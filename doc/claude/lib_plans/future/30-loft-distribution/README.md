@@ -201,11 +201,42 @@ Components:
 `curl` can install loft via one `curl | sh` invocation; the
 installer fails-closed on signature mismatch.
 
-### Phase 30.4 — `loft self-update`
+### Phase 30.4 — `loft self-update` + binary self-check
 
-**Goal:** the installed loft binary updates itself.
+**Goal:** the installed loft binary updates itself AND verifies
+its own integrity on every invocation (the binary's analogue of
+@PLAN12 § Phase 6.7 verification moment 2 — per-invocation
+library hash check).
 
-Flow:
+**Verification timing for the binary** (mirrors and extends
+6.7's library-side timing table):
+
+| # | Moment | What's verified | Default | Off-switch |
+|---|---|---|---|---|
+| 1 | **Install / self-update** | sha256 (matches `index.json` toolchain entry) + Ed25519 sig + sanity `--version` invocation on the downloaded artifact | always | — |
+| 2 | **Startup self-check** | running binary's on-disk bytes hashed and compared to `~/.loft/installed.toml`'s recorded sha256 (which was written at install time) | on | `LOFT_NO_SELF_VERIFY=1` |
+| 3 | **Advisory check** | `(loft, version)` tuple checked against cached `advisories.json` (6.7's feed); fail/warn per severity for the binary the same way as for libraries | on | `LOFT_OFFLINE=1` only suppresses the feed refresh, not the check itself |
+| 4 | **Embedded-key check on self-update** | downloaded binary's Ed25519 public key (extracted from a known offset) matches expected key → catches an attacker that swapped the binary AND its sig with a binary signed by a different (attacker-controlled) key | always | — |
+| 5 | **`loft audit`** | re-hash the running binary; re-check tuple against advisories; report drift | manual | — |
+
+Moment 2 is the cheapest meaningful check: hashing a 10-20MB
+binary at startup is ~30-50ms on modern hardware.  A cached
+`.sha256.verified` marker next to the binary (touched after
+each successful self-check) shrinks this to a single-stat
+operation on warm restarts — set the marker mtime to the
+binary's mtime + 1s after verify; skip if marker is newer.
+A binary tamper modifies the binary's mtime → marker is older
+→ re-verify fires → mismatch detected.
+
+Stdlib coverage: `default/01_code.loft`, `default/02_files.loft`,
+`default/03_text.loft` are baked into the binary via
+`include_str!` (per @PLAN12 § Phase 3.6 — drain doesn't shrink
+to zero; the non-drainable floor stays embedded).  So moment 2
+covers the embedded stdlib by transitivity — no separate
+verification path needed for those files.
+
+**Self-update flow:**
+
 1. Load cached `index.json` (refresh if stale per @PLAN12 6.6
    TTL rule).
 2. Find the newest active version for the current platform.
@@ -213,16 +244,37 @@ Flow:
 4. Download tarball + signature to a temp file.
 5. Verify signature against the public key embedded in the
    running binary (rotation-handled by Phase 30.5).
-6. Sanity-check the downloaded binary by running `loft --version`
-   on it.
-7. Atomic replace.  Unix: rename to target.  Windows: rename
+6. Verify the new binary's embedded public key matches the
+   expected key (moment 4) — catches a swap of "binary +
+   matching-key" pairs.
+7. Sanity-check the downloaded binary by running `loft --version`
+   on it (still moment 1 — proves the binary at least executes).
+8. Atomic replace.  Unix: rename to target.  Windows: rename
    existing → `.old` first, then move new in.
-8. Print "loft 0.8.4 → 0.8.5; release notes: <url>".
+9. Write the new (version, sha256) entry to
+   `~/.loft/installed.toml` (consumed by moment 2 on subsequent
+   startups).
+10. Print "loft 0.8.4 → 0.8.5; release notes: <url>".
+
+**Startup self-check flow** (every `loft` invocation):
+
+1. Read `~/.loft/installed.toml` for the recorded sha256 of the
+   running binary's expected bytes.
+2. Stat the running binary path + the cached
+   `.sha256.verified` marker.
+3. If marker mtime ≥ binary mtime → skip hash, proceed.
+4. Else hash the binary; compare to recorded sha256.
+5. Match → touch marker, proceed.
+6. Mismatch → refuse to start; print "binary integrity check
+   failed: <expected> vs <actual>; run `loft self-update`".
+7. `LOFT_NO_SELF_VERIFY=1` skips steps 1-6 with a stderr note.
 
 **Done when:** `loft self-update` on Linux/macOS/Windows
-correctly upgrades a running install with no shell state lost;
-sig mismatch → no replacement; downgrade requires an explicit
-version arg (no implicit rollback).
+correctly upgrades a running install with no shell state
+lost; sig mismatch → no replacement; downgrade requires an
+explicit version arg (no implicit rollback); startup
+self-check fires on every invocation and refuses to start on
+detected tamper; warm-cache self-check is <1ms via the marker.
 
 ### Phase 30.5 — Key rotation + LTS
 

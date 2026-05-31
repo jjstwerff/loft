@@ -882,6 +882,34 @@ warning: gridmesh 0.1.0 was yanked (bug)
 hello world
 ```
 
+**Verification timing — when hashes get checked.**
+
+Five orthogonal moments.  Each is cheap; the defaults are
+designed so a script run feels free of network or compute
+overhead while still surfacing tampering and recalls.
+
+| # | Moment | What's verified | Default | Off-switch |
+|---|---|---|---|---|
+| 1 | **Install / auto-install** | sha256 (matches `index.json`) + Ed25519 sig on tarball | always | — (cannot disable) |
+| 2 | **Per-invocation library hash** | for each library tuple resolved this process: cached install's sha256 matches `index.json` (one hash per package per process) | on | `LOFT_NO_RUNTIME_VERIFY=1` |
+| 3 | **Advisory feed refresh** | every 24h: re-fetch `advisories.json`, verify sig, re-check cached tuples | on | `LOFT_OFFLINE=1` (uses cache) |
+| 4 | **Per-invocation advisory check** | each loaded (name, version) tuple compared against cached advisories | on | none — advisories always checked when feed cached |
+| 5 | **`loft audit`** | exhaustive: every cached package's sha256 + advisory match for every entry in cache and current lockfile | manual | — |
+
+Moments 2 + 4 together are the steady-state "every run" cost:
+~one hash per loaded package (~5-30ms total for a typical
+script importing 3-5 libraries) + advisory lookup (~µs once
+the feed is in memory).  Cached `*-version.sha256.verified`
+marker files amortize the hash to near-zero on warm cache
+(touch-the-marker after first verify; skip-if-marker-newer-than-
+package-mtime on subsequent runs).
+
+Stdlib coverage is implicit: `default/*.loft` lives inside the
+loft binary via `include_str!`, so verifying the loft binary's
+bytes (lib-plan 30 Phase 30.4 step "binary self-check")
+verifies the embedded stdlib by transitivity.  No separate
+stdlib-file hash check needed.
+
 **Implementation outline (~1-2 work-days):**
 
 1. **Registry schema bump.**  `tools/validate.py` in
@@ -896,24 +924,35 @@ hello world
    the cross-reference.
 3. **Loft binary — advisory loader.**  New
    `src/registry_advisories.rs`: load + verify signature +
-   cache `advisories.json` with 24h TTL.  Honours
-   `LOFT_OFFLINE=1` (use cache; error if cache empty).
-4. **Loft binary — runtime check.**  Hook in the package
-   resolution path (mirror `probe_registry_installed`'s
-   trigger surface): after a (name, version) tuple lands,
-   classify it against the cached advisories.  Defer fail/warn
-   emission until `main`'s pre-execute point so we never warn
-   for the same package twice in one run.
-5. **Override mechanism.**  `LOFT_SECURITY_OVERRIDE=<id>` env
+   cache `advisories.json` with 24h TTL (verification moment 3).
+   Honours `LOFT_OFFLINE=1` (use cache; error if cache empty).
+4. **Loft binary — per-invocation library hash** (verification
+   moment 2).  Hook in the parser's package-resolution path
+   (mirror `probe_registry_installed`'s trigger surface):
+   when a cached library is loaded for the first time in this
+   process, hash its on-disk bytes and compare to the entry
+   in `index.json`.  Touch a sidecar
+   `<install-dir>/.sha256.verified` marker after success; skip
+   the hash on subsequent runs while the marker's mtime ≥ the
+   package's mtime.  Off-switch: `LOFT_NO_RUNTIME_VERIFY=1`.
+5. **Loft binary — per-invocation advisory check**
+   (verification moment 4).  After a (name, version) tuple
+   lands, classify against the cached advisories.  Defer
+   fail/warn emission until `main`'s pre-execute point so we
+   never warn for the same package twice in one run.
+6. **Override mechanism.**  `LOFT_SECURITY_OVERRIDE=<id>` env
    var allows running with a `security_critical` yanked
    version, but emits a stderr audit line: `[security] override
    applied: GHSA-xxxx-yyyy-zzzz (gridmesh 0.1.1)`.  Used for
    incident response: if the user is the one INVESTIGATING the
    CVE, they need to run the vulnerable version locally.
-6. **`loft audit` command.**  Explicit query — scans the
-   current lockfile (project mode) or the global cache (script
-   mode) and reports every affected package without running
-   anything.  Exit code reflects worst severity.
+7. **`loft audit` command** (verification moment 5).  Explicit
+   exhaustive query — scans the current lockfile (project mode)
+   or the global cache (script mode), re-hashes every package
+   against `index.json` (ignoring `.sha256.verified` markers),
+   re-checks every tuple against advisories, and reports every
+   discrepancy + every affected version without running
+   anything.  Exit code reflects worst severity found.
 
 **Tests** (in `tests/registry_advisories.rs`):
 
@@ -928,6 +967,22 @@ hello world
 - Override env var → run + audit-log to stderr.
 - `loft audit` against a fixture lockfile with multiple severities
   → exit code matches worst.
+
+Plus, for verification timing (moments 2 + 5 above):
+
+- **Per-invocation hash matches** → silent, marker touched.
+- **Per-invocation hash mismatch** (tamper a byte in a cached
+  install) → refuse to load, surface the mismatch + the
+  expected sha256.
+- **Marker reuse**: hash skipped on second run; tampering the
+  install AFTER the marker → still caught on `loft audit`
+  (moment 5 ignores markers).
+- **`LOFT_NO_RUNTIME_VERIFY=1`** → marker check + hash both
+  skipped; explicit stderr note `[verify] runtime verify
+  disabled (LOFT_NO_RUNTIME_VERIFY)`.
+- **`loft audit` mismatch detection**: tamper a cached install
+  → `loft audit` reports the bad sha256 + exit code reflects
+  the tamper.
 
 **Open questions:**
 
