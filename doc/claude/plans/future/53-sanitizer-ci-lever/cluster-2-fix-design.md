@@ -941,3 +941,38 @@ Stacked-Borrows reports on the remaining intentional-aliasing store blocks when
 SB is ON (the store layer's design; out of scope for a hard-UB gate).  A Miri
 CI job would run with `-Zmiri-disable-stacked-borrows` (hard-UB gate) and either
 `-Zmiri-ignore-leaks` or after cluster 5 lands.
+
+---
+
+## Cluster 5 (leak) — LANDED; Miri CI gate SHIPPED (D-final) 2026-05-31
+
+**Cluster 5 (free_text leak) — FIXED** (commit 11064863).  `free_text` released
+the String's heap buffer with `shrink_to(0)`, but the `clear()` that makes it
+free ran only under debug-assertions; in release/Miri a non-empty String hit
+`shrink_to(0)` which shrinks capacity only down to `len` → buffer leaked (the
+store holds the String as raw bytes and never runs its Drop).  Fix: `clear()`
+unconditionally before `shrink_to(0)`.  A real production text leak, not just a
+Miri artifact.  Verified: flag-OFF issues 681/0, stores-leak gate 34/0, clippy
+clean, and **Miri p213 fully clean: test ok, no leak, EXIT 0**.
+
+**Miri CI gate — SHIPPED** (commit 79428a50).  `.github/workflows/miri.yml` +
+`make ci-miri`.  Runs the curated `issues` test(s) on the aligned interpreter
+under `-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows` (hard-UB gate).
+Dedicated workflow (interpreter-under-Miri is ~15 min/test); triggers on
+UB-relevant path changes + nightly + manual.  Curated set = `p213` (validated
+Miri-clean after clusters 2/3/4/5).
+
+### Final state — the @PLAN53 lever is in place
+
+The loft interpreter's execution path is Miri-clean for hard UB on the p213
+reproducer (alignment + store-aliasing + uninit-padding + leak all closed,
+clusters 2–5), and a Miri CI job now gates the UB-relevant surface so the next
+latent UB lands red on `main` instead of surfacing months later via a toolchain
+bump (the @P383 failure mode this plan was triggered by).
+
+Remaining lower-priority follow-ups (not blockers; tracked above): the
+intentional store-aliasing blocks under Stacked Borrows ON (a design question —
+the gate runs SB-off by choice); the in-plan items 2e/2f/2g (unexercised
+keyed-iter `remove`, `serialise_text_args`, the char-/bool-first tuple-par and
+sequential-tuple-arg flag-OFF bugs); and growing the Miri curated set as more
+tests are validated clean.
