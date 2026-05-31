@@ -357,6 +357,43 @@ This collapses the schema dramatically: `Function`/`Variable` shrink to
 parse-level fields, and the recursive `Value`/`Type`/`Definition` graph
 plus the type table are the real payload.
 
+#### Snapshot scope — parse-level IR only; recompute the rest (verified 2026-05-31)
+
+The snapshot carries **only what parsing produces and the IR cannot
+recompute**; everything downstream of parse is regenerated on load.
+Verified against the pipeline `parse → scopes::check → assign_slots →
+byte_code`:
+
+- **Slot assignment is NOT included.**  `assign_slots` runs at
+  `scopes::check` (`src/scopes.rs:200`), *after* parse, and `def_code`
+  *reads* `stack_pos` as a codegen input (`codegen.rs:163/356/382/…`).
+  It is therefore not parse output, and it is recomputed deterministically
+  from pure IR (`first_def`/`last_use`/`scope`/type-size via
+  `compute_intervals`).  The user's point holds: slots end up baked in
+  the bytecode — and since the load path **re-runs `scopes::check` →
+  `byte_code` anyway** (codegen is ~0.5 ms, Step 0), slots regenerate for
+  free.  Including them would drag all of `Function`'s post-parse state
+  (`stack_pos`, `pre_assigned_pos`, `loop_scopes`, `loop_seq_ranges`,
+  `closure_var_map`, intervals) into the schema for zero benefit.
+- **Also recomputed, not stored:** bytecode (`code_position`/
+  `code_length`), the derived indices (`def_names` / `possible` /
+  `operators` / `caller_index`), and CONST_STORE vector constants
+  (`build_const_vectors`).
+- **What the snapshot DOES carry:** the parse-level `Data` — definitions
+  (name, `def_type`, declared `returned` type, attributes, the `code`
+  `Value` IR), the type table, and the parse-level bits of `Variable`
+  that the IR can't re-derive (variable name + declared type + argument
+  flag).  Everything else rebuilds.
+
+**Load path:** deserialize parse-level `Data` → `scopes::check`
+(rebuilds slots) → `byte_code` (rebuilds bytecode + const vectors).  The
+S3 bytecode-equivalence gate therefore *also* proves slot recomputation
+is correct — one gate covers both.
+
+This collapses the schema dramatically: `Function`/`Variable` shrink to
+parse-level fields, and the recursive `Value`/`Type`/`Definition` graph
+plus the type table are the real payload.
+
 **Reuse, don't hand-write JSON (user, 2026-05-31):** loft already has
 both directions — `Stores::show_json` (record → JSON) and
 `json_parse_into_stores` / `populate_struct_from_jsonvalue` (JSON →
