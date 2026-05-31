@@ -604,8 +604,9 @@ What remains OPEN in @PLAN12 after this merge:
 - Phase 3.6 (path-helper consolidation `dir`/`basename`/`join(text,text)`/`resolve`
   from `03_text.loft` → `02_files.loft`).
 - Phase 5 (extract `graphics` + `imaging` into `loft-libs-graphics` Stage A).
-- Phase 5b (Stage B — BLOCKED on publishing `loft-ffi-macros` to crates.io +
-  graphics warning sweep; documented in the phase summary).
+- Phase 5b (Stage B — partially unblocked: `loft-ffi-macros 0.1.0`
+  published to crates.io 2026-05-31 15:59 UTC; remaining blocker is
+  the graphics warning sweep — documented in the phase summary).
 - Phase 6w-w (retire every `lib/*/.allow_warnings`).
 - Phase 6t Tier 3 (multiplayer harness port — pulls in @P389 fix).
 - Phase 6t Tier 5 (imaging / world / markdown coverage gaps).
@@ -622,9 +623,11 @@ These will get an entry here when they ship:
 - Phase 3.6 — path-helper consolidation `dir`/`basename`/`join(text,text)`/
   `resolve` from `03_text.loft` → `02_files.loft`.
 - Phase 5 — extract `graphics` + `imaging` Stage A (loft-libs-graphics).
-- Phase 5b — `loft-libs-graphics` Stage B (BLOCKED on publishing
-  `loft-ffi-macros` to crates.io + graphics warning sweep — see
-  the 2026-05-31 "Phase 5b attempt" entry above).
+- Phase 5b — `loft-libs-graphics` Stage B (partially unblocked
+  2026-05-31: `loft-ffi-macros 0.1.0` published to crates.io at
+  15:59 UTC, retiring prerequisite #1; remaining blocker is the
+  graphics warning sweep — see the 2026-05-31 "Phase 5b attempt"
+  entry above for full prerequisite analysis).
 - Phase 6w-w — retire every `.allow_warnings`.
 - Phase 6t Tier 3 — multiplayer harness port (touches @P389).
 - Phase 6t Tier 5 — imaging / world / markdown coverage gaps.
