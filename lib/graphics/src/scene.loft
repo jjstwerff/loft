@@ -53,8 +53,8 @@ pub fn set_color(self: Material, scr: float, scg: float, scb: float) {
 // A node in the scene graph with a mesh, material, and transform.
 pub struct Node {
   name: text,
-  mesh_idx: integer,
-  material_idx: integer,
+  mesh_idx: integer not null,
+  material_idx: integer not null,
   transform: math::Mat4
 }
 

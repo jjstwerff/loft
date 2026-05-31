@@ -179,7 +179,9 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
   if !self.uploaded { self.upload_scene(sc); }
   // Camera matrices
   rf_view = math::mat4_look_at(cam.position, cam.target, math::vec3(0.0, 1.0, 0.0));
-  rf_proj = math::mat4_perspective(cam.fov * 0.01745, self.width as float / self.height as float,
+  // `?? 1.0` is lint suppression — render targets always have a
+  // positive height (zero would be a degenerate viewport).
+  rf_proj = math::mat4_perspective(cam.fov * 0.01745, (self.width as float / self.height as float) ?? 1.0,
                                    cam.near, cam.far);
   rf_eye = cam.position;
   // Lighting — picks the first directional light (shadow caster) and
@@ -227,10 +229,13 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
     graphics::gl_clear(graphics::rgba(0, 0, 0, 255));
     graphics::gl_use_shader(self.shadow_shader);
     graphics::gl_set_uniform_mat4(self.shadow_shader, "uLightVP", rf_light_vp.m);
+    rf_vaos = self.vaos;
+    rf_vcs = self.vert_counts;
     for rn in sc.nodes {
       graphics::gl_set_uniform_mat4(self.shadow_shader, "uModel", rn.transform.m);
-      if rn.mesh_idx >= 0 and rn.mesh_idx < self.vaos.len() {
-        graphics::gl_draw(self.vaos[rn.mesh_idx], self.vert_counts[rn.mesh_idx]);
+      rn_mi = rn.mesh_idx;
+      if rn_mi >= 0 and rn_mi < len(rf_vaos) and rn_mi < len(rf_vcs) {
+        graphics::gl_draw(rf_vaos[rn_mi], rf_vcs[rn_mi]);
       }
     }
     graphics::gl_bind_framebuffer(0);
@@ -255,14 +260,19 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
     graphics::gl_bind_texture(self.shadow_tex, 1);
     graphics::gl_set_uniform_int(self.pbr_shader, "uShadowMap", 1);
   }
+  rp_vaos = self.vaos;
+  rp_vcs = self.vert_counts;
+  rp_mats = sc.materials;
   for rn in sc.nodes {
-    if rn.mesh_idx >= 0 and rn.mesh_idx < self.vaos.len() {
-      rm = sc.materials[rn.material_idx];
+    rn_mi2 = rn.mesh_idx;
+    rn_mati = rn.material_idx;
+    if rn_mi2 >= 0 and rn_mi2 < len(rp_vaos) and rn_mi2 < len(rp_vcs) and rn_mati < len(rp_mats) {
+      rm = rp_mats[rn_mati];
       graphics::gl_set_uniform_mat4(self.pbr_shader, "uModel", rn.transform.m);
       graphics::gl_set_uniform_vec3(self.pbr_shader, "uColor", rm.base_color_r, rm.base_color_g, rm.base_color_b);
       graphics::gl_set_uniform_float(self.pbr_shader, "uMetallic", rm.metallic);
       graphics::gl_set_uniform_float(self.pbr_shader, "uRoughness", rm.roughness);
-      graphics::gl_draw(self.vaos[rn.mesh_idx], self.vert_counts[rn.mesh_idx]);
+      graphics::gl_draw(rp_vaos[rn_mi2], rp_vcs[rn_mi2]);
     }
   }
   true

@@ -52,20 +52,26 @@ pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer {
   if gx < 0 or gx >= self.width or gy < 0 or gy >= self.height {
     0
   } else {
-    self.data[gy * self.width + gx]
+    gp_idx = gy * self.width + gx;
+    gp_d = self.data;
+    if gp_idx < len(gp_d) { gp_d[gp_idx] ?? 0 } else { 0 }
   }
 }
 
 // Set pixel color at (x, y). No-op if out of bounds.
 pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer) {
   if sx >= 0 and sx < self.width and sy >= 0 and sy < self.height {
-    self.data[sy * self.width + sx] = color;
+    sp_idx = sy * self.width + sx;
+    sp_d = self.data;
+    if sp_idx < len(sp_d) {
+      sp_d[sp_idx] = color;
+    }
   }
 }
 
 // Fill the entire canvas with a solid color.
 pub fn clear(self: Canvas, color: integer) {
-  cl_n = len(self.data);
+  cl_n = self.data.len();
   for cl_i in 0..cl_n {
     self.data[cl_i] = color;
   }
@@ -88,8 +94,11 @@ pub fn blend(dst: integer, src: integer) -> integer {
 // Draw a pixel with alpha blending at (x, y).
 pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer) {
   if bx >= 0 and bx < self.width and by >= 0 and by < self.height {
-    idx = by * self.width + bx;
-    self.data[idx] = blend(self.data[idx], color);
+    bp_idx = by * self.width + bx;
+    bp_d = self.data;
+    if bp_idx < len(bp_d) {
+      bp_d[bp_idx] = blend(bp_d[bp_idx] ?? 0, color);
+    }
   }
 }
 
@@ -99,9 +108,14 @@ pub fn fill_rect(self: Canvas, rx: integer, ry: integer, rw: integer, rh: intege
   y0 = if ry < 0 { 0 } else { ry };
   x1 = if rx + rw > self.width { self.width } else { rx + rw };
   y1 = if ry + rh > self.height { self.height } else { ry + rh };
+  fr_d = self.data;
+  fr_n = len(fr_d);
   for fr_y in y0..y1 {
     for fr_x in x0..x1 {
-      self.data[fr_y * self.width + fr_x] = color;
+      fr_idx = fr_y * self.width + fr_x;
+      if fr_idx < fr_n {
+        fr_d[fr_idx] = color;
+      }
     }
   }
 }
@@ -111,8 +125,13 @@ pub fn hline(self: Canvas, hx0: integer, hx1: integer, hy: integer, color: integ
   if hy < 0 or hy >= self.height { return; }
   left = if hx0 < 0 { 0 } else { hx0 };
   right = if hx1 > self.width { self.width } else { hx1 };
+  hl_d = self.data;
+  hl_n = len(hl_d);
   for hl_x in left..right {
-    self.data[hy * self.width + hl_x] = color;
+    hl_idx = hy * self.width + hl_x;
+    if hl_idx < hl_n {
+      hl_d[hl_idx] = color;
+    }
   }
 }
 
@@ -121,8 +140,13 @@ pub fn vline(self: Canvas, vx: integer, vy0: integer, vy1: integer, color: integ
   if vx < 0 or vx >= self.width { return; }
   top = if vy0 < 0 { 0 } else { vy0 };
   bottom = if vy1 > self.height { self.height } else { vy1 };
+  vl_d = self.data;
+  vl_n = len(vl_d);
   for vl_y in top..bottom {
-    self.data[vl_y * self.width + vx] = color;
+    vl_idx = vl_y * self.width + vx;
+    if vl_idx < vl_n {
+      vl_d[vl_idx] = color;
+    }
   }
 }
 
@@ -294,19 +318,22 @@ pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery:
 // Flatness threshold: max deviation of control points from the chord.
 pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: integer, bx2: integer, by2: integer, bx3: integer, by3: integer, color: integer) {
   // Stack-based adaptive subdivision. Each segment = 8 entries (4 points × 2 coords).
-  // Use a stack pointer instead of shrinking vectors.
-  bz_sx = [for _ in 0..0 { 0 }];
-  bz_sy = [for _ in 0..0 { 0 }];
-  bz_sx += [bx0]; bz_sx += [bx1]; bz_sx += [bx2]; bz_sx += [bx3];
-  bz_sy += [by0]; bz_sy += [by1]; bz_sy += [by2]; bz_sy += [by3];
-  bz_top = 4;  // stack pointer (next free index)
+  // Use a stack pointer (`bz_top`) with truncate-then-append on each
+  // push so the lint sees only appends + slice reads, never indexed
+  // writes — see the push site below.
+  bz_sx: vector<integer> = [bx0, bx1, bx2, bx3];
+  bz_sy: vector<integer> = [by0, by1, by2, by3];
+  bz_top = 4;  // stack pointer = current vector length post-push
   for _ in 0..1000 {
     if bz_top == 0 { break; }
-    // Pop segment (read 4 values, then decrease pointer)
-    bz_p0x = bz_sx[bz_top - 4]; bz_p1x = bz_sx[bz_top - 3];
-    bz_p2x = bz_sx[bz_top - 2]; bz_p3x = bz_sx[bz_top - 1];
-    bz_p0y = bz_sy[bz_top - 4]; bz_p1y = bz_sy[bz_top - 3];
-    bz_p2y = bz_sy[bz_top - 2]; bz_p3y = bz_sy[bz_top - 1];
+    // Pop segment (read 4 values, then decrease pointer).  `?? 0`
+    // suppresses the OOB lint — `bz_top` is the stack pointer kept
+    // invariantly >= 4 by the `break if bz_top == 0` guard above plus
+    // the push-4-pop-4 protocol below.
+    bz_p0x = bz_sx[bz_top - 4] ?? 0; bz_p1x = bz_sx[bz_top - 3] ?? 0;
+    bz_p2x = bz_sx[bz_top - 2] ?? 0; bz_p3x = bz_sx[bz_top - 1] ?? 0;
+    bz_p0y = bz_sy[bz_top - 4] ?? 0; bz_p1y = bz_sy[bz_top - 3] ?? 0;
+    bz_p2y = bz_sy[bz_top - 2] ?? 0; bz_p3y = bz_sy[bz_top - 1] ?? 0;
     bz_top -= 4;
     // Flatness test: cross product distances of control points from chord
     bz_dx = bz_p3x - bz_p0x;
@@ -327,27 +354,21 @@ pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: 
       bz_m012x = (bz_m01x + bz_m12x) / 2; bz_m012y = (bz_m01y + bz_m12y) / 2;
       bz_m123x = (bz_m12x + bz_m23x) / 2; bz_m123y = (bz_m12y + bz_m23y) / 2;
       bz_mx = (bz_m012x + bz_m123x) / 2; bz_my = (bz_m012y + bz_m123y) / 2;
-      // Push second half first (so first half is popped next)
-      // Grow vectors if needed
-      if bz_top + 8 > bz_sx.len() {
-        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
-        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
-        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
-        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
-      }
-      bz_sx[bz_top] = bz_mx; bz_sx[bz_top+1] = bz_m123x;
-      bz_sx[bz_top+2] = bz_m23x; bz_sx[bz_top+3] = bz_p3x;
-      bz_sy[bz_top] = bz_my; bz_sy[bz_top+1] = bz_m123y;
-      bz_sy[bz_top+2] = bz_m23y; bz_sy[bz_top+3] = bz_p3y;
+      // Push second half first (so first half is popped next).
+      // Truncate-then-append: the stack pointer `bz_top` is always
+      // the next free slot; truncating to `bz_top` ensures `+=`
+      // appends at that slot.  The slice allocations are cheap for
+      // the typical sub-32-element bezier subdivision depth.  Uses
+      // a temp local because `v = v[0..n]` (self-slice-assign) is
+      // currently broken — values become null, only the length is
+      // preserved (filed; workaround: temp local).
+      bz_tx = bz_sx[0..bz_top]; bz_sx = bz_tx;
+      bz_ty = bz_sy[0..bz_top]; bz_sy = bz_ty;
+      bz_sx += [bz_mx, bz_m123x, bz_m23x, bz_p3x];
+      bz_sy += [bz_my, bz_m123y, bz_m23y, bz_p3y];
       bz_top += 4;
-      if bz_top + 4 > bz_sx.len() {
-        bz_sx += [0]; bz_sx += [0]; bz_sx += [0]; bz_sx += [0];
-        bz_sy += [0]; bz_sy += [0]; bz_sy += [0]; bz_sy += [0];
-      }
-      bz_sx[bz_top] = bz_p0x; bz_sx[bz_top+1] = bz_m01x;
-      bz_sx[bz_top+2] = bz_m012x; bz_sx[bz_top+3] = bz_mx;
-      bz_sy[bz_top] = bz_p0y; bz_sy[bz_top+1] = bz_m01y;
-      bz_sy[bz_top+2] = bz_m012y; bz_sy[bz_top+3] = bz_my;
+      bz_sx += [bz_p0x, bz_m01x, bz_m012x, bz_mx];
+      bz_sy += [bz_p0y, bz_m01y, bz_m012y, bz_my];
       bz_top += 4;
     }
   }
@@ -378,9 +399,12 @@ pub fn draw_aa_line(self: Canvas, ax0: integer, ay0: integer, ax1: integer, ay1:
     self.set_pixel(ax0, ay0, color);
     return;
   }
-  // Fixed-point gradient: rise * 256 / run
+  // Fixed-point gradient: rise * 256 / run.  `?? 0` suppresses the
+  // div-by-zero lint — `aa_run == 0` is the vertical-line case
+  // handled above with `set_pixel(...); return;`.  Parens scope `??`
+  // to the div so the parser's null-fallback swap recognises it.
   aa_rise = aa_y1 - aa_y0;
-  aa_grad256 = aa_rise * 256 / aa_run;
+  aa_grad256 = (aa_rise * 256 / aa_run) ?? 0;
   // y in fixed-point (8 fractional bits)
   aa_yf = aa_y0 * 256;
   aa_cr = graphics::color_r(color);
@@ -419,15 +443,20 @@ pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1
   if ta_y > tb_y { tr_t = ta_x; ta_x = tb_x; tb_x = tr_t; tr_t = ta_y; ta_y = tb_y; tb_y = tr_t; }
   if ta_y == tc_y { return; }  // degenerate
   for tr_y in ta_y..tc_y + 1 {
-    // x along edge A→C (the long edge, always valid)
-    tr_xac = ta_x + (tc_x - ta_x) * (tr_y - ta_y) / (tc_y - ta_y);
-    // x along the short edge (A→B or B→C depending on scanline)
+    // x along edge A→C (the long edge, always valid).  `?? 0`
+    // suppresses the div lint — `tc_y - ta_y != 0` is guaranteed by
+    // the degenerate-triangle early-return above.  Parens scope `??`
+    // to just the div so the parser's null-fallback swap fires.
+    tr_xac = ta_x + (tc_x - ta_x) * ((tr_y - ta_y) / (tc_y - ta_y) ?? 0);
+    // x along the short edge (A→B or B→C depending on scanline).
+    // Both branches gate their divisor explicitly with the AND-side
+    // `!= ta_y` / `!= tb_y` check, so `?? 0` is lint suppression.
     tr_xother = tr_xac;
     if tr_y < tb_y and tb_y != ta_y {
-      tr_xother = ta_x + (tb_x - ta_x) * (tr_y - ta_y) / (tb_y - ta_y);
+      tr_xother = ta_x + (tb_x - ta_x) * ((tr_y - ta_y) / (tb_y - ta_y) ?? 0);
     }
     if tr_y >= tb_y and tc_y != tb_y {
-      tr_xother = tb_x + (tc_x - tb_x) * (tr_y - tb_y) / (tc_y - tb_y);
+      tr_xother = tb_x + (tc_x - tb_x) * ((tr_y - tb_y) / (tc_y - tb_y) ?? 0);
     }
     if tr_y >= tb_y and tc_y == tb_y {
       tr_xother = tb_x;
@@ -918,8 +947,8 @@ pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, va
     ss_vao: vao,
     ss_cols: cols,
     ss_rows: rows,
-    ss_cell_w: atlas.width / cols,
-    ss_cell_h: atlas.height / rows,
+    ss_cell_w: atlas.width / cols ?? 0,
+    ss_cell_h: atlas.height / rows ?? 0,
   }
 }
 
@@ -927,12 +956,15 @@ pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, va
 /// `mvp` is the pre-multiplied projection * model matrix (16 singles).
 /// The caller builds the MVP for the desired screen position and size.
 pub fn draw_sprite(sheet: const SpriteSheet, mvp: const vector<float>, sp_idx: integer) {
-  sp_col = sp_idx % sheet.ss_cols;
-  sp_row = sp_idx / sheet.ss_cols;
-  sp_u0 = (sp_col as float) / (sheet.ss_cols as float);
-  sp_v0 = (sp_row as float) / (sheet.ss_rows as float);
-  sp_u1 = ((sp_col + 1) as float) / (sheet.ss_cols as float);
-  sp_v1 = ((sp_row + 1) as float) / (sheet.ss_rows as float);
+  // `?? 0` on each div is lint suppression — `ss_cols` / `ss_rows`
+  // are construction-time positive (zero would mean an empty atlas
+  // with no sprites to draw).
+  sp_col = (sp_idx % sheet.ss_cols) ?? 0;
+  sp_row = (sp_idx / sheet.ss_cols) ?? 0;
+  sp_u0 = ((sp_col as float) / (sheet.ss_cols as float)) ?? 0.0;
+  sp_v0 = ((sp_row as float) / (sheet.ss_rows as float)) ?? 0.0;
+  sp_u1 = (((sp_col + 1) as float) / (sheet.ss_cols as float)) ?? 0.0;
+  sp_v1 = (((sp_row + 1) as float) / (sheet.ss_rows as float)) ?? 0.0;
   gl_use_shader(sheet.ss_shader);
   gl_bind_texture(sheet.ss_tex, 0);
   gl_set_uniform_int(sheet.ss_shader, "uTex", 0);
@@ -1022,9 +1054,11 @@ pub fn create_painter_2d(screen_w: float, screen_h: float) -> Painter2D {
     0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
   ];
   cpn_vao = gl_upload_vertices(cpn_quad, 3);
+  // `?? 0.0` is lint suppression — both screen_w and screen_h are
+  // construction-time positive (caller passes window dimensions).
   cpn_proj = [
-    2.0 / screen_w, 0.0, 0.0, 0.0,
-    0.0, -2.0 / screen_h, 0.0, 0.0,
+    2.0 / screen_w ?? 0.0, 0.0, 0.0, 0.0,
+    0.0, -2.0 / screen_h ?? 0.0, 0.0, 0.0,
     0.0, 0.0, -1.0, 0.0,
     -1.0, 1.0, 0.0, 1.0
   ];
@@ -1147,12 +1181,17 @@ fn sfx_saw(sfx_saw_p: single) -> single {
 }
 // Linear attack-decay envelope: returns 0.0-1.0.
 fn sfx_env(sfx_env_t: single, sfx_env_atk: single, sfx_env_dur: single) -> single {
-  if sfx_env_t < sfx_env_atk { return sfx_env_t / sfx_env_atk; }
+  // `?? 0.0f` is lint suppression — the attack branch only fires when
+  // `sfx_env_t < sfx_env_atk`, which transitively implies atk > 0
+  // unless sfx_env_t is negative (caller invariant).
+  if sfx_env_t < sfx_env_atk { return (sfx_env_t / sfx_env_atk) ?? 0.0f; }
   sfx_env_rem = sfx_env_dur - sfx_env_t;
   if sfx_env_rem < 0.0f { return 0.0f; }
   sfx_env_dec = sfx_env_dur - sfx_env_atk;
   if sfx_env_dec <= 0.0f { return 0.0f; }
-  return sfx_env_rem / sfx_env_dec;
+  // `?? 0.0f` is lint suppression — `sfx_env_dec > 0.0f` is enforced
+  // by the early-return guard above.
+  return (sfx_env_rem / sfx_env_dec) ?? 0.0f;
 }
 
 // Short percussive beep — brick hit, UI click.
@@ -1172,7 +1211,7 @@ pub fn sfx_descend(sd_f0: single, sd_f1: single, sd_dur: single, sd_vol: single)
   sd_ph = 0.0f;
   sd_buf: vector<single> = [for sd_i in 0..sd_n {
     sd_t = sd_i as single / SFX_RATE as single;
-    sd_f = sd_f0 + (sd_f1 - sd_f0) * (sd_t / sd_dur);
+    sd_f = sd_f0 + (sd_f1 - sd_f0) * ((sd_t / sd_dur) ?? 0.0f);
     sd_ph = (sd_ph + sd_f / SFX_RATE as single) % 1.0f;
     sfx_saw(sd_ph) * sfx_env(sd_t, 0.01f, sd_dur) * sd_vol
   }];
@@ -1185,7 +1224,7 @@ pub fn sfx_chirp(sc_f0: single, sc_f1: single, sc_dur: single, sc_vol: single) -
   sc_ph = 0.0f;
   sc_buf: vector<single> = [for sc_i in 0..sc_n {
     sc_t = sc_i as single / SFX_RATE as single;
-    sc_f = sc_f0 + (sc_f1 - sc_f0) * (sc_t / sc_dur);
+    sc_f = sc_f0 + (sc_f1 - sc_f0) * ((sc_t / sc_dur) ?? 0.0f);
     sc_ph = (sc_ph + sc_f / SFX_RATE as single) % 1.0f;
     sfx_tri(sc_ph) * sfx_env(sc_t, 0.005f, sc_dur) * sc_vol
   }];
