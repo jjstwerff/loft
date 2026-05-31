@@ -89,9 +89,15 @@ jobs:
       # the suite — no concurrent re-resolution.  Same command + manifest
       # `auto_build_native` uses, so the artefacts match.
       - name: Pre-build native lib packages (avoid concurrent auto_build — G3)
+        # All four monorepo native libs (web, server, graphics, imaging)
+        # have been extracted to their respective chunk repos as of
+        # @PLAN12 5b — no monorepo lib/<pkg>/native/ paths remain.
+        # Native pre-build now happens via `auto_build_native` when the
+        # tests pull in registry-installed cdylibs (which build into
+        # ~/.loft/build-cache/<pkg>-<ver>/ per the 6b redirect).
+        # Step kept as a stub for future use.
         run: |
-          cargo build --release --manifest-path lib/graphics/native/Cargo.toml
-          cargo build --release --manifest-path lib/imaging/native/Cargo.toml
+          echo "No monorepo native lib pre-builds — all libs extracted to chunk repos."
 
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.  Use `cargo
@@ -120,12 +126,14 @@ jobs:
       - name: Build wasm rlib (for html_wasm tests)
         run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 
-      # Build the graphics native cdylib so the graphics_gold tests (canvas
-      # + GL-render goldens) run instead of skipping — graphics_gold checks
-      # for libloft_graphics_native.so before comparing.
-      - name: Build graphics native cdylib (Linux only)
-        if: runner.os == 'Linux'
-        run: cargo build --release --manifest-path lib/graphics/native/Cargo.toml
+      # graphics_gold tests skip on CI now that lib/graphics is extracted
+      # — the gold-image comparison runs against the libloft_graphics_native.so
+      # the test itself can't build because the monorepo no longer has the
+      # graphics native source.  Re-enable if a future monorepo-side
+      # smoke needs it.  (Phase 5b removed lib/graphics/.)
+      - name: Build graphics native cdylib (Linux only) — stub
+        if: false
+        run: echo "graphics moved to loft-libs-graphics; skip"
 
       # cargo-nextest runs each test in its own process with better
       # scheduling than cargo test — typically 30-50 % faster on this
