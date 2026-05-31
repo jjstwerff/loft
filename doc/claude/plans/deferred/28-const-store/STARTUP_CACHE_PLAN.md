@@ -280,34 +280,54 @@ to today. Delete `src/cache.rs` + the flag to revert.
 ### Step 2 — `Data` serialization (enables Strategy 2)
 
 **Design.** Serialise the parser output so the stdlib symbol table is
-restorable without re-parsing. Use **`serde` derive + `bincode`**
-(over hand-rolling) because `Data`/`Value`/`Type` are large; the only
-manual bits are the known snags.
+restorable without re-parsing.
+
+**serde is forbidden** (CODE.md § Dependencies — a serde attempt was
+tried here and reverted: `&'static str` fields on `Block`/`Definition`
+make serde-derive inject a `'de: 'static` bound that poisons the
+recursive `Value`/`Type` graph, and the recursion is `Box<Self>`, not
+index-based as an earlier draft of this step wrongly claimed).
+
+**Stop-gap decision (user, 2026-05-31): a per-library JSON snapshot is
+fine as the interim format.**  Serialise `Data` by hand using **loft's
+own database JSON** (`write_json_escaped` + the `src/database/` path for
+encode, `src/json.rs::parse` → `Parsed` tree for decode) — never serde /
+bincode.  Emit the compiled stdlib prefix (and optionally per-`use`d
+library segments) as JSON, load it back, and rebuild native `Data`.
+This is acknowledged second-class — JSON is re-parsed, not mmap'd, and
+gets discarded — but it ships the cold-start win without the IR rewrite.
+It is **superseded by** [plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
+which replaces JSON with the store struct-enum format and turns the
+rebuild into a zero-copy mmap.  Build the JSON stop-gap so its
+call-sites (snapshot key, write, load+rebuild) are **format-agnostic** —
+plan-54 swaps the encoder/decoder underneath without touching the
+startup wiring.
 
 **Implementation.**
-- Ungate `serde` for native; add `bincode = "1"` (confirm no existing
-  transitive copy to reuse).
-- `#[derive(Serialize, Deserialize)]` on `Data`, `Definition`,
-  `Value`, `Type`, `Block`, and owned sub-types in `src/data.rs`.
-- Known manual handling (verified during research):
-  - `Block.name: &'static str` → serialise as `String`, intern back to
-    `&'static` on load (or change the field; assess blast radius).
-  - `Data`'s `OnceLock<HashMap<…>>` caller-index → `#[serde(skip)]`,
-    rebuilt lazily on first use.
-  - audit for any remaining raw pointer / `Instant` / interner handle
-    (Step 2a) before deriving.
-- Round-trip + equivalence tests.
+- Emit `Data` → JSON via the database JSON path (no serde); key the
+  file with `stdlib_cache_key` (already built, `src/cache.rs`).
+- Load JSON → `Parsed` (`src/json.rs::parse`) → rebuild native `Data`
+  (re-`add_def` in parse order; derived indices `def_names` /
+  `possible` / `operators` / `caller_index` rebuild from the
+  definitions — never stored).
+- Field audit before encode: `Block.name` / `Definition.synthetic`
+  (`&'static str` → emit as string, intern on load); `OnceLock`
+  caller-index (skip + rebuild); any `DbRef` into CONST_STORE
+  (re-derive on load).
 
 **Acceptance test.**
 ```
 cargo test data_roundtrip
-#   parse_dir(default/) → serialize Data → deserialize → assert structural equality
-#   + compile /tmp/trivial.loft against the restored Data and assert
+#   parse_dir(default/) → Data→JSON→Data → assert structural equality
+#   + compile /tmp/trivial.loft against the rebuilt Data and assert
 #     byte-identical bytecode vs the fresh-parse path
 ```
+Expected: round-trip lossless; bytecode against the rebuilt `Data` is
+byte-identical to fresh-parse bytecode.
 
-**Rollback.** Derives are additive (no behaviour change until Step 3
-uses them). Drop derives + deps to revert.
+**Rollback.** The JSON snapshot is opt-in behind the cache flag; absent
+it, behaviour is byte-identical to today.  Delete the encode/decode +
+flag to revert.
 
 ---
 
