@@ -320,42 +320,62 @@ only failure mode (a lossy bridge) is caught by S3 in CI before S4 wires
 the flag.  Each rung is a valid stop — what's landed at S1–S3 is harmless
 dead/tested code that doubles as plan-54 foundation (arcs A+B).
 
-#### Snapshot scope — parse-level IR only; recompute the rest (verified 2026-05-31)
+#### Snapshot scope — a complete runnable image (user, 2026-05-31)
 
-The snapshot carries **only what parsing produces and the IR cannot
-recompute**; everything downstream of parse is regenerated on load.
-Verified against the pipeline `parse → scopes::check → assign_slots →
-byte_code`:
+**Goal restated by the user: the cache must let loft *run quickly* — so
+the snapshot carries bytecode AND debug data, ready to either execute on
+the interpreter immediately or feed `--native`, with no recompute pass
+on load.**  This supersedes an earlier (now-rejected) "parse-level IR
+only, recompute everything" framing.
 
-- **Slot assignment is NOT included.**  `assign_slots` runs at
-  `scopes::check` (`src/scopes.rs:200`), *after* parse, and `def_code`
-  *reads* `stack_pos` as a codegen input (`codegen.rs:163/356/382/…`).
-  It is therefore not parse output, and it is recomputed deterministically
-  from pure IR (`first_def`/`last_use`/`scope`/type-size via
-  `compute_intervals`).  The user's point holds: slots end up baked in
-  the bytecode — and since the load path **re-runs `scopes::check` →
-  `byte_code` anyway** (codegen is ~0.5 ms, Step 0), slots regenerate for
-  free.  Including them would drag all of `Function`'s post-parse state
-  (`stack_pos`, `pre_assigned_pos`, `loop_scopes`, `loop_seq_ranges`,
-  `closure_var_map`, intervals) into the schema for zero benefit.
-- **Also recomputed, not stored:** bytecode (`code_position`/
-  `code_length`), the derived indices (`def_names` / `possible` /
-  `operators` / `caller_index`), and CONST_STORE vector constants
-  (`build_const_vectors`).
-- **What the snapshot DOES carry:** the parse-level `Data` — definitions
-  (name, `def_type`, declared `returned` type, attributes, the `code`
-  `Value` IR), the type table, and the parse-level bits of `Variable`
-  that the IR can't re-derive (variable name + declared type + argument
-  flag).  Everything else rebuilds.
+**Why recompute is the wrong call here — corrected measurement.**  The
+earlier framing leaned on "codegen is only ~0.5 ms".  But the expensive
+pass is **slot assignment**, and `scopes::check` (which calls
+`assign_slots`) runs **inside `parse_dir`'s per-file loop**
+(`src/parser/mod.rs:679`) — so it is *already inside* the ~14.7 ms
+`parse_default` figure, not in the 0.5 ms codegen.  Recomputing slots on
+load therefore re-pays part of the very cost the cache exists to remove.
+Storing the runnable image avoids it.  (This is also the shape of the
+retired Phase-D cache, which stored bytecode + stores.)
 
-**Load path:** deserialize parse-level `Data` → `scopes::check`
-(rebuilds slots) → `byte_code` (rebuilds bytecode + const vectors).  The
-S3 bytecode-equivalence gate therefore *also* proves slot recomputation
-is correct — one gate covers both.
+**What the snapshot carries (the runnable image):**
+- the `Data` IR (definitions, type table, `Value`/`Type` graph);
+- **bytecode** — `State.bytecode` + per-`Definition` `code_position` /
+  `code_length`;
+- **debug data** — `State.line_numbers` + `source_spans` (pc → file:line
+  maps) so a cached run has full diagnostics / stack traces;
+- **slot assignment** — the `Variable.stack_pos` / frame sizes that
+  codegen baked into the bytecode (kept consistent with the stored
+  bytecode);
+- **CONST_STORE** vector/string constants (the `Store` byte buffer).
 
-This collapses the schema dramatically: `Function`/`Variable` shrink to
-parse-level fields, and the recursive `Value`/`Type`/`Definition` graph
-plus the type table are the real payload.
+**What still rebuilds on load (genuinely free, derived):**
+- `native::init` function-pointer table — **cannot** be serialized (Rust
+  `fn` addresses); always rebuilt, ~0.02 ms (Step 0);
+- the lookup indices `def_names` / `possible` / `operators` /
+  `caller_index` — pure functions of the definitions;
+- `&'static str` interning on load (`Box::leak`).
+
+**Load path:** deserialize the image → run `native::init` → **execute**
+(interpreter) or hand the materialized IR+bytecode to `--native`.  No
+`scopes::check`, no `byte_code` re-run.
+
+**Consequence for the schema / format:** larger than the parse-level-only
+shape — it includes `State`'s bytecode + debug maps + the slot fields of
+`Variable`.  Absolute offsets (bytecode positions, `def_nr`,
+`known_type`) are fine to store as-is: this snapshot is a **whole image**
+(the stdlib prefix, or core+libs as one bundle), so its internal indices
+are mutually consistent by construction — no relocation is needed on
+load, and none is needed by plan-54's mmap successor either (the mmap is
+the full bundle mapped as one unit, so the baked offsets stay valid).
+Relocation would only arise for an *independent per-library* mmap, which
+is explicitly out of scope (plan-54 § What gets cached).
+
+**Equivalence gate (S3) adjusts accordingly:** instead of "recompute
+bytecode and assert byte-identical", S3 asserts the **loaded** bytecode
++ slots + debug maps equal those from a fresh parse+compile of the same
+input.  Same safety property (a lossy snapshot fails in CI before S4),
+now over the stored image rather than a recompute.
 
 **Reuse, don't hand-write JSON (user, 2026-05-31):** loft already has
 both directions — `Stores::show_json` (record → JSON) and
