@@ -89,6 +89,10 @@ pub struct Parser {
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
+    /// Tier-0 auto-`use` per-file scan cache: a file's `lib::` reference set is
+    /// deterministic, so it is read + scanned at most once (keyed by path) and
+    /// reused across the second pass and any `todo_files` re-parse.
+    auto_use_scan_cache: std::collections::HashMap<String, Vec<String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -371,6 +375,7 @@ impl Parser {
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
+            auto_use_scan_cache: std::collections::HashMap::new(),
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
@@ -3879,8 +3884,18 @@ impl Parser {
     #[allow(clippy::too_many_lines)] // two-pass parser dispatch — splitting would lose context
     fn parse_file(&mut self) {
         let start_def = self.data.definitions();
+        // Tier-0 lazy auto-`use`: the file the lexer is on right now, captured
+        // before the use-loop may switch away.  Scanned for `lib::` references
+        // after the use-region (see the load loop below).
+        let auto_use_scan_file = self.lexer.pos().file.clone();
+        // A file that writes any `use` — or the stdlib, parsed with
+        // `self.default` — is in *explicit* mode: the author manages their
+        // libraries by hand, so a `lib::` to an un-`use`d library is a forgotten
+        // `use`, not a request to auto-load.  Skip the pre-scan for those files.
+        let mut had_use = self.default;
         while self.lexer.has_token("use") {
             if let Some(id) = self.lexer.has_identifier() {
+                had_use = true;
                 // Parse optional import spec: `::*` for wildcard or `::name1, name2` for selective.
                 let spec = if self.lexer.has_token("::") {
                     if self.lexer.has_token("*") {
@@ -3978,6 +3993,49 @@ impl Parser {
                     self.data.use_add(&dep_id);
                     self.lexer.switch(&f);
                 }
+            }
+        }
+        // Tier-0 lazy auto-`use`: scan this file for `lib::` references and load
+        // any that name an unloaded, available library — here in the use-region,
+        // before the defs-loop, exactly like an explicit `use` (so the two-pass
+        // model never sees a redefinition).  Only when the lexer is still on the
+        // scanned file (the use-loop has not switched away to an explicitly-used
+        // library — that file re-parses via `todo_files` and scans itself then).
+        // Resolve every path first (before a `switch` changes the lexer's cwd),
+        // then load with the same `todo_files` + `use_add` + `switch` shape as
+        // the `pending_pkg_deps` loop.  A name that is not a real library is
+        // skipped and falls through to the normal "unknown" error.
+        // `!had_use`: explicit-mode files (any `use`, and the stdlib) are skipped
+        // entirely — the author manages their libraries by hand there.  Read +
+        // scan each remaining file at most once (cache keyed by path).
+        if !had_use && self.lexer.pos().file == auto_use_scan_file {
+            let refs = if let Some(c) = self.auto_use_scan_cache.get(&auto_use_scan_file) {
+                c.clone()
+            } else {
+                let src = self.read_source(&auto_use_scan_file);
+                let r = crate::libscan::scan_qualified_lib_refs(&src);
+                self.auto_use_scan_cache
+                    .insert(auto_use_scan_file.clone(), r.clone());
+                r
+            };
+            let mut to_load: Vec<(String, String)> = Vec::new();
+            for name in refs {
+                if self.data.use_exists(&name) || self.data.def_nr(&name) != u32::MAX {
+                    continue;
+                }
+                let f = self.lib_path(&name);
+                if std::path::Path::new(&f).exists() {
+                    to_load.push((name, f));
+                }
+            }
+            for (name, f) in to_load {
+                if self.data.use_exists(&name) {
+                    continue;
+                }
+                let cur = self.lexer.pos().file.clone();
+                self.todo_files.push((cur, self.data.source));
+                self.data.use_add(&name);
+                self.lexer.switch(&f);
             }
         }
         // Apply wildcard/selective imports queued for this source now that the while-use loop
@@ -4108,6 +4166,17 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// Read a source file's content for the Tier-0 auto-`use` pre-scan.
+    /// Honours the wasm VirtFS; an empty string on a read error (the scan then
+    /// finds nothing and normal resolution proceeds unchanged).
+    fn read_source(&self, filename: &str) -> String {
+        #[cfg(feature = "wasm")]
+        if let Some(c) = crate::wasm::virt_fs_get(filename) {
+            return c;
+        }
+        std::fs::read_to_string(filename).unwrap_or_default()
     }
 
     fn lib_path(&mut self, id: &str) -> String {

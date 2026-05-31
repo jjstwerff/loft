@@ -18,7 +18,8 @@ impl Parser {
             return Type::Reference(self.context, Vec::new());
         }
         let mut source = u16::MAX;
-        let nm = if self.lexer.has_token("::") {
+        let qualified = self.lexer.has_token("::");
+        let nm = if qualified {
             source = self.data.get_source(name);
             if let Some(id) = self.lexer.has_identifier() {
                 id
@@ -29,6 +30,33 @@ impl Parser {
         } else {
             name.to_string()
         };
+        // Tier-0 auto-`use`: a qualified `name::…` whose lowercase `name` is
+        // neither a loaded library (`source` == MAX) nor a known definition is
+        // an unknown library.  After the use-region's pre-scan, any *available*
+        // library would already be loaded, so this is the genuine "no such
+        // library" case — report it directly instead of the downstream "Unknown
+        // function" (reported once types are known, in the second pass).
+        if qualified
+            && source == u16::MAX
+            && !self.first_pass
+            && self.data.def_nr(name) == u32::MAX
+            && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        {
+            diagnostic!(self.lexer, Level::Error, "Unknown library '{name}'");
+            // Consume a trailing call so the parser does not also choke on the
+            // arguments and emit a second, less-helpful error.
+            if self.lexer.has_token("(") && !self.lexer.has_token(")") {
+                loop {
+                    let mut arg = Value::Null;
+                    self.expression(&mut arg);
+                    if !self.lexer.has_token(",") {
+                        self.lexer.has_token(")");
+                        break;
+                    }
+                }
+            }
+            return Type::Unknown(0);
+        }
         // vector<T>.parse(text) — parse a JSON array into a vector of T.
         if nm == "vector" && self.lexer.has_token("<") {
             if let Some(elem_name) = self.lexer.has_identifier() {

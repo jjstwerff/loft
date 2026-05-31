@@ -88,6 +88,7 @@ pub mod introspect;
 pub mod lockfile;
 pub mod log_config;
 pub mod logger;
+pub mod libscan;
 pub mod manifest;
 pub mod triggers;
 #[cfg(feature = "registry")]
