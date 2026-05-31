@@ -48,6 +48,7 @@ pub mod crash_report;
 pub mod data;
 pub mod database;
 pub mod hash;
+pub mod ir_schema;
 pub mod json;
 pub mod keys;
 mod lexer;
