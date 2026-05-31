@@ -194,6 +194,45 @@ Mirroring `--native` rather than inventing a third format buys:
   schema-emission pattern this plan mirrors; arc A reuses `output_init`'s
   registration approach.
 
+## Relationship to self-hosting (loft compiler in loft)
+
+A full loft-in-loft rewrite — parser, type checker, scope analysis, and
+codegen written in loft, running on the interpreter, fast enough to
+compile itself — is anticipated but is a multi-quarter project.  This
+plan is **not an alternative to it; it is a strict down-payment on it**,
+chosen because it is the smallest reversible slice of the same problem.
+
+**Shared hard problem.**  Self-hosting must represent the compiler's IR
+(`Data` / `Value` / `Type` / `Definition`) as loft's own data — there is
+no way to write a loft compiler in loft without it.  This plan answers
+exactly that question for the data model alone, in the
+already-`--native`-validated store format.  Whatever schema this plan
+pins (arc A) is the schema a self-hosted front-end would consume.
+
+**Reversibility ladder.**  Each rung's non-throwaway work feeds the
+next; enter self-hosting through this keyhole, not head-on:
+
+| Rung | Effort | Permanent contribution to self-hosting |
+|---|---|---|
+| @PLAN28 JSON stop-gap | days | the relocatable per-library JSON deliverable (survives as the first-landing / cross-arch fallback); proves loft data *can* hold the IR |
+| **plan-54 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
+| full loft-in-loft | multi-quarter | the destination |
+
+**This plan removes a self-hosting blocker.**  Self-hosting makes the
+interpreter's parse-bound cold-start *worse* (a loft compiler is a
+compile-heavy workload on the interpreter).  The startup cache + this
+plan attack precisely that bottleneck, so they clear the runway rather
+than compete for it.
+
+**Gate, not commitment.**  Full self-hosting stays anticipated, not
+scheduled, until this plan proves the IR-in-loft-data model is **both
+ergonomic to express and fast enough to read** (open questions 2 and 5).
+If `Data`-as-store is pleasant and the hot-path read delta is acceptable,
+self-hosting is materially de-risked; if it is painful, that lesson is
+learned here cheaply, on the smallest slice, before betting a quarter on
+the rewrite.  Pre-1.0 language churn is a second gate — writing a large
+compiler in loft before the syntax settles means writing it twice.
+
 ## See also
 
 - [NATIVE.md](../../../NATIVE.md) — how `--native` represents data as
