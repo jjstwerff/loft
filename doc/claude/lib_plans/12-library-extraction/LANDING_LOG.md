@@ -147,6 +147,53 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6.7a — `loft yank` author helper
+
+Author-side companion to Phase 6.7's consumer-side classifier.
+Closes the security loop: now a maintainer can file an
+advisory without hand-editing index.json + advisories.json.
+
+src/main.rs:
+- New `yank` subcommand + help text.
+- `yank_package(target, severity, advisory, summary, affected,
+  fixed_in)`:
+  - Parses target as `<pkg>@<version>`.
+  - Validates `--severity` against the 5-tier enum
+    (security_critical / security_high / security_low / bug /
+    deprecated); rejects invalid tiers with the full list.
+  - Requires `--advisory` (e.g. GHSA-id) + `--summary`.
+  - Optional `--affected` (defaults to the exact pinned version)
+    and `--fixed-in`.
+  - Emits two blocks:
+    1. index.json typed `status` field to splice into the
+       affected version's entry.
+    2. advisories.json `advisories[]` row with the cross-
+       referenced GHSA id.
+  - `chrono_iso8601_utc()` provides the `published`
+    timestamp.
+  - `escape_json_string()` handles `"`, `\\`, `\n`, `\t`,
+    and control chars; verified the output passes Python's
+    json.loads.
+
+Smoke-tested:
+- Valid full invocation → both blocks emit cleanly with the
+  correct shape.
+- Missing severity → refused.
+- Invalid severity → refused with the valid-tier list.
+- Summary with `"quote"` + `\\backslash` → properly escaped;
+  output passes JSON validation.
+
+Author loop closes:
+  Maintainer discovers vuln → `loft yank web@0.1.0
+  --severity security_critical --advisory GHSA-... ...`
+  → paste both blocks into `loft-lang/registry` PR
+  → maintainer reviews → CI gate validates (Phase 6.7a's
+  proposed cross-ref check; future work in tools/validate.py).
+
+Auto-PR-open (clone registry + apply edits + `gh pr create`)
+is a follow-up; today's MVP eliminates the schema-by-memory
++ JSON-by-hand steps.
+
 ## 2026-05-31 — `loft new <name>` scaffolder
 
 Author scaffolding companion to `loft publish`.  Creates a

@@ -187,6 +187,11 @@ fn print_help() {
     println!("  new <name> [opts]             scaffold a fresh library: loft.toml + src/ +");
     println!("                                tests/ + README; --native adds native/ skeleton;");
     println!("                                --chunk adds .github/workflows/library-ci.yml");
+    println!("  yank <pkg>@<ver> --severity   author helper: draft a registry yank PR — emits");
+    println!("    <tier> --advisory <id>      the typed `status` entry for index.json + the");
+    println!("    --summary <text>            advisories.json row, cross-referenced");
+    println!("    --affected <range>");
+    println!("    --fixed-in <ver>");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -1261,6 +1266,130 @@ fn chrono_iso8601_utc() -> String {
         minute = minute,
         second = second
     )
+}
+
+/// @PLAN12 Phase 6.7a — `loft yank` author helper.
+///
+/// Closes the security loop on the author side.  Phase 6.7
+/// ships the consumer-side classifier (loft binary checks
+/// `~/.loft/registry/advisories.json` against installed
+/// versions and refuses/warns per severity); 6.7a provides
+/// the CLI an author runs to FILE an advisory.
+///
+/// Emits the two edits the registry PR needs:
+///
+/// 1. `index.json` — adds the typed `status` field to the
+///    affected version entry.
+/// 2. `advisories.json` — appends a row with cross-referenced
+///    `id`, `packages[]`, `severity`, `summary`, `published`.
+///
+/// Auto-PR-open (clone registry + splice in the edits +
+/// `gh pr create`) is the next iteration; MVP emits the two
+/// blocks ready for paste into a manual PR.
+#[cfg(feature = "registry")]
+fn yank_package(
+    target: &str,
+    severity: Option<&str>,
+    advisory: Option<&str>,
+    summary: Option<&str>,
+    affected: Option<&str>,
+    fixed_in: Option<&str>,
+) -> i32 {
+    let Some((name, version)) = target.split_once('@') else {
+        eprintln!("loft yank: target must be `<pkg>@<version>` (got `{target}`)");
+        return 1;
+    };
+    if name.is_empty() || version.is_empty() {
+        eprintln!("loft yank: target must be `<pkg>@<version>` (got `{target}`)");
+        return 1;
+    }
+    let severity = match severity {
+        Some(s) => match s {
+            "security_critical" | "security_high" | "security_low" | "bug" | "deprecated" => s,
+            other => {
+                eprintln!(
+                    "loft yank: --severity must be one of \
+                     security_critical / security_high / security_low / bug / deprecated \
+                     (got `{other}`)"
+                );
+                return 1;
+            }
+        },
+        None => {
+            eprintln!("loft yank: --severity required");
+            return 1;
+        }
+    };
+    let Some(advisory) = advisory else {
+        eprintln!("loft yank: --advisory <id> required (e.g. GHSA-xxxx-yyyy-zzzz)");
+        return 1;
+    };
+    let Some(summary) = summary else {
+        eprintln!("loft yank: --summary <text> required");
+        return 1;
+    };
+    let affected_range = affected.unwrap_or(version);
+    let published = chrono_iso8601_utc();
+
+    println!("# 1) Edit `index.json` — set the typed `status` on the affected version.");
+    println!("# Replace the existing `\"{version}\": {{ ... }}` entry for `{name}` with:");
+    println!();
+    println!("\"{version}\": {{");
+    println!("  // ...existing fields (url, sha256, size, loft, subpath, deps, published)...");
+    println!("  \"status\": {{");
+    println!("    \"kind\": \"yanked\",");
+    println!("    \"severity\": \"{severity}\",");
+    println!("    \"advisory\": \"{advisory}\",");
+    println!("    \"summary\": {}", escape_json_string(summary));
+    println!("  }}");
+    println!("}}");
+    println!();
+    println!("# 2) Edit `advisories.json` — append the cross-referenced row.");
+    println!("# Insert at the top of the `\"advisories\": [ ... ]` array:");
+    println!();
+    println!("{{");
+    println!("  \"id\": \"{advisory}\",");
+    println!(
+        "  \"packages\": [{{\"name\": \"{name}\", \"affected\": \"{affected_range}\"{}}}],",
+        if let Some(fix) = fixed_in {
+            format!(", \"fixed_in\": \"{fix}\"")
+        } else {
+            String::new()
+        }
+    );
+    println!("  \"severity\": \"{severity}\",");
+    println!("  \"summary\": {},", escape_json_string(summary));
+    println!("  \"published\": \"{published}\",");
+    println!("  \"references\": []");
+    println!("}}");
+    println!();
+    println!("# Then:");
+    println!("#   git checkout -b yank-{name}-{version}");
+    println!("#   $EDITOR index.json   # apply edit 1");
+    println!("#   $EDITOR advisories.json   # apply edit 2");
+    println!("#   git commit -am 'yank: {name} {version} ({advisory})'");
+    println!("#   gh pr create --title 'yank: {name} {version}' --body \"<rationale>\"");
+    0
+}
+
+/// Quote + JSON-escape a string.  Minimal — handles `"`, `\\`,
+/// `\n`, `\t`.
+#[cfg(feature = "registry")]
+fn escape_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// @PLAN12 — `loft new <name>` scaffolds a fresh loft library
@@ -3394,6 +3523,71 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft update: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "yank" {
+            // @PLAN12 Phase 6.7a — author-side yank workflow.
+            // Emits the index.json + advisories.json edits ready
+            // for the registry PR.
+            #[cfg(feature = "registry")]
+            {
+                let mut target: Option<String> = None;
+                let mut severity: Option<String> = None;
+                let mut advisory: Option<String> = None;
+                let mut summary: Option<String> = None;
+                let mut affected: Option<String> = None;
+                let mut fixed_in: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--severity" {
+                        i += 1;
+                        severity = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--advisory" {
+                        i += 1;
+                        advisory = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--summary" {
+                        i += 1;
+                        summary = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--affected" {
+                        i += 1;
+                        affected = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--fixed-in" {
+                        i += 1;
+                        fixed_in = argv.get(i).cloned();
+                        i += 1;
+                    } else if !a2.starts_with('-') && target.is_none() {
+                        target = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft yank: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                let Some(target) = target else {
+                    eprintln!("loft yank: <pkg>@<version> required");
+                    eprintln!(
+                        "  Usage: loft yank <pkg>@<ver> --severity <tier> --advisory <id> \\"
+                    );
+                    eprintln!("           --summary \"...\" --affected \">=X, <Y\" --fixed-in \"<ver>\"");
+                    std::process::exit(1);
+                };
+                let code = yank_package(
+                    &target,
+                    severity.as_deref(),
+                    advisory.as_deref(),
+                    summary.as_deref(),
+                    affected.as_deref(),
+                    fixed_in.as_deref(),
+                );
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft yank: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "new" {
