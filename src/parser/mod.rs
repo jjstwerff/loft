@@ -4129,6 +4129,7 @@ impl Parser {
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
         self.probe_sidecar_lockfile(id, &mut f);
+        self.probe_project_lockfile(id, &mut f);
         self.probe_registry_installed(id, &mut f);
         self.probe_auto_install(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
@@ -4316,6 +4317,107 @@ impl Parser {
         }
     }
 
+    /// @PLAN12 Phase 6.6 — walk-up project root detection.
+    ///
+    /// From the script's directory, walks up to `/` looking for a
+    /// `loft.toml`.  Returns the dir containing it (the project
+    /// root) — used by:
+    /// - `probe_project_lockfile` to find the lockfile that pins
+    ///   manifest-declared deps.
+    /// - `probe_auto_install` to redirect the lockfile WRITE path
+    ///   to the project root, so auto-installs in a project
+    ///   context update the project's lockfile rather than cwd's.
+    ///
+    /// Returns `None` for script-mode invocations (no `loft.toml`
+    /// anywhere in the parent chain).  Script mode falls back to
+    /// cwd's `loft.lock` (existing behaviour) or to the sidecar
+    /// (when `loft pin <script>` has been run).
+    #[cfg(feature = "registry")]
+    fn find_project_root(script_path: &str) -> Option<std::path::PathBuf> {
+        let p = std::path::Path::new(script_path);
+        if script_path.is_empty() {
+            return None;
+        }
+        let start_dir = if p.is_dir() {
+            p.to_path_buf()
+        } else if let Some(parent) = p.parent() {
+            if parent.as_os_str().is_empty() {
+                std::env::current_dir().ok()?
+            } else {
+                parent.to_path_buf()
+            }
+        } else {
+            return None;
+        };
+        // Canonicalize so the walk-up doesn't terminate prematurely
+        // on relative `./` prefixes that loop on themselves.
+        let abs_start = std::fs::canonicalize(&start_dir).unwrap_or(start_dir);
+        let mut cur = abs_start.as_path();
+        loop {
+            if cur.join("loft.toml").exists() {
+                return Some(cur.to_path_buf());
+            }
+            let Some(parent) = cur.parent() else { return None };
+            if parent == cur {
+                return None;
+            }
+            cur = parent;
+        }
+    }
+
+    /// @PLAN12 Phase 6.6 — project-mode lockfile resolution.
+    ///
+    /// Walks up from the script's directory looking for `loft.toml`;
+    /// if found, reads the adjacent `loft.lock` and resolves `id`
+    /// against it.  Means a script at `myproject/src/foo.loft`
+    /// resolves registry libraries via `myproject/loft.lock` no
+    /// matter where `loft` is invoked from (cwd-independent).
+    ///
+    /// Cargo-style: the project root owns the lockfile; cwd is
+    /// irrelevant.  Inserted in the probe chain BEFORE
+    /// `probe_registry_installed` (which uses cwd as a script-mode
+    /// fallback when no project is found).
+    #[cfg(feature = "registry")]
+    fn probe_project_lockfile(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let Some(project_root) = Self::find_project_root(&cur_script) else {
+            return;
+        };
+        let lock_path = project_root.join("loft.lock");
+        if !lock_path.exists() {
+            return;
+        }
+        let lock = match crate::lockfile::read_lockfile(&lock_path) {
+            Ok(Some(l)) => l,
+            _ => return,
+        };
+        let version = match lock.packages.iter().find(|p| p.name == id) {
+            Some(p) => p.version.clone(),
+            None => return,
+        };
+        let install_dir = crate::registry_index::extract_dir(id, &version);
+        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let versioned_name: String =
+            match install_dir.file_name().and_then(std::ffi::OsStr::to_str) {
+                Some(n) => n.to_string(),
+                None => return,
+            };
+        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            *f = entry;
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_project_lockfile(&mut self, _id: &str, _f: &mut String) {}
+
     /// @PLAN12 Phase 6.6 — sidecar lockfile next to the script.
     ///
     /// `<script>.loft.lock` (e.g. `hello.loft.lock` next to `hello.loft`)
@@ -4464,17 +4566,31 @@ impl Parser {
         // unsigned indexes during the trust-bootstrap window.  Once
         // the production key is embedded, signed indexes verify
         // cleanly and this flag becomes a no-op for the happy path.
+        //
+        // Lockfile WRITE path: walk up from the script's directory
+        // looking for `loft.toml`.  Found → project mode — write to
+        // `<project_root>/loft.lock` so the project's manifest +
+        // lockfile stay co-located regardless of where loft was
+        // invoked from.  Not found → script mode — `lock_path: None`
+        // falls back to cwd's `loft.lock` (the existing default).
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let project_root = Self::find_project_root(&cur_script);
+        let lock_path = project_root.as_ref().map(|p| p.join("loft.lock"));
         let opts = crate::install::InstallOptions {
             allow_unsigned: true,
             refresh: false,
             offline: false,
             allow_prerelease: false,
-            lock_path: None,
+            lock_path,
         };
         match crate::install::auto_install_if_in_catalog(id, &opts) {
             Ok(Some(_report)) => {
                 // Install succeeded; re-probe via lockfile-based
-                // resolution to populate `f`.
+                // resolution to populate `f`.  Try project lockfile
+                // first (where we just wrote the new entry); if
+                // that's not active, fall back to cwd's lockfile
+                // (script-mode case where lock_path was None).
+                self.probe_project_lockfile(id, f);
                 self.probe_registry_installed(id, f);
             }
             Ok(None) => {
