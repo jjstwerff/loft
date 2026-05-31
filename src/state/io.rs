@@ -168,7 +168,7 @@ impl State {
     pub fn write_file(&mut self) {
         let val = *self.get_stack::<DbRef>();
         let file = *self.get_stack::<DbRef>();
-        let db_tp = *self.code::<u16>();
+        let db_tp = self.code::<u16>();
         if file.rec == 0 {
             return;
         }
@@ -359,7 +359,7 @@ impl State {
         let bytes = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<DbRef>();
         let file = *self.get_stack::<DbRef>();
-        let db_tp = *self.code::<u16>();
+        let db_tp = self.code::<u16>();
         if file.rec == 0 {
             return;
         }
@@ -642,15 +642,25 @@ impl State {
     }
 
     pub fn format_database(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let s = self.format_db();
-        self.string_mut(pos - size_ref() as u16).push_str(&s);
+        // @PLAN53 cluster 2 / S4 (2d): format_db pops the composite value's 12-byte
+        // DbRef, which advances TOS by stack_step(12) = 16 under LOFT_ALIGN (12 off).
+        // The destination-buffer offset must back up by the SAME stepped width, else
+        // the String slot is read 4 bytes low and the composite renders empty.  The
+        // DbRef (size_ref=12) is the only non-8-multiple here, so it is the lone
+        // divergent term.  Identity flag-OFF (stack_step(12) == 12).
+        let off = pos - self.stack_step(size_ref()) as u16;
+        self.string_mut(off).push_str(&s);
     }
 
     pub fn format_stack_database(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let s = self.format_db();
-        self.string_ref_mut(pos - size_ref() as u16).push_str(&s);
+        // @PLAN53 cluster 2 / S4 (2d): see format_database — back up by the stepped
+        // DbRef width so the destination String slot is read on its 8-byte boundary.
+        let off = pos - self.stack_step(size_ref()) as u16;
+        self.string_ref_mut(off).push_str(&s);
     }
 
     pub fn sizeof_ref(&mut self) {
@@ -665,8 +675,8 @@ impl State {
     }
 
     pub(super) fn format_db(&mut self) -> String {
-        let db_tp = *self.code::<u16>();
-        let format = *self.code::<u8>();
+        let db_tp = self.code::<u16>();
+        let format = self.code::<u8>();
         let val = *self.get_stack::<DbRef>();
         // validate DbRef and known_type before raw pointer access
         #[cfg(debug_assertions)]
@@ -708,8 +718,8 @@ impl State {
     }
 
     pub fn database(&mut self) {
-        let var = *self.code::<u16>();
-        let db_tp = *self.code::<u16>();
+        let var = self.code::<u16>();
+        let db_tp = self.code::<u16>();
         let code_pos = self.code_pos;
         // B2-runtime: for EnumValue types, the record must be large enough
         // for the parent enum's largest variant.  The parent's size covers
@@ -750,8 +760,8 @@ impl State {
     }
 
     pub fn new_record(&mut self) {
-        let parent_tp = *self.code::<u16>();
-        let fld = *self.code::<u16>();
+        let parent_tp = self.code::<u16>();
+        let fld = self.code::<u16>();
         let data = *self.get_stack::<DbRef>();
         let new_value = self.database.record_new(&data, parent_tp, fld);
         self.database.set_default_value(
@@ -788,18 +798,18 @@ impl State {
     */
     #[allow(clippy::too_many_lines)]
     pub fn iterate(&mut self) {
-        let on = *self.code::<u8>();
-        let arg = *self.code::<u16>();
-        let keys_size = *self.code::<u8>();
+        let on = self.code::<u8>();
+        let arg = self.code::<u16>();
+        let keys_size = self.code::<u8>();
         let mut keys = Vec::new();
         for _ in 0..keys_size {
             keys.push(Key {
-                type_nr: *self.code::<i8>(),
-                position: *self.code::<u16>(),
+                type_nr: self.code::<i8>(),
+                position: self.code::<u16>(),
             });
         }
-        let from_key = *self.code::<u8>();
-        let till_key = *self.code::<u8>();
+        let from_key = self.code::<u8>();
+        let till_key = self.code::<u8>();
         let till = self.stack_key(till_key, &keys);
         let from = self.stack_key(from_key, &keys);
         let data = *self.get_stack::<DbRef>();
@@ -931,8 +941,17 @@ impl State {
             }
             _ => panic!("Not implemented on {on}"),
         }
-        self.put_stack(start);
-        self.put_stack(finish);
+        // @PLAN53 cluster 2 / S4 (2b+2c): push the iterator state as ONE
+        // contiguous 8-byte value, not two separate u32s.  The consumer stores
+        // it into a single I64 var (`{id}#iter_state`, "cur<<32|finish") via an
+        // i64 read.  Under LOFT_ALIGN each `put_stack::<u32>` advances a stepped
+        // (8-byte) slot, so two pushes leave start@P and finish@P+8 with a 4-byte
+        // gap — the i64 read-back then takes [finish | padding] and drops `start`,
+        // killing the sorted cursor (2b) and shifting the hash cursor (2c).  A
+        // single u64 push writes the 8 bytes contiguously in BOTH modes; the
+        // little-endian layout (low=start, high=finish) is byte-identical to the
+        // old two-u32 push when the step is identity (flag-OFF).
+        self.put_stack((u64::from(finish) << 32) | u64::from(start));
     }
 
     pub(super) fn stack_key(&mut self, size: u8, keys: &[Key]) -> Vec<Content> {
@@ -961,9 +980,9 @@ impl State {
     When requested on a not-implemented iterator.
     */
     pub fn step(&mut self) {
-        let state_var = *self.code::<u16>();
-        let on = *self.code::<u8>();
-        let arg = *self.code::<u16>();
+        let state_var = self.code::<u16>();
+        let on = self.code::<u8>();
+        let arg = self.code::<u16>();
         let cur = *self.get_var::<u32>(state_var);
         let finish = *self.get_var::<u32>(state_var - 4);
         let reverse = on & 64 != 0;
@@ -1057,9 +1076,9 @@ impl State {
     When requested on a not-implemented iterator.
     */
     pub fn remove(&mut self) {
-        let state_var = *self.code::<u16>();
-        let on = *self.code::<u8>();
-        let tp = *self.code::<u16>();
+        let state_var = self.code::<u16>();
+        let on = self.code::<u8>();
+        let tp = self.code::<u16>();
         let reverse = on & 64 != 0;
         let cur = *self.get_var::<i32>(state_var);
         let data = *self.get_stack::<DbRef>();
@@ -1089,7 +1108,15 @@ impl State {
                 // VarInt — otherwise −1 comes back as 0xFFFFFFFF = 2^32−1.
                 // put_var adds size_of::<T>(); switching i32→i64 shifts the
                 // target address up by 4 bytes, so pos moves from −8 to −4.
-                self.put_var(state_var - 4, i64::from(n));
+                // @PLAN53 cluster 2 / 2f: this is the lone non-self-compensating
+                // delta in remove() — an i64 put (step(8)=8 both modes) after the
+                // DbRef pop (step(12): 12 V1, 16 V2).  The post-pop 4-byte puts
+                // self-compensate (step(12)−step(4) cancels); this i64 one does not,
+                // so the raw −4 lands 4 bytes low under V2 and stomps the loop's
+                // vector-variable slot → next iteration reads a garbage DbRef
+                // (store_nr=65535) → panic in keys.rs/get_vector.  Thread the
+                // step(12) term: −(step(12)−8) = −4 off (identity), −8 aligned.
+                self.put_var(state_var - (self.stack_step(12) - 8) as u16, i64::from(n));
             }
             1 => {
                 // Use the outer `cur` (read as i32 before the data DbRef was popped).
@@ -1132,7 +1159,11 @@ impl State {
                     };
                     self.put_var(state_var - 8, pred);
                     // If n_after is the finish boundary, also signal end-of-iteration.
-                    let finish = *self.get_var::<u32>(state_var - 16);
+                    // @PLAN53 cluster 2 / 2f: get_var adds NO step, so this finish-read
+                    // delta must thread step(12) the other way: −(step(12)+4) = −16 off
+                    // (identity), −20 aligned.  Latent (no test exercises case-1 index
+                    // #remove under V2 yet) but the same disease as the case-0 fix above.
+                    let finish = *self.get_var::<u32>(state_var - (self.stack_step(12) + 4) as u16);
                     if n_after == finish {
                         self.put_var(state_var - 12, u32::MAX);
                     }
@@ -1179,13 +1210,13 @@ impl State {
     Clear the given structure on the field
     */
     pub fn clear(&mut self) {
-        let tp = *self.code::<u16>();
+        let tp = self.code::<u16>();
         let data = *self.get_stack::<DbRef>();
         self.database.remove_claims(&data, tp);
     }
 
     pub fn append_copy(&mut self) {
-        let tp = *self.code::<u16>();
+        let tp = self.code::<u16>();
         let multiply = *self.get_stack::<i64>() as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
@@ -1212,7 +1243,7 @@ impl State {
     }
 
     pub fn copy_record(&mut self) {
-        let raw_tp = *self.code::<u16>();
+        let raw_tp = self.code::<u16>();
         // Issue #120: high bit of tp signals "free source store after copy".
         let free_source = raw_tp & 0x8000 != 0;
         let tp = raw_tp & 0x7FFF;
@@ -1328,7 +1359,7 @@ impl State {
     /// type id; its `0x8000` high bit frees the source store after the copy
     /// (set by the parser for fresh-storage RHS like `s = build()`).
     pub fn replace_keyed(&mut self) {
-        let raw_tp = *self.code::<u16>();
+        let raw_tp = self.code::<u16>();
         let free_source = raw_tp & 0x8000 != 0;
         let tp = raw_tp & 0x7FFF;
         let dest = *self.get_stack::<DbRef>();
@@ -1354,7 +1385,7 @@ impl State {
     /// collection.  `OpSetKeyed(coll, value, tp)`: `tp`'s `0x8000` bit frees
     /// `value`'s store after the deep copy (caller temp).
     pub fn set_keyed(&mut self) {
-        let raw_tp = *self.code::<u16>();
+        let raw_tp = self.code::<u16>();
         let free_source = raw_tp & 0x8000 != 0;
         let db_tp = raw_tp & 0x7FFF;
         let value = *self.get_stack::<DbRef>();
@@ -1363,7 +1394,7 @@ impl State {
     }
 
     pub fn hash_add(&mut self) {
-        let tp = *self.code::<u16>();
+        let tp = self.code::<u16>();
         let rec = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         hash::add(
@@ -1375,7 +1406,7 @@ impl State {
     }
 
     pub fn validate(&mut self) {
-        let tp = *self.code::<u16>();
+        let tp = self.code::<u16>();
         let data = *self.get_stack::<DbRef>();
         self.database.validate(&data, tp);
     }
@@ -1393,7 +1424,7 @@ impl State {
     }
 
     pub fn hash_remove(&mut self) {
-        let tp = *self.code::<u16>();
+        let tp = self.code::<u16>();
         let rec = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         if rec.rec != 0 {
@@ -1402,12 +1433,12 @@ impl State {
     }
 
     pub(super) fn read_key(&mut self, full: bool) -> (u16, Vec<Content>) {
-        let db_tp = *self.code::<u16>();
+        let db_tp = self.code::<u16>();
         let keys = self.database.get_keys(db_tp);
         let no_keys = if full {
             keys.len() as u8
         } else {
-            *self.code::<u8>()
+            self.code::<u8>()
         };
         let mut key = Vec::new();
         for (k_nr, k) in keys.iter().enumerate() {
@@ -1445,8 +1476,8 @@ impl State {
     }
 
     pub fn finish_record(&mut self) {
-        let parent_tp = *self.code::<u16>();
-        let fld = *self.code::<u16>();
+        let parent_tp = self.code::<u16>();
+        let fld = self.code::<u16>();
         let record = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         self.database.record_finish(&data, &record, parent_tp, fld);
@@ -1482,8 +1513,8 @@ impl State {
     }
 
     pub fn insert_vector(&mut self) {
-        let size = *self.code::<u16>();
-        let db_tp = *self.code::<u16>();
+        let size = self.code::<u16>();
+        let db_tp = self.code::<u16>();
         let index = *self.get_stack::<i64>();
         let r = *self.get_stack::<DbRef>();
         let new_value =

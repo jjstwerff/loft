@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2i — REFERENCE (must always PASS).
+//
+// (integer, integer) = 16 bytes, an 8-multiple total — raw total == stepped
+// total, so no frame shortfall.  Pairs with 2i-01: the delta between this PASS
+// and that PANIC is purely the non-8-multiple total.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+fn add(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  ps: vector<(integer, integer)> = [(1, 2), (3, 4)];
+  sum = 0;
+  for p in ps par(r = add(p), 4) { sum += r; }
+  assert(sum == 10, "2i-02: got {sum}, want 10");
+  println("2i-02 PASSED");
+}

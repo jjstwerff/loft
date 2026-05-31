@@ -27,6 +27,13 @@ pub struct Stack<'a> {
     pub function: Function,
     pub def_nr: u32,
     pub logging: bool,
+    /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), codegen
+    /// advances `position` in 8-rounded steps so the emitted `pos`
+    /// operands match an aligned runtime `stack_pos`.  MUST equal the
+    /// runtime `State::aligned_stack` for the same run (both read the
+    /// same env).  Off by default → tight V1 advances, bytecode
+    /// unchanged.
+    pub aligned: bool,
     loops: Vec<Loop>,
 }
 
@@ -37,9 +44,25 @@ impl<'a> Stack<'a> {
             data,
             def_nr,
             logging,
+            aligned: variables::aligned_stack_enabled(),
             loops: Vec::new(),
             function,
         }
+    }
+
+    /// @PLAN53 cluster 2 / S4 — codegen mirror of `State::stack_step`:
+    /// one eval-stack advance, 8-rounded when `aligned`.  The S4 work
+    /// routes codegen's `position += size(..)` advances through this so
+    /// compile-time and runtime move in lockstep (S1).
+    ///
+    /// Not yet wired: routing codegen's ~dozen `position` advances (plus
+    /// the `text.rs` `pos - N` offsets) is the S4 implementation itself,
+    /// which must move them all together or corrupt.  The scaffold only
+    /// provides the seam + the `aligned` flag; wiring is S4's job.
+    #[inline]
+    #[must_use]
+    pub fn step(&self, size: u16) -> u16 {
+        variables::aligned_stack_step(u32::from(size), self.aligned) as u16
     }
 
     /** Return the amount of space on stack is needed as calculated from code */
@@ -74,15 +97,49 @@ impl<'a> Stack<'a> {
         }
     }
 
+    /// Compile-time distance from the current eval-stack top down to
+    /// variable `v`'s frame slot — the `pos` operand emitted for every
+    /// positional var op (`OpPutInt`, `OpVarRef`, `OpFreeText`, …).
+    /// Both terms are `size()`-derived (see @PLAN53 cluster 2 / S1):
+    /// `position` is advanced by `variables::size` as codegen tracks the
+    /// eval stack, and `function.stack(v)` is the slot the allocator gave.
+    ///
+    /// # Panics
+    /// When `v`'s slot exceeds the current eval position — which means
+    /// either the variable was never assigned a slot (`stack_pos ==
+    /// u16::MAX`, e.g. an allocator skipped it) or the eval stack sits
+    /// below its frame slot.  Names the variable + both operands so the
+    /// failure is self-explanatory instead of a bare
+    /// "attempt to subtract with overflow".
+    pub fn var_pos(&self, v: u16) -> u16 {
+        let slot = self.function.stack(v);
+        self.position.checked_sub(slot).unwrap_or_else(|| {
+            panic!(
+                "var_pos underflow in fn '{}': variable '{}' (v_nr={v}) slot={slot} \
+                 exceeds eval position={} — variable has no assigned slot \
+                 (stack_pos==u16::MAX, allocator skipped it?) or the eval stack \
+                 is below its frame slot",
+                self.data.def(self.def_nr).name,
+                self.function.name(v),
+                self.position,
+            )
+        })
+    }
+
     pub fn operator(&mut self, d_nr: u32) {
         let d = self.data.def(d_nr);
+        // @PLAN53 cluster 2 / S4: a mutable param / the return value each
+        // occupies one stepped eval-stack slot (`put_stack`/`get_stack`
+        // round to 8 in aligned mode), so sum the STEPPED sizes — Σ step,
+        // never step(Σ) — to stay in lockstep with the per-value pushes.
+        // `step` is identity when LOFT_ALIGN is off → V1 unchanged.
         let mut parameters = 0;
         for p in &d.attributes {
             if p.mutable {
-                parameters += variables::size(&p.typedef, &Context::Argument);
+                parameters += self.step(variables::size(&p.typedef, &Context::Argument));
             }
         }
-        let ret = variables::size(&d.returned, &Context::Argument);
+        let ret = self.step(variables::size(&d.returned, &Context::Argument));
         assert!(
             self.position >= parameters,
             "Incorrect stack {} versus {parameters} in {} operator {d_nr}:{}",

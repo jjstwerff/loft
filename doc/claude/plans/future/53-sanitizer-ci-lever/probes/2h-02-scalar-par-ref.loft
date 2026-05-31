@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — REFERENCE (must always PASS).
+//
+// The SAME `par(...)` shape but a SCALAR element (vector<integer>) instead of a
+// tuple.  This proves the parallel-marshalling machinery itself is sound under
+// LOFT_ALIGN — the 2h trigger is specifically the TUPLE element in the worker
+// frame, not par in general.  The delta between this PASS and 2h-01's FAIL is
+// the tuple.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+fn dbl(x: const integer) -> integer { x * 2 }
+
+fn main() {
+  xs: vector<integer> = [1, 2, 3, 4];
+  sum = 0;
+  for x in xs par(r = dbl(x), 4) { sum += r; }
+  assert(sum == 20, "2h-02: got {sum}, want 20");
+  println("2h-02 PASSED");
+}

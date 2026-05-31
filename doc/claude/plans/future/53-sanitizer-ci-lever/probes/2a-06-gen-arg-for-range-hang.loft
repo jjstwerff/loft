@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (HANG / runaway).
+//
+// Same corruption as 2a-05 but the loop is a `for i in 0..n` range rather
+// than a hand-written `while`.  Confirms the trigger is the argument read,
+// independent of the loop-desugaring path (range-iterator vs while).  The
+// range upper bound `n` reads corrupted, so the range never exhausts.
+//
+// RUN WITH A TIMEOUT:
+//   LOFT_TIMEOUT=5 LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret <this>
+//
+// Status under aligned: CURRENTLY HANG ; AFTER 2a FIX -> PASS
+// Status flag-OFF: PASS.
+
+fn span(n: integer) -> iterator<integer> {
+  for i in 0..n {
+    yield i;
+  }
+}
+
+fn main() {
+  s = 0;
+  for v in span(5) {
+    s = s + v;
+  }
+  assert(s == 10, "2a-06: got {s}, want 10");
+  println("2a-06 PASSED");
+}

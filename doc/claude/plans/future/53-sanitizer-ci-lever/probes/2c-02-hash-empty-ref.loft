@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — REFERENCE (must always PASS).
+//
+// An EMPTY hash iterates zero times — no gather, so no phantom element.
+// Pairs with 2c-04 (single element, which DOES emit a phantom): the delta
+// between this PASS and that FAIL is the first gather.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+struct Entry { name: text, count: integer }
+struct Bag { data: hash<Entry[name]> }
+
+fn main() {
+  b = Bag { data: [] };
+  n = 0;
+  for e in b.data { n = n + 1; }
+  assert(n == 0, "2c-02: got {n}, want 0");
+  println("2c-02 PASSED");
+}

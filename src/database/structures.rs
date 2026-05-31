@@ -170,6 +170,33 @@ impl Stores {
         }
     }
 
+    /// @PLAN53 cluster 3: sound cross-store byte copy.  Copies `len` bytes from
+    /// `src_idx`'s record (`src_rec` @ `from_pos`) into `dst_idx`'s record
+    /// (`dst_rec` @ `to_pos`).  `get_disjoint_mut` produces the two store borrows
+    /// from disjoint sub-ranges of `allocations`, so neither overlaps the whole
+    /// slice — the old `from_ref`/`from_mut` reborrow pair formed a `&[Store]`
+    /// and a `&mut [Store]` over the same slice simultaneously, which Miri's
+    /// Stacked Borrows (correctly) rejects as UB.  Behaviour is identical (same
+    /// bytes copied).  Caller guarantees `src_idx != dst_idx`.
+    #[allow(clippy::too_many_arguments)] // low-level (idx, rec, pos) src+dst+len copy descriptor
+    pub(crate) fn copy_block_cross_store(
+        &mut self,
+        src_idx: u16,
+        src_rec: u32,
+        from_pos: isize,
+        dst_idx: u16,
+        dst_rec: u32,
+        to_pos: isize,
+        len: isize,
+    ) {
+        let [src_store, dst_store] = self
+            .allocations
+            .get_disjoint_mut([src_idx as usize, dst_idx as usize])
+            .expect("copy_block_cross_store: src and dst store indices must be distinct");
+        let src_store: &Store = src_store;
+        src_store.copy_block_between(src_rec, from_pos, dst_store, dst_rec, to_pos, len);
+    }
+
     /// P213: claim a fresh record in `host_field`'s Store of size matching
     /// `content_kt`, deep-copy `src`'s payload + nested heap fields into
     /// it, then write the new rec-id u32 into `host_field`.  Used by
@@ -199,19 +226,11 @@ impl Stores {
                 size as isize,
             );
         } else {
-            let src_store: &Store;
-            let dst_store: &mut Store;
-            unsafe {
-                src_store = keys::store(src, &*std::ptr::from_ref::<[Store]>(&self.allocations));
-                dst_store = keys::mut_store(
-                    host_field,
-                    &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
-                );
-            }
-            src_store.copy_block_between(
+            self.copy_block_cross_store(
+                src.store_nr,
                 src.rec,
                 src.pos as isize,
-                dst_store,
+                host_field.store_nr,
                 new_rec,
                 new_db.pos as isize,
                 size as isize,
@@ -321,21 +340,13 @@ impl Stores {
                 o_length as isize * size as isize,
             );
         } else {
-            let o_store: &Store;
-            let db_store: &mut Store;
-            // These stores are actually two different data structures. However, there is no easier
-            // way to tell the rust type system this.
-            unsafe {
-                o_store = keys::store(o_db, &*std::ptr::from_ref::<[Store]>(&self.allocations));
-                db_store = keys::mut_store(
-                    db,
-                    &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
-                );
-            }
-            o_store.copy_block_between(
+            // @PLAN53 cluster 3: two different data structures in distinct stores —
+            // copy via the sound disjoint-borrow helper instead of an aliasing reborrow.
+            self.copy_block_cross_store(
+                o_db.store_nr,
                 o_rec,
                 8,
-                db_store,
+                db.store_nr,
                 new_db.rec,
                 new_db.pos as isize,
                 o_length as isize * size as isize,
@@ -396,22 +407,12 @@ impl Stores {
                     self.store_mut(db)
                         .copy_block(src_rec, 8, new_rec, 8, elem_size as isize);
                 } else {
-                    let o_store: &Store;
-                    let db_store: &mut Store;
-                    // Same trick as the inline path: two disjoint mut borrows
-                    // for cross-store copy.
-                    unsafe {
-                        o_store =
-                            keys::store(o_db, &*std::ptr::from_ref::<[Store]>(&self.allocations));
-                        db_store = keys::mut_store(
-                            db,
-                            &mut *std::ptr::from_mut::<[Store]>(&mut self.allocations),
-                        );
-                    }
-                    o_store.copy_block_between(
+                    // @PLAN53 cluster 3: sound disjoint-borrow cross-store copy.
+                    self.copy_block_cross_store(
+                        o_db.store_nr,
                         src_rec,
                         8,
-                        db_store,
+                        db.store_nr,
                         new_rec,
                         8,
                         elem_size as isize,

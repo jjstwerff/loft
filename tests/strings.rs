@@ -71,6 +71,31 @@ fn string_scope() {
   │ │ │ │ │ │ loop:10L [seq 66..82]
   │ │ │ │ │ │ _m+8=228 [78..78]",
     )
+    // @PLAN53 — aligned (V2) layout: every slot step rounds up to 8,
+    // so offsets differ while behaviour is identical.
+    .slots_aligned(
+        "\
+  block:1
+  __work_5+24=8 [0..145]
+  __work_4+24=32 [3..144]
+  __work_3+24=56 [6..143]
+  __work_2+24=80 [9..142]
+  __work_1+24=104 [12..141]
+  test_value+24=128 [15..140]
+  │ block:2
+  │ a+8=152 [17..102]
+  │ b+24=160 [18..119]
+  │ │ for:3
+  │ │ n#index+8=184 [22..98]
+  │ │ │ loop:4L [seq 23..99]
+  │ │ │ n+8=192 [35..81]
+  │ │ │ │ block:6
+  │ │ │ │ t+24=200 [36..98]
+  │ │ │ │ │ for:9
+  │ │ │ │ │ _m#index+8=224 [65..81]
+  │ │ │ │ │ │ loop:10L [seq 66..82]
+  │ │ │ │ │ │ _m+8=232 [78..78]",
+    )
     .result(Value::str("136 via n:1=1 n:2=12 n:3=122 "));
 }
 
@@ -90,6 +115,22 @@ fn loop_variable() {
   │ │ │ _t+8=52 [19..19]
   │ │ │ │ block:6
   │ │ │ │ b+24=60 [20..32]",
+        )
+        // @PLAN53 — aligned (V2) layout; `test_value` sorts last as its
+        // 8-rounded slot lands above the loop body.
+        .slots_aligned(
+            "\
+  block:1
+  __work_1+24=8 [0..56]
+  │ block:2
+  │ a+8=32 [4..33]
+  │ │ for:3
+  │ │ _t#index+8=40 [6..32]
+  │ │ │ loop:4L [seq 7..33]
+  │ │ │ _t+8=48 [19..19]
+  │ │ │ │ block:6
+  │ │ │ │ b+24=56 [20..32]
+  test_value+8=80 [34..41]",
         )
         .result(Value::Int(246));
 }

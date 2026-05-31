@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2j — REPRODUCER (GUARD-detector, wide dispatcher).
+//
+// Same base-4 entry issue as 2j-01 but via the WIDE dispatcher
+// (execute_at_raw_primitive_input_wide, the tuple path fixed functionally by
+// 2h+2i).  Confirms BOTH par dispatchers share the unstepped entry base.
+//
+// Detector (run_guard.sh): CURRENTLY guard FIRES ; AFTER 2j FIX -> SILENT.
+// Normal binary: PASS both modes.
+
+fn psum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  v: vector<(integer, integer)> = [(1, 10), (2, 20)];
+  sum = 0;
+  for p in v par(r = psum(p), 4) { sum += r; }
+  assert(sum == 33, "2j-02: got {sum}, want 33");
+  println("2j-02 PASSED");
+}

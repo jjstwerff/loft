@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2h — EDGE (worker count).
+//
+// Same failure with a SINGLE worker (`par(..., 1)`) — the bug is the tuple
+// marshalling into the worker frame, independent of how many workers run.
+//
+// Status aligned: CURRENTLY FAIL (0) ; AFTER 2h FIX -> PASS.  Flag-OFF: PASS.
+
+fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+
+fn main() {
+  pairs: vector<(integer, integer)> = [(1, 10), (2, 20)];
+  sum = 0;
+  for p in pairs par(r = pair_sum(p), 1) { sum += r; }
+  assert(sum == 33, "2h-04: got {sum}, want 33");
+  println("2h-04 PASSED");
+}

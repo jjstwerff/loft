@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2j — REFERENCE (guard must be SILENT).
+//
+// A non-par sorted iteration (the 2b path, now fixed + guard-clean).  Proves the
+// guard is otherwise silent across the aligned interpreter — the par-worker
+// entry base (2j-01/02) is the specific remaining offender, not iteration.  Must
+// stay guard-SILENT both before and after the 2j fix.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: sorted<Elm[k]> = [];
+  s += [Elm{k:1, v:10}];
+  s += [Elm{k:2, v:20}];
+  t = 0;
+  for e in s { t += e.v; }
+  assert(t == 30, "2j-03: got {t}, want 30");
+  println("2j-03 PASSED");
+}

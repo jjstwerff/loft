@@ -71,7 +71,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: ci-miri all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -171,17 +171,28 @@ rebuild-native-cdylibs:
 	    echo "FAIL: rebuild $$d"; exit 1; \
 	  }; \
 	done
-	@if [ -d target/wasm32-unknown-unknown ]; then \
+	@# Gate on the target's std being INSTALLED, not on the output dir
+	@# (which persists across toolchain switches — a fresh `rustup default`
+	@# drops the wasm std but leaves target/wasm32-*/, so the old `[ -d … ]`
+	@# heuristic hard-failed with a buried E0463).  Installed → rebuild;
+	@# stale artefact but std gone → warn with the fix and SKIP; neither → skip.
+	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 	  cargo build --release --target wasm32-unknown-unknown \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-unknown-unknown rlib rebuild"; exit 1; \
 	  }; \
+	elif [ -d target/wasm32-unknown-unknown ]; then \
+	  echo "WARN: wasm32-unknown-unknown std not installed — skipping wasm rlib refresh"; \
+	  echo "      (stale target/wasm32-unknown-unknown/ present; run: rustup target add wasm32-unknown-unknown)"; \
 	fi
-	@if [ -d target/wasm32-wasip2 ]; then \
+	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-wasip2; then \
 	  cargo build --release --target wasm32-wasip2 \
 	    --lib --no-default-features --features random -q || { \
 	    echo "FAIL: wasm32-wasip2 rlib rebuild"; exit 1; \
 	  }; \
+	elif [ -d target/wasm32-wasip2 ]; then \
+	  echo "WARN: wasm32-wasip2 std not installed — skipping wasm rlib refresh"; \
+	  echo "      (stale target/wasm32-wasip2/ present; run: rustup target add wasm32-wasip2)"; \
 	fi
 
 test: clippy rebuild-native-cdylibs
@@ -1039,7 +1050,28 @@ test-gl-headless:
 	echo "$$total tested, $$skipped skipped, $$failed failed"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
 
-ci: rebuild-native-cdylibs
+ci-miri:  ## @PLAN53: run the loft interpreter under Miri (hard-UB gate). SLOW (~15 min/test).
+	@# Mirror of .github/workflows/miri.yml.  Catches alignment / OOB / UAF /
+	@# uninitialised / leak UB the homegrown stack_align_guard can't see.
+	@# Needs nightly + miri:  rustup toolchain install nightly --component miri
+	@# -Zmiri-disable-stacked-borrows gates the HARD memory UB, not the aliasing
+	@# model (loft's store layer aliases distinct records by design).  Runs on the
+	@# aligned interpreter (the hard-UB-clean configuration).  Add validated tests
+	@# to the curated list below as the lever closes more clusters.
+	cargo +nightly miri setup
+	LOFT_ALIGN=1 LOFT_SLOT_V2=drive \
+		MIRIFLAGS='-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows' \
+		cargo +nightly miri test --test issues -- --exact \
+		p213_struct_field_basic_int
+
+ci:
+	@# Fresh header FIRST so result.txt can never be mistaken for a stale
+	@# run.  rebuild-native-cdylibs is invoked INSIDE the chain below (not as
+	@# an order-only prerequisite) so its output — and any failure — lands in
+	@# result.txt; as a prerequisite it ran before this truncation and a
+	@# prereq failure (e.g. a missing wasm target after a toolchain switch)
+	@# left the OLD result.txt in place, masking the real cause.
+	@printf '== make ci | %s | %s ==\n' "$$(rustc --version 2>/dev/null)" "$$(date -u +%FT%TZ)" > result.txt
 	-rm -rf tests/generated
 	-rm -f /tmp/loft_native_*
 	# Some tests (e.g. fill_rs_up_to_date, n2..n10) write into tests/generated
@@ -1065,7 +1097,12 @@ ci: rebuild-native-cdylibs
 	#                       repeated PR-212 cycles where ignored drift
 	#                       surfaced as downstream test failures)
 	#   4. Test       job → cargo build --all-targets,
-	#                       cargo build --no-default-features,
+	#                       cargo build --no-default-features
+	#                         (to an isolated --target-dir: this strips
+	#                          `native-extensions` from libloft.rlib, and
+	#                          sharing target/debug/deps/ let it stomp the
+	#                          rlib the native tests link → intermittent
+	#                          `E0433: cannot find native_call`),
 	#                       cargo nextest run --profile ci
 	#
 	# Drift from what GH runs is the most common cause of "passed local,
@@ -1075,14 +1112,17 @@ ci: rebuild-native-cdylibs
 	# is heavy enough that local devs run `make gallery` separately when
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
-	cargo fmt -- --check > result.txt 2>&1 && \
+	$(MAKE) rebuild-native-cdylibs >> result.txt 2>&1 && \
+	cargo fmt -- --check >> result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
 	cargo clippy --all-targets --all-features -- -D warnings >> result.txt 2>&1 && \
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
-	cargo build --no-default-features >> result.txt 2>&1 && \
+	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
-	cargo nextest run --profile ci >> result.txt 2>&1
+	cargo nextest run --profile ci >> result.txt 2>&1 && \
+	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \
+	{ echo 'CI-RESULT: FAILED — see the last failing command above in result.txt' >> result.txt; exit 1; }
 
 # Local-only superset of `ci`: same gates plus the development suites
 # that are NOT in .github/workflows/ci.yml — package smoke tests and

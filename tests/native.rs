@@ -228,28 +228,40 @@ fn fnv64(data: &[u8]) -> u64 {
 /// Build the cache key from the current `.rs` content and rlib identity.
 ///
 /// The key captures both what was compiled (`.rs` bytes) and what it was
-/// linked against (rlib path + modification time).  If either changes the
-/// key changes and the binary is recompiled.
+/// linked against (rlib path + CONTENT hash).  If either changes the key
+/// changes and the binary is recompiled.
+///
+/// BUILD2: keyed on rlib bytes, not mtime.  `actions/cache` persists `target/`
+/// but every CI run reruns `cargo build --release --lib`, which rewrites
+/// `libloft.rlib` with a fresh mtime even on a no-op rebuild — an mtime fold
+/// then misses and recompiles every native fixture.  rustc's rlib output is
+/// byte-deterministic for unchanged sources, so a content hash is stable across
+/// the no-op rebuild (warm-cache hit) while still invalidating when the binary
+/// actually changes (different bytes → different hash).  The rlib is read once
+/// per process via `rlib_content_hash`, not once per fixture.
 fn cache_key(rs_content: &[u8], rlib_info: &Option<(PathBuf, PathBuf)>) -> u64 {
     let mut key = fnv64(rs_content);
     if let Some((rlib, _)) = rlib_info {
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        if let Ok(mtime) = std::fs::metadata(rlib).and_then(|m| m.modified()) {
-            // Mix in the rlib modification time so a recompiled rlib (same path,
-            // different binary) also invalidates the cache.
-            let nanos = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0);
-            let secs = mtime
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            key ^= fnv64(&secs.to_le_bytes());
-            key ^= fnv64(&nanos.to_le_bytes());
-        }
+        key ^= rlib_content_hash(rlib);
     }
     key
+}
+
+/// FNV-1a hash of a file's bytes, memoised per path (the rlib is ~14MB and the
+/// same within a run).  Missing file → 0, matching the old no-op-on-missing.
+fn rlib_content_hash(path: &Path) -> u64 {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(&h) = guard.get(path) {
+        return h;
+    }
+    let h = std::fs::read(path).map(|b| fnv64(&b)).unwrap_or(0);
+    guard.insert(path.to_path_buf(), h);
+    h
 }
 
 /// Phase 1 — parse the `.loft` file and generate its Rust source.
@@ -425,14 +437,17 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     // Only write the .rs file when the content has changed.  This keeps the file's
     // content stable across runs where the loft source hasn't changed, which
     // means cache_key() produces the same hash and compile_native_job stays cached.
-    let tmp_rs = std::env::temp_dir().join(format!("loft_native_{stem}.rs"));
+    // scratch_dir honours LOFT_TMPDIR so the whole native run can be kept off a
+    // small /tmp tmpfs; all of these must agree on the same directory.
+    let scratch = loft::platform::scratch_dir();
+    let tmp_rs = scratch.join(format!("loft_native_{stem}.rs"));
     let existing = std::fs::read(&tmp_rs).unwrap_or_default();
     if existing != buf {
         std::fs::write(&tmp_rs, &buf)?;
     }
 
-    let binary = std::env::temp_dir().join(format!("loft_native_{stem}_bin"));
-    let key_file = std::env::temp_dir().join(format!("loft_native_{stem}_bin.key"));
+    let binary = scratch.join(format!("loft_native_{stem}_bin"));
+    let key_file = scratch.join(format!("loft_native_{stem}_bin.key"));
     Ok(NativeJob {
         stem,
         tmp_rs,
@@ -476,7 +491,27 @@ fn compile_native_job(
 ) -> std::io::Result<bool> {
     if binary_cache_valid(job, rlib_info) {
         println!("  cached  {}", job.stem);
+        // BUILD2: bump the binary's mtime on a cache HIT so its timestamp
+        // tracks last-USE, not last-compile.  A long-lived cache entry is
+        // hit (not recompiled) run after run, so without this its mtime
+        // would freeze at first-compile time and an age-based reaper would
+        // delete exactly the entries the cache most wants to keep warm.
+        let now = std::time::SystemTime::now();
+        let _ = std::fs::File::open(&job.binary).and_then(|f| f.set_modified(now));
+        let _ = std::fs::File::open(&job.key_file).and_then(|f| f.set_modified(now));
         return Ok(true);
+    }
+    // Preflight (Layer 2): never start a compile that could overflow a
+    // RAM-backed tmpfs and exhaust memory.  Reclaims loft's own stale
+    // artefacts first; skips (not fails) the test if space is still low.
+    let scratch = loft::platform::scratch_dir();
+    if !loft::platform::native_compile_space_ok(&scratch) {
+        println!(
+            "  SKIP {} — low temp space in {} (set LOFT_TMPFS_MIN_FREE_MB to tune)",
+            job.stem,
+            scratch.display()
+        );
+        return Ok(false);
     }
     // PLAN49 follow-up — build the rustc args into a file passed via
     // `rustc @argfile` instead of as a long command line.  Windows
@@ -495,6 +530,14 @@ fn compile_native_job(
         "-C".to_string(),
         "opt-level=0".to_string(),
     ];
+    // Layer 1: strip the linked binary (~36MB → ~1MB; the bulk is debug info
+    // from libloft.rlib + std, useless to a run-and-check test).  Opt out with
+    // LOFT_NATIVE_KEEP_SYMBOLS=1 when debugging a native crash (the generated
+    // .rs is always kept for recompilation).
+    if loft::platform::native_strip_symbols() {
+        args.push("-C".to_string());
+        args.push("strip=symbols".to_string());
+    }
     // LOFT_CRANELIFT=1 — use the Cranelift codegen backend for much faster compilation.
     // Requires a nightly toolchain with `rustup component add rustc-codegen-cranelift-preview`.
     if std::env::var_os("LOFT_CRANELIFT").is_some() {
@@ -527,7 +570,7 @@ fn compile_native_job(
     // separated; newline-separated is a strict subset and is what
     // every other tool (clang, gcc) accepts too.  Paths containing
     // whitespace get quoted defensively.
-    let argfile_path = std::env::temp_dir().join(format!("loft_native_{}_args.txt", job.stem));
+    let argfile_path = scratch.join(format!("loft_native_{}_args.txt", job.stem));
     let argfile_contents = args
         .iter()
         .map(|s| {
@@ -595,10 +638,21 @@ fn run_native_jobs(
     jobs: Vec<NativeJob>,
     rlib_info: Option<(PathBuf, PathBuf)>,
 ) -> std::io::Result<()> {
-    let concurrency = std::thread::available_parallelism()
+    // Layer 3: scale worker count to temp-fs headroom.  On a roomy disk this is
+    // just min(cpus, jobs); on a tight RAM-backed tmpfs it clamps down so N
+    // concurrent compiles can't exhaust memory and hang the machine.  Each
+    // in-flight compile peaks at ~1.2GB of temp (rustc intermediates dominate;
+    // the stripped output binary is ~1MB), so reserve that per worker.
+    let cpu_max = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4)
-        .min(jobs.len().max(1));
+        .unwrap_or(4);
+    const PER_WORKER_TMP: u64 = 1280 * 1024 * 1024;
+    let concurrency = loft::platform::native_worker_count(
+        cpu_max,
+        jobs.len(),
+        &loft::platform::scratch_dir(),
+        PER_WORKER_TMP,
+    );
     let rlib_ref = &rlib_info;
 
     // Phase 2: compile all jobs in parallel chunks.
@@ -765,8 +819,11 @@ fn native_tuple_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(compiled, "50-tuples.loft failed to compile under --native");
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 
@@ -783,8 +840,11 @@ fn native_binary_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/20-binary.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(compiled, "20-binary.loft failed to compile under --native");
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 
@@ -801,11 +861,11 @@ fn native_tuple_return_script() -> std::io::Result<()> {
     let rlib_info = find_loft_rlib();
     let entry = std::path::Path::new("tests/scripts/50-tuples.loft");
     let job = prepare_native_test(entry)?;
-    let compiled = compile_native_job(&job, &rlib_info)?;
-    assert!(
-        compiled,
-        "50-tuples.loft (with tuple return) failed to compile under --native"
-    );
+    // Ok(false) = skipped (rustc absent, or Layer-2 low-space guard) — not a
+    // failure; a real compile error returns Err.  Skip the run in that case.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
     run_native_job(&job)
 }
 

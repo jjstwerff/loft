@@ -205,7 +205,7 @@ pub const OPERATORS: &[fn(&mut State)] = &["
             }
             let tp = data.rust_type(&a.typedef, &Context::Argument);
             if !a.mutable {
-                writeln!(into, "    let v_{} = *s.code::<{tp}>();", a.name)?;
+                writeln!(into, "    let v_{} = s.code::<{tp}>();", a.name)?;
             }
         }
         for a in data.def(d_nr).attributes.iter().rev() {

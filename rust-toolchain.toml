@@ -1,0 +1,13 @@
+# Floating-stable toolchain with the wasm targets pinned.
+#
+# `channel = "stable"` keeps local in step with CI (`dtolnay/rust-toolchain@stable`)
+# and preserves the deliberate float-to-latest-stable posture (@PLAN53 — track
+# the newest rustc, don't freeze).  It does NOT pin a version.
+#
+# `targets` is the robustness lever: rustup auto-installs these for whatever
+# stable is active, so a `rustup default …` switch or a fresh machine can never
+# again silently drop the wasm std and hard-fail `make ci`'s native-cdylib
+# rebuild with a buried `E0463: can't find crate for core`.
+[toolchain]
+channel = "stable"
+targets = ["wasm32-unknown-unknown", "wasm32-wasip2"]

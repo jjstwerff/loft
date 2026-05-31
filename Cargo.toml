@@ -40,6 +40,11 @@ mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
 native-extensions = ["dep:libloading"]
 registry     = ["dep:ureq", "dep:zip", "dep:tar", "dep:flate2", "dep:sha2", "dep:ed25519-dalek"]
+# @PLAN53 cluster 2 / S4 — arm the homegrown stack-alignment guards (frame
+# `stack_pos % 8` + per-access slot alignment).  Off by default → zero hot-path
+# cost.  NOT gated on debug_assertions: [profile.dev.package.loft] disables
+# those.  Run the aligned-stack work with `cargo test --features stack_align_guard`.
+stack_align_guard = []
 # Development aid — when set, `tests/testing.rs::Test::drop` writes each
 # test's assembled loft source to `/tmp/loft-repro/<test_name>.loft`
 # *before* running it, with a `fn main() { test(); }` tail appended so

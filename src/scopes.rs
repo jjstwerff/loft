@@ -186,18 +186,66 @@ pub fn check(data: &mut Data) {
         // `doc/claude/plans/finished/04-slot-assignment-redesign/README.md`
         // § Status.  Invariants I1–I7 in `validate.rs` check V1's
         // output at every codegen completion (debug / test builds).
+        // @PLAN53 cluster 2 / S4: in aligned mode each arg + the return-address
+        // slot occupies a STEPPED span, so the locals start at Σ step(arg) +
+        // step(4) — matching codegen's stepped args loop + return slot, which
+        // keeps the frame base (args_base) 8-aligned.  Identity when off.
         let local_start: u16 = {
             let vars = &data.definitions[d_nr as usize].variables;
+            let aligned = crate::variables::aligned_stack_enabled();
+            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
             let arg_size: u16 = vars
                 .arguments()
                 .iter()
-                .map(|&a| size(vars.var_type(a), &Context::Argument))
+                .map(|&a| step(size(vars.var_type(a), &Context::Argument)))
                 .sum();
-            arg_size + 4 // 4 bytes for the return-address slot
+            arg_size + step(4) // return-address slot
         };
         {
             let d = &mut data.definitions[d_nr as usize];
             assign_slots(&mut d.variables, &mut d.code, local_start);
+        }
+        // @PLAN53 cluster 2 — per-function V2 shadow.  When LOFT_SLOT_V2
+        // selects this function (mode[:filter]), compute the ALIGNED V2
+        // layout, optionally dump it beside V1's (report), and validate it
+        // (I1-I8 + alignment).  validate/report restore V1 afterward so
+        // codegen + execution are UNCHANGED; only `drive` keeps the V2
+        // layout (correct execution requires the S4 eval-TOS switch).
+        let fn_name = data.definitions[d_nr as usize].variables.name.clone();
+        if let Some(mode) = crate::variables::v2_mode_for(&fn_name) {
+            let result = {
+                let d = &data.definitions[d_nr as usize];
+                crate::variables::assign_slots_v2(&d.variables, local_start)
+            };
+            if mode == "report" {
+                crate::variables::dump_v1_v2_slots(
+                    &data.definitions[d_nr as usize].variables,
+                    &result,
+                    d_nr,
+                );
+            }
+            let v1_vars = data.definitions[d_nr as usize].variables.clone();
+            let v1_code = data.definitions[d_nr as usize].code.clone();
+            {
+                let d = &mut data.definitions[d_nr as usize];
+                // Reset V1's slots first so validation sees a PURE V2 layout —
+                // otherwise vars V2 skipped retain V1 slots and produce spurious
+                // cross-allocator conflicts.
+                d.variables.reset_local_slots();
+                crate::variables::apply_v2_result(&mut d.variables, &mut d.code, &result);
+            }
+            crate::variables::validate_slots(
+                &data.definitions[d_nr as usize].variables,
+                data,
+                d_nr,
+                true, // V2 is scope-blind — skip I7 (zone-frame invariant).
+            );
+            crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
+            if mode != "drive" {
+                let d = &mut data.definitions[d_nr as usize];
+                d.variables = v1_vars;
+                d.code = v1_code;
+            }
         }
     }
 }
@@ -471,6 +519,21 @@ impl Scopes {
                 *self.var_mapping.get(var).unwrap_or(var),
                 *idx,
                 Box::new(self.scan(inner, function, data)),
+            ),
+            // @PLAN53 cluster 2: remap the var-numbers these IR nodes carry through
+            // `var_mapping` — exactly like `Var`/`TupleGet`/`TuplePut` above.  They
+            // were missing, so when a sibling scope reuses a name (`copy_variable`),
+            // a fn-ref loop break-test (`FnRefDnr`) or a copied closure capture
+            // (`FnRef.clos_var`) kept pointing at the ORIGINAL var.  V1 masked it (the
+            // original + copy share a slot); V2 gives them distinct slots, so the
+            // stale read hit the wrong slot (repro_p352: 2nd reused-name fn-ref loop
+            // read loop-1's exhausted sentinel → 0).  `clos_var == u16::MAX`
+            // (non-capturing) is left untouched — `var_mapping` never holds u16::MAX.
+            Value::FnRefDnr(var) => Value::FnRefDnr(*self.var_mapping.get(var).unwrap_or(var)),
+            Value::FnRef(d_nr, clos_var, fn_type) => Value::FnRef(
+                *d_nr,
+                *self.var_mapping.get(clos_var).unwrap_or(clos_var),
+                fn_type.clone(),
             ),
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             Value::Span(b) => {

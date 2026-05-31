@@ -12,6 +12,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # BUILD2: keep loft's native-test binary cache inside target/ so
+  # actions/cache (which persists ~/.cargo + target/) carries it across runs.
+  # The in-run binary cache is keyed on the rlib's CONTENT hash (mtime-stable
+  # across the per-run `cargo build --release --lib` no-op rebuild), so warm
+  # runs skip the ~565s of native recompiles instead of redoing them.
+  LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
 
 jobs:
   test:
@@ -103,19 +109,17 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo check --no-default-features
 
-      # The `html_wasm` test suite asserts the
-      # `wasm32-unknown-unknown` rlib is fresh against
-      # `src/codegen_runtime.rs` and other runtime sources.  Without
-      # this rebuild step, a cache-restored rlib from main is older
-      # than the PR's runtime sources and the staleness check panics.
-      # Linux-only: macOS / Windows test jobs skip html_wasm via the
-      # rust-target check inside the test (no wasm target installed).
+      # The `html_wasm` / `--html` tests build a wasm32-unknown-unknown rlib
+      # and compile against it.  Build it on ALL three OS: wasm32 is
+      # host-independent, and GitHub's macOS/Windows runner images now SHIP the
+      # wasm target pre-installed, so the test's "target not installed"
+      # self-skip no longer fires there — `loft --html` runs and fails E0463
+      # (rlib never built) instead of skipping.  Building everywhere closes
+      # that gap and actually exercises `--html` cross-platform.
       - name: Install wasm target (for html_wasm tests)
-        if: runner.os == 'Linux'
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build wasm rlib (for html_wasm tests)
-        if: runner.os == 'Linux'
         run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 
       # Build the graphics native cdylib so the graphics_gold tests (canvas
@@ -135,6 +139,23 @@ jobs:
 
       - name: Test
         run: cargo nextest run --profile ci
+
+      # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
+      # a single fixed-named binary (overwritten on change, not duplicated), so
+      # the live set is self-bounding (~300 binaries, ~300MB); the dir only
+      # creeps when a fixture is deleted/renamed and leaves an orphan.  The
+      # cache-HIT path touches each binary's mtime (see compile_native_job), so
+      # mtime = last-USE: a 30-day threshold reaps only genuinely-dead orphans
+      # and can never delete a binary the suite still hits (even fixtures that
+      # run on only one OS are touched well within 30 days).  Deliberately NOT
+      # an aggressive per-run prune — that would delete long-lived warm entries
+      # whose whole purpose is to survive across runs.  Best-effort; skipped on
+      # Windows (find(1) differs) — the Linux/macOS runs keep the shared dir
+      # trimmed for everyone.
+      - name: Reap abandoned native-binary cache entries
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mtime +30 -delete || true
 
   clippy:
     name: Clippy

@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (`tests/issues.rs::p225`).
+//
+// `yield from` delegation: `outer` yields, then delegates to `inner`, then
+// yields again.  Both generators take a text argument `s` read inside a
+// formatted yield.  This stacks a nested coroutine frame on the corrupted-
+// argument mechanism: the delegated `inner(s)` frame's argument is the same
+// 4-byte-high read, and the text arg makes it a wild `Str` ptr -> SIGSEGV.
+//
+// Status aligned: CURRENTLY CRASH/FAIL ; AFTER 2a FIX -> PASS.  Flag-OFF: PASS.
+//   ("start: hi"=9) + ("mid: hi"=7) + ("end: hi"=7) = 23.
+
+fn inner(s: text) -> iterator<text> {
+  yield "mid: {s}";
+}
+
+fn outer(s: text) -> iterator<text> {
+  yield "start: {s}";
+  yield from inner(s);
+  yield "end: {s}";
+}
+
+fn main() {
+  total = 0;
+  for x in outer("hi") {
+    total = total + x.len();
+  }
+  assert(total == 23, "2a-09: got {total}, want 23");
+  println("2a-09 PASSED");
+}

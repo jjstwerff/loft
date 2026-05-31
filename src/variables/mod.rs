@@ -40,8 +40,8 @@ pub use slots::assign_slots;
 // another mod-public-ing pass.
 #[allow(unused_imports)]
 pub use slots_v2::{
-    AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2,
-    v2_report_enabled, v2_validate_enabled,
+    AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2, dump_v1_v2_slots,
+    v2_mode_for,
 };
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
@@ -55,7 +55,7 @@ pub use validate::dump_variables;
 // in the hot interpreter path; clippy sees no in-crate caller and
 // would otherwise flag this re-export.
 #[allow(unused_imports)]
-pub use validate::validate_slots;
+pub use validate::{validate_alignment, validate_slots};
 
 use crate::data::{Context, Data, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
@@ -1480,5 +1480,128 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Iterator(_, _) => size_of::<DbRef>() as u16,
         Type::Tuple(elems) => crate::data::element_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
+    }
+}
+
+/// Stack alignment (in bytes) a value of type `tp` requires so that an
+/// `addr`/`addr_mut::<T>` into the eval stack / frame slot forms a sound,
+/// aligned reference (@PLAN53 cluster 2).
+///
+/// Unlike [`size`], this is **not** context-dependent: stack `text` is
+/// either an align-8 `String` (Variable context) or an align-8 `Str`
+/// (otherwise) — both contain a raw pointer, so 8 either way.  This is
+/// deliberately STRONGER than `data::element_align` (which aligns the
+/// record-stored `Str` to 4); records keep their own weaker layout on
+/// the `element_align` path and are unaffected.  Not meaningful for
+/// `Context::Constant` (byte-packed bytecode operands) — callers only
+/// use it for stack/frame layout.
+// S3: called by the aligned V2 allocator (`slots_v2::assign_slots_v2`).
+pub fn align(tp: &Type) -> u8 {
+    match tp {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Single | Type::Character => 4,
+        Type::Integer(_) | Type::Float | Type::Function(_, _, _) => 8,
+        // String (Variable) and Str (otherwise) both hold a raw pointer → align 8.
+        Type::Text(_) => 8,
+        Type::RefVar(_)
+        | Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Sorted(_, _, _)
+        | Type::Enum(_, true, _)
+        | Type::Spacial(_, _, _)
+        | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
+        Type::Tuple(elems) => crate::data::element_align(&Type::Tuple(elems.clone())),
+        _ => 1,
+    }
+}
+
+/// @PLAN53 cluster 2 / S4 — eval-TOS alignment harness flag.
+///
+/// Returns `true` when the aligned-stack mode is requested via the
+/// `LOFT_ALIGN` env var.  This is the **whole-program** S4 switch:
+/// when on, the eval-stack push/pop step and the frame reserve round
+/// up to the 8-byte max-alignment so a typed write at `stack_pos`
+/// (the cluster-2 Miri finding — unaligned `&mut Str`/`&mut String`/
+/// `i64` on the byte-packed eval stack) can never be unaligned.
+///
+/// It is a *separate, explicit* knob — NOT derived from
+/// `LOFT_SLOT_V2` — so it never auto-activates under the frame-slot
+/// `drive` shadow.  S4 is exercised with both set together
+/// (`LOFT_ALIGN=1 LOFT_SLOT_V2=drive`): V2 supplies aligned frame
+/// slots, this supplies the aligned eval-TOS + frame base.  Default
+/// (unset) leaves V1 execution byte-for-byte unchanged.
+///
+/// Read once at `State` construction (runtime) and `Stack`
+/// construction (codegen) so both sides agree for a whole run; they
+/// MUST agree or the emitted `pos` operands won't match the runtime
+/// `stack_pos` advances.
+#[must_use]
+pub fn aligned_stack_enabled() -> bool {
+    // @PLAN53 — the aligned eval stack is the production default.  Only an
+    // explicit `LOFT_ALIGN=0`/`off`/`false` opts back to the legacy V1
+    // unaligned layout (the escape hatch until the V1 paths are removed in
+    // the follow-up cleanup).  Kept as the single source of truth so the
+    // eval-TOS stepping and the V2 slot allocator never desync.
+    !matches!(
+        std::env::var("LOFT_ALIGN").as_deref(),
+        Ok("0" | "off" | "false")
+    )
+}
+
+/// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance step.
+///
+/// When `aligned`, round `size` up to 8 (the max alignment on the
+/// stack) so successive pushes stay 8-aligned and every typed write
+/// lands on its required boundary; the LIFO pop reverses the same
+/// rounded step (the design's § 3 "uniform-8 step" choice).  When not
+/// `aligned`, returns `size` unchanged — V1's tight, real-size step.
+///
+/// This is the single seam the S4 work toggles: route every
+/// `stack_pos += size` / `-= size` and `stack.position += size` site
+/// through it so codegen and runtime advance in lockstep (S1).
+#[must_use]
+#[inline]
+pub fn aligned_stack_step(size: u32, aligned: bool) -> u32 {
+    if aligned {
+        size.next_multiple_of(8)
+    } else {
+        size
+    }
+}
+
+#[cfg(test)]
+mod align_tests {
+    use super::*;
+
+    // S2 (@PLAN53 cluster 2): the stack-alignment table.  Text is align-8
+    // (both `String` and `Str` hold a raw pointer); small types stay tight
+    // (align 1/4) so they pack into the holes alignment leaves.
+    #[test]
+    fn align_values_for_stack_layout() {
+        assert_eq!(align(&Type::Text(vec![])), 8);
+        assert_eq!(align(&Type::Boolean), 1);
+        assert_eq!(align(&Type::Character), 4);
+        assert_eq!(align(&Type::Single), 4);
+        assert_eq!(align(&Type::Float), 8);
+        assert_eq!(align(&crate::data::I64), 8);
+    }
+
+    // S4 (@PLAN53 cluster 2): the eval-TOS step seam.  Off → real size
+    // (V1, byte-identical); on → rounded to the 8-byte max-alignment.
+    #[test]
+    fn aligned_stack_step_contract() {
+        // aligned off: identity (V1 tight step)
+        assert_eq!(aligned_stack_step(1, false), 1);
+        assert_eq!(aligned_stack_step(12, false), 12);
+        assert_eq!(aligned_stack_step(8, false), 8);
+        // aligned on: round up to 8
+        assert_eq!(aligned_stack_step(1, true), 8);
+        assert_eq!(aligned_stack_step(4, true), 8);
+        assert_eq!(aligned_stack_step(8, true), 8);
+        assert_eq!(aligned_stack_step(12, true), 16);
+        assert_eq!(aligned_stack_step(16, true), 16);
+        assert_eq!(aligned_stack_step(0, true), 0);
     }
 }

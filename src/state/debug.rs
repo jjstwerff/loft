@@ -794,12 +794,12 @@ impl State {
         a: &Attribute,
     ) -> Result<(), Error> {
         if (def.name == "OpGotoFalseWord" || def.name == "OpGotoWord") && a_nr == 0 {
-            let to = i64::from(p) + 3 + i64::from(*self.code::<i16>()) - i64::from(start_pos);
+            let to = i64::from(p) + 3 + i64::from(self.code::<i16>()) - i64::from(start_pos);
             write!(f, "jump={to}")?;
         } else if def.name == "OpCall" && a_nr == 2 {
             self.fn_name(f, data)?;
         } else if def.name == "OpStaticCall" {
-            let v = *self.code::<u16>();
+            let v = self.code::<u16>();
             for (n, val) in &self.library_names {
                 if *val == v {
                     write!(f, "{n}")?;
@@ -817,7 +817,7 @@ impl State {
                 })
             && self.stack.contains_key(&p)
         {
-            let pos = i32::from(*self.code::<u16>());
+            let pos = i32::from(self.code::<u16>());
             write!(f, "var[{}]", i32::from(self.stack[&p]) - pos)?;
         } else if a.mutable {
             write!(
@@ -860,9 +860,9 @@ impl State {
         )?;
         while self.code_pos < start_pos + data.def(d_nr).code_length {
             let p = self.code_pos;
-            let first = *self.code::<u8>();
+            let first = self.code::<u8>();
             let op: u16 = if first == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 255u16 + u16::from(ext)
             } else {
                 u16::from(first)
@@ -924,7 +924,7 @@ impl State {
     }
 
     pub(super) fn fn_name(&mut self, f: &mut dyn Write, data: &Data) -> Result<(), Error> {
-        let addr = *self.code::<i64>() as u32;
+        let addr = self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {
@@ -943,22 +943,22 @@ impl State {
     pub(super) fn dump_attribute(&mut self, a: &Attribute) -> String {
         match a.typedef {
             Type::Integer(s) if s.range() - 1 <= 256 && s.min == 0 => {
-                format!("{}", i32::from(*self.code::<u8>()))
+                format!("{}", i32::from(self.code::<u8>()))
             }
             Type::Integer(s) if s.range() - 1 <= 65536 && s.min == 0 => {
-                format!("{}", i32::from(*self.code::<u16>()))
+                format!("{}", i32::from(self.code::<u16>()))
             }
             Type::Integer(s) if s.range() - 1 <= 256 => {
-                format!("{}", i32::from(*self.code::<i8>()))
+                format!("{}", i32::from(self.code::<i8>()))
             }
             Type::Integer(s) if s.range() - 1 <= 65536 => {
-                format!("{}", i32::from(*self.code::<i16>()))
+                format!("{}", i32::from(self.code::<i16>()))
             }
-            Type::Integer(_) => format!("{}", *self.code::<i64>()),
-            Type::Boolean => format!("{}", *self.code::<u8>() == 1),
-            Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
-            Type::Single => format!("{}", *self.code::<f32>()),
-            Type::Float => format!("{}", *self.code::<f64>()),
+            Type::Integer(_) => format!("{}", self.code::<i64>()),
+            Type::Boolean => format!("{}", self.code::<u8>() == 1),
+            Type::Enum(_, false, _) => format!("{}", self.code::<u8>()),
+            Type::Single => format!("{}", self.code::<f32>()),
+            Type::Float => format!("{}", self.code::<f64>()),
             Type::Text(_) => {
                 let s = self.code_str();
                 if s == STRING_NULL {
@@ -967,14 +967,14 @@ impl State {
                     format!("\"{s}\"")
                 }
             }
-            Type::Character => format!("{}", *self.code::<char>()),
+            Type::Character => format!("{}", self.code::<char>()),
             Type::Keys => {
-                let len = *self.code::<u8>();
+                let len = self.code::<u8>();
                 let mut keys = Vec::new();
                 for _ in 0..len {
                     keys.push(Key {
-                        type_nr: *self.code::<i8>(),
-                        position: *self.code::<u16>(),
+                        type_nr: self.code::<i8>(),
+                        position: self.code::<u16>(),
                     });
                 }
                 format!("{keys:?}")
@@ -996,22 +996,24 @@ impl State {
         self.def_pos = self.code_pos;
         // Fix #88 (parity): push a synthetic CallFrame for the entry function so that
         // stack_trace() returns the same frame count as execute_argv.
+        // @PLAN53 cluster 2 / S4: match execute_argv's aligned entry base.
+        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
         self.call_stack.push(super::CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: entry_base,
             args_size: 0,
             line: 0,
         });
         // Write the return address of the main function but do not override the record size.
-        self.stack_pos = 4;
+        self.stack_pos = entry_base;
         self.put_stack(u32::MAX);
 
         // Compute the initial frame offset for the bridging invariant check.
         // At runtime we start at stack_pos=4 (the return address); the compile-time
         // tracking in self.stack may start at a different value (usually 0).
         let root_compile_start = self.stack.get(&self.code_pos).copied().map_or(0, i64::from);
-        let mut frame_offset = 4i64 - root_compile_start;
+        let mut frame_offset = i64::from(entry_base) - root_compile_start;
         let mut prev_fn_start = self.code_pos;
 
         // TODO Allow command line parameters on main functions
@@ -1034,9 +1036,9 @@ impl State {
             // loop misreads the lead byte 255 as a single-byte opcode and
             // dispatches through `OPERATORS[255]` instead of the intended
             // handler.
-            let first = *self.code::<u8>();
+            let first = self.code::<u8>();
             let op = if first == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 255u16 + u16::from(ext)
             } else {
                 u16::from(first)
@@ -1060,6 +1062,17 @@ impl State {
                 self.log_step(log, op, code, &(cur_d_nr, frame_offset), config, data)?;
             }
             OPERATORS[op as usize](self);
+            // @PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
+            #[cfg(feature = "stack_align_guard")]
+            if self.aligned_stack {
+                assert_eq!(
+                    self.stack_pos % 8,
+                    0,
+                    "S4 alignment broken (trace): op_code={op} at pc={code} left \
+                     stack_pos={} (not 8-aligned)",
+                    self.stack_pos,
+                );
+            }
             if trace_this {
                 self.log_result(log, op, code, data)?;
             }
@@ -1108,7 +1121,17 @@ impl State {
             assert!(step < 10_000_000, "Too many operations");
             if self.code_pos == u32::MAX {
                 // TODO Validate that all databases & String values are also cleared.
-                assert_eq!(self.stack_pos, 4, "Stack not correctly cleared");
+                // @PLAN53 cluster 2 / S4: the entry frame base is the STEPPED
+                // `stack_step(4)` (= 8 under LOFT_ALIGN, 4 off) — what `execute_argv`
+                // resets to.  The `execute_log` debug tracer hard-coded the raw 4, so
+                // a completed program under V2 (stack_pos back at 8) tripped this
+                // end-of-run "stack cleared" check.  Production `execute` was already
+                // correct (issues 685/0); only this debug-path mirror lagged.
+                assert_eq!(
+                    self.stack_pos,
+                    self.stack_step(4),
+                    "Stack not correctly cleared"
+                );
                 // Free the stack store. Mark constant stores (pre-built by
                 // build_const_vectors) as free — they are program-lifetime.
                 self.database.allocations[0].free = true;
@@ -1230,7 +1253,7 @@ impl State {
         for (a_nr, a) in def.attributes.iter().enumerate() {
             if !a.mutable {
                 if def.name == "OpStaticCall" {
-                    let nr = *self.code::<i16>();
+                    let nr = self.code::<i16>();
                     write!(log, "{})", FUNCTIONS[nr as usize].0)?;
                     self.code_pos = cur;
                     self.stack_pos = stack;
@@ -1240,7 +1263,7 @@ impl State {
                 } else if def.name == "OpCall" && a_nr == 2 {
                     self.call_name(&mut attr, a_nr, data);
                 } else if def.name.starts_with("OpGoto") && a_nr == 0 {
-                    let to = i64::from(cur) + 2 + i64::from(*self.code::<i16>()) - i64::from(minus);
+                    let to = i64::from(cur) + 2 + i64::from(self.code::<i16>()) - i64::from(minus);
                     attr.insert(a_nr, format!("jump={to}"));
                 } else if def.name == "OpIterate" {
                     self.iterate_args(log)?;
@@ -1257,7 +1280,7 @@ impl State {
                             forced_size: None,
                         })
                 {
-                    let pos = *self.code::<u16>();
+                    let pos = self.code::<u16>();
                     assert!(
                         u32::from(pos) <= self.stack_pos,
                         "Variable {pos} outside stack {}",
@@ -1348,18 +1371,18 @@ impl State {
     }
 
     pub(super) fn iterate_args(&mut self, log: &mut dyn Write) -> Result<(), Error> {
-        let on = *self.code::<u8>();
-        let arg = *self.code::<u16>();
-        let keys_size = *self.code::<u8>();
+        let on = self.code::<u8>();
+        let arg = self.code::<u16>();
+        let keys_size = self.code::<u8>();
         let mut keys = Vec::new();
         for _ in 0..keys_size {
             keys.push(Key {
-                type_nr: *self.code::<i8>(),
-                position: *self.code::<u16>(),
+                type_nr: self.code::<i8>(),
+                position: self.code::<u16>(),
             });
         }
-        let from_key = *self.code::<u8>();
-        let till_key = *self.code::<u8>();
+        let from_key = self.code::<u8>();
+        let till_key = self.code::<u8>();
         let till = self.stack_key(till_key, &keys);
         let from = self.stack_key(from_key, &keys);
         let data = *self.get_stack::<DbRef>();
@@ -1372,10 +1395,10 @@ impl State {
 
     pub(super) fn return_attr(&mut self, attr: &mut BTreeMap<usize, String>, a_nr: usize) {
         let cur_st = self.stack_pos;
-        let ret = u32::from(*self.code::<u16>());
+        let ret = u32::from(self.code::<u16>());
         let cur_code = self.code_pos;
         self.code::<u8>();
-        let discard = *self.code::<u16>();
+        let discard = self.code::<u16>();
         self.stack_pos -= u32::from(discard);
         self.stack_pos += ret;
         let st = self.stack_pos;
@@ -1391,7 +1414,7 @@ impl State {
         a_nr: usize,
         data: &Data,
     ) {
-        let addr = *self.code::<i64>() as u32;
+        let addr = self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {

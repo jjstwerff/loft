@@ -1,0 +1,78 @@
+# @PLAN53 — the sanitizer CI lever.  Runs the loft interpreter UNDER Miri to
+# catch hard memory-safety UB (alignment, out-of-bounds, use-after-free,
+# uninitialised reads, leaks) before a rustc/LLVM toolchain bump exposes it as
+# silent corruption (the @P383 incident this plan was triggered by).
+#
+# WHY A SEPARATE WORKFLOW (not a job in ci.yml) AND NIGHTLY-ONLY: the loft
+# interpreter executes bytecode, so running it under Miri is
+# interpreter-on-interpreter — ~20 min (almost all sysroot + under-Miri compile).
+# That is far too slow to gate every PR, so this runs NIGHTLY on `main` plus on
+# manual dispatch.  A hard-UB regression lands red within ≤24h, always before any
+# (deliberate, never-auto) release.  The intended cheap, every-PR companion is
+# the homegrown `stack_align_guard` (`--features stack_align_guard`, normal test
+# speed), which catches the alignment-UB class — the class a stack/codegen change
+# is most likely to regress — and lands as a ci.yml job in the follow-up.  Miri
+# remains the gold-standard backstop for the broader UB classes the guard can't
+# see (store aliasing, uninit padding, leaks).
+name: Miri (hard-UB sanitizer)
+
+on:
+  schedule:
+    - cron: '0 4 * * *'        # nightly 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  miri:
+    name: Miri hard-UB gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly + miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache cargo registry + miri target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/miri
+          key: ${{ runner.os }}-miri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-miri-
+
+      - name: miri setup (build the Miri sysroot)
+        run: cargo +nightly miri setup
+
+      # The curated set is pure-compute `issues` tests (no threads / FFI — Miri
+      # blocks those) that exercise the UB-relevant surface (eval stack, store
+      # claim/copy, fn-refs, text) and are validated Miri-clean for hard UB on the
+      # aligned interpreter.  Grow the list as more tests are validated.
+      #
+      # Run on the ALIGNED interpreter (LOFT_ALIGN=1 LOFT_SLOT_V2=drive): that is
+      # the configuration where cluster 2 (eval-stack alignment) is fixed, so the
+      # interpreter is hard-UB-clean and any Miri finding is a genuine regression.
+      #
+      # -Zmiri-disable-stacked-borrows gates the HARD memory-safety UB
+      # (alignment / OOB / UAF / uninit / leak), NOT the aliasing MODEL: loft's
+      # store layer uses intentional raw-pointer aliasing across distinct records
+      # that Stacked/Tree Borrows reject by design.  -Zmiri-disable-isolation lets
+      # the interpreter read its `LOFT_*` env config.
+      - name: Miri hard-UB gate (aligned interpreter)
+        env:
+          LOFT_ALIGN: '1'
+          LOFT_SLOT_V2: drive
+          MIRIFLAGS: '-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows'
+        run: |
+          cargo +nightly miri test --test issues -- --exact \
+            p213_struct_field_basic_int

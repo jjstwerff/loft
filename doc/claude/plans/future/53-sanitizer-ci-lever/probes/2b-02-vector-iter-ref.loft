@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — REFERENCE (must always PASS).
+//
+// Identical struct + consumer but a plain `vector<Elm>` instead of `sorted`.
+// Vector iteration uses a different per-element path that is NOT span-stepped
+// wrongly, so it round-trips under LOFT_ALIGN.  This isolates the 2b trigger
+// to the sorted-collection key-gather, not generic struct-element iteration.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: vector<Elm> = [Elm{k:1, v:10}, Elm{k:2, v:20}, Elm{k:3, v:30}];
+  total = 0;
+  for e in s { total = total + e.v; }
+  assert(total == 60, "2b-02: got {total}, want 60");
+  println("2b-02 PASSED");
+}

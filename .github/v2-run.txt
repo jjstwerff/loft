@@ -1,0 +1,5 @@
+# @PLAN53 V2 validation trigger — bump this file (append a line) + push to fire
+# .github/workflows/v2-validation.yml.  History of runs:
+run 1: 2026-05-31T06:17:40Z — first V2 validation matrix (3-OS suite + guard + Miri)
+run 2: 2026-05-31 — after closing all 11 full-suite failures (frame_vars, 2f, repro_p352, par-fn-ref, native tuple-par, + V2-aware .slots()); local full suite clean under V2
+run 3: 2026-05-31 — after rebase onto #234 + two workflow fixes (v2-guard build-prep, wasm rlib on all 3 OS); ubuntu suite + both Miri lanes were green in run 2; expect guard + macOS suite to clear, windows still red on pre-existing @P229 G3 (ureq/rustls rlib-format)

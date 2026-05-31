@@ -63,6 +63,12 @@ pub struct Test {
     /// Format: space-separated tokens of `name(scope)=slot`, e.g. `"_t(4L)=0 b(4L)=4"`.
     /// Scope suffix "L" means the scope is a loop scope; no suffix means a regular scope.
     expected_slots: Option<String>,
+    /// @PLAN53 — aligned-stack (V2) layout, asserted instead of
+    /// `expected_slots` when `LOFT_ALIGN` is on.  V2 rounds every slot
+    /// step up to 8, so the byte offsets differ from the V1 layout
+    /// while the program behaviour is identical.  Supplied via
+    /// [`Test::slots_aligned`].
+    expected_slots_v2: Option<String>,
 }
 
 impl Test {
@@ -112,6 +118,17 @@ impl Test {
     /// plan-04 redesign).  See `doc/claude/plans/finished/04-slot-assignment-redesign/`.
     pub fn slots(&mut self, spec: &str) -> &mut Test {
         self.expected_slots = Some(spec.to_string());
+        self
+    }
+
+    /// @PLAN53 — supply the aligned-stack (V2) slot layout.  When
+    /// `LOFT_ALIGN` is on, the harness asserts this spec instead of the
+    /// V1 [`slots`](Self::slots) spec.  Use the same multi-line visual
+    /// format; capture it by running the test once under
+    /// `LOFT_ALIGN=1 LOFT_SLOT_V2=drive` and copy-pasting the
+    /// `calculated:` block from the panic.
+    pub fn slots_aligned(&mut self, spec: &str) -> &mut Test {
+        self.expected_slots_v2 = Some(spec.to_string());
         self
     }
 
@@ -299,7 +316,23 @@ impl Drop for Test {
             byte_code(&mut state, &mut p.data);
         }))
         .err();
-        if let Some(spec) = &self.expected_slots {
+        // @PLAN53 — the V2 aligned layout is the production default; assert the
+        // V2 spec when one was supplied, else fall back to the V1 spec (so a
+        // test with only `.slots(...)` still checks *something* — and red-flags
+        // if it drifts).  Mirrors `variables::aligned_stack_enabled()`:
+        // `LOFT_ALIGN=0`/`off`/`false` is the V1 escape hatch.
+        let aligned = !matches!(
+            std::env::var("LOFT_ALIGN").as_deref(),
+            Ok("0" | "off" | "false")
+        );
+        let active_slots = if aligned {
+            self.expected_slots_v2
+                .as_ref()
+                .or(self.expected_slots.as_ref())
+        } else {
+            self.expected_slots.as_ref()
+        };
+        if let Some(spec) = active_slots {
             let test_nr = p.data.def_nr("n_test");
             let f = &p.data.def(test_nr).variables;
             // Build the full calculated layout, sorted by slot, for diff output.
@@ -592,6 +625,7 @@ pub fn testing_code(code: &str, test: &str) -> Test {
         tp: Type::Unknown(0),
         sizes: HashMap::new(),
         expected_slots: None,
+        expected_slots_v2: None,
     }
 }
 
@@ -608,6 +642,7 @@ pub fn testing_expr(expr: &str, test: &str) -> Test {
         tp: Type::Unknown(0),
         sizes: HashMap::new(),
         expected_slots: None,
+        expected_slots_v2: None,
     }
 }
 

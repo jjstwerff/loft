@@ -29,65 +29,31 @@
     clippy::map_entry
 )]
 
-#[macro_use]
-pub mod diagnostics;
-#[macro_use]
-mod trace;
-mod base64;
-mod calc;
-mod codegen_runtime;
-mod compile;
-mod const_eval;
-mod crash_report;
-mod data;
-mod database;
+use loft::base64;
+use loft::compile;
+use loft::data;
+use loft::diagnostics;
 pub mod diagnostic_render;
-mod extensions;
-mod fill;
-mod formatter;
-mod generation;
-mod hash;
-mod introspect;
-mod json;
-mod keys;
-mod lexer;
-mod lockfile;
-mod log_config;
-mod logger;
-mod manifest;
-mod native;
+use loft::extensions;
+use loft::formatter;
+use loft::generation;
+use loft::log_config;
+use loft::logger;
+use loft::manifest;
 mod native_utils;
-mod ops;
-mod parallel;
-mod parser;
-mod platform;
-#[cfg(feature = "png")]
-mod png_store;
-#[cfg(feature = "registry")]
-mod registry_index;
-mod runtime_error;
-mod scopes;
-mod stack;
-mod state;
-mod store;
+use loft::parser;
+use loft::platform;
+use loft::scopes;
+use loft::state;
 mod test_runner;
-mod timeout;
-mod tree;
-mod typedef;
-mod variables;
-mod vector;
-#[cfg(feature = "wasm")]
-mod wasm;
-#[cfg(feature = "wasm")]
-mod wasm_gl;
 
-use crate::diagnostics::Level;
 use crate::native_utils::{
     build_script_native_lib_dirs, default_artifact_path, html_wasm_import_modules_ok,
     is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
-use crate::state::State;
 use crate::test_runner::run_tests;
+use loft::diagnostics::Level;
+use loft::state::State;
 use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -279,7 +245,7 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
     // Resolve a dep name + value to a directory.  Path deps win; we
     // ignore version-only registry refs for now (T4 follow-up).
     fn resolve_dep(name: &str, value: &str, from_pkg: &std::path::Path) -> Option<PathBuf> {
-        if let Some(p) = crate::manifest::extract_path_dep(value) {
+        if let Some(p) = loft::manifest::extract_path_dep(value) {
             let candidate = from_pkg.join(p);
             if candidate.join("loft.toml").exists() {
                 return Some(candidate.canonicalize().unwrap_or(candidate));
@@ -304,7 +270,7 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
             continue;
         }
         let manifest_path = pkg.join("loft.toml");
-        let Some(manifest) = crate::manifest::read_manifest(manifest_path.to_str().unwrap_or(""))
+        let Some(manifest) = loft::manifest::read_manifest(manifest_path.to_str().unwrap_or(""))
         else {
             continue;
         };
@@ -786,14 +752,14 @@ fn extract_toml_version(content: &str) -> String {
 /// declarations, and emits a Rust source file with the correct C-ABI
 /// signatures plus `todo!()` bodies.
 fn generate_native_stubs(pkg_path: &std::path::Path) {
-    use crate::data::{DefType, Type};
+    use loft::data::{DefType, Type};
 
     let toml_path = pkg_path.join("loft.toml");
     if !toml_path.exists() {
         eprintln!("Error: no loft.toml in {}", pkg_path.display());
         std::process::exit(1);
     }
-    let manifest = match crate::manifest::read_manifest(&toml_path.to_string_lossy()) {
+    let manifest = match loft::manifest::read_manifest(&toml_path.to_string_lossy()) {
         Some(m) => m,
         None => {
             eprintln!("Error: cannot read {}", toml_path.display());
@@ -1432,20 +1398,20 @@ fn registry_age_str(path: &std::path::Path) -> String {
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
-    crate::crash_report::install("loft");
+    loft::crash_report::install("loft");
     // @PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
     // (`LOFT_TIMEOUT=<secs>`) BEFORE we parse argv.  An explicit
     // `--timeout` later in argv re-arms (no-op — `arm` is idempotent)
-    // but the env value is the floor.  MUST be `crate::timeout` (this
+    // but the env value is the floor.  MUST be `loft::timeout` (this
     // binary's module instance), not `loft::timeout` (the lib crate's
     // separate copy) — the binary runs its own `crate::` modules
-    // (`crate::state::State` etc.), and the `checkpoint_*` call sites in
-    // them resolve to `crate::timeout`, so the watchdog + breadcrumb must
+    // (`loft::state::State` etc.), and the `checkpoint_*` call sites in
+    // them resolve to `loft::timeout`, so the watchdog + breadcrumb must
     // share that same instance.  Arming `loft::timeout` set a different
     // set of statics the running code never reads.
-    crate::timeout::arm(
-        crate::timeout::env_timeout_secs(),
-        crate::timeout::env_grace_secs(),
+    loft::timeout::arm(
+        loft::timeout::env_timeout_secs(),
+        loft::timeout::env_grace_secs(),
     );
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
@@ -1455,9 +1421,9 @@ fn main() {
     // active or no entry precedes the offending pc.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let (pc, _op, _fn_d_nr) = crate::crash_report::last_context();
+        let (pc, _op, _fn_d_nr) = loft::crash_report::last_context();
         if pc != u32::MAX
-            && let Some(pos) = crate::crash_report::source_loc_for_pc(pc)
+            && let Some(pos) = loft::crash_report::source_loc_for_pc(pc)
         {
             eprintln!("  at {}:{}:{}", pos.file, pos.line, pos.pos);
         }
@@ -1505,7 +1471,7 @@ fn main() {
     // into `introspect_opts` and are flushed into a real
     // `introspect::Options` after argv parsing.
     let mut introspect_mode = false;
-    let mut introspect_sections: Vec<crate::introspect::Section> = Vec::new();
+    let mut introspect_sections: Vec<loft::introspect::Section> = Vec::new();
     let mut introspect_bytecode_out: Option<String> = None;
     let mut introspect_rust_out: Option<String> = None;
     let mut introspect_slots_out: Option<String> = None;
@@ -1617,13 +1583,13 @@ fn main() {
             introspect_mode = true;
             native_mode = false;
         } else if a == "--show-bytecode" {
-            introspect_sections.push(crate::introspect::Section::Bytecode);
+            introspect_sections.push(loft::introspect::Section::Bytecode);
         } else if a == "--show-rust" {
-            introspect_sections.push(crate::introspect::Section::Rust);
+            introspect_sections.push(loft::introspect::Section::Rust);
         } else if a == "--show-slots" {
-            introspect_sections.push(crate::introspect::Section::Slots);
+            introspect_sections.push(loft::introspect::Section::Slots);
         } else if a == "--show-types" {
-            introspect_sections.push(crate::introspect::Section::Types);
+            introspect_sections.push(loft::introspect::Section::Types);
         } else if a == "--bytecode-out" {
             introspect_bytecode_out = argv.get(i).cloned();
             i += 1;
@@ -1756,7 +1722,7 @@ fn main() {
                 std::process::exit(2);
             });
             i += 1;
-            crate::timeout::arm(secs, crate::timeout::env_grace_secs());
+            loft::timeout::arm(secs, loft::timeout::env_grace_secs());
         } else if a == "--check" || a == "check" {
             check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {
@@ -1784,7 +1750,7 @@ fn main() {
             // Read loft.toml to find src/ directory, dependency paths, and native libs.
             let manifest_path = std::path::Path::new("loft.toml");
             if manifest_path.exists() {
-                let manifest = crate::manifest::read_manifest("loft.toml").unwrap_or_default();
+                let manifest = loft::manifest::read_manifest("loft.toml").unwrap_or_default();
                 let entry = manifest.entry.unwrap_or_else(|| "src".to_string());
                 let src_dir = std::path::Path::new(&entry)
                     .parent()
@@ -1816,11 +1782,11 @@ fn main() {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    let lib_file = crate::extensions::platform_lib_name(stem);
+                    let lib_file = loft::extensions::platform_lib_name(stem);
                     let prebuilt = format!("{pkg_dir}/native/{lib_file}");
                     if std::path::Path::new(&prebuilt).exists() {
                         native_lib_paths.push(prebuilt);
-                    } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem)
+                    } else if let Some(built) = loft::extensions::auto_build_native(&pkg_dir, stem)
                     {
                         native_lib_paths.push(built);
                     }
@@ -2105,7 +2071,7 @@ fn main() {
         // `LOFT_TIMEOUT=<secs>` (armed earlier in `main`) overrides this
         // default.  300s is far longer than any single test's compile+run,
         // short enough to catch a true infinite loop.
-        crate::timeout::arm(300, crate::timeout::env_grace_secs());
+        loft::timeout::arm(300, loft::timeout::env_grace_secs());
         // Env-var equivalent so external CI doesn't need to thread the flag
         // through `loft test` invocations buried in shell loops.
         let deny_warnings = deny_warnings
@@ -2907,7 +2873,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // `temp_dir/loft_native.rs`.  The PID suffix is a process-
             // local choice; user-visible artefacts pass through
             // `--native-emit <path>` which the user controls.
-            None => std::env::temp_dir().join(format!("loft_native_{}.rs", std::process::id())),
+            None => platform::scratch_dir().join(format!("loft_native_{}.rs", std::process::id())),
             Some("") => default_artifact_path(&abs_file, "rs"),
             Some(p) => std::path::PathBuf::from(p),
         };
@@ -2968,7 +2934,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 let mut test_fns: Vec<(u32, String)> = Vec::new();
                 for d_nr in start_def..end_def {
                     let def = p.data.def(d_nr);
-                    if !matches!(def.def_type, crate::data::DefType::Function) {
+                    if !matches!(def.def_type, loft::data::DefType::Function) {
                         continue;
                     }
                     if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
@@ -3116,15 +3082,33 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // share across processes; this fallback is only used
             // when the cache miss; it doesn't need to be content-
             // addressed but does need to be unique per process.
-            let binary =
-                std::env::temp_dir().join(format!("loft_native_bin_{}", std::process::id()));
+            let scratch = platform::scratch_dir();
+            // Layer 2: refuse to start a compile that could overflow a
+            // RAM-backed tmpfs and exhaust memory (reclaims loft's own stale
+            // artefacts first).  Warn + continue rather than hard-fail; rustc
+            // will surface a real ENOSPC if it genuinely can't write.
+            if !platform::native_compile_space_ok(&scratch) {
+                eprintln!(
+                    "loft: warning — low space in {} (set LOFT_TMPFS_MIN_FREE_MB to tune)",
+                    scratch.display()
+                );
+            }
+            let binary = scratch.join(format!("loft_native_bin_{}", std::process::id()));
             let mut cmd = std::process::Command::new("rustc");
-            cmd.arg("--edition=2024")
+            cmd.env("TMPDIR", &scratch)
+                .arg("--edition=2024")
                 .arg("-o")
                 .arg(&binary)
                 .arg(&emit_path);
             if native_release {
                 cmd.arg("-O");
+            }
+            // Layer 1: strip the linked binary (~36MB → ~1MB; the bulk is
+            // debug info from libloft.rlib + std).  Skipped when the user
+            // asked for debug info (--native-debug) or set
+            // LOFT_NATIVE_KEEP_SYMBOLS=1.
+            if !native_debug && platform::native_strip_symbols() {
+                cmd.arg("-Cstrip=symbols");
             }
             // NDB.0 — when --native-debug is set, emit DWARF debug
             // info so stock GDB / LLDB can step through the native
@@ -3421,7 +3405,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     // Bypass execution; emit bytecode + Rust + slots and exit.
     if introspect_mode {
         let trace_lines = std::mem::take(&mut p.trace_types_lines);
-        let opts = crate::introspect::Options {
+        let opts = loft::introspect::Options {
             sections: introspect_sections.clone(),
             bytecode_out: introspect_bytecode_out.clone(),
             rust_out: introspect_rust_out.clone(),
@@ -3435,7 +3419,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             install_dir: String::new(),
         };
         let end_def = p.data.definitions();
-        if let Err(e) = crate::introspect::emit_all(&mut p.data, &mut state, end_def, &opts) {
+        if let Err(e) = loft::introspect::emit_all(&mut p.data, &mut state, end_def, &opts) {
             eprintln!("loft: introspect failed: {e}");
             std::process::exit(1);
         }

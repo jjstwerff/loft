@@ -77,12 +77,15 @@ impl State {
             // arg-frame size from the def's attributes (which exist for
             // native fns even when variables don't) and account for the
             // 4-byte return-PC slot.
+            // @PLAN53 cluster 2 / S4: each arg + the return-address slot
+            // occupies a STEPPED span in aligned mode (step is identity
+            // when LOFT_ALIGN is off → V1 unchanged).
             let mut args_size: u16 = 0;
             for attr in &stack.data.def(def_nr).attributes {
-                args_size += size(&attr.typedef, &Context::Argument);
+                args_size += stack.step(size(&attr.typedef, &Context::Argument));
             }
             self.arguments = args_size;
-            stack.position = args_size + 4; // args + return-address slot
+            stack.position = args_size + stack.step(4); // args + return-address slot
             let start = self.code_pos;
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
@@ -96,11 +99,12 @@ impl State {
         let args = stack.function.arguments();
         for v in &args {
             stack.function.set_stack_pos(*v, stack.position);
-            stack.position += size(stack.function.tp(*v), &Context::Argument);
+            // @PLAN53 cluster 2 / S4: stepped arg span (identity when off).
+            stack.position += stack.step(size(stack.function.tp(*v), &Context::Argument));
         }
         let start = self.code_pos;
         self.arguments = stack.position;
-        stack.position += 4; // keep space for the code return address
+        stack.position += stack.step(4); // keep space for the code return address
         if is_empty_stub {
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
@@ -114,7 +118,10 @@ impl State {
         // Per-block `OpReserveFrame(block.var_size)` is deleted in
         // `generate_block`; first-Set helpers now write positional-init
         // or push-then-`OpPut*` into the pre-reserved slots.
-        let frame_hwm = stack.function.frame_hwm(&Context::Variable);
+        // @PLAN53 cluster 2 / S4: round the frame high-water mark to 8 so the
+        // first eval-TOS push above the reserved frame is 8-aligned (identity
+        // when off).
+        let frame_hwm = stack.step(stack.function.frame_hwm(&Context::Variable));
         if frame_hwm > stack.position {
             let reserve = frame_hwm - stack.position;
             stack.add_op("OpReserveFrame", self);
@@ -194,6 +201,7 @@ impl State {
             &data.definitions[def_nr as usize].variables,
             data,
             def_nr,
+            false, // V1 is scope-aware (two-zone) — enforce I7.
         );
     }
 
@@ -353,7 +361,7 @@ impl State {
                     // tuple_def is normally called eagerly during parse).
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let var_pos = stack.var_pos(*var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -405,7 +413,8 @@ impl State {
                     // bump generate_var uses for plain Function vars).
                     Type::Function(_, _, _) => {
                         stack.add_op("OpVarFnRef", self);
-                        stack.position += 4;
+                        // @PLAN53 S4: 20B fn-ref push − 16B `text` account.
+                        stack.position += stack.step(20) - stack.step(16);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
@@ -443,7 +452,8 @@ impl State {
                 self.code_add(value_size);
                 // CO1.3d: OpCoroutineYield suspends and transfers the value to the caller.
                 // The evaluation stack is empty again on resume, so undo the push.
-                stack.position -= value_size;
+                // @PLAN53 S4: the yielded value occupied a stepped span.
+                stack.position -= stack.step(value_size);
                 Type::Void
             }
             Value::TuplePut(var_nr, elem_idx, value) => {
@@ -462,7 +472,7 @@ impl State {
                     let elem_tp = elems[idx].clone();
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.position - stack.function.stack(*var_nr);
+                    let var_pos = stack.var_pos(*var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
@@ -516,7 +526,7 @@ impl State {
                     // `stack.position -= 4` correction.
                     Type::Function(_, _, _) => {
                         stack.add_op("OpPutFnRef", self);
-                        stack.position -= 4;
+                        stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
@@ -549,7 +559,7 @@ impl State {
                     stack.add_op("OpNullRefSentinel", self);
                 } else {
                     // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                    let clos_pos = stack.position - stack.function.stack(*clos_var);
+                    let clos_pos = stack.var_pos(*clos_var);
                     stack.add_op("OpVarRef", self);
                     self.code_add(clos_pos);
                 }
@@ -563,7 +573,7 @@ impl State {
                 // i64 d_nr, so this works without a new opcode.  The
                 // closure DbRef component (next 12B) stays untouched in
                 // the slot.
-                let v_pos = stack.position - stack.function.stack(*v_nr);
+                let v_pos = stack.var_pos(*v_nr);
                 stack.add_op("OpVarInt", self);
                 self.code_add(v_pos);
                 crate::data::I64.clone()
@@ -787,7 +797,9 @@ impl State {
     pub(super) fn gen_drop(&mut self, val: &Value, stack: &mut Stack) -> Type {
         self.generate(val, stack, false);
         // get all variables of the current scope.
-        let size = stack.size_code(val);
+        // @PLAN53 cluster 2 / S4: the value occupies a stepped eval span;
+        // the OpFreeStack discard + the position pop must both be stepped.
+        let size = stack.step(stack.size_code(val));
         if size > 0 {
             stack.add_op("OpFreeStack", self);
             self.code_add(0u8);
@@ -854,12 +866,15 @@ impl State {
     /// that "advance the stack pointer" and "write the sentinel value"
     /// are distinct primitives.
     fn emit_push_sentinel(&mut self, stack: &mut Stack) {
-        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        // @PLAN53 cluster 2 / S4: a DbRef push occupies a stepped span; the
+        // reserve operand, the position advance, and the init slot-offset all
+        // use step(ref_size) (identity when LOFT_ALIGN off).
+        let step = stack.step(size_of::<crate::keys::DbRef>() as u16);
         stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        self.code_add(step);
+        stack.position += step;
         stack.add_op("OpInitRefSentinel", self);
-        self.code_add(ref_size);
+        self.code_add(step);
     }
 
     /// Plan-04 Phase B.2: push a null-state `DbRef` (allocates a store
@@ -867,12 +882,13 @@ impl State {
     /// to `OpConvRefFromNull`, decomposed into `OpReserveFrame(12) +
     /// OpInitRef(12)`.
     fn emit_push_null_ref(&mut self, stack: &mut Stack) {
-        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        // @PLAN53 cluster 2 / S4: stepped DbRef span (see emit_push_sentinel).
+        let step = stack.step(size_of::<crate::keys::DbRef>() as u16);
         stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        self.code_add(step);
+        stack.position += step;
         stack.add_op("OpInitRef", self);
-        self.code_add(ref_size);
+        self.code_add(step);
     }
 
     /// Plan-04 Phase B.2: push a stack-frame `DbRef` pointing at
@@ -881,13 +897,15 @@ impl State {
     /// OpInitCreateStack(12, dep_offset + 12)`.  Caller computes
     /// `dep_offset = stack.position_before - dep.stack_pos`.
     fn emit_push_create_stack(&mut self, stack: &mut Stack, dep_offset: u16) {
-        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        // @PLAN53 cluster 2 / S4: stepped DbRef span; dep_pos shifts by the
+        // same stepped advance (dep is now `step` further below the new TOS).
+        let step = stack.step(size_of::<crate::keys::DbRef>() as u16);
         stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        self.code_add(step);
+        stack.position += step;
         stack.add_op("OpInitCreateStack", self);
-        self.code_add(ref_size);
-        self.code_add(dep_offset + ref_size);
+        self.code_add(step);
+        self.code_add(dep_offset + step);
     }
 
     pub(super) fn gen_set_first_text(&mut self, stack: &mut Stack, v: u16, value: &Value) {
@@ -901,7 +919,7 @@ impl State {
         // Advance TOS so that stack.position >= pos + size (slot fits).
         let slot_end = pos + size;
         if stack.position < slot_end {
-            let advance = slot_end - stack.position;
+            let advance = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(advance);
             stack.position += advance;
@@ -926,7 +944,7 @@ impl State {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = pos + ref_size;
         if stack.position < slot_end {
-            let advance = slot_end - stack.position;
+            let advance = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(advance);
             stack.position += advance;
@@ -1005,7 +1023,7 @@ impl State {
                 // +4 stack tracker bump for the signature mismatch.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpVarFnRef", self);
-                    stack.position += 4;
+                    stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpVarBool", self),
                 Type::Float => stack.add_op("OpVarFloat", self),
@@ -1057,7 +1075,7 @@ impl State {
                 // `stack.position -= 4` correction.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= 4;
+                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -1140,12 +1158,12 @@ impl State {
             let ref_size = size_of::<crate::keys::DbRef>() as u16;
             let slot_end = stack.function.stack(v).saturating_add(ref_size);
             if stack.position < slot_end {
-                let bump = slot_end - stack.position;
+                let bump = stack.step(slot_end) - stack.position;
                 stack.add_op("OpReserveFrame", self);
                 self.code_add(bump);
                 stack.position += bump;
             }
-            let slot_offset = stack.position - stack.function.stack(v);
+            let slot_offset = stack.var_pos(v);
             if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
                 // skip_free bindings borrow; inline_ref lift temporaries are
                 // overwritten before read.  Both want a null sentinel in the
@@ -1177,7 +1195,7 @@ impl State {
                 stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
                 // OpCreateStack pointing at v's slot (now the real DbRef).
-                let dep_offset = stack.position - stack.function.stack(v);
+                let dep_offset = stack.var_pos(v);
                 self.emit_push_create_stack(stack, dep_offset);
                 stack.add_op("OpConstInt", self);
                 self.code_add(12i64);
@@ -1221,12 +1239,12 @@ impl State {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if first && stack.position < slot_end {
-            let bump = slot_end - stack.position;
+            let bump = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
             // Skip-free / inline-ref keyed locals share an outer-owned store.
             // On first assignment, point the slot at it via the sentinel; on
@@ -1410,7 +1428,7 @@ impl State {
                 && !s1_substituted
                 && !is_hidden_buf_arg
             {
-                let free_pos = stack.position - stack.function.stack(v);
+                let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
@@ -1444,12 +1462,12 @@ impl State {
                     let ref_size = size_of::<crate::keys::DbRef>() as u16;
                     let slot_end = stack.function.stack(v).saturating_add(ref_size);
                     if stack.position < slot_end {
-                        let bump = slot_end - stack.position;
+                        let bump = stack.step(slot_end) - stack.position;
                         stack.add_op("OpReserveFrame", self);
                         self.code_add(bump);
                         stack.position += bump;
                     }
-                    let slot_offset = stack.position - stack.function.stack(v);
+                    let slot_offset = stack.var_pos(v);
                     stack.add_op("OpInitRef", self);
                     self.code_add(slot_offset);
                     stack.add_op("OpDatabase", self);
@@ -1576,7 +1594,7 @@ impl State {
                     // may have handed to a different var (probe 02-style
                     // corruption pinned in commit `a957a365`).
                     for av in &caller_hidden_args {
-                        let slot_offset = stack.position - stack.function.stack(*av);
+                        let slot_offset = stack.var_pos(*av);
                         stack.add_op("OpVarRef", self);
                         self.code_add(slot_offset);
                         stack.add_op("OpFreeRef", self);
@@ -1665,7 +1683,7 @@ impl State {
                 // declares 16 B / `text` but the runtime pops 20).
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= 4;
+                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -1735,7 +1753,7 @@ impl State {
                 // DbRef is pushed onto TOS by `generate`; move it to v's
                 // slot via `OpPutRef(slot_offset)`.
                 self.generate(value, stack, false);
-                let var_pos = stack.position - stack.function.stack(v);
+                let var_pos = stack.var_pos(v);
                 stack.add_op("OpPutRef", self);
                 self.code_add(var_pos);
             }
@@ -1766,10 +1784,10 @@ impl State {
             } else {
                 self.gen_fn_ref_value(value, stack);
             }
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             stack.add_op("OpPutFnRef", self);
             self.code_add(var_pos);
-            stack.position -= 4;
+            stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
         } else {
             // Plan-04 Phase B.3 atomic bundle: push then OpPut* at v's
             // slot.  Mirrors `set_var`'s non-RefVar dispatch at
@@ -1782,7 +1800,7 @@ impl State {
             if stack.position == before {
                 return;
             }
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             let tp = stack.function.tp(v).clone();
             match tp {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
@@ -1856,7 +1874,7 @@ impl State {
                 // OpPutRef becomes the mechanism that lands the result in v's
                 // actual slot.
                 self.generate(&args[0], stack, false);
-                let var_pos = stack.position - stack.function.stack(v);
+                let var_pos = stack.var_pos(v);
                 stack.add_op("OpPutRef", self);
                 self.code_add(var_pos);
                 return;
@@ -1868,12 +1886,12 @@ impl State {
         // positional init + allocator at slot_offset.
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if stack.position < slot_end {
-            let bump = slot_end - stack.position;
+            let bump = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -1898,10 +1916,10 @@ impl State {
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
         {
-            let src_pos = stack.position - stack.function.stack(src);
+            let src_pos = stack.var_pos(src);
             stack.add_op("OpVarRef", self);
             self.code_add(src_pos);
-            stack.position += size_of::<crate::keys::DbRef>() as u16;
+            stack.position += stack.step(size_of::<crate::keys::DbRef>() as u16);
             stack.function.set_skip_free(src);
             // Plan-04 Phase B.3.h.4: slot-aware — move the pushed DbRef
             // from TOS to v's slot via OpPutRef.  Under slot-move (still
@@ -1909,7 +1927,7 @@ impl State {
             // behavior-preserving bytecode-level overhead (copy onto
             // self).  Once slot-move is removed, this becomes the
             // mechanism that lands the transferred DbRef in v's slot.
-            let var_pos = stack.position - stack.function.stack(v);
+            let var_pos = stack.var_pos(v);
             stack.add_op("OpPutRef", self);
             self.code_add(var_pos);
             return;
@@ -1920,12 +1938,12 @@ impl State {
         // positional init + allocator at slot_offset.
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if stack.position < slot_end {
-            let bump = slot_end - stack.position;
+            let bump = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -1955,12 +1973,12 @@ impl State {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if stack.position < slot_end {
-            let bump = slot_end - stack.position;
+            let bump = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -1997,12 +2015,12 @@ impl State {
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if stack.position < slot_end {
-            let bump = slot_end - stack.position;
+            let bump = stack.step(slot_end) - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.position - stack.function.stack(v);
+        let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
@@ -2099,7 +2117,7 @@ impl State {
         // @PLAN51 Cluster II Step 2 — post-wrap free + sentinel reset
         // (see the reassignment-path comment for rationale).
         for av in &caller_hidden_args {
-            let slot_offset = stack.position - stack.function.stack(*av);
+            let slot_offset = stack.var_pos(*av);
             stack.add_op("OpVarRef", self);
             self.code_add(slot_offset);
             stack.add_op("OpFreeRef", self);
@@ -2150,14 +2168,14 @@ impl State {
         for arg_val in &inner_args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.position - stack.function.stack(dest_var);
+        let dep_offset = stack.var_pos(dest_var);
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
         for attr_type in &inner_attrs {
-            stack.position -= size(attr_type, &Context::Argument);
+            stack.position -= stack.step(size(attr_type, &Context::Argument));
         }
-        stack.position -= size_of::<crate::keys::DbRef>() as u16;
+        stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
         true
     }
 
@@ -2196,7 +2214,7 @@ impl State {
             && let Some(Value::Var(v)) = parameters.first()
             && matches!(stack.function.tp(*v), Type::Function(_, _, _))
         {
-            let var_pos = stack.position - stack.function.stack(*v);
+            let var_pos = stack.var_pos(*v);
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos - 8);
             stack.add_op("OpFreeRef", self);
@@ -2217,7 +2235,7 @@ impl State {
                     && let Value::Var(v) = &parameters[a_nr]
                     && matches!(stack.function.tp(*v), Type::RefVar(_))
                 {
-                    let var_pos = stack.position - stack.function.stack(*v);
+                    let var_pos = stack.var_pos(*v);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     tps.push(a.typedef.clone());
@@ -2239,7 +2257,8 @@ impl State {
                 }
                 #[cfg(debug_assertions)]
                 {
-                    let expected = size(&a.typedef, &Context::Argument);
+                    // @PLAN53 S4: the arg occupies a stepped span on the stack.
+                    let expected = stack.step(size(&a.typedef, &Context::Argument));
                     let actual = stack.position - stack_before;
                     debug_assert_eq!(
                         actual,
@@ -2279,7 +2298,9 @@ impl State {
                 self.gather_key(stack, &parameters, 2, &mut tps);
             }
             "OpStart" => {
-                was_stack = stack.position + 4 - super::size_ref() as u16;
+                // @PLAN53 cluster 2 / S4: the iterator-pushed value (+4) and the
+                // consumed iterable DbRef (size_ref) each occupy a stepped span.
+                was_stack = stack.position + stack.step(4) - stack.step(super::size_ref() as u16);
                 self.gather_key(stack, &parameters, 2, &mut tps);
             }
             "OpNext" => {
@@ -2287,7 +2308,13 @@ impl State {
                 self.gather_key(stack, &parameters, 3, &mut tps);
             }
             "OpIterate" => {
-                was_stack = stack.position + 8 - super::size_ref() as u16;
+                // @PLAN53 cluster 2 / S4 (2b+2c): OpIterate pushes the start+finish
+                // pair as ONE contiguous 8-byte i64 (see io.rs `iterate`) and
+                // consumes the iterable DbRef.  Account the result as a single
+                // step(8) span, not 2*step(4): under LOFT_ALIGN two separate u32
+                // slots would be 16 bytes (8+8) and leave a 4-byte gap the i64
+                // read-back can't see.  Identity flag-OFF (step(8) == 2*step(4) == 8).
+                was_stack = stack.position + stack.step(8) - stack.step(super::size_ref() as u16);
                 if let Value::Int(parameter_length) = parameters[4] {
                     self.gather_key(stack, &parameters, 4, &mut tps);
                     self.gather_key(stack, &parameters, 5 + parameter_length, &mut tps);
@@ -2329,8 +2356,9 @@ impl State {
             super::emit_op(stack.data.def(op).op_code, self);
             self.code_add(value_size);
             // Stack: -12 (DbRef consumed) + byte_size (yielded value pushed).
-            stack.position -= super::size_ref() as u16;
-            stack.position += byte_size;
+            // @PLAN53 S4: both occupy stepped spans.
+            stack.position -= stack.step(super::size_ref() as u16);
+            stack.position += stack.step(byte_size);
             // Return type is the yield type — inferred from value_size for now.
             return match byte_size {
                 1 => Type::Boolean,
@@ -2344,8 +2372,9 @@ impl State {
             self.remember_stack(stack.position);
             super::emit_op(stack.data.def(op).op_code, self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).
-            stack.position -= super::size_ref() as u16;
-            stack.position += 1;
+            // @PLAN53 S4: both occupy stepped spans.
+            stack.position -= stack.step(super::size_ref() as u16);
+            stack.position += stack.step(1);
             return Type::Boolean;
         }
         // resolve library index — prefer #native symbol, fall back to def name.
@@ -2386,7 +2415,7 @@ impl State {
         if name == "OpCreateStack" && !parameters.is_empty() {
             if let Value::Var(wv) = &parameters[0] {
                 // Dep is the named variable at wv.stack_pos.
-                let dep_offset = stack.position - stack.function.stack(*wv);
+                let dep_offset = stack.var_pos(*wv);
                 self.emit_push_create_stack(stack, dep_offset);
             } else {
                 // OpCreateStack with a non-Var expression (e.g.
@@ -2451,8 +2480,9 @@ impl State {
         } else if let Some(lib_idx) = lib_nr {
             stack.add_op("OpStaticCall", self);
             self.code_add(lib_idx);
+            // @PLAN53 cluster 2 / S4: args were pushed at stepped spans.
             for a in &stack.data.def(op).attributes {
-                stack.position -= size(&a.typedef, &Context::Argument);
+                stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // also subtract the extra args pushed beyond declared params.
             if stack.data.def(op).name == "n_parallel_for"
@@ -2469,11 +2499,11 @@ impl State {
                 for extra in parameters.iter().skip(n_declared) {
                     // Extra args are always integer (8 bytes post-2c).
                     let _ = extra;
-                    stack.position -= 8;
+                    stack.position -= stack.step(8);
                 }
             }
             // add the result to the stack
-            stack.position += size(&stack.data.def(op).returned, &Context::Argument);
+            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
             stack.data.def(op).returned.clone()
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
@@ -2485,21 +2515,24 @@ impl State {
                 stack.add_op("OpCall", self);
             }
             self.code_add(i64::from(op)); // d_nr: i64 (stdlib `const i32` widens post-2c)
+            // @PLAN53 cluster 2 / S4: args_size is the runtime frame-base
+            // delta (args_base = stack_pos - args_size); it MUST equal the
+            // per-arg stepped pushes, so sum Σ step(size) — never step(Σ).
             let args_size: u16 = stack
                 .data
                 .def(op)
                 .attributes
                 .iter()
-                .map(|a| size(&a.typedef, &Context::Argument))
+                .map(|a| stack.step(size(&a.typedef, &Context::Argument)))
                 .sum();
             self.code_add(args_size);
             self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
-                stack.position -= size(&a.typedef, &Context::Argument);
+                stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // add the result to the stack
-            stack.position += size(&stack.data.def(op).returned, &Context::Argument);
+            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
             stack.data.def(op).returned.clone()
         }
     }
@@ -2610,14 +2643,15 @@ impl State {
         }
 
         // fn-ref variable is below all pushed arguments.
-        let fn_var_dist = stack.position - stack.function.stack(v_nr);
+        let fn_var_dist = stack.var_pos(v_nr);
         // declared: visible param sizes; extra: work-buf + closure (all 12-byte DbRefs).
+        // @PLAN53 cluster 2 / S4: each arg occupies a stepped span (Σ step).
         let declared_size: u16 = param_types
             .iter()
-            .map(|t| size(t, &Context::Argument))
+            .map(|t| stack.step(size(t, &Context::Argument)))
             .sum();
         let extra = if args.len() > param_types.len() {
-            (args.len() - param_types.len()) as u16 * super::size_ref() as u16
+            (args.len() - param_types.len()) as u16 * stack.step(super::size_ref() as u16)
         } else {
             0
         };
@@ -2626,7 +2660,7 @@ impl State {
         self.code_add(fn_var_dist);
         self.code_add(total_arg_size);
         stack.position -= total_arg_size;
-        stack.position += size(&ret_type, &Context::Argument);
+        stack.position += stack.step(size(&ret_type, &Context::Argument));
         ret_type
     }
 
@@ -2640,7 +2674,7 @@ impl State {
             stack.position,
             stack.data.def(stack.def_nr).name
         );
-        let var_pos = stack.position - stack.function.stack(variable);
+        let var_pos = stack.var_pos(variable);
         let argument = stack.function.is_argument(variable);
         let code = self.code_pos;
         self.vars.insert(code, variable);
@@ -2651,7 +2685,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
                 // signature returns `text` (16 B Str).  Add the 4-byte
                 // discrepancy to the compile-time stack tracker.
-                stack.position += 4;
+                stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
@@ -2730,7 +2764,7 @@ impl State {
                         // vars.
                         Type::Function(_, _, _) => {
                             stack.add_op("OpVarFnRef", self);
-                            stack.position += 4;
+                            stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
                         Type::Float => stack.add_op("OpVarFloat", self),
@@ -2846,7 +2880,8 @@ impl State {
                 );
             }
         } else {
-            let size = size(&block.result, &Context::Argument);
+            // @PLAN53 S4: the block result occupies a stepped span.
+            let size = stack.step(size(&block.result, &Context::Argument));
             let after = to + size;
             // Plan-04 Phase B.3: under the per-block `OpReserveFrame`
             // that this atomic bundle deletes, a `drop <var>` tail
@@ -3003,7 +3038,7 @@ impl State {
                     // OpFormatStack* APPEND to it → text accumulated across
                     // iterations (`[2.5][2.58][2.581]`).  Emit OpClearStackText
                     // (deref) so the buffer is emptied, matching the native path.
-                    let var_pos = stack.position - stack.function.stack(var);
+                    let var_pos = stack.var_pos(var);
                     stack.add_op("OpClearStackText", self);
                     self.code_add(var_pos);
                     return;
@@ -3011,17 +3046,17 @@ impl State {
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
                 {
-                    let var_pos = stack.position - stack.function.stack(var);
+                    let var_pos = stack.var_pos(var);
                     stack.add_op("OpClearStackText", self);
                     self.code_add(var_pos);
                 }
                 self.generate(value, stack, false);
-                let var_pos = stack.position - stack.function.stack(var);
+                let var_pos = stack.var_pos(var);
                 stack.add_op("OpAppendStackText", self);
                 self.code_add(var_pos);
                 return;
             }
-            let var_pos = stack.position - stack.function.stack(var);
+            let var_pos = stack.var_pos(var);
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos);
             self.generate(value, stack, false);
@@ -3088,7 +3123,7 @@ impl State {
                 }
             }
         }
-        let var_pos = stack.position - stack.function.stack(var);
+        let var_pos = stack.var_pos(var);
         match stack.function.tp(var) {
             Type::Integer(_) => stack.add_op("OpPutInt", self),
             Type::Function(_, _, _) => {
@@ -3096,7 +3131,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
                 // signature pops `text` (16 B Str).  Subtract the 4-byte
                 // discrepancy from the compile-time stack tracker.
-                stack.position -= 4;
+                stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
@@ -3158,14 +3193,19 @@ impl State {
         for arg_val in args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.position - stack.function.stack(var);
+        let dep_offset = stack.var_pos(var);
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
+        // @PLAN53 cluster 2 / S4: the args + the create-stack dest DbRef each
+        // occupy a STEPPED span (DbRef 12 -> 16 in aligned mode), matching the
+        // native get<T> pops; identity when off.  (Twin of try_text_dest_pass —
+        // this is the set_var `r = text_dest_native(...)` path; missing the
+        // step here drifted the frame -4 and corrupted the var read — a8.)
         for attr_type in &attr_types {
-            stack.position -= size(attr_type, &Context::Argument);
+            stack.position -= stack.step(size(attr_type, &Context::Argument));
         }
-        stack.position -= size_of::<crate::keys::DbRef>() as u16;
+        stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
     }
 }
 

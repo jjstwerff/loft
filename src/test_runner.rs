@@ -864,12 +864,10 @@ pub(crate) fn run_tests(
                             .unwrap_or_default()
                             .to_string_lossy()
                             .replace('-', "_");
-                        let tmp_rs =
-                            std::env::temp_dir().join(format!("loft_test_native_{stem}.rs"));
-                        let binary =
-                            std::env::temp_dir().join(format!("loft_test_native_{stem}_bin"));
-                        let key_file =
-                            std::env::temp_dir().join(format!("loft_test_native_{stem}_bin.key"));
+                        let scratch = crate::platform::scratch_dir();
+                        let tmp_rs = scratch.join(format!("loft_test_native_{stem}.rs"));
+                        let binary = scratch.join(format!("loft_test_native_{stem}_bin"));
+                        let key_file = scratch.join(format!("loft_test_native_{stem}_bin.key"));
 
                         // Write .rs only when content changed (preserves cache).
                         let existing = std::fs::read(&tmp_rs).unwrap_or_default();
@@ -892,12 +890,26 @@ pub(crate) fn run_tests(
                                     )
                             });
 
+                        // Layer 2: never start a compile that could overflow a
+                        // RAM-backed tmpfs (reclaims loft's own stale artefacts
+                        // first).  Warn + proceed; rustc surfaces a real ENOSPC
+                        // if it genuinely can't write.
+                        if !cached && !crate::platform::native_compile_space_ok(&scratch) {
+                            eprintln!(
+                                "loft: warning — low space in {} (set LOFT_TMPFS_MIN_FREE_MB to tune)",
+                                scratch.display()
+                            );
+                        }
                         let compile_ok = if cached {
                             true
                         } else {
                             // Compile with rustc.
                             let mut cmd = std::process::Command::new("rustc");
-                            cmd.arg("--edition=2024")
+                            // Keep rustc's own intermediates in the loft
+                            // scratch dir too, so the whole native compile
+                            // stays off a small `/tmp` tmpfs.
+                            cmd.env("TMPDIR", &scratch)
+                                .arg("--edition=2024")
                                 .arg("-C")
                                 .arg("debuginfo=0")
                                 .arg("-C")
@@ -905,6 +917,13 @@ pub(crate) fn run_tests(
                                 .arg("-o")
                                 .arg(&binary)
                                 .arg(&tmp_rs);
+                            // Layer 1: strip the linked binary (~36MB → ~1MB;
+                            // the bulk is debug info from libloft.rlib + std,
+                            // useless to a run-and-check test).  Opt out with
+                            // LOFT_NATIVE_KEEP_SYMBOLS=1 when debugging a crash.
+                            if crate::platform::native_strip_symbols() {
+                                cmd.arg("-C").arg("strip=symbols");
+                            }
                             if let Some(ref ld) = lib_dir {
                                 cmd.arg("--extern")
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));

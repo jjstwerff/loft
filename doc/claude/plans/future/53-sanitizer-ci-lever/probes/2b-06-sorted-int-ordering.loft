@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2b — VARIANT (ascending order check).
+//
+// Inserts keys out of order and checks the iteration yields them ascending.
+// Catches both the "no elements" failure AND any future "wrong order" failure
+// the gather span could produce once it stops dropping elements entirely.
+//
+// Status aligned: CURRENTLY FAIL (empty) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
+
+struct Elm { k: integer, v: integer }
+
+fn main() {
+  s: sorted<Elm[k]> = [];
+  s += [Elm{k:3, v:0}];
+  s += [Elm{k:1, v:0}];
+  s += [Elm{k:2, v:0}];
+  out = "";
+  for e in s { out = out + "{e.k}"; }
+  assert(out == "123", "2b-06: got '{out}', want '123'");
+  println("2b-06 PASSED");
+}

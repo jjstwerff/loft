@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2c — VARIANT (`c60_hash_iter_filter_clause`).
+//
+// A `for … if <clause>` filtered hash iteration.  The phantom leading element
+// carries garbage that the filter clause then tests — so the sum comes back as
+// corrupted garbage (a huge value) rather than 60.  Shows the off-by-one can
+// inject garbage into a guarded body, not just inflate a count.
+//
+// Status aligned: CURRENTLY FAIL (garbage) ; AFTER 2c FIX -> PASS.  Flag-OFF: PASS.
+
+struct Ent { k: text, v: integer }
+struct Bag { data: hash<Ent[k]> }
+
+fn main() {
+  b = Bag { data: [Ent{k:"a",v:1}, Ent{k:"b",v:20}, Ent{k:"c",v:3}, Ent{k:"d",v:40}] };
+  total = 0;
+  for e in b.data if e.v > 10 { total = total + e.v; }
+  assert(total == 60, "2c-06: got {total}, want 60 (20+40)");
+  println("2c-06 PASSED");
+}

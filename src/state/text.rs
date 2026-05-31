@@ -13,7 +13,7 @@ impl State {
     }
 
     pub fn string_from_code(&mut self) {
-        let size = *self.code::<u8>();
+        let size = self.code::<u8>();
         unsafe {
             self.set_string(
                 i32::from(size),
@@ -24,6 +24,8 @@ impl State {
     }
 
     pub(super) unsafe fn set_string(&mut self, size: i32, off: *const u8) {
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<Str>(self.stack_cur.pos + self.stack_pos);
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -57,6 +59,8 @@ impl State {
     #[must_use]
     pub fn string(&mut self) -> Str {
         self.stack_pos -= size_ptr();
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<Str>(self.stack_cur.pos + self.stack_pos);
         *self
             .database
             .store(&self.stack_cur)
@@ -77,7 +81,7 @@ impl State {
     #[inline]
     pub fn append_text(&mut self) {
         let text = self.string();
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         if cfg!(debug_assertions) {
             self.text_positions
                 .insert(self.stack_cur.pos + self.stack_pos + size_ptr() - u32::from(pos));
@@ -91,7 +95,7 @@ impl State {
     /// before any field access.
     #[inline]
     pub fn create_stack(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let db = DbRef {
             store_nr: self.stack_cur.store_nr,
             rec: self.stack_cur.rec,
@@ -109,7 +113,7 @@ impl State {
 
     #[inline]
     pub fn get_stack_ref(&mut self) {
-        let fld = *self.code::<u16>();
+        let fld = self.code::<u16>();
         let r = *self.get_stack::<DbRef>();
         let t = self
             .database
@@ -128,29 +132,34 @@ impl State {
 
     pub fn append_stack_text(&mut self) {
         let text = self.string();
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let v1 = self.string_ref_mut(pos - size_ptr() as u16);
         *v1 += text.str();
     }
 
     pub fn append_stack_character(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
         if c as u32 != 0 {
-            self.string_ref_mut(pos - 4).push(c);
+            // @PLAN53 cluster 2 / S4: the char pop occupies a stepped span
+            // (4 off, 8 aligned) — N = bytes the op's get_stack popped.
+            let off = pos - self.stack_step(4) as u16;
+            self.string_ref_mut(off).push(c);
         }
     }
 
     pub fn clear_stack_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let v1 = self.string_ref_mut(pos);
         v1.clear();
     }
 
     #[inline]
     pub fn append_character(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let c = *self.get_stack::<char>();
+        // @PLAN53 cluster 2 / S4: stepped char-pop span (4 off, 8 aligned).
+        let n = self.stack_step(4) as u16;
         // Plan-07 phase 4e.3 — when a fault tag is set on the
         // preceding `OpTagFault` (4e.1 format-scope swap) AND the
         // char is the null sentinel, render `null(<tag>)` so the
@@ -161,14 +170,14 @@ impl State {
         let tag = self.database.take_format_fault();
         if c as u32 == 0 {
             if let Some(label) = tag {
-                let s = self.string_mut(pos - 4);
+                let s = self.string_mut(pos - n);
                 s.push_str("null(");
                 s.push_str(label);
                 s.push(')');
             }
             return;
         }
-        self.string_mut(pos - 4).push(c);
+        self.string_mut(pos - n).push(c);
     }
 
     #[inline]
@@ -286,7 +295,7 @@ impl State {
     }
 
     pub fn clear_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         self.string_mut(pos).clear();
     }
 
@@ -296,15 +305,20 @@ impl State {
     When the same variable is freed twice.
     */
     pub fn free_text(&mut self) {
-        let pos = *self.code::<u16>();
-        if cfg!(debug_assertions) {
-            let s = self.string_mut(pos);
-            s.clear();
-            for _ in 0..s.len() {
-                *s += "*";
-            }
-        }
-        self.string_mut(pos).shrink_to(0);
+        let pos = self.code::<u16>();
+        // @PLAN53 cluster 5: deallocate the String's heap buffer.  `clear()` sets
+        // len=0 so the following `shrink_to(0)` drops capacity to 0 and frees the
+        // buffer.  Previously `clear()` ran ONLY under debug-assertions, so in
+        // release — and under Miri, where the lib disables debug-assertions — a
+        // non-empty String reached `shrink_to(0)`, which shrinks capacity only down
+        // to `len` (never below), leaving the buffer allocated and LEAKED (the store
+        // holds the String as raw bytes and never runs its Drop; `free_text` is the
+        // sole deallocation point).  Miri's leak checker caught it (cluster 5).
+        // (The old debug-only `for _ in 0..s.len()` poison loop was dead code — it
+        // ran after `clear()`, so `s.len()` was already 0 and it never executed.)
+        let s = self.string_mut(pos);
+        s.clear();
+        s.shrink_to(0);
         if cfg!(debug_assertions) {
             let var_pos = self.stack_cur.pos + self.stack_pos - u32::from(pos);
             let remove = self.text_positions.remove(&var_pos);
@@ -317,6 +331,8 @@ impl State {
     When an unknown internal string format is found.
     */
     pub fn string_mut(&mut self, pos: u16) -> &mut String {
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<String>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store_mut(&self.stack_cur).addr_mut::<String>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -324,6 +340,8 @@ impl State {
     }
 
     pub(super) fn string_ref_mut(&mut self, pos: u16) -> &mut String {
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<DbRef>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         let r = *self.database.store(&self.stack_cur).addr::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -342,7 +360,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         if cfg!(debug_assertions) {
             self.text_positions
                 .insert(self.stack_cur.pos + self.stack_pos - u32::from(pos));
@@ -355,30 +373,30 @@ impl State {
     }
 
     pub fn var_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let new_value = Str::new(self.get_var::<String>(pos));
         self.put_stack(new_value);
     }
 
     pub fn arg_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let new_value = *self.get_var::<Str>(pos);
         self.put_stack(new_value);
     }
 
     pub fn put_text(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let str_val = self.string(); // pops 16B Str; stack_pos -= 16
         self.put_var(pos, str_val); // writes Str at (stack_pos + 16 - pos) = elem_abs
     }
 
     pub fn format_int(&mut self) {
-        let pos = *self.code::<u16>();
-        let radix = *self.code::<u8>();
-        let token = *self.code::<u8>();
-        let plus = *self.code::<bool>();
-        let note = *self.code::<bool>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let radix = self.code::<u8>();
+        let token = self.code::<u8>();
+        let plus = self.code::<bool>();
+        let note = self.code::<bool>();
+        let dir = self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
         // Plan-07 phase 4e.3 — consume the fault tag set by the
@@ -401,12 +419,12 @@ impl State {
     }
 
     pub fn format_stack_int(&mut self) {
-        let pos = *self.code::<u16>();
-        let radix = *self.code::<u8>();
-        let token = *self.code::<u8>();
-        let plus = *self.code::<bool>();
-        let note = *self.code::<bool>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let radix = self.code::<u8>();
+        let token = self.code::<u8>();
+        let plus = self.code::<bool>();
+        let note = self.code::<bool>();
+        let dir = self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
         let tag = self.database.take_format_fault();
@@ -423,8 +441,8 @@ impl State {
     }
 
     pub fn format_float(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
@@ -433,8 +451,8 @@ impl State {
     }
 
     pub fn format_stack_float(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
@@ -443,29 +461,34 @@ impl State {
     }
 
     pub fn format_single(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_mut(pos - 20);
+        // @PLAN53 cluster 2 / S4: N = stepped span of the popped i64+i64+f32
+        // (20 off; 24 aligned — the f32 rounds 4->8).
+        let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let s = self.string_mut(pos - n);
         ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_stack_single(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_ref_mut(pos - 20);
+        // @PLAN53 cluster 2 / S4: stepped span of popped i64+i64+f32 (20/24).
+        let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let s = self.string_ref_mut(pos - n);
         ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_text(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
-        let token = *self.code::<u8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
+        let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
         let s = self.string_mut(pos - 8 - size_ptr() as u16);
@@ -473,9 +496,9 @@ impl State {
     }
 
     pub fn format_stack_text(&mut self) {
-        let pos = *self.code::<u16>();
-        let dir = *self.code::<i8>();
-        let token = *self.code::<u8>();
+        let pos = self.code::<u16>();
+        let dir = self.code::<i8>();
+        let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
         let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);

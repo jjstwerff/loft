@@ -272,6 +272,46 @@ fn check_i4_every_var_placed(vars: &[Variable]) -> Option<usize> {
     None
 }
 
+/// I8 — total-claim capacity bound.  Returns the first placed local whose
+/// byte range `[stack_pos, stack_pos + size)` exceeds the u16-addressable
+/// frame (`> u16::MAX`).  Slot offsets are u16, so anything past that has
+/// overflowed the claim a function can address — a sign of alignment-padding
+/// bloat or a runaway offset (@PLAN53 cluster 2).
+fn check_i8_total_claim(vars: &[Variable]) -> Option<usize> {
+    vars.iter().enumerate().find_map(|(idx, v)| {
+        if v.argument || v.stack_pos == u16::MAX {
+            return None;
+        }
+        let end = u32::from(v.stack_pos) + u32::from(size(&v.type_def, &Context::Variable));
+        (end > u32::from(u16::MAX)).then_some(idx)
+    })
+}
+
+/// @PLAN53 cluster 2 — alignment invariant for the **aligned V2 layout only**.
+/// Every placed local must sit at an `align(tp)`-aligned slot offset so an
+/// `addr`/`addr_mut::<T>` into it is sound.  Panics on the first violation.
+///
+/// Run ONLY on V2's output via the `LOFT_SLOT_V2=validate` shadow path — NOT
+/// in the unconditional `validate_slots` path, because V1's tight layout is
+/// legitimately unaligned and would trip it.
+pub fn validate_alignment(function: &Function) {
+    for (idx, v) in function.variables.iter().enumerate() {
+        if v.argument || v.stack_pos == u16::MAX {
+            continue;
+        }
+        let al = u16::from(crate::variables::align(&v.type_def)).max(1);
+        assert!(
+            v.stack_pos % al == 0,
+            "[ALIGN] variable '{}' (idx={idx}) in function '{}' at slot {} is not \
+             {al}-aligned (type {}) — aligned-V2-allocator bug",
+            v.name,
+            function.name,
+            v.stack_pos,
+            short_type(&v.type_def),
+        );
+    }
+}
+
 /// I5 — kind-consistency on overlapping-slot reuse.  For any pair
 /// of variables whose slot ranges overlap spatially AND whose live
 /// intervals are disjoint (the reuse case), kinds must match; for
@@ -512,7 +552,11 @@ fn check_i6_loop_iteration(vars: &[Variable], function: &Function) -> Option<(u1
 /// On the first failure, logs the full variable table and IR code
 /// before panicking with a distinct `[I1]` … `[I6]` prefix so the
 /// failing invariant is self-identifying.
-pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
+/// `scope_blind` — when true (the V2 shadow path), skip I7 (declared-scope
+/// zone-1 frame): V2 is a scope-blind single-pool allocator, so the V1
+/// two-zone "slot within its scope's zone" invariant does not apply.  All
+/// other invariants (I1 overlap, I2, I5, I6, I8) hold for both allocators.
+pub fn validate_slots(function: &Function, data: &Data, def_nr: u32, scope_blind: bool) {
     let vars = &function.variables;
     let local_start = compute_local_start(function);
 
@@ -526,6 +570,26 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
             function.name,
             v.first_def,
             size(&v.type_def, &Context::Variable),
+        );
+    }
+
+    // ── I8: total-claim capacity bound ───────────────────────────────────
+    // Slot offsets are u16, so a slot whose byte range exceeds u16::MAX has
+    // overflowed the claim a function can address (and `frame_hwm`'s
+    // saturating_add would silently mask it).  Guards alignment-padding
+    // bloat / runaway offsets pushing a slot outside the function's total
+    // claim (@PLAN53 cluster 2).
+    if let Some(idx) = check_i8_total_claim(vars) {
+        let v = &vars[idx];
+        let end = u32::from(v.stack_pos) + u32::from(size(&v.type_def, &Context::Variable));
+        panic!(
+            "[I8] variable '{}' (idx={idx}) in function '{}' has slot \
+             [{}, {end}) exceeding the u16-addressable frame claim \
+             (limit {}); likely alignment-padding bloat or a runaway offset",
+            v.name,
+            function.name,
+            v.stack_pos,
+            u16::MAX,
         );
     }
 
@@ -560,8 +624,10 @@ pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     }
 
     // ── I7: declared-scope zone-1 frame consistency ─────────────────────
-    if let Some((idx, base, top)) =
-        check_i7_scope_frame(vars, function, &data.def(def_nr).code, local_start)
+    // Skipped for the scope-blind V2 allocator (zone frames are a V1 concept).
+    if let Some((idx, base, top)) = (!scope_blind)
+        .then(|| check_i7_scope_frame(vars, function, &data.def(def_nr).code, local_start))
+        .flatten()
     {
         let v = &vars[idx];
         let sz = size(&v.type_def, &Context::Variable);
@@ -940,6 +1006,23 @@ mod invariant_tests {
         assert!(result.is_some());
         let (idx, _base, _top) = result.unwrap();
         assert_eq!(idx, 1);
+    }
+
+    // I8 (@PLAN53 cluster 2): a slot whose byte range exceeds the
+    // u16-addressable frame is flagged; normal slots pass.
+    #[test]
+    fn i8_slot_exceeding_u16_claim_flagged() {
+        let mut f = mk_fn();
+        // INT is 8 bytes; placing at u16::MAX - 4 gives end = u16::MAX + 4.
+        add_local(&mut f, "x", &INT, u16::MAX - 4, 5, 10);
+        assert_eq!(check_i8_total_claim(&f.variables), Some(0));
+    }
+
+    #[test]
+    fn i8_normal_slot_ok() {
+        let mut f = mk_fn();
+        add_local(&mut f, "x", &INT, 12, 5, 10);
+        assert_eq!(check_i8_total_claim(&f.variables), None);
     }
 
     #[test]

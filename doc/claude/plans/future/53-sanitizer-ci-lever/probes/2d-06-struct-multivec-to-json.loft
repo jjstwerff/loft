@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::p145`, single-file).
+//
+// A struct with TWO vector fields rendered via `:j` (to_json).  The original
+// p145 is a cross-file regression (to_json on a multi-vector struct crashed);
+// this single-file form reproduces the aligned-mode failure (empty json) and
+// is the cheapest reproducer.  Walking the second vector field after the first
+// is where the mis-stepped handle bites.
+//
+// Status aligned: CURRENTLY FAIL (empty json) ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+struct Multi { tags: vector<text>, nums: vector<integer> }
+
+fn main() {
+  m = Multi { tags: ["x", "y"], nums: [1, 2, 3] };
+  j = "{m:j}";
+  assert(j.len() > 0, "2d-06: json rendered empty");
+  println("2d-06 PASSED");
+}

@@ -102,6 +102,12 @@ pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
     pub stack_pos: u32,
+    /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
+    /// push/pop step and frame reserve round to 8 so typed stack writes
+    /// are never unaligned (the cluster-2 Miri finding).  Read once from
+    /// the env at construction; off by default → V1 step is unchanged.
+    /// MUST match codegen's `Stack::aligned` for the same run.
+    pub(crate) aligned_stack: bool,
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
     /// The stack store is allocated once and never re-`claim`s, so its
     /// buffer only grows through `ensure_stack`; this cache lets the hot
@@ -204,6 +210,7 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
+            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -433,7 +440,7 @@ impl State {
     }
 
     pub fn static_call(&mut self) {
-        let call = *self.code::<u16>();
+        let call = self.code::<u16>();
         // Fix #87: resolve n_stack_trace index lazily, then only snapshot for that call.
         if self.stack_trace_lib_nr == u16::MAX
             && let Some(&nr) = self.library_names.get("n_stack_trace")
@@ -677,13 +684,17 @@ impl State {
             return 0;
         };
         let vars = &def.variables;
-        // local_start = total argument bytes + 4-byte return-address slot.
+        // local_start = total argument bytes + return-address slot.
+        // @PLAN53 cluster 2 / S4: stepped spans in aligned mode, mirroring
+        // scopes.rs's local_start (identity when off).
+        let aligned = crate::variables::aligned_stack_enabled();
+        let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
         let local_start: u16 = vars
             .arguments()
             .iter()
-            .map(|&a| var_size(vars.tp(a), &Context::Argument))
+            .map(|&a| step(var_size(vars.tp(a), &Context::Argument)))
             .sum::<u16>()
-            .saturating_add(4);
+            .saturating_add(step(4));
         // top = absolute end of the last local variable (from frame base 0).
         let mut top: u16 = local_start;
         for v in 0..vars.count() {
@@ -860,10 +871,18 @@ impl State {
         // S25.1 (CO1.3d / P2-R1): serialise text args to owned Strings before the
         // caller's OpFreeText can free the backing allocations.
         let text_owned = self.serialise_text_args(d_nr, &mut stack_bytes, args_size);
-        // CO1.3d: append the 4-byte return-address slot expected by the function body.
+        // CO1.3d: append the return-address slot expected by the function body.
         // fn_call pushes this slot for regular calls; coroutines must include it so that
         // get_var offsets computed at codegen time remain valid after resume.
-        stack_bytes.extend_from_slice(&[0u8; 4]);
+        // @PLAN53 cluster 2 / S4 (2a): codegen lays the return slot at a STEPPED span
+        // (codegen.rs frame setup: `position += step(4)`), so the captured frame must
+        // reserve step(4) bytes here too.  With a raw 4 the captured `bytes.len()` is
+        // `args_size + 4`, which is step(4)-4 = 4 bytes short of the stepped `local_start`;
+        // the Created-resume TOS in `coroutine_next` then under-advances and every
+        // argument reads 4 bytes high (n=42 → 42<<32).  Identity when LOFT_ALIGN is off
+        // (step(4) == 4), so flag-OFF is byte-for-byte unchanged.
+        let ret_slot = self.stack_step(4) as usize;
+        stack_bytes.resize(stack_bytes.len() + ret_slot, 0);
         self.stack_pos = args_base;
 
         let frame = CoroutineFrame {
@@ -1086,9 +1105,20 @@ impl State {
                 self.put_stack(Str::new(STRING_NULL));
             }
             _ => {
-                for _ in 0..value_size {
-                    self.put_stack(0u8);
+                // @PLAN53 cluster 2 / S4 (R4): push the value_size zero bytes as
+                // ONE stepped slot.  A per-byte put_stack would round EACH byte
+                // to 8 under LOFT_ALIGN, over-advancing catastrophically.  Off:
+                // step is identity → advances value_size, same as the old loop.
+                let step = self.stack_step(value_size);
+                self.ensure_stack(step);
+                let dst = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                unsafe {
+                    std::ptr::write_bytes(dst, 0, value_size as usize);
                 }
+                self.stack_pos += step;
             }
         }
     }
@@ -1145,7 +1175,8 @@ impl State {
         let stack_top = self.stack_pos;
         let frame = self.coroutine_frame_mut(idx);
         let base = frame.stack_base;
-        let value_start = stack_top - value_size;
+        // @PLAN53 cluster 2 / S4: the yielded value sits in a stepped slot at TOS.
+        let value_start = stack_top - self.stack_step(value_size);
         let locals_len = (value_start - base) as usize;
 
         // Serialise locals (CO1.3d: text locals are String objects — bitwise copy is safe
@@ -1243,7 +1274,8 @@ impl State {
         unsafe {
             std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), dest, vs);
         }
-        self.stack_pos = base + value_size;
+        // @PLAN53 cluster 2 / S4: the value slid to `base` occupies a stepped slot.
+        self.stack_pos = base + self.stack_step(value_size);
 
         // Return to consumer.
         self.code_pos = caller_return_pos;
@@ -1335,19 +1367,73 @@ impl State {
         self.stack_cap_bytes = store.byte_capacity() as u32;
     }
 
+    /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance,
+    /// rounded to 8 when `aligned_stack` is on (else the real `size`).
+    /// Codegen's `Stack::step` MUST mirror this so emitted `pos`
+    /// operands match the runtime `stack_pos` (S1 lockstep invariant).
+    #[inline]
+    pub(crate) fn stack_step(&self, size: u32) -> u32 {
+        crate::variables::aligned_stack_step(size, self.aligned_stack)
+    }
+
+    /// @PLAN53 cluster 2 / S4 — homegrown alignment guard (debug + aligned only).
+    /// `pos` is the byte offset passed to `addr`/`addr_mut` on the stack store
+    /// (i.e. `stack_cur.pos + frame_offset`).  A typed `T` accessed there must
+    /// sit on its natural alignment boundary; an unaligned `&T` is the cluster-2
+    /// UB.  Asserts it loudly AT the access site on ANY rustc — no Miri needed.
+    /// The store buffer base + `rec*8` are 8-aligned, so `(rec*8 + pos) % align`
+    /// is the true access alignment.  NB: this checks the SLOT address, never
+    /// `Str.ptr` (string slices legitimately start at any byte).
+    ///
+    /// Gated on the `stack_align_guard` cargo feature — NOT `debug_assertions`,
+    /// because `[profile.dev.package.loft]` sets `debug-assertions = false`
+    /// (so `cfg(debug_assertions)` is off inside this crate even under `cargo
+    /// test`, which silently disabled an earlier version of this guard).  The
+    /// method (and its callers' `pos` computation) does not exist unless the
+    /// feature is on, so the hot push/pop path has ZERO footprint by default.
+    /// Run the S4 aligned-stack work with `cargo test --features
+    /// stack_align_guard` to arm it.  Uses `assert_eq!` (not `debug_assert!`)
+    /// since this crate's debug-assertions are off.
+    #[cfg(feature = "stack_align_guard")]
+    #[inline]
+    pub(crate) fn check_stack_align<T>(&self, pos: u32) {
+        if self.aligned_stack {
+            let al = std::mem::align_of::<T>() as u32;
+            let abs = self.stack_cur.rec * 8 + pos;
+            assert_eq!(
+                abs % al,
+                0,
+                "S4 unaligned stack access: {} at abs offset {abs} (align {al}) — \
+                 cluster-2 UB: a typed value landed off its alignment boundary",
+                std::any::type_name::<T>(),
+            );
+        }
+    }
+
     pub fn reserve_frame(&mut self, size: u16) {
-        self.ensure_stack(u32::from(size));
-        self.stack_pos += u32::from(size);
+        let step = self.stack_step(u32::from(size));
+        self.ensure_stack(step);
+        self.stack_pos += step;
     }
 
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
         let size = u32::from(value);
         if value > 0 {
-            let from_pos = self.stack_cur.plus(pos).min(size);
+            // @PLAN53 cluster 2 / S4: the returned value sits at the LOW end of
+            // a stepped slot on the callee's TOS — `put_stack` wrote the real
+            // `size` bytes at `pos - step(size)` and advanced TOS by `step(size)`
+            // (e.g. a 12-byte `Reference` in a 16-byte slot, 4 bytes padding on
+            // top).  Back up by `step(size)`, NOT the raw `size`, or the read is
+            // shifted into the padding → a 4-byte-garbled `DbRef` whose later
+            // `OpFreeRef` corrupts the heap (the p117 runaway).  Identity off.
+            let from_pos = self.stack_cur.plus(pos).min(self.stack_step(size));
             let to_pos = self.stack_cur.plus(fn_stack);
             self.database.copy_block(&from_pos, &to_pos, size);
         }
-        self.stack_pos = fn_stack + size;
+        // @PLAN53 cluster 2 / S4: the returned value occupies a stepped slot
+        // on the caller's TOS (matching codegen's `position += step(ret)`);
+        // the copy itself moves the real `size` bytes.  Identity when off.
+        self.stack_pos = fn_stack + self.stack_step(size);
     }
 
     /**
@@ -1361,7 +1447,12 @@ impl State {
                 .as_mut_ptr()
                 .offset(on as isize)
                 .cast::<T>();
-            *off.as_mut().expect("code") = value;
+            // The bytecode buffer is byte-granular (`Vec<u8>`); a `T` wider than
+            // 1 byte usually lands at an unaligned offset.  Constructing `&mut T`
+            // there is UB even where the hardware tolerates the access (the
+            // @PLAN53 cluster-1 Miri finding) — write through the unaligned
+            // intrinsic instead, which is defined at any alignment.
+            off.write_unaligned(value);
         }
     }
 
@@ -1383,7 +1474,8 @@ impl State {
         unsafe {
             let off = bc.as_mut_ptr().offset(self.code_pos as isize).cast::<T>();
             self.code_pos += u32::try_from(size_of::<T>()).expect("Problem");
-            *off.as_mut().expect("code") = value;
+            // Unaligned by construction — see code_put (@PLAN53 cluster 1).
+            off.write_unaligned(value);
         }
     }
 
@@ -1404,7 +1496,7 @@ impl State {
     # Panics
     When the position is outside the byte-code
     */
-    pub fn code<T>(&mut self) -> &T {
+    pub fn code<T: Copy>(&mut self) -> T {
         assert!(
             self.code_pos + (size_of::<T>() as u32) <= self.bytecode.len() as u32,
             "Position {} + {} outside generated code {}",
@@ -1419,12 +1511,16 @@ impl State {
                 .offset(self.code_pos as isize)
                 .cast::<T>();
             self.code_pos += size_of::<T>() as u32;
-            off.as_ref().expect("code")
+            // Returns the operand BY VALUE via the unaligned read intrinsic.
+            // The buffer is byte-granular, so a `&T` into it would be an
+            // unaligned reference — UB (the @PLAN53 cluster-1 Miri finding) —
+            // even on x86 where the load itself is tolerated.
+            off.read_unaligned()
         }
     }
 
     pub fn code_str(&mut self) -> &str {
-        let len = *self.code::<u8>();
+        let len = self.code::<u8>();
         unsafe {
             let off = self.bytecode.as_ptr().offset(self.code_pos as isize);
             self.code_pos += u32::from(len);
@@ -1445,7 +1541,9 @@ impl State {
             self.stack_pos,
             size_of::<T>() as u32
         );
-        self.stack_pos -= size_of::<T>() as u32;
+        self.stack_pos -= self.stack_step(size_of::<T>() as u32);
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let r = self
             .database
             .store(&self.stack_cur)
@@ -1479,14 +1577,14 @@ impl State {
 
     /// `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
     pub fn parallel_begin(&mut self) {
-        let n_arms = *self.code::<u8>();
+        let n_arms = self.code::<u8>();
         self.parallel_n_arms = n_arms;
         self.parallel_arm_positions.clear();
     }
 
     /// `parallel {}` — read the arm's bytecode offset and record it.
     pub fn parallel_arm(&mut self) {
-        let offset = *self.code::<u16>();
+        let offset = self.code::<u16>();
         self.parallel_arm_positions.push(offset);
     }
 
@@ -1536,6 +1634,8 @@ impl State {
             "get_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1548,6 +1648,8 @@ impl State {
             "mut_var: pos={pos} exceeds stack_pos={} (frame underflow)",
             self.stack_pos
         );
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1555,9 +1657,15 @@ impl State {
     }
 
     pub fn put_var<T>(&mut self, pos: u16, value: T) {
+        // @PLAN53 cluster 2 / S4: the value's footprint on the stack is its
+        // stepped span (matches the get_stack/put_stack steps it pairs with);
+        // identity when LOFT_ALIGN off.
+        let step = self.stack_step(size_of::<T>() as u32);
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos + step - u32::from(pos));
         *self.database.store_mut(&self.stack_cur).addr_mut::<T>(
             self.stack_cur.rec,
-            self.stack_cur.pos + self.stack_pos + size_of::<T>() as u32 - u32::from(pos),
+            self.stack_cur.pos + self.stack_pos + step - u32::from(pos),
         ) = value;
     }
 
@@ -1569,7 +1677,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         let null_ref = self.database.null();
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
@@ -1587,7 +1695,7 @@ impl State {
     ///
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref_sentinel(&mut self) {
-        let pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -1611,8 +1719,8 @@ impl State {
     /// Both `pos` and `dep_pos` are read from the bytecode stream
     /// as `const u16`.
     pub fn init_create_stack(&mut self) {
-        let pos = *self.code::<u16>();
-        let dep_pos = *self.code::<u16>();
+        let pos = self.code::<u16>();
+        let dep_pos = self.code::<u16>();
         let db = DbRef {
             store_nr: self.stack_cur.store_nr,
             rec: self.stack_cur.rec,
@@ -1649,13 +1757,15 @@ impl State {
                 }
             }
         }
-        self.ensure_stack(size_of::<T>() as u32);
+        self.ensure_stack(self.stack_step(size_of::<T>() as u32));
+        #[cfg(feature = "stack_align_guard")]
+        self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
         let m = self
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
         *m = val;
-        self.stack_pos += size_of::<T>() as u32;
+        self.stack_pos += self.stack_step(size_of::<T>() as u32);
     }
 
     /**
@@ -1949,7 +2059,12 @@ impl State {
 
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
-        self.stack_pos = 4;
+        // @PLAN53 cluster 2 / S4: the entry frame base must be 8-aligned in
+        // aligned mode (step(4)=8) so the entry function's locals — and every
+        // frame it calls — land on their alignment boundary; with the V1 base
+        // of 4 the whole entry frame is misaligned by 4.  Identity when off.
+        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
+        self.stack_pos = entry_base;
         // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
         // to the panic hook so a Rust panic inside any opcode dispatch
         // (e.g. arithmetic overflow in `checked_long!`, the `panic`
@@ -1960,7 +2075,7 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: entry_base,
             args_size: 0,
             line: 0,
         });
@@ -1984,7 +2099,7 @@ impl State {
             let op_pos_rt = self.code_pos;
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             // Publish the current bytecode position + op byte so that a
             // subsequent SIGSEGV/SIGABRT prints the crash location.
             // Cheap: one thread-local store per op.
@@ -1999,10 +2114,26 @@ impl State {
                 trail_head = (trail_head + 1) % 16;
             }
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
+            }
+            // @PLAN53 cluster 2 / S4 — alignment invariant guard.  In aligned
+            // mode the entry base is 8 and every push/pop/reserve advances by a
+            // multiple of 8, so `stack_pos` must stay 8-aligned after EVERY op.
+            // The first op that leaves it unaligned is the bug — name it with
+            // its pc + fn instead of waiting for a distant garbage-deref SIGSEGV.
+            #[cfg(feature = "stack_align_guard")]
+            if self.aligned_stack {
+                assert_eq!(
+                    self.stack_pos % 8,
+                    0,
+                    "S4 alignment broken: op_code={op} at pc={op_pos_rt} left \
+                     stack_pos={} (not 8-aligned), fn_d_nr={}",
+                    self.stack_pos,
+                    self.call_stack.last().map_or(u32::MAX, |f| f.d_nr),
+                );
             }
             // FY.1: frame yield — return to caller (JS requestAnimationFrame).
             if self.database.frame_yield {
@@ -2121,9 +2252,9 @@ impl State {
         self.database.frame_yield = false;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2184,6 +2315,7 @@ impl State {
         State {
             stack_cur,
             stack_pos: 4,
+            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -2247,20 +2379,20 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg); // 12 bytes → stack_pos = 16
         self.put_stack(u32::MAX); // 4 bytes  → stack_pos = 20
         self.code_pos = fn_pos;
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2298,11 +2430,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         // Push extra context args first (they precede the element arg in the
         // function's parameter list: fn worker(element, extra1, extra2, ...)).
         // The stack grows upward; the function reads params from low to high offset.
@@ -2317,9 +2449,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2369,11 +2501,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: input_size as u16,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         // Push the primitive input value at its native byte width.
         // `put_stack` advances stack_pos by `size_of::<T>()`, so we
         // pick the type by `input_size` to match the worker's
@@ -2391,9 +2523,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2449,19 +2581,42 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
-        let input_size = input_bytes.len() as u16;
+        // @PLAN53 cluster 2 / 2i: the worker body's frame reserves the tuple arg
+        // at a STEPPED span (codegen advances each arg by stack_step(size)), so a
+        // tuple whose raw total is not a multiple of 8 (e.g. (integer, character) =
+        // 12) must occupy stack_step(12) = 16 here too.  Providing the raw 12 left
+        // the body's frame 4 bytes short and underflowed the worker stack.  The
+        // copied DATA is still the raw `input_bytes`; only the reserved frame span
+        // (args_size + the TOS advance) is rounded up.  Identity flag-OFF (step==id).
+        let stepped_size = self.stack_step(input_bytes.len() as u32);
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
-            args_size: input_size,
+            args_base: self.stack_step(4),
+            args_size: stepped_size as u16,
             line: 0,
         });
-        self.stack_pos = 4;
-        // Push the input bytes as a single chunk into slot 0.
-        for &b in input_bytes {
-            self.put_stack(b);
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
+        self.ensure_stack(stepped_size);
+        // @PLAN53 cluster 2 / 2h: copy the input bytes as ONE CONTIGUOUS chunk.
+        // A byte-by-byte `put_stack::<u8>` advanced stack_pos by stack_step(1) = 8
+        // PER BYTE under LOFT_ALIGN, smearing the packed tuple buffer (p.0@0, p.1@8)
+        // across 16 separate 8-byte slots; the worker body then reads tuple fields at
+        // the raw `element_offsets` [0, 8] into that smeared layout → padding zeros →
+        // every worker returned 0 (sum collected as 0).  A block copy keeps the buffer
+        // byte-identical to `read_tuple_at_wide`'s raw layout the worker reads.
+        // Identity when off (step(1) == 1, so the old byte loop was already contiguous).
+        self.ensure_stack(input_bytes.len() as u32);
+        let dst = self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        unsafe {
+            std::ptr::copy_nonoverlapping(input_bytes.as_ptr(), dst, input_bytes.len());
         }
+        // Advance past the STEPPED arg span (not the raw byte count) so locals /
+        // extra args / the return sentinel land where the body's frame expects them.
+        self.stack_pos = self.stack_step(4) + stepped_size;
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }
@@ -2470,9 +2625,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2531,11 +2686,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &extra in extra_args {
             self.put_stack(extra as i64);
@@ -2545,9 +2700,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2561,13 +2716,19 @@ impl State {
         // Copy `return_size` bytes from the top of the worker
         // stack to `dst`.  Stack grows upward; the return value
         // occupies the topmost `return_size` bytes.
+        // @PLAN53 cluster 2: the worker's `copy_result`/`fn_return` advanced TOS by
+        // the STEPPED width (`fn_stack + stack_step(size)` = +24 for a 20-byte fn-ref
+        // under V2), so the real value sits at the LOW end of a stepped slot with
+        // padding on top.  Backing up by the RAW `return_size` read 4 bytes into the
+        // value → a 4-byte-shifted (garbage) closure DbRef → OOB free.  Back up by the
+        // stepped width to land on the real bytes.  Identity flag-OFF (step == size).
         assert!(
-            return_size <= self.stack_pos,
+            self.stack_step(return_size) <= self.stack_pos,
             "execute_at_raw_to: return_size {} exceeds stack_pos {}",
             return_size,
             self.stack_pos
         );
-        let src_offset = self.stack_pos - return_size;
+        let src_offset = self.stack_pos - self.stack_step(return_size);
         let store = self.database.store(&self.stack_cur);
         unsafe {
             let src = store.base_ptr().offset(
@@ -2606,11 +2767,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 16,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(input_str); // 16 bytes
         for &extra in extra_args {
             self.put_stack(extra as i64);
@@ -2620,9 +2781,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2674,11 +2835,11 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &dest in hidden_dests {
             // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
@@ -2696,9 +2857,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2738,7 +2899,7 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: 4,
+            args_base: self.stack_step(4),
             args_size: 12,
             line: 0,
         });
@@ -2757,7 +2918,7 @@ impl State {
             work_crs.push(cr);
         }
 
-        self.stack_pos = 4;
+        self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
         self.put_stack(*arg);
         for &extra in extra_args {
             self.put_stack(extra as i64);
@@ -2771,9 +2932,9 @@ impl State {
         let mut step = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
@@ -2847,9 +3008,9 @@ impl State {
         self.code_pos = fn_pos;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
-            let op = *self.code::<u8>();
+            let op = self.code::<u8>();
             if op == 255 {
-                let ext = *self.code::<u8>();
+                let ext = self.code::<u8>();
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);

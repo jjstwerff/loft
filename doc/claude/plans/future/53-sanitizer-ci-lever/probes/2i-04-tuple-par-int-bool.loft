@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2i — VARIANT (1-byte trailing element).
+//
+// (integer, boolean) = 8 + 1 = 9 bytes — non-8-multiple total via a 1-byte
+// boolean.  Same worker-frame shortfall as 2i-01.
+//
+// Status aligned: CURRENTLY PANIC ; AFTER 2i FIX -> PASS.  Flag-OFF: PASS.
+
+fn sel(p: const (integer, boolean)) -> integer { if p.1 { p.0 } else { 0 } }
+
+fn main() {
+  ps: vector<(integer, boolean)> = [(5, true), (9, false), (3, true)];
+  sum = 0;
+  for p in ps par(r = sel(p), 4) { sum += r; }
+  assert(sum == 8, "2i-04: got {sum}, want 8");
+  println("2i-04 PASSED");
+}

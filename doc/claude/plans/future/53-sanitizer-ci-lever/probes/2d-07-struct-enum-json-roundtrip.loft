@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2d — VARIANT (`tests/issues.rs::p159`).
+//
+// Serialise a struct-enum variant to JSON, parse it back, and match on the
+// recovered variant.  Exercises the composite-handle read on both the format
+// and the parse side across a round-trip.
+//
+// Status aligned: CURRENTLY FAIL ; AFTER 2d FIX -> PASS.  Flag-OFF: PASS.
+
+enum Shape { Circle { radius: float }, Rect { width: float, height: float } }
+
+fn main() {
+  c = Circle { radius: 3.14 };
+  j = "{c:j}";
+  p = Shape.parse(j);
+  r = match p { Circle { radius } => radius, Rect => 0.0 };
+  assert(r == 3.14, "2d-07: circle roundtrip got {r}");
+  println("2d-07 PASSED");
+}

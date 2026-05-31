@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — VARIANT (`tests/issues.rs::p328`).
+//
+// A generator that yields a CLOSURE capturing its integer argument `base`,
+// consumed via manual `next(it)` rather than a `for` loop.  The captured
+// `base` is read 4 bytes high (same root cause): `base=100`, `f(5)` returns
+// 429496729605 = (100 << 32) | 5 instead of 105.  Exercises two extra
+// surfaces on top of 2a-01: a 20-byte fn-ref yield value, and manual
+// `next()` consumption.
+//
+// Status aligned: CURRENTLY FAIL (429496729605, want 105) ; AFTER FIX -> PASS.
+// Flag-OFF: PASS.
+
+fn fns(base: integer) -> iterator<fn(integer) -> integer> {
+  yield fn(x: integer) -> integer { x + base };
+}
+
+fn main() {
+  it = fns(100);
+  f = next(it);
+  r = f(5);
+  assert(r == 105, "2a-10: got {r}, want 105 (5 + 100)");
+  println("2a-10 PASSED");
+}

@@ -327,6 +327,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
 | [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
 | [`plans/future/43-binary-io-validation/`](plans/future/43-binary-io-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
+| [`plans/future/53-sanitizer-ci-lever/`](plans/future/53-sanitizer-ci-lever/) | M | @PLAN52 closed (#230) — fix-phase gate satisfied | Sanitizer-gated CI job (Miri / ASan) to catch the UB family the @P383-class toolchain-roulette keeps surfacing.  Catalogue + gate residual UB.  Cluster 1 (unaligned bytecode buffer) fixed; cluster 2 (unaligned eval stack) in progress |
 
 ### G — Goal-enabling
 
@@ -387,6 +388,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/future/41-doc-hygiene-autofix/`](plans/future/41-doc-hygiene-autofix/) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
+| [`plans/future/54-stdlib-fast-start/`](plans/future/54-stdlib-fast-start/) | M-MH | cooperates with **plans/future/38-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced by @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
 
 ### N — Niche / opportunistic
 

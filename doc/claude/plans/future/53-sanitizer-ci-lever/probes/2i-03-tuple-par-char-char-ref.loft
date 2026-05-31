@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2i — REFERENCE (must always PASS).
+//
+// (character, character) = 4 + 4 = 8 bytes — sub-8 ELEMENTS but an 8-multiple
+// TOTAL.  This PASSES aligned, proving the 2i trigger is the tuple's total size
+// being a non-8-multiple, NOT merely the presence of a small element.
+//
+// Status aligned: PASS ; Flag-OFF: PASS.
+
+fn both(p: const (character, character)) -> integer { (p.0 as integer) + (p.1 as integer) }
+
+fn main() {
+  ps: vector<(character, character)> = [('a', 'b')];
+  sum = 0;
+  for p in ps par(r = both(p), 4) { sum += r; }
+  assert(sum == 195, "2i-03: got {sum}, want 195");  // 'a'=97 + 'b'=98
+  println("2i-03 PASSED");
+}

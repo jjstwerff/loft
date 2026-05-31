@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PLAN53 cluster 2 / sub-cluster 2a — MINIMAL REPRODUCER.
+//
+// Shape: a generator that takes an integer ARGUMENT and `yield`s it.
+// Reading the argument across the yield frame round-trip mis-offsets the
+// 8-byte `n` by exactly 4 bytes (step(4) - 4 = 4 under LOFT_ALIGN), so
+// `n = 42` reads back as 42 << 32 = 180388626432.
+//
+//   step(4) return-address slot rounds 4 -> 8 in aligned mode, but the
+//   args/locals boundary in the coroutine create/yield/restore path is
+//   advanced by the RAW 4 somewhere, leaving the argument region shifted.
+//
+// This is the smallest deterministic (no loop, no hang) form of the 2a
+// family.  The escalations live in the sibling probes:
+//   2a-04 (two yields)    -> wrong value
+//   2a-05 (arg in while)  -> HANG (i < n never terminates)
+//   2a-06 (arg in for)    -> HANG
+//   2a-07 (text arg + fmt)-> SIGSEGV (corrupted Str ptr)
+//
+// Status under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive --interpret`:
+//   CURRENTLY FAIL  (observed n == 180388626432, want 42)
+//   AFTER 2a FIX    -> PASS
+// Status flag-OFF (production default): PASS (verified 2026-05-30).
+//
+// Run:
+//   LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret 2a-01-gen-arg-single-yield.loft
+
+fn echo_arg(n: integer) -> iterator<integer> {
+  yield n;
+}
+
+fn main() {
+  s = 0;
+  for v in echo_arg(42) {
+    s = s + v;
+  }
+  assert(s == 42, "2a-01: generator arg read back as {s}, want 42");
+  println("2a-01 PASSED");
+}
