@@ -35,6 +35,9 @@
 # file tests stay foreground.
 set -euo pipefail
 
+# Cache clean/release rebuilds with sccache when present (no-op otherwise).
+source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
+
 LOG_DEFAULT=/tmp/loft_test.log
 OUT_DEFAULT=/tmp/loft_problems.txt
 PID_FILE=/tmp/loft_test.pid

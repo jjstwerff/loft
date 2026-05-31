@@ -71,6 +71,18 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
+# Cache clean/release rebuilds with sccache when it is installed.  Exported
+# so every recipe shell inherits it; a no-op when sccache is absent (CI,
+# other developers) so it never becomes a hard dependency.  Composes with
+# the mold linker from .cargo/config.toml (sccache caches the compile, mold
+# links).  CARGO_INCREMENTAL=0 because sccache cannot cache incremental
+# units — these targets are clean/release builds, not the interactive edit
+# loop, so there is no cost.
+ifneq ($(shell command -v sccache 2>/dev/null),)
+export RUSTC_WRAPPER := sccache
+export CARGO_INCREMENTAL := 0
+endif
+
 .PHONY: ci-miri all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a

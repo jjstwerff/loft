@@ -25,6 +25,9 @@
 
 set -uo pipefail
 
+# Cache clean/release rebuilds with sccache when present (no-op otherwise).
+source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
+
 ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 LOFT="$ROOT/target/release/loft"
 CACHE="$ROOT/target/external-libs"
