@@ -294,6 +294,30 @@ equivalent **in CI** before it is load-bearing.  The ladder makes that
 explicit; the detailed design (relocation map, field audit, reuse rules)
 follows under it.
 
+**PR / review boundary (user, 2026-05-31): the reviewable PR is "we can
+write the JSON for a library / the stdlib".**  That is the first
+observable artifact — a `stdlib.json` (and per-library JSON) the
+reviewer can eyeball.  Reaching it requires **S1 + S2 + the encode half
+of S4** (the chosen route reuses `Stores::show_json`, which only works
+on store records — so the schema and the native→store bridge must exist
+before any JSON can be emitted).  **S3 (decode + equivalence gate) and
+S4's load/cache wiring land in a *later* PR, after the JSON format is
+reviewed.**  First PR deliverable = **emit + inspect**, not yet load.
+The S3 bytecode-equivalence gate still gates the *second* PR (load),
+never the project.
+
+**PR / review boundary (user, 2026-05-31): the reviewable PR is "we can
+write the JSON for a library / the stdlib".**  That is the first
+observable artifact — a `stdlib.json` (and per-library JSON) the
+reviewer can eyeball.  Reaching it requires **S1 + S2 + the encode half
+of S4** (because the chosen route reuses `Stores::show_json`, which only
+works on store records — so the schema and the native→store bridge must
+exist before any JSON can be emitted).  **S3 (decode + equivalence gate)
+and S4's load/cache wiring land in a *later* PR, after the JSON format
+is reviewed.**  So the first PR's deliverable is **emit + inspect**, not
+yet load.  The S3 bytecode-equivalence gate still gates the *second* PR
+(load), never the project.
+
 | Rung | What lands | Safety property |
 |---|---|---|
 | **S1** | IR store schema registered, **unused** (`structure()`/`enumerate()`/`value()` mirroring `output_init`) | dead code behind an uncalled fn; test asserts no `known_type` collision |
