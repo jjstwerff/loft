@@ -320,6 +320,24 @@ only failure mode (a lossy bridge) is caught by S3 in CI before S4 wires
 the flag.  Each rung is a valid stop — what's landed at S1–S3 is harmless
 dead/tested code that doubles as plan-54 foundation (arcs A+B).
 
+#### First slice — type data only, Value-free (user, 2026-05-31)
+
+The S1/S2/S3 plumbing is proven first on a **Value-free subset**: the
+type table (`Type`, 24 variants) + the type `Definition` headers
+(name / `def_type` / `known_type` / `parent`) + `Attribute` (name +
+`typedef`), **excluding `Attribute.value` / `check` / `check_message`
+and parameter defaults** — the only `Value` fields a type def carries.
+`Type` itself is Value-free (its variants hold indices / `Box<Type>` /
+`Vec<u16>`, never `Value`), so this slice exercises schema → bridge →
+JSON round-trip → equivalence gate end-to-end **without** the 34-variant
+`Value` encoder.  It is a real, reviewable artifact (a JSON of the type
+data), and it de-risks the recursive-enum machinery (`Box<Type>`
+recursion, `&'static str`, the database-generator wiring) on the smaller
+half before `Value` lands.  **Not the cold-start PR** — the stdlib is
+~97 % functions whose bodies are `Value`; this slice is the plumbing
+proof, with `Value` (defaults + function bodies) as the required next
+slice.
+
 #### Snapshot scope — a complete runnable image (user, 2026-05-31)
 
 **Goal restated by the user: the cache must let loft *run quickly* — so
