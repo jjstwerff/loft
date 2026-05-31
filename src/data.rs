@@ -1398,7 +1398,7 @@ pub struct Attribute {
     /// This attribute is allowed to be null in the substructure.
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
-    primary: bool,
+    pub(crate) primary: bool,
     /// Hidden return-mechanism parameter added by `text_return` or `ref_return`.
     /// Not a user-declared parameter — should be excluded from dep propagation.
     pub hidden: bool,

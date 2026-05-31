@@ -35,7 +35,7 @@
 //! `structure()` every IR type; (2) fields + variants that reference those
 //! numbers.  S1 lands shells first.
 
-use crate::data::{Block, IntegerSpec, ParForBody, Type, Value};
+use crate::data::{Attribute, Block, IntegerSpec, ParForBody, Type, Value};
 use crate::database::Stores;
 use crate::json::Parsed;
 use crate::keys::Key;
@@ -868,6 +868,77 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
     })
 }
 
+// ─── Attribute JSON (Step 2 container slice C1) ───────────────────────────────
+//
+// `Attribute` is a struct field / parameter descriptor on a `Definition`.  It
+// is a plain data bag (no cross-field invariant), so the codec is a direct
+// field walk: scalars + `Type` (typedef) + three `Value` fields (value / check
+// / check_message).  The `primary` field is `pub(crate)` (widened seam in
+// data.rs) so this out-of-module codec can read and reconstruct it.
+//
+// Same conventions as `Type`/`Value`: a flat JSON object; `Type` via
+// write_type/type_from_parsed, `Value` via write_value/value_from_parsed.
+
+/// Serialise an [`Attribute`] to JSON.
+#[must_use]
+pub fn attribute_to_json(a: &Attribute) -> String {
+    let mut out = String::new();
+    write_attribute(&mut out, a);
+    out
+}
+
+fn write_attribute(out: &mut String, a: &Attribute) {
+    out.push_str("{\"name\":");
+    write_str(out, &a.name);
+    out.push_str(",\"typedef\":");
+    write_type(out, &a.typedef);
+    let _ = write!(
+        out,
+        ",\"mutable\":{},\"constant\":{},\"init\":{},\"nullable\":{},\"primary\":{},\"hidden\":{}",
+        a.mutable, a.constant, a.init, a.nullable, a.primary, a.hidden
+    );
+    out.push_str(",\"value\":");
+    write_value(out, &a.value);
+    out.push_str(",\"check\":");
+    write_value(out, &a.check);
+    out.push_str(",\"check_message\":");
+    write_value(out, &a.check_message);
+    let _ = write!(
+        out,
+        ",\"alias_d_nr\":{},\"assigned_lambda_d_nr\":{}}}",
+        a.alias_d_nr, a.assigned_lambda_d_nr
+    );
+}
+
+/// Parse a JSON string into an [`Attribute`].
+///
+/// # Errors
+/// Malformed JSON, wrong field shape, or an unknown variant tag in a nested
+/// `Type` / `Value`.
+pub fn attribute_from_json(src: &str) -> Result<Attribute, TypeDecodeError> {
+    let parsed = crate::json::parse(src)
+        .map_err(|e| TypeDecodeError::Shape(format!("json parse: {e:?}")))?;
+    attribute_from_parsed(&parsed)
+}
+
+fn attribute_from_parsed(p: &Parsed) -> Result<Attribute, TypeDecodeError> {
+    Ok(Attribute {
+        name: as_str(field(p, "name")?)?,
+        typedef: type_from_parsed(field(p, "typedef")?)?,
+        mutable: as_bool(field(p, "mutable")?)?,
+        constant: as_bool(field(p, "constant")?)?,
+        init: as_bool(field(p, "init")?)?,
+        nullable: as_bool(field(p, "nullable")?)?,
+        primary: as_bool(field(p, "primary")?)?,
+        hidden: as_bool(field(p, "hidden")?)?,
+        value: value_from_parsed(field(p, "value")?)?,
+        check: value_from_parsed(field(p, "check")?)?,
+        check_message: value_from_parsed(field(p, "check_message")?)?,
+        alias_d_nr: as_u32(field(p, "alias_d_nr")?)?,
+        assigned_lambda_d_nr: as_u32(field(p, "assigned_lambda_d_nr")?)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,6 +1473,95 @@ mod tests {
         assert_eq!(
             value_from_json(r#"{"k":"Bogus"}"#),
             Err(TypeDecodeError::UnknownTag("Bogus".to_string()))
+        );
+    }
+
+    // ─── Attribute JSON (container slice C1) ────────────────────────────
+
+    fn sample_attribute() -> Attribute {
+        Attribute {
+            name: "weight".to_string(),
+            typedef: Type::Integer(IntegerSpec::u8()),
+            mutable: true,
+            constant: false,
+            init: true,
+            nullable: false,
+            primary: true,
+            hidden: false,
+            value: Value::Int(5),
+            check: Value::Call(9, vec![Value::Var(0), Value::Int(100)]),
+            check_message: Value::Text("too big".to_string()),
+            alias_d_nr: 42,
+            assigned_lambda_d_nr: u32::MAX,
+        }
+    }
+
+    /// `Attribute` derives only `Clone` (no `PartialEq`), so losslessness is
+    /// proven by re-encode equality: encode → decode → encode must be stable.
+    #[test]
+    fn attribute_round_trip_via_reencode() {
+        let a = sample_attribute();
+        let json = attribute_to_json(&a);
+        let back = attribute_from_json(&json)
+            .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+        assert_eq!(attribute_to_json(&back), json, "re-encode drift");
+    }
+
+    /// The all-defaults attribute (as `add_attribute` builds it) round-trips,
+    /// including the three `Value::Null` fields and the `u32::MAX` sentinels.
+    #[test]
+    fn attribute_default_shape_round_trips() {
+        let a = Attribute {
+            name: String::new(),
+            typedef: Type::Unknown(0),
+            mutable: true,
+            constant: false,
+            init: false,
+            nullable: true,
+            primary: false,
+            hidden: false,
+            value: Value::Null,
+            check: Value::Null,
+            check_message: Value::Null,
+            alias_d_nr: u32::MAX,
+            assigned_lambda_d_nr: u32::MAX,
+        };
+        let json = attribute_to_json(&a);
+        let back = attribute_from_json(&json).expect("decode");
+        assert_eq!(attribute_to_json(&back), json);
+    }
+
+    /// Pin the exact emitted JSON — the on-disk format is a contract.
+    #[test]
+    fn attribute_golden_format() {
+        let a = Attribute {
+            name: "x".to_string(),
+            typedef: Type::Boolean,
+            mutable: false,
+            constant: true,
+            init: false,
+            nullable: false,
+            primary: false,
+            hidden: false,
+            value: Value::Null,
+            check: Value::Null,
+            check_message: Value::Null,
+            alias_d_nr: 0,
+            assigned_lambda_d_nr: 0,
+        };
+        assert_eq!(
+            attribute_to_json(&a),
+            r#"{"name":"x","typedef":{"k":"Boolean"},"mutable":false,"constant":true,"init":false,"nullable":false,"primary":false,"hidden":false,"value":{"k":"Null"},"check":{"k":"Null"},"check_message":{"k":"Null"},"alias_d_nr":0,"assigned_lambda_d_nr":0}"#
+        );
+    }
+
+    /// Every emitted attribute is valid JSON under loft's own parser.
+    #[test]
+    fn attribute_emit_is_valid_json() {
+        let json = attribute_to_json(&sample_attribute());
+        assert!(
+            crate::json::parse(&json).is_ok(),
+            "attribute emitter produced invalid JSON: {json}"
         );
     }
 }
