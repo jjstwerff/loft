@@ -337,7 +337,7 @@ error: loft 0.8.4 was yanked for a security vulnerability
 ```
 
 The `loft self-update` referenced in the fix line is shipped
-by [`lib_plans/30-loft-distribution/`](../30-loft-distribution/README.md)
+by [`lib_plans/future/30-loft-distribution/`](../future/30-loft-distribution/README.md)
 — Phase 6.7 produces the advisory, Phase 30 provides the
 mechanical fix path.  Both halves are required to make the
 trust chain useful for the binary; 6.7 alone surfaces the
