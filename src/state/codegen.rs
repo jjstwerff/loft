@@ -3384,5 +3384,12 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
             }
             eprint!("{pad}}}");
         }
+        // `Span` wraps every expression with a source position — unwrap it so
+        // the dump reads cleanly.
+        Value::Span(b) => print_ir(&b.1, data, vars, depth),
+        // Rare IR nodes (FnRefDnr, ParFor, …) printed opaquely; this is a
+        // debug-only dumper.  The catch-all also keeps `print_ir` exhaustive in
+        // debug-assertions builds (e.g. under cargo-fuzz) as new variants land.
+        _ => eprint!("<ir>"),
     }
 }

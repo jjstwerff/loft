@@ -7,23 +7,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-| Stage | Status |
+**Wave 1 — SHIPPED.**  All five UB clusters fixed + the full sanitizer CI stack
+live on `main`.  The plan is intentionally kept open to host Wave 2 and will be
+moved to `finished/` after the next wave lands.
+
+| Wave | Status |
 |---|---|
-| A — Probe catalogue (UB shapes Miri/ASan surface) | 🔴 not started — gated on PLAN52 closure |
-| B — Mechanism investigation (per UB shape) | 🔴 not started |
-| C — Fix design (OPTIONAL) | ⏸️ pending Stage B |
-| D — Implementation (CI job + per-cluster fixes) | ⏸️ pending Stage B |
+| **Wave 1** — clusters 1-5 fixed + V2-aligned-stack production default + sanitizer CI stack (per-PR guard + nightly Miri/ASan/toolchain-matrix + sticky-comment reporter) | ✅ **SHIPPED** — PR #235 (aligned default + sanitizer engine) + PR #236 (V1 removal + CI stack) |
+| **Wave 2** — macOS-ARM nightly leg, ThreadSanitizer, fuzzing, `LOFT_POISON` keystone, + further coverage expansion | 🔵 **OPEN** — see [§ Wave 2](#wave-2--next-wave-open) below |
 
-**Hard dependency: this plan does NOT start until [@PLAN52](../../finished/52-value-block-borrow-cleanup/README.md) is closed.**
-PLAN52's cluster I (post-consumer `OpFreeText` on a borrowed `Str`)
-is the canonical UB this lever will detect, and running Miri / ASan
-against an unfixed PLAN52 working tree would produce a flood of
-findings that all alias to PLAN52's one root cause — drowning out
-any *other* UB the sweep would reveal.  Wait until PLAN52's Set H
-+ Sets A/B/C/D/E/F/G all PASS on both backends before Stage A here
-begins.
+*Historical note:* PLAN52 was the founding hard dependency (its cluster I was the
+dominant noise that would have drowned out any other sanitizer finding).  PLAN52
+closed via PR #230; that gate is now satisfied.
 
-**Trigger:** the @P383 / rustc 1.96 incident.  loft's IR carried a
+**Trigger (Wave 1):** the @P383 / rustc 1.96 incident.  loft's IR carried a
 latent use-after-free for many releases; rustc 1.94/1.95 happened
 to mask it via libmalloc free-fill behaviour, rustc 1.96 (LLVM 21)
 changed allocator/codegen and the UB surfaced deterministically on
@@ -169,15 +166,17 @@ gets one row + its own `cluster-<id>-<slug>.md` doc.
 
 | ID | Cluster | Severity | Backend asymmetry | Detector | Doc |
 |---|---|---|---|---|---|
-| **1** ✅ | **Unaligned `&mut T` into the bytecode buffer** — `code_add::<T>` / `code_put::<T>` / the `code<T>()` read accessor cast a `*u8` into the byte-granular `Vec<u8>` code buffer; at odd offsets with `T=u16`/`u32` this constructs an unaligned reference (UB).  Fires inside `byte_code` → universal to every program.  **NEW — not a PLAN52 cluster.  FIX LANDED 2026-05-29** (`write_unaligned`/`read_unaligned`; `code<T>` returns by value) — suite green, Miri re-confirm in progress.  Fixed off-gate (disjoint from PLAN52's surface). | Latent UB (masked on x86-64 rustc 1.95; @P383-class toolchain exposure risk) | Universal (both backends compile via `byte_code`) | **Miri** (ASan blind — alignment UB) | [`cluster-1-unaligned-bytecode.md`](cluster-1-unaligned-bytecode.md) |
-| **2** 🟡 | **Unaligned typed access to the byte-packed eval stack** — `set_string`/stack push-pop write `Str`/`DbRef`/8-byte values via `addr_mut::<T>` at `stack_pos`, which advances byte-granularly with no alignment padding → unaligned `&mut Str` (UB).  **STATUS 2026-05-30: substantially fixed via full stack alignment (S4) behind `LOFT_ALIGN` — aligned suite runs start→~`p117`, 2 crashers left; see [`cluster-2-S4-progress.md`](cluster-2-S4-progress.md) for the authoritative state + how-to-test + process rules.**  Record fields are aligned by design (user-confirmed) — this is the *stack*, same shape as cluster 1.  Surfaced the moment cluster 1's fix let Miri reach execute.  Earlier fix path B (unaligned accessors) was superseded by the full-alignment design (`cluster-2-fix-design.md`).  ~~**Fix path chosen: (B)**~~ — unaligned read/write at the ~4-6 typed stack accessors, behind a named `stack_get`/`stack_set` seam (cluster-1 idiom; keeps clear of the fragile slot allocator, unblocks the Miri gate).  **(A)** (align slots in the variable-positioning code) retained as the documented future pivot — trigger: a strict-alignment *interpreter* target (RISC-V SBC).  NOT started. | Latent UB (masked on x86-64 rustc 1.95; @P383-class) | Interpret (native has no byte-packed eval stack) | **Miri** (ASan blind — alignment UB) | [`cluster-2-unaligned-store-access.md`](cluster-2-unaligned-store-access.md) |
+| **1** ✅ | **Unaligned `&mut T` into the bytecode buffer** — `code_add::<T>` / `code_put::<T>` / the `code<T>()` read accessor cast a `*u8` into the byte-granular `Vec<u8>` code buffer; at odd offsets with `T=u16`/`u32` this constructs an unaligned reference (UB).  Fires inside `byte_code` → universal to every program.  **FIX LANDED 2026-05-31** (PR #235; `write_unaligned`/`read_unaligned`; `code<T>` returns by value) — Miri-confirmed clean. | Latent UB (masked on x86-64 rustc 1.95; @P383-class toolchain exposure risk) | Universal (both backends compile via `byte_code`) | **Miri** (ASan blind — alignment UB) | [`cluster-1-unaligned-bytecode.md`](cluster-1-unaligned-bytecode.md) |
+| **2** ✅ | **Unaligned typed access to the byte-packed eval stack** — `set_string`/stack push-pop wrote `Str`/`DbRef`/8-byte values via `addr_mut::<T>` at byte-granular `stack_pos` → unaligned `&mut Str` (UB).  **FIX LANDED 2026-05-31** (PR #235 + #236): full stack alignment (V2 allocator) became the production default; the `LOFT_ALIGN`/`LOFT_SLOT_V2` flags and the entire V1 allocator were removed — one layout now.  Fix path (A) (align slots in the variable-positioning code) was the approach ultimately taken; path (B) (unaligned-accessors behind a seam) was superseded.  GOALS.md Goal B recorded as "B1 LANDED." | Latent UB (masked on x86-64 rustc 1.95; @P383-class) | Interpret (native has no byte-packed eval stack) | **Miri** (ASan blind — alignment UB) | [`cluster-2-unaligned-store-access.md`](cluster-2-unaligned-store-access.md) |
+| **3** ✅ | **Store-aliasing reborrow in cross-store copy** — mutably borrowing the same store twice in `get_disjoint_mut`-precursor code → aliasing `&mut`.  **FIX LANDED 2026-05-31** (PR #236; `get_disjoint_mut`). | Aliasing UB | Interpret + native | **Miri** | `cluster-0-tooling-decision.md` § Progress |
+| **4** ✅ | **Uninitialised padding in fn-ref slot read** — reading a fn-ref slot as `[u8;20]` reads the 4-byte alignment padding as initialised bytes (uninit UB).  **FIX LANDED 2026-05-31** (PR #236; `MaybeUninit` for the fn-ref read). | Uninit UB | Interpret | **Miri** | `cluster-0-tooling-decision.md` § Progress |
+| **5** ✅ | **`free_text` leak** — `free_text` called `String::clear` + `shrink_to_fit` without deallocating the buffer; the String was then dropped without a heap free → leak.  **FIX LANDED 2026-05-31** (PR #236; `clear` before `shrink_to_fit` removes the leak). | Memory leak | Interpret | **Miri** (leak check) | `cluster-0-tooling-decision.md` § Progress |
 | **(PLAN52-I)** | `??`-on-text value-block returns a `Str` borrowing into block-local `_ncc_N`, freed before the consumer reads → heap-use-after-free at the consumer's `copy_nonoverlapping`.  **Owned by [@PLAN52](../../finished/52-value-block-borrow-cleanup/README.md) cluster I — confirmed here under ASan; CLOSED by PLAN52 (#230).** | Heap-UAF (silent corruption; masked on x86-64 rustc 1.95) | Interpret | **ASan** (Miri couldn't reach it — masked behind cluster 1's compile-stage abort) | PLAN52 `cluster I` |
 
-**Disposition note.** Cluster 1 is a genuine new finding this
-lever surfaced and belongs to PLAN53; its *fix* still waits for the
-fix phase (gated on PLAN52 closure per the plan's hard dependency).
-The PLAN52-I confirmation is recorded for completeness — it is
-PLAN52's to fix; this plan only proves the detector sees it.
+**Wave 1 complete.**  All five PLAN53-owned clusters fixed; PLAN52-I owned and
+closed by PLAN52 (#230).  The Miri curated gate (single `p213` test) was
+shipped as `D-final` (PR #236); the per-PR `stack_align_guard` and nightly
+Miri/ASan/toolchain-matrix workflows are live on `main`.
 
 ## Case-finding strategy — actively hunt, don't wait
 
@@ -250,12 +249,13 @@ not "loft program that produces wrong output" but "loft program
 that, under sanitizer, produces zero diagnostics".
 
 For the homegrown cluster-2 (eval-stack alignment) work the "sanitizer
-invocation" is simpler: run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive
-loft --interpret`, one probe per subprocess under `LOFT_TIMEOUT` so a
-runaway aborts cleanly.  Probes live in [`probes/`](probes/); run them
-with [`probes/run.sh`](probes/run.sh).  Invariant: every probe PASSES
-flag-OFF (production is clean); the aligned column is what the fix
-closes.
+invocation" was: run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret`,
+one probe per subprocess under `LOFT_TIMEOUT`.  **Those flags are now gone**
+(V2 is the only layout; `LOFT_ALIGN`/`LOFT_SLOT_V2` were removed in PR #236).
+The probes in [`probes/`](probes/) record the historical mechanism; the
+"flag-OFF PASS / aligned FAIL" distinction no longer applies — all probes pass
+on production.  The run script [`probes/run.sh`](probes/run.sh) still works as
+a regression smoke-check (all 35 probes must pass with no flags).
 
 **Pass 1 — sub-cluster 2a (generator argument mis-offset across `yield`),
 authored 2026-05-30.**  Verified mechanism: a generator reading its own
@@ -304,77 +304,163 @@ Empty until probes exist.
 
 ## Tool gaps
 
+Wave 1 shipped the core sanitizer CI stack.  The table tracks both
+Wave-1 final state and Wave-2 gaps.
+
 | Tool | Status | Used for |
 |---|---|---|
-| Sanitizer CI job (`.github/workflows/ci.yml` new job) | **Missing — the deliverable** | The gating job this plan ships |
-| `cargo +nightly miri test` runner | Available upstream — not yet wired | Strictest UB detector for the interpreter subset |
-| `RUSTFLAGS=-Zsanitizer=address` runner | Available upstream — not yet wired | Real-allocator UB detector for the full suite |
-| Miri ignore annotations (`#[cfg_attr(miri, ignore)]`) | Available upstream — none in tree yet | Mark FFI-heavy tests Miri cannot run; Stage A audits which tests need this |
-| Sanitizer-only test profile in `Cargo.toml` / `.cargo/config.toml` | **TBD during Stage D** | Avoid contaminating default test runs with sanitizer overhead |
+| Per-PR `stack_align_guard` sweep (`.github/workflows/ci.yml`) | ✅ **SHIPPED** (PR #235 + #236) | Cheap per-PR alignment-UB detector; gates every PR |
+| `cargo +nightly miri test` runner (nightly Miri job) | ✅ **SHIPPED** (PR #235; curated `p213` test; `miri.yml`) | Gold-standard hard-UB (alignment/OOB/UAF/uninit) over the interpreter subset |
+| `RUSTFLAGS=-Zsanitizer=address` runner (nightly ASan job) | ✅ **SHIPPED** (PR #235; `miri.yml`) | Real-allocator UAF/OOB sweep over the full interpreter corpus |
+| Rustc toolchain-matrix (beta + nightly) | ✅ **SHIPPED** (PR #235; `miri.yml`; non-blocking) | Early-warning for toolchain-sensitivity — the @P383 trigger class |
+| PR "Nightly health" sticky-comment reporter | ✅ **SHIPPED** (PR #235; `ci.yml` `nightly-status` job) | Surfaces per-job nightly conclusions on each PR; informational, never a merge gate |
+| Miri ignore annotations (`#[cfg_attr(miri, ignore)]`) | Partially in tree | Mark FFI-heavy tests Miri cannot run; curated set covers `p213`; rest still open |
 | `#[cfg(not(miri))]` gate on `crash_report::install` | **Missing** | Lets the loft *binary* run under Miri (`libc::sigemptyset` is unshimmed); only needed for binary-under-Miri, not `cargo miri test` |
-| **`LOFT_POISON=1` arena poison-on-free** (store-record + stack-slot fill on free) | **Missing — recommended homegrown keystone** | Makes store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) detectable on any rustc — the blind spot Miri/ASan/Valgrind all share |
-| Differential generator (random valid loft → interpret vs native diff, run under sanitizer) | **Missing** | Mine the interpret↔native divergence family + masked UB at scale; reuses `cross_mode!` |
-| `cargo-fuzz` target (`fuzz_target!` + `arbitrary` AST gen, ASan) | **Missing** | Coverage-guided structure-aware fuzzing of parse → byte_code → execute |
+| **`LOFT_POISON=1` arena poison-on-free** (store-record + stack-slot fill on free) | **Missing — recommended Wave-2 keystone** | Makes store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) detectable on any rustc — the blind spot Miri/ASan/Valgrind all share |
+| Differential generator (random valid loft → interpret vs native diff, run under sanitizer) | **Spun off to @PLAN55** | Mine the interpret↔native divergence family + masked UB at scale; reuses `cross_mode!` — see [55-program-level-fuzzing/](../55-program-level-fuzzing/README.md) |
+| `cargo-fuzz` target (`fuzz_target!` + `arbitrary`, ASan) — program-level | **Spun off to @PLAN55** | Coverage-guided fuzzing of parse → byte_code → execute; stresses parser/compiler/stack on unseen programs — see [55-program-level-fuzzing/](../55-program-level-fuzzing/README.md) |
+| Structure-aware fuzz target for database collections (vector/hash/tree/radix + store allocator) | **Missing** | Direct fuzz target: clean Rust APIs, documented invariants (DATABASE.md), ASan oracle in place |
 | ASan / Valgrind custom-allocator annotations (`__asan_poison_memory_region` / `VALGRIND_MALLOCLIKE_BLOCK`) | **Missing** | Teach the *external* tools about the loft arena (alternative to the homegrown `LOFT_POISON` lane) |
-| Valgrind Memcheck (informational lane) | Available upstream — not wired | Uninitialized-read detection on the full native binary with no rebuild; complements ASan |
+| Valgrind Memcheck (informational lane) | Available upstream — not wired | Uninitialised-read detection on the full native binary with no rebuild; complements ASan |
+| **ThreadSanitizer (TSan)** | **Missing** | Data-race detector over the parallel/threading suite (`par`/`par_light`); loft has ZERO race coverage today |
+| **macOS-ARM nightly leg** | **Missing** | macOS-ARM is where @P383 surfaced; the ubuntu-only nightly would not have caught it |
+| **Native-backend ASan** | **Missing** | ASan currently instruments only the in-process interpreter; the `--native` codegen runtime is uninstrumented |
+| **MSan (MemorySanitizer)** | **Missing** | Uninitialised-read detection corpus-wide; painful setup (needs instrumented std); lower priority |
+| **OSS-Fuzz onboarding** | **Spun off to @PLAN55** | Scale-up from nightly time-box to sustained coverage-guided fuzzing — see [55-program-level-fuzzing/](../55-program-level-fuzzing/README.md) |
+| **Failure→issue notifier for the nightly** | **Missing** | Opens/updates a deduped GitHub issue on nightly failure; avoids silent red nightly going unnoticed (per-job conclusions hidden behind `continue-on-error`) |
 
-Tools added during this plan are part of its output, not separate
-work.  Closing the plan should leave the CI job + any test
-annotations in tree.
+Wave-2 tools are part of this plan's continued output.  Moving the
+plan to `finished/` should leave the CI job + any test annotations in
+tree.
+
+## Wave 2 — next wave (open)
+
+Wave 1 installed the sanitizer CI stack and fixed the five UB clusters found by
+the initial sweep.  The detector is now live; Wave 2 expands its coverage and
+addresses the categories it cannot yet see.  Priorities, in order:
+
+1. **macOS-ARM nightly leg.**  The nightly is ubuntu-only.  @P383 — the founding
+   incident — surfaced exclusively on macOS-ARM; a ubuntu-only nightly would not
+   have caught it.  Adding a macOS-ARM runner for the toolchain-matrix job (and,
+   once affordable, Miri/ASan) closes the largest known platform blind spot.
+   Highest priority.
+
+2. **ThreadSanitizer (TSan) over the parallel/threading suite.**  loft executes
+   real parallel workloads via `par`/`par_light` under a store-isolation model
+   (see THREADING.md).  ZERO race coverage exists today: Miri runs with
+   stacked-borrows disabled (not a race detector), ASan and the guard do not see
+   races.  TSan is the standout *new category* gap — a different tool class than
+   any of the Wave-1 detectors.
+
+3. **Structure-aware / property-based fuzzing of the database collections +
+   store allocator, under ASan.**  The prime *direct* fuzz target: clean Rust
+   APIs, documented invariants (DATABASE.md), and the ASan oracle is now in
+   place.  Random op-sequences on `vector`/`hash`/`tree`/`radix` checked against
+   a reference model (`std::HashMap` / `BTreeMap` / `Vec`).  Note: the *stack*
+   is not a good direct fuzz target (it is bytecode-driven; random bytecode is
+   invalid-by-construction) — it is best fuzzed indirectly via item 4 below.
+
+4. **Program-level loft-source fuzzing** (`cargo-fuzz` over parse → `byte_code`
+   → execute) **under ASan + the guard feature.**  Stresses parser/compiler/stack
+   on unseen programs; seeds from the ~2000 existing `.loft` tests.  Expect an
+   initial robustness/panic-triage wave (malformed input surfaces `unwrap`/panic
+   paths first).  Cross-references Case-finding strategy lanes 4-5 above (expand
+   there, don't duplicate).  **Spun off to @PLAN55 — see
+   [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md).**
+
+5. **`LOFT_POISON=1` arena poison-on-free keystone.**  Already described in
+   Case-finding strategy lane 3; still **missing**.  Fills freed store records
+   + freed stack slots with a sentinel, turning silent store-internal UAF (the
+   @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the
+   dangling read — on any rustc, no nightly required.  High value-per-effort;
+   pairs with the fuzzers.
+
+6. **Differential fuzzing (interpret ≡ native ≡ wasm).**  Fold fuzzing into
+   Goal C (cross-backend parity): the same program-level fuzzer from item 4, run
+   on all three backends, flags output divergence as a finding.  Reuses
+   `cross_mode!` infrastructure.  **Spun off to @PLAN55 (F3) — see
+   [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md).**
+
+7. **Grow the Miri curated set** beyond the single `p213` test.  Add the
+   cluster 1-5 reproducers + representative text/fn-ref/par shapes so the Miri
+   gate covers more of the hard-UB surface without an unbearable runtime.
+
+8. **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) so
+   ASan leak detection can be turned on corpus-wide.  Currently `detect_leaks=0`
+   in `miri.yml`.  Cluster 5 was a leak; there are likely others.
+
+9. **Native-backend ASan.**  ASan currently instruments only the in-process
+   interpreter.  The `--native` codegen runtime is uninstrumented and is where
+   @P229/G2/G3 lived.
+
+10. **OSS-Fuzz onboarding.**  A nightly time-box is the start; OSS-Fuzz is the
+    scale-up for genuinely sustained, coverage-guided fuzzing with a much larger
+    budget than CI allows.  **Spun off to @PLAN55 (F5) — see
+    [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md).**
+
+11. **MSan (MemorySanitizer) corpus-wide.**  Uninitialised-read detection beyond
+    what Miri covers; lower priority (setup requires a fully instrumented std).
+
+12. **Failure→issue notifier for the nightly.**  A job that opens/updates a
+    deduped GitHub issue when the nightly fails, reading per-*job* conclusions
+    (not just the overall run status, which `continue-on-error` holds green even
+    when matrix legs are red).
 
 ## Status & next-session roadmap
 
-Each step has a binary exit criterion.  The plan is provably closed
-iff Step D8's exit criteria all hold.
+Wave 1 is complete.  The table below covers Wave 2 steps.
 
 | # | Step | Exit criteria | Effort | Risk |
 |---|---|---|---|---|
-| **0** | **WAIT — verify PLAN52 closure.**  Read PLAN52 README; confirm "we know we're clear" criteria 1-5 hold.  If not, this plan stays parked. | PLAN52 README shows all sets A-I PASS on both backends; `make ci` green; PLAN52 moved to `plans/finished/` | 0 — gating check | — |
-| **A1** | **Tooling decision** — write `cluster-0-tooling-decision.md`: pick Miri / ASan / both based on a small spike (run each against `tests/issues.rs` on post-PLAN52 main, measure runtime + finding count + FFI-blocked test count). | Decision committed to `cluster-0-tooling-decision.md` with the spike numbers | 1 session | LOW |
-| **A2** | **First sweep** — run the chosen sanitizer against the full applicable test surface on post-PLAN52 main.  Catalogue every distinct finding as a cluster row in this README; create one `cluster-<id>-<slug>.md` per shape | Cluster catalogue populated; every finding mapped to a cluster | 1-2 sessions | LOW — read-only |
-| **A3** | **Probe authoring** — for each cluster, write a minimal probe in `probes/` that reproduces the finding deterministically; pair with a reference probe that does NOT trigger | Probe table populated; each problem probe paired with a reference; Set H baselines defined | 2-3 sessions | LOW |
-| **B**  | **Mechanism investigation** per cluster — populate each `cluster-<id>-<slug>.md` with verified-vs-hypothesised mechanism, fix surface, options ranked | All cluster docs reach "Ready to fix" state per their own readiness table | 1 session per cluster | LOW-MEDIUM |
-| **C**  | (OPTIONAL — skip when mechanism uniquely determines fix) Fix-shape comparison for clusters with multiple viable fix options | Chosen option recorded per cluster doc | varies | LOW |
-| **D1..N** | **Per-cluster fix commits** — one cluster per commit, pushed before next cluster begins (PLAN52 fix-application discipline applies verbatim) | Each cluster's probe + Set H PASS under the chosen sanitizer; project CI still green; commit pushed | 1-3 days per cluster | varies — scope-pass fixes carry HIGH risk; codegen / store-op fixes vary |
-| **D-final** | **Wire the CI job** — add the sanitizer job to `.github/workflows/ci.yml` (and `make ci-sanitizer` Makefile target).  Decide gating policy: required-to-pass vs informational | New CI job green on `main`; required-to-pass for PRs touching `src/state/`, `src/parser/`, `src/scopes.rs`, `src/generation/`, `src/store.rs`, `src/database/` (the UB-relevant surface) | 1 session | LOW |
-| **D8** | **Close the plan** — graduate one representative probe per cluster to `tests/scripts/15X-plan53-…`; move cluster docs to `plans/finished/53-…/` | All clusters fixed or explicitly recorded as known-deferred (with one-line reason in this README); sanitizer CI green on `main`; `make ci-full` green; this plan moved to `finished/` | 1 session | none |
+| ~~**0**~~ | ~~WAIT — verify PLAN52 closure~~ | PLAN52 closed (#230) — done | done | — |
+| ~~**A1**~~ | ~~Tooling decision~~ | `cluster-0-tooling-decision.md` committed | done | — |
+| ~~**A2**~~ | ~~First sweep~~ | Cluster catalogue populated (clusters 1-5 + PLAN52-I) | done | — |
+| ~~**A3**~~ | ~~Probe authoring~~ | 35 probes in `probes/`; all PASS production | done | — |
+| ~~**B-D**~~ | ~~Per-cluster mechanism + fix commits~~ | Clusters 1-5 all fixed (PR #235/#236) | done | — |
+| ~~**D-final**~~ | ~~Wire the CI job~~ | per-PR guard + nightly Miri/ASan/matrix + sticky-comment live on `main` | done | — |
+| **W2-1** | **macOS-ARM nightly leg** — add macOS-ARM runner to `miri.yml` toolchain-matrix job | macOS-ARM leg green on `main`; nightly badge reflects it | 1 session | LOW |
+| **W2-2** | **ThreadSanitizer job** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread` | TSan job green on `main`; any races found catalogued or fixed | 1-2 sessions | MEDIUM (TSan setup) |
+| **W2-3** | **`LOFT_POISON=1` keystone** — implement arena poison-on-free for store records + stack slots | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data | 1-2 sessions | MEDIUM |
+| **W2-4** | **Database collections fuzz target** (structure-aware, under ASan) | `cargo fuzz run db_collections` runs 10 min with no ASan finding | 2-3 sessions | LOW-MEDIUM |
+| **W2-5** | ~~**Program-level loft-source fuzz**~~ — **spun off to @PLAN55** ([`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md)) | Tracked in @PLAN55 | — | — |
+| **W2-6** | **Grow the Miri curated set** | Cluster 1-5 reproducers + par shapes in the Miri job; job runtime ≤ 20 min | 1 session | LOW |
+| **W2-final** | **Close the plan** — move to `plans/finished/` | All Wave-2 items done or explicitly deferred with a one-line reason; sanitizer CI green; `make ci` green | 1 session | none |
 
 ### "We know we're clear" — binary close criteria
 
-The plan is provably closed iff ALL of these hold after Step D8:
+**Wave 1 criteria (all satisfied 2026-05-31):**
 
-1. **Chosen sanitizer runs clean against the gated test surface** on
-   post-PLAN52 main + this plan's fixes.  Zero unfixed findings; any
-   deferred cluster has an explicit one-line reason in this README's
-   cluster catalogue.
-2. **Sanitizer CI job green on `main`** — verified via the new
-   workflow's last run on `main`.
-3. **`make ci` + `make ci-full` still green** — the sanitizer job
-   does not break any existing gate.
-4. **No regression in PLAN52's probe sets A-I** — re-run PLAN52's
-   `probes/run_set.sh all` against the post-Plan53 tree; all sets
-   still PASS.  PLAN52 acts as the upstream-canary for this plan
-   the way moros_* did for PLAN51.
-5. **rustc-version-aware notes** — README documents which rustc
-   nightly the sanitizer was last green against, so future toolchain
-   bumps have a known-good baseline.
+1. Clusters 1-5 fixed; PLAN52-I owned and closed by PLAN52 (#230). ✅
+2. Per-PR `stack_align_guard` + nightly Miri/ASan/matrix + sticky-comment reporter
+   live on `main`. ✅
+3. `make ci` green; no existing gate broken. ✅
+4. PLAN52 probe sets A-I still PASS against the post-Plan53 tree. ✅
+5. rustc nightly baseline recorded: nightly 1.98.0 (2026-05-28) in
+   `cluster-0-tooling-decision.md`. ✅
 
-If any of (1)-(5) fail, the plan is NOT closed: the offending
-cluster doc grows a new "Fix iterations" entry.
+**Wave 2 close criteria (the plan moves to `finished/` when ALL hold):**
+
+1. All Wave-2 step exit criteria in the table above are met, or the step
+   is explicitly deferred with a one-line reason in this README.
+2. Sanitizer CI (per-PR guard + nightly) still green on `main`.
+3. `make ci` green.
+4. rustc-version-aware note updated for the nightly the Wave-2 CI was
+   last green against.
+
+If any criterion fails, the offending step grows a "Fix iterations" note.
 
 ### Aggregate effort
 
-Estimated ~1-2 weeks once PLAN52 closes.  The first sweep (A2) is
-the biggest unknown: it may surface zero clusters (PLAN52 already
-removed the dominant UB), in which case D1..N collapses and the
-plan becomes a 2-3-day infrastructure ship.  It may surface a
-handful (closure-capture, store-ownership-on-teardown, native
-codegen lifetime), in which case ~1 week of fix work follows.
+**Wave 1 — actual cost:** ~2 weeks (PLAN52 gate + 5-cluster fix arc +
+CI wiring).  The first sweep surfaced 5 clusters (2 alignment-class
+caught by Miri, 3 more after peeling); the V2 aligned-stack work grew
+beyond the original scope but shipped as a clean arc.
 
-Quickest user-visible win: **D-final wires the CI job even if zero
-fixes were needed** — that single commit prevents the next P383.
-If A2 finds no clusters, prioritise shipping the CI job before
-declaring the plan closed.
+**Wave 2 — estimated cost:** 3-6 weeks depending on how many fuzz
+findings surface.  The `LOFT_POISON` keystone and macOS-ARM leg are
+the quickest wins (1-2 sessions each).  TSan and the fuzz targets are
+the bulk of the work.  OSS-Fuzz and the failure-notifier are
+stretch items with unbounded upstream dependency.
 
 ## Fix-application discipline
 
@@ -400,9 +486,11 @@ Two plan-specific notes:
 
 ## See also
 
-- [`plans/futu../../finished/52-value-block-borrow-cleanup/`](../../finished/52-value-block-borrow-cleanup/README.md) — **hard dependency**; this plan does not start until PLAN52 closes.
+- [`plans/future/55-program-level-fuzzing/`](../55-program-level-fuzzing/README.md) — spinoff plan; owns program-level loft-source fuzzing, schema-coupled collection fuzzing (tree/hash/sorted via real programs), differential fuzzing, and OSS-Fuzz onboarding (Wave-2 items #4, #6, #10).
+- [`plans/finished/52-value-block-borrow-cleanup/`](../../finished/52-value-block-borrow-cleanup/README.md) — founding hard dependency (now satisfied, closed via PR #230); the cluster-I heap-UAF was the dominant noise that had to be removed before this plan's sweep was meaningful.
 - [`plans/finished/51-hidden-buffer-aliasing/`](../../finished/51-hidden-buffer-aliasing/) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
 - [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) §@P383 — the trigger incident; the failure mode this plan's CI lever would have caught months earlier.
-- [`doc/claude/TESTING.md`](../../../TESTING.md) — destination for the sanitizer-CI documentation once D-final ships.
-- [`.github/workflows/ci.yml`](../../../../../.github/workflows/ci.yml) — where the new job is added at D-final.
-- [`Makefile`](../../../../../Makefile) — destination for the `make ci-sanitizer` target.
+- [`doc/claude/TESTING.md`](../../../TESTING.md) — sanitizer-CI documentation (shipped D-final, PR #236).
+- [`.github/workflows/ci.yml`](../../../../../.github/workflows/ci.yml) — per-PR `stack_align_guard` job + nightly-status sticky-comment reporter (shipped).
+- [`.github/workflows/miri.yml`](../../../../../.github/workflows/miri.yml) — nightly Miri + ASan + toolchain-matrix job (shipped).
+- [`Makefile`](../../../../../Makefile) — `make ci-sanitizer` target (Wave 2: not yet added; Wave 1 wired the CI job directly).

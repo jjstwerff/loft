@@ -327,7 +327,8 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
 | [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
 | [`plans/future/43-binary-io-validation/`](plans/future/43-binary-io-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
-| [`plans/future/53-sanitizer-ci-lever/`](plans/future/53-sanitizer-ci-lever/) | M | @PLAN52 closed (#230) — fix-phase gate satisfied | Sanitizer-gated CI job (Miri / ASan) to catch the UB family the @P383-class toolchain-roulette keeps surfacing.  Catalogue + gate residual UB.  Cluster 1 (unaligned bytecode buffer) fixed; cluster 2 (unaligned eval stack) in progress |
+| [`plans/future/53-sanitizer-ci-lever/`](plans/future/53-sanitizer-ci-lever/) | M | @PLAN52 closed (#230) — fix-phase gate satisfied | Sanitizer-gated CI job (Miri / ASan) to catch the UB family the @P383-class toolchain-roulette keeps surfacing.  Catalogue + gate residual UB.  Wave 1 (5 clusters + CI stack) shipped; Wave 2 open |
+| [`plans/future/55-program-level-fuzzing/`](plans/future/55-program-level-fuzzing/) | H | `fuzz/` crate exists (@PLAN53 Wave 2); F4 blocked on @PLAN53 W2-3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
 
 ### G — Goal-enabling
 
