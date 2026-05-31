@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "updated": "2026-05-31T00:00:00Z",
+  "retention_days": 90,
+  "advisories": [
+    {
+      "id": "GHSA-mock-aaaa-bbbb",
+      "packages": [{"name": "test_alpha", "affected": ">=0.1.0, <0.2.0", "fixed_in": "0.2.0"}],
+      "severity": "security_critical",
+      "summary": "Mock-registry fixture critical advisory (test only)",
+      "published": "2026-05-30T08:00:00Z",
+      "references": ["https://example.invalid/advisory/mock-aaaa-bbbb"]
+    },
+    {
+      "id": "GHSA-mock-cccc-dddd",
+      "packages": [{"name": "test_beta", "affected": ">=0.1.0, <0.2.0", "fixed_in": "0.2.0"}],
+      "severity": "bug",
+      "summary": "Mock-registry fixture bug advisory (test only)",
+      "published": "2026-05-30T08:00:00Z",
+      "references": []
+    }
+  ]
+}

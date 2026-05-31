@@ -1,0 +1,209 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Tic-tac-toe server (v1).
+//
+// Listens on port 7878.  For each connection: upgrades to a
+// WebSocket, then plays a single game with the connected
+// client until win/loss/draw.  The client plays X (a click on
+// an empty cell), the server plays O (the simplest legal move:
+// first empty cell).
+//
+// Wire protocol — see doc/claude/TIC_TAC_TOE.md § Wire protocol:
+//   "<id>:<payload>"
+// where <id> is the integer assigned by the local Registry at
+// startup.  Both sides register the same names in the same
+// order (Click, Placement, GameOver) so the ids align.
+//
+//   cargo run --release --bin loft -- --interpret \
+//       lib/game_protocol/examples/tictactoe_server.loft
+
+use server;
+
+// ── Namespace handler registry ────────────────────────────────
+// A small in-main-loop hash that hands out integer ids for
+// text handler names.  Drop-in replacement for the future
+// EventLoop's library-managed registry; the wire-level shape
+// (integer id + payload) is identical.
+
+struct RegEntry {
+  name: text,
+  id: integer
+}
+
+struct Registry {
+  by_name: hash<RegEntry[name]>,
+  next_id: integer
+}
+
+fn register(reg: Registry, name: text) -> integer {
+  id = reg.next_id;
+  reg.by_name += [RegEntry { name: name, id: id }];
+  reg.next_id = id + 1;
+  id
+}
+
+fn lookup_id(reg: Registry, name: text) -> integer {
+  if !reg.by_name[name] { return -1; }
+  reg.by_name[name].id
+}
+
+// ── Wire frame helpers ────────────────────────────────────────
+
+fn pack(id: integer, payload: text) -> text {
+  "{id}:{payload}"
+}
+
+// Returns -1 on malformed input.
+fn parse_id(raw: text) -> integer {
+  i = raw.find(":");
+  if i == null { return -1; }
+  raw[..i] as integer
+}
+
+fn parse_payload(raw: text) -> text {
+  i = raw.find(":");
+  if i == null { return ""; }
+  raw[i + 1..]
+}
+
+// ── Game state ────────────────────────────────────────────────
+
+struct Game {
+  cells: vector<text>,    // 9 entries; "" empty, "X" / "O" placed
+  turn: integer,           // count of moves made so far
+  winner: text             // "" / "X" / "O" / "draw"
+}
+
+fn new_game() -> Game {
+  // Empty cells are represented by null; the vector starts at len 9.
+  cs: vector<text> = [];
+  for _ in 0..9 { cs += [null]; }
+  Game { cells: cs, turn: 0, winner: "" }
+}
+
+fn cell_empty(g: Game, idx: integer) -> boolean {
+  v = g.cells[idx];
+  v == null
+}
+
+// Helper: check one line; returns the winning mark or "" (no winner).
+fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
+  a = g.cells[i];
+  if a != null && a == g.cells[j] && a == g.cells[k] {
+    return a;
+  }
+  ""
+}
+
+fn check_winner(g: Game) -> text {
+  // Eight winning lines: three rows, three cols, two diagonals.
+  w = line_winner(g, 0, 1, 2); if w != "" { return w; }
+  w = line_winner(g, 3, 4, 5); if w != "" { return w; }
+  w = line_winner(g, 6, 7, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 3, 6); if w != "" { return w; }
+  w = line_winner(g, 1, 4, 7); if w != "" { return w; }
+  w = line_winner(g, 2, 5, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 4, 8); if w != "" { return w; }
+  w = line_winner(g, 2, 4, 6); if w != "" { return w; }
+  if g.turn >= 9 { return "draw"; }
+  ""
+}
+
+fn first_empty(g: Game) -> integer {
+  for i in 0..9 {
+    if cell_empty(g, i) { return i; }
+  }
+  -1
+}
+
+// ── Main loop ─────────────────────────────────────────────────
+
+fn main() {
+  // Build the namespace registry once; both sides register the
+  // same names in the same order so ids align across the wire.
+  reg = Registry { next_id: 0 };
+  h_click     = register(reg, "Click");      // 0
+  h_placement = register(reg, "Placement");  // 1
+  h_gameover  = register(reg, "GameOver");   // 2
+
+  srv = server::listen(7878);
+  println("tictactoe server listening on :7878");
+  println("registered: Click={h_click} Placement={h_placement} GameOver={h_gameover}");
+
+  while true {
+    req = srv.next();
+    if req == null { continue; }
+
+    ws = server::ws_upgrade();
+    if ws == null { continue; }
+    println("client connected");
+
+    // Handshake: server is the arbiter.  Send the full
+    // name→id map as the first frame so the client can
+    // populate its local registry with our assignments.
+    map_payload = "Click={h_click},Placement={h_placement},GameOver={h_gameover}";
+    ws.send("MAP:{map_payload}");
+    println("sent MAP: {map_payload}");
+
+    g = new_game();
+
+    while g.winner == "" {
+      raw = ws.next();
+      if raw == null { break; }
+
+      id = parse_id(raw);
+      body = parse_payload(raw);
+
+      if id != h_click {
+        // Unknown handler id; ignore for v1.
+        continue;
+      }
+
+      // body is "row,col"
+      comma = body.find(",");
+      if comma == null { continue; }
+      r = body[..comma] as integer;
+      c = body[comma + 1..] as integer;
+      if r < 0 || r > 2 || c < 0 || c > 2 { continue; }
+
+      idx = r * 3 + c;
+      if !cell_empty(g, idx) { continue; }   // already occupied
+
+      // Player places X.
+      g.cells[idx] = "X";
+      g.turn = g.turn + 1;
+      ws.send(pack(h_placement, "X,{r},{c}"));
+      println("player X at {r},{c}");
+
+      w = check_winner(g);
+      if w != "" {
+        g.winner = w;
+        ws.send(pack(h_gameover, w));
+        println("game over: {w}");
+        break;
+      }
+
+      // Server places O at the first empty cell.
+      s = first_empty(g);
+      if s < 0 { break; }   // shouldn't happen; defensive
+      sr = s / 3;
+      sc = s - sr * 3;
+      g.cells[s] = "O";
+      g.turn = g.turn + 1;
+      ws.send(pack(h_placement, "O,{sr},{sc}"));
+      println("server O at {sr},{sc}");
+
+      w = check_winner(g);
+      if w != "" {
+        g.winner = w;
+        ws.send(pack(h_gameover, w));
+        println("game over: {w}");
+        break;
+      }
+    }
+
+    ws.close();
+    println("disconnect; ready for next client");
+  }
+}

@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TIC_TAC_TOE v3 — WebSocket game-protocol probe.
+//
+// The v3 server's WebSocket endpoint lives on `/ws` and speaks the
+// minimal text protocol:
+//   client → server: `click:<row>,<col>`
+//   server → client: `place:<mark>,<row>,<col>`
+//   server → client: `gameover:<X|O|draw>`
+//
+// This probe plays X's column-0 win (clicks (0,0), (1,0), (2,0))
+// and validates the server's responses.  Server places O at the
+// first empty cell each time, so the expected trajectory is:
+//   X@0,0 → O@0,1 → X@1,0 → O@0,2 → X@2,0 → gameover:X
+//
+// Stdout shape (all lines the harness asserts on):
+//   v3-probe: connecting port=<n>
+//   v3-probe: place X 0,0
+//   v3-probe: place O 0,1
+//   v3-probe: place X 1,0
+//   v3-probe: place O 0,2
+//   v3-probe: place X 2,0
+//   v3-probe: gameover X
+//   v3-probe: ok
+
+use web;
+
+// Drain the next non-null message from the handler with a short
+// timeout.  Returns null on timeout.  Both exit paths use an
+// explicit `return` so the parser accepts the loop-then-fallthrough
+// shape (a bare trailing `null` literal infers as `null`, not
+// `text`, which `-> text` then rejects).
+fn next_msg(h: web::WsHandler) -> text {
+  attempts = 0;
+  while attempts < 400 {
+    raw = h.try_recv();
+    if raw != null { return raw; }
+    attempts += 1;
+    web::sleep_ms(5);
+  }
+  return null;
+}
+
+// Send `frame` and assert the next inbound matches `want_prefix`,
+// returning the trailing payload (the bit after the prefix).  On
+// any failure prints a diagnostic and returns null.
+fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
+                     want_prefix: text) -> text {
+  ok = h.send("click:{r},{c}");
+  if !ok {
+    web::sleep_ms(100);
+    ok = h.send("click:{r},{c}");
+  }
+  if !ok {
+    println("v3-probe: send-failed click {r},{c}");
+    return null;
+  }
+  msg = next_msg(h);
+  if msg == null {
+    println("v3-probe: recv-timeout after click {r},{c}");
+    return null;
+  }
+  if !msg.starts_with(want_prefix) {
+    println("v3-probe: prefix-mismatch want=\"{want_prefix}\" got=\"{msg}\"");
+    return null;
+  }
+  msg[want_prefix.len()..]
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  url = "ws://127.0.0.1:{port}/ws";
+
+  println("v3-probe: connecting port={port}");
+  h = web::ws_handler(url);
+  if h == null { println("v3-probe: handler-failed"); return; }
+
+  // Move 1 — X at (0,0).  After the X placement the server replies
+  // with its O placement at the first empty cell (idx 1 = row 0 col 1).
+  payload = click_and_expect(h, 0, 0, "place:X,");
+  if payload == null { h.close(); return; }
+  if payload != "0,0" {
+    println("v3-probe: X-pos-mismatch want=\"0,0\" got=\"{payload}\"");
+    h.close();
+    return;
+  }
+  println("v3-probe: place X 0,0");
+  o = next_msg(h);
+  if o == null || !o.starts_with("place:O,") {
+    println("v3-probe: missing-O-after-X-1 got=\"{o}\"");
+    h.close();
+    return;
+  }
+  println("v3-probe: place O {o[8..]}");
+
+  // Move 2 — X at (1,0).  Server's O goes to first empty (idx 2 = 0,2).
+  payload = click_and_expect(h, 1, 0, "place:X,");
+  if payload == null || payload != "1,0" {
+    println("v3-probe: X-pos-mismatch want=\"1,0\" got=\"{payload}\"");
+    h.close();
+    return;
+  }
+  println("v3-probe: place X 1,0");
+  o = next_msg(h);
+  if o == null || !o.starts_with("place:O,") {
+    println("v3-probe: missing-O-after-X-2 got=\"{o}\"");
+    h.close();
+    return;
+  }
+  println("v3-probe: place O {o[8..]}");
+
+  // Move 3 — X at (2,0): wins column 0 → server emits gameover:X.
+  payload = click_and_expect(h, 2, 0, "place:X,");
+  if payload == null || payload != "2,0" {
+    println("v3-probe: X-pos-mismatch want=\"2,0\" got=\"{payload}\"");
+    h.close();
+    return;
+  }
+  println("v3-probe: place X 2,0");
+  game = next_msg(h);
+  if game == null || !game.starts_with("gameover:") {
+    println("v3-probe: missing-gameover got=\"{game}\"");
+    h.close();
+    return;
+  }
+  winner = game[9..];
+  println("v3-probe: gameover {winner}");
+  if winner != "X" {
+    println("v3-probe: wrong-winner want=\"X\" got=\"{winner}\"");
+    h.close();
+    return;
+  }
+
+  println("v3-probe: ok");
+  h.close();
+}

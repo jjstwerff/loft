@@ -1,0 +1,173 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Tic-tac-toe client (v1) — see doc/claude/TIC_TAC_TOE.md.
+// Text-only first cut: hardcoded sequence of clicks; prints
+// what the server replies.  Mouse + render comes after
+// lib/graphics integration.
+//
+//   cargo run --release --bin loft -- --interpret \
+//       lib/game_protocol/examples/tictactoe_client.loft
+
+use web;
+
+// ── Namespace handler registry (server-arbited) ──────────────
+// Populated from the MAP frame the server sends after upgrade.
+
+struct RegEntry {
+  name: text,
+  id: integer
+}
+
+struct Registry {
+  by_name: hash<RegEntry[name]>
+}
+
+fn install(reg: Registry, name: text, id: integer) {
+  reg.by_name += [RegEntry { name: name, id: id }];
+}
+
+fn lookup_id(reg: Registry, name: text) -> integer {
+  if !reg.by_name[name] { return -1; }
+  reg.by_name[name].id
+}
+
+// Parse "Click=0,Placement=1,GameOver=2" into the registry.
+fn install_map(reg: Registry, payload: text) {
+  rest = payload;
+  while len(rest) > 0 {
+    comma = rest.find(",");
+    entry = rest;
+    if comma != null {
+      entry = rest[..comma];
+      rest = rest[comma + 1..];
+    } else {
+      rest = "";
+    }
+    eq = entry.find("=");
+    if eq != null {
+      n = entry[..eq];
+      v = entry[eq + 1..] as integer;
+      install(reg, n, v);
+      println("learned: {n}={v}");
+    }
+  }
+}
+
+// ── Wire frame helpers ────────────────────────────────────────
+
+fn pack(id: integer, payload: text) -> text {
+  "{id}:{payload}"
+}
+
+fn parse_id(raw: text) -> integer {
+  i = raw.find(":");
+  if i == null { return -1; }
+  raw[..i] as integer
+}
+
+fn parse_payload(raw: text) -> text {
+  i = raw.find(":");
+  if i == null { return ""; }
+  raw[i + 1..]
+}
+
+// ── Main ──────────────────────────────────────────────────────
+
+fn main() {
+  println("client start");
+
+  ws = web::ws_handler("ws://localhost:7878/");
+  if ws == null { return; }
+
+  reg = Registry {};
+
+  // Phase 1: wait for the MAP frame.  try_recv() returns null
+  // until a message arrives; we drive the polling loop here
+  // without needing to capture state in a closure.
+  got_map = false;
+  attempts = 0;
+  while !got_map {
+    raw = ws.try_recv();
+    if raw == null {
+      attempts += 1;
+      if attempts > 500 {
+        println("no MAP after 500 polls; giving up");
+        ws.close();
+        return;
+      }
+      continue;
+    }
+    if raw.starts_with("MAP:") {
+      install_map(reg, raw[4..]);
+      got_map = true;
+    } else {
+      println("unexpected frame before MAP: {raw}");
+    }
+  }
+
+  h_click     = lookup_id(reg, "Click");
+  h_placement = lookup_id(reg, "Placement");
+  h_gameover  = lookup_id(reg, "GameOver");
+  if h_click < 0 || h_placement < 0 || h_gameover < 0 {
+    println("MAP missing required handlers");
+    ws.close();
+    return;
+  }
+  println("registry ready: Click={h_click} Placement={h_placement} GameOver={h_gameover}");
+
+  // Phase 2: play.  Hardcoded winning sequence on column 0.
+  //   X(0,0) → server O at first empty (will be 0,1)
+  //   X(1,0) → server O at first empty (will be 0,2)
+  //   X(2,0) → X wins on column 0; server sends GameOver: X
+  moves = ["0,0", "1,0", "2,0"];
+  game_over = false;
+  for m in moves {
+    if game_over { break; }
+    println("send click {m}");
+    ws.send(pack(h_click, m));
+
+    // Wait for the server's reply (one or two Placements,
+    // possibly followed by GameOver).
+    seen = 0;
+    spin = 0;
+    while seen < 2 && !game_over && spin < 1000 {
+      raw = ws.try_recv();
+      if raw == null {
+        spin += 1;
+        continue;
+      }
+      id = parse_id(raw);
+      body = parse_payload(raw);
+      if id == h_placement {
+        println("placement: {body}");
+        seen += 1;
+      } else if id == h_gameover {
+        println("game over: {body}");
+        game_over = true;
+      } else {
+        println("unknown frame: {raw}");
+      }
+    }
+  }
+
+  // After the winning move the server may send GameOver after
+  // its own placement attempt; drain any tail.
+  spin = 0;
+  while !game_over && spin < 500 {
+    raw = ws.try_recv();
+    if raw == null {
+      spin += 1;
+      continue;
+    }
+    id = parse_id(raw);
+    body = parse_payload(raw);
+    if id == h_gameover {
+      println("game over: {body}");
+      game_over = true;
+    }
+  }
+
+  ws.close();
+  println("done");
+}

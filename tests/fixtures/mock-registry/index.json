@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "updated": "2026-05-31T00:00:00Z",
+  "packages": {
+    "test_alpha": {
+      "description": "Mock-registry fixture for testing the resolution code paths.",
+      "homepage": "https://example.invalid/test_alpha",
+      "categories": ["test"],
+      "yanked": ["0.1.0"],
+      "versions": {
+        "0.1.0": {
+          "url": "file:///does/not/exist/test_alpha-0.1.0.tar.gz",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 0,
+          "loft": ">=0.8",
+          "subpath": "test_alpha",
+          "deps": {},
+          "published": "2026-05-30T00:00:00Z"
+        },
+        "0.2.0": {
+          "url": "file:///does/not/exist/test_alpha-0.2.0.tar.gz",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 0,
+          "loft": ">=0.8",
+          "subpath": "test_alpha",
+          "deps": {},
+          "published": "2026-05-31T00:00:00Z"
+        }
+      }
+    },
+    "test_beta": {
+      "description": "Mock-registry fixture — pinned package with deps.",
+      "homepage": "https://example.invalid/test_beta",
+      "categories": ["test"],
+      "yanked": [],
+      "versions": {
+        "0.1.0": {
+          "url": "file:///does/not/exist/test_beta-0.1.0.tar.gz",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 0,
+          "loft": ">=0.8",
+          "subpath": "test_beta",
+          "deps": {"test_alpha": ">=0.2"},
+          "published": "2026-05-31T00:00:00Z"
+        }
+      }
+    }
+  }
+}

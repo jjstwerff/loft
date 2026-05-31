@@ -1,0 +1,101 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t3 server.  N-client routing + broadcast.
+//
+// Compresses the v5 plan's 30-clients-for-5-minutes liveness check
+// into a CI-shaped 5-clients-for-1-second pattern test: each client
+// sends a single hello message; server broadcasts every hello it
+// receives to every client (including sender); each client confirms
+// it observed N hellos and exits.  Validates:
+//   - srv.run() handles N>2 connections without dropping events
+//   - srv.broadcast() reaches every active connection
+//   - per-client routing under concurrent connect / message storm
+//
+// Wire framing: v2's `<id>:<payload>` text frames so the existing
+// multi-client run() helper parses cleanly.  Frame ids:
+//   1 = Hello (client → server, server-broadcast → all clients)
+//   2 = Welcome (server → client on connect, carries seat number)
+//   3 = Ready (server → all once N clients are connected; gates the
+//       hello round so late-connecting clients do not miss earlier
+//       hellos)
+//
+// Stdout shape:
+//   v5-t3: listening port=<n>
+//   v5-t3: connected seat=<i>
+//   ...
+//   v5-t3: broadcast hello from <label>
+//   ...
+//   v5-t3: done
+
+use server;
+use web;
+
+// Per-client registration: track the label they sent so we can log
+// each broadcast.  Server prints one "broadcast hello from <L>"
+// line per client message, which is N lines for N clients (the
+// harness asserts on counts).
+struct ClientSeat {
+  cs_id:    integer,    // server-assigned WS slot id (key)
+  cs_seat:  integer,    // 1-based seat number — distinct per connect
+}
+
+struct ServerCount {
+  by_id:    hash<ClientSeat[cs_id]>,
+  next:     integer,    // next seat number to assign
+  hellos:   integer,    // total hello broadcasts emitted
+  expected: integer,    // when hellos >= expected, server logs done
+}
+
+H_HELLO = 1;
+H_WELCOME = 2;
+H_READY = 3;
+
+fn handle_connect(srv: server::Server, count: ServerCount, cid: integer) {
+  count.next += 1;
+  seat = count.next;
+  count.by_id += [ClientSeat { cs_id: cid, cs_seat: seat }];
+  println("v5-t3: connected seat={seat}");
+  // Welcome the client with its seat number so it can prefix output.
+  srv.send_to(cid, "{H_WELCOME}:{seat}");
+  // Once all N clients are connected, broadcast READY — clients
+  // gate their hello-send on this so late-connectors never miss a
+  // peer's earlier hello.
+  if count.next == count.expected {
+    println("v5-t3: ready");
+    srv.broadcast("{H_READY}:{count.next}");
+  }
+}
+
+fn handle_hello(srv: server::Server, count: ServerCount, cid: integer, payload: text) {
+  cs = count.by_id[cid];
+  if !cs { return; }
+  count.hellos += 1;
+  println("v5-t3: broadcast hello from {payload}");
+  srv.broadcast("{H_HELLO}:{payload}");
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18093 } else { port_raw as integer };
+  count_raw = env_variable("LOFT_T3_CLIENTS");
+  expected = if count_raw == "" { 5 } else { count_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v5-t3: bind-failed port={port}");
+    return;
+  }
+  println("v5-t3: listening port={port}");
+
+  state = ServerCount { next: 0, hellos: 0, expected: expected };
+  srv.run(fn(ev: server::WsEvent) {
+    if ev.connected {
+      handle_connect(srv, state, ev.cid);
+    } else if ev.message {
+      if ev.msg_id == H_HELLO {
+        handle_hello(srv, state, ev.cid, ev.payload);
+      }
+    }
+  });
+}

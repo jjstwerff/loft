@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Hello-world WebSocket server.
+//
+// Listens on port 7878, upgrades any incoming HTTP request to a
+// WebSocket, and replies "bye world" to every incoming text message.
+// The first deliberate piece of the multiplayer-gaming backdrop:
+// a real-and-runnable server that the loft browser client will hand
+// shake with.
+//
+//   cargo run --release --bin loft -- \
+//       lib/game_protocol/examples/hello_server.loft
+
+use server;
+
+fn main() {
+  srv = server::listen(7878);
+  println("hello-world server listening on :7878");
+
+  // One request at a time is plenty for the round-trip demo.
+  while true {
+    req = srv.next();
+    if req == null { continue; }
+
+    // Any path on this server upgrades to a WebSocket.
+    ws = server::ws_upgrade();
+    if ws == null { continue; }
+
+    // Drain text messages until the peer disconnects, replying to
+    // each with "bye world".  No JSON, no framing on top of text —
+    // raw text in, raw text out.
+    while true {
+      msg = ws.next();
+      if msg == null { break; }
+      println("received: " + msg);
+      ws.send("bye world");
+    }
+    ws.close();
+  }
+}

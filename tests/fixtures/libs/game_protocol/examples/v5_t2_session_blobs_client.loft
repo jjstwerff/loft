@@ -1,0 +1,115 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t2 client.  Reads session-tagged binary blobs and groups
+// by session id.  Each time the session id changes (or the stream
+// ends), prints "v5-t2c: applied session=N blobs=M".  Pairs with
+// v5_t2_session_blobs_server.loft.
+//
+// The blob layout (mirrored from the server):
+//   [type:u8] [session:u32-LE] [color:u8] [height:u8] [age:u16-LE]
+//
+// Stdout shape:
+//   v5-t2c: connecting port=<n>
+//   v5-t2c: handler id=<n>
+//   v5-t2c: applied session=7 blobs=5
+//   v5-t2c: applied session=8 blobs=1
+//   v5-t2c: ok
+
+use web;
+
+// Decode a 32-bit little-endian unsigned integer starting at byte
+// offset `off` of `buf`.  Returns -1 on out-of-range; valid u32
+// values in 0..=0x7FFFFFFF round-trip; values >= 2^31 wrap into
+// loft's i32 negative space (acceptable for this test — we use
+// session ids < 1000).
+fn read_u32_le(buf: text, off: integer) -> integer {
+  b0 = web::byte_at(off,     buf);
+  b1 = web::byte_at(off + 1, buf);
+  b2 = web::byte_at(off + 2, buf);
+  b3 = web::byte_at(off + 3, buf);
+  if b0 < 0 || b1 < 0 || b2 < 0 || b3 < 0 { return -1; }
+  b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+fn flush_session(session: integer, count: integer) {
+  println("v5-t2c: applied session={session} blobs={count}");
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18092 } else { port_raw as integer };
+  url = "ws://127.0.0.1:{port}";
+
+  println("v5-t2c: connecting port={port}");
+  h = web::ws_handler(url);
+  if h == null { println("v5-t2c: ws_handler-failed"); return; }
+  println("v5-t2c: handler id={h.id}");
+
+  current_session = -1;
+  current_count = 0;
+  total_blobs = 0;
+  idle = 0;
+  done = false;
+
+  while !done {
+    raw = h.try_recv();
+    if raw == null {
+      idle += 1;
+      // Stop once we've been idle for ~1 second after receiving at
+      // least the expected 6 blobs (5 + 1).  Generous so a slow
+      // network doesn't trip the cut-off.
+      if total_blobs >= 6 && idle > 200 { done = true; break; }
+      // Hard ceiling so a hang cannot run forever.
+      if idle > 2000 {
+        println("v5-t2c: recv-timeout total={total_blobs}");
+        h.close();
+        return;
+      }
+      web::sleep_ms(5);
+      continue;
+    }
+    idle = 0;
+    op = h.last_opcode();
+    if op != 2 {
+      println("v5-t2c: unexpected-opcode op={op}");
+      h.close();
+      return;
+    }
+    if raw.len() < 5 {
+      println("v5-t2c: short-blob len={raw.len()}");
+      h.close();
+      return;
+    }
+    blob_type = web::byte_at(0, raw);
+    session = read_u32_le(raw, 1);
+
+    if session != current_session {
+      if current_count > 0 {
+        flush_session(current_session, current_count);
+      }
+      current_session = session;
+      current_count = 0;
+    }
+    current_count += 1;
+    total_blobs += 1;
+    // Hide blob_type unless it ever drifts off the expected DELTA(2).
+    if blob_type != 2 {
+      println("v5-t2c: unexpected-type type={blob_type}");
+    }
+  }
+
+  // Flush trailing session.
+  if current_count > 0 {
+    flush_session(current_session, current_count);
+  }
+
+  if total_blobs != 6 {
+    println("v5-t2c: blob-count-mismatch got={total_blobs} want=6");
+    h.close();
+    return;
+  }
+
+  println("v5-t2c: ok");
+  h.close();
+}
