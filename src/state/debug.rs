@@ -1121,7 +1121,17 @@ impl State {
             assert!(step < 10_000_000, "Too many operations");
             if self.code_pos == u32::MAX {
                 // TODO Validate that all databases & String values are also cleared.
-                assert_eq!(self.stack_pos, 4, "Stack not correctly cleared");
+                // @PLAN53 cluster 2 / S4: the entry frame base is the STEPPED
+                // `stack_step(4)` (= 8 under LOFT_ALIGN, 4 off) — what `execute_argv`
+                // resets to.  The `execute_log` debug tracer hard-coded the raw 4, so
+                // a completed program under V2 (stack_pos back at 8) tripped this
+                // end-of-run "stack cleared" check.  Production `execute` was already
+                // correct (issues 685/0); only this debug-path mirror lagged.
+                assert_eq!(
+                    self.stack_pos,
+                    self.stack_step(4),
+                    "Stack not correctly cleared"
+                );
                 // Free the stack store. Mark constant stores (pre-built by
                 // build_const_vectors) as free — they are program-lifetime.
                 self.database.allocations[0].free = true;
