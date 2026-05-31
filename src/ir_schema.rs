@@ -309,9 +309,6 @@ pub enum TypeDecodeError {
     Shape(String),
     /// The `"k"` tag named a variant we don't know.
     UnknownTag(String),
-    /// The `"k"` tag is a valid `Value` variant whose decoder is not wired
-    /// in this chunk yet (V1 leaf-only; recursive variants land in V2–V4).
-    Unsupported(String),
 }
 
 /// Parse a JSON string (via `crate::json::parse`) back into a `Type`.
@@ -485,17 +482,12 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
     })
 }
 
-// ─── Value JSON (Step 2 slice V1: full encoder + leaf decoder) ────────────────
+// ─── Value JSON (Step 2: full encoder + decoder for all 34 variants) ──────────
 //
-// `Value` is the recursive IR-body enum (34 variants).  Per the chunk plan:
-//   * V1 (this) — the FULL encoder (a `match` must be exhaustive, so the
-//     encoder cannot be partial) + sub-encoders for `Block` / `ParForBody` /
-//     `Position` / `Key`, and a decoder covering the **leaf** (non-Value-
-//     recursive) variants.  Recursive variants decode to
-//     `TypeDecodeError::Unsupported` until later chunks wire them:
-//   * V2 — recursive value variants (Call/Set/If/Iter/Tuple/…)
-//   * V3 — Block / Loop (the `&'static str` name)
-//   * V4 — Span / FnRef / ParFor / Keys-tail; removes the Unsupported fallback.
+// `Value` is the recursive IR-body enum.  The encoder is exhaustive (a `match`
+// cannot be partial); the decoder dispatches on the `"k"` tag and covers every
+// variant.  It was built in reviewable slices (V1 leaf → V2 recursive payloads
+// → V3 Block/Loop/Span → V4 FnRef/ParFor), now all landed.
 //
 // Same conventions as `Type`: tagged object `{ "k": "<variant>", … }`,
 // absolute indices verbatim, strings via `write_str`.
@@ -717,15 +709,12 @@ fn write_parforbody(out: &mut String, b: &ParForBody) {
     let _ = write!(out, ",\"stitch_id\":{}}}", b.stitch_id);
 }
 
-/// Parse a JSON string into a `Value`.  V1 decodes leaf variants; V2 adds the
-/// recursive variants with `Value` / `Vec<Value>` / scalar payloads; V3 adds
-/// `Block` / `Loop` (the `&'static str` name) and `Span` (Position).  The
-/// remaining variants (`FnRef`/`ParFor`) return
-/// [`TypeDecodeError::Unsupported`] until V4 wires them.
+/// Parse a JSON string into a `Value`.  Decodes all 34 variants: leaf (V1),
+/// recursive `Value`/`Vec<Value>`/scalar payloads (V2), `Block`/`Loop`/`Span`
+/// (V3), and `FnRef`/`ParFor` (V4 — slice complete).
 ///
 /// # Errors
-/// Malformed JSON, wrong field shape, unknown tag, or a not-yet-wired
-/// recursive variant.
+/// Malformed JSON, wrong field shape, or an unknown variant tag.
 pub fn value_from_json(src: &str) -> Result<Value, TypeDecodeError> {
     let parsed = crate::json::parse(src)
         .map_err(|e| TypeDecodeError::Shape(format!("json parse: {e:?}")))?;
@@ -807,6 +796,19 @@ fn position_from_parsed(p: &Parsed) -> Result<Position, TypeDecodeError> {
     })
 }
 
+/// Decode a [`ParForBody`] (V4 — carried by `Value::ParFor`).
+fn parforbody_from_parsed(p: &Parsed) -> Result<ParForBody, TypeDecodeError> {
+    Ok(ParForBody {
+        input: value_from_parsed(field(p, "input")?)?,
+        x_var: as_u16(field(p, "x_var")?)?,
+        r_var: as_u16(field(p, "r_var")?)?,
+        worker: value_from_parsed(field(p, "worker")?)?,
+        threads: value_from_parsed(field(p, "threads")?)?,
+        body: value_from_parsed(field(p, "body")?)?,
+        stitch_id: as_u8(field(p, "stitch_id")?)?,
+    })
+}
+
 fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
     let tag = as_str(field(p, "k")?)?;
     Ok(match tag.as_str() {
@@ -855,10 +857,13 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
             position_from_parsed(field(p, "pos")?)?,
             value_from_parsed(field(p, "v")?)?,
         ))),
-        // ── recursive variants — wired in V4 ──
-        "FnRef" | "ParFor" => {
-            return Err(TypeDecodeError::Unsupported(tag));
-        }
+        // ── V4: FnRef (Type payload) + ParFor (ParForBody) — slice closes ──
+        "FnRef" => Value::FnRef(
+            as_i32(field(p, "d")?)?,
+            as_u16(field(p, "var")?)?,
+            Box::new(type_from_parsed(field(p, "t")?)?),
+        ),
+        "ParFor" => Value::ParFor(Box::new(parforbody_from_parsed(field(p, "body")?)?)),
         other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
     })
 }
@@ -1305,18 +1310,93 @@ mod tests {
         );
     }
 
-    /// Variants still deferred to V4 decode to `Unsupported` (not
-    /// `UnknownTag`) — they are valid tags whose decoder is not wired yet.
+    /// V4 round-trips FnRef (Type payload) and ParFor (ParForBody with five
+    /// nested Values), closing the Value slice.
     #[test]
-    fn value_v4_tags_are_unsupported_for_now() {
-        let json = value_to_json(&Value::FnRef(2, 1, Box::new(Type::Boolean)));
+    fn value_fnref_parfor_round_trip() {
+        let samples = [
+            Value::FnRef(2, 1, Box::new(Type::Boolean)),
+            // negative dnr + sentinel var (the to_default shape, data.rs:536)
+            Value::FnRef(-1, u16::MAX, Box::new(Type::Function(vec![], Box::new(Type::Null), vec![]))),
+            Value::ParFor(Box::new(ParForBody {
+                input: Value::Var(0),
+                x_var: 1,
+                r_var: 2,
+                worker: Value::Call(3, vec![Value::Int(1)]),
+                threads: Value::Int(4),
+                body: Value::Set(0, Box::new(Value::Var(1))),
+                stitch_id: 7,
+            })),
+        ];
+        for v in &samples {
+            let json = value_to_json(v);
+            let back = value_from_json(&json)
+                .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+            assert_eq!(&back, v, "round trip mismatch via {json}");
+        }
+    }
+
+    /// Pin the exact emitted JSON for FnRef and ParFor.
+    #[test]
+    fn value_golden_fnref_parfor_format() {
         assert_eq!(
-            value_from_json(&json),
-            Err(TypeDecodeError::Unsupported("FnRef".to_string()))
+            value_to_json(&Value::FnRef(2, 1, Box::new(Type::Boolean))),
+            r#"{"k":"FnRef","d":2,"var":1,"t":{"k":"Boolean"}}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::ParFor(Box::new(ParForBody {
+                input: Value::Var(0),
+                x_var: 1,
+                r_var: 2,
+                worker: Value::Null,
+                threads: Value::Int(4),
+                body: Value::Int(1),
+                stitch_id: 0,
+            }))),
+            r#"{"k":"ParFor","body":{"input":{"k":"Var","n":0},"x_var":1,"r_var":2,"worker":{"k":"Null"},"threads":{"k":"Int","n":4},"body":{"k":"Int","n":1},"stitch_id":0}}"#
         );
     }
 
-    /// A genuinely unknown tag is still `UnknownTag`, distinct from `Unsupported`.
+    /// One representative of every payload shape decodes — the decoder is
+    /// exhaustive against the (compiler-enforced exhaustive) encoder.
+    #[test]
+    fn value_decoder_covers_every_shape() {
+        let block = Block {
+            name: "b",
+            operators: vec![Value::Null],
+            result: Type::Null,
+            scope: 0,
+            var_size: 0,
+        };
+        let all = [
+            Value::Null,
+            Value::Call(0, vec![]),
+            Value::Block(Box::new(block.clone())),
+            Value::Loop(Box::new(block)),
+            Value::Span(Box::new((
+                Position { file: "f".into(), line: 1, pos: 1 },
+                Value::Null,
+            ))),
+            Value::FnRef(0, 0, Box::new(Type::Null)),
+            Value::ParFor(Box::new(ParForBody {
+                input: Value::Null,
+                x_var: 0,
+                r_var: 0,
+                worker: Value::Null,
+                threads: Value::Null,
+                body: Value::Null,
+                stitch_id: 0,
+            })),
+        ];
+        for v in &all {
+            let json = value_to_json(v);
+            let back = value_from_json(&json)
+                .unwrap_or_else(|e| panic!("decode error for {json}: {e:?}"));
+            assert_eq!(&back, v, "round trip mismatch via {json}");
+        }
+    }
+
+    /// A genuinely unknown tag is a `UnknownTag` error.
     #[test]
     fn value_unknown_tag_is_an_error() {
         assert_eq!(
