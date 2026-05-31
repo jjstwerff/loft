@@ -520,6 +520,21 @@ impl Scopes {
                 *idx,
                 Box::new(self.scan(inner, function, data)),
             ),
+            // @PLAN53 cluster 2: remap the var-numbers these IR nodes carry through
+            // `var_mapping` — exactly like `Var`/`TupleGet`/`TuplePut` above.  They
+            // were missing, so when a sibling scope reuses a name (`copy_variable`),
+            // a fn-ref loop break-test (`FnRefDnr`) or a copied closure capture
+            // (`FnRef.clos_var`) kept pointing at the ORIGINAL var.  V1 masked it (the
+            // original + copy share a slot); V2 gives them distinct slots, so the
+            // stale read hit the wrong slot (repro_p352: 2nd reused-name fn-ref loop
+            // read loop-1's exhausted sentinel → 0).  `clos_var == u16::MAX`
+            // (non-capturing) is left untouched — `var_mapping` never holds u16::MAX.
+            Value::FnRefDnr(var) => Value::FnRefDnr(*self.var_mapping.get(var).unwrap_or(var)),
+            Value::FnRef(d_nr, clos_var, fn_type) => Value::FnRef(
+                *d_nr,
+                *self.var_mapping.get(clos_var).unwrap_or(clos_var),
+                fn_type.clone(),
+            ),
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
             Value::Span(b) => {
                 let scanned = self.scan(&b.1, function, data);
