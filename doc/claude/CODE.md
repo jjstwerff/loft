@@ -68,6 +68,7 @@ Before adding a dependency:
 3. **Feature-gate optional dependencies.** Any dependency that adds compile weight or is unused for core interpreter work must be behind a Cargo feature (following the `png`, `mmap`, `random`, and planned `http` pattern).
 4. **Prefer crates with minimal transitive dependencies.** `ureq` and `png` have no required transitive deps. Avoid crates that pull in async runtimes, proc-macro infrastructure, or heavy frameworks.
 5. **Never add a dependency to replace < 100 lines of existing-style code.** Adding `serde_json` for seven JSON field-extraction functions that fit in ~80 lines is the wrong trade-off.
+6. **`serde` is forbidden, permanently.** Never add `serde` / `serde_derive` / `serde_json` / `bincode`, and never `#[derive(Serialize, Deserialize)]`. Serialise by hand. See [§ serde is forbidden](#serde-is-forbidden--never-add-it) below.
 
 ### Approved dependencies
 
@@ -84,11 +85,50 @@ Before adding a dependency:
 
 | Crate | Reason |
 |---|---|
-| `serde` / `serde_json` | JSON parsing covered by `src/database/` parser; see H2 in PLANNING.md |
-| `serde` / `serde-wasm-bindgen` | WASM bridge — pass plain JSON text strings; no derive macros needed |
+| **`serde` / `serde_derive` / `serde_json` / `bincode`** | **Forbidden, permanently — see the rule below. Do not add `serde` as a dependency or `#[derive(Serialize, Deserialize)]` anywhere in native code.** |
 | `tokio` / async runtimes | Loft is synchronous; no async use case exists |
 | `clap` | CLI arg parsing; 10 lines of `std::env::args()` suffices |
 | `log` / `tracing` | Loft has its own `logger.rs` tailored to the runtime model |
+
+### serde is forbidden — never add it
+
+**`serde` (and `serde_derive` / `serde_json` / `bincode`) must never be
+a dependency of the interpreter, and `#[derive(Serialize,
+Deserialize)]` must never appear on any project type.** This is a hard
+rule, not a per-case judgement.
+
+Why, concretely:
+
+- **It does not fit the IR.** The compiler's core types
+  (`Value`, `Type`, `Block`, `Definition`, `Data`) carry `&'static str`
+  fields (`Block.name`, `Definition.synthetic`) and a non-derivable
+  `OnceLock` index. serde-derive injects a `'de: 'static` bound from
+  the `&'static str` fields that propagates up the entire recursive
+  graph and fails to compile; the `OnceLock` needs `#[serde(skip)]` +
+  manual rebuild. The derive fights the data model at every turn.
+- **It is unnecessary.** Everything loft needs to serialise (the
+  startup `Data`/bytecode cache, store images, the JSON surface) is
+  better done by **hand-rolled, length-prefixed little-endian
+  encoding** — the approach already used by the store engine
+  (`src/store.rs`), the database JSON parser/formatter
+  (`src/database/`), and the retired bytecode cache. Hand encoding is
+  smaller, has zero proc-macro build cost, lets us skip rebuildable
+  fields (HashMap indices) instead of annotating them, and keeps the
+  on-disk format explicit and versioned.
+- **It is dead weight.** serde pulls in proc-macro infrastructure that
+  bloats compile time for a capability the project already covers.
+
+The lone historical exception was `serde-wasm-bindgen`, required by the
+`wasm-bindgen` ecosystem at the WASM boundary — and even there loft
+passes **plain JSON text strings**, using no derive macros. If a future
+WASM need forces `serde` transitively, it stays strictly behind the
+`wasm` feature and never reaches native code or the IR types. Native
+builds must have zero serde in the tree.
+
+When you need to serialise a Rust type: write `to_bytes` / `from_bytes`
+by hand (see `src/store.rs` and the `src/cache.rs` startup-cache
+encoder for the pattern), keyed/versioned so a format change is
+detected rather than misread.
 
 ---
 
