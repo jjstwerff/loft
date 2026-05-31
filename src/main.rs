@@ -1421,7 +1421,6 @@ fn escape_json_string(s: &str) -> String {
 /// library.
 ///
 /// Refuses if `<name>/` already exists.
-#[cfg(feature = "registry")]
 fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     use std::io::Write as _;
 
