@@ -35,7 +35,10 @@
 //! `structure()` every IR type; (2) fields + variants that reference those
 //! numbers.  S1 lands shells first.
 
-use crate::data::{Attribute, Block, IntegerSpec, ParForBody, Type, Value};
+use crate::data::{
+    Attribute, Block, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
+    LinkedFieldKind, ParForBody, Purity, Type, Value,
+};
 use crate::database::Stores;
 use crate::json::Parsed;
 use crate::keys::Key;
@@ -939,6 +942,301 @@ fn attribute_from_parsed(p: &Parsed) -> Result<Attribute, TypeDecodeError> {
     })
 }
 
+// ─── Definition JSON (Step 2 container slice C2) ──────────────────────────────
+//
+// `Definition` is a top-level named entity (a type / struct / enum / function /
+// constant).  This slice serialises the **portable IR** of a definition and
+// recomputes everything codegen-derived on load (per the recompute-slots
+// decision in STARTUP_CACHE_PLAN.md):
+//
+//   stored  : name, source, def_type, parent, position, attributes, code,
+//             returned[_not_null], rust, native, op_code, known_type,
+//             pub_visible, closure_record, mutated_captures, scalars_to_box,
+//             bounds, forced_size, purity, field_groups, synthetic
+//   derived : attr_names (rebuilt from attributes on load)
+//   omitted : code_position / code_length / const_ref (codegen output → 0/None;
+//             byte_code_from recomputes them)
+//
+// **Scope (C2): type-level definitions.**  `Definition.variables` (the
+// per-function `Function` debug-symbol table) is reconstructed *empty* via
+// `Function::new(name, file)` — correct for type / struct / enum / constant
+// defs, whose variable table is empty.  Function *bodies* carry a populated
+// variable table (debug symbols, kept per the user decision); serialising that
+// table is the **next slice** (C-functions).  A round-trip of a function def
+// through C2 would drop its variable table — tests scope to type-level defs.
+//
+// `Definition` derives only `Clone` (no `PartialEq`), so round-trip tests use
+// re-encode equality (encode → decode → encode is stable), as for `Attribute`.
+
+/// Serialise a [`Definition`] to JSON (portable IR; see module note on scope).
+#[must_use]
+pub fn definition_to_json(d: &Definition) -> String {
+    let mut out = String::new();
+    write_definition(&mut out, d);
+    out
+}
+
+fn def_type_str(t: &DefType) -> &'static str {
+    match t {
+        DefType::Unknown => "Unknown",
+        DefType::Function => "Function",
+        DefType::Dynamic => "Dynamic",
+        DefType::Enum => "Enum",
+        DefType::EnumValue => "EnumValue",
+        DefType::Struct => "Struct",
+        DefType::Vector => "Vector",
+        DefType::Type => "Type",
+        DefType::Constant => "Constant",
+        DefType::Generic => "Generic",
+        DefType::Interface => "Interface",
+    }
+}
+
+fn impure_category_str(c: ImpureCategory) -> &'static str {
+    match c {
+        ImpureCategory::HostIo => "HostIo",
+        ImpureCategory::Prng => "Prng",
+        ImpureCategory::Io => "Io",
+        ImpureCategory::ParentWrite => "ParentWrite",
+        ImpureCategory::ParCall => "ParCall",
+    }
+}
+
+fn write_u32_list(out: &mut String, list: &[u32]) {
+    out.push('[');
+    for (i, n) in list.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "{n}");
+    }
+    out.push(']');
+}
+
+fn write_purity(out: &mut String, p: Purity) {
+    match p {
+        Purity::Unknown => out.push_str("{\"k\":\"Unknown\"}"),
+        Purity::Pure => out.push_str("{\"k\":\"Pure\"}"),
+        Purity::Impure(c) => {
+            let _ = write!(out, "{{\"k\":\"Impure\",\"cat\":\"{}\"}}", impure_category_str(c));
+        }
+    }
+}
+
+fn write_linked_field_group(out: &mut String, g: &LinkedFieldGroup) {
+    let kind = match g.kind {
+        LinkedFieldKind::Tuple => "Tuple",
+        LinkedFieldKind::Index => "Index",
+    };
+    let _ = write!(out, "{{\"kind\":\"{kind}\",\"instance\":{}", g.instance);
+    out.push_str(",\"field_indices\":");
+    write_u16_list(out, &g.field_indices);
+    let _ = write!(out, ",\"alignment\":{},\"size\":{}}}", g.alignment, g.size);
+}
+
+fn write_attribute_list(out: &mut String, list: &[Attribute]) {
+    out.push('[');
+    for (i, a) in list.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_attribute(out, a);
+    }
+    out.push(']');
+}
+
+fn write_field_group_list(out: &mut String, list: &[LinkedFieldGroup]) {
+    out.push('[');
+    for (i, g) in list.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_linked_field_group(out, g);
+    }
+    out.push(']');
+}
+
+fn write_definition(out: &mut String, d: &Definition) {
+    out.push_str("{\"name\":");
+    write_str(out, &d.name);
+    let _ = write!(out, ",\"source\":{},\"def_type\":\"{}\"", d.source, def_type_str(&d.def_type));
+    let _ = write!(out, ",\"parent\":{}", d.parent);
+    out.push_str(",\"position\":");
+    write_position(out, &d.position);
+    out.push_str(",\"attributes\":");
+    write_attribute_list(out, &d.attributes);
+    out.push_str(",\"code\":");
+    write_value(out, &d.code);
+    out.push_str(",\"returned\":");
+    write_type(out, &d.returned);
+    let _ = write!(out, ",\"returned_not_null\":{}", d.returned_not_null);
+    out.push_str(",\"rust\":");
+    write_str(out, &d.rust);
+    out.push_str(",\"native\":");
+    write_str(out, &d.native);
+    let _ = write!(
+        out,
+        ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"closure_record\":{}",
+        d.op_code, d.known_type, d.pub_visible, d.closure_record
+    );
+    out.push_str(",\"mutated_captures\":");
+    write_str_list(out, &d.mutated_captures);
+    out.push_str(",\"scalars_to_box\":");
+    write_str_list(out, &d.scalars_to_box);
+    out.push_str(",\"bounds\":");
+    write_u32_list(out, &d.bounds);
+    // forced_size: Option<u8>, n ∈ {1,2,4,8}; 0 is never valid → encodes None.
+    let _ = write!(out, ",\"forced_size\":{}", d.forced_size.unwrap_or(0));
+    out.push_str(",\"purity\":");
+    write_purity(out, d.purity);
+    out.push_str(",\"field_groups\":");
+    write_field_group_list(out, &d.field_groups);
+    // synthetic: Option<&'static str>; reasons are non-empty idents → "" = None.
+    out.push_str(",\"synthetic\":");
+    write_str(out, d.synthetic.unwrap_or(""));
+    out.push('}');
+}
+
+/// Parse a JSON string into a [`Definition`] (portable IR; see module note).
+///
+/// # Errors
+/// Malformed JSON, wrong field shape, an unknown `def_type` / `purity` /
+/// `field_group` tag, or an unknown variant tag in a nested `Type` / `Value`.
+pub fn definition_from_json(src: &str) -> Result<Definition, TypeDecodeError> {
+    let parsed = crate::json::parse(src)
+        .map_err(|e| TypeDecodeError::Shape(format!("json parse: {e:?}")))?;
+    definition_from_parsed(&parsed)
+}
+
+fn def_type_from_str(s: &str) -> Result<DefType, TypeDecodeError> {
+    Ok(match s {
+        "Unknown" => DefType::Unknown,
+        "Function" => DefType::Function,
+        "Dynamic" => DefType::Dynamic,
+        "Enum" => DefType::Enum,
+        "EnumValue" => DefType::EnumValue,
+        "Struct" => DefType::Struct,
+        "Vector" => DefType::Vector,
+        "Type" => DefType::Type,
+        "Constant" => DefType::Constant,
+        "Generic" => DefType::Generic,
+        "Interface" => DefType::Interface,
+        other => return Err(TypeDecodeError::UnknownTag(format!("DefType::{other}"))),
+    })
+}
+
+fn impure_category_from_str(s: &str) -> Result<ImpureCategory, TypeDecodeError> {
+    Ok(match s {
+        "HostIo" => ImpureCategory::HostIo,
+        "Prng" => ImpureCategory::Prng,
+        "Io" => ImpureCategory::Io,
+        "ParentWrite" => ImpureCategory::ParentWrite,
+        "ParCall" => ImpureCategory::ParCall,
+        other => return Err(TypeDecodeError::UnknownTag(format!("ImpureCategory::{other}"))),
+    })
+}
+
+fn u32_list(p: &Parsed) -> Result<Vec<u32>, TypeDecodeError> {
+    if let Parsed::Array(items) = p {
+        items.iter().map(as_u32).collect()
+    } else {
+        Err(TypeDecodeError::Shape("expected array".into()))
+    }
+}
+
+fn purity_from_parsed(p: &Parsed) -> Result<Purity, TypeDecodeError> {
+    let tag = as_str(field(p, "k")?)?;
+    Ok(match tag.as_str() {
+        "Unknown" => Purity::Unknown,
+        "Pure" => Purity::Pure,
+        "Impure" => Purity::Impure(impure_category_from_str(&as_str(field(p, "cat")?)?)?),
+        other => return Err(TypeDecodeError::UnknownTag(format!("Purity::{other}"))),
+    })
+}
+
+fn linked_field_group_from_parsed(p: &Parsed) -> Result<LinkedFieldGroup, TypeDecodeError> {
+    let kind = match as_str(field(p, "kind")?)?.as_str() {
+        "Tuple" => LinkedFieldKind::Tuple,
+        "Index" => LinkedFieldKind::Index,
+        other => return Err(TypeDecodeError::UnknownTag(format!("LinkedFieldKind::{other}"))),
+    };
+    Ok(LinkedFieldGroup {
+        kind,
+        instance: as_u16(field(p, "instance")?)?,
+        field_indices: dep_list(field(p, "field_indices")?)?,
+        alignment: as_u32(field(p, "alignment")?)? as u8,
+        size: as_u16(field(p, "size")?)?,
+    })
+}
+
+fn attribute_list(p: &Parsed) -> Result<Vec<Attribute>, TypeDecodeError> {
+    if let Parsed::Array(items) = p {
+        items.iter().map(attribute_from_parsed).collect()
+    } else {
+        Err(TypeDecodeError::Shape("expected array".into()))
+    }
+}
+
+fn field_group_list(p: &Parsed) -> Result<Vec<LinkedFieldGroup>, TypeDecodeError> {
+    if let Parsed::Array(items) = p {
+        items.iter().map(linked_field_group_from_parsed).collect()
+    } else {
+        Err(TypeDecodeError::Shape("expected array".into()))
+    }
+}
+
+fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
+    let name = as_str(field(p, "name")?)?;
+    let position = position_from_parsed(field(p, "position")?)?;
+    let attributes = attribute_list(field(p, "attributes")?)?;
+    // attr_names is a derived index (name → attribute slot); rebuild from the
+    // restored attribute list rather than storing it.
+    let attr_names = attributes
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.name.clone(), i))
+        .collect();
+    let forced = as_u32(field(p, "forced_size")?)? as u8;
+    let synthetic_s = as_str(field(p, "synthetic")?)?;
+    Ok(Definition {
+        // variables (Function): reconstructed empty — correct for type-level
+        // defs; function-body variable tables are the next slice (C-functions).
+        variables: crate::variables::Function::new(&name, &position.file),
+        attr_names,
+        // codegen-derived: recomputed by byte_code_from on load.
+        code_position: 0,
+        code_length: 0,
+        const_ref: None,
+        source: as_u16(field(p, "source")?)?,
+        def_type: def_type_from_str(&as_str(field(p, "def_type")?)?)?,
+        parent: as_u32(field(p, "parent")?)?,
+        attributes,
+        code: value_from_parsed(field(p, "code")?)?,
+        returned: type_from_parsed(field(p, "returned")?)?,
+        returned_not_null: as_bool(field(p, "returned_not_null")?)?,
+        rust: as_str(field(p, "rust")?)?,
+        native: as_str(field(p, "native")?)?,
+        op_code: as_u16(field(p, "op_code")?)?,
+        known_type: as_u16(field(p, "known_type")?)?,
+        pub_visible: as_bool(field(p, "pub_visible")?)?,
+        closure_record: as_u32(field(p, "closure_record")?)?,
+        mutated_captures: str_list(field(p, "mutated_captures")?)?,
+        scalars_to_box: str_list(field(p, "scalars_to_box")?)?,
+        bounds: u32_list(field(p, "bounds")?)?,
+        forced_size: if forced == 0 { None } else { Some(forced) },
+        purity: purity_from_parsed(field(p, "purity")?)?,
+        field_groups: field_group_list(field(p, "field_groups")?)?,
+        synthetic: if synthetic_s.is_empty() {
+            None
+        } else {
+            Some(Box::leak(synthetic_s.into_boxed_str()))
+        },
+        // moved last so the `&name` / `&position.file` borrows above are done.
+        name,
+        position,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1563,5 +1861,166 @@ mod tests {
             crate::json::parse(&json).is_ok(),
             "attribute emitter produced invalid JSON: {json}"
         );
+    }
+
+    // ─── Definition JSON (container slice C2) ───────────────────────────
+
+    /// A type-level `Definition` (a struct) with attributes + a field group,
+    /// matching what `Data::add` / the parser produce for a type def.
+    fn sample_struct_def() -> Definition {
+        Definition {
+            name: "Point".to_string(),
+            source: 1,
+            def_type: DefType::Struct,
+            parent: u32::MAX,
+            position: Position { file: "geo.loft".to_string(), line: 4, pos: 0 },
+            attributes: vec![
+                Attribute {
+                    name: "x".to_string(),
+                    typedef: Type::Integer(IntegerSpec::u8()),
+                    mutable: true,
+                    constant: false,
+                    init: false,
+                    nullable: true,
+                    primary: false,
+                    hidden: false,
+                    value: Value::Null,
+                    check: Value::Null,
+                    check_message: Value::Null,
+                    alias_d_nr: u32::MAX,
+                    assigned_lambda_d_nr: u32::MAX,
+                },
+                Attribute {
+                    name: "y".to_string(),
+                    typedef: Type::Integer(IntegerSpec::u8()),
+                    mutable: true,
+                    constant: false,
+                    init: false,
+                    nullable: true,
+                    primary: false,
+                    hidden: false,
+                    value: Value::Int(0),
+                    check: Value::Null,
+                    check_message: Value::Null,
+                    alias_d_nr: u32::MAX,
+                    assigned_lambda_d_nr: u32::MAX,
+                },
+            ],
+            attr_names: std::collections::HashMap::new(),
+            code: Value::Null,
+            returned: Type::Reference(7, vec![]),
+            returned_not_null: false,
+            rust: String::new(),
+            native: String::new(),
+            op_code: u16::MAX,
+            code_position: 0,
+            code_length: 0,
+            known_type: 3,
+            variables: crate::variables::Function::new("Point", "geo.loft"),
+            pub_visible: true,
+            closure_record: u32::MAX,
+            mutated_captures: Vec::new(),
+            scalars_to_box: Vec::new(),
+            bounds: vec![5, 9],
+            const_ref: None,
+            forced_size: Some(4),
+            purity: Purity::Impure(ImpureCategory::HostIo),
+            field_groups: vec![LinkedFieldGroup {
+                kind: LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: vec![0, 1],
+                alignment: 8,
+                size: 16,
+            }],
+            synthetic: Some("enum_dispatcher"),
+        }
+    }
+
+    /// `Definition` derives only `Clone`, so losslessness is proven by
+    /// re-encode equality — and we additionally assert the recomputed /
+    /// derived fields on the decoded value.
+    #[test]
+    fn definition_round_trip_via_reencode() {
+        let d = sample_struct_def();
+        let json = definition_to_json(&d);
+        let back = definition_from_json(&json)
+            .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+        assert_eq!(definition_to_json(&back), json, "re-encode drift");
+
+        // attr_names is rebuilt from attributes (not stored).
+        assert_eq!(back.attr_names.get("x"), Some(&0));
+        assert_eq!(back.attr_names.get("y"), Some(&1));
+        // codegen-derived fields decode to their recompute-me sentinels.
+        assert_eq!(back.code_position, 0);
+        assert_eq!(back.code_length, 0);
+        assert!(back.const_ref.is_none());
+        // the &'static synthetic reason survives via Box::leak.
+        assert_eq!(back.synthetic, Some("enum_dispatcher"));
+        // variables reconstructed empty (type-level def).
+        assert_eq!(back.variables.name, "Point");
+    }
+
+    /// The all-defaults type def (as `Data::add` builds it) round-trips,
+    /// including `synthetic: None` (emitted as "") and `forced_size: None`.
+    #[test]
+    fn definition_default_shape_round_trips() {
+        let d = Definition {
+            name: "T".to_string(),
+            source: 0,
+            def_type: DefType::Type,
+            parent: u32::MAX,
+            position: Position { file: String::new(), line: 0, pos: 0 },
+            attributes: Vec::new(),
+            attr_names: std::collections::HashMap::new(),
+            code: Value::Null,
+            returned: Type::Unknown(0),
+            returned_not_null: false,
+            rust: String::new(),
+            native: String::new(),
+            op_code: u16::MAX,
+            code_position: 0,
+            code_length: 0,
+            known_type: u16::MAX,
+            variables: crate::variables::Function::new("T", ""),
+            pub_visible: false,
+            closure_record: u32::MAX,
+            mutated_captures: Vec::new(),
+            scalars_to_box: Vec::new(),
+            bounds: Vec::new(),
+            const_ref: None,
+            forced_size: None,
+            purity: Purity::Unknown,
+            field_groups: Vec::new(),
+            synthetic: None,
+        };
+        let json = definition_to_json(&d);
+        let back = definition_from_json(&json).expect("decode");
+        assert_eq!(definition_to_json(&back), json);
+        assert!(back.synthetic.is_none());
+        assert!(back.forced_size.is_none());
+    }
+
+    /// Every emitted definition is valid JSON under loft's own parser.
+    #[test]
+    fn definition_emit_is_valid_json() {
+        let json = definition_to_json(&sample_struct_def());
+        assert!(
+            crate::json::parse(&json).is_ok(),
+            "definition emitter produced invalid JSON: {json}"
+        );
+    }
+
+    /// An unknown def_type tag is a decode error (not a silent misparse).
+    /// `Definition` has no `Debug`/`PartialEq`, so match the error directly
+    /// rather than `assert_eq!` on the whole `Result`.
+    #[test]
+    fn definition_unknown_def_type_errors() {
+        let mut json = definition_to_json(&sample_struct_def());
+        json = json.replace("\"def_type\":\"Struct\"", "\"def_type\":\"Bogus\"");
+        match definition_from_json(&json) {
+            Err(TypeDecodeError::UnknownTag(t)) => assert_eq!(t, "DefType::Bogus"),
+            Err(e) => panic!("expected UnknownTag(DefType::Bogus), got {e:?}"),
+            Ok(_) => panic!("expected an error, got Ok"),
+        }
     }
 }
