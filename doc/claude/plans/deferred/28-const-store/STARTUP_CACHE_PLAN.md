@@ -479,6 +479,12 @@ above.  The name-based per-library relocation is a *later* addition on
 top, only when per-library build-time deliverables are wired.  S1–S4
 target the whole-stdlib image; per-library relocation is a follow-on.
 
+**Sequencing note:** the whole-stdlib snapshot (absolute, no relocation)
+is the first deliverable and the simpler one — it is the runnable image
+above.  The name-based per-library relocation is a *later* addition on
+top, only when per-library build-time deliverables are wired.  S1–S4
+target the whole-stdlib image; per-library relocation is a follow-on.
+
 It is **superseded for the bundle/stdlib path by**
 [plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
 which replaces JSON with the store struct-enum format and turns those
