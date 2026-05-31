@@ -625,10 +625,13 @@ pub(crate) fn add_native_extern_flags(
                     .join(&rlib_name)
             }
         } else {
-            // Native: check native/target/release/
-            std::path::PathBuf::from(pkg_dir)
-                .join("native")
-                .join("target")
+            // @PLAN12 Phase 6b — native target via the shared helper:
+            // chunk-resident installs (~/.loft/registry/<pkg>-<ver>/)
+            // get the redirected target at ~/.loft/build-cache/<pkg>-<ver>/;
+            // monorepo lib/<pkg>/native/ keeps in-tree target/.  Must
+            // match what `extensions::auto_build_native` writes so the
+            // rlib is found at link time.
+            crate::extensions::native_target_root(std::path::Path::new(pkg_dir))
                 .join("release")
                 .join(&rlib_name)
         };

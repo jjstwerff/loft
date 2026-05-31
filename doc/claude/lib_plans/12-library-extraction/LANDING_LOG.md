@@ -147,6 +147,83 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6b SHIPPED — net Stage B (consumer migration sweep)
+
+Plan-12's primary mission goal for net: monorepo `lib/web/` +
+`lib/server/` + `lib/game_protocol/` REMOVED.  Consumers
+migrated; tests green.
+
+src/extensions.rs:
+- Refactored `auto_build_native` to delegate target-dir choice
+  to a new shared `native_target_root(pkg_dir)` helper.  Chunk-
+  resident installs (`~/.loft/registry/<pkg>-<ver>/`) get
+  `~/.loft/build-cache/<pkg>-<ver>/` (writable, decoupled from
+  install dir).  Monorepo `lib/<pkg>/native/` keeps in-tree
+  `target/`.
+
+src/native_utils.rs::add_native_extern_flags:
+- Uses the same `native_target_root` helper to find the rlib
+  at link time, so registry-installed packages' rlibs are
+  found in the redirected build-cache instead of the in-tree
+  target/ that no longer exists.
+
+Script relocation (git mv preserves history):
+- `lib/game_protocol/examples/*.loft` → `tests/integration/multiplayer/`
+- `lib/server/tests/server.loft` → `tests/integration/p244_smoke.loft`
+- `tests/integration/loft.toml` + `loft.lock` pin web/server/game_protocol
+  via registry; the scripts resolve via Phase 6.6's walk-up
+  loft.toml detection.
+
+Consumer loft.tomls (new):
+- `tools/audience-demo/loft.toml` — web/server registry + path-
+  deps to monorepo audience_crystal/gridmesh/graphics.
+- `tools/audience-demo-50/loft.toml` — web/server registry only.
+- `tools/viewer/loft.toml` — server registry + path-dep to
+  monorepo markdown.
+- Generated lockfiles via `loft install` from each dir.
+
+Rust harness path updates:
+- `tests/multiplayer_v{2,3,5}.rs` — `lib/game_protocol/examples`
+  → `tests/integration/multiplayer`.
+- `tests/codegen_emitter.rs` p244 — `lib/server/tests/server.loft`
+  → `tests/integration/p244_smoke.loft`.
+
+tests/extraction_hygiene.rs:
+- Added web's 19 symbols (n_http_do, n_ws_*, n_pack_*, etc.) to
+  `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL` with the
+  "loft-libs-net/web/native" owner tag.  Required because the
+  dynamic `forbidden_library_symbols()` scan walks `lib/*` only;
+  after Stage B, web's symbols don't appear in the dynamic scan
+  but the hygiene gate still needs to detect their re-introduction
+  in `src/**`.
+
+tests/multiplayer_v5.rs:
+- `v5_t5_world_tick_and_decay` `#[ignore]`'d.  `use world;` in
+  the script no longer resolves from the new
+  `tests/integration/multiplayer/` location (the parser's walk-up
+  finds `tests/integration/loft.toml` which doesn't list world;
+  the monorepo's `lib/world/` is no longer a sibling).  Un-ignore
+  when Phase 6w extracts `loft-libs-world`.
+
+git rm -r:
+- `lib/web/`
+- `lib/server/`
+- `lib/game_protocol/`
+
+Verification (with SDKROOT set for the local macOS ring/SDK
+quirk):
+- multiplayer_v2: 3/3 pass
+- multiplayer_v3: 2/2 pass
+- multiplayer_v5: 4/4 pass (+ 1 ignored: v5_t5)
+- codegen_emitter::p244_text_native_wrapper_compiles_under_native: pass
+- extraction_hygiene: 4/4 pass
+- wrap: 49/49 pass
+- doc_hygiene: 22/22 pass
+
+Next phase: 5b (graphics + imaging Stage A then Stage B) OR
+Phase 6w (extract loft-libs-world — will un-ignore v5_t5) OR
+the smaller author-side phases (6.7a yank, 6.16 publish).
+
 ## 2026-05-31 — Phase 6b prep — `auto_build_native` target-dir redirect
 
 The actual 6b unblocker.  `extensions::auto_build_native` was
@@ -293,8 +370,6 @@ These will get an entry here when they ship:
 
 - Phase 5b — `loft-libs-graphics` Stage B (extract graphics +
   imaging Stage A first; then remove monorepo lib dirs).
-- Phase 6b — `loft-libs-net` Stage B (remove monorepo
-  lib/{web,server,game_protocol}/).
 - Phase 6.7a — author-side yank workflow (`loft yank` CLI +
   validator cross-ref gate).
 - Phase 6.16 — `loft publish` CLI.

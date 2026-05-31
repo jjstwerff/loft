@@ -538,7 +538,7 @@ fn p244_text_native_wrapper_compiles_under_native() {
     // Direct binary invocation — see p203_reproducer_passes_under_native
     // for the nested-cargo race rationale.
     let status = std::process::Command::new(loft_binary())
-        .arg("lib/server/tests/server.loft")
+        .arg("tests/integration/p244_smoke.loft")
         .current_dir(project_root())
         .status()
         .expect("run lib/server smoke under native");

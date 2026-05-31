@@ -1849,7 +1849,44 @@ enum ArgVal {
 /// either artifact is missing, run cargo (which is itself
 /// fcntl-locked per target dir, so concurrent invocations serialize
 /// and only one actually rebuilds).
+/// @PLAN12 Phase 6b — compute the target dir for a package's
+/// native cdylib/rlib build.
+///
+/// When `pkg_dir` is under `~/.loft/registry/` (i.e., a
+/// `loft install`-extracted chunk), returns the redirected
+/// `~/.loft/build-cache/<pkg>-<ver>/` path; otherwise returns
+/// `<pkg_dir>/native/target` (the in-tree default).
+///
+/// Used by [`auto_build_native`] (to set `CARGO_TARGET_DIR` and
+/// to read the freshly-built artifact) AND by
+/// `native_utils::add_native_extern_flags` (to find the rlib at
+/// link time).  Single source of truth so the cdylib/rlib are
+/// always at the same root.
 #[must_use]
+pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
+    let registry_cache = crate::registry_index::cache_dir();
+    let registry_cache_canon = std::fs::canonicalize(&registry_cache).ok();
+    let pkg_canon = std::fs::canonicalize(pkg_dir).ok();
+    let use_redirected = match (&registry_cache_canon, &pkg_canon) {
+        (Some(rc), Some(pc)) => pc.starts_with(rc),
+        _ => false,
+    };
+    if use_redirected {
+        let stem_dir = pkg_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "native-pkg".to_string());
+        registry_cache
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("build-cache")
+            .join(stem_dir)
+    } else {
+        pkg_dir.join("native").join("target")
+    }
+}
+
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     use std::path::PathBuf;
     // P244-windows fix #2 (2026-05-12): use PathBuf::join, not
@@ -1869,60 +1906,25 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let lib_name = platform_lib_name(stem);
     let rlib_name = format!("lib{stem}.rlib");
 
-    // @PLAN12 Phase 6b prep — separate target dir for chunk-resident
-    // installs.  When `pkg_dir` lives under `~/.loft/registry/`
-    // (i.e., a `loft install`-extracted package), don't write the
-    // target/ inside the install dir — that dir can be on a
-    // read-only filesystem, owned by another user (shared cache),
-    // or sandbox-restricted.  Redirect via `CARGO_TARGET_DIR` to
-    // `~/.loft/build-cache/<pkg>-<ver>/` which sits alongside the
-    // install in user-writable space.
-    //
-    // The monorepo's `lib/<pkg>/native/` continues to use its
-    // in-tree `target/` since the workspace expects it there
-    // (existing `cargo test` paths, IDE settings, mtime keying in
-    // `add_native_extern_flags` / `native_cache_key`).
-    let registry_cache = crate::registry_index::cache_dir();
-    let registry_cache_canon = std::fs::canonicalize(&registry_cache).ok();
-    let pkg_canon = std::fs::canonicalize(&pkg).ok();
-    let use_redirected_target = match (&registry_cache_canon, &pkg_canon) {
-        (Some(rc), Some(pc)) => pc.starts_with(rc),
-        _ => false,
-    };
-    let redirected_target = if use_redirected_target {
-        // Mirror the install dir's last component (`<pkg>-<ver>`)
-        // under build-cache/ so different chunk-versions don't
-        // step on each other's targets.
-        let stem_dir = pkg
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| stem.to_string());
-        Some(
-            registry_cache
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("build-cache")
-                .join(stem_dir),
-        )
-    } else {
-        None
-    };
+    // @PLAN12 Phase 6b — target root via the shared helper (redirects
+    // chunk-resident installs to ~/.loft/build-cache/<pkg>-<ver>/;
+    // keeps in-tree target/ for the monorepo's lib/<pkg>/native/).
+    let target_root = native_target_root(&pkg);
+    let in_tree_target = pkg.join("native").join("target");
+    let use_redirected_target = target_root != in_tree_target;
 
     // Existing-cache check: look in the redirected target first
     // (where future builds land), then the legacy in-tree target/
     // (so existing builds from older loft binaries are still
     // reused).
-    for target_root in [
-        redirected_target.as_deref(),
-        Some(pkg.join("native").join("target").as_path()),
-    ]
-    .iter()
-    .flatten()
-    .copied()
-    {
+    let mut search_roots: Vec<PathBuf> = Vec::new();
+    search_roots.push(target_root.clone());
+    if use_redirected_target {
+        search_roots.push(in_tree_target.clone());
+    }
+    for root in &search_roots {
         for profile in ["release", "debug"] {
-            let dir = target_root.join(profile);
+            let dir = root.join(profile);
             let lib = dir.join(&lib_name);
             let rlib = dir.join(&rlib_name);
             if lib.exists() && rlib.exists() {
@@ -1938,15 +1940,13 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-    let built_path = if let Some(ref tdir) = redirected_target {
-        if let Some(parent) = tdir.parent() {
+    if use_redirected_target {
+        if let Some(parent) = target_root.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        cmd.env("CARGO_TARGET_DIR", tdir);
-        tdir.join("release").join(&lib_name)
-    } else {
-        pkg.join("native").join("target").join("release").join(&lib_name)
-    };
+        cmd.env("CARGO_TARGET_DIR", &target_root);
+    }
+    let built_path = target_root.join("release").join(&lib_name);
     let status = cmd.status();
     match status {
         Ok(s) if s.success() && built_path.exists() => {

@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLAN12 Phase 6b — loft.toml for the audience-demo tool tree.
+# Scripts here use `web` / `server` for protocol/transport,
+# `audience_crystal` + `gridmesh` for the rendering data model,
+# and `graphics` for the actual canvas drawing.
+#
+# `web` + `server` resolve via the loft package registry after
+# Phase 6b removed `lib/web/` + `lib/server/` from the monorepo.
+# `audience_crystal` + `gridmesh` + `graphics` stay path-resolved
+# until their chunks finish Stage B (audience_crystal is the
+# monorepo-paired demo library; gridmesh + graphics live in
+# `loft-libs-graphics` but the monorepo `lib/<pkg>/` is still
+# present pending Phase 5b).
+
+[package]
+name    = "audience_demo"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+web                = ">=0.1"
+server             = ">=0.1"
+audience_crystal   = { path = "../../lib/audience_crystal" }
+gridmesh           = { path = "../../lib/gridmesh" }
+graphics           = { path = "../../lib/graphics" }

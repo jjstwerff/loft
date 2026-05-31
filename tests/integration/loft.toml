@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLAN12 Phase 6b — integration-test manifest for monorepo
+# harnesses (`tests/multiplayer_v{2,3,5}.rs` +
+# `codegen_emitter.rs::p244`) that previously read scripts out of
+# `lib/game_protocol/examples/` and `lib/server/tests/`.  After
+# Stage B removed those library directories from the monorepo,
+# the scripts moved here and depend on the published `web` /
+# `server` / `game_protocol` packages via the loft package
+# registry.
+
+[package]
+name    = "loft_integration_tests"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+web           = ">=0.1"
+server        = ">=0.1"
+game_protocol = ">=0.1"
