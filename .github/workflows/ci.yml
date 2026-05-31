@@ -187,10 +187,17 @@ jobs:
           restore-keys: ubuntu-guard-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
+      # Exclude `wrap::library_suite`: it builds/runs the lib/* NATIVE suites
+      # (graphics/moros_*/shapes FFI), which need the GL/ALSA + graphics-cdylib
+      # build-prep this lean job deliberately omits — and the guard can't see
+      # those spawned native builds anyway.  The alignment-relevant interpreter
+      # tests it leaves are fully covered by the other wrap tests + issues/
+      # strings/frame_vars; the full lib suite runs in the main `test` job.
       - name: Guard sweep (interpreter suites, zero fires expected)
         run: >
           cargo nextest run --profile ci --features stack_align_guard
           --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not test(library_suite)'
 
   clippy:
     name: Clippy
