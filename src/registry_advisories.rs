@@ -35,8 +35,17 @@
 
 #![cfg(feature = "registry")]
 
+use std::path::PathBuf;
+
 use crate::json::{Parsed, parse as parse_json};
 use crate::registry_index;
+use crate::registry_signing::{self, VerifyResult};
+
+/// TTL for the cached advisory feed.  24 h per the design — small
+/// file (~kilobytes), 90-day retention upstream, cheap to refresh.
+/// The full `index.json` uses a separate, longer TTL (CSC of the
+/// existing PKG.REG layer).
+pub const ADVISORIES_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// Severity tier carried by each advisory.  Drives the loft-binary
 /// classifier output ([`Classification::action`]):
@@ -342,6 +351,162 @@ pub fn classify(name: &str, version: &str, feed: &AdvisoryFeed) -> Vec<Classific
     out
 }
 
+// ── Local cache + URL ─────────────────────────────────────────────
+
+/// URL for `advisories.json`.  Derived from the registry URL by
+/// replacing the trailing `index.json` with `advisories.json` —
+/// the design specifies the two live alongside each other in the
+/// registry repo.
+#[must_use]
+pub fn advisories_url() -> String {
+    let url = registry_index::registry_url();
+    if let Some(stripped) = url.strip_suffix("index.json") {
+        format!("{stripped}advisories.json")
+    } else if url.ends_with('/') {
+        format!("{url}advisories.json")
+    } else {
+        format!("{url}/advisories.json")
+    }
+}
+
+/// Paths for the cached advisory feed + signature.
+#[must_use]
+pub fn advisories_paths() -> (PathBuf, PathBuf) {
+    let dir = registry_index::cache_dir();
+    (
+        dir.join("advisories.json"),
+        dir.join("advisories.json.sig"),
+    )
+}
+
+/// Returns `true` when the cached advisory feed is older than
+/// [`ADVISORIES_TTL_SECS`] (or absent).  Mirrors
+/// `install::index_stale` shape — caller uses mtime.
+#[must_use]
+pub fn cache_stale(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return true;
+    };
+    let Ok(modified) = meta.modified() else {
+        return true;
+    };
+    let Ok(age) = modified.elapsed() else {
+        return true;
+    };
+    age.as_secs() > ADVISORIES_TTL_SECS
+}
+
+// ── Loader ────────────────────────────────────────────────────────
+
+/// Options for [`load_or_fetch`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoadOptions {
+    /// Skip signature verification (bootstrap state — no embedded
+    /// trust root).  Mirrors `InstallOptions::allow_unsigned`.
+    pub allow_unsigned: bool,
+    /// Cache-only mode.  Returns Err if the cache is absent or
+    /// stale (no network attempt).
+    pub offline: bool,
+    /// Force re-fetch even if cache is fresh.
+    pub refresh: bool,
+}
+
+/// Load the advisory feed from cache, refreshing from the registry
+/// when the cache is stale (or absent) and we're not in offline
+/// mode.
+///
+/// Returns `Ok(None)` when:
+/// - The feed isn't yet hosted in the registry (HTTP 404).  Treat
+///   as "no advisories" — feature isn't active yet on this
+///   registry.
+/// - Offline + cache absent.  Caller decides whether to warn or
+///   refuse.
+///
+/// Returns `Ok(Some(feed))` on success, `Err` on signature
+/// mismatch or parse error.
+///
+/// # Errors
+/// Signature verification failure, JSON parse failure, or
+/// I/O errors writing the cache.
+pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String> {
+    let (cache_path, sig_path) = advisories_paths();
+    let url = advisories_url();
+
+    let content_bytes: Vec<u8> = if opts.offline {
+        if !cache_path.exists() {
+            return Ok(None);
+        }
+        std::fs::read(&cache_path).map_err(|e| format!("read cached advisories: {e}"))?
+    } else if opts.refresh || cache_stale(&cache_path) {
+        // Refresh.  404 → feature not hosted yet; treat as absent.
+        match registry_index::fetch_index(&url) {
+            Ok(fetched) => {
+                if let Some(parent) = cache_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(&cache_path, &fetched.content)
+                    .map_err(|e| format!("cache advisories: {e}"))?;
+                if !fetched.signature.is_empty() {
+                    let _ = std::fs::write(&sig_path, &fetched.signature);
+                }
+                let sig_bytes = if fetched.signature.is_empty() {
+                    std::fs::read(&sig_path).unwrap_or_default()
+                } else {
+                    fetched.signature.clone()
+                };
+                verify_feed(&fetched.content, &sig_bytes, opts)?;
+                fetched.content
+            }
+            Err(_) if !cache_path.exists() => {
+                // Network failed AND no cache — soft error; treat
+                // as "no advisories available", caller decides what
+                // to log.
+                return Ok(None);
+            }
+            Err(_) => {
+                // Network failed but cache exists — fall through
+                // to using the cached copy.
+                let content = std::fs::read(&cache_path)
+                    .map_err(|e| format!("read cached advisories: {e}"))?;
+                let sig = std::fs::read(&sig_path).unwrap_or_default();
+                verify_feed(&content, &sig, opts)?;
+                content
+            }
+        }
+    } else {
+        let content = std::fs::read(&cache_path)
+            .map_err(|e| format!("read cached advisories: {e}"))?;
+        let sig = std::fs::read(&sig_path).unwrap_or_default();
+        verify_feed(&content, &sig, opts)?;
+        content
+    };
+
+    let text = std::str::from_utf8(&content_bytes)
+        .map_err(|e| format!("advisories.json is not valid UTF-8: {e}"))?;
+    Ok(Some(parse_advisories(text)?))
+}
+
+fn verify_feed(content: &[u8], sig: &[u8], opts: &LoadOptions) -> Result<(), String> {
+    let result = registry_signing::verify_index(content, sig);
+    match result {
+        VerifyResult::Valid => Ok(()),
+        VerifyResult::NoTrustRoot | VerifyResult::MalformedSignature if opts.allow_unsigned => {
+            Ok(())
+        }
+        VerifyResult::Invalid => {
+            Err("advisories.json signature INVALID — refusing to load".to_string())
+        }
+        VerifyResult::NoTrustRoot => Err(
+            "advisories.json unsigned and this loft binary has no embedded trust root; \
+             pass --allow-unsigned to proceed"
+                .to_string(),
+        ),
+        VerifyResult::MalformedSignature => {
+            Err("advisories.json signature is malformed".to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +589,38 @@ mod tests {
         assert!(Severity::SecurityCritical.rank() > Severity::SecurityHigh.rank());
         assert!(Severity::SecurityHigh.rank() > Severity::Bug.rank());
         assert!(Severity::Bug.rank() > Severity::Deprecated.rank());
+    }
+
+    #[test]
+    fn advisories_url_derives_from_index_url() {
+        // Default URL ends in `index.json` — should swap to `advisories.json`.
+        // SAFETY: tests are single-threaded for the read-then-restore env
+        // dance; production never sets these.
+        let prev = std::env::var("LOFT_REGISTRY_URL").ok();
+        // SAFETY: env mutation in tests
+        unsafe {
+            std::env::set_var(
+                "LOFT_REGISTRY_URL",
+                "https://example.com/registry/index.json",
+            );
+        }
+        assert_eq!(
+            advisories_url(),
+            "https://example.com/registry/advisories.json"
+        );
+        // SAFETY: env restore
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("LOFT_REGISTRY_URL", p);
+            } else {
+                std::env::remove_var("LOFT_REGISTRY_URL");
+            }
+        }
+    }
+
+    #[test]
+    fn cache_stale_when_path_absent() {
+        let bogus = std::path::Path::new("/tmp/loft-advisories-test-nonexistent-xyz");
+        assert!(cache_stale(bogus));
     }
 }
