@@ -27,7 +27,7 @@
 //! (`ret_var`) is never freed — its value is consumed by the caller.
 
 use crate::data::{Block, Context, Data, DefType, Type, Value, v_if, v_set};
-use crate::variables::{Function, assign_slots, compute_intervals, size};
+use crate::variables::{Function, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 struct Scopes {
@@ -192,8 +192,7 @@ pub fn check(data: &mut Data) {
         // keeps the frame base (args_base) 8-aligned.  Identity when off.
         let local_start: u16 = {
             let vars = &data.definitions[d_nr as usize].variables;
-            let aligned = crate::variables::aligned_stack_enabled();
-            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
+            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), true) as u16;
             let arg_size: u16 = vars
                 .arguments()
                 .iter()
@@ -201,39 +200,22 @@ pub fn check(data: &mut Data) {
                 .sum();
             arg_size + step(4) // return-address slot
         };
+        // @PLAN53 — the aligned V2 allocator is the ONLY allocator.  Compute the
+        // V2 layout from the (immutable) function intervals, reset stale local
+        // slots, then apply it.  `apply_v2_result` also zeroes every block's
+        // var_size: V2 is scope-blind, a single function-entry reserve (frame
+        // hwm) covers all slots, so there are no per-block reserves.
+        let result = {
+            let d = &data.definitions[d_nr as usize];
+            crate::variables::assign_slots_v2(&d.variables, local_start)
+        };
         {
             let d = &mut data.definitions[d_nr as usize];
-            assign_slots(&mut d.variables, &mut d.code, local_start);
+            d.variables.reset_local_slots();
+            crate::variables::apply_v2_result(&mut d.variables, &mut d.code, &result);
         }
-        // @PLAN53 cluster 2 — per-function V2 shadow.  When LOFT_SLOT_V2
-        // selects this function (mode[:filter]), compute the ALIGNED V2
-        // layout, optionally dump it beside V1's (report), and validate it
-        // (I1-I8 + alignment).  validate/report restore V1 afterward so
-        // codegen + execution are UNCHANGED; only `drive` keeps the V2
-        // layout (correct execution requires the S4 eval-TOS switch).
-        let fn_name = data.definitions[d_nr as usize].variables.name.clone();
-        if let Some(mode) = crate::variables::v2_mode_for(&fn_name) {
-            let result = {
-                let d = &data.definitions[d_nr as usize];
-                crate::variables::assign_slots_v2(&d.variables, local_start)
-            };
-            if mode == "report" {
-                crate::variables::dump_v1_v2_slots(
-                    &data.definitions[d_nr as usize].variables,
-                    &result,
-                    d_nr,
-                );
-            }
-            let v1_vars = data.definitions[d_nr as usize].variables.clone();
-            let v1_code = data.definitions[d_nr as usize].code.clone();
-            {
-                let d = &mut data.definitions[d_nr as usize];
-                // Reset V1's slots first so validation sees a PURE V2 layout —
-                // otherwise vars V2 skipped retain V1 slots and produce spurious
-                // cross-allocator conflicts.
-                d.variables.reset_local_slots();
-                crate::variables::apply_v2_result(&mut d.variables, &mut d.code, &result);
-            }
+        #[cfg(debug_assertions)]
+        {
             crate::variables::validate_slots(
                 &data.definitions[d_nr as usize].variables,
                 data,
@@ -241,11 +223,6 @@ pub fn check(data: &mut Data) {
                 true, // V2 is scope-blind — skip I7 (zone-frame invariant).
             );
             crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
-            if mode != "drive" {
-                let d = &mut data.definitions[d_nr as usize];
-                d.variables = v1_vars;
-                d.code = v1_code;
-            }
         }
     }
 }

@@ -29,20 +29,14 @@
 //! See `slots.rs` for the algorithm.
 
 mod intervals;
-mod slots;
 mod slots_v2;
 mod validate;
 
 pub use intervals::compute_intervals;
-pub use slots::assign_slots;
-// Phase 2b: V2 scaffolding.  Re-export the types so Phase 2c can
-// hook them into the `LOFT_SLOT_V2=validate` shadow path without
-// another mod-public-ing pass.
+// @PLAN53 — the aligned V2 allocator is the only allocator; scopes.rs drives
+// it directly via `assign_slots_v2` + `apply_v2_result`.
 #[allow(unused_imports)]
-pub use slots_v2::{
-    AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2, dump_v1_v2_slots,
-    v2_mode_for,
-};
+pub use slots_v2::{AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2};
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
 // shadow mode can invoke it from any build profile (integration
@@ -1539,15 +1533,11 @@ pub fn align(tp: &Type) -> u8 {
 /// `stack_pos` advances.
 #[must_use]
 pub fn aligned_stack_enabled() -> bool {
-    // @PLAN53 — the aligned eval stack is the production default.  Only an
-    // explicit `LOFT_ALIGN=0`/`off`/`false` opts back to the legacy V1
-    // unaligned layout (the escape hatch until the V1 paths are removed in
-    // the follow-up cleanup).  Kept as the single source of truth so the
-    // eval-TOS stepping and the V2 slot allocator never desync.
-    !matches!(
-        std::env::var("LOFT_ALIGN").as_deref(),
-        Ok("0" | "off" | "false")
-    )
+    // @PLAN53 — V1 removed: the aligned eval stack is the ONLY layout.  This
+    // unconditional `true` is a transitional shim so the existing call sites
+    // keep compiling; it (and the `aligned` parameter threaded through
+    // `aligned_stack_step`) are inlined away in the same cleanup arc.
+    true
 }
 
 /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance step.
