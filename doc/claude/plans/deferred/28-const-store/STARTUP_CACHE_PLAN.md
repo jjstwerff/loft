@@ -338,45 +338,57 @@ half before `Value` lands.  **Not the cold-start PR** — the stdlib is
 proof, with `Value` (defaults + function bodies) as the required next
 slice.
 
-#### Snapshot scope — a complete runnable image (user, 2026-05-31)
+#### Snapshot scope — the portable IR, slots recomputed (user, 2026-05-31; revised 2026-06)
 
-**Goal restated by the user: the cache must let loft *run quickly* — so
-the snapshot carries bytecode AND debug data, ready to either execute on
-the interpreter immediately or feed `--native`, with no recompute pass
-on load.**  This supersedes an earlier (now-rejected) "parse-level IR
-only, recompute everything" framing.
+**DECISION (user, 2026-06): the snapshot stores the *portable* IR and
+recomputes slot assignment + bytecode on load.**  Slot assignment is an
+**internal loft detail that can change between versions** — baking
+`Variable.stack_pos` / frame sizes into the on-disk format would couple
+the format to the slot allocator (a `@PLAN53`-active subsystem).  The
+snapshot therefore carries the version-stable IR (definitions, type
+table, `Value`/`Type` graph, parameter defaults, field/check exprs) and
+the load path re-runs `scopes::check` + `byte_code_from` to produce
+slots and bytecode fresh.
 
-**Why recompute is the wrong call here — corrected measurement.**  The
-earlier framing leaned on "codegen is only ~0.5 ms".  But the expensive
-pass is **slot assignment**, and `scopes::check` (which calls
+**Cost accepted, eyes open.**  `scopes::check` (which calls
 `assign_slots`) runs **inside `parse_dir`'s per-file loop**
-(`src/parser/mod.rs:679`) — so it is *already inside* the ~14.7 ms
-`parse_default` figure, not in the 0.5 ms codegen.  Recomputing slots on
-load therefore re-pays part of the very cost the cache exists to remove.
-Storing the runnable image avoids it.  (This is also the shape of the
-retired Phase-D cache, which stored bytecode + stores.)
+(`src/parser/mod.rs:679`), so it is part of the ~14.7 ms `parse_default`
+figure — recomputing it on load re-pays *that* part.  The win is still
+real: the cache skips lexing + the two-pass parse + type resolution +
+deferred-unknown reconciliation, leaving only slot assignment + codegen.
+The exact saved fraction is measured at Step 5; if slot recompute proves
+to be the dominant residual, storing slots can be revisited as a
+version-keyed optimisation (the cache key already includes the loft
+version, so a slot-format change auto-invalidates).
 
-**What the snapshot carries (the runnable image):**
-- the `Data` IR (definitions, type table, `Value`/`Type` graph);
-- **bytecode** — `State.bytecode` + per-`Definition` `code_position` /
-  `code_length`;
-- **debug data** — `State.line_numbers` + `source_spans` (pc → file:line
-  maps) so a cached run has full diagnostics / stack traces;
-- **slot assignment** — the `Variable.stack_pos` / frame sizes that
-  codegen baked into the bytecode (kept consistent with the stored
-  bytecode);
-- **CONST_STORE** vector/string constants (the `Store` byte buffer).
+> **Superseded framing (kept for history):** an earlier revision of this
+> section said the snapshot must carry bytecode + debug maps + baked
+> slots ("a complete runnable image, no recompute on load").  That is
+> reversed by the decision above — slots/bytecode are recomputed because
+> they are version-coupled; the portable IR is what ships.
 
-**What still rebuilds on load (genuinely free, derived):**
-- `native::init` function-pointer table — **cannot** be serialized (Rust
-  `fn` addresses); always rebuilt, ~0.02 ms (Step 0);
-- the lookup indices `def_names` / `possible` / `operators` /
-  `caller_index` — pure functions of the definitions;
+**What the snapshot carries (the portable IR):**
+- the `Data` IR — definitions, type table, the `Value`/`Type` graph,
+  parameter defaults, field initialisers / `check` / `check_message`;
+- per-`Definition` metadata that is *not* codegen output — `name`,
+  `def_type`, `parent`, `known_type`, `returned`, attributes, etc.
+
+**What rebuilds on load (recomputed, not stored):**
+- **slot assignment** (`Variable.stack_pos`, frame sizes) — internal,
+  version-coupled; `scopes::check` re-runs;
+- **bytecode** + per-`Definition` `code_position` / `code_length` —
+  `byte_code_from` re-runs (~0.5 ms measured);
+- **CONST_STORE** vector/string constants — rebuilt by
+  `build_const_vectors` on the fresh codegen pass;
+- `native::init` function-pointer table — cannot be serialized (Rust
+  `fn` addresses), ~0.02 ms;
+- lookup indices `def_names` / `possible` / `operators` / `caller_index`
+  — pure functions of the definitions (`Data::rebuild_indices`);
 - `&'static str` interning on load (`Box::leak`).
 
-**Load path:** deserialize the image → run `native::init` → **execute**
-(interpreter) or hand the materialized IR+bytecode to `--native`.  No
-`scopes::check`, no `byte_code` re-run.
+**Load path:** deserialize the IR → `native::init` → `scopes::check`
+(slots) → `byte_code_from` (bytecode + CONST_STORE) → **execute** /
+feed `--native`.  No lex, no parse, no type resolution.
 
 **Consequence for the schema / format:** larger than the parse-level-only
 shape — it includes `State`'s bytecode + debug maps + the slot fields of
