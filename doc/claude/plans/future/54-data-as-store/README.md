@@ -272,7 +272,7 @@ next; enter self-hosting through this keyhole, not head-on:
 
 | Rung | Effort | Permanent contribution to self-hosting |
 |---|---|---|
-| @PLAN28 JSON stop-gap | days | the relocatable per-library JSON deliverable (survives as the first-landing / cross-arch fallback); proves loft data *can* hold the IR |
+| @PLAN28 JSON stop-gap | days | proves loft data *can* hold the IR; ships the whole-bundle cold-start win (per-library JSON considered + deferred as too brittle) |
 | **plan-54 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
 | full loft-in-loft | multi-quarter | the destination |
 
