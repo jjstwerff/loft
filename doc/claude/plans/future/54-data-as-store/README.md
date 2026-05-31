@@ -198,9 +198,11 @@ Mirroring `--native` rather than inventing a third format buys:
 
 A full loft-in-loft rewrite — parser, type checker, scope analysis, and
 codegen written in loft, running on the interpreter, fast enough to
-compile itself — is anticipated but is a multi-quarter project.  This
-plan is **not an alternative to it; it is a strict down-payment on it**,
-chosen because it is the smallest reversible slice of the same problem.
+compile itself — is anticipated but is **a 2.0-scale undertaking, far on
+the horizon** (not a 1.0 goal).  This plan is **not an alternative to it;
+it is a strict down-payment on it**, chosen because it is the smallest
+reversible slice of the same problem and is valuable on its own merits
+(cold-start) long before the rewrite is on the table.
 
 **Shared hard problem.**  Self-hosting must represent the compiler's IR
 (`Data` / `Value` / `Type` / `Definition`) as loft's own data — there is
@@ -224,14 +226,17 @@ compile-heavy workload on the interpreter).  The startup cache + this
 plan attack precisely that bottleneck, so they clear the runway rather
 than compete for it.
 
-**Gate, not commitment.**  Full self-hosting stays anticipated, not
-scheduled, until this plan proves the IR-in-loft-data model is **both
-ergonomic to express and fast enough to read** (open questions 2 and 5).
-If `Data`-as-store is pleasant and the hot-path read delta is acceptable,
-self-hosting is materially de-risked; if it is painful, that lesson is
-learned here cheaply, on the smallest slice, before betting a quarter on
-the rewrite.  Pre-1.0 language churn is a second gate — writing a large
-compiler in loft before the syntax settles means writing it twice.
+**Gate, not commitment — and a 2.0 horizon.**  Full self-hosting is a
+**2.0-scale** target, deliberately past 1.0.  Two gates keep it there:
+(1) language maturity — writing a large compiler in loft before the
+syntax settles means writing it twice, so it waits until the 1.x line is
+stable; (2) this plan must first prove the IR-in-loft-data model is
+**both ergonomic to express and fast enough to read** (open questions 2
+and 5).  If `Data`-as-store turns out pleasant and the hot-path read
+delta acceptable, self-hosting is materially de-risked; if painful, that
+lesson is learned here cheaply, on the smallest slice, before betting a
+2.0-scale arc on the rewrite.  Nothing in this plan *commits* to the
+rewrite — it only makes the eventual decision cheaper and better-informed.
 
 ## See also
 
