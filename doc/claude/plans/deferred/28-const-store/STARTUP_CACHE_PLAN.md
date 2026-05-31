@@ -286,7 +286,7 @@ to today. Delete `src/cache.rs` + the flag to revert.
 
 ---
 
-### Step 2 — `Data` snapshot via the database generator (S1–S5 ladder)
+### Step 2 — `Data` snapshot via a native-IR JSON codec (S1–S5 ladder)
 
 **Metric for this step is safety, not lines of code:** every commit
 green, the new path additive + off by default, and the risky part proven
@@ -294,31 +294,54 @@ equivalent **in CI** before it is load-bearing.  The ladder makes that
 explicit; the detailed design (relocation map, field audit, reuse rules)
 follows under it.
 
-**PR / review boundary (user, 2026-05-31): the reviewable PR is "we can
-write the JSON for a library / the stdlib".**  That is the first
-observable artifact — a `stdlib.json` (and per-library JSON) the
-reviewer can eyeball.  Reaching it requires **S1 + S2 + the encode half
-of S4** (the chosen route reuses `Stores::show_json`, which only works
-on store records — so the schema and the native→store bridge must exist
-before any JSON can be emitted).  **S3 (decode + equivalence gate) and
-S4's load/cache wiring land in a *later* PR, after the JSON format is
-reviewed.**  First PR deliverable = **emit + inspect**, not yet load.
-The S3 bytecode-equivalence gate still gates the *second* PR (load),
-never the project.
+> **ROUTE CORRECTION (2026-06, reconciled to what shipped).**  An earlier
+> draft of this step routed encode through `Stores::show_json` — i.e.
+> bridge native `Data` *into store records*, then let the database
+> generator emit JSON.  **That route was not taken.**  What was actually
+> built is a **direct native-IR JSON codec** in [`src/ir_schema.rs`]:
+> hand-written `*_to_json` / `*_from_json` over the native `Type` /
+> `Value` / `Attribute` / `Definition` graph, decoding through loft's own
+> `json::parse` → `Parsed` tree (never serde).  This matches the plan's
+> own "encode is net-new code … the database is lending one escape
+> helper, not doing the serialization" note further down — the
+> show_json route was aspirational; the codec is the reality.  The
+> store-record schema (`register_ir_schema`, the S1 shells) still exists
+> and remains the plan-54 foundation, but it is **not** on the JSON
+> encode/decode path today.  Rung descriptions below are updated to the
+> codec route; the `show_json` / `populate_struct_from_jsonvalue` wording
+> is retained only as the plan-54 successor path.
 
-| Rung | What lands | Safety property |
-|---|---|---|
-| **S1** | IR store schema registered, **unused** (`structure()`/`enumerate()`/`value()` mirroring `output_init`) | dead code behind an uncalled fn; test asserts no `known_type` collision |
-| **S2** | native → store **bridge (write only)**, no live caller | pure new fn; unit-tested in isolation |
-| **S3** | store → native bridge **+ the equivalence gate** | parse → bridge → bridge-back → assert **byte-identical bytecode** to fresh parse, in CI.  *If S3 can't pass, the bridge is lossy and we stop — nothing broken.* |
-| **S4** | wire `show_json` + `populate_struct_from_jsonvalue` onto the bridge, behind `--cache` / `LOFT_NO_CACHE` | opt-in; equivalence already proven in S3; `default/` edit forces a miss (regression test) |
-| **S5** | measure; keep the S3 gate in CI permanently (default-on is Step 5) | any future divergent rebuild fails the build, not the user |
+**PR / review boundary (user, 2026-05-31): the reviewable PR is "we can
+write the JSON for the stdlib".**  The first observable artifact is a
+`stdlib.json` the reviewer can eyeball.  With the codec route, reaching
+it requires **S1 (schema shells, done) + the `Type`/`Value`/`Attribute`/
+`Definition` codecs (done) + C3 (the whole-`Data` codec that emits the
+document)**.  **S3 (the bytecode-equivalence gate) and S4's load/cache
+wiring land later, after the JSON format is reviewed.**  First PR
+deliverable = **emit + inspect**, not yet load.  The S3 equivalence gate
+still gates the *load* PR, never the project.
+
+| Rung | What lands | Status | Safety property |
+|---|---|---|---|
+| **S1** | IR store schema registered, **unused** (`register_ir_schema`) | ✅ `23bf1e3` | dead code behind an uncalled fn; test asserts no `known_type` collision |
+| **S2** | native → JSON **encoder** (`*_to_json`), no live caller | ✅ done | pure new fns; unit-tested + real-stdlib round-tripped.  (Codec route: native→text directly, *not* native→store.) |
+| **S3** | JSON → native **decoder** + the **equivalence gate** | ◐ decoder ✅ (`*_from_json`, real-stdlib round-trip passes); **equivalence gate ⬜ not built** | round-trip proven on the real stdlib; the *bytecode*-equivalence gate (decoded `Data` recompiles byte-identically) is still the open correctness proof |
+| **S4** | wire the codec behind `--cache` / `LOFT_NO_CACHE` | ⬜ not started | opt-in; equivalence proven in S3; `default/` edit forces a miss (regression test) |
+| **S5** | measure; keep the gate in CI permanently (default-on is Step 5) | ⬜ not started | any future divergent rebuild fails the build, not the user |
+
+**Codec build sub-slices (under S2/S3, all shipped + real-stdlib tested):**
+`Type` (24 variants) → `Value` V1–V4 (34 variants) → `Attribute` (C1,
+`primary` pub(crate) seam) → `Definition` (C2, type-level).  **Next: C3**
+— the whole-`Data` codec that ties the per-definition codecs into one
+document (the reviewable `stdlib.json`).  Function-body variable tables
+are recomputed on load, not serialized (slots are version-internal — see
+the snapshot-scope decision above).
 
 **Why this cannot break the project:** the load hands back a *native*
 `Data`, so the ~940 `match value` sites never change in this step; the
-only failure mode (a lossy bridge) is caught by S3 in CI before S4 wires
-the flag.  Each rung is a valid stop — what's landed at S1–S3 is harmless
-dead/tested code that doubles as plan-54 foundation (arcs A+B).
+only failure mode (a lossy codec) is caught by the round-trip tests now
+and the S3 bytecode-equivalence gate before S4 wires the flag.  Each rung
+is a valid stop — what's landed at S1–S3 is harmless tested code.
 
 #### First slice — type data only, Value-free (user, 2026-05-31)
 
@@ -516,18 +539,28 @@ wiring.  (The relocatable per-library JSON deliverable may outlive the
 stop-gap as the cross-arch / first-landing fallback even after mmap
 lands.)
 
-**Implementation.**
-- **Encode (net-new):** a hand-rolled walk over native `Value` / `Type`
-  / `Definition` emitting JSON, reusing `write_json_escaped` for
-  strings.  Every global `def_nr` / `known_type` reference is emitted as
-  a **name** per the relocation map above — not as a raw index.  Key the
-  file with `stdlib_cache_key` (already built, `src/cache.rs`).
-- **Decode (reuse):** JSON → `Parsed` (`src/json.rs::parse`) → rebuild
-  native `Data` by replaying `add_def` in order, then resolving each
-  emitted name to the live `def_nr` (deferring forward refs through the
-  existing `resolve_deferred_unknowns` path).  Derived indices
-  (`def_names` / `possible` / `operators` / `caller_index`) rebuild from
-  the definitions — never stored.
+**Implementation (as built — whole-bundle codec).**
+- **Encode (net-new):** a hand-rolled walk over native `Value` / `Type` /
+  `Attribute` / `Definition` emitting JSON, in
+  [`src/ir_schema.rs`].  String escaping uses the codec's own `write_str`
+  helper (a self-contained JSON escaper); it does **not** depend on the
+  database generator's `write_json_escaped`.  Global `def_nr` /
+  `known_type` references are emitted **verbatim as absolute indices** —
+  this is the whole-stdlib / whole-bundle image, whose internal indices
+  are mutually consistent by construction, so no name-relocation is
+  needed.  (The name-emitting relocation map above applies only to the
+  *deferred* per-library variant.)  Key the file with `stdlib_cache_key`
+  (already built, `src/cache.rs`).
+- **Decode:** JSON → `Parsed` (`src/json.rs::parse`) → rebuild native
+  `Data` field-by-field from the `Parsed` tree (the `*_from_json` codec).
+  Absolute indices are restored verbatim (no `resolve_deferred_unknowns`
+  pass — that is only for the deferred per-library route).  Derived
+  per-`Definition` indices (`attr_names`) rebuild from the restored
+  attributes; whole-`Data` derived indices (`def_names` / `possible` /
+  `operators` / `caller_index`) rebuild from the definitions in C3 — never
+  stored.  Codegen-derived fields (`code_position` / `code_length` /
+  `const_ref`, slot assignment) are recomputed by `byte_code_from`, not
+  stored.
 - **Field audit before encode:** `Block.name` / `Definition.synthetic`
   (`&'static str` → emit as string, intern on load via `Box::leak`);
   `OnceLock` caller-index (skip + rebuild); `Definition.const_ref:
