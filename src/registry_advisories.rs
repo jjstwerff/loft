@@ -200,8 +200,8 @@ pub fn parse_advisories(content: &str) -> Result<AdvisoryFeed, String> {
             }
         }
     }
-    let schema_version = schema_version
-        .ok_or_else(|| "advisories.json: missing `schema_version`".to_string())?;
+    let schema_version =
+        schema_version.ok_or_else(|| "advisories.json: missing `schema_version`".to_string())?;
     if schema_version != 1 {
         return Err(format!(
             "advisories.json: schema_version {schema_version} unsupported — upgrade loft"
@@ -272,7 +272,9 @@ fn parse_advisory(val: &Parsed) -> Result<Advisory, String> {
     let summary = summary.ok_or_else(|| format!("advisory `{id}`: missing `summary`"))?;
     let published = published.ok_or_else(|| format!("advisory `{id}`: missing `published`"))?;
     if packages.is_empty() {
-        return Err(format!("advisory `{id}`: must list at least one affected package"));
+        return Err(format!(
+            "advisory `{id}`: must list at least one affected package"
+        ));
     }
     Ok(Advisory {
         id,
@@ -312,8 +314,8 @@ fn parse_advisory_package(val: &Parsed) -> Result<AdvisoryPackage, String> {
         }
     }
     let name = name.ok_or_else(|| "advisory package: missing `name`".to_string())?;
-    let affected = affected
-        .ok_or_else(|| format!("advisory package `{name}`: missing `affected` range"))?;
+    let affected =
+        affected.ok_or_else(|| format!("advisory package `{name}`: missing `affected` range"))?;
     Ok(AdvisoryPackage {
         name,
         affected,
@@ -373,10 +375,7 @@ pub fn advisories_url() -> String {
 #[must_use]
 pub fn advisories_paths() -> (PathBuf, PathBuf) {
     let dir = registry_index::cache_dir();
-    (
-        dir.join("advisories.json"),
-        dir.join("advisories.json.sig"),
-    )
+    (dir.join("advisories.json"), dir.join("advisories.json.sig"))
 }
 
 /// Returns `true` when the cached advisory feed is older than
@@ -454,7 +453,7 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
                 } else {
                     fetched.signature.clone()
                 };
-                verify_feed(&fetched.content, &sig_bytes, opts)?;
+                verify_feed(&fetched.content, &sig_bytes, *opts)?;
                 fetched.content
             }
             Err(_) if !cache_path.exists() => {
@@ -469,15 +468,15 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
                 let content = std::fs::read(&cache_path)
                     .map_err(|e| format!("read cached advisories: {e}"))?;
                 let sig = std::fs::read(&sig_path).unwrap_or_default();
-                verify_feed(&content, &sig, opts)?;
+                verify_feed(&content, &sig, *opts)?;
                 content
             }
         }
     } else {
-        let content = std::fs::read(&cache_path)
-            .map_err(|e| format!("read cached advisories: {e}"))?;
+        let content =
+            std::fs::read(&cache_path).map_err(|e| format!("read cached advisories: {e}"))?;
         let sig = std::fs::read(&sig_path).unwrap_or_default();
-        verify_feed(&content, &sig, opts)?;
+        verify_feed(&content, &sig, *opts)?;
         content
     };
 
@@ -486,7 +485,7 @@ pub fn load_or_fetch(opts: &LoadOptions) -> Result<Option<AdvisoryFeed>, String>
     Ok(Some(parse_advisories(text)?))
 }
 
-fn verify_feed(content: &[u8], sig: &[u8], opts: &LoadOptions) -> Result<(), String> {
+fn verify_feed(content: &[u8], sig: &[u8], opts: LoadOptions) -> Result<(), String> {
     let result = registry_signing::verify_index(content, sig);
     match result {
         VerifyResult::Valid => Ok(()),

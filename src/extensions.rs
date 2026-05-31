@@ -1864,26 +1864,38 @@ enum ArgVal {
 /// always at the same root.
 #[must_use]
 pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
-    let registry_cache = crate::registry_index::cache_dir();
-    let registry_cache_canon = std::fs::canonicalize(&registry_cache).ok();
-    let pkg_canon = std::fs::canonicalize(pkg_dir).ok();
-    let use_redirected = match (&registry_cache_canon, &pkg_canon) {
-        (Some(rc), Some(pc)) => pc.starts_with(rc),
-        _ => false,
-    };
-    if use_redirected {
-        let stem_dir = pkg_dir
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "native-pkg".to_string());
-        registry_cache
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("build-cache")
-            .join(stem_dir)
-    } else {
-        pkg_dir.join("native").join("target")
+    // Without the registry feature there is no `~/.loft/registry/` to
+    // redirect away from — every install is in-tree, so the package
+    // dir's own `native/target/` is the target root.
+    #[cfg(not(feature = "registry"))]
+    {
+        return pkg_dir.join("native").join("target");
+    }
+    #[cfg(feature = "registry")]
+    {
+        let registry_cache = crate::registry_index::cache_dir();
+        let registry_cache_canon = std::fs::canonicalize(&registry_cache).ok();
+        let pkg_canon = std::fs::canonicalize(pkg_dir).ok();
+        let use_redirected = match (&registry_cache_canon, &pkg_canon) {
+            (Some(rc), Some(pc)) => pc.starts_with(rc),
+            _ => false,
+        };
+        if use_redirected {
+            let stem_dir = pkg_dir.file_name().map_or_else(
+                || "native-pkg".to_string(),
+                |s| s.to_string_lossy().into_owned(),
+            );
+            registry_cache
+                .parent()
+                .map_or_else(
+                    || std::path::PathBuf::from("."),
+                    std::path::Path::to_path_buf,
+                )
+                .join("build-cache")
+                .join(stem_dir)
+        } else {
+            pkg_dir.join("native").join("target")
+        }
     }
 }
 

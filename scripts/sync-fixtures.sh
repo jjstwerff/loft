@@ -49,6 +49,7 @@ loft-libs-core      arguments-v0.1.1         arguments
 loft-libs-graphics  shapes-v0.2.0            shapes
 loft-libs-graphics  gridmesh-v0.1.1          gridmesh
 loft-libs-net       game_protocol-v0.1.1     game_protocol
+loft-libs-net       web-v0.1.1               web
 EOF
 )
 

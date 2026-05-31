@@ -4372,13 +4372,12 @@ impl Parser {
             return;
         }
         let strict = std::env::var("LOFT_STRICT_SECURITY").is_ok();
-        let overrides: std::collections::HashSet<String> =
-            std::env::var("LOFT_SECURITY_OVERRIDE")
-                .unwrap_or_default()
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect();
+        let overrides: std::collections::HashSet<String> = std::env::var("LOFT_SECURITY_OVERRIDE")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
         for hit in &hits {
             use crate::registry_advisories::Severity;
             let overridden = overrides.contains(&hit.advisory_id);
@@ -4400,9 +4399,7 @@ impl Parser {
                         );
                     }
                     if strict && !overridden {
-                        eprintln!(
-                            "  refused under LOFT_STRICT_SECURITY=1"
-                        );
+                        eprintln!("  refused under LOFT_STRICT_SECURITY=1");
                         eprintln!(
                             "  override (audit-trail required): LOFT_SECURITY_OVERRIDE={}",
                             hit.advisory_id
@@ -4448,7 +4445,7 @@ impl Parser {
 
     /// No-op when registry feature is off.
     #[cfg(not(feature = "registry"))]
-    #[allow(clippy::unused_self)]
+    #[allow(clippy::unused_self, dead_code)]
     fn check_advisory(&mut self, _name: &str, _version: &str) {}
 
     /// Lazy process-global advisory feed loader.  Cached for the
@@ -4514,7 +4511,7 @@ impl Parser {
             if cur.join("loft.toml").exists() {
                 return Some(cur.to_path_buf());
             }
-            let Some(parent) = cur.parent() else { return None };
+            let parent = cur.parent()?;
             if parent == cur {
                 return None;
             }
@@ -4560,11 +4557,11 @@ impl Parser {
             Some(p) => p.to_string(),
             None => return,
         };
-        let versioned_name: String =
-            match install_dir.file_name().and_then(std::ffi::OsStr::to_str) {
-                Some(n) => n.to_string(),
-                None => return,
-            };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
             self.check_advisory(id, &version);
             *f = entry;
@@ -4613,11 +4610,11 @@ impl Parser {
             Some(p) => p.to_string(),
             None => return,
         };
-        let versioned_name: String =
-            match install_dir.file_name().and_then(std::ffi::OsStr::to_str) {
-                Some(n) => n.to_string(),
-                None => return,
-            };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
             self.check_advisory(id, &version);
             *f = entry;

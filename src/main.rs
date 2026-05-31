@@ -666,7 +666,10 @@ fn list_installed() {
     }
 
     if entries.is_empty() {
-        println!("No registry packages installed (cache: {}).", cache.display());
+        println!(
+            "No registry packages installed (cache: {}).",
+            cache.display()
+        );
         return;
     }
 
@@ -693,7 +696,7 @@ fn list_installed() {
         if let Some(idx) = &index {
             if let Some(pkg) = idx.packages.get(name) {
                 if let Some(v) = pkg.versions.get(version) {
-                    sha = v.sha256.clone();
+                    sha.clone_from(&v.sha256);
                     if pkg.yanked.iter().any(|y| y == version) {
                         status_tag.push_str(" [YANKED]");
                     }
@@ -744,7 +747,7 @@ struct UpdateOpts {
 ///
 /// Exit codes:
 /// - 0  → up-to-date (no updates needed or all updates applied
-///        successfully).
+///   successfully).
 /// - 1  → updates available (`--check`) OR install failure.
 /// - 2  → no lockfile to update.
 #[cfg(feature = "registry")]
@@ -886,7 +889,10 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
         if let Some(t) = &opts.target {
             println!("loft update {t}: already on the highest satisfying version.");
         } else {
-            println!("loft update: all {} packages up-to-date.", lock.packages.len());
+            println!(
+                "loft update: all {} packages up-to-date.",
+                lock.packages.len()
+            );
         }
         return 0;
     }
@@ -964,11 +970,7 @@ fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf>
 /// - `--packages X,Y,Z` → just those (transitive deps not yet
 ///   auto-resolved; transitive harvest is a follow-up if useful).
 #[cfg(feature = "registry")]
-fn bundle_export(
-    outdir: &str,
-    packages: Option<&[String]>,
-    all: bool,
-) -> i32 {
+fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
     use loft::install::InstallOptions;
     use loft::registry_index;
     use std::path::Path;
@@ -1215,7 +1217,10 @@ fn bundle_import(indir: &str) -> i32 {
     }
 
     if imported.is_empty() {
-        eprintln!("loft bundle import: no packages found in {}", pkg_dir.display());
+        eprintln!(
+            "loft bundle import: no packages found in {}",
+            pkg_dir.display()
+        );
         return 1;
     }
     println!(
@@ -1251,7 +1256,7 @@ fn chrono_iso8601_utc() -> String {
     let era = z.div_euclid(146_097);
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = (yoe as i64) + era * 400;
+    let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
@@ -1510,7 +1515,8 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
                  [dependencies]\nloft-ffi = \"0.1\"\n\n\
                  [build-dependencies]\nloft-ffi-build = \"0.2\"\n"
             );
-            let build_rs = "fn main() {\n    loft_ffi_build::generate_register_from_loft(\"../src\");\n}\n";
+            let build_rs =
+                "fn main() {\n    loft_ffi_build::generate_register_from_loft(\"../src\");\n}\n";
             let lib_rs = "// Native bindings for the loft library.\n\
                  // Add `#[unsafe(no_mangle)] pub extern \"C\" fn n_<name>(...)` here for each\n\
                  // function whose loft signature is annotated `#native`.\n\n\
@@ -1580,7 +1586,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
 ///
 /// Closes the publish-by-hand friction.  After the author has
 /// tagged + released their library on GitHub (`<pkg>-v<ver>` tag
-/// + `gh release create` with the `loft package` tarball as an
+/// and `gh release create` with the `loft package` tarball as an
 /// asset), `loft publish` from the package dir:
 ///
 /// 1. Re-packages locally via `package::package_create` — gets
@@ -1615,14 +1621,15 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     let (org, repo) = match git_remote_org_repo(pkg_path) {
         Some(v) => v,
         None => {
-            eprintln!("loft publish: cannot detect GitHub org/repo from `git remote get-url origin`");
+            eprintln!(
+                "loft publish: cannot detect GitHub org/repo from `git remote get-url origin`"
+            );
             eprintln!("  Run from inside a chunk-repo working tree with an `origin` remote.");
             return 1;
         }
     };
-    let release_url = format!(
-        "https://github.com/{org}/{repo}/releases/download/{tag}/{tarball_filename}"
-    );
+    let release_url =
+        format!("https://github.com/{org}/{repo}/releases/download/{tag}/{tarball_filename}");
     let homepage = format!("https://github.com/{org}/{repo}/tree/main/{}", pkg.name);
 
     if !dry_run {
@@ -1630,12 +1637,15 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
             eprintln!(
                 "loft publish: release `{tag}` not found, OR doesn't carry the asset `{tarball_filename}`."
             );
-            eprintln!(
-                "  Tag + release first:"
-            );
+            eprintln!("  Tag + release first:");
             eprintln!("    git tag {tag}");
             eprintln!("    git push origin {tag}");
-            eprintln!("    gh release create {tag} {} --title \"{} v{}\"", pkg.tarball.display(), pkg.name, pkg.version);
+            eprintln!(
+                "    gh release create {tag} {} --title \"{} v{}\"",
+                pkg.tarball.display(),
+                pkg.name,
+                pkg.version
+            );
             eprintln!("  Or pass --dry-run to skip this check.");
             return 1;
         }
@@ -1643,8 +1653,8 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
 
     // Emit the index.json entry.  Read deps from loft.toml.
     let manifest_path = pkg_path.join("loft.toml");
-    let manifest = loft::manifest::read_manifest(manifest_path.to_str().unwrap_or(""))
-        .unwrap_or_default();
+    let manifest =
+        loft::manifest::read_manifest(manifest_path.to_str().unwrap_or("")).unwrap_or_default();
     let registry_deps: Vec<(String, String)> = manifest
         .dependencies
         .iter()
@@ -1654,13 +1664,19 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     let published = chrono_iso8601_utc();
 
     println!("# Paste this entry into `loft-lang/registry/index.json` under");
-    println!("# `\"packages\": {{ \"{}\": {{ \"versions\": {{ ... }} }} }}`:", pkg.name);
+    println!(
+        "# `\"packages\": {{ \"{}\": {{ \"versions\": {{ ... }} }} }}`:",
+        pkg.name
+    );
     println!();
     println!("\"{}\": {{", pkg.version);
     println!("  \"url\": \"{release_url}\",");
     println!("  \"sha256\": \"{}\",", pkg.sha256);
     println!("  \"size\": {},", pkg.size);
-    println!("  \"loft\": \"{}\",", manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string()));
+    println!(
+        "  \"loft\": \"{}\",",
+        manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string())
+    );
     println!("  \"subpath\": \"{}\",", pkg.name);
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
@@ -2002,7 +2018,10 @@ fn pin_script(script: &str) {
     }
 
     if uses.is_empty() {
-        eprintln!("loft pin: no `use` declarations found in `{}`", script_path.display());
+        eprintln!(
+            "loft pin: no `use` declarations found in `{}`",
+            script_path.display()
+        );
         std::process::exit(1);
     }
 
@@ -3330,7 +3349,7 @@ fn main() {
                 refresh: false,
                 offline: false,
                 allow_prerelease: false,
-        lock_path: None,
+                lock_path: None,
             };
             let mut positional: Vec<String> = Vec::new();
             while i < argv.len() {
@@ -3453,7 +3472,9 @@ fn main() {
                         } else if a2 == "--packages" {
                             i += 1;
                             let Some(list) = argv.get(i) else {
-                                eprintln!("loft bundle export: --packages requires a comma-separated list");
+                                eprintln!(
+                                    "loft bundle export: --packages requires a comma-separated list"
+                                );
                                 std::process::exit(1);
                             };
                             packages = Some(
@@ -3572,7 +3593,9 @@ fn main() {
                     eprintln!(
                         "  Usage: loft yank <pkg>@<ver> --severity <tier> --advisory <id> \\"
                     );
-                    eprintln!("           --summary \"...\" --affected \">=X, <Y\" --fixed-in \"<ver>\"");
+                    eprintln!(
+                        "           --summary \"...\" --affected \">=X, <Y\" --fixed-in \"<ver>\""
+                    );
                     std::process::exit(1);
                 };
                 let code = yank_package(
@@ -3677,7 +3700,9 @@ fn main() {
             }
             #[cfg(not(feature = "registry"))]
             {
-                eprintln!("loft list-installed: this binary was built without the `registry` feature.");
+                eprintln!(
+                    "loft list-installed: this binary was built without the `registry` feature."
+                );
                 std::process::exit(1);
             }
         } else if a == "pin" {

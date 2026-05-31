@@ -673,7 +673,12 @@ const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
     // `src/native.rs` under `cfg(all(target_arch="wasm32",
     // feature="wasm"))` and route through `host_*` JS bridges in
     // this file.
-    ("web.loft", include_str!("../lib/web/src/web.loft")),
+    // Post-Stage B (2026-05-31): web sourced from the fixture clone
+    // of loft-libs-net (see scripts/sync-fixtures.sh PINNED_REFS).
+    (
+        "web.loft",
+        include_str!("../tests/fixtures/libs/web/src/web.loft"),
+    ),
 ];
 
 /// Run a loft program supplied as a JSON array of `{name, content}` file objects.
