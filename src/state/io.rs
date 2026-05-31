@@ -1108,7 +1108,15 @@ impl State {
                 // VarInt — otherwise −1 comes back as 0xFFFFFFFF = 2^32−1.
                 // put_var adds size_of::<T>(); switching i32→i64 shifts the
                 // target address up by 4 bytes, so pos moves from −8 to −4.
-                self.put_var(state_var - 4, i64::from(n));
+                // @PLAN53 cluster 2 / 2f: this is the lone non-self-compensating
+                // delta in remove() — an i64 put (step(8)=8 both modes) after the
+                // DbRef pop (step(12): 12 V1, 16 V2).  The post-pop 4-byte puts
+                // self-compensate (step(12)−step(4) cancels); this i64 one does not,
+                // so the raw −4 lands 4 bytes low under V2 and stomps the loop's
+                // vector-variable slot → next iteration reads a garbage DbRef
+                // (store_nr=65535) → panic in keys.rs/get_vector.  Thread the
+                // step(12) term: −(step(12)−8) = −4 off (identity), −8 aligned.
+                self.put_var(state_var - (self.stack_step(12) - 8) as u16, i64::from(n));
             }
             1 => {
                 // Use the outer `cur` (read as i32 before the data DbRef was popped).
@@ -1151,7 +1159,11 @@ impl State {
                     };
                     self.put_var(state_var - 8, pred);
                     // If n_after is the finish boundary, also signal end-of-iteration.
-                    let finish = *self.get_var::<u32>(state_var - 16);
+                    // @PLAN53 cluster 2 / 2f: get_var adds NO step, so this finish-read
+                    // delta must thread step(12) the other way: −(step(12)+4) = −16 off
+                    // (identity), −20 aligned.  Latent (no test exercises case-1 index
+                    // #remove under V2 yet) but the same disease as the case-0 fix above.
+                    let finish = *self.get_var::<u32>(state_var - (self.stack_step(12) + 4) as u16);
                     if n_after == finish {
                         self.put_var(state_var - 12, u32::MAX);
                     }
