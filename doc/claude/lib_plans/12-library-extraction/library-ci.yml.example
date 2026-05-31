@@ -64,7 +64,17 @@ jobs:
       - name: Build loft from source
         working-directory: loft-src
         run: |
-          cargo build --release --bin loft
+          # `--lib --bin loft` is load-bearing.  Without explicit
+          # `--lib`, cargo emits `libloft.rlib` ONLY into
+          # `target/release/deps/` (no canonical-name copy in the
+          # parent `target/release/`).  `loft --native` then fails
+          # to resolve transitive crates like `mmap_storage` /
+          # `rand_core` with `error[E0463]: can't find crate for X
+          # which loft depends on` — verified on loft-libs-core 2026-
+          # 05-29: a clean `--bin loft` build reproduces the failure,
+          # adding `--lib` makes it green.  See plan-12 README §
+          # Phase 6.5 for the diagnostic.
+          cargo build --release --lib --bin loft
           echo "$PWD/target/release" >> $GITHUB_PATH
 
       - name: Interpreter — loft test

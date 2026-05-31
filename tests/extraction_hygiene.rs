@@ -62,10 +62,10 @@ const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
     // (which walks `lib/*` only), so symbols are pinned here to keep
     // the hygiene gate detecting re-introduction in `src/**`.
     //
-    // crypto (6):
+    // crypto (5): n_hmac_sha256_raw was removed 2026-05-30 alongside
+    // loft-libs-core's `jwt_sign` cleanup (its sole consumer).
     ("n_sha256", "loft-libs-core/crypto/native"),
     ("n_hmac_sha256", "loft-libs-core/crypto/native"),
-    ("n_hmac_sha256_raw", "loft-libs-core/crypto/native"),
     ("n_base64_encode", "loft-libs-core/crypto/native"),
     ("n_base64_decode", "loft-libs-core/crypto/native"),
     ("n_base64url_encode", "loft-libs-core/crypto/native"),
@@ -449,11 +449,10 @@ fn forbidden_library_deps_absent_from_main_cargo() {
 #[test]
 fn manifest_native_functions_cover_drained_libraries() {
     let forbidden = forbidden_library_symbols();
-    // Phase 1a: crypto.  6 symbols.
+    // Phase 1a: crypto.  5 symbols (n_hmac_sha256_raw retired 2026-05-30).
     let crypto_expected: &[&str] = &[
         "n_sha256",
         "n_hmac_sha256",
-        "n_hmac_sha256_raw",
         "n_base64_encode",
         "n_base64_decode",
         "n_base64url_encode",

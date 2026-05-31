@@ -675,6 +675,112 @@ Example binary reader/writer patterns live in
 
 ---
 
+## Warning-clean idioms (LOFT_DENY_WARNINGS=1)
+
+When `LOFT_DENY_WARNINGS=1` (set by the canonical chunk-repo
+`library-ci.yml`), three idioms surface repeatedly during a clean-up
+sweep.  These are the patterns to reach for first.  Sourced from the
+`loft-libs-core::arguments` sweep, 2026-05-30.
+
+### `not null` on vector fields safe-to-default-to-`[]`
+
+The parser emits a field-level "field `X.f` is read N times and never
+defended with `??` or `if x.f != null`" warning when a struct field
+is read repeatedly without a null check.  For **vector fields whose
+constructor initialises to `[]` and whose only writers append /
+index-assign**, declaring the field `not null` is safe and silences
+the warning at the source.
+
+```loft
+struct Args {
+  // Initialised to `[]` in create(); writers only append or
+  // index-assign — never produce null.  `not null` is the right
+  // marker: it makes the constructor enforce non-null at write-time.
+  options: vector<Arg> not null,
+  results: vector<text> not null,
+  positionals: vector<text> not null,
+}
+```
+
+Don't apply `not null` blindly — only when the constructor and
+every writer demonstrably never produce null.  Otherwise the
+runtime gets a null-write panic later.
+
+### Capture-into-local before indexing (skip-pattern 5)
+
+The parser's skip-pattern 5 recognises `if idx < len(vec) { … vec[idx] … }`
+and silences the `v[i]` may-be-null warning inside the then-block.
+**The pattern only matches when `vec` is a bare local `Var`, not a
+struct-field deref.**  So `if i < len(self.results) { self.results[i] }`
+does NOT match.  Capture into a local first:
+
+```loft
+// BAD — warning fires on self.results[i]:
+if i < len(self.results) {
+  self.results[i] = "true";
+}
+
+// GOOD — capture self.results into `results`, then bound-guard:
+results = self.results;        // local Var; same backing vector
+if i < len(results) {
+  results[i] = "true";         // skip-pattern 5 silences the warning
+}
+```
+
+The local aliases the same underlying vector, so indexed writes
+propagate.  Field-level writes still go through `self.field` (the
+capture's slot doesn't track appends).
+
+### Capture-and-null-check (v[i] preserves null semantics)
+
+When the value can legitimately be null and the consumer checks
+`if !val { … }`, the warning text suggests `x = v[i]; if x != null { … }`
+as one of the safe forms.  Use this when `??` defaults would change
+semantics (e.g. `?? ""` collapses null and empty-string into the
+same path):
+
+```loft
+// BAD — warning fires on self.results[mi]:
+if !self.results[mi] {
+  self.err = "Required option missing";
+  return false
+}
+
+// GOOD — capture and null-check, preserves the "missing → null" contract:
+results = self.results;
+if mi < len(results) {
+  val = results[mi];
+  if val == null {
+    self.err = "Required option missing";
+    return false
+  }
+}
+```
+
+The capture into a local is required (for skip-pattern 5 to recognise
+the bound guard); the null check then satisfies the parser's "x = v[i];
+if x != null" hint.
+
+### Why these idioms specifically
+
+The warning text itself names three fixes for `v[i]`:
+`v[i] ?? <fallback>`, `if i < len(v) { v[i] }`, or
+`x = v[i]; if x != null { ... }`.  The three idioms above are
+when-to-reach-for-which:
+
+- **`??` fallback** — use when a non-null sentinel makes sense
+  (e.g. `?? Pixel{r:0,g:0,b:0}`).  Changes runtime behaviour:
+  on OOB you get the sentinel back instead of null.
+- **`if i < len(v)` bound** — use when the access is index-bounded
+  in practice but the parser can't see it.  Requires bare-Var vec
+  (capture into a local).  Zero-cost — dead-code guard the optimizer
+  drops when the bound is provable.
+- **capture-and-null-check** — use when the value is genuinely
+  nullable and the consumer's contract is "missing → null".
+  Preserves the null semantics.
+
+---
+
 ## Known error messages → fixes
 
 | Error message | Fix |
