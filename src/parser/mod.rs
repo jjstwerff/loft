@@ -220,6 +220,14 @@ pub struct Parser {
     /// `(p.field + 1) ?? 0` and `if p.field != null` are
     /// under-detected today (slice 2).
     pub(crate) last_field_read_site: Option<(u32, u32)>,
+    /// @PLAN12 Phase 6.7 — dedupe set for the per-invocation advisory
+    /// check.  Once a `(name, version)` tuple has been classified
+    /// against the advisory feed during this parser's lifetime, we
+    /// don't re-fire the warning.  Critical-severity matches abort
+    /// via `process::exit(3)` before the second probe could fire
+    /// anyway; this dedupe is for the warning/note tiers.
+    #[cfg(feature = "registry")]
+    advisory_checked: std::collections::HashSet<(String, String)>,
 }
 
 // Operators ordered on their precedence
@@ -390,6 +398,8 @@ impl Parser {
             field_read_counts: std::collections::HashMap::new(),
             defended_field_reads: std::collections::HashSet::new(),
             last_field_read_site: None,
+            #[cfg(feature = "registry")]
+            advisory_checked: std::collections::HashSet::new(),
         }
     }
 
@@ -4317,6 +4327,132 @@ impl Parser {
         }
     }
 
+    /// @PLAN12 Phase 6.7 — per-invocation advisory classifier.
+    ///
+    /// Called by each lockfile-based probe (sidecar / project /
+    /// registry-installed) after resolving a `(name, version)`
+    /// tuple.  Loads the cached advisory feed (lazily, once per
+    /// process), classifies the tuple, and emits severity-tiered
+    /// output:
+    ///
+    /// - `security_critical` → refuse to proceed; `process::exit(3)`.
+    ///   Override: `LOFT_SECURITY_OVERRIDE=<advisory-id>` (comma-
+    ///   separated for multiple) bypasses with an audit-trail
+    ///   stderr line.
+    /// - `security_high` → loud `warning:` block; continue.
+    /// - `security_low` / `bug` → one-line warning.
+    /// - `deprecated` → one-line note.
+    ///
+    /// Dedupes via `self.advisory_checked` so a package surfaced by
+    /// multiple `use` paths (sidecar + auto-install re-probe) only
+    /// reports once.  Feed loading is best-effort offline + cache-
+    /// only: no network fetch fires during script execution, only
+    /// during explicit `loft audit` / install commands.
+    #[cfg(feature = "registry")]
+    fn check_advisory(&mut self, name: &str, version: &str) {
+        let key = (name.to_string(), version.to_string());
+        if !self.advisory_checked.insert(key) {
+            return;
+        }
+        let Some(feed) = Self::advisory_feed() else {
+            return;
+        };
+        let hits = crate::registry_advisories::classify(name, version, feed);
+        if hits.is_empty() {
+            return;
+        }
+        let overrides: std::collections::HashSet<String> =
+            std::env::var("LOFT_SECURITY_OVERRIDE")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        for hit in &hits {
+            use crate::registry_advisories::Severity;
+            let overridden = overrides.contains(&hit.advisory_id);
+            match hit.severity {
+                Severity::SecurityCritical if !overridden => {
+                    eprintln!(
+                        "error: {} {} was yanked for a security vulnerability",
+                        hit.package, hit.version
+                    );
+                    eprintln!("  advisory: {}", hit.advisory_id);
+                    eprintln!("  summary:  {}", hit.summary);
+                    if let Some(fix) = &hit.fixed_in {
+                        eprintln!(
+                            "  fix:      {} >= {} (run `loft install {}@{}`)",
+                            hit.package, fix, hit.package, fix
+                        );
+                    }
+                    eprintln!(
+                        "  override (audit-trail required): LOFT_SECURITY_OVERRIDE={}",
+                        hit.advisory_id
+                    );
+                    std::process::exit(3);
+                }
+                Severity::SecurityCritical => {
+                    // Override applied — log the audit line + continue.
+                    eprintln!(
+                        "[security] override applied: {} ({} {})",
+                        hit.advisory_id, hit.package, hit.version
+                    );
+                }
+                Severity::SecurityHigh => {
+                    eprintln!(
+                        "warning: {} {} has a known security issue",
+                        hit.package, hit.version
+                    );
+                    eprintln!("  advisory: {}", hit.advisory_id);
+                    eprintln!("  summary:  {}", hit.summary);
+                    if let Some(fix) = &hit.fixed_in {
+                        eprintln!("  fix:      {} >= {}", hit.package, fix);
+                    }
+                }
+                Severity::SecurityLow | Severity::Bug => {
+                    eprintln!(
+                        "warning: {} {} — {} (advisory {})",
+                        hit.package, hit.version, hit.summary, hit.advisory_id
+                    );
+                }
+                Severity::Deprecated => {
+                    eprintln!(
+                        "note: {} {} is deprecated — {} (advisory {})",
+                        hit.package, hit.version, hit.summary, hit.advisory_id
+                    );
+                }
+            }
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn check_advisory(&mut self, _name: &str, _version: &str) {}
+
+    /// Lazy process-global advisory feed loader.  Cached for the
+    /// duration of the process; offline-respecting; never refetches
+    /// from network mid-parse (the explicit `loft audit` flow does
+    /// that).  Returns `None` when the registry doesn't yet host an
+    /// advisory feed (current real state — HTTP 404 soft-fails to
+    /// "no advisories").
+    #[cfg(feature = "registry")]
+    fn advisory_feed() -> Option<&'static crate::registry_advisories::AdvisoryFeed> {
+        use std::sync::OnceLock;
+        static FEED: OnceLock<Option<crate::registry_advisories::AdvisoryFeed>> = OnceLock::new();
+        FEED.get_or_init(|| {
+            let opts = crate::registry_advisories::LoadOptions {
+                allow_unsigned: true,
+                // Mid-parse, never hit the network — always cache-only.
+                // `loft audit` does the freshness refresh on demand.
+                offline: true,
+                refresh: false,
+            };
+            crate::registry_advisories::load_or_fetch(&opts).unwrap_or(None)
+        })
+        .as_ref()
+    }
+
     /// @PLAN12 Phase 6.6 — walk-up project root detection.
     ///
     /// From the script's directory, walks up to `/` looking for a
@@ -4409,6 +4545,7 @@ impl Parser {
                 None => return,
             };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
             *f = entry;
         }
     }
@@ -4461,6 +4598,7 @@ impl Parser {
                 None => return,
             };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
             *f = entry;
         }
     }
@@ -4516,6 +4654,7 @@ impl Parser {
             None => return,
         };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
             *f = entry;
         }
     }
