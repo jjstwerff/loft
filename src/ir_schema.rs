@@ -1399,6 +1399,95 @@ pub fn data_from_json(src: &str) -> Result<Data, TypeDecodeError> {
     Ok(data)
 }
 
+// ─── Snapshot load + compare (Step 2 — validation path) ───────────────────────
+//
+// The load path at the `Data` level is [`data_from_json`].  [`load_snapshot`]
+// wraps it with file I/O.  [`compare_data`] is the validator the quick-loading
+// work leans on: it diffs a loaded `Data` against a freshly-parsed reference
+// `Data` WITHOUT mutating either — re-encoding each definition to JSON and
+// reporting the *first* divergence (which definition, which byte offset) so a
+// mismatch is debuggable rather than a bare boolean.
+//
+// Re-encode equality is the comparison key because `Data` / `Definition` don't
+// derive `PartialEq`, and because it is exactly the property the snapshot must
+// hold: encode(load(snapshot)) must equal encode(fresh).  A field the decoder
+// drops or reconstructs wrongly shows up as a per-definition JSON difference.
+
+/// Load a [`Data`] snapshot from a file written by [`data_to_json`].
+///
+/// # Errors
+/// File read error, or any [`data_from_json`] decode error.
+pub fn load_snapshot(path: &str) -> Result<Data, TypeDecodeError> {
+    let src = std::fs::read_to_string(path)
+        .map_err(|e| TypeDecodeError::Shape(format!("read {path}: {e}")))?;
+    data_from_json(&src)
+}
+
+/// A localized description of the first place two `Data` values diverge.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DataDiff {
+    /// The two `Data` have different definition counts.
+    Count { reference: u32, loaded: u32 },
+    /// Definition `index` (`name`) re-encodes differently; `at` is the byte
+    /// offset of the first differing character, with short context snippets.
+    Definition {
+        index: u32,
+        name: String,
+        at: usize,
+        reference: String,
+        loaded: String,
+    },
+    /// The whole-`Data` re-encode differs but every definition matched — a
+    /// `Data`-level field (e.g. `source`) diverged.
+    Header { reference: String, loaded: String },
+}
+
+/// Compare a `loaded` `Data` against a `reference` (freshly-parsed) `Data` by
+/// re-encoding both, returning the first divergence or `Ok(())` if identical.
+///
+/// Neither argument is mutated — this is the read-only validator for the
+/// snapshot load path (does NOT swap the snapshot into the running `Data`).
+///
+/// # Errors
+/// [`DataDiff`] describing the first definition (or header) that differs.
+pub fn compare_data(reference: &Data, loaded: &Data) -> Result<(), DataDiff> {
+    let rn = reference.definitions();
+    let ln = loaded.definitions();
+    if rn != ln {
+        return Err(DataDiff::Count { reference: rn, loaded: ln });
+    }
+    for d_nr in 0..rn {
+        let r = definition_to_json(reference.def(d_nr));
+        let l = definition_to_json(loaded.def(d_nr));
+        if r != l {
+            let at = r
+                .char_indices()
+                .zip(l.char_indices())
+                .find(|((_, rc), (_, lc))| rc != lc)
+                .map_or_else(|| r.len().min(l.len()), |((i, _), _)| i);
+            let snippet = |s: &str| {
+                let start = at.saturating_sub(20);
+                let end = (at + 40).min(s.len());
+                s.get(start..end).unwrap_or(s).to_string()
+            };
+            return Err(DataDiff::Definition {
+                index: d_nr,
+                name: reference.def(d_nr).name.clone(),
+                at,
+                reference: snippet(&r),
+                loaded: snippet(&l),
+            });
+        }
+    }
+    // Every definition matched; catch any Data-level (header) difference.
+    let r = data_to_json(reference);
+    let l = data_to_json(loaded);
+    if r != l {
+        return Err(DataDiff::Header { reference: r, loaded: l });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

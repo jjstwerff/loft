@@ -33,8 +33,9 @@ mod common;
 
 use common::cached_default;
 use loft::ir_schema::{
-    attribute_from_json, attribute_to_json, data_from_json, data_to_json, definition_from_json,
-    definition_to_json, type_from_json, type_to_json, value_from_json, value_to_json,
+    attribute_from_json, attribute_to_json, compare_data, data_from_json, data_to_json,
+    definition_from_json, definition_to_json, type_from_json, type_to_json, value_from_json,
+    value_to_json,
 };
 
 /// Every `Type` in the stdlib (each def's `returned` plus every attribute
@@ -177,5 +178,37 @@ fn stdlib_whole_data_round_trip() {
     eprintln!(
         "stdlib_whole_data_round_trip: {n} definitions, {} bytes of JSON, {name_checks} names re-resolved",
         json.len()
+    );
+}
+
+/// The snapshot LOAD + COMPARE validator (the quick-loading debug path): parse
+/// the stdlib fresh, encode→decode it into a SEPARATE `Data`, and `compare_data`
+/// the loaded copy against the fresh reference — neither mutated.  This is the
+/// check the quick-loading work leans on: a divergence is reported as a
+/// localized `DataDiff` (which definition, which byte), not a bare `false`.
+#[test]
+fn stdlib_load_compares_equal_to_fresh() {
+    let (reference, _db) = cached_default();
+
+    // Round-trip through the snapshot format into a fresh, separate Data.
+    let json = data_to_json(&reference);
+    let loaded = data_from_json(&json).expect("snapshot decode");
+
+    // The loaded Data must be re-encode-identical to the freshly-parsed one,
+    // definition by definition.  `reference` is NOT mutated.
+    match compare_data(&reference, &loaded) {
+        Ok(()) => {}
+        Err(diff) => panic!("loaded snapshot diverges from fresh parse: {diff:?}"),
+    }
+
+    // Sanity: the reference really did carry the full stdlib.
+    assert!(
+        reference.definitions() > 100,
+        "expected the full stdlib, got {} defs",
+        reference.definitions()
+    );
+    eprintln!(
+        "stdlib_load_compares_equal_to_fresh: {} definitions compared identical",
+        reference.definitions()
     );
 }
