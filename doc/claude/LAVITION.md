@@ -65,31 +65,78 @@ to also know what engine the script targets.
 
 Lavition's library landscape splits into four kinds:
 
-### 1. Data primitives (loft ecosystem; consumed at runtime by games)
+### 1. Data + system libraries (loft ecosystem; consumed at runtime by games)
 
 Live in `loft-lang/loft-libs-*`.  Bare descriptive names.  Games
 import these and ship them in their runtime binary.
 
-**Finalized names — the `hex_*` family.**  Naming intent: each library
-covers ONE data axis of the hex world.  The `hex_*` prefix marks the
-family + leaves room for parallel `voxel_*` / `tile_*` families later
-without naming collisions.
+**Six chunks by tier-of-concern.**  The grouping rule: a chunk's
+libraries should share an answer to "what does a consumer pulling
+this in get pulled in TRANSITIVELY?"  Cross-chunk consumers know
+what they're opting into.  This avoids the previous mistake of
+bundling unrelated things under "graphics" just because they were
+visually adjacent.
 
-| Library | Purpose | Chunk | Status |
+| Chunk | Domain | Transitive deps | Headless? |
 |---|---|---|---|
-| `hex_world` | sparse 32×32 chunked hex grid + addressing + save/load | loft-libs-world (planned) | exists as `lib/world/` in monorepo; rename + extract is next-up |
-| `hex_walls` | wall segment data (24 sub-hex directions) + curve detection + read APIs | loft-libs-world | currently folded into `lib/world/src/wall.loft`; split + extract after hex_world |
-| `hex_terrain` | per-hex heightmap + material palette + slope rules | loft-libs-world | NEW — needs design + ship |
-| `hex_items` | item-instance data (placement, orientation among 12 directions, animation state, vertical layer) | loft-libs-world | NEW — needs design + ship |
-| `particles` | ribbon trails + point-burst particles | loft-libs-world | planned slot ([`lib_plans/future/27-particles/`](lib_plans/future/27-particles/)) |
-| `physics_2body` | rigid-body collision + integrator | loft-libs-world | planned slot ([`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/)) |
-| `graphics` | 2D canvas + 3D rendering + OpenGL bindings | loft-libs-graphics | shipped 0.1.0 |
-| `imaging` | PNG load/save + pixel manipulation | loft-libs-graphics | shipped 0.1.0 |
-| `shapes` / `gridmesh` | geometry primitives | loft-libs-graphics | shipped |
+| `loft-libs-core` | utilities | (none meaningful) | yes |
+| `loft-libs-net` | networking | ureq, tungstenite | yes (server-side) |
+| `loft-libs-graphics` | rendering (GPU) | glutin, gl, winit, fontdue, image, rodio | no |
+| `loft-libs-assets` | file formats | png (imaging), gltf parsing (glb) | yes |
+| `loft-libs-game` | game systems | (no external system deps; integrates with graphics/assets per consumer choice) | yes |
+| `loft-libs-world` | hex-grid world data | (loft data only) | yes |
+
+**Library inventory per chunk:**
+
+| Chunk | Libraries | Status |
+|---|---|---|
+| `loft-libs-core` | `arguments`, `random`, `crypto` | all shipped |
+| `loft-libs-net` | `web`, `server`, `game_protocol` | all shipped |
+| `loft-libs-graphics` | `graphics`, `shapes`, `gridmesh` | all shipped 0.1.x |
+| `loft-libs-assets` | `imaging`, `glb` | imaging shipped (currently under graphics chunk; migrates at next major); glb to promote out of graphics submodule (W.0) |
+| `loft-libs-game` | `physics_2body`, `particles`, `input`, `time`, `audio_bus` | chunk not yet bootstrapped; first inhabitant is `time` (already exists as `lib/time/`) |
+| `loft-libs-world` | `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | chunk not yet bootstrapped; `hex_world` exists as `lib/world/` in monorepo (rename pending) |
+
+**Naming the hex_* family.**  Each library covers ONE data axis of
+the hex world.  The `hex_*` prefix marks the family + leaves room for
+parallel `voxel_*` / `tile_*` families later.
+
+**Future cleanup notes** (not blocking):
+- `imaging` lives in `loft-libs-graphics` today but conceptually
+  belongs in `loft-libs-assets`.  Migrate at the next major-version
+  boundary (deprecation period publishes under both chunks for one
+  minor release).
+- Graphics's `audio_*` + `sfx_*` surface is the mixer / OS audio
+  output device interface — it's effectively a small "audio
+  rendering" sub-library inside graphics.  Game-side audio
+  TRIGGERS (categorise sounds, ducking, spatial) live in
+  `audio_bus` (game chunk).  A future cleanup could move the mixer
+  into its own `loft-libs-audio` chunk if audio surface grows.
 
 These libraries know nothing about lavition.  They're equally usable by
 a pure-loft CLI tool, a game built on lavition, or a third-party engine
 that wants the same data primitives.
+
+**`lavition_stack` meta-package.**  To hide the 6-chunk granularity
+from new users, a small `lavition_stack` meta-package with NO code,
+just dependencies:
+
+```toml
+[package]
+name = "lavition_stack"
+version = "0.1.0"
+loft = ">=0.8"
+
+[dependencies]
+graphics = ">=0.1"; imaging = ">=0.1"; glb = ">=0.1"
+hex_world = ">=0.1"; hex_walls = ">=0.1"; hex_terrain = ">=0.1"; hex_items = ">=0.1"
+physics_2body = ">=0.1"; particles = ">=0.1"; input = ">=0.1"; time = ">=0.1"; audio_bus = ">=0.1"
+```
+
+A new game's loft.toml then becomes one line: `lavition_stack = ">=0.1"`.
+The meta-package lives in a small `loft-libs-meta` chunk; composition
+evolves via meta-package version bumps without breaking individual
+library versioning.
 
 ### 2. Engine core (lavition org; required by every plugin)
 
@@ -306,47 +353,240 @@ pub fn remove_item(w: ChunkedWorld, hex: hex_world::HexId, direction: integer)
 pub fn tick_animations(w: ChunkedWorld, dt_ms: integer)
 ```
 
-### Cross-cutting: `physics_2body` and `particles`
+## Game-system libraries — per-library narrative
 
-Not hex-prefixed because they're general-purpose primitives consumable
-by any spatial library (`hex_walls`, future `voxel_walls`, 2D
-collision games).  See their plan slots:
-[`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/),
-[`lib_plans/future/27-particles/`](lib_plans/future/27-particles/).
+The `loft-libs-game` chunk holds general game-runtime systems.  None
+are hex-specific or rendering-coupled; they're the substrate any game
+needs to tick state per-frame regardless of what data shape it uses.
+
+### `physics_2body` — rigid-body collision + integration
+
+**Owns:** pairwise collision math + integrator.  Sphere ↔ sphere,
+AABB ↔ AABB, sphere ↔ AABB.  Velocity-Verlet or symplectic Euler
+integrator.  NO N-body stacking (the "2body" in the name); for chains
+/ articulated bodies, a future `physics_chain` or external library
+applies.
+
+**Lavition pairing:** none direct.  Game code (or a game-internal
+hex-physics glue layer) wires hex_walls's collision shapes into
+physics_2body queries.
+
+**Game roles:** projectile + entity collision, movement constraints,
+ground/wall contact resolution.
+
+**API sketch:**
+
+```loft
+pub enum ColShape { Sphere(radius: float), Aabb(half_extents: Vec3) }
+pub struct Body { pos: Vec3, vel: Vec3, mass: float, shape: ColShape }
+
+pub fn collide_pair(a: const Body, b: const Body) -> Collision  // null if no contact
+pub fn integrate(b: Body, force: Vec3, dt: float) -> Body
+pub fn resolve_collision(a: Body, b: Body, c: const Collision) -> (Body, Body)
+```
+
+Plan slot: [`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/).
+
+### `particles` — emission + lifetime + sync state
+
+**Owns:** particle emission, per-particle lifetime, transient state
+(position, velocity, age, color).  Two flavours per the existing plan
+slot — ribbon trails (ring-buffered points for plane smoke, exhaust)
+and point bursts (short-lived sprites for explosions, score
+confetti).
+
+**Headless usable:** yes — a multiplayer server can simulate
+emission/lifetime for sync; clients render with graphics
+primitives.
+
+**Lavition pairing:** no editor authoring today — particles are
+emitted at runtime by game logic.  A future `lavition_particle_preview`
+plugin could let authors tune emitter parameters visually.
+
+**Graphics pairing:** particles expose a "renderable list" each frame;
+graphics draws it.  Decoupled so headless usage stays clean.
+
+**API sketch:**
+
+```loft
+pub struct ParticleEmitter { /* opaque: type + position + emission rate + lifetime */ }
+
+pub fn emitter_trail(position: Vec3, max_points: integer) -> ParticleEmitter
+pub fn emitter_burst(position: Vec3, count: integer, lifetime_s: float) -> ParticleEmitter
+
+pub fn emitter_tick(e: ParticleEmitter, dt: float)
+pub fn emitter_emit_point(e: ParticleEmitter, pos: Vec3, vel: Vec3, color: integer)
+pub fn emitter_particles(e: const ParticleEmitter) -> vector<RenderablePoint>
+```
+
+Plan slot: [`lib_plans/future/27-particles/`](lib_plans/future/27-particles/).
+
+### `input` — abstract input state + key bindings
+
+**Owns:** mouse position + button state, keyboard down/up, controller
+axes/buttons, action bindings (map "Space key" → action "jump"),
+debounce / edge detection.
+
+**Coupling pattern:** `graphics` (the platform layer via winit/glutin)
+owns the raw OS event loop and exposes raw events via
+`graphics::poll_events() -> vector<RawEvent>`.  The `input` library
+reads those events each tick and maintains the abstract state.  Game
+code queries the abstract state.  No circular dep.
+
+```
+winit / glutin (in graphics cdylib)
+   │
+   ▼  graphics::poll_events() -> vector<RawEvent>
+input library (loft-libs-game)
+   │  resolves bindings, maintains abstract state
+   ▼
+game code: input::is_action_pressed("jump")
+```
+
+**Lavition pairing:** every editor plugin uses `input` for keyboard
+shortcuts + mouse interaction; bindings managed by
+`lavition_editor_core`.
+
+**Game roles:** all gameplay input — entity control, UI clicks,
+camera control, debug shortcuts.
+
+**API sketch:**
+
+```loft
+pub struct Bindings { /* key/button → action_id mapping */ }
+pub struct InputState { /* opaque — accessed via fns below */ }
+
+pub fn input_new(b: Bindings) -> InputState
+pub fn input_tick(s: InputState, events: const vector<RawEvent>)
+
+// Query API (game code calls these per frame)
+pub fn is_action_pressed(s: const InputState, action: text) -> boolean
+pub fn is_action_just_pressed(s: const InputState, action: text) -> boolean   // single-tick edge
+pub fn get_axis(s: const InputState, axis: text) -> float                       // -1.0..1.0
+pub fn mouse_position(s: const InputState) -> Vec2
+pub fn mouse_button_down(s: const InputState, button: integer) -> boolean
+pub fn rebind(s: InputState, action: text, raw: RawEvent)                       // user remapping
+```
+
+`RawEvent` lives in `graphics` (it's the platform-event union).
+`input` imports it; the game doesn't have to touch it directly.
+
+### `time` — frame counter + dt + scheduling
+
+**Owns:** frame counter, dt (delta since last frame), wall clock
+access, scheduling primitives (timers, repeating tasks, defer-to-
+next-frame).
+
+**Migration path:** `lib/time/` already exists in the monorepo as a
+fully-designed library.  When `loft-libs-game` chunk bootstraps, time
+moves over as the first inhabitant — cheaper than starting the chunk
+with a brand-new library still being designed.
+
+**Lavition pairing:** editor uses time for animation playback + UI
+transitions + auto-save scheduling.
+
+**Game roles:** the game loop's tick driver; animation timing; AI
+schedules.
+
+**API:** preserve current `lib/time/` API; mark version 0.1.0 with
+whatever it currently exposes; iterate post-extraction.
+
+### `audio_bus` — game-side audio triggers
+
+**Owns:** play_sfx, set_volume_for_category (music/sfx/voice),
+spatial audio (sound at world position, listener position),
+ducking, category mixing.
+
+**Distinct from `graphics`'s audio:** graphics currently has
+`audio_play_raw` + `sfx_*` helpers — those are the mixer / output
+device interface (talks to rodio).  `audio_bus` is the
+game-side abstraction (categorise sounds, spatialize, manage groups);
+it composes graphics's low-level mixer as the output.
+
+```
+game code
+   │  audio_bus::play("sfx", "click.wav", at: hex(3,5))
+audio_bus  (loft-libs-game)
+   │  resolves bindings, applies category volume, spatializes
+   ▼  graphics::audio_play_raw(samples, gain, pan)
+graphics audio mixer  (loft-libs-graphics)
+   │
+   ▼  rodio → OS audio device
+```
+
+**Future cleanup:** mixing/output could itself migrate out of graphics
+into a `loft-libs-audio` chunk; not blocking — flag in graphics's
+README.
+
+**API sketch (preliminary):**
+
+```loft
+pub struct AudioBus { /* opaque */ }
+
+pub fn audio_new() -> AudioBus
+pub fn set_category_volume(b: AudioBus, category: text, gain: float)
+pub fn play(b: AudioBus, category: text, asset: text)
+pub fn play_at(b: AudioBus, category: text, asset: text, world_pos: Vec3)
+pub fn set_listener_position(b: AudioBus, pos: Vec3)
+pub fn duck(b: AudioBus, category: text, gain: float, duration_s: float)
+```
 
 ## Next library work — execution order
 
-The `loft-libs-world` chunk is the next chunk to ship.  Order is
-foundation-first: hex_world blocks everything downstream because every
-other lib references its addressing.
+Three new chunks need to bootstrap: `loft-libs-assets`,
+`loft-libs-game`, `loft-libs-world`.  Each chunk-bootstrap is
+~30 minutes of work: GitHub repo + CI workflow from the
+`loft-libs-net` template + registry-side validator setup.
 
-Each sub-step is a self-contained Stage A → Stage B mini-cycle (same
-pattern Phase 5b just ran: tarball + chunk-repo + registry PR +
+Each library sub-step is a self-contained Stage A → Stage B mini-cycle
+(same pattern Phase 5b just ran: tarball + chunk-repo + registry PR +
 consumer migration + monorepo cleanup).
 
 | # | Step | Effort | Depends on |
 |---|---|---|---|
-| W.1 | Rename `lib/world` → `lib/hex_world` in monorepo + update consumer loft.tomls + path-deps + `src/wasm.rs` `include_str!` paths.  Pre-extraction churn, all internal. | S | — |
-| W.2 | Extract `hex_world` Stage A → Stage B (publish to `loft-libs-world/hex_world`, swap monorepo `lib/moros_*` consumers to registry deps, remove `lib/hex_world/`). | M | W.1 + lavition design clarification (data shape stable enough to ship 0.1.0) |
-| W.3 | Split `hex_walls` out of `lib/hex_world/src/wall.loft` into its own monorepo library `lib/hex_walls/`.  Defines the API boundary between the addressing primitive and the wall data. | M | W.2 |
-| W.4 | Extract `hex_walls` Stage A → Stage B. | M | W.3 + curve-detection pass design |
-| W.5 | Design + implement `hex_terrain` as a new monorepo library `lib/hex_terrain/` (heightmap + materials).  Migrate moros's existing terrain code if any. | MH | W.2 (uses hex_world addressing) |
+| **W.0** | Promote `glb` out of `graphics` submodule into `lib/glb/` (monorepo).  Add a re-export shim so existing graphics consumers keep working. | S | — |
+| **W.0a** | Bootstrap `loft-libs-assets` chunk (GitHub repo + CI from net template). | S | — |
+| **W.0b** | Extract `glb` Stage A → Stage B → `loft-libs-assets/glb 0.1.0`. | M | W.0, W.0a |
+| **W.0c** | Bootstrap `loft-libs-game` chunk. | S | — |
+| **W.0d** | Extract `lib/time` → `loft-libs-game/time 0.1.0` (uses time as the chunk's bootstrap inhabitant — it's already a complete library, cheaper than starting with brand-new design work). | M | W.0c |
+| **W.0e** | Bootstrap `loft-libs-world` chunk. | S | — |
+| W.1 | Rename `lib/world` → `lib/hex_world` (monorepo, internal churn) + update consumer loft.tomls + `src/wasm.rs` `include_str!` paths. | S | — |
+| W.2 | Extract `hex_world` Stage A → Stage B → `loft-libs-world/hex_world 0.1.0`. | M | W.0e, W.1 |
+| W.3 | Split `hex_walls` out of `lib/hex_world/src/wall.loft` into `lib/hex_walls/`.  Defines the API boundary. | M | W.2 |
+| W.4 | Extract `hex_walls` Stage A → Stage B. | M | W.3 + curve-detection design |
+| W.5 | Design + implement `hex_terrain` as `lib/hex_terrain/`. | MH | W.2 (uses hex_world addressing) |
 | W.6 | Extract `hex_terrain` Stage A → Stage B. | M | W.5 |
-| W.7 | Design + implement `hex_items` as a new monorepo library `lib/hex_items/`. | MH | W.2 + W.3 (item placement uses 12 directions, layer model shared with hex_walls) |
+| W.7 | Design + implement `hex_items` as `lib/hex_items/`. | MH | W.2, W.3 (12-dir placement, layer model shared with walls) |
 | W.8 | Extract `hex_items` Stage A → Stage B. | M | W.7 |
-| W.9 | Ship `physics_2body` (from existing plan slot) to the same chunk.  Reads hex_walls for collision geometry. | MH | W.4, plan-26 design |
-| W.10 | Ship `particles` (from existing plan slot) to the same chunk.  Independent. | M | plan-27 design |
+| W.9 | Design + implement `lib/physics_2body/` (from existing plan slot). | MH | plan-26 design |
+| W.10 | Extract `physics_2body` Stage A → Stage B → `loft-libs-game`. | M | W.9 |
+| W.11 | Design + implement `lib/particles/` (from existing plan slot). | M | plan-27 design |
+| W.12 | Extract `particles` Stage A → Stage B → `loft-libs-game`. | M | W.11 |
+| W.13 | Design + implement `lib/input/`.  Wraps `graphics::poll_events()` → abstract action state + bindings. | MH | — (parallel with hex work) |
+| W.14 | Extract `input` Stage A → Stage B → `loft-libs-game`. | M | W.13 |
+| W.15 | Audit graphics's existing audio surface (`audio_play_raw` + `sfx_*`) — clarify the boundary between graphics's mixer and game's `audio_bus`. | S | — |
+| W.16 | Design + implement `lib/audio_bus/` + extract Stage A → Stage B → `loft-libs-game`. | MH | W.15 |
+| W.17 | Bootstrap `loft-libs-meta` chunk + ship `lavition_stack 0.1.0` meta-package. | S | enough chunks live to make the meta-package meaningful (typically after W.2 + W.0b ship) |
 
-**Total:** ~10 sub-phases, each self-contained.  Realistic shipping
-cadence: 1-2 sub-phases per session, so the full `loft-libs-world`
-chunk lands across 5-10 sessions.  After W.10, lavition can start
-implementing its plugins against the stable data layer.
+**Total:** ~17 sub-phases.  Realistic shipping cadence: 1-2 per
+session, so the whole 6-chunk topology lands across 10-17 sessions.
 
 **Branch model:** continue the established pattern — one cross-theme
 branch (`doc-updates` or successor) accumulates the work; a PR opens
-per chunk milestone (e.g. when hex_world + hex_walls both ship → PR
-"`loft-libs-world` foundation"; when terrain + items ship → next PR;
-etc.).  The 6-PR-per-game-data-lib model would be too much PR overhead.
+per chunk milestone (`loft-libs-assets` bootstrap + glb extraction →
+one PR; `loft-libs-world` foundation = hex_world + hex_walls → next
+PR; etc.).  Avoid one-PR-per-library — too much review overhead.
+
+**Open sequencing notes:**
+- W.0 / W.0a / W.0b (glb promotion) can ship before any hex work since
+  they touch different libraries.  Good "first session of the new
+  topology" candidate.
+- W.0c / W.0d (game chunk + time migration) similar — independent of
+  the world chunk work.
+- W.1 / W.2 (hex_world rename + extract) is the foundation for W.3-W.8.
+- W.9 / W.10 (physics_2body) depends ON nothing new but lavition's
+  glue layer would want it before authoring real plugins.  Ship after
+  the data layer is stable.
 
 ## Discoverability — the practical reason for brand visibility
 
