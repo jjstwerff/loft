@@ -22,6 +22,9 @@
 
 set -euo pipefail
 
+# Cache clean/release rebuilds with sccache when present (no-op otherwise).
+source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
+
 CORPUS=(
     tests/docs/03-integer.loft
     tests/docs/04-boolean.loft
