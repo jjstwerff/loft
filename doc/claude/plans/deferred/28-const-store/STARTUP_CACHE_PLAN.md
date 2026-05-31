@@ -286,7 +286,36 @@ to today. Delete `src/cache.rs` + the flag to revert.
 
 ---
 
-### Step 2 — `Data` serialization (enables Strategy 2)
+### Step 2 — `Data` snapshot via the database generator (S1–S5 ladder)
+
+**Metric for this step is safety, not lines of code:** every commit
+green, the new path additive + off by default, and the risky part proven
+equivalent **in CI** before it is load-bearing.  The ladder makes that
+explicit; the detailed design (relocation map, field audit, reuse rules)
+follows under it.
+
+| Rung | What lands | Safety property |
+|---|---|---|
+| **S1** | IR store schema registered, **unused** (`structure()`/`enumerate()`/`value()` mirroring `output_init`) | dead code behind an uncalled fn; test asserts no `known_type` collision |
+| **S2** | native → store **bridge (write only)**, no live caller | pure new fn; unit-tested in isolation |
+| **S3** | store → native bridge **+ the equivalence gate** | parse → bridge → bridge-back → assert **byte-identical bytecode** to fresh parse, in CI.  *If S3 can't pass, the bridge is lossy and we stop — nothing broken.* |
+| **S4** | wire `show_json` + `populate_struct_from_jsonvalue` onto the bridge, behind `--cache` / `LOFT_NO_CACHE` | opt-in; equivalence already proven in S3; `default/` edit forces a miss (regression test) |
+| **S5** | measure; keep the S3 gate in CI permanently (default-on is Step 5) | any future divergent rebuild fails the build, not the user |
+
+**Why this cannot break the project:** the load hands back a *native*
+`Data`, so the ~940 `match value` sites never change in this step; the
+only failure mode (a lossy bridge) is caught by S3 in CI before S4 wires
+the flag.  Each rung is a valid stop — what's landed at S1–S3 is harmless
+dead/tested code that doubles as plan-54 foundation (arcs A+B).
+
+**Reuse, don't hand-write JSON (user, 2026-05-31):** loft already has
+both directions — `Stores::show_json` (record → JSON) and
+`json_parse_into_stores` / `populate_struct_from_jsonvalue` (JSON →
+record), both schema-driven over store records.  So S1's schema + the
+S2/S3 bridge let the **existing generator** do both JSON directions; no
+bespoke serializer, no serde.  (The earlier "hand-rolled JSON walk"
+framing below is superseded by this — the walk is the *bridge to store
+records*, after which JSON is the database generator's job.)
 
 **Design.** Serialise the parser output so the stdlib symbol table is
 restorable without re-parsing.

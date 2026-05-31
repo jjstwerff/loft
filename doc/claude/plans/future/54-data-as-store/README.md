@@ -136,7 +136,7 @@ Mirroring `--native` rather than inventing a third format buys:
 |---|---|---|
 | **A** — IR store schema | Define the struct-enum schema for `Value`/`Type`/`Definition`/`Function`/`Attribute` as loft type registrations (the `init`-equivalent for the compiler's own types). | Open — needs design |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
-| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration. | Open — the bulk |
+| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration). | Open — the bulk |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
 
@@ -156,6 +156,55 @@ Mirroring `--native` rather than inventing a third format buys:
    generation/, then parser/).
 5. **E (bundle snapshots)** — core snapshot first (deterministic, shared);
    per-script bundle snapshot second.
+
+## Incremental migration — arc C is many small plans, never one
+
+The ~940 `data.def(...)` reads and the `match value { … }` /
+`match type { … }` arms cannot move to a store-backed representation in
+a single change without breaking the project.  Arc C is therefore a
+**series of follow-up plans**, each green and shippable on its own,
+enabled by an **accessor seam** introduced *before* any representation
+changes.
+
+**The seam (precondition, cheap, additive).**  Route every IR read
+through accessor methods instead of touching fields directly:
+`data.def(d).name()`, `.returned()`, `.code()`, … and small helpers
+over `Value` / `Type` (e.g. `value.as_call()`, `ty.as_reference()`)
+that today just `match` the native enum.  This is a pure refactor with
+**no behaviour change** — the native `Vec`/`Box` stays underneath — so it
+lands incrementally under the normal green-commit discipline and is a
+valid stop at any point.  Once a subsystem reads only through the seam,
+its representation can be swapped without touching that subsystem again.
+
+**Then migrate behind the seam, one slice per follow-up plan:**
+
+1. **Seam-only plan** — introduce the accessor methods; convert
+   call-sites to them mechanically, subsystem by subsystem
+   (`state/` → `generation/` → `parser/`).  Representation unchanged.
+   Each subsystem is its own commit; the build is green throughout.
+2. **Per-subsystem representation swap** — with `state/` reading only
+   through the seam, move *its* reads to the store accessor; leave the
+   rest on native.  A **dual-backed `Data`** (native `Vec` *and* the
+   store, kept in sync during the transition) lets one subsystem read
+   from the store while others still read native — this is what makes
+   "not at once" possible.  Repeat per subsystem.
+3. **Drop the native backing** — once every subsystem reads from the
+   store, delete the native `Vec`/`Box` fields and the sync.  Only now
+   is `Data` truly store-backed; only now does mmap (arc D) become
+   zero-copy for *reads*, not just load.
+
+**Why this is safe the same way @PLAN28's ladder is:** each step is
+additive (the seam adds methods, doesn't remove fields), off the
+critical path until proven (dual-backing runs both representations and
+can assert they agree), and reversible (revert one subsystem's swap
+without touching others).  A per-subsystem **equivalence assertion**
+(native read == store read, behind a debug flag) is the analogue of
+@PLAN28 S3's bytecode gate.
+
+**Plan shape:** the seam is one small plan; each subsystem swap is its
+own follow-up plan (or `## Open work` row if it stays small).  None of
+them is the whole arc — that is the point.  They are sequenced here but
+opened one at a time, capped at the usual ≤3 active.
 
 ## Open design questions
 
