@@ -157,6 +157,41 @@ jobs:
         continue-on-error: true
         run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mtime +30 -delete || true
 
+  # @PLAN53 — the cheap per-PR sanitizer.  `stack_align_guard` asserts every
+  # typed eval-stack access lands on its alignment boundary; it runs at normal
+  # test speed (just offset checks), so it is the per-PR gate for the
+  # alignment-UB class — the class a stack/codegen change is most likely to
+  # regress.  The heavier Miri hard-UB sweep (UAF/uninit/leak/OOB) runs NIGHTLY
+  # (see miri.yml), not per-PR.  Ubuntu-only: the guard is an arch-independent
+  # offset check, so one platform suffices.  Only the in-process interpreter
+  # suites are run — the guard cannot see the separate binaries that native /
+  # wasm / html tests spawn, so running those here would add cost without
+  # coverage.
+  guard:
+    name: stack_align_guard sweep (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-guard-cargo-
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Guard sweep (interpreter suites, zero fires expected)
+        run: >
+          cargo nextest run --profile ci --features stack_align_guard
+          --lib --test issues --test wrap --test strings --test frame_vars
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
