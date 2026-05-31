@@ -115,6 +115,52 @@ fn is_narrow_int_return(ret: &Type) -> bool {
     }
 }
 
+/// Emit the Rust expression that reads one by-value tuple element out of the
+/// store record `elm` at byte offset `off`.  Mirrors the scalar read helpers
+/// the interpreter uses for tuple-typed worker arguments; `_ts` is the
+/// `&Store` bound by [`tuple_arg_prep`].
+fn tuple_elem_read(t: &Type, off: usize) -> String {
+    let off = off as u32;
+    match t {
+        Type::Integer(_) => format!("_ts.get_int(elm.rec, elm.pos + {off})"),
+        Type::Character | Type::Null => format!("_ts.get_i32_raw(elm.rec, elm.pos + {off})"),
+        Type::Boolean => format!("_ts.get_boolean(elm.rec, elm.pos + {off}, 1)"),
+        Type::Enum(_, false, _) => format!(
+            "{{ let r = _ts.get_byte(elm.rec, elm.pos + {off}, 0); if r < 0 {{ 255u8 }} else {{ r as u8 }} }}"
+        ),
+        Type::Single => format!("_ts.get_single(elm.rec, elm.pos + {off})"),
+        Type::Float => format!("_ts.get_float(elm.rec, elm.pos + {off})"),
+        other => format!("compile_error!(\"par tuple worker: unsupported by-value element type {other:?}\")"),
+    }
+}
+
+/// When the par worker's element parameter is a tuple passed by value, the
+/// native closure receives a `DbRef` (`elm`) but the worker fn expects the
+/// unpacked tuple.  Returns `(prep, arg)`: `prep` is the closure-body prelude
+/// that materialises a Rust tuple `_p` from the record's fields, and `arg` is
+/// the expression passed to the worker.  Non-tuple workers return
+/// `("", "elm")` — byte-identical to the original single-`DbRef` path.
+fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str) {
+    let worker_def = ctx.output.data.def(fn_d_nr);
+    let Some(elem_attr) = worker_def.attributes.first() else {
+        return (String::new(), "elm");
+    };
+    let Type::Tuple(elems) = &elem_attr.typedef else {
+        return (String::new(), "elm");
+    };
+    let offsets = crate::data::element_offsets(elems);
+    let reads: Vec<String> = elems
+        .iter()
+        .zip(offsets.iter())
+        .map(|(t, off)| tuple_elem_read(t, *off))
+        .collect();
+    let prep = format!(
+        "let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = ({},); ",
+        reads.join(", ")
+    );
+    (prep, "_p")
+}
+
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
 ///
 /// Lifts the legacy match-arm body verbatim into a custom emitter
@@ -196,18 +242,21 @@ impl OpEmitter for ParallelForEmitter {
         // closures receive `&UnsafeCell<Stores>` from the parallel-
         // runner helpers; user-fn calls take `cell`, so the closure
         // parameter is named `cell` and threaded through verbatim.
+        // `prep`/`arg` unpack a by-value tuple element from the record
+        // (empty/`elm` for the common single-`DbRef` worker).
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
         match shape {
             ClosureShape::Text => write!(
                 ctx.w,
-                ", |cell, elm| {{ let mut _w = String::new(); {worker_name}(cell, elm{extras}, &mut _w); _w }})"
+                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
                 ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,
             ClosureShape::Float => write!(
                 ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}).to_bits() as i64 }})"
             )?,
             ClosureShape::Scalar => {
                 // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
@@ -218,12 +267,12 @@ impl OpEmitter for ParallelForEmitter {
                 if matches!(worker_ret, Type::Boolean) {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as u8 as i64 }})"
                     )?;
                 } else {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as i64 }})"
                     )?;
                 }
             }
@@ -315,18 +364,19 @@ impl OpEmitter for ParallelQueueEmitter {
             s
         };
 
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
         match shape {
             ClosureShape::Text => write!(
                 ctx.w,
-                ", |cell, elm| {{ let mut _w = String::new(); {worker_name}(cell, elm{extras}, &mut _w); _w }})"
+                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
                 ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,
             ClosureShape::Float => write!(
                 ctx.w,
-                ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}).to_bits() as i64 }})"
             )?,
             ClosureShape::Scalar => {
                 // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
@@ -337,12 +387,12 @@ impl OpEmitter for ParallelQueueEmitter {
                 if matches!(worker_ret, Type::Boolean) {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as u8 as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as u8 as i64 }})"
                     )?;
                 } else {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as i64 }})"
                     )?;
                 }
             }
