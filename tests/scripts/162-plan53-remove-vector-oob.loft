@@ -1,0 +1,57 @@
+// 162 — @PLAN53 Wave 2: regression guard for the remove_vector off-by-one OOB.
+//
+// Bug (fixed in commit 72113508): remove_vector shifted `len - i` elements
+// instead of `len - i - 1`, reading element `len` — one past the last valid
+// element — into adjacent store memory.  The stray read landed in the now-dead
+// tail slot, so observable contents stayed correct in normal runs; the UB was
+// invisible to release tests.  Only ASan / a debug-build copy_block assert
+// caught the over-read.
+//
+// Trigger condition: the over-read only crosses the record's allocation
+// boundary when the vector is at FULL INITIAL CAPACITY and a NON-LAST element
+// is removed.  Initial capacity via `vector_append`/`insert_vector` is
+// `checked_vec_cap(11, elem_size)` words, which holds exactly 11 elements for
+// 8-byte (integer / i64) elements before any resize.  A vector of exactly 11
+// integers with a middle element removed sits right at that boundary.
+//
+// Guard: on the pre-fix code, the ASan CI job (`asan` job in ci.yml) fires an
+// OOB-read on the copy_block source pointer.  On the fixed code this passes
+// cleanly.
+
+fn main() {
+  // Build a vector of exactly 11 integers — fills the initial allocation
+  // (checked_vec_cap(11, 8) = 12 words = 96 bytes; 8-byte header + 88 bytes
+  // of payload = room for exactly 11 eight-byte elements).
+  v = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110];
+  assert(len(v) == 11, "setup: len={len(v)}, want 11");
+
+  // Remove a middle element (index 5, value 60).
+  // Pre-fix: copy_block reads element at index 11 (one past the last valid
+  // element) — an out-of-bounds read that ASan catches.
+  // Post-fix: only len-i-1 = 5 elements are shifted; no OOB.
+  v.remove(5);
+
+  assert(len(v) == 10, "after remove: len={len(v)}, want 10");
+
+  // Verify the element that was right after the removed slot shifted down.
+  assert(v[5] == 70, "v[5] should be 70 (was 80 before remove), got {v[5]}");
+
+  // Verify the elements before the removed slot are undisturbed.
+  assert(v[0] == 10, "v[0]={v[0]}");
+  assert(v[4] == 50, "v[4]={v[4]}");
+
+  // Verify the elements after the removed slot shifted down correctly.
+  assert(v[6] == 80, "v[6]={v[6]}");
+  assert(v[7] == 90, "v[7]={v[7]}");
+  assert(v[8] == 100, "v[8]={v[8]}");
+  assert(v[9] == 110, "v[9]={v[9]}");
+
+  // Also exercise removing the LAST element (should not trigger copy_block at
+  // all — the `if len - i > 1` guard skips the shift entirely).
+  v2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  v2.remove(10);
+  assert(len(v2) == 10, "remove-last: len={len(v2)}, want 10");
+  assert(v2[9] == 10, "remove-last: v2[9]={v2[9]}, want 10");
+
+  println("162-plan53-remove-vector-oob PASSED");
+}

@@ -539,6 +539,16 @@ script_test!(auto_convert, "tests/scripts/54-auto-convert.loft");
 // stack_trace() introspection returns frames from nested calls.
 script_test!(stack_trace_script, "tests/scripts/55-stack-trace.loft");
 
+// @PLAN53 Wave 2 regression: remove_vector off-by-one OOB.
+// A vector at full initial capacity (11 integer elements) with a middle element
+// removed triggered a copy_block read one past the last valid element.
+// Fixed in commit 72113508; this exercises the boundary case so the ASan CI
+// job catches any reintroduction.
+script_test!(
+    plan53_remove_vector_oob,
+    "tests/scripts/162-plan53-remove-vector-oob.loft"
+);
+
 /// P89 regression: every field name `n_stack_trace` looks up at runtime
 /// must exist in the loaded schema.  If `default/04_stacktrace.loft` is
 /// edited to rename or remove a field, this test fails immediately
