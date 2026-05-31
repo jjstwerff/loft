@@ -70,6 +70,11 @@ pub struct Version {
     pub replaces: Vec<String>,
     /// Schema slot — resolver-side support deferred.
     pub provides: Vec<String>,
+    /// Tier-1 lazy-load triggers — text-method names as `"name:receiver"`
+    /// (e.g. `"matches:text"`), derived from the package source at publish time
+    /// so a CONSUMER's resolver can map `obj.method()` to this package without
+    /// having the source.  Produced by `crate::triggers::derive_triggers`.
+    pub triggers: Vec<String>,
     /// Schema slot — pre-built distribution deferred.
     pub binaries: BTreeMap<String, BinaryEntry>,
     pub prerelease: bool,
@@ -217,6 +222,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
     let mut conflicts: Vec<String> = Vec::new();
     let mut replaces: Vec<String> = Vec::new();
     let mut provides: Vec<String> = Vec::new();
+    let mut triggers: Vec<String> = Vec::new();
     let mut binaries: BTreeMap<String, BinaryEntry> = BTreeMap::new();
     let mut prerelease = false;
     let mut published: Option<String> = None;
@@ -258,6 +264,15 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
             }
             ("provides", Parsed::Array(a)) => {
                 provides = a
+                    .iter()
+                    .filter_map(|p| match p {
+                        Parsed::Str(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            ("triggers", Parsed::Array(a)) => {
+                triggers = a
                     .iter()
                     .filter_map(|p| match p {
                         Parsed::Str(s) => Some(s.clone()),
@@ -308,6 +323,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
         conflicts,
         replaces,
         provides,
+        triggers,
         binaries,
         prerelease,
         published,
@@ -642,6 +658,34 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn parses_triggers_field() {
+        let doc = r#"{
+            "schema_version": 1,
+            "updated": "2026-05-31T00:00:00Z",
+            "packages": {
+                "regex": {
+                    "description": "regex",
+                    "categories": [],
+                    "yanked": [],
+                    "versions": {
+                        "0.1.0": {
+                            "url": "u", "sha256": "s", "size": 1, "loft": ">=0.8",
+                            "triggers": ["matches:text", "regex_find:text"],
+                            "published": "2026-05-31T00:00:00Z"
+                        }
+                    }
+                }
+            }
+        }"#;
+        let idx = parse_index(doc).expect("parse");
+        let v = &idx.packages["regex"].versions["0.1.0"];
+        assert_eq!(
+            v.triggers,
+            vec!["matches:text".to_string(), "regex_find:text".to_string()]
+        );
+    }
 
     #[test]
     fn parses_sample_index() {

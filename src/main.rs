@@ -1696,6 +1696,23 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         }
         println!("  }},");
     }
+    // Tier-1 trigger surface — derived from the package source at publish time
+    // (lib_plans/future/03-lazy-stdlib), so a CONSUMER's resolver can map
+    // `obj.method()` to this package without the source.  Emitted only when the
+    // package opts in via `[triggers] enabled`; nothing is hand-listed.
+    if manifest.trigger_enabled {
+        let entry = manifest
+            .entry
+            .clone()
+            .unwrap_or_else(|| format!("src/{}.loft", pkg.name));
+        let src = std::fs::read_to_string(pkg_path.join(&entry)).unwrap_or_default();
+        let methods: Vec<String> = loft::triggers::derive_triggers(&src)
+            .methods
+            .iter()
+            .map(|m| format!("\"{}:{}\"", m.name, m.receiver))
+            .collect();
+        println!("  \"triggers\": [{}],", methods.join(", "));
+    }
     println!("  \"published\": \"{published}\"");
     println!("}}");
     println!();
