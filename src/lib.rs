@@ -42,6 +42,7 @@ unsafe extern "C" {
 #[macro_use]
 pub mod diagnostics;
 pub mod base64;
+pub mod cache;
 mod calc;
 pub mod crash_report;
 pub mod data;
