@@ -89,6 +89,21 @@ pub struct Parser {
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
+    /// Auto-`use` per-file scan cache: a file's `(lib:: refs, .method() calls)`
+    /// are deterministic, so it is read + scanned at most once (keyed by path)
+    /// and reused across the second pass and any `todo_files` re-parse.
+    auto_use_scan_cache: std::collections::HashMap<String, (Vec<String>, Vec<String>)>,
+    /// Tier-1 text-method trigger map: `method name -> providing package`,
+    /// derived once per top-level parse from the current package's (and its
+    /// trigger-enabled dependencies') declared triggers.  `None` until built.
+    auto_use_trigger_map: Option<std::collections::HashMap<String, String>>,
+    /// Tier-1 lazy *catalog* fallback: `method name -> providing package`,
+    /// derived once from the cached registry `index.json` (`triggers` field).
+    /// Consulted only for methods the local `auto_use_trigger_map` did not
+    /// resolve — i.e. a package the user has NOT declared as a dependency but
+    /// that the registry says provides the method.  `None` until first miss;
+    /// cached empty when the catalog is absent or the registry feature is off.
+    auto_use_catalog_map: Option<std::collections::HashMap<String, String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
     /// - Define variables, try to determine their type (can become clear from later code).
@@ -371,6 +386,9 @@ impl Parser {
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
+            auto_use_scan_cache: std::collections::HashMap::new(),
+            auto_use_trigger_map: None,
+            auto_use_catalog_map: None,
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
@@ -3879,8 +3897,18 @@ impl Parser {
     #[allow(clippy::too_many_lines)] // two-pass parser dispatch — splitting would lose context
     fn parse_file(&mut self) {
         let start_def = self.data.definitions();
+        // Tier-0 lazy auto-`use`: the file the lexer is on right now, captured
+        // before the use-loop may switch away.  Scanned for `lib::` references
+        // after the use-region (see the load loop below).
+        let auto_use_scan_file = self.lexer.pos().file.clone();
+        // A file that writes any `use` — or the stdlib, parsed with
+        // `self.default` — is in *explicit* mode: the author manages their
+        // libraries by hand, so a `lib::` to an un-`use`d library is a forgotten
+        // `use`, not a request to auto-load.  Skip the pre-scan for those files.
+        let mut had_use = self.default;
         while self.lexer.has_token("use") {
             if let Some(id) = self.lexer.has_identifier() {
+                had_use = true;
                 // Parse optional import spec: `::*` for wildcard or `::name1, name2` for selective.
                 let spec = if self.lexer.has_token("::") {
                     if self.lexer.has_token("*") {
@@ -3978,6 +4006,89 @@ impl Parser {
                     self.data.use_add(&dep_id);
                     self.lexer.switch(&f);
                 }
+            }
+        }
+        // Tier-0 lazy auto-`use`: scan this file for `lib::` references and load
+        // any that name an unloaded, available library — here in the use-region,
+        // before the defs-loop, exactly like an explicit `use` (so the two-pass
+        // model never sees a redefinition).  Only when the lexer is still on the
+        // scanned file (the use-loop has not switched away to an explicitly-used
+        // library — that file re-parses via `todo_files` and scans itself then).
+        // Resolve every path first (before a `switch` changes the lexer's cwd),
+        // then load with the same `todo_files` + `use_add` + `switch` shape as
+        // the `pending_pkg_deps` loop.  A name that is not a real library is
+        // skipped and falls through to the normal "unknown" error.
+        // `!had_use`: explicit-mode files (any `use`, and the stdlib) are skipped
+        // entirely — the author manages their libraries by hand there.  Read +
+        // scan each remaining file at most once (cache keyed by path).
+        if !had_use && self.lexer.pos().file == auto_use_scan_file {
+            let (refs, calls) = if let Some(c) = self.auto_use_scan_cache.get(&auto_use_scan_file) {
+                c.clone()
+            } else {
+                let src = Self::read_source(&auto_use_scan_file);
+                let pair = (
+                    crate::libscan::scan_qualified_lib_refs(&src),
+                    crate::libscan::scan_method_calls(&src),
+                );
+                self.auto_use_scan_cache
+                    .insert(auto_use_scan_file.clone(), pair.clone());
+                pair
+            };
+            // Tier-0: `lib::x` — the library is named directly.
+            let mut to_load: Vec<String> = Vec::new();
+            for name in refs {
+                if self.data.use_exists(&name) || self.data.def_nr(&name) != u32::MAX {
+                    continue;
+                }
+                if !to_load.contains(&name) {
+                    to_load.push(name);
+                }
+            }
+            // Tier-1: `obj.method(…)` — map the method to its providing package
+            // via the trigger surface of the current package (+ trigger-enabled
+            // deps), derived once and cached.
+            if !calls.is_empty() {
+                let map = self.trigger_map(&auto_use_scan_file);
+                // Catalog fallback is built lazily — only read index.json once a
+                // method misses the local (current package + deps) trigger map.
+                let mut catalog: Option<std::collections::HashMap<String, String>> = None;
+                for m in calls {
+                    let pkg = if let Some(p) = map.get(&m) {
+                        Some(p.clone())
+                    } else {
+                        if catalog.is_none() {
+                            catalog = Some(self.catalog_trigger_map());
+                        }
+                        catalog.as_ref().and_then(|c| c.get(&m).cloned())
+                    };
+                    if let Some(pkg) = pkg
+                        && !self.data.use_exists(&pkg)
+                        && !to_load.contains(&pkg)
+                    {
+                        to_load.push(pkg);
+                    }
+                }
+            }
+            // Resolve every path first (before a `switch` changes the cwd), then
+            // load with the proven todo_files + use_add + switch shape.
+            let mut resolved: Vec<(String, String)> = Vec::new();
+            for n in to_load {
+                if self.data.use_exists(&n) {
+                    continue;
+                }
+                let f = self.lib_path(&n);
+                if std::path::Path::new(&f).exists() {
+                    resolved.push((n, f));
+                }
+            }
+            for (name, f) in resolved {
+                if self.data.use_exists(&name) {
+                    continue;
+                }
+                let cur = self.lexer.pos().file.clone();
+                self.todo_files.push((cur, self.data.source));
+                self.data.use_add(&name);
+                self.lexer.switch(&f);
             }
         }
         // Apply wildcard/selective imports queued for this source now that the while-use loop
@@ -4108,6 +4219,109 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// Read a source file's content for the Tier-0 auto-`use` pre-scan.
+    /// Honours the wasm VirtFS; an empty string on a read error (the scan then
+    /// finds nothing and normal resolution proceeds unchanged).
+    fn read_source(filename: &str) -> String {
+        #[cfg(feature = "wasm")]
+        if let Some(c) = crate::wasm::virt_fs_get(filename) {
+            return c;
+        }
+        std::fs::read_to_string(filename).unwrap_or_default()
+    }
+
+    /// Tier-1: build (once, cached) the `method name -> providing package` map
+    /// from the current package's declared triggers — `[triggers] enabled` plus
+    /// the text-methods derived from its source — and those of its
+    /// trigger-enabled dependencies.  The package is located by walking up from
+    /// `from_file` to the nearest `loft.toml`.
+    fn trigger_map(&mut self, from_file: &str) -> std::collections::HashMap<String, String> {
+        if let Some(m) = &self.auto_use_trigger_map {
+            return m.clone();
+        }
+        let mut map = std::collections::HashMap::new();
+        let mut dir = std::path::Path::new(from_file)
+            .parent()
+            .map(std::path::Path::to_path_buf);
+        while let Some(d) = dir {
+            let toml = d.join("loft.toml");
+            if toml.exists() {
+                Self::add_pkg_triggers(&toml, &d, &mut map);
+                if let Some(man) = crate::manifest::read_manifest(&toml.to_string_lossy()) {
+                    for (dep, _ver) in &man.dependencies {
+                        if let Some(entry) = self.lib_path_manifest(&d.to_string_lossy(), dep)
+                            && let Some(root) = std::path::Path::new(&entry)
+                                .parent()
+                                .and_then(|p| p.parent())
+                        {
+                            Self::add_pkg_triggers(&root.join("loft.toml"), root, &mut map);
+                        }
+                    }
+                }
+                break;
+            }
+            dir = d.parent().map(std::path::Path::to_path_buf);
+        }
+        self.auto_use_trigger_map = Some(map.clone());
+        map
+    }
+
+    /// Add a package's derived text-method triggers (`method -> package`) to
+    /// `map`, when the package opts in via `[triggers] enabled`.
+    fn add_pkg_triggers(
+        toml: &std::path::Path,
+        pkg_root: &std::path::Path,
+        map: &mut std::collections::HashMap<String, String>,
+    ) {
+        let Some(man) = crate::manifest::read_manifest(&toml.to_string_lossy()) else {
+            return;
+        };
+        if !man.trigger_enabled {
+            return;
+        }
+        let Some(name) = man.name else { return };
+        let entry = man.entry.unwrap_or_else(|| format!("src/{name}.loft"));
+        let src = std::fs::read_to_string(pkg_root.join(&entry)).unwrap_or_default();
+        for mt in crate::triggers::derive_triggers(&src).methods {
+            map.entry(mt.name).or_insert_with(|| name.clone());
+        }
+    }
+
+    /// Tier-1 lazy *catalog* fallback (`method -> package`), read once from the
+    /// cached registry `index.json`.  This is what makes `line.matches(p)` work
+    /// against a package the user has NOT declared as a dependency: the local
+    /// `trigger_map` misses, so we look the method up across the whole catalog,
+    /// get the package name, and hand it to `lib_path` — which resolves it via
+    /// the same lockfile → installed → auto-install chain an explicit `use`
+    /// would take.  Ambiguity is dropped by `trigger_providers` (registry
+    /// submission already rejects true collisions).  Cached (empty on absent
+    /// catalog) so the file read happens at most once per parse.
+    #[cfg(feature = "registry")]
+    fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
+        if let Some(m) = &self.auto_use_catalog_map {
+            return m.clone();
+        }
+        let mut map = std::collections::HashMap::new();
+        let (idx_path, _, _) = crate::registry_index::index_paths();
+        if let Ok(content) = std::fs::read_to_string(&idx_path)
+            && let Ok(index) = crate::registry_index::parse_index(&content)
+        {
+            map = crate::registry_index::trigger_providers(&index)
+                .into_iter()
+                .collect();
+        }
+        self.auto_use_catalog_map = Some(map.clone());
+        map
+    }
+
+    /// No-op when the registry feature is off — there is no cached catalog to
+    /// consult, so Tier-1 resolves only via declared dependencies.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn catalog_trigger_map(&mut self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
     }
 
     fn lib_path(&mut self, id: &str) -> String {

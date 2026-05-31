@@ -47,6 +47,15 @@ pub struct Manifest {
     /// registration callback onto `globalThis.LOFT_WASM_EXTENSIONS`
     /// (see `lib/imaging/wasm/host.js` for the canonical shape).
     pub wasm_bridge_host_js: Option<String>,
+    /// `[triggers] enabled = true` (lib_plans/future/03-lazy-stdlib) — opt this
+    /// library into lazy auto-load, making `use <pkg>;` optional.  This is the
+    /// ONLY trigger metadata: when set, loft DERIVES the actual trigger surface
+    /// (the `<pkg>::` namespace, the library's public text-methods, any public
+    /// types) from the library's own source — nothing is hand-listed, so there
+    /// is no parallel table to drift (same source-of-truth principle as the
+    /// source-scanned `#native` symbols).  The resolver side that acts on this
+    /// is separate, future work; today this is parsed metadata.
+    pub trigger_enabled: bool,
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -96,6 +105,7 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                         .wasm_bridge_routes
                         .push((key.to_string(), value.to_string()));
                 }
+                ("triggers", "enabled") => manifest.trigger_enabled = value == "true",
                 _ => {}
             }
         }
@@ -224,6 +234,23 @@ mod tests {
             m.dependencies[1],
             ("utils".to_string(), "../utils".to_string())
         );
+    }
+
+    #[test]
+    fn parses_trigger_enabled() {
+        let p = write_temp(
+            "triggers",
+            "[package]\nname = \"regex\"\n\n[triggers]\nenabled = true\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert!(m.trigger_enabled, "[triggers] enabled = true should parse");
+    }
+
+    #[test]
+    fn trigger_disabled_by_default() {
+        let p = write_temp("notrig", "[package]\nname = \"plain\"\n");
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert!(!m.trigger_enabled, "no [triggers] section -> disabled");
     }
 
     #[test]

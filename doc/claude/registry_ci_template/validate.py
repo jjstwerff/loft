@@ -8,7 +8,7 @@ Drop this file at `tools/validate.py` in the `loft-lang/registry`
 repo.  Wired in by `.github/workflows/pr-validate.yml` (also in this
 template directory).
 
-Three gates per PR:
+Four gates per PR:
 
 1. **Schema lint** — every package + version row has the required
    fields, types match, schema_version is unchanged.
@@ -21,6 +21,12 @@ Three gates per PR:
    run `loft package`, compare the produced sha256 to the PR's
    claim.  Caught: source repo's tag points at different bytes
    than the uploaded release tarball.
+4. **Trigger uniqueness** — every Tier-1 `method:receiver` trigger
+   must be owned by at most one package across the whole registry.
+   A consumer auto-loads a library from a bare `obj.method()` call,
+   so two packages claiming `text.matches` would make the auto-load
+   ambiguous.  Caught: a new library claiming a method-on-type
+   trigger another package already owns.
 
 Exits 0 on all-pass; non-zero with line-prefixed errors on any
 failure.  The workflow surfaces those lines as PR comments.
@@ -172,6 +178,37 @@ def gate_reproducible_build(idx: dict, prev: dict) -> None:
             print(f"[repro] {name} v{ver} reproduces from source")
 
 
+def gate_trigger_uniqueness(idx: dict) -> None:
+    """Every `method:receiver` Tier-1 trigger must be owned by at most one
+    package across the whole registry.
+
+    A consumer auto-loads a library from a bare `obj.method()` call, so the
+    trigger that maps `matches` -> the providing package must be globally
+    unique; two packages claiming `text.matches` would make the auto-load
+    ambiguous.  A package re-declaring its own trigger across versions is fine
+    — only a *cross-package* collision is rejected.
+
+    Runs over the full index (not just new rows): `main` is assumed clean, so
+    any collision present here was introduced by this PR.
+    """
+    owner: dict[str, str] = {}
+    for name, pkg in idx.get("packages", {}).items():
+        for vobj in pkg.get("versions", {}).values():
+            for trig in vobj.get("triggers", []) or []:
+                if not trig:
+                    continue
+                prior = owner.get(trig)
+                if prior is not None and prior != name:
+                    fail(
+                        f"trigger `{trig}` is claimed by both `{prior}` and "
+                        f"`{name}`; a method-on-type trigger must be unique "
+                        f"across the registry — rename the method in `{name}` "
+                        f"or drop its `[triggers]` opt-in"
+                    )
+                owner.setdefault(trig, name)
+    print("[triggers] all method-on-type triggers are uniquely owned")
+
+
 def _new_entries(idx: dict, prev: dict) -> list[tuple[str, str, dict]]:
     """Return list of (name, version, version_object) for rows that
     are present in `idx` but not in `prev`."""
@@ -199,6 +236,8 @@ def main() -> None:
     else:
         print("[gate 3] reproducible-build re-check")
         gate_reproducible_build(idx, prev)
+    print("[gate 4] trigger uniqueness")
+    gate_trigger_uniqueness(idx)
     print("All gates passed.")
 
 

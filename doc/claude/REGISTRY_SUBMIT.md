@@ -158,18 +158,30 @@ subsequent versions, `add my-lib 0.2.0`).
 ### 5. Wait for CI + maintainer review
 
 The registry's CI runs `tools/validate.py` automatically.
-Three gates:
+Four gates:
 
 | Gate | What it checks | Common failure cause |
 |---|---|---|
 | Schema lint | Required fields, correct types, `schema_version` unchanged | Typo in field name, wrong type (`size` as string instead of int), forgot `published` |
 | Tarball verify | Download `url`, hash it, compare to PR's `sha256` | Re-uploaded the GitHub release asset after opening the PR; pasted wrong sha256 |
 | Reproducible-build re-check | Clone `<homepage>` at `v<version>`, run `loft package`, compare sha256 | Source repo's tag points at different bytes than the uploaded tarball; build environment leaked content (e.g. uncommitted files) into the tarball |
+| Trigger uniqueness | Every Tier-1 `method:receiver` trigger is owned by at most one package across the whole registry | Your `[triggers]`-enabled package declares a `pub fn` method-on-type (`matches:text`, …) that another package already claims |
 
 If a gate fails, CI surfaces the error as a PR comment.  Fix
 the underlying cause, push to your PR branch, CI re-runs.
 
-When all three gates pass, a registry maintainer reviews the
+> **Trigger uniqueness, in plain terms.** If your package opts into
+> `[triggers]` (so consumers can call `obj.method()` and have your
+> library auto-loaded), every `method:receiver` pair you expose must
+> be globally unique — because a consumer writing `line.matches(p)`
+> auto-loads *the* package that owns `matches:text`, and there can be
+> only one.  `loft publish` warns you locally when a trigger you are
+> about to claim is already taken (checked against your cached
+> catalog); gate 4 enforces it as a hard reject.  The fix is to rename
+> the method, or drop the `[triggers]` opt-in and let consumers reach
+> your library with an explicit `use`.
+
+When all four gates pass, a registry maintainer reviews the
 PR — typically a sanity check on the description, homepage URL,
 and tarball provenance.  After approval, the maintainer signs
 the new `index.json` locally (see
