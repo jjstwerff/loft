@@ -39,24 +39,37 @@ Shipped so far:
   `crypto` published + installable end-to-end; their `lib/` dirs are
   removed from the monorepo (residual `lib/random/native/target/`
   build cache cleaned 2026-05-28).
-- **`loft-libs-net` SHIPPED** (Phase 6): `web`, `server`,
-  `game_protocol` 0.1.0 (initial); transitive `loft install` +
-  lockfile merge smoke-tested.  **v0.1.1 patch release shipped
-  2026-05-31** (registry PR #5, all three validator gates green
-  including the reproducible-build re-check) bundling Phase 6r
-  + 6.5 + warning sweep + the new `byte_at.loft` coverage.
-  Chain that landed it: jjstwerff/loft #234 (deterministic
-  `loft package` — zero mtime in gzip + tar headers) → net #2
-  (omnibus) → net #3 (version bump) → 3 tags + 3 GitHub releases →
-  registry #4 (validator multi-package homepage fix) → registry #5
-  (the version entries).
+- **`loft-libs-net` SHIPPED (A+B)** (Phase 6 + 6b): `web`, `server`,
+  `game_protocol` 0.1.0 (initial) → v0.1.1 patch release 2026-05-31
+  (registry PR #5, all three validator gates green including
+  reproducible-build re-check); Stage B 2026-05-31 (PR #238 squash
+  commit `eff4b01`) removed `lib/web/` + `lib/server/` +
+  `lib/game_protocol/` from the monorepo with consumer migration
+  (`tests/integration/`, `tools/audience-demo*/`, `tools/viewer/`
+  swung to registry-version deps).  Native cdylib build redirects
+  to `~/.loft/build-cache/<pkg>-<ver>/` via the shared
+  `extensions::native_target_root` helper.
 - **`loft-libs-graphics` partial** (Phase 5): `shapes` 0.2.0 +
   `gridmesh` 0.1.1 published.  Phase 6.5 + warning-sweep omnibus
   shipped 2026-05-31 (chunk PR #1: canonical `library-ci.yml`,
   gridmesh `step_y` `_x` rename + `buckets not null`; registry PR #6
   all three validator gates green).  `graphics` + `imaging` remain
   in the monorepo but their native-codegen blocker is **gone**
-  (see below).
+  (see below).  Stage B is **BLOCKED on prerequisites** —
+  see Phase 5b in the phase summary.
+- **Consumer-side surface SHIPPED** (PR #238): `loft new <name>`
+  scaffolder (with `--native` / `--chunk` flags); Phase 6.6
+  auto-install on `use` + `loft pin` sidecar + walk-up
+  `loft.toml` + `loft list-installed`; Phase 6.7 signed
+  advisory feed + `loft audit`; Phase 6.8 `loft update`;
+  Phase 6.11 `loft bundle export/import` + `file://` URLs;
+  Phase 6.12 `tests/fixtures/libs/` + `scripts/sync-fixtures.sh`.
+- **Author UX surface SHIPPED** (PR #238): Phase 6.16
+  `loft publish` (emit-entry MVP); Phase 6.7a `loft yank`
+  (emit-blocks MVP for typed status + advisories.json row);
+  `LIBRARY_AUTHORING.md` end-to-end author guide; Phase 6.14
+  `loft doc` + canonical `library-ci.yml` gh-pages step;
+  Phase 6.15 `scripts/gen_library_catalog.py` catalog generator.
 
 Recently corrected (this README was stale before 2026-05-26):
 
@@ -100,13 +113,17 @@ resolving extracted packages through the registry rather than via
 
 Stage A without Stage B is "the library is published but the
 monorepo still depends on its in-tree copy" — a real release for
-external users, but not the end state.  loft-libs-core completed
-both stages; loft-libs-net + loft-libs-graphics are Stage-A-only
-as of 2026-05-31.
+external users, but not the end state.  loft-libs-core +
+loft-libs-net completed both stages (net Stage B shipped via
+PR #238 squash `eff4b01`, 2026-05-31); loft-libs-graphics is
+Stage-A-only as of 2026-05-31 (Stage B blocked — see Phase 5b).
 
 ## Next steps — small verifiable increments
 
-Ordered by readiness.  Each is independently verifiable.
+Ordered by readiness.  Each is independently verifiable.  The
+PR #238 closure (2026-05-31) shipped every 6.x consumer/author UX
+phase + net Stage B; what remains is the longer-arc graphics/world/
+moros extraction work plus the closure ritual.
 
 1. ~~Migrate `server`/`graphics` to the `[native.functions]` manifest
    pattern.~~  **DONE + superseded** — the manifest was a transitional
@@ -345,7 +362,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 6.8 | `loft update` command — `loft update` refreshes lockfile to latest active versions of all declared deps; `loft update <pkg>` targets one package; project-mode explicit upgrade path that pairs with the 6.7 yank channel | 6.6 (lockfile primitives), 6.7 (advisory feed for "is the new version safe to pick") | **SHIPPED** 2026-05-31.  Walks project (walk-up `loft.toml`) or cwd `loft.lock`; respects per-dep range; skips yanked via `find_best_version`; `--dry-run` / `--check` / scoped-by-pkg modes.  `--major` (range bump) deferred to a follow-up.  Design at [registry-resolution.md § Phase 6.8](registry-resolution.md#phase-68--loft-update-command-proposed-2026-05-31) |
 | 6.11 | Offline bundle support — `loft bundle export <pkgs> <outdir>` + `loft bundle import <indir>` + `LOFT_REGISTRY_URL=file://` resolution; stale-advisory thresholds (`LOFT_ADVISORY_MAX_AGE`, `LOFT_ADVISORY_STALE_REFUSE`); makes air-gapped / regulated-environment / classroom-lab deployments first-class | 6.6, 6.7 | **SHIPPED (core)** 2026-05-31.  `loft bundle export --all` / `--packages X,Y,Z <outdir>` writes index + advisories + tarballs + manifest.json; `loft bundle import <indir>` verifies sha256 per tarball + extracts to `~/.loft/registry/`; `http_get_bytes` now handles `file://` URLs so `LOFT_REGISTRY_URL=file://...` is a drop-in mirror.  Stale-advisory thresholds + transitive auto-resolve for `--packages` are follow-ups.  Design at [offline.md § Phase 6.11](offline.md#phase-611--offline-bundle-support-proposed-2026-05-31) |
 | 6.12 | Loft-developer offline test loop — `tests/fixtures/libs/` + `scripts/sync-fixtures.sh`; bundled-fixture pattern that survives Stage B's `lib/<pkg>/` removal; eliminates "loft contributor needs internet to run tests" failure mode; mock-registry fixture for testing registry-resolution code paths | Stage B for each chunk (the gap this closes only appears once `lib/<pkg>/` is removed) | **SHIPPED (scaffolding + pure-loft fixtures)** 2026-05-31.  `scripts/sync-fixtures.sh` clones pinned tags + copies sources; `--check` mode for drift detection.  Initial population: arguments, shapes, gridmesh, game_protocol (pure-loft only; native-cdylib packages stay in monorepo until their chunk's Stage B).  `tests/fixtures/mock-registry/` has `index.json` + `advisories.json` for offline resolution-path tests (4/4 passing).  Doc-hygiene gate verifies fixture-dir structural integrity.  Native-cdylib fixtures (random / web / server / crypto / imaging) land when their Stage B is closer.  Design at [offline.md § Phase 6.12](offline.md#phase-612--loft-developer-offline-test-loop-proposed-2026-05-31) |
-| 6.13 | Documentation harvest + close-out — extract design content from this plan into permanent reference docs (PACKAGES.md / PKG_REGISTRY.md / new authoring docs); create user-facing onboarding docs (INSTALL.md / SECURITY.md / PUBLISHING.md / USING_LIBRARIES.md); retire stale in-monorepo `lib/<pkg>/` references; CLAUDE.md table surgery; reference audit sweep; split plan into `README.md` (retrospective) + `LANDING_LOG.md`; move to `lib_plans/finished/12-library-extraction/`.  The closure ritual that prevents the plan from "just stopping" with valuable design content trapped in a finished doc no one reads | All previous 6.x phases shipped (6.5 + 6.6 + 6.7 + 6.7a + 6.8 + 6.11 + 6.12 + 6.14 + 6.15 + 6.16) + Stage B done for all three chunks (core ✓ already; 5b + 6b pending) | **IN PROGRESS** — designed 2026-05-31; [LANDING_LOG.md](LANDING_LOG.md) seeded 2026-05-31 with every shipped commit through Phase 6.12 (incremental from here — each new phase appends an entry).  Permanent-doc harvest + user-facing onboarding docs are the closure-time work (when only blockers remain); see [closure.md § Phase 6.13](closure.md#phase-613--documentation-harvest--close-out-proposed-2026-05-31) |
+| 6.13 | Documentation harvest + close-out — extract design content from this plan into permanent reference docs (PACKAGES.md / PKG_REGISTRY.md / new authoring docs); create user-facing onboarding docs (INSTALL.md / SECURITY.md / PUBLISHING.md / USING_LIBRARIES.md); retire stale in-monorepo `lib/<pkg>/` references; CLAUDE.md table surgery; reference audit sweep; split plan into `README.md` (retrospective) + `LANDING_LOG.md`; move to `lib_plans/finished/12-library-extraction/`.  The closure ritual that prevents the plan from "just stopping" with valuable design content trapped in a finished doc no one reads | All previous 6.x phases shipped (6.5 + 6.6 + 6.7 + 6.7a + 6.8 + 6.11 + 6.12 + 6.14 + 6.15 + 6.16) + Stage B done for all three chunks (core ✓ already; 5b + 6b pending) | **IN PROGRESS** — [LANDING_LOG.md](LANDING_LOG.md) seeded 2026-05-31 with every shipped commit through Phase 6.12; PR #238 closure entry (2026-05-31, squash `eff4b01`) records every 6.x consumer + author-UX phase landing on main.  LIBRARY_AUTHORING.md author-facing walkthrough shipped same day.  Remaining closure work: permanent-doc harvest into PACKAGES.md / PKG_REGISTRY.md, CLAUDE.md table surgery, reference-audit sweep, move to `lib_plans/finished/`.  Fires when only longer-arc items (5/5b/6w/7-series) remain. |
 | 6.14 | Library documentation pipeline — chunk-repo HTML doc generation; analogue of `cargo run --bin gendoc` for libraries that live OUTSIDE the monorepo; per-version published to a per-chunk gh-pages site OR aggregated at `loft-lang.org/libraries/<name>/<ver>/`.  After Stage B, the existing monorepo `gendoc` has no library source to read; this fills that gap | 5b + 6b (Stage B work that removes monorepo lib sources), Stage A complete for the library being documented | **SHIPPED (loft-binary side + CI template)** 2026-05-31.  `loft doc <path>` was already wired as PKG.8 — reads `<pkg>/loft.toml` + `<pkg>/src/*.loft` + optional `<pkg>/docs/*.loft` topic pages, emits HTML to `<pkg>/doc/`.  Verified against the gridmesh fixture: `doc/index.html` + `doc/api-general.html` generated cleanly.  `library-ci.yml.example` gained a "Generate per-package docs" step + a tag-gated "Publish docs to gh-pages" step (URL pattern `loft-lang.github.io/<chunk>/<pkg>/<ver>/`).  Chunk-repo rollout (apply the new YAML) is a per-chunk PR; lands incrementally.  Cross-package link generation + `<pkg>/latest/` redirects are follow-ups.  Design at [library-docs.md](library-docs.md) |
 | 6.15 | Library catalog page generator — `scripts/gen_library_catalog.py` that pulls `index.json` from the registry and writes `doc/library-catalog.md` (and an HTML view at `loft-lang.org/libraries`); auto-update via CI on registry change; one page listing every published library with one-liner descriptions, current active versions, license, and link to docs (Phase 6.14) | 6.7 (status info for yanked entries), 6.14 (doc URLs to link to) | **SHIPPED** 2026-05-31.  Python script reads `index.json` (live HTTPS, file://, or local path) and emits a categorised markdown table — packages sorted within each category; one-liner description + latest active version + link to chunk-repo homepage.  `--check` mode for CI drift detection.  Verified against live registry + the mock-registry fixture.  Registry-side CI auto-update + HTML rendering at `loft-lang.org/libraries` are follow-ups.  Design at [closure.md § Library catalog generator](closure.md#phase-615--library-catalog-page-generator-proposed-2026-05-31) |
 | 6.16 | `loft publish` command — CLI helper that reads `loft.toml`, verifies CI green at the tag, computes sha256 + size, opens a registry PR via the GitHub API (or generates the PR body for manual `gh pr create`); the missing piece that closes the authoring-friction gap vs `cargo publish` | 6.5 (CI), 6.6 (install primitives reused by some flows) | **SHIPPED (emit-entry MVP)** 2026-05-31.  Re-packages locally via `package::package_create` (deterministic); auto-detects chunk repo from `git remote get-url origin`; verifies the GitHub release at `<pkg>-v<ver>` carries the expected asset (via `gh release view`); emits the `index.json` entry block ready for paste into a registry PR.  `--dry-run` skips the GH verification.  Auto-PR-open (clone registry + splice index.json + `gh pr create`) is the next iteration; MVP closes the friction gap by eliminating manual sha256 + size computation. |

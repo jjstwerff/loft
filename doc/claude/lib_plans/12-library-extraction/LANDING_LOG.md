@@ -242,6 +242,21 @@ loop:
   $ loft publish                 # emit registry index entry
   # paste into loft-lang/registry PR
 
+## 2026-05-31 — LIBRARY_AUTHORING.md — end-to-end author guide
+
+- `doc/claude/LIBRARY_AUTHORING.md` — consolidates the author UX
+  sprint (Phase 6.16 `loft publish` + `loft new` scaffolder +
+  Phase 6.7a `loft yank`) into one user-facing walkthrough:
+  scaffold → develop → pre-release checklist → publish
+  (tag → release source + binary → emit registry entry → PR) →
+  maintain (patch releases, yank with severity tiers,
+  `loft update`).  Closes the author-friction gap by giving
+  authors a single doc to read instead of cross-referencing
+  PACKAGES.md + REGISTRY_SUBMIT.md + topical phase files.
+- CLAUDE.md doc-index row added immediately after
+  REGISTRY_SUBMIT.md, flagging LIBRARY_AUTHORING as the
+  higher-level walkthrough.
+
 ## 2026-05-31 — Phase 6.16 — `loft publish` author helper
 
 src/main.rs:
@@ -533,26 +548,94 @@ as a separate plan-12 sub-phase OR a fix into `extensions.rs`
   mock_registry_fixtures_are_valid).  Native-cdylib fixtures
   defer to their respective Stage B work.
 
+## 2026-05-31 — PR #238 squash-merged to main (`eff4b01`)
+
+The 38-commit `libraries7` branch (Phase 6.6 / 6.7 / 6.7a / 6.8 /
+6.11 / 6.12 / 6.13 / 6.14 / 6.15 / 6.16 + `loft new` +
+LIBRARY_AUTHORING.md + net Stage B + author UX sprint) merged to
+main as squash commit `eff4b01`.
+
+CI-discovered fixes the merge carries (caught during PR review,
+not in the original feature commits):
+
+- **`744535c`** — fmt + clippy --all-targets cleanup + tests/registry_e2e.rs
+  `lock_path: None` in 4× `InstallOptions` blocks + `doc/claude/PROBLEMS.md`
+  @P389 row's `../lib_plans/12-...` broken link → `lib_plans/12-...` +
+  `doc/claude/ROADMAP.md` row for `lib_plans/future/30-loft-distribution`
+  (the plan existed on disk but never appeared in ROADMAP) + wasm
+  cross-build fix (`src/extensions.rs::native_target_root` gates
+  `registry_index::cache_dir()` behind `feature = "registry"`,
+  returns in-tree path on non-registry builds) + post-Stage-B
+  `src/wasm.rs` repoint of `web.loft` from `lib/web/src/web.loft`
+  (removed by Stage B) → `tests/fixtures/libs/web/src/web.loft` +
+  `scripts/sync-fixtures.sh PINNED_REFS` adds `web-v0.1.1`.
+- **`f2594eb`** — `.github/workflows/ci.yml` G3-avoidance pre-build
+  drops the now-stale `lib/web/native/Cargo.toml` +
+  `lib/server/native/Cargo.toml` lines (both removed by Stage B).
+  graphics + imaging stay in the pre-build (Stage B pending).
+- **`6bc9d95`** — `scaffold_library` had a stray `#[cfg(feature =
+  "registry")]` it didn't need (the function only writes files);
+  drop the gate so `loft new` works under default-features and
+  `--no-default-features` alike.
+- **`5b945bb`** — `tests/codegen_emitter.rs::p244_text_native_wrapper_compiles_under_native`
+  marked `#[ignore = "blocked by @P389 — cross-package native link
+  on Linux CI"]` because post-Stage B the test pulls TWO chunk-resident
+  cdylibs (server + transitively web) into one native link — exactly
+  @P389's failure shape.  Pre-Stage-B the CI's pre-build of
+  `lib/web/native` + `lib/server/native` populated each `target/release/deps/`
+  with rustls/ureq rlibs and masked it; post-Stage B both packages
+  live in `~/.loft/build-cache/<pkg>-<ver>/` and the link fails.
+  The actual @P244 regression target (the LoftStr→Str wrapper in
+  `src/generation/mod.rs`) is NOT at risk — wrapper codegen runs
+  before link.  Un-ignore when @P389 is resolved.  Also fixes the
+  broken markdown link in `doc/claude/lib_plans/12-library-extraction/security.md:340`
+  (`../30-loft-distribution/` → `../future/30-loft-distribution/`).
+
+Final CI gate state at merge: all checks green (Test ubuntu/macos/windows,
+Browser build, Clippy, Format, Doc hygiene, stack_align_guard, all Analyze*,
+CodeQL, Nightly health) except the **pre-existing ASan UAF/OOB gate
+failure** that also fails on `main` HEAD (commit `2f5268d`, the PLAN53 Wave 2
+work — `taiki-e/install-action@nextest` picks up `-Zsanitizer=address`
+in RUSTFLAGS and stable rustc rejects it).  GitHub `mergeStateStatus:
+UNSTABLE` allowed the squash through.
+
+What remains OPEN in @PLAN12 after this merge:
+
+- Phase 3.6 (path-helper consolidation `dir`/`basename`/`join(text,text)`/`resolve`
+  from `03_text.loft` → `02_files.loft`).
+- Phase 5 (extract `graphics` + `imaging` into `loft-libs-graphics` Stage A).
+- Phase 5b (Stage B — BLOCKED on publishing `loft-ffi-macros` to crates.io +
+  graphics warning sweep; documented in the phase summary).
+- Phase 6w-w (retire every `lib/*/.allow_warnings`).
+- Phase 6t Tier 3 (multiplayer harness port — pulls in @P389 fix).
+- Phase 6t Tier 5 (imaging / world / markdown coverage gaps).
+- Phase 6w (extract `loft-libs-world`).
+- Phase 7a/p/b/c (moros split + cross-project consumers).
+- Phase 8 (final monorepo cleanup + `audience_crystal` test dir).
+
 ---
 
 ## Pending phases (in roughly the order they'd land)
 
 These will get an entry here when they ship:
 
-- Phase 5b — `loft-libs-graphics` Stage B (extract graphics +
-  imaging Stage A first; then remove monorepo lib dirs).
-- Phase 6.7a — author-side yank workflow (`loft yank` CLI +
-  validator cross-ref gate).
-- Phase 6.16 — `loft publish` CLI.
+- Phase 3.6 — path-helper consolidation `dir`/`basename`/`join(text,text)`/
+  `resolve` from `03_text.loft` → `02_files.loft`.
+- Phase 5 — extract `graphics` + `imaging` Stage A (loft-libs-graphics).
+- Phase 5b — `loft-libs-graphics` Stage B (BLOCKED on publishing
+  `loft-ffi-macros` to crates.io + graphics warning sweep — see
+  the 2026-05-31 "Phase 5b attempt" entry above).
 - Phase 6w-w — retire every `.allow_warnings`.
-- Phase 6t Tier 3 — multiplayer harness port.
-- Phase 6t Tier 5 — remaining coverage gaps.
+- Phase 6t Tier 3 — multiplayer harness port (touches @P389).
+- Phase 6t Tier 5 — imaging / world / markdown coverage gaps.
 - Phase 6w — extract `loft-libs-world`.
 - Phase 7a/p/b/c — moros split + cross-project consumers.
-- Phase 8 — final monorepo cleanup.
-- Phase 6.13 — documentation harvest + close-out (the
-  closure ritual itself; this file becomes the finished plan's
-  landing log).
+- Phase 8 — final monorepo cleanup + `audience_crystal` test dir.
+- Phase 6.13 closure — permanent-doc harvest (PACKAGES.md /
+  PKG_REGISTRY.md / new author-facing onboarding docs); CLAUDE.md
+  table surgery; reference-audit sweep; move this whole directory
+  to `lib_plans/finished/12-library-extraction/`.  Fires when only
+  the longer-arc items above remain.
 
 Append new sections above this list as phases ship; remove
 items from this list as they land.
