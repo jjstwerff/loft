@@ -108,3 +108,34 @@ jobs:
       - name: Transitive dep tests
         working-directory: ${{ matrix.package }}
         run: loft test --deps
+
+      # Phase 6.14 — generate per-package HTML docs.
+      # `loft doc` reads <pkg>/loft.toml + <pkg>/src/*.loft (+ optional
+      # <pkg>/docs/*.loft topic pages) and emits HTML to <pkg>/doc/.
+      # Output collected as a CI artifact on every PR + push; release
+      # tags additionally publish to gh-pages (see next step).
+      - name: Generate per-package docs
+        working-directory: ${{ matrix.package }}
+        run: loft doc .
+
+      - name: Upload docs as CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-${{ matrix.package }}-${{ github.sha }}
+          path: ${{ matrix.package }}/doc/
+          retention-days: 14
+
+      # Phase 6.14 — publish to gh-pages on release tags only.
+      # URL pattern: https://loft-lang.github.io/<chunk>/<pkg>/<ver>/
+      # The destination_dir takes the version from the tag's
+      # `<pkg>-v<X.Y.Z>` shape; the workflow trigger needs to be
+      # extended to fire on `<pkg>-v*` tag pushes for this step to
+      # have anything to publish.
+      - name: Publish docs to gh-pages (release only)
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.package))
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ matrix.package }}/doc
+          destination_dir: ${{ matrix.package }}/${{ env.PKG_VERSION }}
+          keep_files: true

@@ -147,6 +147,29 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6.14 — library docs pipeline (CLI + CI template)
+
+- `loft doc <path>` CLI was already wired as PKG.8 — reads
+  `<pkg>/loft.toml` + `<pkg>/src/*.loft` (+ optional
+  `<pkg>/docs/*.loft`) and emits HTML to `<pkg>/doc/`.
+  Verified end-to-end against the gridmesh fixture
+  (`index.html` + `api-general.html`).
+- `library-ci.yml.example` gained two new steps:
+  - "Generate per-package docs" — always runs; collects
+    `<pkg>/doc/` as a CI artifact.
+  - "Publish docs to gh-pages (release only)" — fires on
+    `<pkg>-v*` tags; pushes to `<chunk>.github.io/<pkg>/<ver>/`.
+- Per-chunk rollout (applying the new YAML to each chunk repo)
+  lands incrementally.  Cross-package link generation +
+  `<pkg>/latest/` symlinks are follow-ups.
+
+## 2026-05-31 — Phase 6.13 — landing-log seed
+
+- `LANDING_LOG.md` (this file) created and back-populated with
+  every shipped phase through Phase 6.12.  Phase 6.13 now
+  IN PROGRESS — incremental append per phase.  Permanent-doc
+  harvest + user-facing onboarding remain closure-time work.
+
 ## 2026-05-31 — Phase 6.12 — loft-dev offline test loop (scaffolding)
 
 - **`bc32723`** — `scripts/sync-fixtures.sh` +
@@ -169,8 +192,6 @@ These will get an entry here when they ship:
   lib/{web,server,game_protocol}/).
 - Phase 6.7a — author-side yank workflow (`loft yank` CLI +
   validator cross-ref gate).
-- Phase 6.14 — library docs pipeline (`loft doc` +
-  per-version gh-pages hosting).
 - Phase 6.15 — library catalog page generator.
 - Phase 6.16 — `loft publish` CLI.
 - Phase 6w-w — retire every `.allow_warnings`.
