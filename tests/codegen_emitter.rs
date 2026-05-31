@@ -580,35 +580,32 @@ fn p244_text_native_wrapper_compiles_under_native() {
 #[test]
 fn p310_graphics_vector_ffi_checks_clean() {
     // Direct binary invocation — see p203_reproducer_passes_under_native
-    // for the nested-cargo race rationale.
+    // for the nested-cargo race rationale.  The fixture is its own mini-
+    // package (`tests/fixtures/p310/loft.toml`) with a registry dep on
+    // `graphics`; loft auto-installs on first `use graphics;`.  Previously
+    // this test passed `--lib lib` to link the WHOLE monorepo native stack
+    // (graphics + web + server + imaging) under one rustc, doubling as the
+    // Windows multi-lib link guard — but @PLAN12 Phase 5b moved those four
+    // packages to chunk repos, so the cross-lib guard now lives in the
+    // graphics chunk's own CI matrix (per-platform builds against pinned
+    // loft).  This test still pins the vector<integer> → *const i64 path
+    // end-to-end against a real `graphics::save_png` consumer.
     let out = std::process::Command::new(loft_binary())
         .args([
             "--check",
-            "--lib",
-            "lib",
-            "tests/fixtures/p310_save_png.loft",
+            "tests/fixtures/p310/p310_save_png.loft",
         ])
         .current_dir(project_root())
         .output()
         .expect("run --check on the @P310 graphics save_png fixture");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // This `--check --lib lib` links the WHOLE `lib/` native stack (graphics +
-    // web + server + imaging) under one rustc invocation, so it doubles as the
-    // Windows multi-lib link guard.  The previous Windows-only silent-skip
-    // branches (LNK1181 / "required to be available in rlib format") were
-    // removed 2026-05-30: @P229 G2 was fixed in src/native_utils.rs (each
-    // native package's own build-script link-search dirs are now harvested, so
-    // the second `windows_x86_64_msvc` version's `.lib` resolves), and G3 no
-    // longer reproduces.  The test now asserts the link on every platform.
-    // See doc/claude/WINDOWS.md § G2.
     assert!(
         out.status.success(),
-        "P310: graphics save_png fixture failed `--check`.  Either the \
+        "P310: graphics save_png fixture failed `--check`.  The \
          vector_elem_rust_type storage-stride fix (src/generation/mod.rs) \
-         regressed (vector<integer> lowered to *const i32 vs the vec<i64> \
-         wrapper), or — on Windows (LNK1181) — the @P229 G2 per-package \
-         link-search harvest (src/native_utils.rs::add_native_extern_flags) \
-         regressed.  stderr={stderr:?}"
+         likely regressed — vector<integer> must lower to *const i64 to \
+         match the vec<i64> `loft_save_png` wrapper, not *const i32.  \
+         stderr={stderr:?}"
     );
 }
 

@@ -477,7 +477,7 @@ view: view-refresh
 #      compile failures.
 #   4. Verify libloft.rlib exists for both wasm32 and the host
 #      (proc-macros need the host deps dir).
-#   5. Run `loft --html doc/brick-buster.html ...brick-buster.loft`.
+#   5. Run `loft --html doc/brick-buster.html ...25-brick-buster.loft`.
 #   6. Sanity-check the output HTML: doctype + loft_start + > 5kB.
 #   7. Print the file:// URL so the user can click through.
 game:
@@ -504,7 +504,7 @@ game:
 	@echo "  [5/7] compiling Brick Buster to self-contained HTML ..."
 	@./target/release/loft --html doc/brick-buster.html \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
-	    tools/brick-buster/brick-buster.loft \
+	    tools/brick-buster/25-brick-buster.loft \
 	    >/tmp/loft_game_html.log 2>&1 || { \
 	    echo "    FAIL: --html compilation — see /tmp/loft_game_html.log"; \
 	    tail -30 /tmp/loft_game_html.log; exit 1; }
@@ -650,7 +650,7 @@ play:
 	@# across runs.
 	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
-	    tools/brick-buster/brick-buster.loft
+	    tools/brick-buster/25-brick-buster.loft
 
 # ── Native Moros editor ────────────────────────────────────────────
 #
