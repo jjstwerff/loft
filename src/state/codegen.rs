@@ -2314,8 +2314,7 @@ impl State {
                 // step(8) span, not 2*step(4): under LOFT_ALIGN two separate u32
                 // slots would be 16 bytes (8+8) and leave a 4-byte gap the i64
                 // read-back can't see.  Identity flag-OFF (step(8) == 2*step(4) == 8).
-                was_stack =
-                    stack.position + stack.step(8) - stack.step(super::size_ref() as u16);
+                was_stack = stack.position + stack.step(8) - stack.step(super::size_ref() as u16);
                 if let Value::Int(parameter_length) = parameters[4] {
                     self.gather_key(stack, &parameters, 4, &mut tps);
                     self.gather_key(stack, &parameters, 5 + parameter_length, &mut tps);
