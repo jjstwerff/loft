@@ -20,7 +20,7 @@
 
 **A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, chiptune music, hand-designed levels, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
 
-And it's one file: [`25-brick-buster.loft`](lib/graphics/examples/25-brick-buster.loft).
+And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.loft).
 
 ## Three ways to see loft
 
@@ -114,7 +114,7 @@ loft examples/match.loft        # Pattern matching on enums
 | `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
 | **`25-brick-buster.loft`** | **A complete arcade game** |
 
-See the [full example list](lib/graphics/examples/README.md).
+See the [full example list](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics/examples) in the graphics chunk repo.
 
 ## Contributing
 

@@ -1567,6 +1567,16 @@ impl Parser {
             return;
         }
         let mut ctx = WarnCtx::default();
+        // Initialise `last_pos` to the function's own source position so
+        // any fault inside the body that lacks a finer-grained
+        // `Value::Span` wrapper attributes to the function (the
+        // legitimate fallback) instead of leaking to the lexer's
+        // current cursor — which is *past* the just-parsed body and
+        // would otherwise point at the next function's start.
+        let fn_pos = self.data.definitions[self.context as usize]
+            .position
+            .clone();
+        ctx.last_pos = Some(fn_pos);
         self.walk_for_warnings(body, &mut ctx);
     }
 
@@ -1672,14 +1682,15 @@ impl Parser {
                 // Skip pattern 5 — recognise `if idx < len(vec) { ... }` and
                 // `if idx < n { ... }` (where `n` is a captured `len(vec)`),
                 // and push (idx_var, vec_var) onto the guarded-pairs stack so
-                // indexing inside `then_b` is treated as safe.
-                let pushed =
-                    guard_pair_with_ctx(cond.unspan(), &self.data, Some(&ctx.len_captures));
-                if let Some(pair) = pushed {
-                    ctx.guarded_pairs.push(pair);
+                // indexing inside `then_b` is treated as safe.  Also walks
+                // AND-conjuncted conditions (`if a<len(u) and b<len(v) { ... }`)
+                // and pushes each qualifying conjunct.
+                let pushed = collect_guard_pairs(cond.unspan(), &self.data, &ctx.len_captures);
+                for pair in &pushed {
+                    ctx.guarded_pairs.push(*pair);
                 }
                 self.walk_for_warnings(then_b, ctx);
-                if pushed.is_some() {
+                for _ in &pushed {
                     ctx.guarded_pairs.pop();
                 }
                 self.walk_for_warnings(else_b, ctx);
@@ -1898,6 +1909,55 @@ fn guard_pair_with_ctx(
         _ => return None,
     };
     Some((*idx_var, vec_var))
+}
+
+/// Collect every `(idx_var, vec_var)` pair that `cond` proves safe.
+/// Handles both a single comparison and AND-conjuncted comparisons
+/// like `if a < len(u) and b < len(v) { ... }`.  Caller pushes each
+/// returned pair onto `ctx.guarded_pairs` for the duration of the
+/// then-block, then pops them.
+fn collect_guard_pairs(
+    cond: &Value,
+    data: &Data,
+    captures: &std::collections::HashMap<u16, u16>,
+) -> Vec<(u16, u16)> {
+    let mut out = Vec::new();
+    collect_guard_pairs_into(cond, data, captures, &mut out);
+    out
+}
+
+fn collect_guard_pairs_into(
+    cond: &Value,
+    data: &Data,
+    captures: &std::collections::HashMap<u16, u16>,
+    out: &mut Vec<(u16, u16)>,
+) {
+    // Strip Conv* casts (handled by unwrap_cond).
+    let inner = unwrap_cond(cond, data);
+    // Loft's short-circuit `a and b` lowers to `if a then b else false`
+    // — recurse into both arms so each conjunct contributes.  Match on
+    // shape `If(left, right, Boolean(false))`.
+    if let Value::If(left, right, else_v) = inner
+        && matches!(else_v.unspan(), Value::Boolean(false))
+    {
+        collect_guard_pairs_into(left, data, captures, out);
+        collect_guard_pairs_into(right, data, captures, out);
+        return;
+    }
+    // Also recurse into explicit AND-call forms in case the lowering
+    // changes / for `int & int`-style bool checks built on LandInt.
+    if let Value::Call(def_nr, args) = inner {
+        let raw = data.def(*def_nr).original_name();
+        let name = raw.strip_suffix("Nullable").unwrap_or(raw.as_str());
+        if matches!(name, "AndBool" | "And" | "LandInt") && args.len() == 2 {
+            collect_guard_pairs_into(&args[0], data, captures, out);
+            collect_guard_pairs_into(&args[1], data, captures, out);
+            return;
+        }
+    }
+    if let Some(pair) = guard_pair_with_ctx(inner, data, Some(captures)) {
+        out.push(pair);
+    }
 }
 
 /// True when `src` is a `len(<Var>)` call — used to recognise the

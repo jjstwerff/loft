@@ -7,4 +7,4 @@ loft    = ">=0.8"
 entry = "src/audience_crystal.loft"
 
 [dependencies]
-gridmesh = { path = "../gridmesh" }
+gridmesh = ">=0.1"

@@ -10,4 +10,4 @@ entry = "src/moros_sim.loft"
 moros_map    = { path = "../moros_map" }
 moros_editor = { path = "../moros_editor" }
 moros_render = { path = "../moros_render" }
-graphics     = { path = "../graphics" }
+graphics     = ">=0.1"

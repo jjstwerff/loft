@@ -1,0 +1,165 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Scene graph types for the graphics package.
+// Represents a 3D scene with nodes, cameras, lights, and materials.
+use math;
+use mesh;
+
+// --- Materials ---
+
+// A simple PBR-like material.
+pub struct Material {
+  name: text,
+  base_color_r: float not null,
+  base_color_g: float not null,
+  base_color_b: float not null,
+  base_color_a: float not null,
+  metallic: float not null,
+  roughness: float not null
+}
+
+pub fn material(mname: text) -> Material {
+  Material {
+    name: mname,
+    base_color_r: 0.8, base_color_g: 0.8, base_color_b: 0.8, base_color_a: 1.0,
+    metallic: 0.0, roughness: 0.5
+  }
+}
+
+// Shorthand: opaque dielectric material with the given color.
+pub fn material_color(mname: text, mr: float, mg: float, mb: float) -> Material {
+  Material {
+    name: mname, base_color_r: mr, base_color_g: mg, base_color_b: mb,
+    base_color_a: 1.0, metallic: 0.0, roughness: 0.5
+  }
+}
+
+// Shorthand: metallic material with the given color and roughness.
+pub fn material_metal(mname: text, mr: float, mg: float, mb: float, mrough: float) -> Material {
+  Material {
+    name: mname, base_color_r: mr, base_color_g: mg, base_color_b: mb,
+    base_color_a: 1.0, metallic: 1.0, roughness: mrough
+  }
+}
+
+pub fn set_color(self: Material, scr: float, scg: float, scb: float) {
+  self.base_color_r = scr;
+  self.base_color_g = scg;
+  self.base_color_b = scb;
+}
+
+// --- Scene nodes ---
+
+// A node in the scene graph with a mesh, material, and transform.
+pub struct Node {
+  name: text,
+  mesh_idx: integer not null,
+  material_idx: integer not null,
+  transform: math::Mat4
+}
+
+pub fn node(nn: text, nm: integer, nmat: integer) -> Node {
+  Node { name: nn, mesh_idx: nm, material_idx: nmat, transform: math::mat4_identity() }
+}
+
+// Create a node with an explicit transform (avoids mutation of transform field).
+pub fn node_at(nn: text, nm: integer, nmat: integer, xf: math::Mat4) -> Node {
+  Node { name: nn, mesh_idx: nm, material_idx: nmat, transform: xf }
+}
+
+// --- Camera ---
+
+pub struct Camera {
+  name: text,
+  fov: float not null,
+  near: float not null,
+  far: float not null,
+  position: math::Vec3,
+  target: math::Vec3
+}
+
+pub fn camera(cname: text) -> Camera {
+  Camera {
+    name: cname,
+    fov: 60.0, near: 0.1, far: 100.0,
+    position: math::vec3(0.0, 0.0, 5.0),
+    target: math::vec3(0.0, 0.0, 0.0)
+  }
+}
+
+// --- Lights (KHR_lights_punctual) ---
+
+pub enum LightType { Directional, Point, Spot }
+
+pub struct Light {
+  name: text,
+  light_type: LightType not null,
+  color_r: float not null,
+  color_g: float not null,
+  color_b: float not null,
+  intensity: float not null,
+  position: math::Vec3,
+  direction: math::Vec3
+}
+
+pub fn directional_light(ln: text, lr: float, lg: float, lb: float, li: float, ldir: math::Vec3) -> Light {
+  Light {
+    name: ln, light_type: Directional,
+    color_r: lr, color_g: lg, color_b: lb, intensity: li,
+    position: math::vec3(0.0, 0.0, 0.0), direction: ldir
+  }
+}
+
+pub fn point_light(ln: text, lr: float, lg: float, lb: float, li: float, lpos: math::Vec3) -> Light {
+  Light {
+    name: ln, light_type: Point,
+    color_r: lr, color_g: lg, color_b: lb, intensity: li,
+    position: lpos, direction: math::vec3(0.0, -1.0, 0.0)
+  }
+}
+
+// --- Scene ---
+
+// A complete 3D scene.
+pub struct Scene {
+  name: text,
+  meshes: vector<mesh::Mesh>,
+  materials: vector<Material>,
+  nodes: vector<Node>,
+  cameras: vector<Camera>,
+  lights: vector<Light>
+}
+
+pub fn scene(sn: text) -> Scene {
+  Scene { name: sn }
+}
+
+// Add a mesh to the scene and return its index.
+pub fn add_mesh(self: Scene, sm: mesh::Mesh) -> integer {
+  si = self.meshes.len();
+  self.meshes += [sm];
+  si
+}
+
+// Add a material to the scene and return its index.
+pub fn add_material(self: Scene, smat: Material) -> integer {
+  si = self.materials.len();
+  self.materials += [smat];
+  si
+}
+
+// Add a node to the scene.
+pub fn add_node(self: Scene, sn: Node) {
+  self.nodes += [sn];
+}
+
+// Add a camera to the scene.
+pub fn add_camera(self: Scene, sc: Camera) {
+  self.cameras += [sc];
+}
+
+pub fn add_light(self: Scene, sl: Light) -> integer {
+  si = self.lights.len();
+  self.lights += [sl];
+  si
+}

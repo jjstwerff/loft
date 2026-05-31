@@ -1,0 +1,16 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @P310 regression fixture — a vector<integer> argument to a vec<i64>
+# FFI wrapper must lower to *const i64.  This mini-package is driven by
+# `tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean`
+# (native --check, no run).  It depends on the registry-published
+# `graphics` chunk; auto-install handles fetch on first use.
+
+[package]
+name    = "p310_save_png"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+graphics = ">=0.1"

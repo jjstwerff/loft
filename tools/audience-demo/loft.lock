@@ -16,3 +16,17 @@ url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.1.
 sha256 = "01729ea6efdf600da2e3e1a4937a77baa3a7d20fa50af316726dd294069fa63d"
 source = "registry"
 deps = ["web"]
+
+[[package]]
+name = "gridmesh"
+version = "0.1.1"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.1/gridmesh-0.1.1.tar.gz"
+sha256 = "baedd9c4537a2de34fe5a4b5a026a281aa6037411eb3261e2a97fabc15850e13"
+source = "registry"
+
+[[package]]
+name = "graphics"
+version = "0.1.0"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.1.0/graphics-0.1.0.tar.gz"
+sha256 = "762271f637cbedaff4c3cda73ef9c6da0bcc826b8c81d9bb08eae03a645510db"
+source = "registry"

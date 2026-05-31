@@ -102,7 +102,7 @@ fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
         );
         return None;
     }
-    let src = root.join("lib/graphics/examples/25-brick-buster.loft");
+    let src = root.join("tools/brick-buster/25-brick-buster.loft");
     let html_mtime = html.metadata().ok()?.modified().ok()?;
     let src_mtime = src.metadata().ok()?.modified().ok()?;
     if html_mtime < src_mtime {

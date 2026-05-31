@@ -28,6 +28,12 @@ lib/world/tests/_tmp_*.bin
 test_scene_debug.loft
 # Audience-demo server runtime snapshot (regenerated on each run).
 tools/audience-demo/world.bin
+# Project-root loft.lock left behind by tests that invoke the loft
+# binary with cwd=project_root against a fixture mini-package (e.g.
+# tests/codegen_emitter.rs::p310_graphics_vector_ffi_checks_clean —
+# the fixture's own lockfile leaks into the runner's cwd).  Real
+# consumer projects should commit their own loft.lock.
+/loft.lock
 # FUSE filesystem hidden files: created when a file is deleted while still
 # open by another process (e.g. an editor or watcher). They're stale OS
 # artefacts, never source code.

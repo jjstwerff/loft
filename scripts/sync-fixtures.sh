@@ -48,6 +48,8 @@ PINNED_REFS=$(cat <<'EOF'
 loft-libs-core      arguments-v0.1.1         arguments
 loft-libs-graphics  shapes-v0.2.0            shapes
 loft-libs-graphics  gridmesh-v0.1.1          gridmesh
+loft-libs-graphics  graphics-v0.1.0          graphics
+loft-libs-graphics  imaging-v0.1.0           imaging
 loft-libs-net       game_protocol-v0.1.1     game_protocol
 loft-libs-net       web-v0.1.1               web
 EOF
@@ -69,7 +71,12 @@ while IFS= read -r line; do
     ref="${parts[1]}"
     pkgs_csv="${parts[2]}"
 
-    target_dir="$TMPDIR_ROOT/$chunk"
+    # Clone per-(chunk, ref) — different tags in the same chunk
+    # may point at commits that lack one or more of the other tags'
+    # packages (e.g. graphics-v0.1.0's commit doesn't yet have an
+    # imaging/ dir; shapes-v0.2.0's commit lacks both).  Key by
+    # ref so each line picks up its own snapshot.
+    target_dir="$TMPDIR_ROOT/$chunk-$ref"
     if [[ ! -d "$target_dir" ]]; then
         echo "[sync] cloning $chunk @ $ref"
         # --filter=blob:none is a partial clone — fast, no LFS

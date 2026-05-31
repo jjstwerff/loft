@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# brick-buster — the gallery showpiece game.  Compiled to a single
+# self-contained HTML via `make game` and hosted in the loft web
+# gallery (loft-lang.github.io/loft/brick-buster.html).
+#
+# Previously lived at `lib/graphics/examples/25-brick-buster.loft`;
+# moved here when @PLAN12 5b-5 removed the monorepo `lib/graphics/`
+# dir.  Now consumes graphics + shapes via the loft package registry.
+
+[package]
+name    = "brick_buster"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+graphics = ">=0.1"
+shapes   = ">=0.1"
