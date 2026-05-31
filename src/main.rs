@@ -181,6 +181,9 @@ fn print_help() {
     println!("                                ship via USB/scp; import on the target machine");
     println!("  bundle import <dir>           install a bundle into ~/.loft/registry/");
     println!("                                (verifies sha256 + signature per artifact)");
+    println!("  publish [pkg]                 author helper: repackage locally + verify the");
+    println!("                                GitHub release exists + emit the index.json");
+    println!("                                entry to paste into a registry PR");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -1255,6 +1258,195 @@ fn chrono_iso8601_utc() -> String {
         minute = minute,
         second = second
     )
+}
+
+/// @PLAN12 Phase 6.16 — `loft publish` author helper.
+///
+/// Closes the publish-by-hand friction.  After the author has
+/// tagged + released their library on GitHub (`<pkg>-v<ver>` tag
+/// + `gh release create` with the `loft package` tarball as an
+/// asset), `loft publish` from the package dir:
+///
+/// 1. Re-packages locally via `package::package_create` — gets
+///    the deterministic sha256 + size + name + version.
+/// 2. Detects the chunk repo from `git remote get-url origin`.
+/// 3. Verifies the GitHub release exists at `<pkg>-v<ver>` and
+///    carries the expected tarball asset (via `gh release view`).
+/// 4. Emits the `index.json` entry block, ready to paste into
+///    the registry PR.  Includes the auto-generated `url`,
+///    `sha256`, `size`, `subpath`, `deps` from the loft.toml.
+///
+/// `--dry-run` skips the GitHub-release verification (the rest
+/// of the flow runs).
+///
+/// Auto-PR open via `gh pr create` against `loft-lang/registry`
+/// is a follow-up; today the author copies the emitted block
+/// into a manual PR.
+#[cfg(feature = "registry")]
+fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
+    use loft::package;
+
+    let pkg = match package::package_create(pkg_path, None) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("loft publish: package: {e}");
+            return 1;
+        }
+    };
+    let tag = format!("{}-v{}", pkg.name, pkg.version);
+    let tarball_filename = format!("{}-{}.tar.gz", pkg.name, pkg.version);
+
+    let (org, repo) = match git_remote_org_repo(pkg_path) {
+        Some(v) => v,
+        None => {
+            eprintln!("loft publish: cannot detect GitHub org/repo from `git remote get-url origin`");
+            eprintln!("  Run from inside a chunk-repo working tree with an `origin` remote.");
+            return 1;
+        }
+    };
+    let release_url = format!(
+        "https://github.com/{org}/{repo}/releases/download/{tag}/{tarball_filename}"
+    );
+    let homepage = format!("https://github.com/{org}/{repo}/tree/main/{}", pkg.name);
+
+    if !dry_run {
+        if !github_release_has_asset(&org, &repo, &tag, &tarball_filename) {
+            eprintln!(
+                "loft publish: release `{tag}` not found, OR doesn't carry the asset `{tarball_filename}`."
+            );
+            eprintln!(
+                "  Tag + release first:"
+            );
+            eprintln!("    git tag {tag}");
+            eprintln!("    git push origin {tag}");
+            eprintln!("    gh release create {tag} {} --title \"{} v{}\"", pkg.tarball.display(), pkg.name, pkg.version);
+            eprintln!("  Or pass --dry-run to skip this check.");
+            return 1;
+        }
+    }
+
+    // Emit the index.json entry.  Read deps from loft.toml.
+    let manifest_path = pkg_path.join("loft.toml");
+    let manifest = loft::manifest::read_manifest(manifest_path.to_str().unwrap_or(""))
+        .unwrap_or_default();
+    let registry_deps: Vec<(String, String)> = manifest
+        .dependencies
+        .iter()
+        .filter(|(_, v)| loft::manifest::extract_path_dep(v).is_none())
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    let published = chrono_iso8601_utc();
+
+    println!("# Paste this entry into `loft-lang/registry/index.json` under");
+    println!("# `\"packages\": {{ \"{}\": {{ \"versions\": {{ ... }} }} }}`:", pkg.name);
+    println!();
+    println!("\"{}\": {{", pkg.version);
+    println!("  \"url\": \"{release_url}\",");
+    println!("  \"sha256\": \"{}\",", pkg.sha256);
+    println!("  \"size\": {},", pkg.size);
+    println!("  \"loft\": \"{}\",", manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string()));
+    println!("  \"subpath\": \"{}\",", pkg.name);
+    if registry_deps.is_empty() {
+        println!("  \"deps\": {{}},");
+    } else {
+        let mut deps_lines: Vec<String> = Vec::new();
+        for (n, v) in &registry_deps {
+            // Strip `{ path = "..." }` -> bare; we already filtered
+            // those, so `v` is a plain version string.
+            deps_lines.push(format!("    \"{n}\": \"{v}\""));
+        }
+        println!("  \"deps\": {{");
+        for (idx, line) in deps_lines.iter().enumerate() {
+            if idx + 1 == deps_lines.len() {
+                println!("{line}");
+            } else {
+                println!("{line},");
+            }
+        }
+        println!("  }},");
+    }
+    println!("  \"published\": \"{published}\"");
+    println!("}}");
+    println!();
+    println!("# If this is the first version, also add the package block:");
+    println!("# \"{}\": {{", pkg.name);
+    println!("#   \"description\": \"<one-liner>\",");
+    println!("#   \"homepage\": \"{homepage}\",");
+    println!("#   \"categories\": [\"<category>\"],");
+    println!("#   \"yanked\": [],");
+    println!("#   \"versions\": {{ ... the version block above ... }}");
+    println!("# }}");
+    if dry_run {
+        eprintln!("\n[publish] dry-run: GitHub release verification skipped.");
+    } else {
+        eprintln!("\n[publish] verified release {tag} exists with asset {tarball_filename}");
+        eprintln!("[publish] next step: open registry PR with the entry above");
+    }
+    0
+}
+
+/// Parse `git remote get-url origin` output for the github
+/// org + repo.  Handles `https://github.com/<org>/<repo>(.git)?`
+/// and `git@github.com:<org>/<repo>(.git)?` shapes.  Returns
+/// `None` when the remote isn't a github URL.
+#[cfg(feature = "registry")]
+fn git_remote_org_repo(pkg_path: &std::path::Path) -> Option<(String, String)> {
+    let out = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(pkg_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    let stripped = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))?
+        .strip_suffix(".git")
+        .unwrap_or_else(|| {
+            url.strip_prefix("https://github.com/")
+                .or_else(|| url.strip_prefix("git@github.com:"))
+                .unwrap_or("")
+        })
+        .to_string();
+    let mut parts = stripped.splitn(2, '/');
+    let org = parts.next()?.to_string();
+    let repo = parts.next()?.trim_end_matches(".git").to_string();
+    if org.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((org, repo))
+}
+
+/// Check whether a GitHub release at `<tag>` exists and carries
+/// an asset named `<asset>` (the deterministic tarball).  Uses
+/// the `gh` CLI; returns false if `gh` is missing or the API
+/// call fails.
+#[cfg(feature = "registry")]
+fn github_release_has_asset(org: &str, repo: &str, tag: &str, asset: &str) -> bool {
+    let out = std::process::Command::new("gh")
+        .args([
+            "release",
+            "view",
+            tag,
+            "--repo",
+            &format!("{org}/{repo}"),
+            "--json",
+            "assets",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let body = String::from_utf8(out.stdout).unwrap_or_default();
+    // Simple substring check — JSON parse would be more
+    // principled but `gh release view --json assets` returns
+    // `"name":"<asset>"` lines we can match directly.
+    body.contains(&format!("\"name\":\"{asset}\""))
 }
 
 /// @PLAN12 Phase 6.7 — `loft audit` walks every installed package
@@ -3015,6 +3207,39 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft update: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "publish" {
+            // @PLAN12 Phase 6.16 — author-side publish helper.
+            // Repackages locally (deterministic), verifies the
+            // GitHub release exists with the expected tag + asset,
+            // emits the index.json entry ready for the registry PR.
+            #[cfg(feature = "registry")]
+            {
+                let mut dry_run = false;
+                let mut pkg_path: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--dry-run" {
+                        dry_run = true;
+                        i += 1;
+                    } else if !a2.starts_with('-') && pkg_path.is_none() {
+                        pkg_path = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft publish: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                let dir = pkg_path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let code = publish_package(&dir, dry_run);
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft publish: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "audit" {

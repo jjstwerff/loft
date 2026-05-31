@@ -147,6 +147,42 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6.16 — `loft publish` author helper
+
+src/main.rs:
+- New `publish` subcommand + help text + `publish_package` body.
+- Re-packages the current dir via `package::package_create`
+  (deterministic; same machinery as `loft package`).
+- Auto-detects the chunk repo from `git remote get-url origin`
+  via the new `git_remote_org_repo` helper.  Handles both
+  HTTPS and SSH URL shapes.
+- Verifies the GitHub release exists with the expected asset
+  via `gh release view <tag> --json assets` (new helper
+  `github_release_has_asset`).  Skipped under `--dry-run`.
+- Emits the registry-ready `index.json` version block (url +
+  sha256 + size + loft + subpath + deps + published) plus a
+  commented-out package-block stub for first-version releases.
+- Reads `[dependencies]` from loft.toml, filters out path-deps,
+  emits the registry-version entries as the `deps` map.
+
+Smoke-tested against the live `loft-libs-graphics/gridmesh`
+package (v0.1.1):
+  - `--dry-run` emits the index entry; release-check skipped.
+  - Live mode verifies `gridmesh-v0.1.1` exists with
+    `gridmesh-0.1.1.tar.gz` asset → success message printed.
+
+Closes the publish-by-hand friction:
+  Before: bump version → tag → push → `loft package` →
+          `gh release create` → manually compute sha256/size →
+          hand-edit registry/index.json → open PR.
+  After:  bump version → tag → push → `gh release create`
+          (with `loft package` tarball as asset) → `loft publish`
+          → paste emitted block into registry PR.
+
+Auto-PR-open (clone registry + splice index.json + `gh pr
+create`) is the next iteration; today's MVP eliminates the
+hash-+-size computation step + tag/asset verification.
+
 ## 2026-05-31 — Phase 5b attempt — prerequisites surfaced, BLOCKED
 
 Tried to start `loft-libs-graphics` Stage B by copying imaging
