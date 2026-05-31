@@ -35,9 +35,11 @@
 //! `structure()` every IR type; (2) fields + variants that reference those
 //! numbers.  S1 lands shells first.
 
-use crate::data::{IntegerSpec, Type};
+use crate::data::{Block, IntegerSpec, ParForBody, Type, Value};
 use crate::database::Stores;
 use crate::json::Parsed;
+use crate::keys::Key;
+use crate::lexer::Position;
 use std::fmt::Write as _;
 use std::num::NonZeroU8;
 
@@ -300,13 +302,16 @@ fn write_type(out: &mut String, ty: &Type) {
     }
 }
 
-/// Errors from decoding a `Type` out of a `Parsed` tree.
+/// Errors from decoding a `Type` / `Value` out of a `Parsed` tree.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeDecodeError {
     /// Top-level JSON did not parse, or a sub-node had the wrong JSON shape.
     Shape(String),
     /// The `"k"` tag named a variant we don't know.
     UnknownTag(String),
+    /// The `"k"` tag is a valid `Value` variant whose decoder is not wired
+    /// in this chunk yet (V1 leaf-only; recursive variants land in V2–V4).
+    Unsupported(String),
 }
 
 /// Parse a JSON string (via `crate::json::parse`) back into a `Type`.
@@ -476,6 +481,316 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
         ),
         "Rewritten" => Type::Rewritten(Box::new(type_from_parsed(field(p, "t")?)?)),
         "Tuple" => Type::Tuple(type_list(field(p, "elems")?)?),
+        other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
+    })
+}
+
+// ─── Value JSON (Step 2 slice V1: full encoder + leaf decoder) ────────────────
+//
+// `Value` is the recursive IR-body enum (34 variants).  Per the chunk plan:
+//   * V1 (this) — the FULL encoder (a `match` must be exhaustive, so the
+//     encoder cannot be partial) + sub-encoders for `Block` / `ParForBody` /
+//     `Position` / `Key`, and a decoder covering the **leaf** (non-Value-
+//     recursive) variants.  Recursive variants decode to
+//     `TypeDecodeError::Unsupported` until later chunks wire them:
+//   * V2 — recursive value variants (Call/Set/If/Iter/Tuple/…)
+//   * V3 — Block / Loop (the `&'static str` name)
+//   * V4 — Span / FnRef / ParFor / Keys-tail; removes the Unsupported fallback.
+//
+// Same conventions as `Type`: tagged object `{ "k": "<variant>", … }`,
+// absolute indices verbatim, strings via `write_str`.
+
+/// Serialise a `Value` to JSON.  Exhaustive over all 34 variants.
+#[must_use]
+pub fn value_to_json(v: &Value) -> String {
+    let mut out = String::new();
+    write_value(&mut out, v);
+    out
+}
+
+fn write_value(out: &mut String, v: &Value) {
+    match v {
+        Value::Null => out.push_str("{\"k\":\"Null\"}"),
+        Value::Line(n) => {
+            let _ = write!(out, "{{\"k\":\"Line\",\"n\":{n}}}");
+        }
+        Value::Int(n) => {
+            let _ = write!(out, "{{\"k\":\"Int\",\"n\":{n}}}");
+        }
+        Value::Long(n) => {
+            let _ = write!(out, "{{\"k\":\"Long\",\"n\":{n}}}");
+        }
+        Value::Float(f) => {
+            let _ = write!(out, "{{\"k\":\"Float\",\"f\":{f}}}");
+        }
+        Value::Single(f) => {
+            let _ = write!(out, "{{\"k\":\"Single\",\"f\":{f}}}");
+        }
+        Value::Boolean(b) => {
+            let _ = write!(out, "{{\"k\":\"Boolean\",\"b\":{b}}}");
+        }
+        Value::Enum(ord, tp) => {
+            let _ = write!(out, "{{\"k\":\"Enum\",\"ord\":{ord},\"tp\":{tp}}}");
+        }
+        Value::Text(s) => {
+            out.push_str("{\"k\":\"Text\",\"s\":");
+            write_str(out, s);
+            out.push('}');
+        }
+        Value::RawExpr(s) => {
+            out.push_str("{\"k\":\"RawExpr\",\"s\":");
+            write_str(out, s);
+            out.push('}');
+        }
+        Value::Var(n) => {
+            let _ = write!(out, "{{\"k\":\"Var\",\"n\":{n}}}");
+        }
+        Value::Break(n) => {
+            let _ = write!(out, "{{\"k\":\"Break\",\"n\":{n}}}");
+        }
+        Value::Continue(n) => {
+            let _ = write!(out, "{{\"k\":\"Continue\",\"n\":{n}}}");
+        }
+        Value::FnRefDnr(n) => {
+            let _ = write!(out, "{{\"k\":\"FnRefDnr\",\"n\":{n}}}");
+        }
+        Value::TupleGet(var, idx) => {
+            let _ = write!(out, "{{\"k\":\"TupleGet\",\"var\":{var},\"idx\":{idx}}}");
+        }
+        Value::Keys(keys) => {
+            out.push_str("{\"k\":\"Keys\",\"keys\":");
+            write_key_list(out, keys);
+            out.push('}');
+        }
+        // ── recursive variants (decoded in V2+) ──
+        Value::Call(d, args) => {
+            let _ = write!(out, "{{\"k\":\"Call\",\"d\":{d},\"args\":");
+            write_value_list(out, args);
+            out.push('}');
+        }
+        Value::CallRef(var, args) => {
+            let _ = write!(out, "{{\"k\":\"CallRef\",\"var\":{var},\"args\":");
+            write_value_list(out, args);
+            out.push('}');
+        }
+        Value::Insert(items) => {
+            out.push_str("{\"k\":\"Insert\",\"items\":");
+            write_value_list(out, items);
+            out.push('}');
+        }
+        Value::Tuple(items) => {
+            out.push_str("{\"k\":\"Tuple\",\"items\":");
+            write_value_list(out, items);
+            out.push('}');
+        }
+        Value::Parallel(arms) => {
+            out.push_str("{\"k\":\"Parallel\",\"arms\":");
+            write_value_list(out, arms);
+            out.push('}');
+        }
+        Value::Set(var, inner) => {
+            let _ = write!(out, "{{\"k\":\"Set\",\"var\":{var},\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::Return(inner) => {
+            out.push_str("{\"k\":\"Return\",\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::Drop(inner) => {
+            out.push_str("{\"k\":\"Drop\",\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::Yield(inner) => {
+            out.push_str("{\"k\":\"Yield\",\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::BreakWith(n, inner) => {
+            let _ = write!(out, "{{\"k\":\"BreakWith\",\"n\":{n},\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::TuplePut(var, idx, inner) => {
+            let _ = write!(out, "{{\"k\":\"TuplePut\",\"var\":{var},\"idx\":{idx},\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::If(cond, t, f) => {
+            out.push_str("{\"k\":\"If\",\"cond\":");
+            write_value(out, cond);
+            out.push_str(",\"t\":");
+            write_value(out, t);
+            out.push_str(",\"f\":");
+            write_value(out, f);
+            out.push('}');
+        }
+        Value::Iter(var, create, next, init) => {
+            let _ = write!(out, "{{\"k\":\"Iter\",\"var\":{var},\"create\":");
+            write_value(out, create);
+            out.push_str(",\"next\":");
+            write_value(out, next);
+            out.push_str(",\"init\":");
+            write_value(out, init);
+            out.push('}');
+        }
+        Value::Span(boxed) => {
+            let (pos, inner) = boxed.as_ref();
+            out.push_str("{\"k\":\"Span\",\"pos\":");
+            write_position(out, pos);
+            out.push_str(",\"v\":");
+            write_value(out, inner);
+            out.push('}');
+        }
+        Value::Block(b) => {
+            out.push_str("{\"k\":\"Block\",\"block\":");
+            write_block(out, b);
+            out.push('}');
+        }
+        Value::Loop(b) => {
+            out.push_str("{\"k\":\"Loop\",\"block\":");
+            write_block(out, b);
+            out.push('}');
+        }
+        Value::FnRef(d, var, ty) => {
+            let _ = write!(out, "{{\"k\":\"FnRef\",\"d\":{d},\"var\":{var},\"t\":");
+            write_type(out, ty);
+            out.push('}');
+        }
+        Value::ParFor(b) => {
+            out.push_str("{\"k\":\"ParFor\",\"body\":");
+            write_parforbody(out, b);
+            out.push('}');
+        }
+    }
+}
+
+fn write_value_list(out: &mut String, list: &[Value]) {
+    out.push('[');
+    for (i, v) in list.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_value(out, v);
+    }
+    out.push(']');
+}
+
+fn write_key_list(out: &mut String, keys: &[Key]) {
+    out.push('[');
+    for (i, k) in keys.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "{{\"type_nr\":{},\"position\":{}}}", k.type_nr, k.position);
+    }
+    out.push(']');
+}
+
+fn write_position(out: &mut String, pos: &Position) {
+    out.push_str("{\"file\":");
+    write_str(out, &pos.file);
+    let _ = write!(out, ",\"line\":{},\"pos\":{}}}", pos.line, pos.pos);
+}
+
+fn write_block(out: &mut String, b: &Block) {
+    out.push_str("{\"name\":");
+    write_str(out, b.name);
+    out.push_str(",\"operators\":");
+    write_value_list(out, &b.operators);
+    out.push_str(",\"result\":");
+    write_type(out, &b.result);
+    let _ = write!(out, ",\"scope\":{},\"var_size\":{}}}", b.scope, b.var_size);
+}
+
+fn write_parforbody(out: &mut String, b: &ParForBody) {
+    out.push_str("{\"input\":");
+    write_value(out, &b.input);
+    let _ = write!(out, ",\"x_var\":{},\"r_var\":{},\"worker\":", b.x_var, b.r_var);
+    write_value(out, &b.worker);
+    out.push_str(",\"threads\":");
+    write_value(out, &b.threads);
+    out.push_str(",\"body\":");
+    write_value(out, &b.body);
+    let _ = write!(out, ",\"stitch_id\":{}}}", b.stitch_id);
+}
+
+/// Parse a JSON string into a `Value`.  V1 decodes leaf variants; recursive
+/// variants return [`TypeDecodeError::Unsupported`] until V2–V4 wire them.
+///
+/// # Errors
+/// Malformed JSON, wrong field shape, unknown tag, or a not-yet-wired
+/// recursive variant.
+pub fn value_from_json(src: &str) -> Result<Value, TypeDecodeError> {
+    let parsed = crate::json::parse(src)
+        .map_err(|e| TypeDecodeError::Shape(format!("json parse: {e:?}")))?;
+    value_from_parsed(&parsed)
+}
+
+fn as_i64(p: &Parsed) -> Result<i64, TypeDecodeError> {
+    if let Parsed::Number(n) = p {
+        Ok(*n as i64)
+    } else {
+        Err(TypeDecodeError::Shape("expected number".into()))
+    }
+}
+
+fn as_f64(p: &Parsed) -> Result<f64, TypeDecodeError> {
+    if let Parsed::Number(n) = p {
+        Ok(*n)
+    } else {
+        Err(TypeDecodeError::Shape("expected number".into()))
+    }
+}
+
+fn as_u8(p: &Parsed) -> Result<u8, TypeDecodeError> {
+    Ok(as_u32(p)? as u8)
+}
+
+fn key_list(p: &Parsed) -> Result<Vec<Key>, TypeDecodeError> {
+    if let Parsed::Array(items) = p {
+        items
+            .iter()
+            .map(|it| {
+                Ok(Key {
+                    type_nr: as_i64(field(it, "type_nr")?)? as i8,
+                    position: as_u16(field(it, "position")?)?,
+                })
+            })
+            .collect()
+    } else {
+        Err(TypeDecodeError::Shape("expected array".into()))
+    }
+}
+
+fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
+    let tag = as_str(field(p, "k")?)?;
+    Ok(match tag.as_str() {
+        // ── leaf variants (V1) ──
+        "Null" => Value::Null,
+        "Line" => Value::Line(as_u32(field(p, "n")?)?),
+        "Int" => Value::Int(as_i32(field(p, "n")?)?),
+        "Long" => Value::Long(as_i64(field(p, "n")?)?),
+        "Float" => Value::Float(as_f64(field(p, "f")?)?),
+        "Single" => Value::Single(as_f64(field(p, "f")?)? as f32),
+        "Boolean" => Value::Boolean(as_bool(field(p, "b")?)?),
+        "Enum" => Value::Enum(as_u8(field(p, "ord")?)?, as_u16(field(p, "tp")?)?),
+        "Text" => Value::Text(as_str(field(p, "s")?)?),
+        "RawExpr" => Value::RawExpr(as_str(field(p, "s")?)?),
+        "Var" => Value::Var(as_u16(field(p, "n")?)?),
+        "Break" => Value::Break(as_u16(field(p, "n")?)?),
+        "Continue" => Value::Continue(as_u16(field(p, "n")?)?),
+        "FnRefDnr" => Value::FnRefDnr(as_u16(field(p, "n")?)?),
+        "TupleGet" => Value::TupleGet(as_u16(field(p, "var")?)?, as_u16(field(p, "idx")?)?),
+        "Keys" => Value::Keys(key_list(field(p, "keys")?)?),
+        // ── recursive variants — wired in later chunks (V2–V4) ──
+        "Call" | "CallRef" | "Insert" | "Tuple" | "Parallel" | "Set" | "Return" | "Drop"
+        | "Yield" | "BreakWith" | "TuplePut" | "If" | "Iter" | "Span" | "Block" | "Loop"
+        | "FnRef" | "ParFor" => {
+            return Err(TypeDecodeError::Unsupported(tag));
+        }
         other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
     })
 }
@@ -698,5 +1013,126 @@ mod tests {
                 "emitter produced invalid JSON: {json}"
             );
         }
+    }
+
+    // ─── Value JSON (slice V1: leaf variants) ───────────────────────────
+
+    /// Every leaf (non-Value-recursive) variant survives encode→decode.
+    #[test]
+    fn value_leaf_round_trip() {
+        let samples = [
+            Value::Null,
+            Value::Line(7),
+            Value::Int(-5),
+            Value::Int(2_000_000_000),
+            Value::Long(9_999_999_999),
+            Value::Float(3.5),
+            Value::Single(2.5),
+            Value::Boolean(true),
+            Value::Boolean(false),
+            Value::Enum(3, 12),
+            Value::Text("hi\n\"x\"\t\\z".to_string()),
+            Value::RawExpr("a + b".to_string()),
+            Value::Var(4),
+            Value::Break(1),
+            Value::Continue(2),
+            Value::FnRefDnr(8),
+            Value::TupleGet(1, 2),
+            Value::Keys(vec![
+                Key { type_nr: -1, position: 5 },
+                Key { type_nr: 3, position: 0 },
+            ]),
+        ];
+        for v in &samples {
+            let json = value_to_json(v);
+            let back = value_from_json(&json)
+                .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+            assert_eq!(&back, v, "round trip mismatch via {json}");
+        }
+    }
+
+    /// Pin the exact emitted JSON for representative leaf variants — the
+    /// on-disk format is a contract (a drift invalidates every snapshot).
+    #[test]
+    fn value_golden_leaf_format() {
+        assert_eq!(value_to_json(&Value::Null), r#"{"k":"Null"}"#);
+        assert_eq!(value_to_json(&Value::Int(-5)), r#"{"k":"Int","n":-5}"#);
+        assert_eq!(value_to_json(&Value::Boolean(true)), r#"{"k":"Boolean","b":true}"#);
+        assert_eq!(value_to_json(&Value::Enum(3, 12)), r#"{"k":"Enum","ord":3,"tp":12}"#);
+        assert_eq!(value_to_json(&Value::Var(4)), r#"{"k":"Var","n":4}"#);
+        assert_eq!(value_to_json(&Value::TupleGet(1, 2)), r#"{"k":"TupleGet","var":1,"idx":2}"#);
+        assert_eq!(
+            value_to_json(&Value::Text("a\"b".to_string())),
+            r#"{"k":"Text","s":"a\"b"}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::Keys(vec![Key { type_nr: -1, position: 5 }])),
+            r#"{"k":"Keys","keys":[{"type_nr":-1,"position":5}]}"#
+        );
+    }
+
+    /// The full encoder is exhaustive (it must compile over all 34 variants);
+    /// every emit — leaf AND recursive — must be valid JSON even before the
+    /// recursive decoders land.
+    #[test]
+    fn value_encoder_emits_valid_json_for_recursive() {
+        let block = Block {
+            name: "blk",
+            operators: vec![Value::Int(1), Value::Null],
+            result: Type::Boolean,
+            scope: 2,
+            var_size: 8,
+        };
+        let samples = [
+            Value::Call(5, vec![Value::Int(1), Value::Var(0)]),
+            Value::Set(3, Box::new(Value::Int(9))),
+            Value::If(
+                Box::new(Value::Boolean(true)),
+                Box::new(Value::Int(1)),
+                Box::new(Value::Int(0)),
+            ),
+            Value::Block(Box::new(block.clone())),
+            Value::Loop(Box::new(block)),
+            Value::FnRef(2, 1, Box::new(Type::Boolean)),
+            Value::Span(Box::new((
+                Position { file: "f.loft".to_string(), line: 3, pos: 7 },
+                Value::Int(42),
+            ))),
+            Value::ParFor(Box::new(ParForBody {
+                input: Value::Var(0),
+                x_var: 1,
+                r_var: 2,
+                worker: Value::Null,
+                threads: Value::Int(4),
+                body: Value::Int(1),
+                stitch_id: 0,
+            })),
+        ];
+        for v in &samples {
+            let json = value_to_json(v);
+            assert!(
+                crate::json::parse(&json).is_ok(),
+                "encoder produced invalid JSON: {json}"
+            );
+        }
+    }
+
+    /// Recursive tags decode to `Unsupported` (not `UnknownTag`) until V2–V4.
+    #[test]
+    fn value_recursive_tags_are_unsupported_for_now() {
+        let json = value_to_json(&Value::Set(1, Box::new(Value::Int(2))));
+        assert_eq!(
+            value_from_json(&json),
+            Err(TypeDecodeError::Unsupported("Set".to_string()))
+        );
+    }
+
+    /// A genuinely unknown tag is still `UnknownTag`, distinct from `Unsupported`.
+    #[test]
+    fn value_unknown_tag_is_an_error() {
+        assert_eq!(
+            value_from_json(r#"{"k":"Bogus"}"#),
+            Err(TypeDecodeError::UnknownTag("Bogus".to_string()))
+        );
     }
 }
