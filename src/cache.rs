@@ -84,7 +84,7 @@ pub mod map_static_str {
     pub fn deserialize<'de, D, K>(de: D) -> Result<HashMap<K, &'static str>, D::Error>
     where
         D: Deserializer<'de>,
-        K: Deserialize<'de> + Eq + Hash,
+        K: serde::de::DeserializeOwned + Eq + Hash,
     {
         let pairs: Vec<(K, String)> = Vec::deserialize(de)?;
         Ok(pairs

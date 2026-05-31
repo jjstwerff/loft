@@ -43,7 +43,7 @@ pub enum LexItem {
     None,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     /// The file name where this construct is found.
     pub file: String,
