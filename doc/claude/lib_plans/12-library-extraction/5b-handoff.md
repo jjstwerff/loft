@@ -3,9 +3,18 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 5b — Stage A handoff
+# Phase 5b — Stage A handoff (historical record — Phase 5b CLOSED 2026-05-31)
 
-State (2026-05-31):
+This doc is the time-frozen handoff that was prepared mid-session
+when the chunk-repo + registry PR work was still ahead.  All steps
+completed the same day; see the LANDING_LOG entry "Phase 5b SHIPPED
+— loft-libs-graphics Stage A + Stage B" for the actual landing
+record.  Kept here for the restructure-pattern reference + the
+chunk-repo + registry-PR command sequences that future similar
+extractions (Phase 6w `loft-libs-world`, Phase 7 moros split) can
+copy.
+
+State at original handoff (2026-05-31):
 
 - ✓ Chunk repo `loft-libs-graphics` updated (commits `40e0a3d`
   graphics + `86613ca` imaging on `main`).
@@ -13,9 +22,11 @@ State (2026-05-31):
 - ✓ GitHub releases live with deterministic tarballs:
   - https://github.com/loft-lang/loft-libs-graphics/releases/tag/graphics-v0.1.0
   - https://github.com/loft-lang/loft-libs-graphics/releases/tag/imaging-v0.1.0
-- ⏳ Registry PR pending — paste the two `index.json` entries
-  below into a `loft-lang/registry` PR.
-- ⏳ Subsequent monorepo steps (5b-4..6) wait on registry merge.
+- ✓ Registry PR — opened, validated (3 gates green), merged.
+  https://github.com/loft-lang/registry/pull/7
+- ✓ Monorepo steps 5b-4 (consumer migration), 5b-5 (dir removal +
+  hygiene/wasm/fixtures), 5b-6 (full CI green) — all shipped on
+  `doc-updates` (commits `408686d`, `93ce34a`, `21af961`).
 
 ## Stage A artifacts ready
 

@@ -679,6 +679,83 @@ row added with workaround).
 
 **Phase 5b is now fully UNBLOCKED.**
 
+## 2026-05-31 — Phase 5b SHIPPED — loft-libs-graphics Stage A + Stage B
+
+Branch: `doc-updates`.  Stage A for graphics + imaging shipped to
+chunk repo + registry; Stage B removed all four monorepo lib dirs.
+
+**Stage A (chunk repo + registry):**
+
+- Chunk repo `loft-lang/loft-libs-graphics`:
+  - `40e0a3d` Add graphics 0.1.0.
+  - `86613ca` Add imaging 0.1.0 (wasm bridge deferred — see
+    follow-up section below).
+  - Tags: `graphics-v0.1.0`, `imaging-v0.1.0`.
+  - GitHub releases with deterministic tarballs:
+    - https://github.com/loft-lang/loft-libs-graphics/releases/tag/graphics-v0.1.0
+      (sha256 `762271f637cbedaff4c3cda73ef9c6da0bcc826b8c81d9bb08eae03a645510db`,
+      88,828 B)
+    - https://github.com/loft-lang/loft-libs-graphics/releases/tag/imaging-v0.1.0
+      (sha256 `1eceb3771cfbefed9809b2efec39fd8180bba0336cc959e2e0ed6ddb369cf4ce`,
+      12,320 B)
+- Registry repo `loft-lang/registry` PR #7 merged 17:48 UTC:
+  https://github.com/loft-lang/registry/pull/7
+  - Adds graphics + imaging package entries at the loft-libs-graphics
+    section.
+  - All three validator gates green:
+    - Gate 1 schema lint ✓
+    - Gate 2 sha256 + size verify (downloaded from GH releases) ✓
+    - Gate 3 reproducible-build re-check (cloned at tag, re-ran
+      `loft package`, byte-identical) ✓
+
+**Stage B (monorepo cleanup):**
+
+- **`408686d`** (5b-4) — consumer migration.  4 loft.tomls swapped
+  from path-deps to registry versions:
+  - `lib/moros_render/loft.toml`: `graphics = { path = "../graphics" }`
+    → `graphics = ">=0.1"`.
+  - `lib/moros_sim/loft.toml`: same.
+  - `lib/audience_crystal/loft.toml`: `gridmesh = ">=0.1"`.
+  - `tools/audience-demo/loft.toml`: `gridmesh` + `graphics` swap.
+  - 4 new `loft.lock` files pinning the registry SHA + version.
+  - Sibling moros_* deps stay path-resolved (Phase 7-series).
+- **`93ce34a`** (5b-5) — monorepo cleanup.  Removed
+  `lib/{shapes,gridmesh,graphics,imaging}/` (93 tracked + ~2235
+  untracked artifact files):
+  - `src/wasm.rs::BUNDLED_LIB_FILES` repointed all 7
+    `include_str!` paths from `../lib/{graphics,shapes}/src/X.loft`
+    → `../tests/fixtures/libs/{graphics,shapes}/src/X.loft`.  Same
+    fixture-repoint pattern Phase 6b used for `web.loft`.
+  - `tests/extraction_hygiene.rs::FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`
+    gained 56 graphics symbols (n_gl_*, n_save_png, n_text_height,
+    n_rasterize_text_into, n_audio_*) + 1 imaging symbol
+    (n_load_png; n_save_png shared with graphics).  Retired the
+    stale TBD comment block.
+  - `scripts/sync-fixtures.sh` PINNED_REFS extended with
+    `graphics-v0.1.0` + `imaging-v0.1.0`.  Bug fix: each
+    (chunk, ref) pair now clones into its own temp dir (was: one
+    clone per chunk at first-seen ref, which broke when later refs
+    added packages the earlier ref's commit didn't have).
+  - `tests/fixtures/libs/{graphics,imaging,shapes}/` populated from
+    canonical chunk-repo tags (50 files total).
+- **`21af961`** (5b-6) — `cargo fmt` for extraction_hygiene.rs (the
+  long graphics symbol rows needed wrapping).
+
+**Verification** (all green):
+- `cargo build --release --bin loft --features registry`
+- `cargo fmt --check`
+- `cargo clippy --bin loft --features registry --all-targets -- -D warnings`
+- `cargo test --release --test wrap` 50/50
+- `cargo test --release --test issues` 681/681
+- `cargo test --release --test extraction_hygiene` 4/4
+- `./scripts/find_problems.sh --bg` full nextest — zero failures
+- `scripts/check_doc_drift.sh` clean (only pre-existing plan-53
+  time-projection warning)
+
+**Phase 5b CLOSED.**  Phase 5 chunk (loft-libs-graphics) is now
+fully (A+B) shipped — third and final chunk to complete both
+stages after loft-libs-core (4+stage-B) and loft-libs-net (6+6b).
+
 ---
 
 ## Pending phases (in roughly the order they'd land)
@@ -687,18 +764,11 @@ These will get an entry here when they ship:
 
 - Phase 3.6 — path-helper consolidation `dir`/`basename`/`join(text,text)`/
   `resolve` from `03_text.loft` → `02_files.loft`.
-- Phase 5 — extract `graphics` + `imaging` Stage A (loft-libs-graphics).
-- Phase 5b — `loft-libs-graphics` Stage B (fully UNBLOCKED
-  2026-05-31: both prerequisites resolved on `doc-updates` —
-  `loft-ffi-macros 0.1.0` on crates.io 15:59 UTC + graphics
-  warning sweep complete with `.allow_warnings` removed).  Ready
-  for execution; this slot stays here until the chunk repo + Stage B
-  consumer migration land.
 - Phase 6w-w — retire every `.allow_warnings`.  `lib/graphics/`
-  retired 2026-05-31; remaining: shapes (stale opt-out, free drop),
-  moros_map (4), moros_editor (6), moros_render (31),
-  audience_crystal (40), moros_ui (155), moros_sim (173) — total 409
-  unique warnings across 6 monorepo libs still carrying the opt-out.
+  retired by warning sweep + `lib/shapes/` retired by removal
+  (2026-05-31); remaining 6 monorepo libs: moros_map (4),
+  moros_editor (6), moros_render (31), audience_crystal (40),
+  moros_ui (155), moros_sim (173) — total 409 unique warnings.
 - Phase 6t Tier 3 — multiplayer harness port (touches @P389).
 - Phase 6t Tier 5 — imaging / world / markdown coverage gaps.
 - Phase 6w — extract `loft-libs-world`.
