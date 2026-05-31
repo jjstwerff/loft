@@ -4129,6 +4129,7 @@ impl Parser {
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
         self.probe_registry_installed(id, &mut f);
+        self.probe_auto_install(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
 
@@ -4371,6 +4372,77 @@ impl Parser {
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
     fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
+
+    /// @PLAN12 Phase 6.6 — auto-install on `use`.
+    ///
+    /// When `id` doesn't resolve via any of the prior strategies
+    /// (path-dep, sibling lookup, lockfile + cached registry install)
+    /// AND `id` is a known package name in the registry catalog,
+    /// fire `install_one` to fetch + extract + lockfile-update,
+    /// then re-run the cached-registry-install probe.
+    ///
+    /// The Python comparison: `python my_script.py` with
+    /// `import requests` works if `pip install requests` was done
+    /// once.  Loft's equivalent — `loft my_script.loft` with
+    /// `use gridmesh;` — Just Works on first run by doing the
+    /// `pip install` step on the user's behalf.
+    ///
+    /// Off-switches: `LOFT_OFFLINE=1` and `LOFT_NO_AUTO_INSTALL=1`
+    /// both suppress this probe.  Surprise reduction: every cold
+    /// install prints `[registry] ...` lines (mirrors Cargo's
+    /// "Downloading…" output); steady-state (cache hit, resolves
+    /// via probe_registry_installed) is silent.
+    #[cfg(feature = "registry")]
+    fn probe_auto_install(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        // Off-switches.
+        if std::env::var("LOFT_OFFLINE").is_ok() {
+            return;
+        }
+        if std::env::var("LOFT_NO_AUTO_INSTALL").is_ok() {
+            return;
+        }
+        // Bootstrap state: the loft binary may not have an embedded
+        // trust root yet (K_tmp → K_real rotation per
+        // PKG_REGISTRY.md / REGISTRY_BOOTSTRAP.md).  Mirror what
+        // `loft install` / `loft search` / `loft info` do — accept
+        // unsigned indexes during the trust-bootstrap window.  Once
+        // the production key is embedded, signed indexes verify
+        // cleanly and this flag becomes a no-op for the happy path.
+        let opts = crate::install::InstallOptions {
+            allow_unsigned: true,
+            refresh: false,
+            offline: false,
+            allow_prerelease: false,
+        };
+        match crate::install::auto_install_if_in_catalog(id, &opts) {
+            Ok(Some(_report)) => {
+                // Install succeeded; re-probe via lockfile-based
+                // resolution to populate `f`.
+                self.probe_registry_installed(id, f);
+            }
+            Ok(None) => {
+                // `id` is not a registry package; let the remaining
+                // resolution strategies handle it (or fail with
+                // the standard "library not found" diagnostic).
+            }
+            Err(e) => {
+                // Network failure, sig mismatch, or similar.
+                // Print a notice but let resolution fall through —
+                // the user may have a path-dep or sibling that
+                // resolves anyway, or they may want the standard
+                // error.
+                eprintln!("[registry] auto-install failed for {id}: {e}");
+            }
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {

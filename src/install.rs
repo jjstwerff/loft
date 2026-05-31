@@ -292,6 +292,45 @@ fn build_lockfile(graph: &[ResolvedPackage]) -> LockFile {
     lock
 }
 
+/// Auto-install fallback fired by the parser's `use X;` resolution
+/// chain (@PLAN12 Phase 6.6).
+///
+/// Behaviour:
+/// - Loads the registry index (uses cached, refreshes if TTL stale).
+/// - If `name` is in the catalog, installs the latest active version
+///   (same machinery as `loft install <name>`).
+/// - Returns `Ok(Some(report))` on a successful install, `Ok(None)`
+///   when `name` is NOT in the catalog (so the parser can fall
+///   through to remaining resolution strategies), or `Err` on a real
+///   failure (network down on a cold cache, signature mismatch,
+///   etc.).
+///
+/// The caller (parser's `probe_auto_install`) decides whether to
+/// announce or stay silent based on the return value.
+///
+/// # Errors
+///
+/// Surfaces any error from `install_one` — network failure, sig
+/// mismatch, tarball corruption, lockfile write failure.
+pub fn auto_install_if_in_catalog(
+    name: &str,
+    opts: &InstallOptions,
+) -> Result<Option<InstallReport>, String> {
+    // Load the index FIRST so we can check membership without
+    // committing to a network fetch for the tarball.  load_index
+    // honours `opts.offline` — if true, only uses cached index.
+    let index = load_index(opts)?;
+    if !index.packages.contains_key(name) {
+        return Ok(None);
+    }
+    eprintln!("[registry] resolving {name} from registry");
+    let report = install_one(name, None, opts)?;
+    for (n, v) in &report.installed {
+        eprintln!("[registry] installed {n} {v}");
+    }
+    Ok(Some(report))
+}
+
 /// Render a human-readable summary of an install.
 #[must_use]
 pub fn format_report(report: &InstallReport) -> String {
