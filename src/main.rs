@@ -172,6 +172,10 @@ fn print_help() {
     println!("  audit                         check every installed package against the");
     println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
     println!("                                2 if any high, 3 if any security_critical");
+    println!("  update [pkg]                  refresh lockfile to latest active versions");
+    println!("                                that satisfy each dep's loft.toml range;");
+    println!("                                --dry-run reports changes without writing;");
+    println!("                                --check exits 1 if any updates are available");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -696,6 +700,230 @@ fn list_installed() {
         );
     }
     println!("{} package(s) total", entries.len());
+}
+
+/// @PLAN12 Phase 6.8 — knob set for the `loft update` command.
+#[cfg(feature = "registry")]
+#[derive(Debug, Default, Clone)]
+struct UpdateOpts {
+    /// Specific package name; `None` updates every entry in the
+    /// lockfile.
+    target: Option<String>,
+    /// Compute + print the diff without writing the lockfile.
+    dry_run: bool,
+    /// Exit non-zero if any updates are available (CI gate).
+    /// Implies dry_run.
+    check_only: bool,
+}
+
+/// @PLAN12 Phase 6.8 — `loft update` driver.
+///
+/// Walks the project's (or cwd's) `loft.lock`, looks up each
+/// package in the registry index, picks the highest active
+/// non-yanked version that satisfies the corresponding range
+/// from `loft.toml` (if present; otherwise the lockfile-pinned
+/// version is treated as exact and never updated), and — unless
+/// in dry-run/check mode — calls `install_one` to fetch + extract
+/// + merge into the lockfile.
+///
+/// Exit codes:
+/// - 0  → up-to-date (no updates needed or all updates applied
+///        successfully).
+/// - 1  → updates available (`--check`) OR install failure.
+/// - 2  → no lockfile to update.
+#[cfg(feature = "registry")]
+fn update_packages(opts: &UpdateOpts) -> i32 {
+    use loft::install::{InstallOptions, install_one};
+    use loft::lockfile;
+    use loft::manifest;
+    use loft::registry_index;
+
+    // Find the project root or fall back to cwd.  Mirror the
+    // parser's walk-up logic (Phase 6.6) — start at cwd, walk up
+    // looking for loft.toml.
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("loft update: cwd: {e}");
+            return 1;
+        }
+    };
+    let project_root = find_project_root_from(&cwd);
+    let lock_dir = project_root.as_ref().unwrap_or(&cwd);
+    let lock_path = lock_dir.join("loft.lock");
+    if !lock_path.exists() {
+        eprintln!(
+            "loft update: no loft.lock at {} — nothing to update.",
+            lock_path.display()
+        );
+        eprintln!(
+            "  Run `loft install <pkg>` first (or `loft pin <script>` for one-file scripts)."
+        );
+        return 2;
+    }
+    let lock = match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            eprintln!("loft update: lockfile empty");
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("loft update: cannot read {}: {e}", lock_path.display());
+            return 1;
+        }
+    };
+    if lock.packages.is_empty() {
+        eprintln!("loft update: lockfile has no packages.");
+        return 0;
+    }
+
+    // Read project loft.toml deps so we know the version range for
+    // each entry.  Transitive deps (in lockfile but not in toml)
+    // default to "*" (any non-yanked).
+    let toml_deps: std::collections::HashMap<String, String> = project_root
+        .as_ref()
+        .and_then(|root| manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("")))
+        .map(|m| {
+            m.dependencies
+                .into_iter()
+                .filter(|(_, v)| manifest::extract_path_dep(v).is_none())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Load index (offline-respecting, allow_unsigned for the
+    // bootstrap window).
+    let install_opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: std::env::var("LOFT_OFFLINE").is_ok(),
+        allow_prerelease: false,
+        lock_path: Some(lock_path.clone()),
+    };
+    let index = match loft_install_load_index(&install_opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft update: {e}");
+            return 1;
+        }
+    };
+
+    let dry = opts.dry_run || opts.check_only;
+    let mut updates_available = false;
+    let mut install_failures: Vec<String> = Vec::new();
+    let mut diff: Vec<String> = Vec::new();
+
+    for entry in &lock.packages {
+        if let Some(t) = &opts.target {
+            if t != &entry.name {
+                continue;
+            }
+        }
+        let pkg = match index.packages.get(&entry.name) {
+            Some(p) => p,
+            None => {
+                diff.push(format!(
+                    "  {pkg} {ver} — not in current index (orphan; skipped)",
+                    pkg = entry.name,
+                    ver = entry.version
+                ));
+                continue;
+            }
+        };
+        let constraint = toml_deps
+            .get(&entry.name)
+            .cloned()
+            .unwrap_or_else(|| "*".to_string());
+        let Some(best) = registry_index::find_best_version(pkg, &constraint, false) else {
+            diff.push(format!(
+                "  {pkg} {ver} — no version satisfies range `{constraint}` (skipped)",
+                pkg = entry.name,
+                ver = entry.version
+            ));
+            continue;
+        };
+        if best.semver == entry.version {
+            // Already on the highest satisfying version.
+            continue;
+        }
+        // Higher OR lower (e.g. rollback after yank) — both are
+        // "updates" in the sense of "lockfile would change."
+        updates_available = true;
+        diff.push(format!(
+            "  {pkg} {old} → {new}",
+            pkg = entry.name,
+            old = entry.version,
+            new = best.semver
+        ));
+        if !dry {
+            match install_one(&entry.name, Some(&best.semver), &install_opts) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("  FAILED {} {}: {e}", entry.name, best.semver);
+                    install_failures.push(entry.name.clone());
+                }
+            }
+        }
+    }
+
+    if diff.is_empty() {
+        if let Some(t) = &opts.target {
+            println!("loft update {t}: already on the highest satisfying version.");
+        } else {
+            println!("loft update: all {} packages up-to-date.", lock.packages.len());
+        }
+        return 0;
+    }
+
+    if opts.check_only {
+        println!("loft update --check: updates available:");
+        for line in &diff {
+            println!("{line}");
+        }
+        return 1;
+    }
+    if opts.dry_run {
+        println!("loft update --dry-run: would update:");
+        for line in &diff {
+            println!("{line}");
+        }
+        return 0;
+    }
+
+    println!("loft update:");
+    for line in &diff {
+        println!("{line}");
+    }
+    if !install_failures.is_empty() {
+        eprintln!(
+            "loft update: {} package(s) failed to install",
+            install_failures.len()
+        );
+        return 1;
+    }
+    let _ = updates_available;
+    0
+}
+
+/// Walk up from `start` looking for the nearest directory that
+/// contains a `loft.toml`.  Returns `None` when reaching the
+/// filesystem root with no match.  Mirrors
+/// `parser::find_project_root` but reusable from main.rs
+/// (which can't reach into the parser's static helper).
+#[cfg(feature = "registry")]
+fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let abs = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let mut cur = abs.as_path();
+    loop {
+        if cur.join("loft.toml").exists() {
+            return Some(cur.to_path_buf());
+        }
+        let parent = cur.parent()?;
+        if parent == cur {
+            return None;
+        }
+        cur = parent;
+    }
 }
 
 /// @PLAN12 Phase 6.7 — `loft audit` walks every installed package
@@ -2363,6 +2591,38 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "update" {
+            // @PLAN12 Phase 6.8 — refresh lockfile entries to latest
+            // active version within each dep's loft.toml range.
+            #[cfg(feature = "registry")]
+            {
+                let mut update_opts = UpdateOpts::default();
+                let mut target: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--dry-run" {
+                        update_opts.dry_run = true;
+                        i += 1;
+                    } else if a2 == "--check" {
+                        update_opts.check_only = true;
+                        i += 1;
+                    } else if !a2.starts_with('-') && target.is_none() {
+                        target = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft update: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                update_opts.target = target;
+                let code = update_packages(&update_opts);
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft update: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "audit" {
