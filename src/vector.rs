@@ -150,7 +150,11 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         // separate field (word 1), so the trailing slack never affects
         // `len()`, indexing, copy (length-based, shrinks to fit) or
         // serialisation.
-        let cur_words = store.get_u32_raw(vec_rec, 0); // positive i32 claim as u32
+        // The claim header (positive i32) is read via `addr`, NOT the
+        // `get_u32_raw` field accessor — `valid()` forbids field offset 0
+        // (header), so the accessor panics in debug builds.  `claim`/`resize`
+        // read the header the same way.
+        let cur_words = *store.addr::<i32>(vec_rec, 0) as u32;
         let cur_cap = cur_words.saturating_mul(8).saturating_sub(8) / size;
         let target = if needed <= cur_cap {
             needed
@@ -365,12 +369,17 @@ pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) ->
         return false;
     }
     if len - i > 1 {
+        // Shift elements [i+1 .. len) down to [i .. len-1): that is
+        // `len - i - 1` elements.  Using `len - i` reads element `len` — one
+        // past the last valid element — an out-of-bounds read into adjacent
+        // memory (the stray element lands in the now-dead tail slot, so the
+        // observable result was correct, masking the UB).
         store.copy_block(
             vec_rec,
             checked_vec_pos(i as u32 + 1, size) as isize,
             vec_rec,
             checked_vec_pos(i as u32, size) as isize,
-            (len as isize - i as isize) * size as isize,
+            (len as isize - i as isize - 1) * size as isize,
         );
     }
     store.set_u32_raw(vec_rec, 4, len as u32 - 1);

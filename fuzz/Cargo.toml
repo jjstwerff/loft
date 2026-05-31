@@ -27,3 +27,10 @@ path = "fuzz_targets/store_alloc.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "vector_collection"
+path = "fuzz_targets/vector_collection.rs"
+test = false
+doc = false
+bench = false
