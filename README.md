@@ -114,7 +114,7 @@ loft examples/match.loft        # Pattern matching on enums
 | `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
 | **`25-brick-buster.loft`** | **A complete arcade game** |
 
-See the [full example list](lib/graphics/examples/README.md).
+See the [full example list](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics/examples) in the graphics chunk repo.
 
 ## Contributing
 
