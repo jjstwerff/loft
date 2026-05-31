@@ -3,13 +3,16 @@
 # uninitialised reads, leaks) before a rustc/LLVM toolchain bump exposes it as
 # silent corruption (the @P383 incident this plan was triggered by).
 #
-# WHY A SEPARATE WORKFLOW (not a job in ci.yml): the loft interpreter executes
-# bytecode, so running it under Miri is interpreter-on-interpreter — ~15 min per
-# `issues` test.  That is far too slow to block every PR, so this gate runs only
-# when the UB-relevant surface changes (paths filter below), plus nightly and on
-# manual dispatch.  The cheap, every-PR alignment detector is the homegrown
-# `stack_align_guard` (see doc/.../53-sanitizer-ci-lever/probes/run_guard.sh);
-# Miri is the gold-standard backstop for the broader UB classes the guard can't
+# WHY A SEPARATE WORKFLOW (not a job in ci.yml) AND NIGHTLY-ONLY: the loft
+# interpreter executes bytecode, so running it under Miri is
+# interpreter-on-interpreter — ~20 min (almost all sysroot + under-Miri compile).
+# That is far too slow to gate every PR, so this runs NIGHTLY on `main` plus on
+# manual dispatch.  A hard-UB regression lands red within ≤24h, always before any
+# (deliberate, never-auto) release.  The intended cheap, every-PR companion is
+# the homegrown `stack_align_guard` (`--features stack_align_guard`, normal test
+# speed), which catches the alignment-UB class — the class a stack/codegen change
+# is most likely to regress — and lands as a ci.yml job in the follow-up.  Miri
+# remains the gold-standard backstop for the broader UB classes the guard can't
 # see (store aliasing, uninit padding, leaks).
 name: Miri (hard-UB sanitizer)
 
@@ -17,21 +20,6 @@ on:
   schedule:
     - cron: '0 4 * * *'        # nightly 04:00 UTC
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      # The UB-relevant surface: interpreter, store/heap, codegen, lowering.
-      - 'src/state/**'
-      - 'src/database/**'
-      - 'src/store.rs'
-      - 'src/keys.rs'
-      - 'src/parser/**'
-      - 'src/scopes.rs'
-      - 'src/variables/**'
-      - 'src/generation/**'
-      - 'src/fill.rs'
-      - 'default/**'
-      - '.github/workflows/miri.yml'
 
 permissions:
   contents: read

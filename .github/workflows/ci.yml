@@ -109,19 +109,17 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo check --no-default-features
 
-      # The `html_wasm` test suite asserts the
-      # `wasm32-unknown-unknown` rlib is fresh against
-      # `src/codegen_runtime.rs` and other runtime sources.  Without
-      # this rebuild step, a cache-restored rlib from main is older
-      # than the PR's runtime sources and the staleness check panics.
-      # Linux-only: macOS / Windows test jobs skip html_wasm via the
-      # rust-target check inside the test (no wasm target installed).
+      # The `html_wasm` / `--html` tests build a wasm32-unknown-unknown rlib
+      # and compile against it.  Build it on ALL three OS: wasm32 is
+      # host-independent, and GitHub's macOS/Windows runner images now SHIP the
+      # wasm target pre-installed, so the test's "target not installed"
+      # self-skip no longer fires there — `loft --html` runs and fails E0463
+      # (rlib never built) instead of skipping.  Building everywhere closes
+      # that gap and actually exercises `--html` cross-platform.
       - name: Install wasm target (for html_wasm tests)
-        if: runner.os == 'Linux'
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build wasm rlib (for html_wasm tests)
-        if: runner.os == 'Linux'
         run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 
       # Build the graphics native cdylib so the graphics_gold tests (canvas
