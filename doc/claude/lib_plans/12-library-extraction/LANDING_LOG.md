@@ -147,6 +147,46 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 5b attempt — prerequisites surfaced, BLOCKED
+
+Tried to start `loft-libs-graphics` Stage B by copying imaging
++ graphics into the chunk repo.  Two real preparatory tasks
+surfaced that aren't part of 5b itself:
+
+1. **imaging depends on `loft-ffi-macros`** — `lib/imaging/native/Cargo.toml`
+   has `loft-ffi-macros = { path = "../../../loft-ffi-macros" }`.
+   Chunk-resident Cargo.toml needs registry-version deps
+   (`loft-ffi-macros = "0.1"`), but loft-ffi-macros is NOT on
+   crates.io.  Confirmed by direct `cargo fetch` probe: "no
+   matching package named `loft-ffi-macros` found, location
+   searched: crates.io index".  Options: (a) publish
+   `loft-ffi-macros` 0.1.0 to crates.io; (b) refactor imaging
+   to use plain `loft-ffi` like web/server do (no proc-macro);
+   (c) vendor loft-ffi-macros into imaging's `native/`.
+
+2. **graphics has 209 warnings + `.allow_warnings` opt-out** —
+   shipping graphics to the chunk repo with the opt-out file
+   would carry the debt into the chunk against the "every new
+   chunk starts warning-free" Phase 6.5 discipline (`LOFT_DENY_WARNINGS=1`
+   default).  Warning sweep (Phase 6w-w slice for graphics)
+   needed before graphics can ship clean Stage A.
+
+5b attempt rolled back; no changes committed.  Plan README's
+5b row updated to BLOCKED with the prerequisite list.
+
+Recommended next steps before retrying 5b:
+- Publish `loft-ffi-macros 0.1.0` to crates.io (separate
+  small task; mirrors the `loft-ffi-build 0.2.0` publish that
+  unblocked Phase 6r).
+- Graphics warning sweep (Phase 6w-w; non-trivial — 209
+  warnings to triage; some require code idiom changes per
+  the loft-write skill's "warning-clean idioms" doc).
+
+5b's monorepo cleanup (5b.2 — remove `lib/shapes/`,
+`lib/gridmesh/`, `lib/graphics/`, `lib/imaging/`) waits on
+5b.1 (graphics + imaging Stage A) which waits on the above
+prerequisites.
+
 ## 2026-05-31 — Phase 6b SHIPPED — net Stage B (consumer migration sweep)
 
 Plan-12's primary mission goal for net: monorepo `lib/web/` +
