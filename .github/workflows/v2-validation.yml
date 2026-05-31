@@ -97,6 +97,21 @@ jobs:
             target
           key: ubuntu-v2-guard-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-v2-guard-cargo-
+      # Build-prep mirrors the v2-suite job: native-compile tests shell out to
+      # build generated Rust against the release loft + mmap_storage rlibs, and
+      # binary-spawn tests exec target/release/loft — both absent without this,
+      # which otherwise fails the lane with E0463 (can't find mmap_storage) /
+      # "failed to spawn loft binary", masquerading as guard fires.
+      - name: Build
+        run: cargo build --all-targets
+      - name: Build (release loft binary + lib for integration tests)
+        run: cargo build --release --lib --bin loft
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Build wasm rlib
+        run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+      - name: Build graphics native cdylib
+        run: cargo build --release --manifest-path lib/graphics/native/Cargo.toml
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Test (V2 + stack_align_guard, zero fires expected)
