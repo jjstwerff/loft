@@ -22,7 +22,7 @@
 
 #![cfg(feature = "registry")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::lockfile::{self, LockFile, LockedPackage, SCHEMA_VERSION};
 use crate::registry_index::{self, FetchedIndex, RegistryIndex, Version, extract_tarball};
@@ -46,6 +46,13 @@ pub struct InstallOptions {
     pub offline: bool,
     /// Accept prerelease versions when resolving constraints.
     pub allow_prerelease: bool,
+    /// Override the lockfile path written by `install_one`.
+    /// `None` → default cwd/`loft.lock` (existing behaviour).
+    /// `Some(path)` → write/merge into that path instead.
+    /// Used by `loft pin <script>` (writes `<script>.loft.lock`
+    /// next to the script) and by future project-mode walk-up
+    /// resolution (writes to the project root's `loft.lock`).
+    pub lock_path: Option<PathBuf>,
 }
 
 /// High-level outcome printed back to the user.
@@ -109,15 +116,22 @@ pub fn install_one(
             .push((r.name.clone(), r.version.semver.clone()));
     }
 
-    // Write lockfile in the current working dir.  When a lockfile
-    // already exists (e.g. from a previous `loft install <other>`),
-    // MERGE this install's graph into it: new entries overwrite same-
-    // named entries, others survive.  This lets `loft install crypto`
-    // followed by `loft install random` produce a combined lockfile
-    // listing both packages — matches expectations from cargo / npm.
-    let lock_path = std::env::current_dir()
-        .map_err(|e| format!("cwd: {e}"))?
-        .join("loft.lock");
+    // Write lockfile.  When a lockfile already exists (e.g. from a
+    // previous `loft install <other>`), MERGE this install's graph
+    // into it: new entries overwrite same-named entries, others
+    // survive.  This lets `loft install crypto` followed by
+    // `loft install random` produce a combined lockfile listing both
+    // packages — matches expectations from cargo / npm.
+    //
+    // Path: `opts.lock_path` if set (used by `loft pin <script>`
+    // for the sidecar `<script>.loft.lock`); otherwise cwd's
+    // `loft.lock` (default for `loft install`).
+    let lock_path = match &opts.lock_path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()
+            .map_err(|e| format!("cwd: {e}"))?
+            .join("loft.lock"),
+    };
     let mut lock = match lockfile::read_lockfile(&lock_path) {
         Ok(Some(existing)) => existing,
         _ => lockfile::LockFile {
@@ -418,6 +432,7 @@ mod tests {
             refresh: false,
             offline: false,
             allow_prerelease: false,
+            lock_path: None,
         }
     }
 

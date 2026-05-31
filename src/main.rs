@@ -163,6 +163,9 @@ fn print_help() {
     println!("                                install /p       — install package at /p");
     println!("                                install name     — download latest from registry");
     println!("                                install name@v   — download specific version");
+    println!("  pin <script.loft>             pin every registry library the script uses");
+    println!("                                writes <script>.loft.lock next to the script;");
+    println!("                                subsequent runs use the pinned versions");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -466,6 +469,7 @@ fn search_registry(query: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let index = match loft_install_load_index(&opts) {
         Ok(i) => i,
@@ -522,6 +526,7 @@ fn package_info(name: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let index = match loft_install_load_index(&opts) {
         Ok(i) => i,
@@ -571,6 +576,156 @@ fn package_info(name: &str) {
         };
         println!("    {}{tag_str}", ver.semver);
     }
+}
+
+/// @PLAN12 Phase 6.6 — `loft pin <script>` writes a sidecar
+/// `<script>.loft.lock` next to the script.  Subsequent runs of
+/// that script resolve registry libraries via the sidecar (see
+/// `src/parser/mod.rs::probe_sidecar_lockfile`), so the script
+/// becomes reproducible regardless of cwd or registry drift.
+///
+/// Implementation: scans the script source for `use <name>;`
+/// declarations, installs each name that exists in the registry
+/// catalog (calls `install_one` with `lock_path` redirected to
+/// the sidecar), and prints a summary.  Imports that aren't
+/// registry packages (path-deps, sibling packages, stdlib) are
+/// ignored — only registry libraries need pinning; everything
+/// else either lives in the workspace or is part of loft itself.
+#[cfg(feature = "registry")]
+fn pin_script(script: &str) {
+    use loft::install::{InstallOptions, install_one};
+    use loft::registry_index;
+    use std::path::PathBuf;
+
+    let script_path = PathBuf::from(script);
+    if !script_path.exists() {
+        eprintln!("loft pin: script `{}` not found", script_path.display());
+        std::process::exit(1);
+    }
+    let source = match std::fs::read_to_string(&script_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("loft pin: cannot read `{}`: {e}", script_path.display());
+            std::process::exit(1);
+        }
+    };
+
+    // Extract `use <name>;` declarations.  Simple line-scan rather
+    // than a full parser pass — we want to pin even scripts that
+    // have parse errors elsewhere.  Loft `use` syntax forms:
+    //   use foo;
+    //   use foo::bar;
+    //   use foo::{a, b};
+    //   use foo::*;
+    // All start with `use <ident>` after stripping leading whitespace
+    // + skipping comment lines.
+    let mut uses: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        // Skip comments and blank lines.
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("use ") else {
+            continue;
+        };
+        // Take the leading identifier (alphanumeric + underscore).
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || uses.contains(&name) {
+            continue;
+        }
+        uses.push(name);
+    }
+
+    if uses.is_empty() {
+        eprintln!("loft pin: no `use` declarations found in `{}`", script_path.display());
+        std::process::exit(1);
+    }
+
+    // Sidecar path next to the script.
+    let mut sidecar = script_path.clone();
+    let sidecar_name = format!(
+        "{}.lock",
+        script_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("script.loft")
+    );
+    sidecar.set_file_name(sidecar_name);
+
+    // Load index once so we can filter out non-registry names
+    // (path-deps + stdlib + sibling packages) before invoking
+    // install_one — saves a network hit + a confusing error.
+    let opts_for_index = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = match loft_install_load_index(&opts_for_index) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft pin: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: Some(sidecar.clone()),
+    };
+
+    let mut pinned: Vec<(String, String)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for name in &uses {
+        if !index.packages.contains_key(name) {
+            skipped.push(name.clone());
+            continue;
+        }
+        match install_one(name, None, &opts) {
+            Ok(report) => {
+                for (n, v) in report.installed.iter().chain(report.skipped_cached.iter()) {
+                    if !pinned.iter().any(|(pn, _)| pn == n) {
+                        pinned.push((n.clone(), v.clone()));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("loft pin: install `{name}` failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if pinned.is_empty() {
+        eprintln!(
+            "loft pin: no registry libraries in `{}` (only sibling / stdlib uses)",
+            script_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    println!("Pinned to {}:", sidecar.display());
+    for (n, v) in &pinned {
+        println!("  {n} {v}");
+    }
+    if !skipped.is_empty() {
+        println!("Not from registry (left unresolved):");
+        for n in &skipped {
+            println!("  {n}");
+        }
+    }
+    println!("{} library(ies) pinned", pinned.len());
+    // Keep registry_index in the symbol table so the cfg above
+    // doesn't drop the import.
+    let _ = registry_index::cache_dir();
 }
 
 /// Thin wrapper exposing `install::load_index`-equivalent for the
@@ -1814,6 +1969,7 @@ fn main() {
                 refresh: false,
                 offline: false,
                 allow_prerelease: false,
+        lock_path: None,
             };
             let mut positional: Vec<String> = Vec::new();
             while i < argv.len() {
@@ -1913,6 +2069,24 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "pin" {
+            // @PLAN12 Phase 6.6 — write a sidecar lockfile next to
+            // a script so subsequent runs use pinned versions
+            // regardless of cwd or registry drift.
+            #[cfg(feature = "registry")]
+            {
+                let Some(script) = argv.get(i) else {
+                    eprintln!("loft pin: script path required");
+                    std::process::exit(1);
+                };
+                pin_script(script);
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft pin: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "registry" {
