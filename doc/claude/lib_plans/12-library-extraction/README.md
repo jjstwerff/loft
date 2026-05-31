@@ -342,6 +342,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 6.8 | `loft update` command — `loft update` refreshes lockfile to latest active versions of all declared deps; `loft update <pkg>` targets one package; project-mode explicit upgrade path that pairs with the 6.7 yank channel | 6.6 (lockfile primitives), 6.7 (advisory feed for "is the new version safe to pick") | **OPEN — S (~1 day)** — designed 2026-05-31; closes the loop "registry says you're outdated → user has a one-command fix"; see [§ Phase 6.8 detail](#phase-68--loft-update-command-proposed-2026-05-31) below |
 | 6.11 | Offline bundle support — `loft bundle export <pkgs> <outdir>` + `loft bundle import <indir>` + `LOFT_REGISTRY_URL=file://` resolution; stale-advisory thresholds (`LOFT_ADVISORY_MAX_AGE`, `LOFT_ADVISORY_STALE_REFUSE`); makes air-gapped / regulated-environment / classroom-lab deployments first-class | 6.6, 6.7 | **OPEN — S (~1-2 days)** — designed 2026-05-31; companion to 6.7 advisory channel for environments that need controlled-schedule registry refresh instead of on-demand; see [§ Phase 6.11 detail](#phase-611--offline-bundle-support-proposed-2026-05-31) below |
 | 6.12 | Loft-developer offline test loop — `tests/fixtures/libs/` + `scripts/sync-fixtures.sh`; bundled-fixture pattern that survives Stage B's `lib/<pkg>/` removal; eliminates "loft contributor needs internet to run tests" failure mode; mock-registry fixture for testing registry-resolution code paths | Stage B for each chunk (the gap this closes only appears once `lib/<pkg>/` is removed) | **OPEN — S (~1 day)** — designed 2026-05-31; defensive: lands BEFORE Stage B aggressive removal so the loft contributor experience doesn't regress; see [§ Phase 6.12 detail](#phase-612--loft-developer-offline-test-loop-proposed-2026-05-31) below |
+| 6.13 | Documentation harvest + close-out — extract design content from this plan into permanent reference docs (PACKAGES.md / PKG_REGISTRY.md / new authoring docs); create user-facing onboarding docs (INSTALL.md / SECURITY.md / PUBLISHING.md / USING_LIBRARIES.md / library catalog); retire stale in-monorepo `lib/<pkg>/` references; CLAUDE.md table surgery; reference audit sweep; split plan into `README.md` (retrospective) + `LANDING_LOG.md`; move to `lib_plans/finished/12-library-extraction/`.  The closure ritual that prevents the plan from "just stopping" with valuable design content trapped in a finished doc no one reads | All previous 6.x phases shipped (6.5 + 6.6 + 6.7 + 6.8 + 6.11 + 6.12) + Stage B done for all three chunks (core ✓ already, net + graphics pending) | **OPEN — M (~3-5 days total, spread across the plan's tail)** — designed 2026-05-31; harvesting happens AS each 6.x phase ships (don't accumulate in the plan); see [§ Phase 6.13 detail](#phase-613--documentation-harvest--close-out-proposed-2026-05-31) below |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -1582,6 +1583,169 @@ internet" regression on every monorepo checkout.  With 6.12,
 the regression is bounded to "maintainers need to sync
 fixtures when chunks ship new versions" — a planned,
 auditable cadence.
+
+### Phase 6.13 — documentation harvest + close-out (proposed 2026-05-31)
+
+**Trigger.**  Plan-12 is unusually doc-heavy.  By the time
+6.5 + 6.6 + 6.7 + 6.8 + 6.11 + 6.12 + Stage B + lib-plan 30
+have all landed, this README is ~2500+ lines of design
+content, decision records, and lessons learned.  Closing the
+plan by simply moving the file to `lib_plans/finished/`
+strands all of that — finished plans are read for archaeology,
+not as ongoing reference.  Without explicit doc-harvest work,
+"where's the canonical authoring guide?" gets the wrong
+answer "open this 2026 plan."
+
+**Goal.**  When plan-12 closes:
+
+- Every piece of durable design content lives in a PERMANENT
+  reference doc (PACKAGES.md, PKG_REGISTRY.md, or a
+  purpose-named new doc), not in the finished plan.
+- The finished plan is a compressed retrospective +
+  chronological landing log.  ~500 lines, not ~2500.
+- User-facing onboarding for "install loft", "use libraries",
+  "publish a library", "security model", "library catalog"
+  exists as top-level docs (not buried inside Claude-internal
+  references).
+- No stale in-monorepo `lib/<pkg>/` references survive in any
+  doc.
+- `CLAUDE.md`'s doc index reflects the new layout; reading-
+  by-goal paths route through current docs, not finished
+  plans.
+
+**Scope.**  Six categories of work, each enumerated in detail
+in [§ Evaluation — doc state after plan-12 lands](#suggested-closure-sequence-the-work-to-actually-do)
+above.  Recapped here as concrete deliverables:
+
+| Category | Output | Lines |
+|---|---|---|
+| **Migration from plan-12** | Move design content from this plan to permanent docs.  Phase 6.5 template → PACKAGES.md § Library CI; Phase 6r per-symbol rule → PACKAGES.md or `LIBRARY_AUTHORING.md`; Phase 6.6 auto-install → PACKAGES.md § Auto-install; Phase 6.7 advisory schema → PKG_REGISTRY.md § Security advisories; Phase 6.8 `loft update` → `CLI.md`; Phase 6.11 offline → `OFFLINE.md`; Phase 6.12 dev-loop → DEVELOPMENT.md § Test fixtures; verify-on-recompile tables → PACKAGES.md § Verification + lib-plan-30. | varies |
+| **New Claude-internal docs** | `LIBRARY_AUTHORING.md` (end-to-end "publish a library" guide); `OFFLINE.md` (air-gap + bundle workflow + loft-dev offline loop). | ~400 + ~250 |
+| **New user-facing docs (repo root)** | `INSTALL.md` (install.sh + OS packages + self-update); `SECURITY.md` (trust model + vuln disclosure); `PUBLISHING.md` (author's view); `USING_LIBRARIES.md` (consumer's view of `use` + manifest + lockfile + CLI). | ~150 + ~200 + ~300 + ~250 |
+| **Library catalog generator** | Script that pulls `index.json` from the registry and writes a markdown catalog page; CI auto-update; published at `loft-lang.org/libraries` or `doc/library-catalog.md`. | ~50 (script) + dynamic page |
+| **CLAUDE.md table surgery** | Add new docs to index; retire obsolete reading-by-goal rows ("Implement `loft install`" → done; "Build the `server` library" → it lives in chunk repo now); update reading-by-goal paths so "Add a feature to the compiler" doesn't route through plan-12. | ~30 row changes |
+| **Reference audit + sweep** | `grep -rln "PLAN12\|plan-12\|12-library-extraction" doc/` — rewrite every survivor to point at the new permanent doc OR cite the finished-plan retrospective.  No reference points at an open phase. | per-file edits across ~20 docs |
+| **Plan-12 closure** | Split `lib_plans/12-library-extraction/README.md` into `README.md` (compressed retrospective, ~500 lines) + `LANDING_LOG.md` (chronological per-phase landing record, ~500 lines).  `git mv` to `lib_plans/finished/12-library-extraction/`. | retrospective rewrite + log compile |
+
+**Harvest cadence — DON'T accumulate.**
+
+The critical rule: harvest each 6.x phase's design content
+INTO the permanent doc AT THE TIME THE PHASE SHIPS, not at
+plan close.  Otherwise 6.13 becomes a 2-week migration
+sprint where one person tries to remember why each design
+decision was made.
+
+```
+Phase 6.6 ships → extract auto-install design into PACKAGES.md § Auto-install
+Phase 6.7 ships → extract advisory schema into PKG_REGISTRY.md § Security advisories
+Phase 6.8 ships → extract `loft update` UX into CLI.md
+Phase 6.11 ships → create OFFLINE.md from the section
+Phase 6.12 ships → extract fixture pattern into DEVELOPMENT.md § Test fixtures
+...
+Phase 6.13 close → just the user-facing docs + cleanup + plan split
+```
+
+At 6.13 time, the plan README is already ~half-migrated.
+What's LEFT in the plan is just:
+- Retrospective narrative (kept; that's the closure record).
+- Stage A / Stage B per-chunk landing log (kept; chronological).
+- Implementation lessons not yet folded elsewhere (rare; fold them).
+
+**Implementation outline (M, ~3-5 work-days):**
+
+1. **Per-phase harvest (continuous, ~half day per shipping
+   phase)** — when a phase merges, extract its `### Phase 6.x detail`
+   section's permanent content into the target reference doc.
+   Leave a compact landing-record stub in the plan ("Shipped
+   2026-Q? in commit `<sha>`; design now at PACKAGES.md § Foo").
+2. **User-facing doc creation (sprint, ~2 days)** —
+   `INSTALL.md`, `SECURITY.md`, `PUBLISHING.md`,
+   `USING_LIBRARIES.md`.  Each ~150-300 lines, mostly
+   reorganisation + tone shift from Claude-internal to
+   user-facing.
+3. **Library catalog generator (~half day)** — `scripts/gen_library_catalog.py`
+   that pulls `index.json` and writes `doc/library-catalog.md`.
+   Wire into CI to auto-update on registry change.
+4. **CLAUDE.md surgery (~half day)** — add new docs to index,
+   retire obsolete rows, rewrite reading-by-goal paths that
+   still route through plan-12.
+5. **Reference audit (~half day)** — `grep -rln` for the
+   plan / phase identifiers; rewrite each surviving reference
+   to point at the permanent doc.
+6. **Plan-12 split + move (~half day)** — compress the
+   plan's narrative into a retrospective README; extract
+   per-phase landing chronology into LANDING_LOG.md; `git mv`
+   to `lib_plans/finished/12-library-extraction/`.
+
+**Verification (the gate that closes the plan):**
+
+A `tests/doc_hygiene.rs` test plus a manual checklist:
+
+```rust
+#[test]
+fn plan12_no_open_phase_references() {
+    // After plan-12 closes, every reference to PLAN12 / plan-12 / 12-library-extraction
+    // in doc/ must point at either:
+    //   (a) lib_plans/finished/12-library-extraction/README.md (retrospective), OR
+    //   (b) lib_plans/finished/12-library-extraction/LANDING_LOG.md (chronology)
+    // NEVER at "Phase X" inside an open plan.
+
+    // Walk doc/, grep for the identifiers, classify each survivor.
+    // Fail if any "Phase 6.X" or "§ Phase X" reference survives outside the finished plan.
+}
+```
+
+Manual checklist (the "done when" recital):
+
+- [ ] `make ci` green (existing gates plus the new plan12_no_open_phase_references).
+- [ ] All shipping 6.x phases have a one-line "Shipped {date}: see {permanent-doc}" entry in the plan.
+- [ ] `INSTALL.md`, `SECURITY.md`, `PUBLISHING.md`,
+      `USING_LIBRARIES.md`, `LIBRARY_AUTHORING.md`,
+      `OFFLINE.md` exist and pass doc_hygiene.
+- [ ] `doc/library-catalog.md` generates cleanly from `index.json`.
+- [ ] `CLAUDE.md` doc-index table reflects new docs; obsolete
+      reading-by-goal rows retired.
+- [ ] `grep -rln "PLAN12" doc/` returns only references to the
+      finished plan + LANDING_LOG (no "Phase X" pointers
+      survive).
+- [ ] Plan moved to `lib_plans/finished/12-library-extraction/`;
+      readme compressed to retrospective shape (~500 lines).
+- [ ] LANDING_LOG.md present with per-phase chronology.
+- [ ] User who's never seen the plan can reach "how do I
+      publish a library?" from `CLAUDE.md` in ≤2 clicks.
+
+**Why this is its own phase, not "just close-out work."**
+
+Closure is real work.  Other recently-closed plans
+(`plans/finished/22-mutable-closures/`,
+`plans/finished/52-value-block-borrow-cleanup/`,
+`plans/finished/44-hash-semantics/`) demonstrate that doc
+discipline at close determines whether the finished plan
+serves as a useful artifact or becomes archaeology.  Plan-12
+is unusually large; its closure work deserves explicit phase
+status so it doesn't get treated as "the cleanup task someone
+will get to."
+
+**Open questions:**
+
+1. **Catalog format.**  HTML page on `loft-lang.org`, or
+   markdown in the repo, or both?  Recommendation: markdown
+   in repo (commitable, no hosting dep) + auto-rendered HTML
+   on loft-lang.org as a polished view.
+2. **Retrospective compression target.**  Keep all design
+   detail, or just decisions + outcomes?  Recommendation:
+   decisions + outcomes + the few "what we learned" lessons
+   that surface design pitfalls future projects should know
+   about.  Implementation detail moves to permanent docs.
+3. **Should 6.13 also fold lib-plan 30's design?**  No —
+   lib-plan 30 is its own slot, with its own lifecycle.  Its
+   doc harvest is lib-plan-30's responsibility when it
+   closes.
+4. **Versioned doc snapshots.**  Should the doc state be
+   tagged with each minor release ("this is how things
+   worked in v0.9.0")?  Out of scope for 6.13;
+   CHANGELOG.md already serves this purpose at the user
+   level.
 
 ### Phase 6w-w — retire every `.allow_warnings`
 
