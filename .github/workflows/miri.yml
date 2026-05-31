@@ -104,6 +104,12 @@ jobs:
       # ASan coverage.  An explicit --target makes RUSTFLAGS instrument the whole
       # build.  detect_leaks=0 keeps this a clean UAF/OOB gate until the
       # LeakSanitizer live-at-exit baseline (~108 allocations) is triaged.
+      #
+      # --skip the generated-code-freshness meta-tests: they regenerate a file
+      # (fill.rs / native fns) and byte-compare it to the committed copy, which
+      # is toolchain-SENSITIVE (ASan runs on nightly; the files were committed
+      # under stable) — a build-hygiene check, not memory safety.  ci.yml
+      # validates freshness on stable; skipping here unmasks ASan's real signal.
       - name: ASan sweep (UAF / OOB; leaks off pending triage)
         env:
           RUSTFLAGS: '-Zsanitizer=address'
@@ -111,6 +117,8 @@ jobs:
         run: >
           cargo +nightly test --release --target x86_64-unknown-linux-gnu
           --lib --test issues --test wrap --test strings --test frame_vars
+          -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
+          --skip native_rs_functions_up_to_date
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
@@ -146,8 +154,14 @@ jobs:
 
       # Interpreter test targets only — the core where UB lives and where a
       # toolchain change is most likely to surface it.  Skips the heavy
-      # native/wasm build-prep an early-warning check doesn't need.
+      # native/wasm build-prep an early-warning check doesn't need.  Also skips
+      # the generated-code-freshness meta-tests (fill.rs / native fns): those
+      # byte-compare a regeneration to the committed copy and are toolchain-
+      # sensitive by construction (a build-hygiene check ci.yml runs on stable),
+      # so they would red-flag the matrix on a non-runtime concern.
       - name: Test (ubuntu, ${{ matrix.toolchain }})
         run: >
           cargo +${{ matrix.toolchain }} test --release
           --lib --test issues --test wrap --test strings --test frame_vars
+          -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
+          --skip native_rs_functions_up_to_date
