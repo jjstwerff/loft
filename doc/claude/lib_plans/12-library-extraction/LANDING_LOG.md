@@ -147,6 +147,48 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6b prep — `auto_build_native` target-dir redirect
+
+The actual 6b unblocker.  `extensions::auto_build_native` was
+writing `target/` inside the package install dir
+(`~/.loft/registry/<pkg>-<ver>/native/target/`).  Restricted
+on shared / sandboxed / read-only filesystems → cargo build
+fails silently → parser panics at first call to a native fn.
+
+Fix in src/extensions.rs:
+- When `pkg_dir` is under `~/.loft/registry/` (i.e., the package
+  is a `loft install`-extracted chunk), redirect cargo's target
+  via `CARGO_TARGET_DIR=~/.loft/build-cache/<pkg>-<ver>/`.  Sits
+  alongside the install in user-writable space.
+- When `pkg_dir` is inside the monorepo's `lib/<pkg>/native/`,
+  keep the in-tree `target/` — the workspace's existing
+  `cargo test` paths + `add_native_extern_flags`'s mtime keying
+  expect it there.
+- Cached-build lookup checks the redirected target first (where
+  future builds land), then the legacy in-tree target/ (so
+  existing builds from older loft binaries are still reused).
+
+Verified end-to-end by running 6b execution probe (Stage B
+removal of `lib/{web,server,game_protocol}/`): multiplayer
+v2 + v3 + 4/5 of v5 pass against registry-resolved net
+packages with auto-built cdylibs.  Stage B itself rolled back
+pending the downstream consumer-migration work (audience-demo
++ viewer + extraction_hygiene gate + v5_t5 world dep);
+6b's main native-build blocker is now resolved.
+
+Still pending for 6b to ship:
+- `tools/audience-demo/*.loft` + `tools/audience-demo-50/*.loft`
+  + `tools/viewer/src/main.loft` need a loft.toml (or top-level
+  monorepo lockfile) so they resolve `use web/server;` post-
+  removal.
+- v5_t5 `use world;` — either Phase 6w extracts world, or
+  v5_t5 gets `#[ignore]`'d in the gap.
+- `tests/extraction_hygiene.rs::manifest_native_functions_cover_drained_libraries`
+  scans `lib/web/src/web.loft` for `#native` annotations; needs
+  to switch to fixture or to gracefully handle missing lib.
+- Multiplayer + p244 script relocation (`lib/<pkg>/examples`
+  + `lib/server/tests/server.loft` → `tests/integration/`).
+
 ## 2026-05-31 — Phase 6b attempt — rolled back
 
 Attempted the "in-monorepo move-then-delete" refactor (Option D

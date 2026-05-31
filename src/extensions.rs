@@ -1868,25 +1868,86 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     }
     let lib_name = platform_lib_name(stem);
     let rlib_name = format!("lib{stem}.rlib");
-    let release_dir = pkg.join("native").join("target").join("release");
-    let release_path = release_dir.join(&lib_name);
-    let release_rlib_path = release_dir.join(&rlib_name);
-    if release_path.exists() && release_rlib_path.exists() {
-        return Some(release_path.to_string_lossy().to_string());
+
+    // @PLAN12 Phase 6b prep — separate target dir for chunk-resident
+    // installs.  When `pkg_dir` lives under `~/.loft/registry/`
+    // (i.e., a `loft install`-extracted package), don't write the
+    // target/ inside the install dir — that dir can be on a
+    // read-only filesystem, owned by another user (shared cache),
+    // or sandbox-restricted.  Redirect via `CARGO_TARGET_DIR` to
+    // `~/.loft/build-cache/<pkg>-<ver>/` which sits alongside the
+    // install in user-writable space.
+    //
+    // The monorepo's `lib/<pkg>/native/` continues to use its
+    // in-tree `target/` since the workspace expects it there
+    // (existing `cargo test` paths, IDE settings, mtime keying in
+    // `add_native_extern_flags` / `native_cache_key`).
+    let registry_cache = crate::registry_index::cache_dir();
+    let registry_cache_canon = std::fs::canonicalize(&registry_cache).ok();
+    let pkg_canon = std::fs::canonicalize(&pkg).ok();
+    let use_redirected_target = match (&registry_cache_canon, &pkg_canon) {
+        (Some(rc), Some(pc)) => pc.starts_with(rc),
+        _ => false,
+    };
+    let redirected_target = if use_redirected_target {
+        // Mirror the install dir's last component (`<pkg>-<ver>`)
+        // under build-cache/ so different chunk-versions don't
+        // step on each other's targets.
+        let stem_dir = pkg
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| stem.to_string());
+        Some(
+            registry_cache
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("build-cache")
+                .join(stem_dir),
+        )
+    } else {
+        None
+    };
+
+    // Existing-cache check: look in the redirected target first
+    // (where future builds land), then the legacy in-tree target/
+    // (so existing builds from older loft binaries are still
+    // reused).
+    for target_root in [
+        redirected_target.as_deref(),
+        Some(pkg.join("native").join("target").as_path()),
+    ]
+    .iter()
+    .flatten()
+    .copied()
+    {
+        for profile in ["release", "debug"] {
+            let dir = target_root.join(profile);
+            let lib = dir.join(&lib_name);
+            let rlib = dir.join(&rlib_name);
+            if lib.exists() && rlib.exists() {
+                return Some(lib.to_string_lossy().to_string());
+            }
+        }
     }
-    let debug_dir = pkg.join("native").join("target").join("debug");
-    let debug_path = debug_dir.join(&lib_name);
-    let debug_rlib_path = debug_dir.join(&rlib_name);
-    if debug_path.exists() && debug_rlib_path.exists() {
-        return Some(debug_path.to_string_lossy().to_string());
-    }
-    let built_path = release_path;
-    let status = std::process::Command::new("cargo")
-        .args(["build", "--release", "--manifest-path"])
+
+    // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo
+    // writes outside the install dir.
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(["build", "--release", "--manifest-path"])
         .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status();
+        .stderr(std::process::Stdio::inherit());
+    let built_path = if let Some(ref tdir) = redirected_target {
+        if let Some(parent) = tdir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        cmd.env("CARGO_TARGET_DIR", tdir);
+        tdir.join("release").join(&lib_name)
+    } else {
+        pkg.join("native").join("target").join("release").join(&lib_name)
+    };
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() && built_path.exists() => {
             Some(built_path.to_string_lossy().to_string())
