@@ -237,12 +237,19 @@ jobs:
       # (E0463) — and doctests aren't memory-safety-relevant anyway.  The
       # filter drops the lib-FFI integration test + the toolchain-sensitive
       # generated-code-freshness meta-tests.
+      #
+      # `+nightly-2026-05-28` is EXPLICIT: the repo's rust-toolchain.toml pins
+      # `channel = "stable"`, which otherwise overrides the dtolnay nightly
+      # install for `cargo` in the repo dir — and `-Zsanitizer` is nightly-only,
+      # so a bare `cargo` here runs stable and errors "the option `Z` is only
+      # accepted on the nightly compiler".
       - name: ASan sweep (UAF / OOB; leaks off pending triage)
         env:
           RUSTFLAGS: '-Zsanitizer=address'
           ASAN_OPTIONS: 'detect_leaks=0'
         run: >
-          cargo nextest run --profile ci --release --target x86_64-unknown-linux-gnu
+          cargo +nightly-2026-05-28 nextest run --profile ci --release
+          --target x86_64-unknown-linux-gnu
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'

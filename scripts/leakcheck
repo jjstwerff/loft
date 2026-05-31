@@ -35,6 +35,8 @@
 #   printf 'fn main(){ for i in 0..9 { d = mk(); use(d); } }\n' | scripts/leakcheck -
 
 set -uo pipefail
+# Cache clean/release rebuilds with sccache when present (no-op otherwise).
+source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOFT="$ROOT/target/release/loft"
 

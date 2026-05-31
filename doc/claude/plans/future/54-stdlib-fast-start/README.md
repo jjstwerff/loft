@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Future — design sketch only, no implementation.  **Origin:**
-surfaced during [@PLAN53](../53-sanitizer-ci-lever/README.md)
+surfaced during [@PLAN53](../../finished/53-sanitizer-ci-lever/README.md)
 Stage A1 sanitizer probing (2026-05-29).  Every loft invocation
 re-parses the entire `default/*.loft` stdlib at startup —
 lexing, two-pass parsing, scope analysis, and bytecode
@@ -107,7 +107,7 @@ changes — with no change to observable program behaviour.
   durable/serializable store, arc A can build on it (with the Q2
   caveat for the Miri variant).  Sequence PLAN54 after PLAN38's
   serialization primitive when possible.
-- **[@PLAN53 sanitizer-ci-lever](../53-sanitizer-ci-lever/README.md)** —
+- **[@PLAN53 sanitizer-ci-lever](../../finished/53-sanitizer-ci-lever/README.md)** —
   this plan is the generalization of PLAN53's "Miri-subset tests
   must not reload the full stdlib per test" finding.  PLAN53 does
   NOT depend on PLAN54 (it uses `cached_default()` + minimal
@@ -123,4 +123,4 @@ changes — with no change to observable program behaviour.
 - [PERFORMANCE.md](../../../PERFORMANCE.md) — startup-latency context;
   this plan's win is amortizing the per-invocation stdlib parse.
 - [@PLAN38 loft-store-durable](../38-loft-store-durable/README.md),
-  [@PLAN53 sanitizer-ci-lever](../53-sanitizer-ci-lever/README.md).
+  [@PLAN53 sanitizer-ci-lever](../../finished/53-sanitizer-ci-lever/README.md).
