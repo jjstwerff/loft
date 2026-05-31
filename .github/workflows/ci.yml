@@ -199,6 +199,56 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not test(library_suite)'
 
+  # @PLAN53 Wave 2 — the per-PR ASan gate.  ASan is cheap enough (~few min,
+  # ubuntu-only, parallel under the windows `Test` long pole) to gate every PR,
+  # giving UAF / OOB / double-free detection at PR time — the @P383 founding bug
+  # class.  Complements the `guard` (alignment) and the nightly Miri
+  # (alignment / uninit / provenance, which ASan is blind to).
+  #
+  # Pinned nightly so a churny nightly day can't block PRs (ASan needs
+  # -Zsanitizer, nightly-only).  Interpreter targets only — ASan can't see the
+  # separate binaries native/wasm/html tests spawn.  Skips the lib-FFI
+  # integration test (needs GL/ALSA build-prep) + the toolchain-sensitive
+  # generated-code-freshness meta-tests (ci.yml validates those on stable).
+  # detect_leaks=0 until the LeakSanitizer live-at-exit baseline is triaged.
+  asan:
+    name: ASan UAF/OOB gate (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust nightly (pinned)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-28
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-asan-pr-cargo-
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      # nextest (not `cargo test`): it does NOT build doctests, which under
+      # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro
+      # (E0463) — and doctests aren't memory-safety-relevant anyway.  The
+      # filter drops the lib-FFI integration test + the toolchain-sensitive
+      # generated-code-freshness meta-tests.
+      - name: ASan sweep (UAF / OOB; leaks off pending triage)
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+          ASAN_OPTIONS: 'detect_leaks=0'
+        run: >
+          cargo nextest run --profile ci --release --target x86_64-unknown-linux-gnu
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
+          test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

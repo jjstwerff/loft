@@ -98,6 +98,9 @@ jobs:
           key: ubuntu-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-asan-cargo-
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       # The interpreter test targets (issues/wrap/strings/frame_vars + lib unit
       # tests) run in-process, so ASan instruments the interpreter itself —
       # native/wasm/html tests spawn separate uninstrumented binaries and add no
@@ -105,20 +108,22 @@ jobs:
       # build.  detect_leaks=0 keeps this a clean UAF/OOB gate until the
       # LeakSanitizer live-at-exit baseline (~108 allocations) is triaged.
       #
-      # --skip the generated-code-freshness meta-tests: they regenerate a file
-      # (fill.rs / native fns) and byte-compare it to the committed copy, which
-      # is toolchain-SENSITIVE (ASan runs on nightly; the files were committed
-      # under stable) — a build-hygiene check, not memory safety.  ci.yml
-      # validates freshness on stable; skipping here unmasks ASan's real signal.
+      # nextest (not `cargo test`): it does NOT build doctests, which under
+      # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro
+      # (E0463).  The filter drops the lib-FFI integration test (needs GL/ALSA
+      # build-prep) + the toolchain-sensitive generated-code-freshness meta-tests
+      # (they byte-compare a regeneration to a stable-committed file — a build-
+      # hygiene check, not memory safety; ci.yml validates them on stable).
       - name: ASan sweep (UAF / OOB; leaks off pending triage)
         env:
           RUSTFLAGS: '-Zsanitizer=address'
           ASAN_OPTIONS: 'detect_leaks=0'
         run: >
-          cargo +nightly test --release --target x86_64-unknown-linux-gnu
+          cargo +nightly nextest run --profile ci --release
+          --target x86_64-unknown-linux-gnu
           --lib --test issues --test wrap --test strings --test frame_vars
-          -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
-          --skip native_rs_functions_up_to_date
+          -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
+          test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
