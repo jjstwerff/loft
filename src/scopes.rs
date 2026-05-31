@@ -192,7 +192,7 @@ pub fn check(data: &mut Data) {
         // keeps the frame base (args_base) 8-aligned.  Identity when off.
         let local_start: u16 = {
             let vars = &data.definitions[d_nr as usize].variables;
-            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), true) as u16;
+            let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s)) as u16;
             let arg_size: u16 = vars
                 .arguments()
                 .iter()

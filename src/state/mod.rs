@@ -103,11 +103,6 @@ pub struct State {
     pub(crate) stack_cur: DbRef,
     pub stack_pos: u32,
     /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
-    /// push/pop step and frame reserve round to 8 so typed stack writes
-    /// are never unaligned (the cluster-2 Miri finding).  Read once from
-    /// the env at construction; off by default → V1 step is unchanged.
-    /// MUST match codegen's `Stack::aligned` for the same run.
-    pub(crate) aligned_stack: bool,
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
     /// The stack store is allocated once and never re-`claim`s, so its
     /// buffer only grows through `ensure_stack`; this cache lets the hot
@@ -210,7 +205,6 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
-            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -685,10 +679,9 @@ impl State {
         };
         let vars = &def.variables;
         // local_start = total argument bytes + return-address slot.
-        // @PLAN53 cluster 2 / S4: stepped spans in aligned mode, mirroring
-        // scopes.rs's local_start (identity when off).
-        let aligned = crate::variables::aligned_stack_enabled();
-        let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s), aligned) as u16;
+        // @PLAN53 cluster 2 / S4: 8-rounded stepped spans, mirroring
+        // scopes.rs's local_start.
+        let step = |s: u16| crate::variables::aligned_stack_step(u32::from(s)) as u16;
         let local_start: u16 = vars
             .arguments()
             .iter()
@@ -1367,13 +1360,13 @@ impl State {
         self.stack_cap_bytes = store.byte_capacity() as u32;
     }
 
-    /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance,
-    /// rounded to 8 when `aligned_stack` is on (else the real `size`).
-    /// Codegen's `Stack::step` MUST mirror this so emitted `pos`
+    /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance, always
+    /// rounded up to 8.  Codegen's `Stack::step` mirrors this so emitted `pos`
     /// operands match the runtime `stack_pos` (S1 lockstep invariant).
     #[inline]
+    #[allow(clippy::unused_self)]
     pub(crate) fn stack_step(&self, size: u32) -> u32 {
-        crate::variables::aligned_stack_step(size, self.aligned_stack)
+        crate::variables::aligned_stack_step(size)
     }
 
     /// @PLAN53 cluster 2 / S4 — homegrown alignment guard (debug + aligned only).
@@ -1397,17 +1390,15 @@ impl State {
     #[cfg(feature = "stack_align_guard")]
     #[inline]
     pub(crate) fn check_stack_align<T>(&self, pos: u32) {
-        if self.aligned_stack {
-            let al = std::mem::align_of::<T>() as u32;
-            let abs = self.stack_cur.rec * 8 + pos;
-            assert_eq!(
-                abs % al,
-                0,
-                "S4 unaligned stack access: {} at abs offset {abs} (align {al}) — \
-                 cluster-2 UB: a typed value landed off its alignment boundary",
-                std::any::type_name::<T>(),
-            );
-        }
+        let al = std::mem::align_of::<T>() as u32;
+        let abs = self.stack_cur.rec * 8 + pos;
+        assert_eq!(
+            abs % al,
+            0,
+            "S4 unaligned stack access: {} at abs offset {abs} (align {al}) — \
+             cluster-2 UB: a typed value landed off its alignment boundary",
+            std::any::type_name::<T>(),
+        );
     }
 
     pub fn reserve_frame(&mut self, size: u16) {
@@ -2063,7 +2054,7 @@ impl State {
         // aligned mode (step(4)=8) so the entry function's locals — and every
         // frame it calls — land on their alignment boundary; with the V1 base
         // of 4 the whole entry frame is misaligned by 4.  Identity when off.
-        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
+        let entry_base = crate::variables::aligned_stack_step(4);
         self.stack_pos = entry_base;
         // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
         // to the panic hook so a Rust panic inside any opcode dispatch
@@ -2125,7 +2116,7 @@ impl State {
             // The first op that leaves it unaligned is the bug — name it with
             // its pc + fn instead of waiting for a distant garbage-deref SIGSEGV.
             #[cfg(feature = "stack_align_guard")]
-            if self.aligned_stack {
+            {
                 assert_eq!(
                     self.stack_pos % 8,
                     0,
@@ -2315,7 +2306,6 @@ impl State {
         State {
             stack_cur,
             stack_pos: 4,
-            aligned_stack: crate::variables::aligned_stack_enabled(),
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,

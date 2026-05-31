@@ -997,7 +997,7 @@ impl State {
         // Fix #88 (parity): push a synthetic CallFrame for the entry function so that
         // stack_trace() returns the same frame count as execute_argv.
         // @PLAN53 cluster 2 / S4: match execute_argv's aligned entry base.
-        let entry_base = crate::variables::aligned_stack_step(4, self.aligned_stack);
+        let entry_base = crate::variables::aligned_stack_step(4);
         self.call_stack.push(super::CallFrame {
             d_nr,
             call_pos: 0,
@@ -1064,7 +1064,7 @@ impl State {
             OPERATORS[op as usize](self);
             // @PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
             #[cfg(feature = "stack_align_guard")]
-            if self.aligned_stack {
+            {
                 assert_eq!(
                     self.stack_pos % 8,
                     0,
