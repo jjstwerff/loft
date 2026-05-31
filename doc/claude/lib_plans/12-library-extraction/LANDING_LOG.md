@@ -147,6 +147,22 @@ Four chunks + a default-policy revision:
   Air-gap deployment loop verified end-to-end with an
   isolated `LOFT_HOME` simulating the air-gap target.
 
+## 2026-05-31 — Phase 6.15 — library catalog generator
+
+- `scripts/gen_library_catalog.py` — Python script that reads
+  `index.json` (live HTTPS / file:// / local path) and emits
+  `doc/library-catalog.md`: a categorised table of every
+  published library with one-liner description + latest active
+  version + link to homepage.
+- `--check` mode for CI drift detection (exit 1 if the
+  committed file differs from the regenerated output).
+- Verified against the live registry + the mock-registry
+  fixture from Phase 6.12.
+- 8 active packages across 6 categories at generation time
+  (cli/crypto/geometry/graphics/math/net).
+- Registry-side CI wire-up + polished HTML view at
+  `loft-lang.org/libraries` are follow-ups.
+
 ## 2026-05-31 — Phase 6.14 — library docs pipeline (CLI + CI template)
 
 - `loft doc <path>` CLI was already wired as PKG.8 — reads
@@ -192,7 +208,6 @@ These will get an entry here when they ship:
   lib/{web,server,game_protocol}/).
 - Phase 6.7a — author-side yank workflow (`loft yank` CLI +
   validator cross-ref gate).
-- Phase 6.15 — library catalog page generator.
 - Phase 6.16 — `loft publish` CLI.
 - Phase 6w-w — retire every `.allow_warnings`.
 - Phase 6t Tier 3 — multiplayer harness port.
