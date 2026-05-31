@@ -53,12 +53,12 @@ does NOT belong in the names users read inside script code.
 | GitHub org | brand-prefixed | `github.com/loft-lang/`, `github.com/lavition/` |
 | Repo / chunk | brand-prefixed | `loft-libs-world`, `lavition/editor` |
 | Crates.io crate | brand-prefixed where coupled | `lavition_core` |
-| **`use X;` in `.loft` scripts** | **descriptive only — NO brand prefix** | `use hexworld;`, `use hex_walls;`, `use terrain;` |
+| **`use X;` in `.loft` scripts** | **descriptive only — NO brand prefix** | `use hex_world;`, `use hex_walls;`, `use terrain;` |
 | Plugin manifests (lavition-internal) | short descriptive | `[plugin] name = "hex_editor"` |
 
 Same model as cargo: `use serde;` is descriptive; the brand
 (`serde-rs/serde`) lives in the repo URL.  A cold reader encountering
-`use hexworld;` knows what the library is from the name alone; no need
+`use hex_world;` knows what the library is from the name alone; no need
 to also know what engine the script targets.
 
 ## Library model
@@ -77,8 +77,8 @@ without naming collisions.
 
 | Library | Purpose | Chunk | Status |
 |---|---|---|---|
-| `hexworld` | sparse 32×32 chunked hex grid + addressing + save/load | loft-libs-world (planned) | exists as `lib/world/` in monorepo; rename + extract is next-up |
-| `hex_walls` | wall segment data (24 sub-hex directions) + curve detection + read APIs | loft-libs-world | currently folded into `lib/world/src/wall.loft`; split + extract after hexworld |
+| `hex_world` | sparse 32×32 chunked hex grid + addressing + save/load | loft-libs-world (planned) | exists as `lib/world/` in monorepo; rename + extract is next-up |
+| `hex_walls` | wall segment data (24 sub-hex directions) + curve detection + read APIs | loft-libs-world | currently folded into `lib/world/src/wall.loft`; split + extract after hex_world |
 | `hex_terrain` | per-hex heightmap + material palette + slope rules | loft-libs-world | NEW — needs design + ship |
 | `hex_items` | item-instance data (placement, orientation among 12 directions, animation state, vertical layer) | loft-libs-world | NEW — needs design + ship |
 | `particles` | ribbon trails + point-burst particles | loft-libs-world | planned slot ([`lib_plans/future/27-particles/`](lib_plans/future/27-particles/)) |
@@ -169,13 +169,13 @@ API outline.  These are the source material for the eventual
 `lavition.io/docs/<lib>/` pages (which own the "lavition + generic-term"
 search space — see [Discoverability](#discoverability--the-practical-reason-for-brand-visibility)).
 
-### `hexworld` — the addressing primitive
+### `hex_world` — the addressing primitive
 
 **Owns:** the hex grid itself.  Sparse 32×32 chunked storage so a 5000-hex
 world is mostly empty chunks; load/save round-trips the whole structure.
 
 **Lavition pairing:** loaded by `lavition_core` as the canonical world
-coordinate system; every plugin reads/writes against `hexworld`
+coordinate system; every plugin reads/writes against `hex_world`
 addresses (`HexId { col, row }` or chunk-relative
 `(ChunkId, sub_col, sub_row)`).
 
@@ -221,7 +221,7 @@ chains of straight segments as smooth shapes for preview + final render.
 **API sketch:**
 ```loft
 pub struct WallSegment {
-  hex: hexworld::HexId not null,
+  hex: hex_world::HexId not null,
   orientation: integer not null,   // 0..23
   layer: integer not null,         // basement/ground/2nd/roof/free
   material: integer not null,
@@ -229,10 +229,10 @@ pub struct WallSegment {
   height_max: float
 }
 
-pub fn walls_at(w: const ChunkedWorld, h: hexworld::HexId) -> vector<WallSegment>
-pub fn walls_between(w: const ChunkedWorld, a: hexworld::HexId, b: hexworld::HexId) -> vector<WallSegment>
+pub fn walls_at(w: const ChunkedWorld, h: hex_world::HexId) -> vector<WallSegment>
+pub fn walls_between(w: const ChunkedWorld, a: hex_world::HexId, b: hex_world::HexId) -> vector<WallSegment>
 pub fn add_wall(w: ChunkedWorld, seg: WallSegment)
-pub fn remove_wall(w: ChunkedWorld, hex: hexworld::HexId, orientation: integer)
+pub fn remove_wall(w: ChunkedWorld, hex: hex_world::HexId, orientation: integer)
 
 // Curve detection — derived view, no separate storage.
 pub fn detect_curves(w: const ChunkedWorld, layer: integer) -> vector<CurveChain>
@@ -265,9 +265,9 @@ pub struct MaterialPalette {
   materials: vector<MaterialDef> not null
 }
 
-pub fn terrain_at(w: const ChunkedWorld, h: hexworld::HexId) -> HexTerrain
-pub fn set_terrain(w: ChunkedWorld, h: hexworld::HexId, t: HexTerrain)
-pub fn slope_between(w: const ChunkedWorld, a: hexworld::HexId, b: hexworld::HexId) -> float
+pub fn terrain_at(w: const ChunkedWorld, h: hex_world::HexId) -> HexTerrain
+pub fn set_terrain(w: ChunkedWorld, h: hex_world::HexId, t: HexTerrain)
+pub fn slope_between(w: const ChunkedWorld, a: hex_world::HexId, b: hex_world::HexId) -> float
 pub fn palette_of(w: const ChunkedWorld) -> MaterialPalette
 ```
 
@@ -286,12 +286,12 @@ Stencils placed as items (smaller render scale) write into this library.
   frame to render + tick animations).
 - Interaction targets (item type → interaction script).
 - Save/load (items round-trip with the rest of the world via
-  `hexworld::world_save`).
+  `hex_world::world_save`).
 
 **API sketch:**
 ```loft
 pub struct HexItem {
-  hex: hexworld::HexId not null,
+  hex: hex_world::HexId not null,
   direction: integer not null,        // 0..11 (12-direction placement)
   item_type: integer not null,
   orientation: integer,                // optional rotation around vertical axis
@@ -299,10 +299,10 @@ pub struct HexItem {
   anim_state: integer                  // optional animation track + frame
 }
 
-pub fn items_at(w: const ChunkedWorld, h: hexworld::HexId) -> vector<HexItem>
+pub fn items_at(w: const ChunkedWorld, h: hex_world::HexId) -> vector<HexItem>
 pub fn items_in_region(w: const ChunkedWorld, region: ChunkRegion) -> iterator<HexItem>
 pub fn place_item(w: ChunkedWorld, item: HexItem)
-pub fn remove_item(w: ChunkedWorld, hex: hexworld::HexId, direction: integer)
+pub fn remove_item(w: ChunkedWorld, hex: hex_world::HexId, direction: integer)
 pub fn tick_animations(w: ChunkedWorld, dt_ms: integer)
 ```
 
@@ -317,7 +317,7 @@ collision games).  See their plan slots:
 ## Next library work — execution order
 
 The `loft-libs-world` chunk is the next chunk to ship.  Order is
-foundation-first: hexworld blocks everything downstream because every
+foundation-first: hex_world blocks everything downstream because every
 other lib references its addressing.
 
 Each sub-step is a self-contained Stage A → Stage B mini-cycle (same
@@ -326,11 +326,11 @@ consumer migration + monorepo cleanup).
 
 | # | Step | Effort | Depends on |
 |---|---|---|---|
-| W.1 | Rename `lib/world` → `lib/hexworld` in monorepo + update consumer loft.tomls + path-deps + `src/wasm.rs` `include_str!` paths.  Pre-extraction churn, all internal. | S | — |
-| W.2 | Extract `hexworld` Stage A → Stage B (publish to `loft-libs-world/hexworld`, swap monorepo `lib/moros_*` consumers to registry deps, remove `lib/hexworld/`). | M | W.1 + lavition design clarification (data shape stable enough to ship 0.1.0) |
-| W.3 | Split `hex_walls` out of `lib/hexworld/src/wall.loft` into its own monorepo library `lib/hex_walls/`.  Defines the API boundary between the addressing primitive and the wall data. | M | W.2 |
+| W.1 | Rename `lib/world` → `lib/hex_world` in monorepo + update consumer loft.tomls + path-deps + `src/wasm.rs` `include_str!` paths.  Pre-extraction churn, all internal. | S | — |
+| W.2 | Extract `hex_world` Stage A → Stage B (publish to `loft-libs-world/hex_world`, swap monorepo `lib/moros_*` consumers to registry deps, remove `lib/hex_world/`). | M | W.1 + lavition design clarification (data shape stable enough to ship 0.1.0) |
+| W.3 | Split `hex_walls` out of `lib/hex_world/src/wall.loft` into its own monorepo library `lib/hex_walls/`.  Defines the API boundary between the addressing primitive and the wall data. | M | W.2 |
 | W.4 | Extract `hex_walls` Stage A → Stage B. | M | W.3 + curve-detection pass design |
-| W.5 | Design + implement `hex_terrain` as a new monorepo library `lib/hex_terrain/` (heightmap + materials).  Migrate moros's existing terrain code if any. | MH | W.2 (uses hexworld addressing) |
+| W.5 | Design + implement `hex_terrain` as a new monorepo library `lib/hex_terrain/` (heightmap + materials).  Migrate moros's existing terrain code if any. | MH | W.2 (uses hex_world addressing) |
 | W.6 | Extract `hex_terrain` Stage A → Stage B. | M | W.5 |
 | W.7 | Design + implement `hex_items` as a new monorepo library `lib/hex_items/`. | MH | W.2 + W.3 (item placement uses 12 directions, layer model shared with hex_walls) |
 | W.8 | Extract `hex_items` Stage A → Stage B. | M | W.7 |
@@ -344,7 +344,7 @@ implementing its plugins against the stable data layer.
 
 **Branch model:** continue the established pattern — one cross-theme
 branch (`doc-updates` or successor) accumulates the work; a PR opens
-per chunk milestone (e.g. when hexworld + hex_walls both ship → PR
+per chunk milestone (e.g. when hex_world + hex_walls both ship → PR
 "`loft-libs-world` foundation"; when terrain + items ship → next PR;
 etc.).  The 6-PR-per-game-data-lib model would be too much PR overhead.
 
@@ -352,7 +352,7 @@ etc.).  The 6-PR-per-game-data-lib model would be too much PR overhead.
 
 The brand isn't visible in metadata for marketing reasons.  It's visible
 because **descriptive symbol names are not searchable on their own.**  A
-user who encounters `use hexworld;` in a script and googles "hexworld"
+user who encounters `use hex_world;` in a script and googles "hex_world"
 gets Roblox games, Civilization map packs, and 2D puzzle clones — not
 our library.  This is the same problem Python's `requests` has:
 "requests documentation" returns garbage; the canonical query is
@@ -363,7 +363,7 @@ mitigate the cost on multiple fronts:
 
 ### 1. Names unique enough that search has a fighting chance
 
-`hexworld` > `world` (less collision).  `hex_walls` > `walls`.
+`hex_world` > `world` (less collision).  `hex_walls` > `walls`.
 `terrain` is borderline; `particles` is OK; `physics_2body` is unique.
 The bad offenders in the current library set are short generic words —
 `shapes`, `graphics`, `imaging`, `web`, `server`, `math`, `mesh`,
@@ -392,7 +392,7 @@ specific library's docs.
 
 Every published library's `README.md` opens with the ecosystem context:
 
-> # hexworld — chunked hex grid for the loft language
+> # hex_world — chunked hex grid for the loft language
 >
 > Part of the [loft](https://github.com/jjstwerff/loft) ecosystem;
 > works standalone and with the [lavition](https://github.com/lavition)
@@ -405,13 +405,13 @@ the symbol carry the brand.
 ### 4. IDE / editor tooltips supply context the symbol omits
 
 When lavition's editor (or any LSP-aware loft IDE plugin) hovers over
-`use hexworld;`, the tooltip shows:
+`use hex_world;`, the tooltip shows:
 
 ```
-hexworld v0.1.0
+hex_world v0.1.0
 chunked hex grid + addressing + save/load
 loft-lang/loft-libs-world
-docs:  https://loft-lang.org/libraries/hexworld
+docs:  https://loft-lang.org/libraries/hex_world
 ```
 
 The symbol stays bare in source; the IDE provides the brand context.
@@ -420,7 +420,7 @@ Same pattern IntelliJ uses for bare Java imports (hover on `List` →
 
 ### 5. Lavition's docs own the "lavition + generic-term" search space
 
-The discoverability target isn't "googling `hexworld` finds us" (it
+The discoverability target isn't "googling `hex_world` finds us" (it
 won't, against Roblox + Civ + a dozen other things).  The target is
 **"googling `lavition world` or `lavition wall` lands on our docs
 directly."**  That query is achievable with normal SEO because
@@ -431,7 +431,7 @@ Concrete structure for the lavition docs site:
 
 ```
 lavition.io/docs/                     overview
-lavition.io/docs/world                ← hexworld + lavition editor integration
+lavition.io/docs/world                ← hex_world + lavition editor integration
 lavition.io/docs/wall                 ← hex_walls + hex_editor plugin
 lavition.io/docs/terrain              ← terrain + terrain_paint plugin
 lavition.io/docs/items                ← items + item_placer plugin
@@ -440,8 +440,8 @@ lavition.io/docs/layers               ← vertical-layer model
 ```
 
 Each page covers the editor narrative + the underlying loft library
-(`hexworld`, `hex_walls`, etc.) and links out to the library's own
-docs (`loft-lang.org/libraries/hexworld/`).  The brand is in the URL +
+(`hex_world`, `hex_walls`, etc.) and links out to the library's own
+docs (`loft-lang.org/libraries/hex_world/`).  The brand is in the URL +
 page title + meta description; the library symbol stays bare in code.
 
 So a user can find the right documentation via three paths:
@@ -450,7 +450,7 @@ So a user can find the right documentation via three paths:
   brand-disambiguated lavition docs page.  Brand goes in the search,
   not the symbol.
 - **"loft library catalog"** → hits the registry / catalog page,
-  browses by category to find `hexworld`.
+  browses by category to find `hex_world`.
 - **Hover in IDE** → tooltip resolves the bare symbol to its docs URL.
 
 ### 6. Cross-linking between loft + lavition + game project sites
@@ -486,7 +486,7 @@ deprecation period publishing both names for one minor release.
 ### What this section is NOT
 
 This isn't a recommendation to brand-prefix EVERY symbol.  Unique-enough
-names (`hexworld`, `hex_walls`, `terrain`, `particles`, `physics_2body`,
+names (`hex_world`, `hex_walls`, `terrain`, `particles`, `physics_2body`,
 `gridmesh`, `imaging`, `arguments`, `crypto`, `random`) stay bare —
 they're already searchable enough that the mitigations above carry the
 discoverability load.  The prefix is only for short generic words
@@ -495,10 +495,10 @@ where SEO is genuinely broken without it.
 ## Migration / rename pending
 
 - `lib/world` (currently in monorepo, planned for `loft-libs-world`
-  extraction): rename to `hexworld` to disambiguate from voxel / tile /
+  extraction): rename to `hex_world` to disambiguate from voxel / tile /
   BSP "world" expectations.
 - `walls` data (currently folded into `lib/world/`): split out as
-  `hex_walls` matching the `hexworld` pairing.
+  `hex_walls` matching the `hex_world` pairing.
 - `lib_plans/future/24-universal-editor/` plan: keep the design content,
   retitle to reference lavition as the engine the plan delivers.
 - 6 residual `lav` / `Lavition` references in the loft tree (pre-rename
@@ -511,8 +511,8 @@ where SEO is genuinely broken without it.
 - **Don't rename `loft` to anything else.**  It's a real shipped artifact
   with published packages, a registry, and consumer commitments.  loft
   stays loft; lavition is built *on* loft.
-- **Don't add brand prefixes to data libraries.**  `use hexworld;` is
-  cleaner and more portable than `use lavition_hexworld;` (which would
+- **Don't add brand prefixes to data libraries.**  `use hex_world;` is
+  cleaner and more portable than `use lavition_hex_world;` (which would
   falsely imply engine coupling).
 
 ## See also
