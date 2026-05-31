@@ -441,8 +441,19 @@ path *lacks* (absolute offsets, fixed at snapshot time → whole-prefix
 only), and the reason per-library is a JSON-stop-gap capability, not an
 mmap one.
 
-**The relocation map — every absolute index must be emitted as a name
-and re-resolved on load.**  These are the reference kinds the encoder
+**The relocation map — PER-LIBRARY JSON ONLY.**  Relocation is needed
+**only** for the independent per-library JSON deliverable, because that
+file drops into an arbitrary already-loaded prefix.  The **whole-stdlib
+/ whole-bundle** JSON snapshot does **not** relocate — like the mmap
+image, it is one complete image whose absolute `def_nr` / `known_type` /
+offsets are internally consistent and stored as-is.  So:
+
+- whole-stdlib / whole-bundle JSON → store absolute indices verbatim (no
+  remap), same as the runnable image / mmap.
+- per-library JSON → emit cross-references **by name** and re-resolve on
+  load (the map below).
+
+For the **per-library** case, these are the reference kinds the encoder
 must rewrite (audit before implementing; grep `def_nr` / `known_type`
 producers in `src/data.rs`):
 
@@ -461,6 +472,12 @@ yet present at load time, defer via the existing `deferred_unknown` /
 `resolve_deferred_unknowns` mechanism (`src/parser/mod.rs`).  The
 load path therefore mirrors the two-pass parse: append all defs (names
 resolvable), then a reconcile pass rewrites any still-pending name → index.
+
+**Sequencing note:** the whole-stdlib snapshot (absolute, no relocation)
+is the first deliverable and the simpler one — it is the runnable image
+above.  The name-based per-library relocation is a *later* addition on
+top, only when per-library build-time deliverables are wired.  S1–S4
+target the whole-stdlib image; per-library relocation is a follow-on.
 
 It is **superseded for the bundle/stdlib path by**
 [plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
