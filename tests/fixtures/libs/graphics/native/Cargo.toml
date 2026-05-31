@@ -8,8 +8,8 @@ license = "LGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-loft-ffi = { path = "../../../loft-ffi" }
-loft-ffi-macros = { path = "../../../loft-ffi-macros" }
+loft-ffi = "0.1"
+loft-ffi-macros = "0.1"
 glutin = "0.32"
 gl = "0.14"
 raw-window-handle = "0.6"

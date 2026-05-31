@@ -103,12 +103,74 @@ const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
     ("n_ws_group_clear", "loft-libs-net/web/native"),
     ("n_ws_group_add", "loft-libs-net/web/native"),
     ("n_ws_group_poll", "loft-libs-net/web/native"),
-    // Add rows here ONLY when the library's `loft.toml` can't yet
-    // declare the symbol via `[native.functions]`, OR when the
-    // library has been extracted to an external path (path-dep scan
-    // is not yet implemented).  Future TBD rows for reference:
-    //   ("n_load_png",  "lib/imaging/native"),   // @P321c — needs ABI fix first
-    //   ("n_save_png",  "lib/imaging/native"),   // @P321c
+    // graphics (56) — drained in @PLAN12 Phase 5b (2026-05-31).
+    // Stage B removed `lib/graphics/` from the monorepo; graphics is now
+    // resolved exclusively through the loft package registry
+    // (`loft install graphics` → `~/.loft/registry/graphics-<ver>/`).
+    // OpenGL bindings + canvas-image PNG save + sprite/text/audio.
+    ("n_gl_create_window", "loft-libs-graphics/graphics/native"),
+    ("n_gl_create_fullscreen_window", "loft-libs-graphics/graphics/native"),
+    ("n_gl_set_fullscreen", "loft-libs-graphics/graphics/native"),
+    ("n_gl_window_width", "loft-libs-graphics/graphics/native"),
+    ("n_gl_window_height", "loft-libs-graphics/graphics/native"),
+    ("n_gl_mouse_wheel", "loft-libs-graphics/graphics/native"),
+    ("n_gl_poll_events", "loft-libs-graphics/graphics/native"),
+    ("n_gl_swap_buffers", "loft-libs-graphics/graphics/native"),
+    ("n_gl_clear", "loft-libs-graphics/graphics/native"),
+    ("n_gl_destroy_window", "loft-libs-graphics/graphics/native"),
+    ("n_gl_create_shader", "loft-libs-graphics/graphics/native"),
+    ("n_gl_use_shader", "loft-libs-graphics/graphics/native"),
+    ("n_gl_draw", "loft-libs-graphics/graphics/native"),
+    ("n_gl_bind_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_delete_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_load_font", "loft-libs-graphics/graphics/native"),
+    ("n_text_height", "loft-libs-graphics/graphics/native"),
+    ("n_gl_font_ascent", "loft-libs-graphics/graphics/native"),
+    ("n_rasterize_text_into", "loft-libs-graphics/graphics/native"),
+    ("n_gl_measure_text", "loft-libs-graphics/graphics/native"),
+    ("n_gl_upload_vertices", "loft-libs-graphics/graphics/native"),
+    ("n_gl_set_mat4", "loft-libs-graphics/graphics/native"),
+    ("n_gl_set_uniform_float", "loft-libs-graphics/graphics/native"),
+    ("n_gl_set_uniform_int", "loft-libs-graphics/graphics/native"),
+    ("n_gl_set_uniform_vec3", "loft-libs-graphics/graphics/native"),
+    ("n_gl_enable", "loft-libs-graphics/graphics/native"),
+    ("n_gl_disable", "loft-libs-graphics/graphics/native"),
+    ("n_gl_blend_func", "loft-libs-graphics/graphics/native"),
+    ("n_gl_cull_face", "loft-libs-graphics/graphics/native"),
+    ("n_gl_depth_mask", "loft-libs-graphics/graphics/native"),
+    ("n_gl_viewport", "loft-libs-graphics/graphics/native"),
+    ("n_gl_create_framebuffer", "loft-libs-graphics/graphics/native"),
+    ("n_gl_bind_framebuffer", "loft-libs-graphics/graphics/native"),
+    ("n_gl_framebuffer_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_create_depth_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_create_color_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_draw_fullscreen_quad", "loft-libs-graphics/graphics/native"),
+    ("n_gl_key_pressed", "loft-libs-graphics/graphics/native"),
+    ("n_gl_mouse_x", "loft-libs-graphics/graphics/native"),
+    ("n_gl_mouse_y", "loft-libs-graphics/graphics/native"),
+    ("n_gl_mouse_button", "loft-libs-graphics/graphics/native"),
+    ("n_gl_draw_elements", "loft-libs-graphics/graphics/native"),
+    ("n_gl_draw_mode", "loft-libs-graphics/graphics/native"),
+    ("n_gl_delete_shader", "loft-libs-graphics/graphics/native"),
+    ("n_gl_delete_vao", "loft-libs-graphics/graphics/native"),
+    ("n_gl_delete_framebuffer", "loft-libs-graphics/graphics/native"),
+    ("n_gl_line_width", "loft-libs-graphics/graphics/native"),
+    ("n_gl_point_size", "loft-libs-graphics/graphics/native"),
+    ("n_gl_load_texture", "loft-libs-graphics/graphics/native"),
+    ("n_gl_upload_canvas", "loft-libs-graphics/graphics/native"),
+    ("n_save_png", "loft-libs-graphics/graphics/native"),
+    ("n_gl_screenshot", "loft-libs-graphics/graphics/native"),
+    ("n_audio_load", "loft-libs-graphics/graphics/native"),
+    ("n_audio_play", "loft-libs-graphics/graphics/native"),
+    ("n_audio_stop", "loft-libs-graphics/graphics/native"),
+    ("n_audio_set_volume", "loft-libs-graphics/graphics/native"),
+    ("n_audio_play_raw", "loft-libs-graphics/graphics/native"),
+    // imaging (2) — drained in @PLAN12 Phase 5b (2026-05-31).
+    // Note `n_save_png` exists in both graphics + imaging cdylibs
+    // (graphics' save_png writes a Canvas; imaging's writes an Image)
+    // — different ABIs scoped to their respective cdylib.
+    ("n_load_png", "loft-libs-graphics/imaging/native"),
+    // n_save_png already listed above under graphics.
 ];
 
 /// Read every `lib/*/loft.toml` and walk its `[native.functions]` table

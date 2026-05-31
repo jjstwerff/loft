@@ -654,19 +654,37 @@ const DEFAULT_FILES: &[(&str, &str)] = &[
 /// Library files embedded in the WASM build so `use <name>;` resolves in the
 /// browser sandbox without a native cdylib.
 const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
+    // Post-Stage B (5b, 2026-05-31): graphics + shapes sourced from
+    // fixture clones of loft-libs-graphics (see scripts/sync-fixtures.sh
+    // PINNED_REFS); monorepo lib/{graphics,shapes}/ are gone.
     (
         "graphics.loft",
-        include_str!("../lib/graphics/src/graphics.loft"),
+        include_str!("../tests/fixtures/libs/graphics/src/graphics.loft"),
     ),
-    ("math.loft", include_str!("../lib/graphics/src/math.loft")),
-    ("mesh.loft", include_str!("../lib/graphics/src/mesh.loft")),
-    ("scene.loft", include_str!("../lib/graphics/src/scene.loft")),
+    (
+        "math.loft",
+        include_str!("../tests/fixtures/libs/graphics/src/math.loft"),
+    ),
+    (
+        "mesh.loft",
+        include_str!("../tests/fixtures/libs/graphics/src/mesh.loft"),
+    ),
+    (
+        "scene.loft",
+        include_str!("../tests/fixtures/libs/graphics/src/scene.loft"),
+    ),
     (
         "render.loft",
-        include_str!("../lib/graphics/src/render.loft"),
+        include_str!("../tests/fixtures/libs/graphics/src/render.loft"),
     ),
-    ("glb.loft", include_str!("../lib/graphics/src/glb.loft")),
-    ("shapes.loft", include_str!("../lib/shapes/src/shapes.loft")),
+    (
+        "glb.loft",
+        include_str!("../tests/fixtures/libs/graphics/src/glb.loft"),
+    ),
+    (
+        "shapes.loft",
+        include_str!("../tests/fixtures/libs/shapes/src/shapes.loft"),
+    ),
     // TTT v3.5 — `use web` resolves in the browser via this baked-in
     // source.  The native fns it declares (`n_ws_*`, `n_http_*`,
     // `n_sleep_ms`, `n_pack_*`, `n_byte_at`) are registered in
