@@ -1,0 +1,29 @@
+[package]
+name = "loft-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.loft]
+path = ".."
+
+# Keep loft's internal debug validators (Store::fl_validate + the record-count
+# consistency assert) live in the fuzz build — a free in-tree oracle on top of
+# ASan.  cargo-fuzz builds in release, so opt them in explicitly.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "store_alloc"
+path = "fuzz_targets/store_alloc.rs"
+test = false
+doc = false
+bench = false

@@ -305,6 +305,21 @@ impl Store {
         store
     }
 
+    /// A standalone, immediately-usable store for tests and fuzzing.
+    ///
+    /// `new` returns a store flagged `free` (the database layer clears that
+    /// when it registers the store into a `Stores`); without a `Stores` the
+    /// store's own `validate()` rejects it as "freed".  This mirrors what the
+    /// in-crate unit tests do by hand (`store.free = false`) and gives external
+    /// callers (the fuzz harness) a clean entry point.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new_in_use(size: u32) -> Store {
+        let mut store = Store::new(size);
+        store.free = false;
+        store
+    }
+
     #[cfg(not(feature = "mmap"))]
     pub fn open(_path: &str) -> Store {
         panic!(
