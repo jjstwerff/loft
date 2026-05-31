@@ -409,6 +409,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/) | M | — | `physics_2body` — shared rigid-body collision + integrator for moros / dryopea / bumper-airplanes (sphere/AABB pairwise; no N-body stacking) |
 | [`lib_plans/future/27-particles/`](lib_plans/future/27-particles/) | S | — | `particles` — ribbon trails + point-burst particles (two-flavour scope) for dryopea + bumper-airplanes |
 | [`lib_plans/future/28-test-deps/`](lib_plans/future/28-test-deps/) | S | F | `loft test --deps` — transitive dep-tree test walker driven by loft.toml + loft.lock; wired into chunk CI as a final regression-catch step (T2/T3 SHIPPED 2026-05-28; T4 lockfile driver still open) |
+| [`lib_plans/future/30-loft-distribution/`](lib_plans/future/30-loft-distribution/) | MH | F | `loft` binary distribution + self-update + advisory integration — signed releases, `loft update --self`, verify-on-recompile hash, stdlib hash channel (companion to @PLAN12 Phase 6.7/6.8) |
 
 ### Deferred plans
 

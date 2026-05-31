@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TTT v5 — t4 server.  Stateless catch-up after reconnect.
+//
+// The server holds 5 pre-cached "session blobs" (sessions 1-5),
+// each in the same wire shape as t2 ([type:u8] [session:u32-LE]
+// [color:u8] [height:u8] [age:u16-LE]).  Two text request frames:
+//
+//   1:N  — Subscribe: send sessions 1..=N (initial drain)
+//   2:K  — Catch_up: send sessions K+1..=ALL (replay since K)
+//
+// "Stateless" reconnect (per v5 plan): the server doesn't tie any
+// per-client identity to the request — whoever holds the WS slot
+// when a `2:K` arrives gets the replay.  A reconnecting client
+// gets a fresh slot id; the answer is the same.
+//
+// Stdout shape:
+//   v5-t4: listening port=<n>
+//   v5-t4: subscribe cid=<n> upto=<n>
+//   v5-t4: catch_up cid=<n> from=<n>
+//   ...
+
+use server;
+use web;
+
+H_SUBSCRIBE = 1;
+H_CATCH_UP  = 2;
+
+TYPE_DELTA = 2;
+
+// Cached session entry — a tiny pre-baked payload per session id.
+struct Session {
+  s_id:     integer,    // 1..N
+  s_color:  integer,
+  s_height: integer,
+  s_age:    integer,
+}
+
+struct Cache {
+  by_id: hash<Session[s_id]>,
+  total: integer,       // highest session id present
+}
+
+fn build_cache(n: integer) -> Cache {
+  c = Cache { by_id: [], total: n };
+  for bi in 1..=n {
+    c.by_id += [Session {
+      s_id:     bi,
+      s_color:  (bi * 11) % 9 + 1,        // 1..9 deterministic
+      s_height: 10 + bi,
+      s_age:    100 + bi,
+    }];
+  }
+  c
+}
+
+fn send_session(srv: server::Server, cid: integer, s: Session) -> boolean {
+  web::pack_reset();
+  web::pack_u8(TYPE_DELTA);
+  web::pack_u32_le(s.s_id);
+  web::pack_u8(s.s_color);
+  web::pack_u8(s.s_height);
+  web::pack_u16_le(s.s_age);
+  // Multi-client send_to is text-framed only today — for binary
+  // we drop to the per-slot native send_binary helper that the
+  // single-client path also uses (slot ids are interchangeable
+  // across the two surfaces).
+  ws_send_binary_to_native(cid, web::pack_take())
+}
+
+// Bridge: lib/server's multi-client API exposes send_to (text only)
+// but the underlying slot tables are shared with the binary surface
+// — same WS_CONNS table.  Routing through the per-slot binary fn
+// reuses the existing path with no new infrastructure.
+fn ws_send_binary_to_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_send_binary"
+
+fn handle_subscribe(srv: server::Server, cache: Cache, cid: integer, payload: text) {
+  upto = payload as integer;
+  if upto < 1 { upto = 1; }
+  if upto > cache.total { upto = cache.total; }
+  println("v5-t4: subscribe cid={cid} upto={upto}");
+  for hi in 1..=upto {
+    s = cache.by_id[hi];
+    if !s { continue; }
+    if !send_session(srv, cid, s) {
+      println("v5-t4: send-failed cid={cid} sid={hi}");
+      return;
+    }
+    web::sleep_ms(2);
+  }
+}
+
+fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: text) {
+  from = payload as integer;
+  if from < 0 { from = 0; }
+  println("v5-t4: catch_up cid={cid} from={from}");
+  for cj in (from + 1)..=cache.total {
+    s = cache.by_id[cj];
+    if !s { continue; }
+    if !send_session(srv, cid, s) {
+      println("v5-t4: send-failed cid={cid} sid={cj}");
+      return;
+    }
+    web::sleep_ms(2);
+  }
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 18094 } else { port_raw as integer };
+  total_raw = env_variable("LOFT_T4_SESSIONS");
+  total = if total_raw == "" { 5 } else { total_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v5-t4: bind-failed port={port}");
+    return;
+  }
+  println("v5-t4: listening port={port}");
+
+  cache = build_cache(total);
+  srv.run(fn(ev: server::WsEvent) {
+    if ev.message {
+      if ev.msg_id == H_SUBSCRIBE {
+        handle_subscribe(srv, cache, ev.cid, ev.payload);
+      } else if ev.msg_id == H_CATCH_UP {
+        handle_catch_up(srv, cache, ev.cid, ev.payload);
+      }
+    }
+  });
+}

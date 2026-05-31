@@ -43,7 +43,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn examples_dir() -> PathBuf {
-    workspace_root().join("lib/game_protocol/examples")
+    workspace_root().join("tests/integration/multiplayer")
 }
 
 fn pick_free_port() -> u16 {

@@ -163,6 +163,35 @@ fn print_help() {
     println!("                                install /p       — install package at /p");
     println!("                                install name     — download latest from registry");
     println!("                                install name@v   — download specific version");
+    println!("  pin <script.loft>             pin every registry library the script uses");
+    println!("                                writes <script>.loft.lock next to the script;");
+    println!("                                subsequent runs use the pinned versions");
+    println!("  list-installed                list every registry package installed locally");
+    println!("                                (from ~/.loft/registry/), annotated with sha256");
+    println!("                                + size + index status (active / yanked / orphan)");
+    println!("  audit                         check every installed package against the");
+    println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
+    println!("                                2 if any high, 3 if any security_critical");
+    println!("  update [pkg]                  refresh lockfile to latest active versions");
+    println!("                                that satisfy each dep's loft.toml range;");
+    println!("                                --dry-run reports changes without writing;");
+    println!("                                --check exits 1 if any updates are available");
+    println!("  bundle export [opts] <dir>    write a self-contained offline bundle of");
+    println!("                                registry packages (--all or --packages X,Y,Z);");
+    println!("                                ship via USB/scp; import on the target machine");
+    println!("  bundle import <dir>           install a bundle into ~/.loft/registry/");
+    println!("                                (verifies sha256 + signature per artifact)");
+    println!("  publish [pkg]                 author helper: repackage locally + verify the");
+    println!("                                GitHub release exists + emit the index.json");
+    println!("                                entry to paste into a registry PR");
+    println!("  new <name> [opts]             scaffold a fresh library: loft.toml + src/ +");
+    println!("                                tests/ + README; --native adds native/ skeleton;");
+    println!("                                --chunk adds .github/workflows/library-ci.yml");
+    println!("  yank <pkg>@<ver> --severity   author helper: draft a registry yank PR — emits");
+    println!("    <tier> --advisory <id>      the typed `status` entry for index.json + the");
+    println!("    --summary <text>            advisories.json row, cross-referenced");
+    println!("    --affected <range>");
+    println!("    --fixed-in <ver>");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -466,6 +495,7 @@ fn search_registry(query: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let index = match loft_install_load_index(&opts) {
         Ok(i) => i,
@@ -522,6 +552,7 @@ fn package_info(name: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let index = match loft_install_load_index(&opts) {
         Ok(i) => i,
@@ -571,6 +602,1509 @@ fn package_info(name: &str) {
         };
         println!("    {}{tag_str}", ver.semver);
     }
+}
+
+/// @PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
+/// in `~/.loft/registry/` and annotates each with its sha256 +
+/// size + index status (active / yanked / orphan-from-index).
+///
+/// Pure query — touches no network, writes nothing.  Useful for
+/// "what's in my cache?" investigations + as a starting point for
+/// `loft audit` once Phase 6.7's advisory channel ships.
+#[cfg(feature = "registry")]
+fn list_installed() {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+    use std::path::PathBuf;
+
+    let cache = registry_index::cache_dir();
+    if !cache.exists() {
+        println!("No registry cache at {}.", cache.display());
+        return;
+    }
+
+    // Collect `<pkg>-<ver>/` dirs.  Format is `<name>-<semver>/` where
+    // semver may contain dots and dashes (prerelease tags), so split
+    // on the LAST dash followed by a digit — but the names we ship
+    // don't contain dashes today, so split on the first dash works.
+    // Robust version: find the last segment that starts with a digit.
+    let mut entries: Vec<(String, String, PathBuf)> = Vec::new();
+    let read = match std::fs::read_dir(&cache) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("loft list-installed: cannot read {}: {e}", cache.display());
+            std::process::exit(1);
+        }
+    };
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dirname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        // Last `-<digit>` boundary splits name from version.
+        let mut split: Option<usize> = None;
+        let bytes = dirname.as_bytes();
+        let mut i = 1;
+        while i < bytes.len() {
+            if bytes[i - 1] == b'-' && bytes[i].is_ascii_digit() {
+                split = Some(i - 1);
+                break;
+            }
+            i += 1;
+        }
+        let Some(at) = split else { continue };
+        let (name, rest) = dirname.split_at(at);
+        let version = rest.trim_start_matches('-').to_string();
+        if name.is_empty() || version.is_empty() {
+            continue;
+        }
+        entries.push((name.to_string(), version, path));
+    }
+
+    if entries.is_empty() {
+        println!(
+            "No registry packages installed (cache: {}).",
+            cache.display()
+        );
+        return;
+    }
+
+    // Sort by name then version (lex order is good enough for display).
+    entries.sort();
+
+    // Try to load the cached index so we can show sha256 + size +
+    // status.  If the index isn't cached (cold loft binary), skip
+    // the annotations but still list the dirs.
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: true, // never hit the network for this query
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = loft_install_load_index(&opts).ok();
+
+    println!("Installed packages (in {}):", cache.display());
+    for (name, version, path) in &entries {
+        let on_disk_bytes = dir_size_bytes(path).unwrap_or(0);
+        let mut sha = String::new();
+        let mut status_tag = String::new();
+        if let Some(idx) = &index {
+            if let Some(pkg) = idx.packages.get(name) {
+                if let Some(v) = pkg.versions.get(version) {
+                    sha.clone_from(&v.sha256);
+                    if pkg.yanked.iter().any(|y| y == version) {
+                        status_tag.push_str(" [YANKED]");
+                    }
+                } else {
+                    status_tag.push_str(" [version not in current index]");
+                }
+            } else {
+                status_tag.push_str(" [orphan: package not in current index]");
+            }
+        }
+        let sha_short: String = sha.chars().take(12).collect();
+        let sha_disp = if sha_short.is_empty() {
+            "(unknown sha)".to_string()
+        } else {
+            format!("sha256:{sha_short}…")
+        };
+        println!(
+            "  {name} {version}{status_tag} — {} bytes on disk, {sha_disp}",
+            on_disk_bytes
+        );
+    }
+    println!("{} package(s) total", entries.len());
+}
+
+/// @PLAN12 Phase 6.8 — knob set for the `loft update` command.
+#[cfg(feature = "registry")]
+#[derive(Debug, Default, Clone)]
+struct UpdateOpts {
+    /// Specific package name; `None` updates every entry in the
+    /// lockfile.
+    target: Option<String>,
+    /// Compute + print the diff without writing the lockfile.
+    dry_run: bool,
+    /// Exit non-zero if any updates are available (CI gate).
+    /// Implies dry_run.
+    check_only: bool,
+}
+
+/// @PLAN12 Phase 6.8 — `loft update` driver.
+///
+/// Walks the project's (or cwd's) `loft.lock`, looks up each
+/// package in the registry index, picks the highest active
+/// non-yanked version that satisfies the corresponding range
+/// from `loft.toml` (if present; otherwise the lockfile-pinned
+/// version is treated as exact and never updated), and — unless
+/// in dry-run/check mode — calls `install_one` to fetch + extract
+/// + merge into the lockfile.
+///
+/// Exit codes:
+/// - 0  → up-to-date (no updates needed or all updates applied
+///   successfully).
+/// - 1  → updates available (`--check`) OR install failure.
+/// - 2  → no lockfile to update.
+#[cfg(feature = "registry")]
+fn update_packages(opts: &UpdateOpts) -> i32 {
+    use loft::install::{InstallOptions, install_one};
+    use loft::lockfile;
+    use loft::manifest;
+    use loft::registry_index;
+
+    // Find the project root or fall back to cwd.  Mirror the
+    // parser's walk-up logic (Phase 6.6) — start at cwd, walk up
+    // looking for loft.toml.
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("loft update: cwd: {e}");
+            return 1;
+        }
+    };
+    let project_root = find_project_root_from(&cwd);
+    let lock_dir = project_root.as_ref().unwrap_or(&cwd);
+    let lock_path = lock_dir.join("loft.lock");
+    if !lock_path.exists() {
+        eprintln!(
+            "loft update: no loft.lock at {} — nothing to update.",
+            lock_path.display()
+        );
+        eprintln!(
+            "  Run `loft install <pkg>` first (or `loft pin <script>` for one-file scripts)."
+        );
+        return 2;
+    }
+    let lock = match lockfile::read_lockfile(&lock_path) {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            eprintln!("loft update: lockfile empty");
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("loft update: cannot read {}: {e}", lock_path.display());
+            return 1;
+        }
+    };
+    if lock.packages.is_empty() {
+        eprintln!("loft update: lockfile has no packages.");
+        return 0;
+    }
+
+    // Read project loft.toml deps so we know the version range for
+    // each entry.  Transitive deps (in lockfile but not in toml)
+    // default to "*" (any non-yanked).
+    let toml_deps: std::collections::HashMap<String, String> = project_root
+        .as_ref()
+        .and_then(|root| manifest::read_manifest(root.join("loft.toml").to_str().unwrap_or("")))
+        .map(|m| {
+            m.dependencies
+                .into_iter()
+                .filter(|(_, v)| manifest::extract_path_dep(v).is_none())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Load index (offline-respecting, allow_unsigned for the
+    // bootstrap window).
+    let install_opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: std::env::var("LOFT_OFFLINE").is_ok(),
+        allow_prerelease: false,
+        lock_path: Some(lock_path.clone()),
+    };
+    let index = match loft_install_load_index(&install_opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft update: {e}");
+            return 1;
+        }
+    };
+
+    let dry = opts.dry_run || opts.check_only;
+    let mut updates_available = false;
+    let mut install_failures: Vec<String> = Vec::new();
+    let mut diff: Vec<String> = Vec::new();
+
+    for entry in &lock.packages {
+        if let Some(t) = &opts.target {
+            if t != &entry.name {
+                continue;
+            }
+        }
+        let pkg = match index.packages.get(&entry.name) {
+            Some(p) => p,
+            None => {
+                diff.push(format!(
+                    "  {pkg} {ver} — not in current index (orphan; skipped)",
+                    pkg = entry.name,
+                    ver = entry.version
+                ));
+                continue;
+            }
+        };
+        let constraint = toml_deps
+            .get(&entry.name)
+            .cloned()
+            .unwrap_or_else(|| "*".to_string());
+        let Some(best) = registry_index::find_best_version(pkg, &constraint, false) else {
+            diff.push(format!(
+                "  {pkg} {ver} — no version satisfies range `{constraint}` (skipped)",
+                pkg = entry.name,
+                ver = entry.version
+            ));
+            continue;
+        };
+        if best.semver == entry.version {
+            // Already on the highest satisfying version.
+            continue;
+        }
+        // Higher OR lower (e.g. rollback after yank) — both are
+        // "updates" in the sense of "lockfile would change."
+        updates_available = true;
+        diff.push(format!(
+            "  {pkg} {old} → {new}",
+            pkg = entry.name,
+            old = entry.version,
+            new = best.semver
+        ));
+        if !dry {
+            match install_one(&entry.name, Some(&best.semver), &install_opts) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("  FAILED {} {}: {e}", entry.name, best.semver);
+                    install_failures.push(entry.name.clone());
+                }
+            }
+        }
+    }
+
+    if diff.is_empty() {
+        if let Some(t) = &opts.target {
+            println!("loft update {t}: already on the highest satisfying version.");
+        } else {
+            println!(
+                "loft update: all {} packages up-to-date.",
+                lock.packages.len()
+            );
+        }
+        return 0;
+    }
+
+    if opts.check_only {
+        println!("loft update --check: updates available:");
+        for line in &diff {
+            println!("{line}");
+        }
+        return 1;
+    }
+    if opts.dry_run {
+        println!("loft update --dry-run: would update:");
+        for line in &diff {
+            println!("{line}");
+        }
+        return 0;
+    }
+
+    println!("loft update:");
+    for line in &diff {
+        println!("{line}");
+    }
+    if !install_failures.is_empty() {
+        eprintln!(
+            "loft update: {} package(s) failed to install",
+            install_failures.len()
+        );
+        return 1;
+    }
+    let _ = updates_available;
+    0
+}
+
+/// Walk up from `start` looking for the nearest directory that
+/// contains a `loft.toml`.  Returns `None` when reaching the
+/// filesystem root with no match.  Mirrors
+/// `parser::find_project_root` but reusable from main.rs
+/// (which can't reach into the parser's static helper).
+#[cfg(feature = "registry")]
+fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let abs = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let mut cur = abs.as_path();
+    loop {
+        if cur.join("loft.toml").exists() {
+            return Some(cur.to_path_buf());
+        }
+        let parent = cur.parent()?;
+        if parent == cur {
+            return None;
+        }
+        cur = parent;
+    }
+}
+
+/// @PLAN12 Phase 6.11 — `loft bundle export <outdir>` writes a
+/// self-contained directory of registry artifacts (index +
+/// advisories + tarballs) that can be carried via USB / scp and
+/// imported on an air-gapped machine via `loft bundle import`.
+///
+/// Layout:
+/// ```
+/// <outdir>/
+/// ├── index.json + index.json.sig
+/// ├── advisories.json + advisories.json.sig  (when present)
+/// ├── packages/
+/// │   ├── <pkg>-<ver>.tar.gz
+/// │   └── ...
+/// └── manifest.json   (bundle metadata: timestamp, source URL,
+///                      loft binary version, package list)
+/// ```
+///
+/// Selection:
+/// - `--all` (or omit both flags) → every package in index.
+/// - `--packages X,Y,Z` → just those (transitive deps not yet
+///   auto-resolved; transitive harvest is a follow-up if useful).
+#[cfg(feature = "registry")]
+fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+    use std::path::Path;
+
+    let out = Path::new(outdir);
+    if let Err(e) = std::fs::create_dir_all(out.join("packages")) {
+        eprintln!("loft bundle export: cannot create {}: {e}", out.display());
+        return 1;
+    }
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = match loft_install_load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft bundle export: {e}");
+            return 1;
+        }
+    };
+
+    // Pick which packages to export.
+    let want: Vec<String> = if all || packages.is_none() {
+        index.packages.keys().cloned().collect()
+    } else {
+        packages.unwrap_or(&[]).to_vec()
+    };
+    if want.is_empty() {
+        eprintln!("loft bundle export: nothing to export (empty package list)");
+        return 1;
+    }
+
+    // Copy index.json + sig.
+    let (idx_path, sig_path, _) = registry_index::index_paths();
+    if idx_path.exists() {
+        if let Err(e) = std::fs::copy(&idx_path, out.join("index.json")) {
+            eprintln!("loft bundle export: copy index.json: {e}");
+            return 1;
+        }
+    }
+    if sig_path.exists() {
+        let _ = std::fs::copy(&sig_path, out.join("index.json.sig"));
+    }
+    // Advisories (optional — registry may not host one yet).
+    let (adv_path, adv_sig_path) = loft::registry_advisories::advisories_paths();
+    if adv_path.exists() {
+        let _ = std::fs::copy(&adv_path, out.join("advisories.json"));
+        if adv_sig_path.exists() {
+            let _ = std::fs::copy(&adv_sig_path, out.join("advisories.json.sig"));
+        }
+    }
+
+    // For each requested package: pick its latest active version,
+    // ensure the tarball is downloaded, copy into bundle/packages/.
+    let mut exported: Vec<(String, String)> = Vec::new();
+    for name in &want {
+        let pkg = match index.packages.get(name) {
+            Some(p) => p,
+            None => {
+                eprintln!("  warning: {name} not in current index — skipped");
+                continue;
+            }
+        };
+        let Some(ver) = registry_index::find_best_version(pkg, "*", false) else {
+            eprintln!("  warning: {name} has no installable version — skipped");
+            continue;
+        };
+        let tarball = format!("{name}-{}.tar.gz", ver.semver);
+        let dest = out.join("packages").join(&tarball);
+        // Download to the bundle's packages/.
+        eprintln!("[bundle] fetching {} {}", name, ver.semver);
+        let bytes = match registry_index::download_tarball(&ver.url, &dest) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  FAILED: {e}");
+                return 1;
+            }
+        };
+        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+            eprintln!("  FAILED: {e}");
+            return 1;
+        }
+        exported.push((name.clone(), ver.semver.clone()));
+    }
+
+    // Write manifest.json — bundle metadata for the import side.
+    let manifest_pkgs: String = exported
+        .iter()
+        .map(|(n, v)| format!("    {{\"name\":\"{n}\",\"version\":\"{v}\"}}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let registry_url = registry_index::registry_url();
+    let loft_version = env!("CARGO_PKG_VERSION");
+    let manifest = format!(
+        "{{\n  \"schema_version\": 1,\n  \"created\": \"{}\",\n  \"registry_url\": \"{}\",\n  \"loft_version\": \"{}\",\n  \"packages\": [\n{}\n  ]\n}}\n",
+        chrono_iso8601_utc(),
+        registry_url,
+        loft_version,
+        manifest_pkgs
+    );
+    if let Err(e) = std::fs::write(out.join("manifest.json"), manifest) {
+        eprintln!("loft bundle export: write manifest: {e}");
+        return 1;
+    }
+
+    println!(
+        "[bundle] exported {} package(s) to {}",
+        exported.len(),
+        out.display()
+    );
+    0
+}
+
+/// @PLAN12 Phase 6.11 — `loft bundle import <indir>` installs a
+/// previously-exported bundle into `~/.loft/registry/`.
+///
+/// Steps per artifact:
+/// 1. Copy `index.json` + `.sig` (sig kept; loader verifies via
+///    `allow_unsigned` for the bootstrap window).
+/// 2. Copy `advisories.json` + `.sig` (when present).
+/// 3. For each `packages/<pkg>-<ver>.tar.gz`:
+///    - Verify sha256 matches the index entry.
+///    - Extract to `~/.loft/registry/<pkg>-<ver>/`.
+/// 4. Print summary.
+#[cfg(feature = "registry")]
+fn bundle_import(indir: &str) -> i32 {
+    use loft::registry_index;
+    use std::path::Path;
+
+    let inp = Path::new(indir);
+    let bundle_index = inp.join("index.json");
+    if !bundle_index.exists() {
+        eprintln!("loft bundle import: {} has no index.json", inp.display());
+        return 1;
+    }
+
+    // Read + parse the bundle's index so we know the per-tarball sha256.
+    let idx_bytes = match std::fs::read(&bundle_index) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("loft bundle import: read index: {e}");
+            return 1;
+        }
+    };
+    let idx_text = match std::str::from_utf8(&idx_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("loft bundle import: index not UTF-8: {e}");
+            return 1;
+        }
+    };
+    let index = match registry_index::parse_index(idx_text) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft bundle import: parse index: {e}");
+            return 1;
+        }
+    };
+
+    // Copy index + sig + (optional) advisories into the cache.
+    let cache = registry_index::cache_dir();
+    if let Err(e) = std::fs::create_dir_all(&cache) {
+        eprintln!("loft bundle import: cannot create {}: {e}", cache.display());
+        return 1;
+    }
+    let _ = std::fs::copy(&bundle_index, cache.join("index.json"));
+    let bundle_sig = inp.join("index.json.sig");
+    if bundle_sig.exists() {
+        let _ = std::fs::copy(&bundle_sig, cache.join("index.json.sig"));
+    }
+    let bundle_adv = inp.join("advisories.json");
+    if bundle_adv.exists() {
+        let _ = std::fs::copy(&bundle_adv, cache.join("advisories.json"));
+        let bundle_adv_sig = inp.join("advisories.json.sig");
+        if bundle_adv_sig.exists() {
+            let _ = std::fs::copy(&bundle_adv_sig, cache.join("advisories.json.sig"));
+        }
+    }
+
+    // Extract each tarball; verify sha256 against the index entry.
+    let pkg_dir = inp.join("packages");
+    let read = match std::fs::read_dir(&pkg_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("loft bundle import: read {}: {e}", pkg_dir.display());
+            return 1;
+        }
+    };
+    let mut imported: Vec<(String, String)> = Vec::new();
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        let fname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if !fname.ends_with(".tar.gz") {
+            continue;
+        }
+        let stem = &fname[..fname.len() - ".tar.gz".len()];
+        // Split last `-<digit>` boundary for (name, version).
+        let bytes = stem.as_bytes();
+        let mut at: Option<usize> = None;
+        let mut idx = 1;
+        while idx < bytes.len() {
+            if bytes[idx - 1] == b'-' && bytes[idx].is_ascii_digit() {
+                at = Some(idx - 1);
+                break;
+            }
+            idx += 1;
+        }
+        let Some(split) = at else { continue };
+        let (name, rest) = stem.split_at(split);
+        let version = rest.trim_start_matches('-');
+
+        // Look up sha256 in the imported index.
+        let Some(pkg) = index.packages.get(name) else {
+            eprintln!("  skip {fname}: not in bundle's index");
+            continue;
+        };
+        let Some(ver) = pkg.versions.get(version) else {
+            eprintln!("  skip {fname}: version not in bundle's index");
+            continue;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  read {fname}: {e}");
+                return 1;
+            }
+        };
+        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+            eprintln!("  sha256 MISMATCH for {fname}: {e}");
+            return 1;
+        }
+        if let Err(e) = registry_index::extract_tarball(&path, &cache) {
+            eprintln!("  extract {fname}: {e}");
+            return 1;
+        }
+        imported.push((name.to_string(), version.to_string()));
+    }
+
+    if imported.is_empty() {
+        eprintln!(
+            "loft bundle import: no packages found in {}",
+            pkg_dir.display()
+        );
+        return 1;
+    }
+    println!(
+        "[bundle] imported {} package(s) into {}",
+        imported.len(),
+        cache.display()
+    );
+    for (n, v) in &imported {
+        println!("  {n} {v}");
+    }
+    0
+}
+
+/// Minimal ISO-8601 UTC timestamp.  Avoid pulling in a date crate;
+/// loft already does its own time formatting elsewhere via
+/// `std::time::SystemTime`.  Format: `YYYY-MM-DDTHH:MM:SSZ`.
+#[cfg(feature = "registry")]
+fn chrono_iso8601_utc() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Days since 1970-01-01 (Unix epoch).
+    let day = secs / 86_400;
+    let sod = secs % 86_400;
+    let hour = sod / 3600;
+    let minute = (sod % 3600) / 60;
+    let second = sod % 60;
+    // Convert day count to Y/M/D via the standard algorithm.
+    // Cribbed from https://howardhinnant.github.io/date_algorithms.html
+    let z = day as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = i64::from(yoe) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z",
+        y = y,
+        m = m,
+        d = d,
+        hour = hour,
+        minute = minute,
+        second = second
+    )
+}
+
+/// @PLAN12 Phase 6.7a — `loft yank` author helper.
+///
+/// Closes the security loop on the author side.  Phase 6.7
+/// ships the consumer-side classifier (loft binary checks
+/// `~/.loft/registry/advisories.json` against installed
+/// versions and refuses/warns per severity); 6.7a provides
+/// the CLI an author runs to FILE an advisory.
+///
+/// Emits the two edits the registry PR needs:
+///
+/// 1. `index.json` — adds the typed `status` field to the
+///    affected version entry.
+/// 2. `advisories.json` — appends a row with cross-referenced
+///    `id`, `packages[]`, `severity`, `summary`, `published`.
+///
+/// Auto-PR-open (clone registry + splice in the edits +
+/// `gh pr create`) is the next iteration; MVP emits the two
+/// blocks ready for paste into a manual PR.
+#[cfg(feature = "registry")]
+fn yank_package(
+    target: &str,
+    severity: Option<&str>,
+    advisory: Option<&str>,
+    summary: Option<&str>,
+    affected: Option<&str>,
+    fixed_in: Option<&str>,
+) -> i32 {
+    let Some((name, version)) = target.split_once('@') else {
+        eprintln!("loft yank: target must be `<pkg>@<version>` (got `{target}`)");
+        return 1;
+    };
+    if name.is_empty() || version.is_empty() {
+        eprintln!("loft yank: target must be `<pkg>@<version>` (got `{target}`)");
+        return 1;
+    }
+    let severity = match severity {
+        Some(s) => match s {
+            "security_critical" | "security_high" | "security_low" | "bug" | "deprecated" => s,
+            other => {
+                eprintln!(
+                    "loft yank: --severity must be one of \
+                     security_critical / security_high / security_low / bug / deprecated \
+                     (got `{other}`)"
+                );
+                return 1;
+            }
+        },
+        None => {
+            eprintln!("loft yank: --severity required");
+            return 1;
+        }
+    };
+    let Some(advisory) = advisory else {
+        eprintln!("loft yank: --advisory <id> required (e.g. GHSA-xxxx-yyyy-zzzz)");
+        return 1;
+    };
+    let Some(summary) = summary else {
+        eprintln!("loft yank: --summary <text> required");
+        return 1;
+    };
+    let affected_range = affected.unwrap_or(version);
+    let published = chrono_iso8601_utc();
+
+    println!("# 1) Edit `index.json` — set the typed `status` on the affected version.");
+    println!("# Replace the existing `\"{version}\": {{ ... }}` entry for `{name}` with:");
+    println!();
+    println!("\"{version}\": {{");
+    println!("  // ...existing fields (url, sha256, size, loft, subpath, deps, published)...");
+    println!("  \"status\": {{");
+    println!("    \"kind\": \"yanked\",");
+    println!("    \"severity\": \"{severity}\",");
+    println!("    \"advisory\": \"{advisory}\",");
+    println!("    \"summary\": {}", escape_json_string(summary));
+    println!("  }}");
+    println!("}}");
+    println!();
+    println!("# 2) Edit `advisories.json` — append the cross-referenced row.");
+    println!("# Insert at the top of the `\"advisories\": [ ... ]` array:");
+    println!();
+    println!("{{");
+    println!("  \"id\": \"{advisory}\",");
+    println!(
+        "  \"packages\": [{{\"name\": \"{name}\", \"affected\": \"{affected_range}\"{}}}],",
+        if let Some(fix) = fixed_in {
+            format!(", \"fixed_in\": \"{fix}\"")
+        } else {
+            String::new()
+        }
+    );
+    println!("  \"severity\": \"{severity}\",");
+    println!("  \"summary\": {},", escape_json_string(summary));
+    println!("  \"published\": \"{published}\",");
+    println!("  \"references\": []");
+    println!("}}");
+    println!();
+    println!("# Then:");
+    println!("#   git checkout -b yank-{name}-{version}");
+    println!("#   $EDITOR index.json   # apply edit 1");
+    println!("#   $EDITOR advisories.json   # apply edit 2");
+    println!("#   git commit -am 'yank: {name} {version} ({advisory})'");
+    println!("#   gh pr create --title 'yank: {name} {version}' --body \"<rationale>\"");
+    0
+}
+
+/// Quote + JSON-escape a string.  Minimal — handles `"`, `\\`,
+/// `\n`, `\t`.
+#[cfg(feature = "registry")]
+fn escape_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// @PLAN12 — `loft new <name>` scaffolds a fresh loft library
+/// package, ready for development + `loft publish`.
+///
+/// Layout produced:
+///
+/// ```
+/// <name>/
+/// ├── loft.toml           — package manifest with [package] + [library]
+/// ├── README.md           — placeholder header pointing at the registry
+/// ├── src/<name>.loft     — empty entry file with a `pub fn hello()` stub
+/// └── tests/
+///     └── 01-smoke.loft   — single `test_smoke` exercising the stub
+/// ```
+///
+/// With `--native`: also creates `native/Cargo.toml` + `native/src/lib.rs`
+/// + `native/build.rs` for the cdylib bindings.
+///
+/// With `--chunk`: also creates `.github/workflows/library-ci.yml`
+/// using the canonical template from
+/// `doc/claude/lib_plans/12-library-extraction/library-ci.yml.example`
+/// — for when the dir is becoming a fresh chunk-repo's first
+/// library.
+///
+/// Refuses if `<name>/` already exists.
+fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
+    use std::io::Write as _;
+
+    // Sanity-check name (lowercase + alphanumeric + underscore;
+    // matches loft's identifier rules).
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        eprintln!(
+            "loft new: library name must be lowercase ascii + digits + underscore (got `{name}`)"
+        );
+        return 1;
+    }
+
+    let pkg_dir = std::path::PathBuf::from(name);
+    if pkg_dir.exists() {
+        eprintln!("loft new: `{name}/` already exists; refusing to overwrite");
+        return 1;
+    }
+
+    // Helper closures.
+    let write_file = |rel: &str, content: &str| -> std::io::Result<()> {
+        let path = pkg_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(content.as_bytes())?;
+        Ok(())
+    };
+
+    // loft.toml — includes [native] declaration when --native.
+    let loft_toml = if native {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\nnative = \"loft_{name}\"\n\n\
+             [native]\ncrate = \"loft-{name}\"\n\n[dependencies]\n"
+        )
+    } else {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+             [library]\nentry = \"src/{name}.loft\"\n\n[dependencies]\n"
+        )
+    };
+
+    // src/<name>.loft — placeholder stub.
+    let src_loft = format!(
+        "// Copyright (c) 2026\n// SPDX-License-Identifier: LGPL-3.0-or-later\n\n\
+         // {name} — replace with a one-line description of the library.\n\n\
+         // Returns the greeting.  Replace with the library's actual API.\n\
+         pub fn hello() -> text {{\n  \"hello from {name}\"\n}}\n"
+    );
+
+    // tests/01-smoke.loft — minimal regression guard.
+    let test_loft = format!(
+        "// Smoke test for {name}.\n\
+         use {name};\n\n\
+         fn test_hello() {{\n  \
+           greeting = {name}::hello();\n  \
+           assert(greeting == \"hello from {name}\", \"hello() returned {{greeting ?? \\\"null\\\"}}\");\n\
+         }}\n"
+    );
+
+    let readme = format!(
+        "# {name}\n\n\
+         <One-line description of the library.>\n\n\
+         ## Install\n\n\
+         ```\n\
+         loft install {name}\n\
+         ```\n\n\
+         ## Usage\n\n\
+         ```loft\n\
+         use {name};\n\n\
+         fn main() {{\n  \
+           println({name}::hello());\n\
+         }}\n\
+         ```\n"
+    );
+
+    if let Err(e) = (|| -> std::io::Result<()> {
+        write_file("loft.toml", &loft_toml)?;
+        write_file(&format!("src/{name}.loft"), &src_loft)?;
+        write_file("tests/01-smoke.loft", &test_loft)?;
+        write_file("README.md", &readme)?;
+        if native {
+            let cargo_toml = format!(
+                "[package]\nname = \"loft-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"LGPL-3.0-or-later\"\n\n\
+                 [lib]\ncrate-type = [\"cdylib\", \"rlib\"]\n\n\
+                 [dependencies]\nloft-ffi = \"0.1\"\n\n\
+                 [build-dependencies]\nloft-ffi-build = \"0.2\"\n"
+            );
+            let build_rs =
+                "fn main() {\n    loft_ffi_build::generate_register_from_loft(\"../src\");\n}\n";
+            let lib_rs = "// Native bindings for the loft library.\n\
+                 // Add `#[unsafe(no_mangle)] pub extern \"C\" fn n_<name>(...)` here for each\n\
+                 // function whose loft signature is annotated `#native`.\n\n\
+                 include!(concat!(env!(\"OUT_DIR\"), \"/loft_register_gen.rs\"));\n";
+            write_file("native/Cargo.toml", &cargo_toml)?;
+            write_file("native/build.rs", build_rs)?;
+            write_file("native/src/lib.rs", lib_rs)?;
+        }
+        if chunk {
+            // Canonical CI YAML — single-package matrix; user edits when adding more.
+            let yml = format!(
+                "name: library-ci\n\n\
+                 on:\n  push:\n    branches: [main]\n  pull_request:\n\n\
+                 jobs:\n  test:\n    runs-on: ubuntu-latest\n    \
+                 strategy:\n      fail-fast: false\n      matrix:\n        package: [{name}]\n    \
+                 steps:\n      - uses: actions/checkout@v4\n\n      \
+                 - name: Install mold (loft's pinned linker)\n        \
+                 run: sudo apt-get update -y && sudo apt-get install -y mold\n\n      \
+                 - name: Clone loft source\n        uses: actions/checkout@v4\n        \
+                 with:\n          repository: jjstwerff/loft\n          path: loft-src\n\n      \
+                 - name: Cache cargo registry + loft build\n        uses: actions/cache@v4\n        \
+                 with:\n          path: |\n            ~/.cargo/registry\n            ~/.cargo/git\n            loft-src/target\n          \
+                 key: loft-${{{{ hashFiles('loft-src/Cargo.lock') }}}}\n\n      \
+                 - name: Build loft\n        working-directory: loft-src\n        \
+                 run: |\n          cargo build --release --lib --bin loft\n          \
+                 echo \"$PWD/target/release\" >> $GITHUB_PATH\n\n      \
+                 - name: Interpreter — loft test\n        working-directory: ${{{{ matrix.package }}}}\n        \
+                 env:\n          LOFT_DENY_WARNINGS: ${{{{ hashFiles(format('{{0}}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}}}\n        \
+                 run: loft --interpret --tests tests\n\n      \
+                 - name: Native — loft --native test\n        working-directory: ${{{{ matrix.package }}}}\n        \
+                 env:\n          LOFT_DENY_WARNINGS: ${{{{ hashFiles(format('{{0}}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}}}\n        \
+                 run: loft --native --tests tests\n"
+            );
+            write_file(".github/workflows/library-ci.yml", &yml)?;
+        }
+        Ok(())
+    })() {
+        eprintln!("loft new: failed to write scaffolding: {e}");
+        // Best-effort cleanup
+        let _ = std::fs::remove_dir_all(&pkg_dir);
+        return 1;
+    }
+
+    println!("Created library `{name}/`:");
+    println!("  loft.toml");
+    println!("  src/{name}.loft");
+    println!("  tests/01-smoke.loft");
+    println!("  README.md");
+    if native {
+        println!("  native/Cargo.toml");
+        println!("  native/build.rs");
+        println!("  native/src/lib.rs");
+    }
+    if chunk {
+        println!("  .github/workflows/library-ci.yml");
+    }
+    println!();
+    println!("Next steps:");
+    println!("  cd {name}");
+    println!("  loft test           # exercises the smoke test");
+    println!("  $EDITOR src/{name}.loft   # add your library's API");
+    println!("  loft publish        # when ready to ship (after tag + GH release)");
+    0
+}
+
+/// @PLAN12 Phase 6.16 — `loft publish` author helper.
+///
+/// Closes the publish-by-hand friction.  After the author has
+/// tagged + released their library on GitHub (`<pkg>-v<ver>` tag
+/// and `gh release create` with the `loft package` tarball as an
+/// asset), `loft publish` from the package dir:
+///
+/// 1. Re-packages locally via `package::package_create` — gets
+///    the deterministic sha256 + size + name + version.
+/// 2. Detects the chunk repo from `git remote get-url origin`.
+/// 3. Verifies the GitHub release exists at `<pkg>-v<ver>` and
+///    carries the expected tarball asset (via `gh release view`).
+/// 4. Emits the `index.json` entry block, ready to paste into
+///    the registry PR.  Includes the auto-generated `url`,
+///    `sha256`, `size`, `subpath`, `deps` from the loft.toml.
+///
+/// `--dry-run` skips the GitHub-release verification (the rest
+/// of the flow runs).
+///
+/// Auto-PR open via `gh pr create` against `loft-lang/registry`
+/// is a follow-up; today the author copies the emitted block
+/// into a manual PR.
+#[cfg(feature = "registry")]
+fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
+    use loft::package;
+
+    let pkg = match package::package_create(pkg_path, None) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("loft publish: package: {e}");
+            return 1;
+        }
+    };
+    let tag = format!("{}-v{}", pkg.name, pkg.version);
+    let tarball_filename = format!("{}-{}.tar.gz", pkg.name, pkg.version);
+
+    let (org, repo) = match git_remote_org_repo(pkg_path) {
+        Some(v) => v,
+        None => {
+            eprintln!(
+                "loft publish: cannot detect GitHub org/repo from `git remote get-url origin`"
+            );
+            eprintln!("  Run from inside a chunk-repo working tree with an `origin` remote.");
+            return 1;
+        }
+    };
+    let release_url =
+        format!("https://github.com/{org}/{repo}/releases/download/{tag}/{tarball_filename}");
+    let homepage = format!("https://github.com/{org}/{repo}/tree/main/{}", pkg.name);
+
+    if !dry_run {
+        if !github_release_has_asset(&org, &repo, &tag, &tarball_filename) {
+            eprintln!(
+                "loft publish: release `{tag}` not found, OR doesn't carry the asset `{tarball_filename}`."
+            );
+            eprintln!("  Tag + release first:");
+            eprintln!("    git tag {tag}");
+            eprintln!("    git push origin {tag}");
+            eprintln!(
+                "    gh release create {tag} {} --title \"{} v{}\"",
+                pkg.tarball.display(),
+                pkg.name,
+                pkg.version
+            );
+            eprintln!("  Or pass --dry-run to skip this check.");
+            return 1;
+        }
+    }
+
+    // Emit the index.json entry.  Read deps from loft.toml.
+    let manifest_path = pkg_path.join("loft.toml");
+    let manifest =
+        loft::manifest::read_manifest(manifest_path.to_str().unwrap_or("")).unwrap_or_default();
+    let registry_deps: Vec<(String, String)> = manifest
+        .dependencies
+        .iter()
+        .filter(|(_, v)| loft::manifest::extract_path_dep(v).is_none())
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    let published = chrono_iso8601_utc();
+
+    println!("# Paste this entry into `loft-lang/registry/index.json` under");
+    println!(
+        "# `\"packages\": {{ \"{}\": {{ \"versions\": {{ ... }} }} }}`:",
+        pkg.name
+    );
+    println!();
+    println!("\"{}\": {{", pkg.version);
+    println!("  \"url\": \"{release_url}\",");
+    println!("  \"sha256\": \"{}\",", pkg.sha256);
+    println!("  \"size\": {},", pkg.size);
+    println!(
+        "  \"loft\": \"{}\",",
+        manifest.loft_version.unwrap_or_else(|| ">=0.8".to_string())
+    );
+    println!("  \"subpath\": \"{}\",", pkg.name);
+    if registry_deps.is_empty() {
+        println!("  \"deps\": {{}},");
+    } else {
+        let mut deps_lines: Vec<String> = Vec::new();
+        for (n, v) in &registry_deps {
+            // Strip `{ path = "..." }` -> bare; we already filtered
+            // those, so `v` is a plain version string.
+            deps_lines.push(format!("    \"{n}\": \"{v}\""));
+        }
+        println!("  \"deps\": {{");
+        for (idx, line) in deps_lines.iter().enumerate() {
+            if idx + 1 == deps_lines.len() {
+                println!("{line}");
+            } else {
+                println!("{line},");
+            }
+        }
+        println!("  }},");
+    }
+    println!("  \"published\": \"{published}\"");
+    println!("}}");
+    println!();
+    println!("# If this is the first version, also add the package block:");
+    println!("# \"{}\": {{", pkg.name);
+    println!("#   \"description\": \"<one-liner>\",");
+    println!("#   \"homepage\": \"{homepage}\",");
+    println!("#   \"categories\": [\"<category>\"],");
+    println!("#   \"yanked\": [],");
+    println!("#   \"versions\": {{ ... the version block above ... }}");
+    println!("# }}");
+    if dry_run {
+        eprintln!("\n[publish] dry-run: GitHub release verification skipped.");
+    } else {
+        eprintln!("\n[publish] verified release {tag} exists with asset {tarball_filename}");
+        eprintln!("[publish] next step: open registry PR with the entry above");
+    }
+    0
+}
+
+/// Parse `git remote get-url origin` output for the github
+/// org + repo.  Handles `https://github.com/<org>/<repo>(.git)?`
+/// and `git@github.com:<org>/<repo>(.git)?` shapes.  Returns
+/// `None` when the remote isn't a github URL.
+#[cfg(feature = "registry")]
+fn git_remote_org_repo(pkg_path: &std::path::Path) -> Option<(String, String)> {
+    let out = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(pkg_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    let stripped = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))?
+        .strip_suffix(".git")
+        .unwrap_or_else(|| {
+            url.strip_prefix("https://github.com/")
+                .or_else(|| url.strip_prefix("git@github.com:"))
+                .unwrap_or("")
+        })
+        .to_string();
+    let mut parts = stripped.splitn(2, '/');
+    let org = parts.next()?.to_string();
+    let repo = parts.next()?.trim_end_matches(".git").to_string();
+    if org.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((org, repo))
+}
+
+/// Check whether a GitHub release at `<tag>` exists and carries
+/// an asset named `<asset>` (the deterministic tarball).  Uses
+/// the `gh` CLI; returns false if `gh` is missing or the API
+/// call fails.
+#[cfg(feature = "registry")]
+fn github_release_has_asset(org: &str, repo: &str, tag: &str, asset: &str) -> bool {
+    let out = std::process::Command::new("gh")
+        .args([
+            "release",
+            "view",
+            tag,
+            "--repo",
+            &format!("{org}/{repo}"),
+            "--json",
+            "assets",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let body = String::from_utf8(out.stdout).unwrap_or_default();
+    // Simple substring check — JSON parse would be more
+    // principled but `gh release view --json assets` returns
+    // `"name":"<asset>"` lines we can match directly.
+    body.contains(&format!("\"name\":\"{asset}\""))
+}
+
+/// @PLAN12 Phase 6.7 — `loft audit` walks every installed package
+/// in `~/.loft/registry/` and classifies each against the cached
+/// advisory feed.  Exit code reflects worst severity found:
+/// - 0 → clean (no matches)
+/// - 1 → at least one low / bug / deprecated match
+/// - 2 → at least one security_high match
+/// - 3 → at least one security_critical match
+///
+/// Refreshes the advisory feed if stale (24h TTL) UNLESS
+/// `LOFT_OFFLINE=1` is set, in which case it falls back to the
+/// cached copy (or warns + returns code 0 if no cache).
+///
+/// Pure deep scan — no installs, no writes.  The natural
+/// companion to `loft list-installed`.
+#[cfg(feature = "registry")]
+fn audit_installed() -> i32 {
+    use loft::registry_advisories::{self, LoadOptions, Severity};
+
+    let offline = std::env::var("LOFT_OFFLINE").is_ok();
+    let opts = LoadOptions {
+        allow_unsigned: true,
+        offline,
+        refresh: false,
+    };
+    let feed = match registry_advisories::load_or_fetch(&opts) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            if offline {
+                eprintln!(
+                    "[audit] advisory feed not cached and offline; can't audit (exit 0 as no-evidence)"
+                );
+            } else {
+                eprintln!(
+                    "[audit] advisory feed unavailable (registry may not host one yet); nothing to check"
+                );
+            }
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("loft audit: {e}");
+            return 4;
+        }
+    };
+
+    // Enumerate cached installs (same logic as list-installed).
+    let cache = loft::registry_index::cache_dir();
+    let read = match std::fs::read_dir(&cache) {
+        Ok(r) => r,
+        Err(_) => {
+            println!("No registry cache; nothing to audit.");
+            return 0;
+        }
+    };
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dirname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let mut split: Option<usize> = None;
+        let bytes = dirname.as_bytes();
+        let mut i = 1;
+        while i < bytes.len() {
+            if bytes[i - 1] == b'-' && bytes[i].is_ascii_digit() {
+                split = Some(i - 1);
+                break;
+            }
+            i += 1;
+        }
+        let Some(at) = split else { continue };
+        let (name, rest) = dirname.split_at(at);
+        let version = rest.trim_start_matches('-').to_string();
+        if !name.is_empty() && !version.is_empty() {
+            entries.push((name.to_string(), version));
+        }
+    }
+    entries.sort();
+
+    let mut all_classifications = Vec::new();
+    for (name, version) in &entries {
+        let hits = registry_advisories::classify(name, version, &feed);
+        for hit in hits {
+            all_classifications.push(hit);
+        }
+    }
+
+    if all_classifications.is_empty() {
+        println!(
+            "{} installed package(s) audited against {} advisory entries — clean",
+            entries.len(),
+            feed.advisories.len()
+        );
+        return 0;
+    }
+
+    // Compute worst severity → exit code.
+    let mut worst = 0u8;
+    println!(
+        "Audit found {} advisory match(es) across {} installed package(s):",
+        all_classifications.len(),
+        entries.len()
+    );
+    for hit in &all_classifications {
+        worst = worst.max(hit.severity.rank());
+        let prefix = match hit.severity {
+            Severity::SecurityCritical => "ERROR",
+            Severity::SecurityHigh => "WARN",
+            Severity::SecurityLow | Severity::Bug => "NOTE",
+            Severity::Deprecated => "INFO",
+        };
+        println!(
+            "  [{prefix}] {pkg} {ver}  {sev}  {summary}",
+            pkg = hit.package,
+            ver = hit.version,
+            sev = hit.severity.as_str(),
+            summary = hit.summary,
+        );
+        println!("         advisory: {}", hit.advisory_id);
+        if let Some(fix) = &hit.fixed_in {
+            println!(
+                "         fix: {pkg} >= {fix} (run `loft install {pkg}@{fix}`)",
+                pkg = hit.package
+            );
+        }
+        for r in &hit.references {
+            println!("         reference: {r}");
+        }
+    }
+
+    // Worst severity → exit code:
+    //   Deprecated (rank 1) → 1
+    //   Low / Bug (rank 2)  → 1
+    //   High (rank 3)       → 2
+    //   Critical (rank 4)   → 3
+    match worst {
+        1 | 2 => 1,
+        3 => 2,
+        4 => 3,
+        _ => 0,
+    }
+}
+
+/// Total size in bytes of a directory's contents (recursive).
+/// Used by `list-installed`; cheap enough for the typical
+/// ~/.loft/registry/<pkg>-<ver>/ layout (a few hundred files at
+/// most per package).  Returns None on read errors so callers
+/// can degrade to "size unknown" rather than failing the whole
+/// listing.
+#[cfg(feature = "registry")]
+fn dir_size_bytes(dir: &std::path::Path) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let read = std::fs::read_dir(&d).ok()?;
+        for ent in read.filter_map(Result::ok) {
+            let p = ent.path();
+            let m = match ent.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if m.is_dir() {
+                stack.push(p);
+            } else if m.is_file() {
+                total += m.len();
+            }
+        }
+    }
+    Some(total)
+}
+
+/// @PLAN12 Phase 6.6 — `loft pin <script>` writes a sidecar
+/// `<script>.loft.lock` next to the script.  Subsequent runs of
+/// that script resolve registry libraries via the sidecar (see
+/// `src/parser/mod.rs::probe_sidecar_lockfile`), so the script
+/// becomes reproducible regardless of cwd or registry drift.
+///
+/// Implementation: scans the script source for `use <name>;`
+/// declarations, installs each name that exists in the registry
+/// catalog (calls `install_one` with `lock_path` redirected to
+/// the sidecar), and prints a summary.  Imports that aren't
+/// registry packages (path-deps, sibling packages, stdlib) are
+/// ignored — only registry libraries need pinning; everything
+/// else either lives in the workspace or is part of loft itself.
+#[cfg(feature = "registry")]
+fn pin_script(script: &str) {
+    use loft::install::{InstallOptions, install_one};
+    use loft::registry_index;
+    use std::path::PathBuf;
+
+    let script_path = PathBuf::from(script);
+    if !script_path.exists() {
+        eprintln!("loft pin: script `{}` not found", script_path.display());
+        std::process::exit(1);
+    }
+    let source = match std::fs::read_to_string(&script_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("loft pin: cannot read `{}`: {e}", script_path.display());
+            std::process::exit(1);
+        }
+    };
+
+    // Extract `use <name>;` declarations.  Simple line-scan rather
+    // than a full parser pass — we want to pin even scripts that
+    // have parse errors elsewhere.  Loft `use` syntax forms:
+    //   use foo;
+    //   use foo::bar;
+    //   use foo::{a, b};
+    //   use foo::*;
+    // All start with `use <ident>` after stripping leading whitespace
+    // + skipping comment lines.
+    let mut uses: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        // Skip comments and blank lines.
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("use ") else {
+            continue;
+        };
+        // Take the leading identifier (alphanumeric + underscore).
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || uses.contains(&name) {
+            continue;
+        }
+        uses.push(name);
+    }
+
+    if uses.is_empty() {
+        eprintln!(
+            "loft pin: no `use` declarations found in `{}`",
+            script_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    // Sidecar path next to the script.
+    let mut sidecar = script_path.clone();
+    let sidecar_name = format!(
+        "{}.lock",
+        script_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("script.loft")
+    );
+    sidecar.set_file_name(sidecar_name);
+
+    // Load index once so we can filter out non-registry names
+    // (path-deps + stdlib + sibling packages) before invoking
+    // install_one — saves a network hit + a confusing error.
+    let opts_for_index = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = match loft_install_load_index(&opts_for_index) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft pin: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: Some(sidecar.clone()),
+    };
+
+    let mut pinned: Vec<(String, String)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for name in &uses {
+        if !index.packages.contains_key(name) {
+            skipped.push(name.clone());
+            continue;
+        }
+        match install_one(name, None, &opts) {
+            Ok(report) => {
+                for (n, v) in report.installed.iter().chain(report.skipped_cached.iter()) {
+                    if !pinned.iter().any(|(pn, _)| pn == n) {
+                        pinned.push((n.clone(), v.clone()));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("loft pin: install `{name}` failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if pinned.is_empty() {
+        eprintln!(
+            "loft pin: no registry libraries in `{}` (only sibling / stdlib uses)",
+            script_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    println!("Pinned to {}:", sidecar.display());
+    for (n, v) in &pinned {
+        println!("  {n} {v}");
+    }
+    if !skipped.is_empty() {
+        println!("Not from registry (left unresolved):");
+        for n in &skipped {
+            println!("  {n}");
+        }
+    }
+    println!("{} library(ies) pinned", pinned.len());
+    // Keep registry_index in the symbol table so the cfg above
+    // doesn't drop the import.
+    let _ = registry_index::cache_dir();
 }
 
 /// Thin wrapper exposing `install::load_index`-equivalent for the
@@ -1814,6 +3348,7 @@ fn main() {
                 refresh: false,
                 offline: false,
                 allow_prerelease: false,
+                lock_path: None,
             };
             let mut positional: Vec<String> = Vec::new();
             while i < argv.len() {
@@ -1913,6 +3448,278 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "bundle" {
+            // @PLAN12 Phase 6.11 — offline bundle export/import.
+            #[cfg(feature = "registry")]
+            {
+                let Some(sub) = argv.get(i) else {
+                    eprintln!("loft bundle: subcommand required (export | import)");
+                    std::process::exit(1);
+                };
+                i += 1;
+                if sub == "export" {
+                    let mut packages: Option<Vec<String>> = None;
+                    let mut all = false;
+                    let mut outdir: Option<String> = None;
+                    while i < argv.len() {
+                        let a2 = argv[i].as_str();
+                        if a2 == "--all" {
+                            all = true;
+                            i += 1;
+                        } else if a2 == "--packages" {
+                            i += 1;
+                            let Some(list) = argv.get(i) else {
+                                eprintln!(
+                                    "loft bundle export: --packages requires a comma-separated list"
+                                );
+                                std::process::exit(1);
+                            };
+                            packages = Some(
+                                list.split(',')
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                                    .collect(),
+                            );
+                            i += 1;
+                        } else if !a2.starts_with('-') && outdir.is_none() {
+                            outdir = Some(a2.to_string());
+                            i += 1;
+                        } else {
+                            eprintln!("loft bundle export: unknown argument `{a2}`");
+                            std::process::exit(1);
+                        }
+                    }
+                    let Some(out) = outdir else {
+                        eprintln!("loft bundle export: <outdir> required");
+                        std::process::exit(1);
+                    };
+                    let code = bundle_export(&out, packages.as_deref(), all);
+                    std::process::exit(code);
+                } else if sub == "import" {
+                    let Some(indir) = argv.get(i) else {
+                        eprintln!("loft bundle import: <indir> required");
+                        std::process::exit(1);
+                    };
+                    let code = bundle_import(indir);
+                    std::process::exit(code);
+                }
+                eprintln!("loft bundle: unknown subcommand `{sub}`");
+                std::process::exit(1);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft bundle: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "update" {
+            // @PLAN12 Phase 6.8 — refresh lockfile entries to latest
+            // active version within each dep's loft.toml range.
+            #[cfg(feature = "registry")]
+            {
+                let mut update_opts = UpdateOpts::default();
+                let mut target: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--dry-run" {
+                        update_opts.dry_run = true;
+                        i += 1;
+                    } else if a2 == "--check" {
+                        update_opts.check_only = true;
+                        i += 1;
+                    } else if !a2.starts_with('-') && target.is_none() {
+                        target = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft update: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                update_opts.target = target;
+                let code = update_packages(&update_opts);
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft update: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "yank" {
+            // @PLAN12 Phase 6.7a — author-side yank workflow.
+            // Emits the index.json + advisories.json edits ready
+            // for the registry PR.
+            #[cfg(feature = "registry")]
+            {
+                let mut target: Option<String> = None;
+                let mut severity: Option<String> = None;
+                let mut advisory: Option<String> = None;
+                let mut summary: Option<String> = None;
+                let mut affected: Option<String> = None;
+                let mut fixed_in: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--severity" {
+                        i += 1;
+                        severity = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--advisory" {
+                        i += 1;
+                        advisory = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--summary" {
+                        i += 1;
+                        summary = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--affected" {
+                        i += 1;
+                        affected = argv.get(i).cloned();
+                        i += 1;
+                    } else if a2 == "--fixed-in" {
+                        i += 1;
+                        fixed_in = argv.get(i).cloned();
+                        i += 1;
+                    } else if !a2.starts_with('-') && target.is_none() {
+                        target = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft yank: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                let Some(target) = target else {
+                    eprintln!("loft yank: <pkg>@<version> required");
+                    eprintln!(
+                        "  Usage: loft yank <pkg>@<ver> --severity <tier> --advisory <id> \\"
+                    );
+                    eprintln!(
+                        "           --summary \"...\" --affected \">=X, <Y\" --fixed-in \"<ver>\""
+                    );
+                    std::process::exit(1);
+                };
+                let code = yank_package(
+                    &target,
+                    severity.as_deref(),
+                    advisory.as_deref(),
+                    summary.as_deref(),
+                    affected.as_deref(),
+                    fixed_in.as_deref(),
+                );
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft yank: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "new" {
+            // @PLAN12 — `loft new <name>` scaffolds a fresh library
+            // package: loft.toml + src/<name>.loft stub + tests/ +
+            // canonical library-ci.yml (when --chunk is set).
+            let mut native = false;
+            let mut chunk = false;
+            let mut name: Option<String> = None;
+            while i < argv.len() {
+                let a2 = argv[i].as_str();
+                if a2 == "--native" {
+                    native = true;
+                    i += 1;
+                } else if a2 == "--chunk" {
+                    chunk = true;
+                    i += 1;
+                } else if !a2.starts_with('-') && name.is_none() {
+                    name = Some(a2.to_string());
+                    i += 1;
+                } else {
+                    eprintln!("loft new: unknown argument `{a2}`");
+                    std::process::exit(1);
+                }
+            }
+            let Some(name) = name else {
+                eprintln!("loft new: library name required");
+                eprintln!("  Usage: loft new <name> [--native] [--chunk]");
+                std::process::exit(1);
+            };
+            let code = scaffold_library(&name, native, chunk);
+            std::process::exit(code);
+        } else if a == "publish" {
+            // @PLAN12 Phase 6.16 — author-side publish helper.
+            // Repackages locally (deterministic), verifies the
+            // GitHub release exists with the expected tag + asset,
+            // emits the index.json entry ready for the registry PR.
+            #[cfg(feature = "registry")]
+            {
+                let mut dry_run = false;
+                let mut pkg_path: Option<String> = None;
+                while i < argv.len() {
+                    let a2 = argv[i].as_str();
+                    if a2 == "--dry-run" {
+                        dry_run = true;
+                        i += 1;
+                    } else if !a2.starts_with('-') && pkg_path.is_none() {
+                        pkg_path = Some(a2.to_string());
+                        i += 1;
+                    } else {
+                        eprintln!("loft publish: unknown argument `{a2}`");
+                        std::process::exit(1);
+                    }
+                }
+                let dir = pkg_path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let code = publish_package(&dir, dry_run);
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft publish: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "audit" {
+            // @PLAN12 Phase 6.7 — explicit deep scan: every cached
+            // package vs the advisory feed.  Exit code reflects
+            // worst severity.
+            #[cfg(feature = "registry")]
+            {
+                let code = audit_installed();
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft audit: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "list-installed" {
+            // @PLAN12 Phase 6.6 — enumerate ~/.loft/registry/<pkg>-<ver>/
+            // dirs, annotate with sha256 + size from the cached index.
+            #[cfg(feature = "registry")]
+            {
+                list_installed();
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft list-installed: this binary was built without the `registry` feature."
+                );
+                std::process::exit(1);
+            }
+        } else if a == "pin" {
+            // @PLAN12 Phase 6.6 — write a sidecar lockfile next to
+            // a script so subsequent runs use pinned versions
+            // regardless of cwd or registry drift.
+            #[cfg(feature = "registry")]
+            {
+                let Some(script) = argv.get(i) else {
+                    eprintln!("loft pin: script path required");
+                    std::process::exit(1);
+                };
+                pin_script(script);
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft pin: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "registry" {

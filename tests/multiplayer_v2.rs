@@ -47,7 +47,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn examples_dir() -> PathBuf {
-    workspace_root().join("lib/game_protocol/examples")
+    workspace_root().join("tests/integration/multiplayer")
 }
 
 /// P231: allocate a free TCP port by binding to `127.0.0.1:0` and

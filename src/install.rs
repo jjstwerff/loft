@@ -22,7 +22,7 @@
 
 #![cfg(feature = "registry")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::lockfile::{self, LockFile, LockedPackage, SCHEMA_VERSION};
 use crate::registry_index::{self, FetchedIndex, RegistryIndex, Version, extract_tarball};
@@ -46,6 +46,13 @@ pub struct InstallOptions {
     pub offline: bool,
     /// Accept prerelease versions when resolving constraints.
     pub allow_prerelease: bool,
+    /// Override the lockfile path written by `install_one`.
+    /// `None` → default cwd/`loft.lock` (existing behaviour).
+    /// `Some(path)` → write/merge into that path instead.
+    /// Used by `loft pin <script>` (writes `<script>.loft.lock`
+    /// next to the script) and by future project-mode walk-up
+    /// resolution (writes to the project root's `loft.lock`).
+    pub lock_path: Option<PathBuf>,
 }
 
 /// High-level outcome printed back to the user.
@@ -109,15 +116,22 @@ pub fn install_one(
             .push((r.name.clone(), r.version.semver.clone()));
     }
 
-    // Write lockfile in the current working dir.  When a lockfile
-    // already exists (e.g. from a previous `loft install <other>`),
-    // MERGE this install's graph into it: new entries overwrite same-
-    // named entries, others survive.  This lets `loft install crypto`
-    // followed by `loft install random` produce a combined lockfile
-    // listing both packages — matches expectations from cargo / npm.
-    let lock_path = std::env::current_dir()
-        .map_err(|e| format!("cwd: {e}"))?
-        .join("loft.lock");
+    // Write lockfile.  When a lockfile already exists (e.g. from a
+    // previous `loft install <other>`), MERGE this install's graph
+    // into it: new entries overwrite same-named entries, others
+    // survive.  This lets `loft install crypto` followed by
+    // `loft install random` produce a combined lockfile listing both
+    // packages — matches expectations from cargo / npm.
+    //
+    // Path: `opts.lock_path` if set (used by `loft pin <script>`
+    // for the sidecar `<script>.loft.lock`); otherwise cwd's
+    // `loft.lock` (default for `loft install`).
+    let lock_path = match &opts.lock_path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()
+            .map_err(|e| format!("cwd: {e}"))?
+            .join("loft.lock"),
+    };
     let mut lock = match lockfile::read_lockfile(&lock_path) {
         Ok(Some(existing)) => existing,
         _ => lockfile::LockFile {
@@ -292,6 +306,45 @@ fn build_lockfile(graph: &[ResolvedPackage]) -> LockFile {
     lock
 }
 
+/// Auto-install fallback fired by the parser's `use X;` resolution
+/// chain (@PLAN12 Phase 6.6).
+///
+/// Behaviour:
+/// - Loads the registry index (uses cached, refreshes if TTL stale).
+/// - If `name` is in the catalog, installs the latest active version
+///   (same machinery as `loft install <name>`).
+/// - Returns `Ok(Some(report))` on a successful install, `Ok(None)`
+///   when `name` is NOT in the catalog (so the parser can fall
+///   through to remaining resolution strategies), or `Err` on a real
+///   failure (network down on a cold cache, signature mismatch,
+///   etc.).
+///
+/// The caller (parser's `probe_auto_install`) decides whether to
+/// announce or stay silent based on the return value.
+///
+/// # Errors
+///
+/// Surfaces any error from `install_one` — network failure, sig
+/// mismatch, tarball corruption, lockfile write failure.
+pub fn auto_install_if_in_catalog(
+    name: &str,
+    opts: &InstallOptions,
+) -> Result<Option<InstallReport>, String> {
+    // Load the index FIRST so we can check membership without
+    // committing to a network fetch for the tarball.  load_index
+    // honours `opts.offline` — if true, only uses cached index.
+    let index = load_index(opts)?;
+    if !index.packages.contains_key(name) {
+        return Ok(None);
+    }
+    eprintln!("[registry] resolving {name} from registry");
+    let report = install_one(name, None, opts)?;
+    for (n, v) in &report.installed {
+        eprintln!("[registry] installed {n} {v}");
+    }
+    Ok(Some(report))
+}
+
 /// Render a human-readable summary of an install.
 #[must_use]
 pub fn format_report(report: &InstallReport) -> String {
@@ -379,6 +432,7 @@ mod tests {
             refresh: false,
             offline: false,
             allow_prerelease: false,
+            lock_path: None,
         }
     }
 

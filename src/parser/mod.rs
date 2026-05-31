@@ -220,6 +220,14 @@ pub struct Parser {
     /// `(p.field + 1) ?? 0` and `if p.field != null` are
     /// under-detected today (slice 2).
     pub(crate) last_field_read_site: Option<(u32, u32)>,
+    /// @PLAN12 Phase 6.7 — dedupe set for the per-invocation advisory
+    /// check.  Once a `(name, version)` tuple has been classified
+    /// against the advisory feed during this parser's lifetime, we
+    /// don't re-fire the warning.  Critical-severity matches abort
+    /// via `process::exit(3)` before the second probe could fire
+    /// anyway; this dedupe is for the warning/note tiers.
+    #[cfg(feature = "registry")]
+    advisory_checked: std::collections::HashSet<(String, String)>,
 }
 
 // Operators ordered on their precedence
@@ -390,6 +398,8 @@ impl Parser {
             field_read_counts: std::collections::HashMap::new(),
             defended_field_reads: std::collections::HashSet::new(),
             last_field_read_site: None,
+            #[cfg(feature = "registry")]
+            advisory_checked: std::collections::HashSet::new(),
         }
     }
 
@@ -4128,7 +4138,10 @@ impl Parser {
         Self::probe_loft_lib_flat(id, &mut f);
         self.probe_loft_lib_manifest(id, &mut f);
         self.probe_user_installed(id, &mut f);
+        self.probe_sidecar_lockfile(id, &mut f);
+        self.probe_project_lockfile(id, &mut f);
         self.probe_registry_installed(id, &mut f);
+        self.probe_auto_install(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
 
@@ -4314,6 +4327,305 @@ impl Parser {
         }
     }
 
+    /// @PLAN12 Phase 6.7 — per-invocation advisory classifier.
+    ///
+    /// Called by each lockfile-based probe (sidecar / project /
+    /// registry-installed) after resolving a `(name, version)`
+    /// tuple.  Loads the cached advisory feed (lazily, once per
+    /// process), classifies the tuple, and emits severity-tiered
+    /// output:
+    ///
+    /// - `security_critical` → loud `error:` block; **continue
+    ///   running** (the user may be running their code precisely to
+    ///   test the upgrade, and security fixes can introduce
+    ///   breaking changes; refusing here is worse than warning).
+    ///   Opt-in refusal: `LOFT_STRICT_SECURITY=1` (env var) OR
+    ///   `--strict-security` (CLI flag, intended for CI gates) — in
+    ///   either, critical aborts with `process::exit(3)` UNLESS
+    ///   `LOFT_SECURITY_OVERRIDE=<advisory-id>` is set (comma-
+    ///   separated for multiple).
+    /// - `security_high` → loud `warning:` block; continue.
+    /// - `security_low` / `bug` → one-line warning.
+    /// - `deprecated` → one-line note.
+    ///
+    /// The Cargo / npm precedent: `cargo audit` defaults to warn,
+    /// `--deny warnings` is opt-in for CI.  Pure refusal blocks the
+    /// user precisely when they're trying to ship a fix or assess
+    /// the upgrade — the wrong default.
+    ///
+    /// Dedupes via `self.advisory_checked` so a package surfaced by
+    /// multiple `use` paths (sidecar + auto-install re-probe) only
+    /// reports once.  Feed loading is best-effort offline + cache-
+    /// only: no network fetch fires during script execution, only
+    /// during explicit `loft audit` / install commands.
+    #[cfg(feature = "registry")]
+    fn check_advisory(&mut self, name: &str, version: &str) {
+        let key = (name.to_string(), version.to_string());
+        if !self.advisory_checked.insert(key) {
+            return;
+        }
+        let Some(feed) = Self::advisory_feed() else {
+            return;
+        };
+        let hits = crate::registry_advisories::classify(name, version, feed);
+        if hits.is_empty() {
+            return;
+        }
+        let strict = std::env::var("LOFT_STRICT_SECURITY").is_ok();
+        let overrides: std::collections::HashSet<String> = std::env::var("LOFT_SECURITY_OVERRIDE")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        for hit in &hits {
+            use crate::registry_advisories::Severity;
+            let overridden = overrides.contains(&hit.advisory_id);
+            match hit.severity {
+                Severity::SecurityCritical => {
+                    // Loud error block — same in strict and non-strict
+                    // mode.  The DIFFERENCE is only whether we then
+                    // refuse to proceed.
+                    eprintln!(
+                        "error: {} {} was yanked for a security vulnerability",
+                        hit.package, hit.version
+                    );
+                    eprintln!("  advisory: {}", hit.advisory_id);
+                    eprintln!("  summary:  {}", hit.summary);
+                    if let Some(fix) = &hit.fixed_in {
+                        eprintln!(
+                            "  fix:      {} >= {} (run `loft install {}@{}`)",
+                            hit.package, fix, hit.package, fix
+                        );
+                    }
+                    if strict && !overridden {
+                        eprintln!("  refused under LOFT_STRICT_SECURITY=1");
+                        eprintln!(
+                            "  override (audit-trail required): LOFT_SECURITY_OVERRIDE={}",
+                            hit.advisory_id
+                        );
+                        std::process::exit(3);
+                    }
+                    if strict && overridden {
+                        eprintln!(
+                            "[security] override applied: {} ({} {})",
+                            hit.advisory_id, hit.package, hit.version
+                        );
+                    }
+                    // Non-strict mode: error block printed, but we
+                    // proceed.  User retains the right to run their
+                    // code while they investigate / fix.
+                }
+                Severity::SecurityHigh => {
+                    eprintln!(
+                        "warning: {} {} has a known security issue",
+                        hit.package, hit.version
+                    );
+                    eprintln!("  advisory: {}", hit.advisory_id);
+                    eprintln!("  summary:  {}", hit.summary);
+                    if let Some(fix) = &hit.fixed_in {
+                        eprintln!("  fix:      {} >= {}", hit.package, fix);
+                    }
+                }
+                Severity::SecurityLow | Severity::Bug => {
+                    eprintln!(
+                        "warning: {} {} — {} (advisory {})",
+                        hit.package, hit.version, hit.summary, hit.advisory_id
+                    );
+                }
+                Severity::Deprecated => {
+                    eprintln!(
+                        "note: {} {} is deprecated — {} (advisory {})",
+                        hit.package, hit.version, hit.summary, hit.advisory_id
+                    );
+                }
+            }
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self, dead_code)]
+    fn check_advisory(&mut self, _name: &str, _version: &str) {}
+
+    /// Lazy process-global advisory feed loader.  Cached for the
+    /// duration of the process; offline-respecting; never refetches
+    /// from network mid-parse (the explicit `loft audit` flow does
+    /// that).  Returns `None` when the registry doesn't yet host an
+    /// advisory feed (current real state — HTTP 404 soft-fails to
+    /// "no advisories").
+    #[cfg(feature = "registry")]
+    fn advisory_feed() -> Option<&'static crate::registry_advisories::AdvisoryFeed> {
+        use std::sync::OnceLock;
+        static FEED: OnceLock<Option<crate::registry_advisories::AdvisoryFeed>> = OnceLock::new();
+        FEED.get_or_init(|| {
+            let opts = crate::registry_advisories::LoadOptions {
+                allow_unsigned: true,
+                // Mid-parse, never hit the network — always cache-only.
+                // `loft audit` does the freshness refresh on demand.
+                offline: true,
+                refresh: false,
+            };
+            crate::registry_advisories::load_or_fetch(&opts).unwrap_or(None)
+        })
+        .as_ref()
+    }
+
+    /// @PLAN12 Phase 6.6 — walk-up project root detection.
+    ///
+    /// From the script's directory, walks up to `/` looking for a
+    /// `loft.toml`.  Returns the dir containing it (the project
+    /// root) — used by:
+    /// - `probe_project_lockfile` to find the lockfile that pins
+    ///   manifest-declared deps.
+    /// - `probe_auto_install` to redirect the lockfile WRITE path
+    ///   to the project root, so auto-installs in a project
+    ///   context update the project's lockfile rather than cwd's.
+    ///
+    /// Returns `None` for script-mode invocations (no `loft.toml`
+    /// anywhere in the parent chain).  Script mode falls back to
+    /// cwd's `loft.lock` (existing behaviour) or to the sidecar
+    /// (when `loft pin <script>` has been run).
+    #[cfg(feature = "registry")]
+    fn find_project_root(script_path: &str) -> Option<std::path::PathBuf> {
+        let p = std::path::Path::new(script_path);
+        if script_path.is_empty() {
+            return None;
+        }
+        let start_dir = if p.is_dir() {
+            p.to_path_buf()
+        } else if let Some(parent) = p.parent() {
+            if parent.as_os_str().is_empty() {
+                std::env::current_dir().ok()?
+            } else {
+                parent.to_path_buf()
+            }
+        } else {
+            return None;
+        };
+        // Canonicalize so the walk-up doesn't terminate prematurely
+        // on relative `./` prefixes that loop on themselves.
+        let abs_start = std::fs::canonicalize(&start_dir).unwrap_or(start_dir);
+        let mut cur = abs_start.as_path();
+        loop {
+            if cur.join("loft.toml").exists() {
+                return Some(cur.to_path_buf());
+            }
+            let parent = cur.parent()?;
+            if parent == cur {
+                return None;
+            }
+            cur = parent;
+        }
+    }
+
+    /// @PLAN12 Phase 6.6 — project-mode lockfile resolution.
+    ///
+    /// Walks up from the script's directory looking for `loft.toml`;
+    /// if found, reads the adjacent `loft.lock` and resolves `id`
+    /// against it.  Means a script at `myproject/src/foo.loft`
+    /// resolves registry libraries via `myproject/loft.lock` no
+    /// matter where `loft` is invoked from (cwd-independent).
+    ///
+    /// Cargo-style: the project root owns the lockfile; cwd is
+    /// irrelevant.  Inserted in the probe chain BEFORE
+    /// `probe_registry_installed` (which uses cwd as a script-mode
+    /// fallback when no project is found).
+    #[cfg(feature = "registry")]
+    fn probe_project_lockfile(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let Some(project_root) = Self::find_project_root(&cur_script) else {
+            return;
+        };
+        let lock_path = project_root.join("loft.lock");
+        if !lock_path.exists() {
+            return;
+        }
+        let lock = match crate::lockfile::read_lockfile(&lock_path) {
+            Ok(Some(l)) => l,
+            _ => return,
+        };
+        let version = match lock.packages.iter().find(|p| p.name == id) {
+            Some(p) => p.version.clone(),
+            None => return,
+        };
+        let install_dir = crate::registry_index::extract_dir(id, &version);
+        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
+        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
+            *f = entry;
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_project_lockfile(&mut self, _id: &str, _f: &mut String) {}
+
+    /// @PLAN12 Phase 6.6 — sidecar lockfile next to the script.
+    ///
+    /// `<script>.loft.lock` (e.g. `hello.loft.lock` next to `hello.loft`)
+    /// pins the registry versions a one-file script uses.  Generated by
+    /// `loft pin <script>`; takes precedence over the cwd `loft.lock`
+    /// because the sidecar belongs TO the script, while cwd's lockfile
+    /// belongs to wherever the user happens to be invoking from.
+    ///
+    /// Without the sidecar, single-file scripts inherit cwd's lockfile
+    /// (or auto-install latest active).  With it, the script is
+    /// reproducible regardless of cwd or registry-state drift.
+    #[cfg(feature = "registry")]
+    fn probe_sidecar_lockfile(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        if cur_script.is_empty() {
+            return;
+        }
+        let sidecar = format!("{cur_script}.lock");
+        if !std::path::Path::new(&sidecar).exists() {
+            return;
+        }
+        let lock = match crate::lockfile::read_lockfile(std::path::Path::new(&sidecar)) {
+            Ok(Some(l)) => l,
+            _ => return,
+        };
+        let version = match lock.packages.iter().find(|p| p.name == id) {
+            Some(p) => p.version.clone(),
+            None => return,
+        };
+        let install_dir = crate::registry_index::extract_dir(id, &version);
+        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
+        {
+            Some(n) => n.to_string(),
+            None => return,
+        };
+        if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
+            *f = entry;
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_sidecar_lockfile(&mut self, _id: &str, _f: &mut String) {}
+
     /// `~/.loft/registry/<id>-<version>/` — packages installed via `loft install`
     /// against the package registry.  Resolves the version via the cwd's
     /// `loft.lock` (written by `loft install`).  When loft.lock is absent or
@@ -4360,6 +4672,7 @@ impl Parser {
             None => return,
         };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
+            self.check_advisory(id, &version);
             *f = entry;
         }
     }
@@ -4371,6 +4684,92 @@ impl Parser {
     #[cfg(not(feature = "registry"))]
     #[allow(clippy::unused_self)]
     fn probe_registry_installed(&mut self, _id: &str, _f: &mut String) {}
+
+    /// @PLAN12 Phase 6.6 — auto-install on `use`.
+    ///
+    /// When `id` doesn't resolve via any of the prior strategies
+    /// (path-dep, sibling lookup, lockfile + cached registry install)
+    /// AND `id` is a known package name in the registry catalog,
+    /// fire `install_one` to fetch + extract + lockfile-update,
+    /// then re-run the cached-registry-install probe.
+    ///
+    /// The Python comparison: `python my_script.py` with
+    /// `import requests` works if `pip install requests` was done
+    /// once.  Loft's equivalent — `loft my_script.loft` with
+    /// `use gridmesh;` — Just Works on first run by doing the
+    /// `pip install` step on the user's behalf.
+    ///
+    /// Off-switches: `LOFT_OFFLINE=1` and `LOFT_NO_AUTO_INSTALL=1`
+    /// both suppress this probe.  Surprise reduction: every cold
+    /// install prints `[registry] ...` lines (mirrors Cargo's
+    /// "Downloading…" output); steady-state (cache hit, resolves
+    /// via probe_registry_installed) is silent.
+    #[cfg(feature = "registry")]
+    fn probe_auto_install(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        // Off-switches.
+        if std::env::var("LOFT_OFFLINE").is_ok() {
+            return;
+        }
+        if std::env::var("LOFT_NO_AUTO_INSTALL").is_ok() {
+            return;
+        }
+        // Bootstrap state: the loft binary may not have an embedded
+        // trust root yet (K_tmp → K_real rotation per
+        // PKG_REGISTRY.md / REGISTRY_BOOTSTRAP.md).  Mirror what
+        // `loft install` / `loft search` / `loft info` do — accept
+        // unsigned indexes during the trust-bootstrap window.  Once
+        // the production key is embedded, signed indexes verify
+        // cleanly and this flag becomes a no-op for the happy path.
+        //
+        // Lockfile WRITE path: walk up from the script's directory
+        // looking for `loft.toml`.  Found → project mode — write to
+        // `<project_root>/loft.lock` so the project's manifest +
+        // lockfile stay co-located regardless of where loft was
+        // invoked from.  Not found → script mode — `lock_path: None`
+        // falls back to cwd's `loft.lock` (the existing default).
+        let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
+        let project_root = Self::find_project_root(&cur_script);
+        let lock_path = project_root.as_ref().map(|p| p.join("loft.lock"));
+        let opts = crate::install::InstallOptions {
+            allow_unsigned: true,
+            refresh: false,
+            offline: false,
+            allow_prerelease: false,
+            lock_path,
+        };
+        match crate::install::auto_install_if_in_catalog(id, &opts) {
+            Ok(Some(_report)) => {
+                // Install succeeded; re-probe via lockfile-based
+                // resolution to populate `f`.  Try project lockfile
+                // first (where we just wrote the new entry); if
+                // that's not active, fall back to cwd's lockfile
+                // (script-mode case where lock_path was None).
+                self.probe_project_lockfile(id, f);
+                self.probe_registry_installed(id, f);
+            }
+            Ok(None) => {
+                // `id` is not a registry package; let the remaining
+                // resolution strategies handle it (or fail with
+                // the standard "library not found" diagnostic).
+            }
+            Err(e) => {
+                // Network failure, sig mismatch, or similar.
+                // Print a notice but let resolution fall through —
+                // the user may have a path-dep or sibling that
+                // resolves anyway, or they may want the standard
+                // error.
+                eprintln!("[registry] auto-install failed for {id}: {e}");
+            }
+        }
+    }
+
+    /// No-op when registry feature is off.
+    #[cfg(not(feature = "registry"))]
+    #[allow(clippy::unused_self)]
+    fn probe_auto_install(&mut self, _id: &str, _f: &mut String) {}
 
     /// Final fallback: beside the parsed file itself.
     fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {

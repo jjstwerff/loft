@@ -322,6 +322,7 @@ fn end_to_end_install_against_fixture_server() {
         refresh: true, // skip TTL on first run
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     // `loft.lock` is written into cwd — temporarily move to a fresh
     // dir so we don't dirty the dev's working tree.
@@ -435,6 +436,7 @@ fn install_rejects_tarball_with_wrong_sha256() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
     let install_cwd = tmpdir("install_rejects_bad_sha_cwd");
@@ -475,6 +477,7 @@ fn install_rejects_missing_package_in_index() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
     let install_cwd = tmpdir("install_missing_pkg_cwd");
@@ -604,6 +607,7 @@ fn end_to_end_install_with_transitive_dep() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
     let install_cwd = tmpdir("end_to_end_transitive_cwd");

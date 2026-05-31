@@ -1109,3 +1109,68 @@ fn doc_gallery_examples_js_is_up_to_date() {
         "doc/gallery-examples.js",
     );
 }
+
+/// @PLAN12 Phase 6.12 — every fixture dir under
+/// `tests/fixtures/libs/` MUST contain a `loft.toml`.  Cheap
+/// structural sanity check that doesn't require network (the
+/// chunk-repo drift check via `scripts/sync-fixtures.sh --check`
+/// lives in a separate CI workflow because it needs to clone the
+/// pinned tags).  This guard catches "someone added an empty
+/// fixture dir by accident."
+#[test]
+fn lib_fixtures_have_loft_toml() {
+    let dir = std::path::Path::new("tests/fixtures/libs");
+    if !dir.exists() {
+        // Pre-population state — no fixtures yet.  Acceptable.
+        return;
+    }
+    let entries = fs::read_dir(dir).expect("read tests/fixtures/libs");
+    let mut missing: Vec<String> = Vec::new();
+    for ent in entries.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
+        if !path.join("loft.toml").exists() {
+            missing.push(path.display().to_string());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "Fixture dirs without loft.toml — likely incomplete sync.  \
+         Run `scripts/sync-fixtures.sh` to refresh: {missing:?}"
+    );
+}
+
+/// @PLAN12 Phase 6.12 — mock-registry fixture must be valid.
+/// Cheap parse-only check: if mock-registry/index.json doesn't
+/// parse, every test that uses LOFT_REGISTRY_URL=file://...
+/// breaks confusingly downstream.  Same for advisories.json.
+#[test]
+fn mock_registry_fixtures_are_valid() {
+    let idx = std::path::Path::new("tests/fixtures/mock-registry/index.json");
+    let adv = std::path::Path::new("tests/fixtures/mock-registry/advisories.json");
+    if !idx.exists() {
+        // Pre-population state.  Acceptable.
+        return;
+    }
+    let content = fs::read_to_string(idx).expect("read mock index");
+    assert!(
+        content.contains("\"schema_version\""),
+        "mock-registry/index.json: missing schema_version key"
+    );
+    if adv.exists() {
+        let content = fs::read_to_string(adv).expect("read mock advisories");
+        assert!(
+            content.contains("\"advisories\""),
+            "mock-registry/advisories.json: missing advisories key"
+        );
+    }
+}

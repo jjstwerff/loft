@@ -547,6 +547,12 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> Result<(), String> {
 }
 
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    // @PLAN12 Phase 6.11 — support `file://` URLs for offline
+    // mirrors + bundle-import-served indexes.  Same contract as the
+    // HTTP path: return the raw bytes at the URL.
+    if let Some(path) = url.strip_prefix("file://") {
+        return std::fs::read(path).map_err(|e| format!("file:// read error for {path}: {e}"));
+    }
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_mins(1))

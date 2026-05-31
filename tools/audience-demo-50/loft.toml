@@ -1,0 +1,14 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLAN12 Phase 6b — loft.toml for the audience-demo-50 probe
+# tree.  Uses `web` + `server` only.
+
+[package]
+name    = "audience_demo_50"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+web    = ">=0.1"
+server = ">=0.1"

@@ -78,6 +78,31 @@ const FORBIDDEN_LIBRARY_SYMBOLS_MANUAL: &[(&str, &str)] = &[
     ("n_rand", "loft-libs-core/random/native"),
     ("n_rand_seed", "loft-libs-core/random/native"),
     ("n_rand_indices", "loft-libs-core/random/native"),
+    // web (19) — drained in @PLAN12 Phase 6b (2026-05-31).
+    // Stage B removed `lib/web/` from the monorepo; web is now
+    // resolved exclusively through the loft package registry
+    // (`loft install web` → `~/.loft/registry/web-<ver>/`).
+    // Symbols pinned here because `forbidden_library_symbols()`'s
+    // dynamic scan walks `lib/*` only.
+    ("n_http_do", "loft-libs-net/web/native"),
+    ("n_http_body", "loft-libs-net/web/native"),
+    ("n_ws_connect", "loft-libs-net/web/native"),
+    ("n_ws_client_send", "loft-libs-net/web/native"),
+    ("n_ws_client_send_binary", "loft-libs-net/web/native"),
+    ("n_ws_client_recv", "loft-libs-net/web/native"),
+    ("n_ws_client_message", "loft-libs-net/web/native"),
+    ("n_ws_client_opcode", "loft-libs-net/web/native"),
+    ("n_ws_client_close", "loft-libs-net/web/native"),
+    ("n_sleep_ms", "loft-libs-net/web/native"),
+    ("n_pack_reset", "loft-libs-net/web/native"),
+    ("n_pack_u8", "loft-libs-net/web/native"),
+    ("n_pack_u16_le", "loft-libs-net/web/native"),
+    ("n_pack_u32_le", "loft-libs-net/web/native"),
+    ("n_pack_take", "loft-libs-net/web/native"),
+    ("n_byte_at", "loft-libs-net/web/native"),
+    ("n_ws_group_clear", "loft-libs-net/web/native"),
+    ("n_ws_group_add", "loft-libs-net/web/native"),
+    ("n_ws_group_poll", "loft-libs-net/web/native"),
     // Add rows here ONLY when the library's `loft.toml` can't yet
     // declare the symbol via `[native.functions]`, OR when the
     // library has been extracted to an external path (path-dep scan

@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLAN12 Phase 6b — loft.toml for the branch-review viewer tool
+# (`tools/viewer/`).  Uses `server` for the HTTP serving and the
+# monorepo `markdown` library for content rendering.
+
+[package]
+name    = "loft_viewer"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/main.loft"
+
+[dependencies]
+server   = ">=0.1"
+markdown = { path = "../../lib/markdown" }

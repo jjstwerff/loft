@@ -1,0 +1,120 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// gridmesh Phase B2 — ChunkField + chunk partition + wired-in dirty index.
+// The dirty index is a keyed SET (`hash<ChunkKey[ck]>`) deduped by key,
+// relying on the plan-44 keyed-collection primitives: `+=` dedup-insert
+// (@P306), `if h[k]` membership, `f.dirty = []` clear (@P307 OpClearKeyed).
+
+use gridmesh;
+
+// chunk_of partitions offset coords by `1 << shift` (shift 3 → 8/axis),
+// flooring correctly across the origin (negative coords).
+fn test_chunk_partition() {
+  a = chunk_of(0, 0, 3);    assert(a.cx == 0 && a.cy == 0, "(0,0)->chunk(0,0)");
+  b = chunk_of(8, 0, 3);    assert(b.cx == 1 && b.cy == 0, "(8,0)->chunk(1,0)");
+  c = chunk_of(0 - 1, 0, 3); assert(c.cx == 0 - 1 && c.cy == 0, "(-1,0)->chunk(-1,0)");
+  d = chunk_of(7, 7, 3);    assert(d.cx == 0 && d.cy == 0, "(7,7)->chunk(0,0)");
+}
+
+// field_new builds the spatial index from the coords (the cidx hash field
+// is populated via `cidx: build_index(...)` — a hash-returning call deep-
+// copied into the field, working since @P308 fixed the keyed-HASH
+// struct-field initialiser).
+fn test_field_new_builds_index() {
+  xs: vector<integer> = [0, 1, 8, 0 - 1];
+  ys: vector<integer> = [0, 0, 0, 0];
+  f = field_new(0, xs, ys, 3, 2);
+  assert(len(f.xs) == 4, "coords stored");
+  assert(len(f.cidx) == 4, "spatial index populated (not empty)");
+  assert(idx_at(f.cidx, 0, 0) == 0, "lookup oldest cell");
+  assert(idx_at(f.cidx, 8, 0) == 2, "lookup third cell");
+  assert(idx_at(f.cidx, 99, 99) == 0 - 1, "lookup miss = -1");
+  assert(dirty_count(f) == 0, "dirty starts empty");
+}
+
+// Marking dedups by chunk; a border cell (within halo_k of a chunk edge)
+// marks the adjacent chunk too.
+fn test_mark_and_dedup() {
+  xs: vector<integer> = [0];
+  ys: vector<integer> = [0];
+  f = field_new(0, xs, ys, 3, 2);     // cs=8, halo_k=2
+  field_mark_dirty(f, 4, 4);          // interior → its chunk only
+  assert(dirty_count(f) == 1, "interior mark → 1 chunk");
+  field_mark_dirty(f, 3, 3);          // same chunk again → dedup
+  assert(dirty_count(f) == 1, "re-mark same chunk dedups");
+  field_mark_dirty(f, 1, 4);          // lx=1 < halo_k=2 → chunk(0,0)+chunk(-1,0)
+  assert(dirty_count(f) == 2, "low-x border marks adjacent chunk");
+  assert(chunk_is_dirty(f, 4, 4), "membership: dirty chunk");
+  assert(!chunk_is_dirty(f, 100, 100), "membership: clean chunk");
+}
+
+// clear_dirty empties the wired-in index (OpClearKeyed); re-marking works.
+fn test_clear_and_remark() {
+  xs: vector<integer> = [0];
+  ys: vector<integer> = [0];
+  f = field_new(0, xs, ys, 3, 2);
+  field_mark_dirty(f, 4, 4);
+  assert(dirty_count(f) == 1, "marked");
+  clear_dirty(f);
+  assert(dirty_count(f) == 0, "cleared");
+  assert(!chunk_is_dirty(f, 4, 4), "membership false after clear");
+  field_mark_dirty(f, 4, 4);
+  assert(dirty_count(f) == 1, "re-mark after clear works");
+}
+
+// field_add_cell appends a cell, indexes it, and marks its chunk dirty.
+fn test_add_cell() {
+  xs: vector<integer> = [0];
+  ys: vector<integer> = [0];
+  f = field_new(0, xs, ys, 3, 2);
+  clear_dirty(f);
+  field_add_cell(f, 100, 100);
+  assert(len(f.xs) == 2, "cell appended");
+  assert(len(f.cidx) == 2, "cell indexed");
+  assert(idx_at(f.cidx, 100, 100) == 1, "new cell lookup → index 1");
+  assert(dirty_count(f) == 1, "add marked its chunk dirty");
+}
+
+fn frc_has(v: vector<integer>, target: integer) -> boolean {
+  found = false;
+  for frc_h_i in 0..len(v) { if (v[frc_h_i] ?? (0 - 1)) == target { found = true; } }
+  found
+}
+
+// field_remove_cell is the MIRROR of field_add_cell: it drops the cell from the
+// spatial index AND its chunk bucket and marks the chunk dirty, WITHOUT
+// compacting the coord arrays — so surviving cells keep their indices (C4 needs
+// stable cell_ix for the projector's per-cell bloom births).
+fn test_remove_cell() {
+  // three cells, one per chunk (shift 3 → 8 cells/axis): ix 0,1,2.
+  xs: vector<integer> = [0, 8, 16];
+  ys: vector<integer> = [0, 0, 0];
+  f = field_new(0, xs, ys, 3, 2);
+  clear_dirty(f);
+  field_remove_cell(f, 8, 0);                 // remove the middle cell (ix 1)
+  assert(idx_at(f.cidx, 8, 0) == 0 - 1, "removed cell: cidx lookup now a miss");
+  assert(idx_at(f.cidx, 0, 0) == 0, "survivor (0,0) keeps index 0");
+  assert(idx_at(f.cidx, 16, 0) == 2, "survivor (16,0) keeps index 2 (NOT compacted)");
+  assert(len(f.xs) == 3, "coord slot orphaned, not compacted (index stability)");
+  assert(dirty_count(f) >= 1, "remove marked the chunk dirty (same path as add)");
+  // the removed index is gone from its chunk bucket → a rebuild won't emit it.
+  b1 = f.buckets[chunk_of(8, 0, 3).ck];
+  assert(b1 != null, "removed cell's chunk bucket still exists");
+  assert(!frc_has(b1.cell_ixs, 1), "bucket no longer lists the removed index 1");
+  // removing a coord with no cell is a harmless no-op.
+  field_remove_cell(f, 99, 99);
+  assert(idx_at(f.cidx, 0, 0) == 0, "remove-miss is a no-op");
+}
+
+// A removed coord can be re-painted; it gets a FRESH index (identity not reused).
+fn test_remove_then_readd() {
+  xs: vector<integer> = [0, 8];
+  ys: vector<integer> = [0, 0];
+  f = field_new(0, xs, ys, 3, 2);
+  field_remove_cell(f, 8, 0);                 // ix 1 orphaned
+  assert(idx_at(f.cidx, 8, 0) == 0 - 1, "removed");
+  field_add_cell(f, 8, 0);                    // re-paint same coord
+  assert(idx_at(f.cidx, 8, 0) == 2, "re-add gets a fresh index (2), not the orphaned 1");
+  assert(len(f.xs) == 3, "re-add appended a new slot");
+}

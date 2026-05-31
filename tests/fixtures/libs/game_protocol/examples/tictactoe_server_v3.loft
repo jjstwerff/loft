@@ -1,0 +1,307 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// TIC_TAC_TOE v3 — server delivers the client.
+//
+// One loft program serves both the browser-side game UI (HTML +
+// vanilla JS in INDEX_HTML) AND the WebSocket game protocol on a
+// single port — no second process, no nginx, no separate
+// static-file server — `loft tictactoe_server_v3.loft` is the
+// entire deployment.
+//
+// Wire protocol (intentionally tiny — no MAP handshake, no
+// registry, just straight text frames):
+//   client → server: `click:<row>,<col>`        (X plays here)
+//   server → client: `place:<mark>,<row>,<col>` (board update)
+//   server → client: `gameover:<X|O|draw>`     (terminal)
+//
+// The browser opens `ws://<host>/ws` after the page loads, the
+// server replays the game until win/loss/draw, then closes.
+//
+// HTTP routing convention:
+//   GET  /            → text/html  interactive board (vanilla JS)
+//   GET  /client.loft → text/plain loft client source (placeholder
+//                       for the eventual loft-WASM client; the
+//                       JS-in-HTML client is what plays today)
+//   GET  /favicon.ico → 404 (until we ship one)
+//   GET  /ws          → WebSocket upgrade → game session
+//   anything else     → 404
+//
+// Out of scope for v3 today: loft-source-→-WASM client.  That
+// path needs the lib_plans/07-web-ide W1+ work (full Rust→WASM
+// loft interpreter); plan-32 v3 is officially split into
+// "server-side" (shipped) and "browser bootstrap" (this commit
+// — JS client) milestones.  A future "v3.5" can add the
+// loft-compiled-to-WASM client once the WASM interpreter ships.
+//
+//   /home/ubuntu/loft/target/release/loft --interpret \
+//       lib/game_protocol/examples/tictactoe_server_v3.loft
+//   then open http://localhost:7878/
+
+use server;
+
+// Loft backtick strings interpolate `{expr}` — every literal `{`
+// in the HTML/JS/CSS body is escaped as `{{`.  The flip side is
+// `}}` for closing braces.  This is mechanical: every `{` → `{{`,
+// every `}` → `}}` (across CSS rules, JS arrow bodies, template
+// literals — anywhere a real brace appears).
+INDEX_HTML = `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>tic-tac-toe (loft v3)</title>
+  <style>
+    body   {{ font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }}
+    h1     {{ margin: 0 0 0.5rem 0; font-size: 1.4rem; }}
+    #status {{ font-size: 1.1rem; margin: 0.5rem 0 1rem 0; min-height: 1.4em; }}
+    #board {{ display: grid; grid-template-columns: repeat(3, 4rem); gap: 4px; }}
+    .cell  {{ width: 4rem; height: 4rem; background: #222; display: flex;
+              align-items: center; justify-content: center; font-size: 2rem;
+              cursor: pointer; user-select: none; transition: background 80ms; }}
+    .cell:hover  {{ background: #333; }}
+    .cell.x      {{ color: #6cf; }}
+    .cell.o      {{ color: #fc6; }}
+    .cell.full   {{ cursor: default; }}
+    .cell.full:hover {{ background: #222; }}
+    body.over .cell {{ cursor: default; }}
+    body.over .cell:hover {{ background: #222; }}
+  </style>
+</head>
+<body>
+  <h1>tic-tac-toe (loft v3)</h1>
+  <div id="status">connecting …</div>
+  <div id="board"></div>
+  <script>
+    const status = document.getElementById("status");
+    const board  = document.getElementById("board");
+    const cells  = [];
+    for (let r = 0; r < 3; r++) {{
+      for (let c = 0; c < 3; c++) {{
+        const div = document.createElement("div");
+        div.className = "cell";
+        div.dataset.r = r;
+        div.dataset.c = c;
+        div.addEventListener("click", () => {{
+          if (document.body.classList.contains("over")) return;
+          if (div.classList.contains("full")) return;
+          if (ws.readyState !== WebSocket.OPEN) return;
+          ws.send("click:" + r + "," + c);
+        }});
+        board.appendChild(div);
+        cells.push(div);
+      }}
+    }}
+    const url = (location.protocol === "https:" ? "wss://" : "ws://")
+              + location.host + "/ws";
+    const ws = new WebSocket(url);
+    ws.addEventListener("open",  () => {{ status.textContent = "your turn — you play X"; }});
+    ws.addEventListener("error", () => {{ status.textContent = "WS error"; }});
+    ws.addEventListener("close", () => {{
+      if (!document.body.classList.contains("over")) {{
+        status.textContent = "WS closed before the game ended";
+      }}
+    }});
+    ws.addEventListener("message", (ev) => {{
+      const msg = ev.data;
+      if (msg.startsWith("place:")) {{
+        const [mark, rs, cs] = msg.slice(6).split(",");
+        const i = (parseInt(rs, 10) * 3) + parseInt(cs, 10);
+        const cell = cells[i];
+        cell.textContent = mark;
+        cell.classList.add(mark === "X" ? "x" : "o", "full");
+      }} else if (msg.startsWith("gameover:")) {{
+        const w = msg.slice(9);
+        document.body.classList.add("over");
+        if (w === "draw") {{
+          status.textContent = "draw";
+        }} else {{
+          status.textContent = w + " wins";
+        }}
+      }}
+    }});
+  </script>
+</body>
+</html>
+`;
+
+// Placeholder loft client source — the real client lands once the
+// browser-side bootstrap is wired up.  Today this is just enough
+// for `curl /client.loft` to succeed and the harness to verify the
+// content-type + body markers.
+// Same brace-escape rule as INDEX_HTML — any `{` in the embedded
+// loft source becomes `{{`.
+CLIENT_LOFT = `
+// tic-tac-toe v3 client (placeholder — runs in the browser via the
+// loft interpreter WASM).  Bootstrap sequence:
+//   1. browser fetches / → INDEX_HTML loads loft-rt.js + loft.wasm
+//   2. loft.wasm fetches /client.loft (this file) and runs it
+//   3. this file opens a WebSocket to /ws and plays the game
+fn main() {{
+  println("v3 client placeholder — browser bootstrap pending");
+}}
+`;
+
+fn handle_request(req: server::Request) {
+  if req.method != "GET" {
+    req.respond(405, "Method Not Allowed");
+    return;
+  }
+  if req.path == "/" {
+    req.respond_html(INDEX_HTML);
+  } else if req.path == "/client.loft" {
+    req.respond_loft(CLIENT_LOFT);
+  } else if req.path == "/favicon.ico" {
+    req.respond_404();
+  } else {
+    println("v3-srv: unrouted GET {req.path}");
+    req.respond_404();
+  }
+}
+
+// ── Game state (v1-style single-game per WS session) ───────────────
+
+struct Game {
+  cells:  vector<text>,    // 9 entries; null = empty, "X" / "O" placed
+  turn:   integer,         // moves played so far
+  winner: text             // null until set; then "X" / "O" / "draw"
+}
+
+fn new_game() -> Game {
+  cs: vector<text> = [];
+  for _ in 0..9 { cs += [null]; }
+  Game { cells: cs, turn: 0, winner: null }
+}
+
+fn cell_empty(g: Game, idx: integer) -> boolean {
+  v = g.cells[idx];
+  v == null
+}
+
+// Returns the winning mark or "" (no winner on this line).
+fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
+  a = g.cells[i];
+  if a != null && a == g.cells[j] && a == g.cells[k] {
+    return a;
+  }
+  ""
+}
+
+// Returns the winning mark, "draw", or "" (game continues).
+fn check_winner(g: Game) -> text {
+  w = line_winner(g, 0, 1, 2); if w != "" { return w; }
+  w = line_winner(g, 3, 4, 5); if w != "" { return w; }
+  w = line_winner(g, 6, 7, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 3, 6); if w != "" { return w; }
+  w = line_winner(g, 1, 4, 7); if w != "" { return w; }
+  w = line_winner(g, 2, 5, 8); if w != "" { return w; }
+  w = line_winner(g, 0, 4, 8); if w != "" { return w; }
+  w = line_winner(g, 2, 4, 6); if w != "" { return w; }
+  if g.turn >= 9 { return "draw"; }
+  ""
+}
+
+fn first_empty(g: Game) -> integer {
+  for fi in 0..9 {
+    if cell_empty(g, fi) { return fi; }
+  }
+  -1
+}
+
+fn place_and_announce(ws: server::WebSocket, g: Game, mark: text,
+                       r: integer, c: integer) -> boolean {
+  idx = r * 3 + c;
+  g.cells[idx] = mark;
+  g.turn = g.turn + 1;
+  ws.send("place:{mark},{r},{c}")
+}
+
+fn handle_ws_session(ws: server::WebSocket) {
+  println("v3-game: session start");
+  g = new_game();
+
+  while g.winner == null {
+    msg = ws.next();
+    if msg == null { break; }
+    if !msg.starts_with("click:") {
+      println("v3-game: ignoring non-click frame \"{msg}\"");
+      continue;
+    }
+    body = msg[6..];
+    comma = body.find(",");
+    if comma == null {
+      println("v3-game: malformed click \"{msg}\"");
+      continue;
+    }
+    r = body[..comma] as integer;
+    c = body[comma + 1..] as integer;
+    if r < 0 || r > 2 || c < 0 || c > 2 {
+      println("v3-game: out-of-range click r={r} c={c}");
+      continue;
+    }
+    if !cell_empty(g, r * 3 + c) {
+      println("v3-game: already-placed click r={r} c={c}");
+      continue;
+    }
+
+    // Player's X.
+    if !place_and_announce(ws, g, "X", r, c) { break; }
+    println("v3-game: X at {r},{c}");
+    w = check_winner(g);
+    if w != "" {
+      g.winner = w;
+      ws.send("gameover:{w}");
+      println("v3-game: gameover {w}");
+      break;
+    }
+
+    // Server's O — first empty cell (deterministic, easy to test).
+    s = first_empty(g);
+    if s < 0 { break; }
+    sr = s / 3;
+    sc = s - sr * 3;
+    if !place_and_announce(ws, g, "O", sr, sc) { break; }
+    println("v3-game: O at {sr},{sc}");
+    w = check_winner(g);
+    if w != "" {
+      g.winner = w;
+      ws.send("gameover:{w}");
+      println("v3-game: gameover {w}");
+      break;
+    }
+  }
+
+  ws.close();
+}
+
+fn main() {
+  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port = if port_raw == "" { 7878 } else { port_raw as integer };
+
+  srv = server::listen(port);
+  if srv.handle < 0 {
+    println("v3-srv: bind-failed port={port}");
+    return;
+  }
+  println("v3-srv: listening port={port}");
+
+  // Single-process loop: each accept either serves an HTTP page
+  // or upgrades to WebSocket.  The Upgrade-detection convention
+  // is path-based for now (`/ws`); once `tcp_headers()` ships
+  // we can detect via the actual `Upgrade: websocket` header.
+  while true {
+    req = srv.next();
+    if req == null { continue; }
+    if req.path == "/ws" {
+      ws = server::ws_upgrade();
+      if ws == null {
+        println("v3-srv: ws-upgrade-failed");
+        continue;
+      }
+      println("v3-srv: ws-upgraded");
+      handle_ws_session(ws);
+    } else {
+      handle_request(req);
+    }
+  }
+}

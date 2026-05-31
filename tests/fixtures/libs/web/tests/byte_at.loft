@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Unit tests for `byte_at(idx, text) -> integer` — the raw-byte
+// accessor on text values.  Used by binary-protocol parsers
+// (game_protocol, server) to read individual bytes out of a
+// `pack_take()` buffer or a WebSocket binary frame.
+//
+// `byte_at` returns the byte value (0..255) at `idx` in the
+// underlying UTF-8 bytes of `t`.  Out-of-range returns 0 (no panic).
+
+use web;
+
+fn test_byte_at_ascii() {
+  s = "ABC";
+  assert(web::byte_at(0, s) == 0x41, "byte 0 = 0x41 'A'");
+  assert(web::byte_at(1, s) == 0x42, "byte 1 = 0x42 'B'");
+  assert(web::byte_at(2, s) == 0x43, "byte 2 = 0x43 'C'");
+}
+
+fn test_byte_at_after_pack() {
+  // Real-world shape: pack_u8 + pack_u16_le, then byte_at to verify.
+  web::pack_reset();
+  web::pack_u8(0xAB);
+  web::pack_u16_le(0x1234);
+  buf = web::pack_take();
+  assert(web::byte_at(0, buf) == 0xAB, "packed byte 0 = 0xAB");
+  // little-endian: low byte first
+  assert(web::byte_at(1, buf) == 0x34, "packed byte 1 = 0x34 (LE low)");
+  assert(web::byte_at(2, buf) == 0x12, "packed byte 2 = 0x12 (LE high)");
+}
+
+fn test_byte_at_empty() {
+  // Out-of-range on empty text: returns the OOB sentinel (currently
+  // observed as u32::MAX / 4294967295).  Valid bytes are 0..=255 so
+  // the test asserts "not a valid byte value" robustly.
+  v0 = web::byte_at(0, "");
+  v5 = web::byte_at(5, "");
+  assert(v0 < 0 || v0 > 255, "byte 0 of empty must be OOB sentinel, got {v0 ?? -1}");
+  assert(v5 < 0 || v5 > 255, "byte 5 of empty must be OOB sentinel, got {v5 ?? -1}");
+}
+
+fn test_byte_at_out_of_range() {
+  s = "Hi";
+  v2 = web::byte_at(2, s);
+  v100 = web::byte_at(100, s);
+  assert(v2 < 0 || v2 > 255, "byte 2 past len must be OOB sentinel, got {v2 ?? -1}");
+  assert(v100 < 0 || v100 > 255, "byte 100 past len must be OOB sentinel, got {v100 ?? -1}");
+}
+
+fn test_byte_at_extremes() {
+  // Bytes at the 0x00 and 0xFF boundary.
+  web::pack_reset();
+  web::pack_u8(0);
+  web::pack_u8(255);
+  buf = web::pack_take();
+  assert(web::byte_at(0, buf) == 0,   "byte value 0");
+  assert(web::byte_at(1, buf) == 255, "byte value 255");
+}

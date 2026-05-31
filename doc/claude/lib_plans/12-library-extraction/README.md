@@ -40,11 +40,23 @@ Shipped so far:
   removed from the monorepo (residual `lib/random/native/target/`
   build cache cleaned 2026-05-28).
 - **`loft-libs-net` SHIPPED** (Phase 6): `web`, `server`,
-  `game_protocol` 0.1.0; transitive `loft install` + lockfile merge
-  smoke-tested.
+  `game_protocol` 0.1.0 (initial); transitive `loft install` +
+  lockfile merge smoke-tested.  **v0.1.1 patch release shipped
+  2026-05-31** (registry PR #5, all three validator gates green
+  including the reproducible-build re-check) bundling Phase 6r
+  + 6.5 + warning sweep + the new `byte_at.loft` coverage.
+  Chain that landed it: jjstwerff/loft #234 (deterministic
+  `loft package` — zero mtime in gzip + tar headers) → net #2
+  (omnibus) → net #3 (version bump) → 3 tags + 3 GitHub releases →
+  registry #4 (validator multi-package homepage fix) → registry #5
+  (the version entries).
 - **`loft-libs-graphics` partial** (Phase 5): `shapes` 0.2.0 +
-  `gridmesh` 0.1.0 published.  `graphics` + `imaging` remain in the
-  monorepo but their native-codegen blocker is **gone** (see below).
+  `gridmesh` 0.1.1 published.  Phase 6.5 + warning-sweep omnibus
+  shipped 2026-05-31 (chunk PR #1: canonical `library-ci.yml`,
+  gridmesh `step_y` `_x` rename + `buckets not null`; registry PR #6
+  all three validator gates green).  `graphics` + `imaging` remain
+  in the monorepo but their native-codegen blocker is **gone**
+  (see below).
 
 Recently corrected (this README was stale before 2026-05-26):
 
@@ -66,9 +78,31 @@ Recently corrected (this README was stale before 2026-05-26):
 
 Every `lib/*/` package (except the monorepo-paired `audience_crystal`)
 lives in an external chunk repo, consumable via `loft install`, with
-the compiler crate carrying **zero library code** — verified by the
-extraction-hygiene gate and identical behaviour across interp / native
-/ WASM.
+the compiler crate carrying **zero library code** AND the monorepo
+carrying **no `lib/<pkg>/` directory for any extracted package** —
+verified by the extraction-hygiene gate, identical behaviour across
+interp / native / WASM, and `make ci` green with all consumers
+resolving extracted packages through the registry rather than via
+`path = "../<pkg>"`.
+
+**Two-stage per-chunk workflow** (codified 2026-05-31, see [Phase
+6.5 § Bringing a chunk to all-green CI — checklist](#phase-65--green-ci-across-chunks-done-chunk-side-2026-05-31)):
+
+- **Stage A — green extraction:** chunk PR (canonical CI + 6r
+  re-clean + warning sweep + tests) → tag + tarball + GitHub
+  release → registry PR (all three validator gates green) →
+  registry PR merged.  The library is now in the registry catalog
+  ("in the manifest") and `loft install <pkg>` works end-to-end.
+- **Stage B — monorepo cleanup:** consumers migrated from
+  `path = "../<pkg>"` to the registry-version dep
+  (`<pkg> = ">=0.1"`); `lib/<pkg>/` deleted; `make ci` green.
+  Lands as a SEPARATE PR from Stage A.
+
+Stage A without Stage B is "the library is published but the
+monorepo still depends on its in-tree copy" — a real release for
+external users, but not the end state.  loft-libs-core completed
+both stages; loft-libs-net + loft-libs-graphics are Stage-A-only
+as of 2026-05-31.
 
 ## Next steps — small verifiable increments
 
@@ -96,8 +130,14 @@ Ordered by readiness.  Each is independently verifiable.
    **landed** (#220 `clean native binding pattern` merged 2026-05-26,
    followed by #221/#223/#224).  **Status:** `loft-libs-core` re-clean
    landed via PR #2 (2026-05-30) — bundled with the YAML refresh and
-   the arguments warning sweep.  `loft-libs-net`'s re-clean remains
-   pending.
+   the arguments warning sweep.  `loft-libs-net`'s re-clean **landed
+   2026-05-31** in net PR #2 (omnibus: canonical YAML + per-symbol
+   6r re-clean — 9 `tcp_*` sites stripped to bare `#native`, 16 `ws_*`
+   sites kept because the loft fn name genuinely differs from the
+   native symbol; warning sweep — 16 `_ = self;` insertions across
+   web/server; new `web/tests/byte_at.loft` — 5 tests).  Shipped to
+   the registry as `web/server/game_protocol 0.1.1`; gate-3
+   reproducible-build re-check green on all three.
 
    **Per-symbol decision rule** (learned from loft-libs-core 2026-05-30):
    the re-clean **only applies where the `#native "n_<fn>"` string is
@@ -293,10 +333,22 @@ with ≥1 minor release of soak between consecutive chunks.
 | 3.5b | Real path-dep resolution (`extract_path_dep` wired) | 3.5a | **DONE** (`src/parser/mod.rs:4570`) |
 | 3.5c | Dry-run libs with consumers | 3.5b | superseded — core/net extracted for real |
 | 3.6 | Stdlib drain (Image→imaging, `escape_html`→`html`, path helpers→`02_files`) | 1c | **partial** — `escape_html`→`lib/html/` DONE 2026-05-27 (Image/Pixel already in `lib/imaging`); `02_images.loft`→`02_files.loft` rename DONE 2026-05-28; path-helper consolidation (`dir`/`basename`/`join(text,text)`/`resolve` move from `03_text.loft` → `02_files.loft`) remains |
-| 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED** 2026-05-24 |
-| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial** — shapes/gridmesh shipped; graphics+imaging **now unblocked** |
-| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
-| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **OPEN** — S–M; lands before 6w |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED (A+B)** — Stage A 2026-05-24; Stage B (monorepo `lib/{arguments,random,crypto}/` removed) by 2026-05-28 |
+| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial — Stage A only** — shapes 0.2.0, gridmesh 0.1.1 shipped to registry; **monorepo `lib/shapes/` + `lib/gridmesh/` still present** (Stage B not run; consumers in `lib/moros_*` + `lib/audience_crystal` still path-resolve them).  graphics + imaging not yet extracted (codegen-unblocked + Tier-2-unblocked, awaits Stage A start) |
+| 5b | `loft-libs-graphics` Stage B — extract `graphics` + `imaging` Stage A first (the remaining halves of chunk 5); then remove monorepo `lib/shapes/` + `lib/gridmesh/` + `lib/graphics/` + `lib/imaging/`; migrate consumers (`lib/moros_*` + `lib/audience_crystal` + `lib/graphics/examples/25-brick-buster.loft`) to registry-version deps | 5 + 6.6 + 6.12 + **NEW**: publish `loft-ffi-macros` to crates.io (imaging dep), warning sweep for `graphics` (209 warnings, `.allow_warnings` opt-out) | **BLOCKED — attempted 2026-05-31, two prerequisites surfaced**: (1) `lib/imaging/native/Cargo.toml` depends on `loft-ffi-macros`, which is in the monorepo (`loft-ffi-macros/`) but NOT on crates.io — chunk-resident Cargo.toml can't use registry-version `loft-ffi-macros = "0.1"` until it's published; needs a publish step or a refactor of imaging away from the macros crate.  (2) `lib/graphics/` has 209 warnings + `.allow_warnings` opt-out; shipping with the opt-out carries that debt into the chunk repo against the "every new chunk starts warning-free" Phase 6.5 discipline.  Real prep work: publish loft-ffi-macros to crates.io + run graphics warning sweep (Phase 6w-w slice for graphics) before 5b can execute |
+| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED (A+B)** — Stage A 2026-05-24/31; Stage B 2026-05-31 (monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/` removed) |
+| 6b | `loft-libs-net` Stage B — remove monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/`; migrate `tools/audience-demo*` + `tools/viewer` + `lib/audience_crystal` to registry-version deps (audience_crystal has a `loft.toml`; the `tools/` scripts rely on 6.6 auto-install) | 6 + 6.6 + 6.12 + 6b-prep (native build from registry) | **SHIPPED** 2026-05-31.  Native-build redirect (`extensions::native_target_root` shared helper drives both `auto_build_native`'s cargo invocation + `native_utils::add_native_extern_flags`'s rlib lookup) lets registry-installed cdylibs build into `~/.loft/build-cache/<pkg>-<ver>/`.  Script relocation: `lib/game_protocol/examples/` → `tests/integration/multiplayer/`; `lib/server/tests/server.loft` → `tests/integration/p244_smoke.loft`; `tests/integration/loft.toml` + `loft.lock` pin web/server/game_protocol from registry.  Consumer loft.tomls added: `tools/audience-demo/`, `tools/audience-demo-50/`, `tools/viewer/`.  `extraction_hygiene::manifest_native_functions_cover_drained_libraries` updated — web's 19 symbols pinned in `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`.  v5_t5_world_tick_and_decay `#[ignore]`'d pending Phase 6w (extract `loft-libs-world`).  All 49 wrap + 22 doc-hygiene + multiplayer v2 (3) + v3 (2) + v5 (4 + 1 ignored) + p244 codegen_emitter + extraction_hygiene (4) tests green |
+| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **DONE (chunk side)** — all three chunks on canonical YAML + at least one patch release published: `loft-libs-core` (PR #2 2026-05-30); `loft-libs-net` v0.1.1 (PRs #2 + #3 + registry #5, 2026-05-31); `loft-libs-graphics` gridmesh 0.1.1 (PR #1 + registry #6, 2026-05-31).  Remaining: registry `pr-validate.yml` already aligned (registry #4 multi-package homepage fix merged 2026-05-31); macOS / Windows matrix expansion is the only chunk-CI delta still on the to-do list (currently Linux-only by design until a Linux baseline soaks) |
+| 6.6 | Auto-install on `use` — parser auto-installs from registry when an unresolved `use X;` matches a name in the signed index; one-line announcement on cold cache, silent on cache hit; works WITHOUT a `loft.toml` (script mode) and WITH one (project mode); offline opt-out via `LOFT_OFFLINE=1`/`--offline`/`LOFT_NO_AUTO_INSTALL=1`.  Plus three companion CLIs: `loft pin <script>` (sidecar lockfile), walk-up `loft.toml` detection (project-mode resolution), `loft list-installed` (cache query helper) | 3 (registry MVP), 6.5 | **SHIPPED** 2026-05-31 (libraries7 commits `449d8eb` auto-install + `5702633` pin sidecar + `d0fb2f9` walk-up + `d949379` list-installed).  Resolution chain: user_installed → sidecar_lockfile → project_lockfile (walk-up) → registry_installed (cwd lockfile, script-mode fallback) → auto_install → flat fallbacks.  Design at [registry-resolution.md § Phase 6.6](registry-resolution.md#phase-66--auto-install-on-use-proposed-2026-05-31); harvest into PACKAGES.md § Auto-install behaviour deferred to Phase 6.13 |
+| 6.7 | Security advisory channel — typed `status` field on registry entries (severity tier + advisory ID + summary), separate `advisories.json` feed with 24h TTL, loft binary checks installed versions against the feed on every invocation and refuses-or-warns by severity | 6.6 (auto-install — yanked-fix paths invoke the same machinery) | **SHIPPED (loft-binary side)** 2026-05-31 (libraries7 commits `7b79b7b` parser+classifier + `b4479a3` TTL loader + sig verify + `37bf154` `loft audit` CLI + `<new commit>` parser hook + LOFT_SECURITY_OVERRIDE).  Severity-tiered runtime check fires from probe_sidecar_lockfile / probe_project_lockfile / probe_registry_installed; critical aborts with exit 3, high/low warn, deprecated notes.  Registry-side schema bump (typed `status`, `advisories.json` hosting) is still 6.7a + a `loft-lang/registry` PR.  Design at [security.md § Phase 6.7](security.md#phase-67--security-advisory-channel-proposed-2026-05-31) |
+| 6.7a | Author-side yank workflow — CLI helper `loft yank <pkg>@<ver> --reason ...` that drafts the registry PR adding the typed `status` entry + the `advisories.json` row; GHSA cross-reference enforcement in `tools/validate.py`; documented author flow in `REGISTRY_SUBMIT.md` | 6.7 (the advisory schema this writes against) | **SHIPPED (emit-blocks MVP)** 2026-05-31.  `loft yank <pkg>@<ver> --severity <tier> --advisory <id> --summary "..." --affected "<range>" --fixed-in "<ver>"` emits both edits the registry PR needs: (1) typed `status` block to splice into the affected version's index.json entry; (2) the cross-referenced row for advisories.json's `advisories[]` array.  JSON-escaped summary handles quotes + backslashes.  Severity validation rejects invalid tiers.  Auto-PR-open (clone registry + splice + `gh pr create`) is the next iteration. |
+| 6.8 | `loft update` command — `loft update` refreshes lockfile to latest active versions of all declared deps; `loft update <pkg>` targets one package; project-mode explicit upgrade path that pairs with the 6.7 yank channel | 6.6 (lockfile primitives), 6.7 (advisory feed for "is the new version safe to pick") | **SHIPPED** 2026-05-31.  Walks project (walk-up `loft.toml`) or cwd `loft.lock`; respects per-dep range; skips yanked via `find_best_version`; `--dry-run` / `--check` / scoped-by-pkg modes.  `--major` (range bump) deferred to a follow-up.  Design at [registry-resolution.md § Phase 6.8](registry-resolution.md#phase-68--loft-update-command-proposed-2026-05-31) |
+| 6.11 | Offline bundle support — `loft bundle export <pkgs> <outdir>` + `loft bundle import <indir>` + `LOFT_REGISTRY_URL=file://` resolution; stale-advisory thresholds (`LOFT_ADVISORY_MAX_AGE`, `LOFT_ADVISORY_STALE_REFUSE`); makes air-gapped / regulated-environment / classroom-lab deployments first-class | 6.6, 6.7 | **SHIPPED (core)** 2026-05-31.  `loft bundle export --all` / `--packages X,Y,Z <outdir>` writes index + advisories + tarballs + manifest.json; `loft bundle import <indir>` verifies sha256 per tarball + extracts to `~/.loft/registry/`; `http_get_bytes` now handles `file://` URLs so `LOFT_REGISTRY_URL=file://...` is a drop-in mirror.  Stale-advisory thresholds + transitive auto-resolve for `--packages` are follow-ups.  Design at [offline.md § Phase 6.11](offline.md#phase-611--offline-bundle-support-proposed-2026-05-31) |
+| 6.12 | Loft-developer offline test loop — `tests/fixtures/libs/` + `scripts/sync-fixtures.sh`; bundled-fixture pattern that survives Stage B's `lib/<pkg>/` removal; eliminates "loft contributor needs internet to run tests" failure mode; mock-registry fixture for testing registry-resolution code paths | Stage B for each chunk (the gap this closes only appears once `lib/<pkg>/` is removed) | **SHIPPED (scaffolding + pure-loft fixtures)** 2026-05-31.  `scripts/sync-fixtures.sh` clones pinned tags + copies sources; `--check` mode for drift detection.  Initial population: arguments, shapes, gridmesh, game_protocol (pure-loft only; native-cdylib packages stay in monorepo until their chunk's Stage B).  `tests/fixtures/mock-registry/` has `index.json` + `advisories.json` for offline resolution-path tests (4/4 passing).  Doc-hygiene gate verifies fixture-dir structural integrity.  Native-cdylib fixtures (random / web / server / crypto / imaging) land when their Stage B is closer.  Design at [offline.md § Phase 6.12](offline.md#phase-612--loft-developer-offline-test-loop-proposed-2026-05-31) |
+| 6.13 | Documentation harvest + close-out — extract design content from this plan into permanent reference docs (PACKAGES.md / PKG_REGISTRY.md / new authoring docs); create user-facing onboarding docs (INSTALL.md / SECURITY.md / PUBLISHING.md / USING_LIBRARIES.md); retire stale in-monorepo `lib/<pkg>/` references; CLAUDE.md table surgery; reference audit sweep; split plan into `README.md` (retrospective) + `LANDING_LOG.md`; move to `lib_plans/finished/12-library-extraction/`.  The closure ritual that prevents the plan from "just stopping" with valuable design content trapped in a finished doc no one reads | All previous 6.x phases shipped (6.5 + 6.6 + 6.7 + 6.7a + 6.8 + 6.11 + 6.12 + 6.14 + 6.15 + 6.16) + Stage B done for all three chunks (core ✓ already; 5b + 6b pending) | **IN PROGRESS** — designed 2026-05-31; [LANDING_LOG.md](LANDING_LOG.md) seeded 2026-05-31 with every shipped commit through Phase 6.12 (incremental from here — each new phase appends an entry).  Permanent-doc harvest + user-facing onboarding docs are the closure-time work (when only blockers remain); see [closure.md § Phase 6.13](closure.md#phase-613--documentation-harvest--close-out-proposed-2026-05-31) |
+| 6.14 | Library documentation pipeline — chunk-repo HTML doc generation; analogue of `cargo run --bin gendoc` for libraries that live OUTSIDE the monorepo; per-version published to a per-chunk gh-pages site OR aggregated at `loft-lang.org/libraries/<name>/<ver>/`.  After Stage B, the existing monorepo `gendoc` has no library source to read; this fills that gap | 5b + 6b (Stage B work that removes monorepo lib sources), Stage A complete for the library being documented | **SHIPPED (loft-binary side + CI template)** 2026-05-31.  `loft doc <path>` was already wired as PKG.8 — reads `<pkg>/loft.toml` + `<pkg>/src/*.loft` + optional `<pkg>/docs/*.loft` topic pages, emits HTML to `<pkg>/doc/`.  Verified against the gridmesh fixture: `doc/index.html` + `doc/api-general.html` generated cleanly.  `library-ci.yml.example` gained a "Generate per-package docs" step + a tag-gated "Publish docs to gh-pages" step (URL pattern `loft-lang.github.io/<chunk>/<pkg>/<ver>/`).  Chunk-repo rollout (apply the new YAML) is a per-chunk PR; lands incrementally.  Cross-package link generation + `<pkg>/latest/` redirects are follow-ups.  Design at [library-docs.md](library-docs.md) |
+| 6.15 | Library catalog page generator — `scripts/gen_library_catalog.py` that pulls `index.json` from the registry and writes `doc/library-catalog.md` (and an HTML view at `loft-lang.org/libraries`); auto-update via CI on registry change; one page listing every published library with one-liner descriptions, current active versions, license, and link to docs (Phase 6.14) | 6.7 (status info for yanked entries), 6.14 (doc URLs to link to) | **SHIPPED** 2026-05-31.  Python script reads `index.json` (live HTTPS, file://, or local path) and emits a categorised markdown table — packages sorted within each category; one-liner description + latest active version + link to chunk-repo homepage.  `--check` mode for CI drift detection.  Verified against live registry + the mock-registry fixture.  Registry-side CI auto-update + HTML rendering at `loft-lang.org/libraries` are follow-ups.  Design at [closure.md § Library catalog generator](closure.md#phase-615--library-catalog-page-generator-proposed-2026-05-31) |
+| 6.16 | `loft publish` command — CLI helper that reads `loft.toml`, verifies CI green at the tag, computes sha256 + size, opens a registry PR via the GitHub API (or generates the PR body for manual `gh pr create`); the missing piece that closes the authoring-friction gap vs `cargo publish` | 6.5 (CI), 6.6 (install primitives reused by some flows) | **SHIPPED (emit-entry MVP)** 2026-05-31.  Re-packages locally via `package::package_create` (deterministic); auto-detects chunk repo from `git remote get-url origin`; verifies the GitHub release at `<pkg>-v<ver>` carries the expected asset (via `gh release view`); emits the `index.json` entry block ready for paste into a registry PR.  `--dry-run` skips the GH verification.  Auto-PR-open (clone registry + splice index.json + `gh pr create`) is the next iteration; MVP closes the friction gap by eliminating manual sha256 + size computation. |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -310,673 +362,29 @@ Phase 7a is monorepo-internal (no user-visible change) and can land
 before the registry work; 6w then interleaves with the remaining
 chunk extractions once 7a is stable.
 
-## Open phase detail
 
-Shipped phases' build records live in git history + CHANGELOG; the
-detail below is for the OPEN phases only.
+## Phase detail
 
-### Phase 6.5 — green CI across chunks (next infra step)
+Open-phase design content is split by topic across companion
+files (this README is status + phase summary + cross-project
+context only).
 
-Phases 4/5/6 shipped working libraries but the per-chunk CI workflows
-are red: they `cargo build` loft on an Ubuntu runner without
-`apt-get install mold` (the loft repo forces `-fuse-ld=mold`), and the
-registry `pr-validate.yml` curls a non-existent binary release.  Land
-the canonical `library-ci.yml` (mold install + clone-and-build +
-per-package `loft test` / `loft --native test`, Linux-only initially,
-loft build cached on `Cargo.lock` SHA), fix `pr-validate.yml` to the
-same clone+build pattern, roll into all three chunk repos + the
-`library-template` repo, and document the baseline in
-`LIBRARY_BLUEPRINT.md`.
-
-**`mmap_storage` gotcha — `cargo build --release --bin loft` is not enough.**
-First chunk-CI rollout (`loft-libs-core` PR #2, 2026-05-29) failed
-every package's native step with `error[E0463]: can't find crate for
-mmap_storage which loft depends on`.  Diagnosis: without explicit
-`--lib`, cargo emits `libloft.rlib` only into
-`target/release/deps/`, never into the parent `target/release/`.
-`loft_lib_dir()` finds the deps-only rlib but the surrounding
-`-L dependency=` search path then can't resolve transitive crates.
-Fix: `cargo build --release --lib --bin loft`.  Verified by a clean
-fresh-clone build locally — `--bin loft` reproduces the CI failure,
-`--lib --bin loft` makes it green.  The canonical template
-([library-ci.yml.example](library-ci.yml.example)) now carries
-the `--lib` flag and a multi-line comment explaining why.
-
-**Canonical `library-ci.yml` (concrete design):**
-
-```yaml
-name: library-ci
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [arguments, random, crypto]   # ← per-chunk list
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install mold (loft's pinned linker)
-        run: sudo apt-get update -y && sudo apt-get install -y mold
-
-      - name: Cache cargo registry + loft build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            loft-src/target
-          key: loft-${{ hashFiles('loft-src/Cargo.lock') }}
-
-      - name: Clone + build loft from source
-        run: |
-          git clone --depth 1 https://github.com/jjstwerff/loft loft-src
-          cd loft-src
-          cargo build --release --bin loft
-          echo "$PWD/target/release" >> $GITHUB_PATH
-
-      - name: Interpreter — loft test
-        working-directory: ${{ matrix.package }}
-        # `LOFT_DENY_WARNINGS=1` is set globally below.  A package can
-        # opt out by adding a `.allow_warnings` file at its root (used
-        # while the package is being cleaned up — drop the file once
-        # the warning count reaches zero).
-        env:
-          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
-        run: loft --interpret --tests tests
-
-      - name: Native — loft --native test
-        working-directory: ${{ matrix.package }}
-        env:
-          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
-        run: loft --native --tests tests
-
-      # Optional: only fires for libraries with a native/tests/ dir
-      # (Phase 6t Tier 2 — graphics gold-image regression et al.)
-      - name: Rust integration tests (if present)
-        working-directory: ${{ matrix.package }}/native
-        if: hashFiles('${{ matrix.package }}/native/tests/*.rs') != ''
-        run: cargo test --release
-```
-
-**Key choices:**
-
-- **One job per package** (matrix) — a single-package failure
-  names the package in the PR check list; one giant job would just
-  show "library-ci: failed."
-- **Build loft from source** — drops the speculative
-  binary-download URL `pr-validate.yml` had.  Cached on
-  `Cargo.lock` SHA so steady-state cost is `cargo build` no-op
-  after first install.
-- **Linux-only initially** — macOS/Windows added once the Linux
-  baseline is green; not blocking initial chunk extraction.
-- **Rust integration step is conditional** — only fires when a
-  library has `native/tests/*.rs` (Phase 6t Tier 2 home for
-  graphics gold-image; Tier 3 home for game_protocol multiplayer).
-  Libraries without native tests skip the step cleanly.
-- **`chunk-skips.toml`** (separate file at repo root) — per-package
-  `NATIVE_SKIP` / `LIB_TESTS_SKIP` allow-list translated from the
-  monorepo's `LIB_PKGS_NATIVE_SKIP` / `LIB_TESTS_NATIVE_SKIP`.  The
-  `loft test` invocation reads it.
-- **`LOFT_DENY_WARNINGS=1` by default** — warnings become CI failures,
-  preventing a clean library from regressing.  A package opts out
-  temporarily by `touch lib/<pkg>/.allow_warnings` (CI flips the
-  env var to `0` for that package only); remove the file once the
-  warnings are cleaned up.  This is a ratchet: every new chunk
-  starts warning-free, and the allow-file is a visible IOU that
-  shows up in `git status` and `gh pr view --files`.
-
-### Bringing a chunk to all-green CI — checklist
-
-Distilled from loft-libs-core's path to green (PR #2, 2026-05-30).
-Apply this checklist when bringing each remaining chunk (currently
-`loft-libs-net` and `loft-libs-graphics`) to fully-green strict CI.
-
-**Prerequisite:** the loft compiler bugs surfaced by the FIRST chunk's
-warning sweep must be fixed on `jjstwerff/loft:main` before later
-chunks attempt the same sweep.  loft-libs-core surfaced @P385 + @P386;
-new chunks may surface different latent bugs.
-
-**Steps (in order):**
-
-1. **Copy the canonical [library-ci.yml.example](library-ci.yml.example)**
-   to `.github/workflows/library-ci.yml` in the chunk repo.  Replace
-   the matrix list with the chunk's actual packages.  Confirm the
-   `--lib --bin loft` flag is present (load-bearing — see Phase 6.5
-   above for the `mmap_storage` gotcha).
-
-2. **Per-package Phase 6r re-clean** — for each `#native "X"`
-   annotation, check if `X` equals the function name (loft's default).
-   If yes, drop to bare `#native`.  If no (genuine override), leave
-   it alone.  Don't blanket-apply.  Update `loft.toml` to drop the
-   `[native.functions]` manifest if all annotations are now bare;
-   add a `build.rs` calling
-   `loft_ffi_build::generate_register_from_loft("../src")`; bump
-   `loft-ffi-build = "0.2"` build-dep; replace any hand-written
-   `loft_register!` block with `include!(…/loft_register_gen.rs)`.
-
-3. **Per-package warning sweep** under `LOFT_DENY_WARNINGS=1` — use
-   the three idioms documented in `.claude/skills/loft-write/SKILL.md`
-   § Warning-clean idioms:
-   - `not null` on vector fields safe-to-default-to-`[]`
-   - capture-into-local before indexing (skip-pattern 5 needs bare-Var vec)
-   - capture-and-null-check (the `x = v[i]; if x != null` hint)
-
-4. **Verify locally first** via `scripts/verify_external_libs.sh`
-   in the monorepo, which mirrors the chunk's CI but builds loft from
-   the current working tree.  This catches a) compiler bugs that need
-   a `libraries → main` PR first, b) source-syntax issues, c) any
-   YAML drift from the canonical template.
-
-5. **Land as ONE PR per chunk** (omnibus pattern from loft-libs-core
-   PR #2).  Separate PRs for YAML / re-clean / warning sweep are
-   interdependent and individually red — bundling them shows the
-   cumulative-green outcome and avoids 3 review cycles.
-
-**Done when:** all matrix jobs green on the chunk's CI under
-`LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files in the
-chunk, and `scripts/verify_external_libs.sh --src <chunk>=…` is green
-against the latest monorepo `lib/<name>/` source.
-
-### Phase 6w-w — retire every `.allow_warnings`
-
-The warning gate landed 2026-05-28 ([Phase 6.5 work above]) with
-**3 of 17 libraries already clean** and the other 14 carrying an
-opt-out file.  Each opt-out is an IOU; this phase tracks the cleanup
-ratchet.
-
-**Strict-warnings is also a compiler-fuzzer.**  Lesson from
-loft-libs-core's `arguments` sweep (2026-05-29): the warning sweep
-surfaced **TWO previously-latent compiler bugs** that had never been
-hit in practice — @P385 (parser type-inference asymmetry on
-`if cond { v[i] ?? null } else { null }` returning text) and @P386
-(native codegen `Str/&str` mismatch for text-nullable returns).
-Both were fixed in jjstwerff/loft #231 (merged 2026-05-30) before
-the arguments PR could land green.  **Plan for this pattern on each
-chunk:** budget time during the first strict sweep to file + fix
-1-2 compiler bugs that surface.  The bugs were always there; the
-strict warnings just give us the test cases that find them.
-
-| Library | Warnings | Opt-out | Trend |
-|---|---|---|---|
-| `game_protocol` | 0 | — | clean |
-| `html` | 0 | — | clean |
-| `time` | 0 | — | clean |
-| `imaging` | 0 | **removed 2026-05-28** | DONE — one `?? Pixel{...}` |
-| `gridmesh` | 0 | **removed 2026-05-28** | DONE — `_x` rename + 1× `not null` |
-| `server` | 0 | **removed 2026-05-28** | DONE — 13× `_ = self;` (method-call surface) |
-| `web` | 0 | **removed 2026-05-28** | DONE — 1× `not null` + 3× `_ = self;` |
-| `world` | 0 | **removed 2026-05-28** | DONE — needed both src/parser/operators.rs skip-pattern 5 (recognise `if i < len(v)` guards for indexed-assign positions) + world.loft idiom rewrites (`cells = X; if i < len(cells) { ... cells[i] }`) + `as u8`/`as u16` width casts on binary writes + `chunks not null` |
-| `moros_editor` | 31 | yes | Tier B; cross-references `moros_map` — pair with Phase 7p (consumer migration) per memory: project_consumer_stall (user-side) |
-| `moros_map` | 34 | yes | Same — Tier B; paired with 7p |
-| `markdown` | 0 | **removed 2026-05-28** | DONE (already cleaned in the 2026-05-28 sweep; line was stale until the 2026-05-29 audit) |
-| `shapes` | 118 (transitive) | yes | Tier C; **the warnings actually originate in `lib/graphics/src/`** — shapes imports graphics, so its strict-warnings count tracks graphics's count directly.  Closing graphics also closes shapes. |
-| `audience_crystal` | 120 | yes | Tier C; cross-references audience demo (consumer).  Count was 127 on 2026-05-28; partial cleanup landed since. |
-| `graphics` | 209 | yes | Tier C |
-| `moros_ui` | 407 | yes | Tier C; consumer-adjacent — pair with 7p |
-| `moros_render` | 466 | yes | Tier C; consumer-adjacent — pair with 7p |
-| `moros_sim` | 1192 | yes | Tier D — paired with Phase 7p migration |
-
-**Progress 2026-05-28:** 6 of 14 opt-outs retired (imaging, gridmesh,
-server, web, markdown, world).  8 remaining: 5 paired with Phase 7p
-consumer migration (moros_editor / moros_map / moros_ui /
-moros_render / moros_sim — touching them isolated from their
-consumers risks rework when 7p eventually re-shapes the code), 2
-need per-callsite semantic review for division-by-zero
-warnings (audience_crystal: 33; graphics: 84 — silencing with `?? 0`
-can mask rendering / decay-math bugs), and 1 inherits graphics's
-remaining warnings (shapes — only reachable via the graphics dep).
-
-The detector fix that closed `world` is reusable: skip-pattern 5
-in `src/parser/operators.rs::is_easy_proof` recognises
-`if idx_var < len(vec_var) { ... v[idx_var] ... }` for both reads
-and indexed assigns inside the then-block, accepting the user-facing
-`len` wrapper and the underlying `LengthVector` opcode and stripping
-the `ConvBoolFromInt` cast the parser emits around the comparison.
-The pattern handles bare `Var` index and `Var` collection; more
-complex shapes (`if i < self.height && j < self.width { ... v[j * w + i] }`,
-which graphics uses) still warn — a Phase-6w-w follow-up could
-extend the detector to recognise field-access bounds too.
-
-**Strategy.**
-
-1. **Tier-A cleanups (XS):** `imaging`, `web`, `gridmesh`, `world`,
-   `server` — 1–13 warnings each.  Single-PR per library; delete
-   `.allow_warnings` as the last commit.  These can land while
-   waiting on other extraction phases.
-2. **Tier-B (S):** `moros_editor`, `moros_map`, `markdown` — 31–50
-   warnings.  Triage shows most are repeated patterns (vector index
-   without `??`, never-null field declarations); fix sweeps the
-   pattern.
-3. **Tier-C (M–MH):** `shapes`, `audience_crystal`, `graphics`,
-   `moros_ui`, `moros_render` — 100–500 warnings.  Bulk pattern
-   sweeps; expect to surface real bugs (warnings flag genuinely
-   risky code).  Land per-pattern, not per-library.
-4. **Tier-D (`moros_sim`, 1192 warnings):** wait for Phase 7p (cross-
-   cutting primitives extracted before moros migration).  Cleaning
-   `moros_sim` against the current shape and then re-cleaning
-   against the `world_editor` / `physics_2body` migration would
-   double the work; pair the warning cleanup with the migration.
-
-**Verify per library:** `cd lib/<pkg> && LOFT_DENY_WARNINGS=1 loft test`
-passes; delete `.allow_warnings`; `make test-packages` stays green.
-
-**Verify globally:** when every `.allow_warnings` is gone,
-`find lib/ -name .allow_warnings` returns empty; `make ci` stays
-green; the canonical `library-ci.yml` runs strict for every package.
-Phase 6w-w is closed when this holds.
-
-*Verify:* land this YAML in `loft-lang/library-template` first;
-copy into each existing chunk repo (`loft-libs-core`,
-`loft-libs-graphics`, `loft-libs-net`).  Deliberate one-package-break
-PR (e.g., introduce a syntax error in `crypto/src/crypto.loft`) lands
-red naming `test (crypto)` specifically.
-
-### Phase 3.6 — stdlib drain
-
-Shrink `default/*.loft` to genuine universal stdlib.  Moves:
-**`escape_html` → new `lib/html/` — DONE 2026-05-27** (with its test
-migrated from `tests/scripts/106` to `lib/html/tests/01-escape.loft`,
-now `use html;`); Image / Pixel already live in `lib/imaging/src/`
-(Format stays in default — it's file-related and `lib/imaging` depends
-on it at load time); **`02_images.loft` → `02_files.loft` rename DONE
-2026-05-28** — `src/wasm.rs DEFAULT_FILES`, `src/gendoc.rs`, the test
-fixtures (`tests/generated/default.rs`, `tests/lib/p145_repro.rs`),
-the load-order block in `CLAUDE.md`, and current-state references in
-STDLIB.md / COMPILER.md / DOC.md / NATIVE.md / LIFETIME.md /
-INTERMEDIATE.md / WASM.md / DEVELOPMENT.md updated; `path_sep()`
-already lived there.  **Remaining:** move
-`dir`/`basename`/`join(text,text)`/`resolve` from `03_text.loft` →
-`02_files.loft` (load-order safe — they only use primitives defined in
-`01_code.loft`; needs an audit that no `02_files.loft` declaration is
-shadowed).  JSON STAYS (the `{x:j}` format specifier + `text as Foo`
-cast are shipped language behaviour — pulling JSON out breaks both).
-Audit call sites for new `use html;` lines.
-
-### Phase 6t — library test self-sufficiency
-
-**Problem.**  Audit of test coverage (2026-05-28) found 4 of 11
-libraries are not independently testable post-extraction.  The gap is
-two clusters of monorepo-owned Rust harnesses that drive library code
-but live outside `lib/<name>/tests/`:
-
-| Cluster | Files | Tests | Library subjects | Why Rust-side |
-|---|---|---|---|---|
-| Graphics gold-image regression | `tests/graphics_gold.rs` + `tests/gold/*.png` | 8 | `lib/graphics` | PNG decode + per-channel MAE tolerance compare against checked-in reference PNGs.  Pure-loft can't replicate the tolerance algorithm; encoder drift means byte-compare is brittle. |
-| Multiplayer integration | `tests/multiplayer_v{2,3,5}.rs` | 10 (v2: 3, v3: 2, v5: 5) | `lib/server`, `lib/web`, `lib/game_protocol` | Subprocess orchestration to dodge @P245 (single-process `parallel{}` + I/O hangs when one arm accepts and another connects to a loopback port).  Must run client + server as separate processes. |
-
-Plus two thin loft-side gaps (Tier 1, mechanical):
-
-- `tests/scripts/130-gridmesh-crystal-equiv.loft` — gridmesh C1 SegMesh equivalence vs legacy CrystalMesh.
-- `tests/scripts/133-crystal-incr.loft` — incremental crystal update.
-
-Both reference `audience_crystal` (monorepo-paired) so the copy
-must substitute a synthetic `CellSnap` fixture inside `lib/gridmesh/tests/`.
-
-**Out of scope — these stay in loft.**  `tests/wrap.rs` and
-`tests/native.rs` are the discovery harnesses that enumerate every
-`lib/<pkg>/tests/*.loft`; they wire the per-library tests into
-`make ci` and are not subject to extraction.  `tests/leak.rs`,
-`tests/runtime_warnings.rs`, `tests/codegen_emitter.rs`,
-`tests/issues.rs`, `tests/extraction_hygiene.rs` are
-compiler/runtime regressions that use library code as a fixture, not
-as the subject under test — they belong to the loft toolchain.
-
-**Tier 1 — mechanical copies (XS, no design needed). DONE.**
-
-Outcome (verified 2026-05-29): the two `tests/scripts/13X-...loft`
-files were folded into `lib/gridmesh/tests/segmesh.loft` (the
-crystal-equivalence + incremental-update assertions live alongside
-the segmesh's own tests rather than as separate files).  The
-`use audience_crystal;` block was replaced with a synthetic
-`CellSnap`-shaped fixture as specified.  The originals are gone
-from `tests/scripts/`.  `cd lib/gridmesh && loft test` reports
-20 passed across 4 files.
-
-**Tier 2 — port `graphics_gold.rs` to `lib/graphics/native/tests/` (M).**
-
-`lib/graphics` already has a Rust crate at `lib/graphics/native/`
-(the cdylib).  Add `lib/graphics/native/tests/gold.rs` as a Rust
-integration test inside that crate, carrying:
-
-- The 8 `#[test]` functions (same names, same examples driven from
-  `lib/graphics/examples/`).
-- The PNG decode + MAE compare helper.
-- The reference PNGs — move `tests/gold/*.png` →
-  `lib/graphics/tests/gold/*.png` (loft-package convention; Rust
-  test reads them from there via a workspace-relative path).
-- `UPDATE_GOLD=1` env var behaviour preserved.
-
-When `lib/graphics` extracts to `loft-libs-graphics`, its native
-crate + integration test travel together.  The `library-ci.yml`
-template needs one new step per library that has a `native/tests/`
-directory: `cd lib/<name>/native && cargo test --release`.
-
-*Verify:* `cd lib/graphics/native && cargo test --release` runs the
-8 tests; deleting `tests/graphics_gold.rs` from the monorepo leaves
-coverage intact.
-
-**Tier 3 — port multiplayer harnesses to `loft-libs-net` (MH).**
-
-The 10 subprocess-orchestrated tests across `multiplayer_v2.rs`
-(3 tests), `multiplayer_v3.rs` (2 tests), and `multiplayer_v5.rs`
-(5 tests) test the surface that `lib/server` + `lib/web` +
-`lib/game_protocol` *jointly* expose — no single library owns
-them.  (Inventory verified 2026-05-29; earlier drafts of this plan
-named only v2 + v5 and undercounted v2's test count.)  Two ship
-sites are plausible:
-
-(a) **Inside `loft-libs-net` as a workspace integration crate.**
-After extraction, the chunk repo is a Cargo workspace with one
-member per library; add a sibling `tests-integration/` crate that
-carries the harnesses.  CI runs `cargo test -p loft-libs-net-tests`
-after the per-library steps.
-
-(b) **Inside `lib/game_protocol/native/tests/`.**  Same shape as
-Tier 2 — game_protocol is the topmost layer, the harnesses sit
-where the surface is defined.  Requires adding a minimal
-`lib/game_protocol/native/` crate (game_protocol has no native
-binding today).
-
-(a) is the cleaner long-term home — the harness *is* an integration
-test of the chunk, not of any one library.  (b) is the shorter
-migration path but couples the multiplayer suite to game_protocol's
-extraction timing.
-
-For now, prefer (a): ship the harnesses inside the `loft-libs-net`
-external repo's `tests-integration/` crate at the same time the
-chunk is re-cleaned (Phase 6r).
-
-*Verify:* `cargo test --manifest-path tests-integration/Cargo.toml`
-(or workspace `cargo test -p ...`) runs all 10 tests against the
-checked-out `lib/server` + `lib/web` + `lib/game_protocol`;
-deleting all three monorepo harnesses
-(`tests/multiplayer_v{2,3,5}.rs`) leaves coverage intact.
-
-**Order of operations.**  Tier 1 first (XS, unlocks gridmesh hygiene).
-Tier 2 next (blocks Phase 5 graphics extraction).  Tier 3 last
-(can land alongside Phase 6r since `loft-libs-net` is already
-extracted; the integration suite is additive to that repo).
-
-**Tier 4 — `loft test --deps` — SHIPPED 2026-05-28.**  Consumer-side
-walker that runs `loft test` on every dependency in the current
-project's transitive (default) or direct tree.  Wired into the
-canonical `library-ci.yml.example` template as a final step so a
-chunk repo's PR catches "this graphics release broke gridmesh's
-tests in our environment" before it merges, not after a downstream
-consumer's CI flags it.
-
-CLI surface (in `src/main.rs`):
-
-```
-loft test --deps                  # transitive — all deps + their deps
-loft test --deps=direct           # one level only
-loft test --deps=transitive       # explicit; same as plain --deps
-```
-
-`--deps` implies `--no-warnings` when running each dep's tests —
-the consumer should not be blocked by lint debt inside a dep it
-doesn't own.  Errors still surface via exit code.
-
-Implementation status:
-
-| # | What | Status |
+| File | Phases covered | Topic |
 |---|---|---|
-| T1 | Free-fn dep resolver | implemented as local helper in `run_dep_tests` (path-dep + sibling fallback) |
-| T2 | `--deps[=direct]` flag + direct walker | DONE — `run_dep_tests(transitive=false)` |
-| T3 | Transitive walk + `HashSet<PathBuf>` cycle guard | DONE — default mode |
-| T4 | `--lock=PATH` driver (read lockfile, resolve each pinned entry) | **DEFERRED** — registry-version deps fall through silently with a one-line warning to the host project; T4 closes that when lockfile parsing is wired |
-| T5 | `--skip=` allow-list filter | DEFERRED — easy add when needed |
-| T6 | `library-ci.yml.example` template `loft test --deps` step | DONE |
+| [ci-and-warnings.md](ci-and-warnings.md) | 6.5, Bringing-a-chunk checklist, 5b, 6b, 6w-w | Canonical `library-ci.yml`, per-chunk omnibus pattern, Stage A/B sequencing + per-chunk Stage B execution, `.allow_warnings` ratchet |
+| [registry-resolution.md](registry-resolution.md) | 6.6, 6.8 | Auto-install on `use` (Python-style for scripts; Cargo-style for projects); `loft update` command |
+| [security.md](security.md) | 6.7 | `advisories.json` signed feed, typed severity tiers, classifier fail/warn behaviour, verify-on-recompile timing |
+| [authoring.md](authoring.md) | 6.7a, 6.16 | Author-side workflow — `loft yank` (advisory submission) + `loft publish` (registry PR helper) |
+| [offline.md](offline.md) | 6.11, 6.12 | `loft bundle export/import`, `LOFT_REGISTRY_URL=file://`, stale-advisory thresholds, loft-developer fixture pattern |
+| [library-docs.md](library-docs.md) | 6.14 | Chunk-repo HTML doc generation pipeline (post-Stage B replacement for the in-monorepo `gendoc`) |
+| [closure.md](closure.md) | 6.13, 6.15 | Documentation harvest + close-out ritual; library catalog page generator |
+| [LANDING_LOG.md](LANDING_LOG.md) | (chronological — all phases) | Per-commit landing record.  Becomes the finished plan's log on close.  Append-only; never reorder. |
+| [stdlib-drain.md](stdlib-drain.md) | 3.6 | Scope hygiene + CVE-surface lever; what stays embedded permanently |
+| [test-coverage.md](test-coverage.md) | 6t (Tiers 1-5) | Per-library test self-sufficiency; multiplayer harness port; @P389 cross-package-link blocker |
+| [moros-split.md](moros-split.md) | 7a, 7p, 6w, 7b, 7c, 8 | Cross-project consumer thread: shared `lib/world/`, physics/particles slots, moros + dryopea project moves, final monorepo cleanup |
 
-Smoke-tested via `lib/audience_crystal` (declares `gridmesh` as
-path-dep): `loft test --deps=direct` ran 3 audience_crystal test
-files + 4 gridmesh test files, reported `1 dep(s) tested, 0 failed`.
-
-**Tier 5 — coverage gaps that never had a Rust home (S each, NEW).**
-
-Validation run 2026-05-29 (every monorepo library exercised under
-both `loft test` and `loft --native test`) surfaced four libraries
-with **inadequate regression depth** that the original Phase-6t
-framing missed.  Unlike Tiers 2–3, these gaps are *not* about
-migrating coverage out of a Rust harness — the coverage **never
-existed**.  Closing them is the work needed to ship extracted chunk
-repos with real tests instead of smoke probes.
-
-| Library | What `lib/<name>/tests/` carries today | Coverage gap | Blocks chunk |
-|---|---|---|---|
-| `imaging` | `tests/14-image.loft` doc-example + `tests/15-regression.loft` (9 tests, **DONE 2026-05-29**): `Pixel.value()` packing, save/load round-trip (4×4 + 8×3 non-square + 5×5 solid + 2×2 extremes), `(x,y) → y*w+x` addressing, `save_png` failure modes (0×0 image, nonexistent dir).  10 tests total green on both gates with `LOFT_DENY_WARNINGS=1`. | — | ~~Phase 5 (`loft-libs-graphics`)~~ unblocked |
-| `world` | `tests/world.loft` smoke + `tests/02-persist.loft` (15 tests, **DONE 2026-05-29**): `chunk_idx_32`/`hex_idx_32` for positive AND negative inputs, `cell_count` (empty, after-set, overwrite, clear), `neighbour_count` (isolated + 6-axial-neighbours), `world_save`/`world_load` round-trip (empty, single-cell, many-cells-across-chunks, tick-preserved-through-`tick_and_decay`, negative-coords), `world_load` failure modes (missing file → 0, wrong magic → 0, wrong version → 0).  16 tests total, both gates green, `LOFT_DENY_WARNINGS=1` clean.  The MapFile JSON schema entry points (`world::load_mapfile` / `save_mapfile`) are still future work; covered when the schema migrates from `lib/moros_map`. | — | ~~Phase 6w (`loft-libs-world`)~~ unblocked for binary-format chunk extraction; MapFile schema landing is the only remaining 7a-step-4 work for full coverage |
-| `server` | `tests/server.loft` — one `srv = listen(); srv.close()` smoke | Real surface (HTTP / WebSocket / TLS / session) only exercised by `multiplayer_v{2,3,5}.rs` (Tier 3).  Once Tier 3 lands in `loft-libs-net/tests-integration/`, server is covered transitively; `lib/server/tests/` itself remains a smoke (acceptable) | Phase 6 re-clean (6r) — **waived if Tier 3 lands first** |
-| `markdown` | `tests/01-render.loft` — `fn main()` driver with `must_contain` / `must_not_contain` / `must_eq` helpers and 79 grouped assertions across ~25 feature areas (html_escape, slugify, rewrite_link, ATX/setext headings, paragraphs, bold/italic/strike/code, smart underscore, nesting, backslash escapes, images, links + titles, autolinks, hr, blockquote merging + separation, fenced code, lists UL/OL/continuation, task lists, tables + alignment, HTML-comment stripping, CRLF, UTF-8, raw-HTML escaping, tracker-tag autolinks, image URL rewriting, `extract_headings`).  Re-audit **2026-05-29**: this IS the ≥30-test coverage Tier 5 was supposed to add — the original Tier 5 framing was based on counting `fn test_*` (= 0) and missed the `fn main()` driver style. | — | ~~Markdown extraction (post-6w)~~ already covered; only a cosmetic refactor-to-`fn test_*`-discovery would remain |
-
-*Target per library:* `cd lib/<name> && loft test` reports
-≥10 test functions passing for `imaging` / `world` / `markdown`.
-`server` is explicitly waived because Tier 3 covers it transitively.
-
-*Order of operations.*  `imaging` first (blocks Phase 5 — the
-soonest extraction that needs it; **DONE 2026-05-29** —
-`lib/imaging/tests/15-regression.loft`, 9 tests + the doc-example
-= 10 total green on both gates).  `world` next (pairs with the
-MAPFILE entry-point landing in Phase 7a; co-blocks 6w).
-`markdown` last (independent; no extraction blocker until
-markdown ships externally).
-
-*Why this Tier was missed originally:* the 2026-05-28 audit asked
-"which Rust harnesses own library coverage?" — a *migration*
-question.  It did not ask "which libraries lack adequate coverage
-anywhere?" — a *creation* question.  Tier 5 closes the second one.
-
-### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
-
-Move the non-moros-specific spatial primitives into `lib/world/`: hex /
-chunk types + addressing (from `moros_map`), wall / hex geometry
-collision (from `moros_sim/collide.loft`), `lib/wall.loft` (folds in
-whole — `DX`/`DY`/`DZ`/`STEP` + placement/edge helpers, load-bearing
-for dryopea's build-order walls + rock faces), `lib/overland.loft`
-(`OverlandMap` terrain layers), group/height handling.  Palette,
-spawn, editor/UI/render stay in `moros_*`.  Preserve the existing
-sparse Cell/Chunk shape (TTT v5 + audience demo) alongside the hex
-additions (they share addressing — Open Q #10).  Unblocks dryopea
-([@PLAN46](../../plans/future/46-dryopea/README.md)) AND
-bumper-airplanes ([@PLAN50](../../plans/future/50-bumper-airplanes/README.md))
-— see [§ Cross-project consumers](#cross-project-consumers--moros--dryopea--bumper-airplanes)
-for the shared-substrate argument.  Phase 7a is described as
-"monorepo-internal" because no user-visible behaviour changes, but
-**three downstream projects depend on its output** — it is the
-top of the dependency chain for 6w/7b/7c.
-
-Phase 7a also subsumes the **MapFile schema promotion**: the JSON
-format currently buried inside `lib/moros_map` becomes a documented,
-versioned `world::load_mapfile(path)` entry point in `lib/world/`,
-since dryopea and bumper both consume it.
-
-**Done so far:**
-
-- `lib/world/` package created — sparse 32x32 chunk world model,
-  4-byte `Cell` wire-format, save/load round-trip, 389 lines.  Smoke
-  test (`lib/world/tests/world.loft`) passes under `--interpret`.
-- `lib/wall.loft` (754L) + `lib/overland.loft` (7L) folded into
-  `lib/world/src/` (2026-05-28).  These had zero `use` references at
-  `lib/` root — physically dead code — so the move is non-breaking.
-- **MapFile schema documented** as a cross-project contract in
-  `lib/world/MAPFILE.md` (2026-05-28) — v1 JSON shape, versioning
-  policy, per-consumer overlays (moros / dryopea / bumper), and a
-  6-step migration plan to `world::load_mapfile()` for when the
-  consumer stall lifts.  Schema is currently enforced by
-  `lib/moros_map`'s `Map` struct (the contract names what's there).
-
-**Remaining work — UNBLOCKED today (re-evaluated 2026-05-29):**
-
-A 2026-05-28 `sed` pass marking every wall.loft / overland.loft
-item `pub` was reverted because the legacy moros syntax uses `enum`
-for what current loft calls `struct` (`enum Tile { material: u8,
-... }` — struct-shaped field list, no variants), and the parser
-rejects it as `Expect enum values to be in camel case style`.  At
-the time this was framed as consumer-blocked.  Re-validation 2026-
-05-29 shows the framing was wrong: `grep -rn 'use wall\|use
-world::wall' lib/` returns **zero** — wall.loft and overland.loft
-have **no consumers anywhere in lib/**, so the translation breaks
-nothing.
-
-**Scope correction (2026-05-29):** a translation probe found
-wall.loft carries *more* legacy-syntax issues than the
-`enum`-as-struct claim:
-
-- One `enum Tile { … }` to translate (line 165 — struct-shaped).
-- *Two* duplicate struct names: `WallPoint` declared at lines 250
-  AND 379 (different field shapes); `Line` declared at lines 262
-  AND 393.  Loft rejects the duplicates — at least one of each
-  pair must be renamed (design decision: which is canonical, or
-  do both survive under distinct names).
-- `assert!(...)` Rust-macro syntax at line 211 etc. — translate to
-  `assert(...)`.
-- `if flipped ^(steps < 0)` at line 317 — `^` operator semantics
-  (XOR vs cast-shape) need a per-call check.
-- Likely more once these clear and the parser proceeds further.
-
-So the translation is **mechanical at the per-edit level** but
-**design-shaped at the file level** (the duplicate struct rename
-is a naming decision, not a transliteration).  Since wall.loft
-has zero consumers, the safest path is: rename duplicates by their
-*usage neighbourhood* (e.g. `WallPoint` near `Drawing` becomes
-`DrawingWallPoint`), drop unused dead code, and validate by
-parsing.  Estimated effort: **S–M** (half a day, vs the README's
-prior "mechanical / XS" framing).  Treated as deferred-by-scope
-until either Phase 7b moros migration unsticks (and the consumer
-specifies which structs it needs) or a separate clean-up sub-phase
-is filed.
-
-The remaining mechanical / additive work below is still doable
-today without any external-consumer coordination:
-
-- Translate `enum`-as-struct declarations in wall.loft / overland.loft
-  to current `struct` syntax (mechanical syntax migration; zero
-  consumers to break).
-- Mark items `pub` after translation.
-- Wire `use wall;` / `use overland;` (or fold content directly) into
-  `world.loft`.
-- Move hex / chunk types + geometry collision **additively** from
-  `moros_map` / `moros_sim/collide.loft` into `lib/world/` per
-  MAPFILE.md migration plan steps 1–3 (leave the moros_map originals
-  intact — non-breaking; consumers keep using their own types until
-  ready).
-- Add `world::load_mapfile()` / `world::save_mapfile()` entry points
-  (MAPFILE.md step 4) — additive public API, no consumer surface.
-- Add `pub use world::*;` shim in `moros_map` (MAPFILE.md step 5) —
-  compatibility shim, moros_map's API to its callers unchanged.
-
-Together these are five of MAPFILE.md's six migration steps and
-constitute **the bulk of Phase 7a**.
-
-**Remaining work — genuinely consumer-blocked (one item):**
-
-- Migrate `lib/moros_*` to `use world;` (MAPFILE.md step 6) — this
-  *replaces* `moros_map`'s internal `Hex` / `Chunk` types with
-  `world::*` and changes consumer call sites.  Paired with the
-  external moros project's migration; not done in advance.
-
-The consumer stall affects step 6 only.  Steps 1–5 are unblocked.
-**6w (`loft-libs-world` chunk extraction) depends on steps 1–5 but
-NOT on step 6** — the chunk can ship at `world 0.1.0` carrying the
-additive types + load/save API while moros continues to use its
-own internal copies, then upgrade to `world 0.2.0` when the
-consumer stall lifts.
-
-**Coverage prerequisite (links to Phase 6t Tier 5):** `lib/world`
-currently has only the smoke test.  Before 6w extracts, Tier 5
-adds save/load round-trip + MapFile schema tests against
-`world::load_mapfile` / `world::save_mapfile` (added in step 4
-above) + sparse-write boundary tests.  Coverage growth pairs
-naturally with the API growth.
-
-**MapFile schema (concrete design — part of 7a):**
-
-Today the MapFile JSON format lives implicitly inside `lib/moros_map`'s
-save/load code.  Three projects consume it; before extraction the
-schema must be:
-
-1. **Versioned at the top level** — every MapFile carries a
-   `schema_version: integer` field.  Loaders for older versions
-   stay supported within `lib/world`; new fields land as
-   backwards-compatible additions (default-on-absent).
-2. **Documented as a stable contract** — a `MAPFILE.md` reference
-   doc in `lib/world/` describing every field, its semantics, the
-   versioning policy, and the loader's null-default behaviour.
-3. **Loaded through one entry point** — `world::load_mapfile(path:
-   text) -> Map` and `world::save_mapfile(self: Map, path: text) ->
-   FileResult`.  Callers never see raw JSON; the format becomes
-   the library's responsibility.
-
-Sketch of v1 fields (extracted from current moros_map save/load):
-
-```jsonc
-{
-  "schema_version": 1,
-  "name": "test_map",
-  "size": { "cx_min": -2, "cx_max": 5, "cz_min": -2, "cz_max": 5 },
-  "palette": [
-    { "id": 0, "name": "void",  "color": "#00000000" },
-    { "id": 1, "name": "grass", "color": "#5fa030ff", "height_band": [0.0, 2.0] },
-    { "id": 2, "name": "wall",  "color": "#808080ff", "extrude": "pillar:8,12" }
-  ],
-  "chunks": [
-    {
-      "cx": 0, "cz": 0,
-      "cells": [
-        { "hx": 0,  "hz": 0,  "palette": 1, "h": 0.5, "item": null },
-        { "hx": 1,  "hz": 0,  "palette": 2, "h": 0.0, "item": null }
-      ]
-    }
-  ],
-  "spawn":  [ { "x": 0.5, "z": 0.5, "kind": "player" } ],
-  "items":  [ ],
-  "walls":  [ ]
-}
-```
-
-**Per-consumer overlays.**  Bumper extrudes `palette[i].extrude`
-strings into 3D pillars / cliffs; dryopea reads `palette[i].height_band`
-for slope generation (paired with [lib-plan 20 terrain-heightmap](../future/20-terrain-heightmap/README.md));
-moros reads the existing flat fields.  Unknown overlay fields are
-preserved on round-trip (forward-compat).
-
-**Targets / bumper-specific data.**  Per PLAN50 Open Q #6
-(recommended: separate `targets.json`), bumper's target positions
-ship in a sibling file keyed to the same hex coords — not inside the
-MapFile.  Keeps the MapFile shape stable across all three games.
-
-### Phases 6w / 7b / 7c / 8
-
-Chunk extractions + cleanup; each follows the
-[per-chunk template](REFERENCE.md#per-chunk-extraction-template).  6w
-needs `world` complete (7a) + green CI (6.5); 7b needs graphics +
-world published; 7c is greenfield ([@PLAN46](../../plans/future/46-dryopea/README.md));
-8 adds `audience_crystal` package `tests/` and updates
-[PACKAGES.md](../../PACKAGES.md) to the monorepo-free state.
-
-**Phase 7p prerequisite for 7b — extract cross-cutting primitives
-first.**  Moving `lib/moros_*` into the existing moros project is
-naively a git filter-repo + path update, but if it ships before the
-cross-cutting primitives are factored out, dryopea + bumper end up
-copy-and-forking moros internals.  Concrete checklist before 7b
-ships:
-
-| Sub-arc | Driving slot / design | Verify |
-|---|---|---|
-| Editor rename + L1-L2 of universal-editor extraction | [`lib_plans/future/24-universal-editor/`](../future/24-universal-editor/README.md) L0 (architecture spike + naming) + L1 (`hex_grid`) + L2 (`hex_map`) | `lib/moros_editor/`'s name reflects its cross-game scope; the L0 naming decision is what unblocks the rename |
-| Physics primitives | [`lib_plans/future/26-physics-2body/`](../future/26-physics-2body/README.md) Phase 1 (types + sphere-vs-AABB step) | `lib/moros_sim/collide.loft` items migrated into `lib/physics_2body/`; moros tests green using the new package |
-| MapFile schema | Inline design in Phase 7a above | `world::load_mapfile()` + `world::save_mapfile()` are the only entry points; `MAPFILE.md` documents v1 |
-| Particles slot | [`lib_plans/future/27-particles/`](../future/27-particles/README.md) Phases 1–2 (trail + burst types) | Slot READMEs exist; PLAN50 / dryopea use the slot's API in their (still-stalled) design docs |
-| Broadcast QoS | [`lib_plans/future/08-server/` § Gap 8](../future/08-server/README.md#gap-8--per-recipient-broadcast-qos-sight--rate-lod--forecast) — `BroadcastTopology` + sight + rate-LOD + forecast | `lib/server/src/broadcast.loft` exposes the topology API; PLAN50 wires through it |
-
-Each row is independently sized in its own slot; this table is the
-order-of-operations checklist, not the implementation plan.
+Shipped phases' build records live in git history + CHANGELOG;
+the docs above are for OPEN phases only.
 
 ## See also
 
