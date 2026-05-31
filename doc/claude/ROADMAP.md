@@ -286,7 +286,7 @@ Every item below must be checked off before the project claims its stability bar
 - [ ] `doc/claude/INCONSISTENCIES.md` reviewed: each entry resolved or explicitly accepted in LOFT.md / CHANGELOG.md
 - [ ] Pre-built binaries on the GitHub release for all four platforms
 - [ ] HTML reference and PDF up to date and linked from the release page
-- [ ] **[@PLAN53 sanitizer-CI-lever](plans/future/53-sanitizer-ci-lever/README.md)** — Miri / ASan / TSan sweep against the post-PLAN52 baseline to catch UB classes that current testing misses (per the @PLAN52 closure tool-gap row)
+- [x] **[@PLAN53 sanitizer-CI-lever](plans/finished/53-sanitizer-ci-lever/README.md)** — Miri / ASan / guard CI stack live on `main`; 5 UB clusters fixed; Wave-2 coverage continuing in [@PLAN56](plans/future/56-sanitizer-coverage-expansion/README.md) (CLOSED 2026-05-31)
 
 ---
 
@@ -327,8 +327,8 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/future/19-struct-enum-validation/`](plans/future/19-struct-enum-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
 | [`plans/future/20-collection-validation/`](plans/future/20-collection-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
 | [`plans/future/43-binary-io-validation/`](plans/future/43-binary-io-validation/) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
-| [`plans/future/53-sanitizer-ci-lever/`](plans/future/53-sanitizer-ci-lever/) | M | @PLAN52 closed (#230) — fix-phase gate satisfied | Sanitizer-gated CI job (Miri / ASan) to catch the UB family the @P383-class toolchain-roulette keeps surfacing.  Catalogue + gate residual UB.  Wave 1 (5 clusters + CI stack) shipped; Wave 2 open |
-| [`plans/future/55-program-level-fuzzing/`](plans/future/55-program-level-fuzzing/) | H | `fuzz/` crate exists (@PLAN53 Wave 2); F4 blocked on @PLAN53 W2-3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
+| [`plans/future/55-program-level-fuzzing/`](plans/future/55-program-level-fuzzing/) | H | `fuzz/` crate exists (shipped under @PLAN53); F4 blocked on @PLAN56 S3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
+| [`plans/future/56-sanitizer-coverage-expansion/`](plans/future/56-sanitizer-coverage-expansion/) | M | @PLAN53 closed (PRs #235/#236/#237) | Expands the sanitizer CI stack @PLAN53 shipped: macOS-ARM nightly leg (highest — @P383 was macOS-ARM-only), ThreadSanitizer, `LOFT_POISON` keystone, LSan triage, growing Miri curated set, native-ASan, failure-notifier.  Successor to @PLAN53 Wave 2 (non-fuzzing items) |
 
 ### G — Goal-enabling
 
@@ -389,7 +389,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/future/41-doc-hygiene-autofix/`](plans/future/41-doc-hygiene-autofix/) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
-| [`plans/future/54-stdlib-fast-start/`](plans/future/54-stdlib-fast-start/) | M-MH | cooperates with **plans/future/38-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced by @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
+| [`plans/future/54-stdlib-fast-start/`](plans/future/54-stdlib-fast-start/) | M-MH | cooperates with **plans/future/38-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced during @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
 
 ### N — Niche / opportunistic
 
@@ -425,6 +425,7 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
 - **(cross-mode harness shipped by closed @PLAN14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
 - **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/future/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
+- **plans/future/56-sanitizer-coverage-expansion S3 (`LOFT_POISON`) → plans/future/55-program-level-fuzzing F4** (arena poison-on-free keystone prerequisite for meaningful store-internal UAF fuzzing)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion

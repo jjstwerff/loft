@@ -32,7 +32,7 @@ this is defined against: "passes today" is not "stable."
   uninitialised reads, aliasing, leaks) with Miri + the homegrown
   `stack_align_guard` + fuzzing, independent of whether output is currently
   correct.  Finds the *correct-today-corrupt-tomorrow* bugs dogfooding is blind
-  to.  (See [plans/future/53-sanitizer-ci-lever](plans/future/53-sanitizer-ci-lever/README.md).)
+  to.  (See [@PLAN53](plans/finished/53-sanitizer-ci-lever/README.md) — closed; remaining coverage in [@PLAN56](plans/future/56-sanitizer-coverage-expansion/README.md).)
 
 Goals **C** and **D** are the dogfood engine; goals **A** and **B** are the
 sanitizer engine.
@@ -52,11 +52,11 @@ behaviour, and stays that way across toolchain bumps.
 3. A **Miri + guard CI gate is green on `main`**, so new UB lands red the day it
    is committed.
 
-**Status (2026-05-31): partial but real.**  Clusters 3 (store-aliasing), 4
-(uninit fn-ref padding), 5 (`free_text` leak) are LANDED *production* fixes;
-`p213` is Miri-clean (hard UB) under V2.  But: the guard is only proven on
-`issues` (685/0, ubuntu); the Miri gate (`.github/workflows/miri.yml`) is not on
-`main`; the corpus-wide Miri/guard sweep is not done.
+**Status (2026-05-31): live on `main`.**  Clusters 1-5 fixed (PLAN53 PRs
+#235/#236/#237); the Miri gate + per-PR ASan guard + `stack_align_guard` are
+live on `main`; the Miri curated set covers 4 tests (p213 + clusters 3/4/5).
+Remaining coverage expansion (macOS-ARM leg, TSan, LSan triage, native-ASan,
+growing Miri set, `LOFT_POISON` keystone) tracked in @PLAN56.
 
 ---
 
@@ -69,7 +69,7 @@ default or stay on the byte-packed unaligned V1 stack.
 
 **Done when** EITHER:
 - **(B1)** V2 is the production default with the full validation in
-  [plans/future/53-sanitizer-ci-lever/TESTING.md](plans/future/53-sanitizer-ci-lever/TESTING.md)
+  [plans/finished/53-sanitizer-ci-lever/TESTING.md](plans/finished/53-sanitizer-ci-lever/TESTING.md)
   green — full suite under V2 on all 3 OS, differential V1≡V2, guard zero-fires,
   Miri clean, perf within threshold; OR
 - **(B2)** an explicit, recorded decision to stay on V1 with the sanitizer gate
@@ -151,8 +151,10 @@ A language that is only one of those is not stable.
 ## See also
 
 - [CLAUDE.md](../../CLAUDE.md) § "Development cadence — the dogfood loop" — Goal D.
-- [plans/future/53-sanitizer-ci-lever/](plans/future/53-sanitizer-ci-lever/README.md)
-  — Goals A/B: the sanitizer lever, cluster fixes, the V2 alignment work.
-- [plans/future/53-sanitizer-ci-lever/TESTING.md](plans/future/53-sanitizer-ci-lever/TESTING.md)
-  — Goal B's exit criteria (what must pass to flip V2 to default).
+- [plans/finished/53-sanitizer-ci-lever/](plans/finished/53-sanitizer-ci-lever/README.md)
+  — Goals A/B: the sanitizer lever, cluster fixes, the V2 alignment work (CLOSED 2026-05-31).
+- [plans/finished/53-sanitizer-ci-lever/TESTING.md](plans/finished/53-sanitizer-ci-lever/TESTING.md)
+  — Goal B's exit criteria (historical record; V2 is now the production default, B1 LANDED).
+- [plans/future/56-sanitizer-coverage-expansion/](plans/future/56-sanitizer-coverage-expansion/README.md)
+  — Goal A continuing: remaining Wave-2 coverage items (macOS-ARM, TSan, LSan, native-ASan, `LOFT_POISON`).
 - [ROADMAP.md](ROADMAP.md) / [PLANNING.md](PLANNING.md) — feature backlog feeding Goal D.
