@@ -81,7 +81,7 @@ entire PLAN52 family included.  Therefore:
 - A persistent precompiled-stdlib cache would help generally but is
   **off this plan's critical path** and carries a Miri-provenance
   caveat (mmap-reinterpret is Miri-hostile) — filed as
-  [@PLAN54 stdlib-fast-start](../54-stdlib-fast-start/README.md).
+  [@PLAN54 stdlib-fast-start](../../future/54-stdlib-fast-start/README.md).
 
 ## rustc baseline (per close-criterion 5)
 
