@@ -614,6 +614,71 @@ What remains OPEN in @PLAN12 after this merge:
 - Phase 7a/p/b/c (moros split + cross-project consumers).
 - Phase 8 (final monorepo cleanup + `audience_crystal` test dir).
 
+## 2026-05-31 — Phase 5b prereq #2 + lint improvements (doc-updates)
+
+Branch: `doc-updates` (not yet merged to main).  Five commits
+covering 5b prerequisite resolution + lint quality fixes + the
+graphics warning sweep + PROBLEMS.md additions.
+
+- **`4c7c8cc`** — plan-doc reconciliation after PR #238 (status
+  bullets + Phase 6.13 IN PROGRESS update + "Pending phases" list
+  pruning).
+- **`e790ead`** — Phase 5b prerequisite #1 RESOLVED.  Note
+  `loft-ffi-macros 0.1.0` published to crates.io 2026-05-31 15:59 UTC
+  (~15min after PR #238 squash).  Phase summary row updated:
+  BLOCKED → PARTIALLY UNBLOCKED.
+- **`e592fd8`** — graphics warning sweep, first wave (3 files clean):
+  `lib/graphics/src/mesh.loft` (6/6, sphere divisions + vertex-lookup
+  guards), `lib/graphics/src/scene.loft` (0 native warnings — earlier
+  count was mesh.loft cross-pollution), `lib/graphics/src/glb.loft`
+  (10/10, identity-Mat4 element-wise `?? 0.0`, indexed-assign
+  refactor in `glb_scene_json`'s mesh_mat build).
+- **`639d546`** — **lint quality improvements**.  Two bugs fixed in
+  `src/parser/operators.rs::warn_undefended_fault_sites`:
+  - **Position attribution** — initialise `WarnCtx::last_pos` to the
+    function's own `Definition.position` so faults inside the body
+    without a finer-grained `Value::Span` attribute to the function
+    being analysed, NOT to the lexer cursor (which had advanced past
+    the closing brace to the next function's header).  Prior
+    behaviour misattributed warnings to unrelated clean functions.
+  - **AND-conjunction guard walking** — new `collect_guard_pairs`
+    helper recursively walks the If-cond tree.  Recognises both the
+    short-circuit lowering `If(left, right, Boolean(false))` (loft's
+    `a and b` form) and explicit `AndBool` / `And` / `LandInt` calls,
+    so `if a < len(u) and b < len(v) { u[a] + v[b] }` now lifts both
+    conjuncts onto `guarded_pairs`.  Both arms suppress correctly.
+  - Verified: 50/50 wrap + 681/681 issues tests pass.
+- **`177453e`** — graphics warning sweep COMPLETE.  Three more files:
+  `lib/graphics/src/graphics.loft` (53→0), `lib/graphics/src/render.loft`
+  (61→0), `lib/graphics/src/scene.loft` (`Node.mesh_idx` and
+  `Node.material_idx` marked `not null` to close the field-defence
+  lint that surfaced once indexing was visible).  `.allow_warnings`
+  opt-out **deleted**; `LOFT_DENY_WARNINGS=1` clean across all six
+  source files.
+
+Restructure pattern documented (bind-local + len-guard idiom):
+
+    rf_d = self.data;
+    rf_n = len(rf_d);
+    for fr_y in y0..y1 {
+      for fr_x in x0..x1 {
+        fr_idx = fr_y * self.width + fr_x;
+        if fr_idx < rf_n { rf_d[fr_idx] = color; }
+      }
+    }
+
+The outer compound bounds-check (`if x>=0 and x<w and y>=0 and y<h`)
+stays for short-circuit speed; the inner `if fr_idx < rf_n` is
+lint-defensive (unreachable under the canvas invariant
+`len(data) == width * height`).  `draw_bezier`'s stack rewrote from
+indexed-write to truncate-then-append using a temp local to dodge
+the @P390 self-slice-assign issue.
+
+Surfaced **@P390** (self-slice-assign drops element values; PROBLEMS.md
+row added with workaround).
+
+**Phase 5b is now fully UNBLOCKED.**
+
 ---
 
 ## Pending phases (in roughly the order they'd land)
@@ -623,12 +688,17 @@ These will get an entry here when they ship:
 - Phase 3.6 — path-helper consolidation `dir`/`basename`/`join(text,text)`/
   `resolve` from `03_text.loft` → `02_files.loft`.
 - Phase 5 — extract `graphics` + `imaging` Stage A (loft-libs-graphics).
-- Phase 5b — `loft-libs-graphics` Stage B (partially unblocked
-  2026-05-31: `loft-ffi-macros 0.1.0` published to crates.io at
-  15:59 UTC, retiring prerequisite #1; remaining blocker is the
-  graphics warning sweep — see the 2026-05-31 "Phase 5b attempt"
-  entry above for full prerequisite analysis).
-- Phase 6w-w — retire every `.allow_warnings`.
+- Phase 5b — `loft-libs-graphics` Stage B (fully UNBLOCKED
+  2026-05-31: both prerequisites resolved on `doc-updates` —
+  `loft-ffi-macros 0.1.0` on crates.io 15:59 UTC + graphics
+  warning sweep complete with `.allow_warnings` removed).  Ready
+  for execution; this slot stays here until the chunk repo + Stage B
+  consumer migration land.
+- Phase 6w-w — retire every `.allow_warnings`.  `lib/graphics/`
+  retired 2026-05-31; remaining: shapes (stale opt-out, free drop),
+  moros_map (4), moros_editor (6), moros_render (31),
+  audience_crystal (40), moros_ui (155), moros_sim (173) — total 409
+  unique warnings across 6 monorepo libs still carrying the opt-out.
 - Phase 6t Tier 3 — multiplayer harness port (touches @P389).
 - Phase 6t Tier 5 — imaging / world / markdown coverage gaps.
 - Phase 6w — extract `loft-libs-world`.
