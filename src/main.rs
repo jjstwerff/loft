@@ -4083,6 +4083,8 @@ fn main() {
     // recoverable CLI fault (wrong `--path`, not a corrupt install), so
     // emit a clean actionable diagnostic and exit non-zero rather than
     // unwrapping the NotFound into a panic.
+    // Step 0 (startup-cache plan): env-gated parse timing (LOFT_TIMING).
+    let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
     if let Err(e) = p.parse_dir(&default_dir.to_string_lossy(), true, false) {
         eprintln!(
@@ -4098,6 +4100,12 @@ fn main() {
         std::process::exit(1);
     }
     let start_def = p.data.definitions();
+    if std::env::var("LOFT_TIMING").is_ok() {
+        eprintln!(
+            "LOFT_TIMING parse_default={:.2}ms ({start_def} defs)",
+            t_parse_default.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     // `--show-types --trace`: enable per-expression type recording
     // BEFORE parsing the user file (parse_dir on default/* already
     // ran without tracing — those are stdlib internals).

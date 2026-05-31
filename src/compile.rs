@@ -37,10 +37,16 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
 /// `CONST_STORE` via `set_str`) tripped the assertion on the now-locked
 /// store.  Compiling only the new wrapper avoids the re-emission entirely.
 pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
+    // Step 0 (startup-cache plan): env-gated phase timing.  No-op unless
+    // LOFT_TIMING is set.  Separates native::init from the codegen loop.
+    let timing = std::env::var("LOFT_TIMING").is_ok();
+    let t_init = std::time::Instant::now();
     if start_d_nr == 0 {
         native::init(state);
         register_native_stubs(state, data);
     }
+    let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
+    let t_codegen = std::time::Instant::now();
     for d_nr in start_d_nr..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
@@ -51,6 +57,12 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
         build_const_vectors(state, data);
         state.database.allocations[crate::database::CONST_STORE as usize]
             .lock_with_origin("compile.rs::compile (CONST_STORE init)");
+    }
+    if timing {
+        eprintln!(
+            "LOFT_TIMING byte_code_from start={start_d_nr} native_init={init_ms:.2}ms codegen={:.2}ms",
+            t_codegen.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }
 
