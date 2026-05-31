@@ -4175,6 +4175,25 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
+    // write the parsed `Data` as the startup-cache JSON snapshot and exit.
+    // This is the manual validation path for the quick-loading work: dump the
+    // post-parse image, then (later) load it back and diff.  The JSON is the
+    // machine format (compact); format it externally if you need to eyeball.
+    // No effect unless the env var is set.
+    if let Ok(path) = std::env::var("LOFT_DUMP_SNAPSHOT") {
+        let json = loft::ir_schema::data_to_json(&p.data);
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("loft: failed to write snapshot to {path}: {e}");
+            std::process::exit(1);
+        }
+        eprintln!(
+            "loft: wrote startup-cache snapshot ({} bytes, {} defs) to {path}",
+            json.len(),
+            p.data.definitions()
+        );
+        std::process::exit(0);
+    }
     let mut state = State::new(p.database);
     // Set source_dir for the source_dir() built-in.
     state.database.source_dir = std::path::Path::new(&abs_file)
