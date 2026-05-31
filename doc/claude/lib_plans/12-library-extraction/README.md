@@ -51,8 +51,12 @@ Shipped so far:
   registry #4 (validator multi-package homepage fix) → registry #5
   (the version entries).
 - **`loft-libs-graphics` partial** (Phase 5): `shapes` 0.2.0 +
-  `gridmesh` 0.1.0 published.  `graphics` + `imaging` remain in the
-  monorepo but their native-codegen blocker is **gone** (see below).
+  `gridmesh` 0.1.1 published.  Phase 6.5 + warning-sweep omnibus
+  shipped 2026-05-31 (chunk PR #1: canonical `library-ci.yml`,
+  gridmesh `step_y` `_x` rename + `buckets not null`; registry PR #6
+  all three validator gates green).  `graphics` + `imaging` remain
+  in the monorepo but their native-codegen blocker is **gone**
+  (see below).
 
 Recently corrected (this README was stale before 2026-05-26):
 
@@ -74,9 +78,31 @@ Recently corrected (this README was stale before 2026-05-26):
 
 Every `lib/*/` package (except the monorepo-paired `audience_crystal`)
 lives in an external chunk repo, consumable via `loft install`, with
-the compiler crate carrying **zero library code** — verified by the
-extraction-hygiene gate and identical behaviour across interp / native
-/ WASM.
+the compiler crate carrying **zero library code** AND the monorepo
+carrying **no `lib/<pkg>/` directory for any extracted package** —
+verified by the extraction-hygiene gate, identical behaviour across
+interp / native / WASM, and `make ci` green with all consumers
+resolving extracted packages through the registry rather than via
+`path = "../<pkg>"`.
+
+**Two-stage per-chunk workflow** (codified 2026-05-31, see [Phase
+6.5 § Bringing a chunk to all-green CI — checklist](#phase-65--green-ci-across-chunks-done-chunk-side-2026-05-31)):
+
+- **Stage A — green extraction:** chunk PR (canonical CI + 6r
+  re-clean + warning sweep + tests) → tag + tarball + GitHub
+  release → registry PR (all three validator gates green) →
+  registry PR merged.  The library is now in the registry catalog
+  ("in the manifest") and `loft install <pkg>` works end-to-end.
+- **Stage B — monorepo cleanup:** consumers migrated from
+  `path = "../<pkg>"` to the registry-version dep
+  (`<pkg> = ">=0.1"`); `lib/<pkg>/` deleted; `make ci` green.
+  Lands as a SEPARATE PR from Stage A.
+
+Stage A without Stage B is "the library is published but the
+monorepo still depends on its in-tree copy" — a real release for
+external users, but not the end state.  loft-libs-core completed
+both stages; loft-libs-net + loft-libs-graphics are Stage-A-only
+as of 2026-05-31.
 
 ## Next steps — small verifiable increments
 
@@ -307,10 +333,10 @@ with ≥1 minor release of soak between consecutive chunks.
 | 3.5b | Real path-dep resolution (`extract_path_dep` wired) | 3.5a | **DONE** (`src/parser/mod.rs:4570`) |
 | 3.5c | Dry-run libs with consumers | 3.5b | superseded — core/net extracted for real |
 | 3.6 | Stdlib drain (Image→imaging, `escape_html`→`html`, path helpers→`02_files`) | 1c | **partial** — `escape_html`→`lib/html/` DONE 2026-05-27 (Image/Pixel already in `lib/imaging`); `02_images.loft`→`02_files.loft` rename DONE 2026-05-28; path-helper consolidation (`dir`/`basename`/`join(text,text)`/`resolve` move from `03_text.loft` → `02_files.loft`) remains |
-| 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED** 2026-05-24 |
-| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial** — shapes/gridmesh shipped; graphics+imaging **now unblocked** |
-| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
-| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **partial** — `loft-libs-core` green (PR #2 2026-05-30); `loft-libs-net` green + v0.1.1 SHIPPED to registry (PRs #2 + #3 + tags + releases + registry #5 all merged 2026-05-31); `loft-libs-graphics` + registry `pr-validate.yml` refresh still pending |
+| 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED (A+B)** — Stage A 2026-05-24; Stage B (monorepo `lib/{arguments,random,crypto}/` removed) by 2026-05-28 |
+| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial — Stage A only** — shapes 0.2.0, gridmesh 0.1.1 shipped to registry; **monorepo `lib/shapes/` + `lib/gridmesh/` still present** (Stage B not run; consumers in `lib/moros_*` + `lib/audience_crystal` still path-resolve them).  graphics + imaging not yet extracted (codegen-unblocked + Tier-2-unblocked, awaits Stage A start) |
+| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **partial — Stage A only** — 0.1.0 (2026-05-24) + 0.1.1 (2026-05-31) shipped to registry; **monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/` still present** (Stage B not run; consumers in `tools/audience-demo*`, `tools/viewer`, `lib/audience_crystal` still path-resolve them) |
+| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **DONE (chunk side)** — all three chunks on canonical YAML + at least one patch release published: `loft-libs-core` (PR #2 2026-05-30); `loft-libs-net` v0.1.1 (PRs #2 + #3 + registry #5, 2026-05-31); `loft-libs-graphics` gridmesh 0.1.1 (PR #1 + registry #6, 2026-05-31).  Remaining: registry `pr-validate.yml` already aligned (registry #4 multi-package homepage fix merged 2026-05-31); macOS / Windows matrix expansion is the only chunk-CI delta still on the to-do list (currently Linux-only by design until a Linux baseline soaks) |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -329,7 +355,7 @@ chunk extractions once 7a is stable.
 Shipped phases' build records live in git history + CHANGELOG; the
 detail below is for the OPEN phases only.
 
-### Phase 6.5 — green CI across chunks (next infra step)
+### Phase 6.5 — green CI across chunks (DONE chunk-side 2026-05-31)
 
 Phases 4/5/6 shipped working libraries but the per-chunk CI workflows
 are red: they `cargo build` loft on an Ubuntu runner without
@@ -447,11 +473,15 @@ jobs:
 
 ### Bringing a chunk to all-green CI — checklist
 
-Distilled from loft-libs-core's path to green (PR #2, 2026-05-30)
-and reapplied successfully to loft-libs-net (PRs #2 + #3 + tags +
-releases + registry #4 + #5, all merged 2026-05-31).  Apply this
-checklist when bringing the remaining chunk (`loft-libs-graphics`)
-to fully-green strict CI.
+Distilled from loft-libs-core's path to green (PR #2, 2026-05-30),
+reapplied to loft-libs-net (PRs #2 + #3 + tags + releases +
+registry #4 + #5, all 2026-05-31), and again to loft-libs-graphics
+(PR #1 + gridmesh-v0.1.1 release + registry #6, also 2026-05-31).
+The pattern has now been applied **three times** across three
+distinct chunk shapes (pure-loft single package, multi-package with
+native cdylibs, multi-package pure-loft).  Apply this checklist when
+bringing any future chunk to fully-green strict CI; no
+chunk-specific divergences have surfaced yet.
 
 **Prerequisite:** the loft compiler bugs surfaced by the FIRST chunk's
 warning sweep must be fixed on `jjstwerff/loft:main` before later
@@ -494,10 +524,71 @@ new chunks may surface different latent bugs.
    interdependent and individually red — bundling them shows the
    cumulative-green outcome and avoids 3 review cycles.
 
-**Done when:** all matrix jobs green on the chunk's CI under
-`LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files in the
-chunk, and `scripts/verify_external_libs.sh --src <chunk>=…` is green
-against the latest monorepo `lib/<name>/` source.
+6. **Release sequence (Stage A — green extraction):** bump
+   `<pkg>/loft.toml` version → tag `<pkg>-v<version>` at the merge
+   SHA → `loft package` (deterministic — same sha256 twice in a
+   row) → `gh release create <tag>` with the tarball as the asset →
+   open registry PR adding the new version entries to `index.json`
+   → wait for all three validator gates (schema lint, tarball
+   sha256+size verify, reproducible-build re-check) green → merge
+   registry PR.  THIS is "the extraction is green" — the library
+   resolves end-to-end via the registry, from anywhere on the
+   internet.
+
+7. **Stage B — remove `lib/<pkg>/` from the monorepo.**  ONLY
+   after Stage A is green AND the registry PR is merged (which is
+   when "the library is in the manifest" — the registry's
+   `index.json` is the catalog).  Steps per extracted package:
+   - **Audit consumers.**  Grep the monorepo for `use <pkg>;` and
+     `path = ".*<pkg>"` references outside the package's own dir
+     (every `lib/*/loft.toml`, every `tools/*/loft.toml`,
+     `examples/`, `tests/`).  Today (2026-05-31) the residual
+     consumers are: `web`/`server` → `tools/audience-demo*` +
+     `tools/viewer` + `lib/audience_crystal`; `game_protocol` →
+     same set; `gridmesh` → `lib/audience_crystal` + likely
+     `lib/moros_*`; `shapes` → `lib/moros_*` candidates (verify).
+   - **Migrate each consumer's `loft.toml`** from
+     `<pkg> = { path = "../<pkg>" }` to the registry-version form
+     `<pkg> = ">=0.1"` (or `>=0.2` for the libraries that bumped
+     major-zero minor).  Tools without a `loft.toml` (single-file
+     `.loft` scripts under `tools/audience-demo/`) get a minimal
+     `loft.toml` declaring the registry dep, or are migrated to
+     `loft install` against a workspace-level lockfile if one
+     exists for that tool tree.
+   - **Verify resolution** by running `make ci` (or the equivalent
+     targeted suite for the affected consumers — `cargo test
+     --test native_library_suite` covers most monorepo lib
+     resolution paths).  Resolution must succeed via the registry,
+     not via path-deps to `lib/<pkg>/`.
+   - **Delete the directory:** `git rm -r lib/<pkg>/`.  Re-run
+     `make ci` — the tree must still be green.  No silent fallback
+     to a stashed copy.
+   - **Land as a single Stage-B PR** per chunk (or per package if
+     one chunk needs multiple migration waves).  The PR title
+     pattern: `Stage B: remove lib/<pkg>/ — consumers migrated to
+     registry <pkg> <version>`.
+
+**Done when (Stage A):** all matrix jobs green on the chunk's CI
+under `LOFT_DENY_WARNINGS=1`, no `.allow_warnings` opt-out files
+in the chunk, `scripts/verify_external_libs.sh --src <chunk>=…`
+is green against the latest monorepo `lib/<name>/` source, and
+the registry PR adding the new version is merged with all three
+validator gates green.
+
+**Done when (Stage B):** no `lib/<pkg>/` directory exists in the
+monorepo, no `path = "../<pkg>"` references survive in any
+`loft.toml`, no monorepo-internal `use <pkg>;` statement resolves
+to a path-dep (it must resolve through the registry / lockfile).
+`make ci` green.
+
+**Why Stage B is a SEPARATE PR from the omnibus.**  Stage A is
+chunk-side work; Stage B is monorepo-side work touching unrelated
+consumers.  Bundling them inflates review surface, mixes risks
+(monorepo consumer break vs chunk release), and complicates
+rollback (if Stage B breaks a consumer, you can revert just Stage
+B without unpublishing the registry release).  Each chunk's
+Stage B PR is the trigger to bump the row in the phase summary
+table from "Stage A SHIPPED" to "SHIPPED (Stage A + B)".
 
 **Release-loop lessons from loft-libs-net v0.1.1 (2026-05-31).**
 Applying the loft-libs-core path-to-green to net surfaced two
@@ -534,6 +625,28 @@ PR.  The first two chunks each surfaced 1-2 compiler bugs
 during the warning sweep (loft-libs-core: @P385/@P386; net: none
 new); budget 1 day per chunk for "fix surfaced compiler bug, land
 on monorepo main, rebase chunk PR" rounds.
+
+**Third-chunk result (loft-libs-graphics, 2026-05-31).**
+End-to-end took ~30 minutes (chunk PR omnibus + verification +
+tag + tarball + GitHub release + registry PR), not the budgeted
+~1 work-day, because the third chunk surfaced **no new
+chunk-specific work**:
+- `shapes` was already at 0.2.0 (had yanked its `graphics` dep in
+  an earlier release) and already warning-clean.  No source change.
+- `gridmesh` only needed re-syncing from the monorepo's cleaned
+  source (the chunk repo was forked before the 2026-05-28 sweep
+  that landed `_x` rename + `not null` on `buckets`).  Diff is
+  4 lines.
+- Tarball reproducible-build re-check passed first try (the
+  deterministic-packaging fix from net was sufficient).
+The remaining engineering time was a transient GH Actions
+runner issue (registry PR #6's first validator run hung 16+ min
+on `sudo apt-get install -y mold` — almost certainly an apt
+mirror or runner-region issue, not anything we caused).
+Cancel-and-rerun produced a healthy run in 1m33s.  **Lesson:**
+when `apt-get install mold` doesn't finish in <60s, the runner
+is hung — cancel + rerun rather than waiting on the 20-min
+timeout.
 
 ### Phase 6w-w — retire every `.allow_warnings`
 
