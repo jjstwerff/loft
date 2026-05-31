@@ -608,4 +608,95 @@ mod tests {
             Err(TypeDecodeError::Shape(_))
         ));
     }
+
+    // ── Golden output tests ─────────────────────────────────────────────────
+    //
+    // Pin the EXACT JSON string for representative variants.  The round-trip
+    // tests prove losslessness; these lock the on-disk *format* so it can't
+    // silently change shape (a format drift would invalidate every cached
+    // snapshot, so the format is a contract).  They also document what the
+    // emitted JSON looks like.
+
+    #[test]
+    fn golden_bare_variant() {
+        // Payload-free variant → just the tag.
+        assert_eq!(type_to_json(&Type::Boolean), r#"{"k":"Boolean"}"#);
+        assert_eq!(type_to_json(&Type::Null), r#"{"k":"Null"}"#);
+    }
+
+    #[test]
+    fn golden_integer_spec() {
+        // `forced` is 0 when forced_size is None.
+        assert_eq!(
+            type_to_json(&Type::Integer(IntegerSpec::wide())),
+            r#"{"k":"Integer","spec":{"min":-2147483647,"max":4294967295,"not_null":false,"forced":0}}"#
+        );
+        // u8 alias carries a forced 1-byte width.
+        assert_eq!(
+            type_to_json(&Type::Integer(IntegerSpec::u8())),
+            r#"{"k":"Integer","spec":{"min":0,"max":255,"not_null":false,"forced":1}}"#
+        );
+    }
+
+    #[test]
+    fn golden_index_carrying_variant() {
+        // def_nr + dep list stored verbatim (absolute, whole-bundle image).
+        assert_eq!(
+            type_to_json(&Type::Reference(9, vec![0, 1])),
+            r#"{"k":"Reference","n":9,"dep":[0,1]}"#
+        );
+    }
+
+    #[test]
+    fn golden_recursive_variant() {
+        // Box<Type> recursion nests the child object inline under "t".
+        assert_eq!(
+            type_to_json(&Type::Vector(Box::new(Type::Text(vec![])), vec![2])),
+            r#"{"k":"Vector","t":{"k":"Text","dep":[]},"dep":[2]}"#
+        );
+    }
+
+    #[test]
+    fn golden_sort_keys() {
+        assert_eq!(
+            type_to_json(&Type::Sorted(
+                3,
+                vec![("name".into(), true), ("age".into(), false)],
+                vec![1],
+            )),
+            r#"{"k":"Sorted","n":3,"keys":[{"name":"name","asc":true},{"name":"age","asc":false}],"dep":[1]}"#
+        );
+    }
+
+    #[test]
+    fn golden_function_variant() {
+        assert_eq!(
+            type_to_json(&Type::Function(
+                vec![Type::Boolean, Type::Float],
+                Box::new(Type::Null),
+                vec![],
+            )),
+            r#"{"k":"Function","args":[{"k":"Boolean"},{"k":"Float"}],"result":{"k":"Null"},"dep":[]}"#
+        );
+    }
+
+    #[test]
+    fn golden_output_is_valid_json() {
+        // Every emitted string must parse back through loft's own JSON parser
+        // (strict dialect) — guards against a malformed-emitter regression
+        // independent of our own decoder.
+        let samples = [
+            Type::Boolean,
+            Type::Integer(IntegerSpec::u8()),
+            Type::Vector(Box::new(Type::Reference(2, vec![3])), vec![]),
+            Type::Sorted(1, vec![("k".into(), true)], vec![]),
+        ];
+        for ty in &samples {
+            let json = type_to_json(ty);
+            assert!(
+                crate::json::parse(&json).is_ok(),
+                "emitter produced invalid JSON: {json}"
+            );
+        }
+    }
 }
