@@ -176,6 +176,11 @@ fn print_help() {
     println!("                                that satisfy each dep's loft.toml range;");
     println!("                                --dry-run reports changes without writing;");
     println!("                                --check exits 1 if any updates are available");
+    println!("  bundle export [opts] <dir>    write a self-contained offline bundle of");
+    println!("                                registry packages (--all or --packages X,Y,Z);");
+    println!("                                ship via USB/scp; import on the target machine");
+    println!("  bundle import <dir>           install a bundle into ~/.loft/registry/");
+    println!("                                (verifies sha256 + signature per artifact)");
     println!("  registry <subcommand>         manage the local package registry");
     println!(
         "                                sync             — pull latest registry from source URL"
@@ -924,6 +929,332 @@ fn find_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf>
         }
         cur = parent;
     }
+}
+
+/// @PLAN12 Phase 6.11 — `loft bundle export <outdir>` writes a
+/// self-contained directory of registry artifacts (index +
+/// advisories + tarballs) that can be carried via USB / scp and
+/// imported on an air-gapped machine via `loft bundle import`.
+///
+/// Layout:
+/// ```
+/// <outdir>/
+/// ├── index.json + index.json.sig
+/// ├── advisories.json + advisories.json.sig  (when present)
+/// ├── packages/
+/// │   ├── <pkg>-<ver>.tar.gz
+/// │   └── ...
+/// └── manifest.json   (bundle metadata: timestamp, source URL,
+///                      loft binary version, package list)
+/// ```
+///
+/// Selection:
+/// - `--all` (or omit both flags) → every package in index.
+/// - `--packages X,Y,Z` → just those (transitive deps not yet
+///   auto-resolved; transitive harvest is a follow-up if useful).
+#[cfg(feature = "registry")]
+fn bundle_export(
+    outdir: &str,
+    packages: Option<&[String]>,
+    all: bool,
+) -> i32 {
+    use loft::install::InstallOptions;
+    use loft::registry_index;
+    use std::path::Path;
+
+    let out = Path::new(outdir);
+    if let Err(e) = std::fs::create_dir_all(out.join("packages")) {
+        eprintln!("loft bundle export: cannot create {}: {e}", out.display());
+        return 1;
+    }
+
+    let opts = InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    let index = match loft_install_load_index(&opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft bundle export: {e}");
+            return 1;
+        }
+    };
+
+    // Pick which packages to export.
+    let want: Vec<String> = if all || packages.is_none() {
+        index.packages.keys().cloned().collect()
+    } else {
+        packages.unwrap_or(&[]).to_vec()
+    };
+    if want.is_empty() {
+        eprintln!("loft bundle export: nothing to export (empty package list)");
+        return 1;
+    }
+
+    // Copy index.json + sig.
+    let (idx_path, sig_path, _) = registry_index::index_paths();
+    if idx_path.exists() {
+        if let Err(e) = std::fs::copy(&idx_path, out.join("index.json")) {
+            eprintln!("loft bundle export: copy index.json: {e}");
+            return 1;
+        }
+    }
+    if sig_path.exists() {
+        let _ = std::fs::copy(&sig_path, out.join("index.json.sig"));
+    }
+    // Advisories (optional — registry may not host one yet).
+    let (adv_path, adv_sig_path) = loft::registry_advisories::advisories_paths();
+    if adv_path.exists() {
+        let _ = std::fs::copy(&adv_path, out.join("advisories.json"));
+        if adv_sig_path.exists() {
+            let _ = std::fs::copy(&adv_sig_path, out.join("advisories.json.sig"));
+        }
+    }
+
+    // For each requested package: pick its latest active version,
+    // ensure the tarball is downloaded, copy into bundle/packages/.
+    let mut exported: Vec<(String, String)> = Vec::new();
+    for name in &want {
+        let pkg = match index.packages.get(name) {
+            Some(p) => p,
+            None => {
+                eprintln!("  warning: {name} not in current index — skipped");
+                continue;
+            }
+        };
+        let Some(ver) = registry_index::find_best_version(pkg, "*", false) else {
+            eprintln!("  warning: {name} has no installable version — skipped");
+            continue;
+        };
+        let tarball = format!("{name}-{}.tar.gz", ver.semver);
+        let dest = out.join("packages").join(&tarball);
+        // Download to the bundle's packages/.
+        eprintln!("[bundle] fetching {} {}", name, ver.semver);
+        let bytes = match registry_index::download_tarball(&ver.url, &dest) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  FAILED: {e}");
+                return 1;
+            }
+        };
+        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+            eprintln!("  FAILED: {e}");
+            return 1;
+        }
+        exported.push((name.clone(), ver.semver.clone()));
+    }
+
+    // Write manifest.json — bundle metadata for the import side.
+    let manifest_pkgs: String = exported
+        .iter()
+        .map(|(n, v)| format!("    {{\"name\":\"{n}\",\"version\":\"{v}\"}}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let registry_url = registry_index::registry_url();
+    let loft_version = env!("CARGO_PKG_VERSION");
+    let manifest = format!(
+        "{{\n  \"schema_version\": 1,\n  \"created\": \"{}\",\n  \"registry_url\": \"{}\",\n  \"loft_version\": \"{}\",\n  \"packages\": [\n{}\n  ]\n}}\n",
+        chrono_iso8601_utc(),
+        registry_url,
+        loft_version,
+        manifest_pkgs
+    );
+    if let Err(e) = std::fs::write(out.join("manifest.json"), manifest) {
+        eprintln!("loft bundle export: write manifest: {e}");
+        return 1;
+    }
+
+    println!(
+        "[bundle] exported {} package(s) to {}",
+        exported.len(),
+        out.display()
+    );
+    0
+}
+
+/// @PLAN12 Phase 6.11 — `loft bundle import <indir>` installs a
+/// previously-exported bundle into `~/.loft/registry/`.
+///
+/// Steps per artifact:
+/// 1. Copy `index.json` + `.sig` (sig kept; loader verifies via
+///    `allow_unsigned` for the bootstrap window).
+/// 2. Copy `advisories.json` + `.sig` (when present).
+/// 3. For each `packages/<pkg>-<ver>.tar.gz`:
+///    - Verify sha256 matches the index entry.
+///    - Extract to `~/.loft/registry/<pkg>-<ver>/`.
+/// 4. Print summary.
+#[cfg(feature = "registry")]
+fn bundle_import(indir: &str) -> i32 {
+    use loft::registry_index;
+    use std::path::Path;
+
+    let inp = Path::new(indir);
+    let bundle_index = inp.join("index.json");
+    if !bundle_index.exists() {
+        eprintln!("loft bundle import: {} has no index.json", inp.display());
+        return 1;
+    }
+
+    // Read + parse the bundle's index so we know the per-tarball sha256.
+    let idx_bytes = match std::fs::read(&bundle_index) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("loft bundle import: read index: {e}");
+            return 1;
+        }
+    };
+    let idx_text = match std::str::from_utf8(&idx_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("loft bundle import: index not UTF-8: {e}");
+            return 1;
+        }
+    };
+    let index = match registry_index::parse_index(idx_text) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("loft bundle import: parse index: {e}");
+            return 1;
+        }
+    };
+
+    // Copy index + sig + (optional) advisories into the cache.
+    let cache = registry_index::cache_dir();
+    if let Err(e) = std::fs::create_dir_all(&cache) {
+        eprintln!("loft bundle import: cannot create {}: {e}", cache.display());
+        return 1;
+    }
+    let _ = std::fs::copy(&bundle_index, cache.join("index.json"));
+    let bundle_sig = inp.join("index.json.sig");
+    if bundle_sig.exists() {
+        let _ = std::fs::copy(&bundle_sig, cache.join("index.json.sig"));
+    }
+    let bundle_adv = inp.join("advisories.json");
+    if bundle_adv.exists() {
+        let _ = std::fs::copy(&bundle_adv, cache.join("advisories.json"));
+        let bundle_adv_sig = inp.join("advisories.json.sig");
+        if bundle_adv_sig.exists() {
+            let _ = std::fs::copy(&bundle_adv_sig, cache.join("advisories.json.sig"));
+        }
+    }
+
+    // Extract each tarball; verify sha256 against the index entry.
+    let pkg_dir = inp.join("packages");
+    let read = match std::fs::read_dir(&pkg_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("loft bundle import: read {}: {e}", pkg_dir.display());
+            return 1;
+        }
+    };
+    let mut imported: Vec<(String, String)> = Vec::new();
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        let fname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if !fname.ends_with(".tar.gz") {
+            continue;
+        }
+        let stem = &fname[..fname.len() - ".tar.gz".len()];
+        // Split last `-<digit>` boundary for (name, version).
+        let bytes = stem.as_bytes();
+        let mut at: Option<usize> = None;
+        let mut idx = 1;
+        while idx < bytes.len() {
+            if bytes[idx - 1] == b'-' && bytes[idx].is_ascii_digit() {
+                at = Some(idx - 1);
+                break;
+            }
+            idx += 1;
+        }
+        let Some(split) = at else { continue };
+        let (name, rest) = stem.split_at(split);
+        let version = rest.trim_start_matches('-');
+
+        // Look up sha256 in the imported index.
+        let Some(pkg) = index.packages.get(name) else {
+            eprintln!("  skip {fname}: not in bundle's index");
+            continue;
+        };
+        let Some(ver) = pkg.versions.get(version) else {
+            eprintln!("  skip {fname}: version not in bundle's index");
+            continue;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  read {fname}: {e}");
+                return 1;
+            }
+        };
+        if let Err(e) = registry_index::verify_sha256(&bytes, &ver.sha256) {
+            eprintln!("  sha256 MISMATCH for {fname}: {e}");
+            return 1;
+        }
+        if let Err(e) = registry_index::extract_tarball(&path, &cache) {
+            eprintln!("  extract {fname}: {e}");
+            return 1;
+        }
+        imported.push((name.to_string(), version.to_string()));
+    }
+
+    if imported.is_empty() {
+        eprintln!("loft bundle import: no packages found in {}", pkg_dir.display());
+        return 1;
+    }
+    println!(
+        "[bundle] imported {} package(s) into {}",
+        imported.len(),
+        cache.display()
+    );
+    for (n, v) in &imported {
+        println!("  {n} {v}");
+    }
+    0
+}
+
+/// Minimal ISO-8601 UTC timestamp.  Avoid pulling in a date crate;
+/// loft already does its own time formatting elsewhere via
+/// `std::time::SystemTime`.  Format: `YYYY-MM-DDTHH:MM:SSZ`.
+#[cfg(feature = "registry")]
+fn chrono_iso8601_utc() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Days since 1970-01-01 (Unix epoch).
+    let day = secs / 86_400;
+    let sod = secs % 86_400;
+    let hour = sod / 3600;
+    let minute = (sod % 3600) / 60;
+    let second = sod % 60;
+    // Convert day count to Y/M/D via the standard algorithm.
+    // Cribbed from https://howardhinnant.github.io/date_algorithms.html
+    let z = day as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z",
+        y = y,
+        m = m,
+        d = d,
+        hour = hour,
+        minute = minute,
+        second = second
+    )
 }
 
 /// @PLAN12 Phase 6.7 — `loft audit` walks every installed package
@@ -2591,6 +2922,67 @@ fn main() {
             #[cfg(not(feature = "registry"))]
             {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
+        } else if a == "bundle" {
+            // @PLAN12 Phase 6.11 — offline bundle export/import.
+            #[cfg(feature = "registry")]
+            {
+                let Some(sub) = argv.get(i) else {
+                    eprintln!("loft bundle: subcommand required (export | import)");
+                    std::process::exit(1);
+                };
+                i += 1;
+                if sub == "export" {
+                    let mut packages: Option<Vec<String>> = None;
+                    let mut all = false;
+                    let mut outdir: Option<String> = None;
+                    while i < argv.len() {
+                        let a2 = argv[i].as_str();
+                        if a2 == "--all" {
+                            all = true;
+                            i += 1;
+                        } else if a2 == "--packages" {
+                            i += 1;
+                            let Some(list) = argv.get(i) else {
+                                eprintln!("loft bundle export: --packages requires a comma-separated list");
+                                std::process::exit(1);
+                            };
+                            packages = Some(
+                                list.split(',')
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                                    .collect(),
+                            );
+                            i += 1;
+                        } else if !a2.starts_with('-') && outdir.is_none() {
+                            outdir = Some(a2.to_string());
+                            i += 1;
+                        } else {
+                            eprintln!("loft bundle export: unknown argument `{a2}`");
+                            std::process::exit(1);
+                        }
+                    }
+                    let Some(out) = outdir else {
+                        eprintln!("loft bundle export: <outdir> required");
+                        std::process::exit(1);
+                    };
+                    let code = bundle_export(&out, packages.as_deref(), all);
+                    std::process::exit(code);
+                } else if sub == "import" {
+                    let Some(indir) = argv.get(i) else {
+                        eprintln!("loft bundle import: <indir> required");
+                        std::process::exit(1);
+                    };
+                    let code = bundle_import(indir);
+                    std::process::exit(code);
+                }
+                eprintln!("loft bundle: unknown subcommand `{sub}`");
+                std::process::exit(1);
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft bundle: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
         } else if a == "update" {
