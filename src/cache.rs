@@ -134,6 +134,58 @@ fn target_triple() -> String {
     )
 }
 
+/// Collect the `default/` stdlib sources as `(filename, content)` pairs,
+/// sorted by filename for a deterministic cache key.  Reads every `*.loft`
+/// file directly under `default_dir` (non-recursive — the stdlib is flat).
+///
+/// Returns an empty vec on any read error; the caller treats that as
+/// "cannot cache" and falls back to a cold parse.
+#[must_use]
+pub fn collect_stdlib_sources(default_dir: &str) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(default_dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("loft") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        out.push((name, content));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The on-disk path for the stdlib snapshot keyed by `key`.
+///
+/// Uses `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`), falling back to
+/// the system temp dir if neither is set.  The filename embeds the full
+/// 64-hex key so distinct builds / feature-sets / stdlib-content never
+/// collide.
+#[must_use]
+pub fn stdlib_cache_path(key: &[u8; 32]) -> std::path::PathBuf {
+    let mut hex = String::with_capacity(64);
+    for b in key {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("loft");
+    base.join(format!("stdlib-{hex}.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +274,39 @@ mod tests {
         // build config.
         #[cfg(feature = "threading")]
         assert!(feature_signature().contains("threading"));
+    }
+
+    #[test]
+    fn collect_stdlib_sources_reads_default_dir_sorted() {
+        // The real default/ dir relative to the crate root.
+        let srcs = collect_stdlib_sources("default");
+        assert!(srcs.len() >= 3, "expected the stdlib .loft files, got {}", srcs.len());
+        assert!(srcs.iter().all(|(n, _)| std::path::Path::new(n).extension() == Some("loft".as_ref())));
+        // Sorted by filename → deterministic key.
+        let mut sorted = srcs.clone();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(srcs, sorted, "sources must be returned sorted by filename");
+        // 01_code.loft is always present and non-empty.
+        assert!(srcs.iter().any(|(n, c)| n == "01_code.loft" && !c.is_empty()));
+    }
+
+    #[test]
+    fn collect_stdlib_sources_missing_dir_is_empty() {
+        assert!(collect_stdlib_sources("nonexistent-dir-xyz").is_empty());
+    }
+
+    #[test]
+    fn cache_path_is_deterministic_and_key_specific() {
+        let k1 = stdlib_cache_key(&[("x.loft".into(), "a".into())]);
+        let k2 = stdlib_cache_key(&[("x.loft".into(), "b".into())]);
+        let p1 = stdlib_cache_path(&k1);
+        assert_eq!(p1, stdlib_cache_path(&k1), "same key → same path");
+        assert_ne!(p1, stdlib_cache_path(&k2), "different key → different path");
+        let name = p1.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("stdlib-") && name.ends_with(".json"));
+        assert!(
+            name.len() == "stdlib-".len() + 64 + ".json".len(),
+            "filename embeds 64-hex key"
+        );
     }
 }
