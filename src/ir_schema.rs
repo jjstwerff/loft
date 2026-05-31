@@ -718,9 +718,10 @@ fn write_parforbody(out: &mut String, b: &ParForBody) {
 }
 
 /// Parse a JSON string into a `Value`.  V1 decodes leaf variants; V2 adds the
-/// recursive variants with `Value` / `Vec<Value>` / scalar payloads.  The
-/// remaining variants (`Block`/`Loop`/`Span`/`FnRef`/`ParFor`) return
-/// [`TypeDecodeError::Unsupported`] until V3–V4 wire them.
+/// recursive variants with `Value` / `Vec<Value>` / scalar payloads; V3 adds
+/// `Block` / `Loop` (the `&'static str` name) and `Span` (Position).  The
+/// remaining variants (`FnRef`/`ParFor`) return
+/// [`TypeDecodeError::Unsupported`] until V4 wires them.
 ///
 /// # Errors
 /// Malformed JSON, wrong field shape, unknown tag, or a not-yet-wired
@@ -781,6 +782,31 @@ fn boxed(p: &Parsed, name: &str) -> Result<Box<Value>, TypeDecodeError> {
     Ok(Box::new(value_from_parsed(field(p, name)?)?))
 }
 
+/// Decode a [`Block`] (V3).  `Block.name` is a `&'static str` — at parse time
+/// it is always a string literal, so on load from a snapshot we materialise
+/// one via [`Box::leak`].  This is a *deliberate, bounded* leak: a loaded
+/// image holds a small fixed set of distinct block names, and those names
+/// live for the whole process anyway (the cache loads once at startup).
+fn block_from_parsed(p: &Parsed) -> Result<Block, TypeDecodeError> {
+    let name: &'static str = Box::leak(as_str(field(p, "name")?)?.into_boxed_str());
+    Ok(Block {
+        name,
+        operators: value_list(field(p, "operators")?)?,
+        result: type_from_parsed(field(p, "result")?)?,
+        scope: as_u16(field(p, "scope")?)?,
+        var_size: as_u16(field(p, "var_size")?)?,
+    })
+}
+
+/// Decode a [`Position`] (V3 — carried by `Value::Span`).
+fn position_from_parsed(p: &Parsed) -> Result<Position, TypeDecodeError> {
+    Ok(Position {
+        file: as_str(field(p, "file")?)?,
+        line: as_u32(field(p, "line")?)?,
+        pos: as_u32(field(p, "pos")?)?,
+    })
+}
+
 fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
     let tag = as_str(field(p, "k")?)?;
     Ok(match tag.as_str() {
@@ -822,8 +848,15 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
             boxed(p, "next")?,
             boxed(p, "init")?,
         ),
-        // ── recursive variants — wired in later chunks (V3–V4) ──
-        "Span" | "Block" | "Loop" | "FnRef" | "ParFor" => {
+        // ── V3: Block / Loop (&'static str name) + Span (Position) ──
+        "Block" => Value::Block(Box::new(block_from_parsed(field(p, "block")?)?)),
+        "Loop" => Value::Loop(Box::new(block_from_parsed(field(p, "block")?)?)),
+        "Span" => Value::Span(Box::new((
+            position_from_parsed(field(p, "pos")?)?,
+            value_from_parsed(field(p, "v")?)?,
+        ))),
+        // ── recursive variants — wired in V4 ──
+        "FnRef" | "ParFor" => {
             return Err(TypeDecodeError::Unsupported(tag));
         }
         other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
@@ -1211,10 +1244,71 @@ mod tests {
         );
     }
 
-    /// Variants still deferred to V3–V4 decode to `Unsupported` (not
+    /// V3 round-trips Block / Loop (with the `&'static str` name) and Span
+    /// (with a Position), including nested Values inside the block body.
+    #[test]
+    fn value_block_span_round_trip() {
+        let block = Block {
+            name: "Iter range",
+            operators: vec![
+                Value::Set(0, Box::new(Value::Int(1))),
+                Value::Call(7, vec![Value::Var(0)]),
+                Value::Null,
+            ],
+            result: Type::Boolean,
+            scope: 2,
+            var_size: 8,
+        };
+        let samples = [
+            Value::Block(Box::new(block.clone())),
+            Value::Loop(Box::new(block)),
+            Value::Span(Box::new((
+                Position { file: "src/x.loft".to_string(), line: 12, pos: 4 },
+                Value::Call(3, vec![Value::Int(9)]),
+            ))),
+            // empty-body block — the degenerate operators=[] case
+            Value::Block(Box::new(Block {
+                name: "",
+                operators: vec![],
+                result: Type::Null,
+                scope: 0,
+                var_size: 0,
+            })),
+        ];
+        for v in &samples {
+            let json = value_to_json(v);
+            let back = value_from_json(&json)
+                .unwrap_or_else(|e| panic!("decode failed for {json}: {e:?}"));
+            assert_eq!(&back, v, "round trip mismatch via {json}");
+        }
+    }
+
+    /// Pin the exact emitted JSON for a Block and a Span.
+    #[test]
+    fn value_golden_block_span_format() {
+        assert_eq!(
+            value_to_json(&Value::Block(Box::new(Block {
+                name: "blk",
+                operators: vec![Value::Null],
+                result: Type::Boolean,
+                scope: 2,
+                var_size: 8,
+            }))),
+            r#"{"k":"Block","block":{"name":"blk","operators":[{"k":"Null"}],"result":{"k":"Boolean"},"scope":2,"var_size":8}}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::Span(Box::new((
+                Position { file: "f.loft".to_string(), line: 3, pos: 7 },
+                Value::Int(42),
+            )))),
+            r#"{"k":"Span","pos":{"file":"f.loft","line":3,"pos":7},"v":{"k":"Int","n":42}}"#
+        );
+    }
+
+    /// Variants still deferred to V4 decode to `Unsupported` (not
     /// `UnknownTag`) — they are valid tags whose decoder is not wired yet.
     #[test]
-    fn value_v3_v4_tags_are_unsupported_for_now() {
+    fn value_v4_tags_are_unsupported_for_now() {
         let json = value_to_json(&Value::FnRef(2, 1, Box::new(Type::Boolean)));
         assert_eq!(
             value_from_json(&json),
