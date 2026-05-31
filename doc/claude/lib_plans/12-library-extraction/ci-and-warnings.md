@@ -403,3 +403,115 @@ copy into each existing chunk repo (`loft-libs-core`,
 PR (e.g., introduce a syntax error in `crypto/src/crypto.loft`) lands
 red naming `test (crypto)` specifically.
 
+
+### Stage B execution per chunk (proposed 2026-05-31)
+
+The Stage A/B workflow above is documented as steps 6-7 of
+the Bringing-a-chunk checklist.  This subsection adds the
+per-chunk EXECUTION detail — what specifically lands in each
+chunk's Stage B PR, when, and how the consumer migrations are
+sequenced.
+
+`loft-libs-core` (Phase 4) shipped Stage A + Stage B together
+by 2026-05-28 (the consumer set was small: only monorepo tests
+imported `arguments` / `random` / `crypto`, and those were
+migrated to `tests/scripts/*.loft` references).  The remaining
+two chunks are deferred until 6.6 (auto-install) + 6.12
+(loft-dev fixture pattern) ship — otherwise the consumer set
+explodes into "every script needs a loft.toml" friction.
+
+#### Phase 6b — `loft-libs-net` Stage B (proposed 2026-05-31)
+
+**Scope.**  Remove `lib/web/`, `lib/server/`, `lib/game_protocol/`
+from the monorepo.  Migrate the following consumers:
+
+| Consumer | Migration |
+|---|---|
+| `tools/audience-demo/*.loft` (4 files: `crystal_render`, `projector`, `crystal_editor`, `crystal_stress`) | Single-file scripts use `use web;` / `use server;` / `use gridmesh;` / `use audience_crystal;`.  After 6.6 ships, auto-install resolves these from the registry on first run.  No loft.toml needed.  Add a minimal `loft.toml` only if pinning is wanted; otherwise script-mode + global lockfile suffices. |
+| `tools/audience-demo-50/probe*.loft` (2 files: `probe`, `probe_server`) | Same — auto-install handles it. |
+| `tools/viewer/src/main.loft` | Has a `loft.toml` (verify); migrate path-deps to registry-version. |
+| `lib/audience_crystal/loft.toml` | Already has `gridmesh = { path = "../gridmesh" }`.  Switch to `gridmesh = ">=0.1"`.  Same for `web` if it appears (audit). |
+| `lib/audience_crystal/src/*.loft` + `tests/*.loft` | `use gridmesh;` / `use web;` etc. — resolve through the lockfile after the loft.toml change. |
+| `tests/crystal_editor_gold.rs` | Drives `tools/audience-demo/crystal_editor.loft` from repo cwd.  After 6.6 + 6.12, auto-install fires from anywhere; this test passes without changes. |
+| `tests/fixtures/libs/` (post-6.12) | Add `web` / `server` / `game_protocol` snapshots so monorepo compiler tests still have library source to compile against. |
+
+**Execution outline:**
+
+1. Verify 6.6 (auto-install) is on `jjstwerff/loft:main` and
+   working end-to-end (the `LOFT_OFFLINE=1` off-switch and
+   announcement output both green).
+2. Verify 6.12 (`tests/fixtures/libs/`) has `web` / `server` /
+   `game_protocol` snapshots committed; `library_fixture_suite`
+   passes.
+3. On a feature branch, perform the consumer audit (`grep -rln
+   'use web\|use server\|use game_protocol'`).
+4. Migrate each consumer's `loft.toml` (path-dep →
+   registry-version).  For scripts without a `loft.toml`, no
+   change needed (auto-install fires).
+5. Run `make ci` — all consumers should resolve via auto-install
+   + lockfile; cache populates on first run.
+6. `git rm -r lib/web/ lib/server/ lib/game_protocol/`.
+7. Re-run `make ci` — tree still green.
+8. Update `tests/wrap.rs::collect_library_tests` if hardcoded
+   per-package skip lists reference these now-removed packages.
+9. Update plan-12 phase summary table: row 6 → "SHIPPED (A+B)".
+10. PR title: `Stage B: remove lib/{web,server,game_protocol}/ — consumers migrated to net 0.1.1`.
+
+**Verify:** `find lib/ -maxdepth 1 -name 'web' -o -name 'server' -o -name 'game_protocol'` returns empty.  `grep -rln 'path = "../\(web\|server\|game_protocol\)"' lib/ tools/` returns empty.  `make ci` green.
+
+#### Phase 5b — `loft-libs-graphics` Stage B (proposed 2026-05-31)
+
+**Scope.**  Two-step phase because Phase 5 itself is only
+half-shipped: shapes + gridmesh are Stage A; graphics +
+imaging haven't been extracted yet.
+
+**5b.1 — extract graphics + imaging Stage A** (the remaining
+half of Phase 5):
+
+1. Both are codegen-unblocked (per @P321c fix) and
+   Tier-2-unblocked (`tests/graphics_gold.rs` infrastructure
+   ready to port via Phase 6t Tier 2 — DONE per phase-summary).
+2. Sync `lib/graphics/` + `lib/imaging/` source into
+   `loft-lang/loft-libs-graphics/`.  Apply the Bringing-a-chunk
+   checklist (canonical YAML — already there since gridmesh
+   shipped; per-symbol 6r re-clean if any `#native` annotations
+   need it; warning sweep using the three idioms).
+3. Open omnibus PR; verify all 4 packages green
+   (shapes/gridmesh already; graphics + imaging joining).
+4. Tag `graphics-v0.1.0` + `imaging-v0.1.0`; package; release;
+   registry PR adding the two new entries.
+
+**5b.2 — Stage B for the full chunk:**
+
+Same execution outline as 6b above, applied to consumers of
+`shapes` / `gridmesh` / `graphics` / `imaging`:
+
+| Consumer | Migration |
+|---|---|
+| `lib/graphics/examples/25-brick-buster.loft` | `use shapes;` — auto-install resolves it.  Brick-buster is Makefile-driven, not strict CI; runs on demand. |
+| `lib/audience_crystal/loft.toml` | Already covered in 6b. |
+| `tools/audience-demo/*.loft` | `use gridmesh;` — also covered in 6b's auto-install case. |
+| `lib/moros_render/loft.toml` + `lib/moros_sim/loft.toml` | Both have `graphics = { path = "../graphics" }`.  Switch to `graphics = ">=0.1"`. |
+| `tests/graphics_gold.rs` | Drives examples that `use graphics;`; after Stage A, resolution goes through the registry via 6.6.  Verify on a clean `~/.loft/` checkout. |
+| `tests/fixtures/libs/` | Add `shapes` / `gridmesh` / `graphics` / `imaging` snapshots. |
+
+**Execution:** mirrors 6b (consumer audit → migrate
+loft.tomls → `make ci` → `git rm -r lib/{shapes,gridmesh,graphics,imaging}/`
+→ `make ci` again → phase-table update → Stage B PR).
+
+**Verify:** as 6b, plus the brick-buster example builds + runs
+via the Makefile target after `lib/shapes/` is gone (cache must
+be populated; air-gap users follow the bundle workflow).
+
+**Sequencing.**  5b.1 (extract graphics + imaging) can land
+INDEPENDENTLY of 5b.2 (Stage B cleanup) — they're separable.
+Reasonable order:
+
+1. 5b.1 first (publish graphics + imaging 0.1.0 to registry).
+   At this point `loft-libs-graphics` has all four packages
+   shipped Stage A.
+2. Wait for 6.6 + 6.12 to ship (auto-install + fixture
+   pattern).
+3. 5b.2 then (remove monorepo copies).
+4. 6b can run in parallel with 5b.2 — they touch different
+   monorepo directories.

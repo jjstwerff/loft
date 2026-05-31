@@ -180,3 +180,120 @@ will get to."
    CHANGELOG.md already serves this purpose at the user
    level.
 
+
+## Phase 6.15 — library catalog page generator (proposed 2026-05-31)
+
+**Trigger.**  Phase 6.13's harvest produces user-facing
+docs (INSTALL.md / SECURITY.md / etc.), but there's a
+specific gap not yet filled: **how does a user discover
+that `gridmesh` exists?**  Today's answer: open
+`loft-lang/registry/index.json` raw in a browser, read
+JSON.  Not OK for adoption.
+
+The fix: a generated catalog page listing every published
+library with its purpose, latest active version, license,
+and a link to the per-version HTML docs that
+[Phase 6.14](library-docs.md) ships.
+
+**Scope.**
+
+`scripts/gen_library_catalog.py`:
+
+1. Fetch `index.json` + `advisories.json` from the
+   registry.  Use the same URL the loft binary uses
+   (`LOFT_REGISTRY_URL` honoured for testing).
+2. For each package: extract name, description, homepage,
+   latest active version (skip yanked-security-critical),
+   license (from `loft.toml` in the chunk repo, fetched
+   via gh-pages or homepage), categories.
+3. Emit `doc/library-catalog.md` with a sorted table:
+
+   ```markdown
+   # Loft Library Catalog
+
+   Auto-generated 2026-05-31 from loft-lang/registry.
+   Run `loft search <term>` for command-line search.
+
+   | Library | Description | Latest | License | Docs |
+   |---|---|---|---|---|
+   | [arguments](https://loft-lang.github.io/loft-libs-core/arguments/latest/) | CLI argument parsing — positional + flags + `--help` | 0.1.1 | LGPL-3.0-or-later | [docs](...) |
+   | [crypto](...) | SHA-256, HMAC, base64 | 0.2.0 | LGPL-3.0-or-later | [docs](...) |
+   | ...
+   ```
+
+4. Group by category (cli, crypto, math, net, graphics,
+   geometry, world).  Each group has its own heading.
+5. Per-library page (one click deeper) listing all
+   available versions with publish dates + yank status +
+   per-version doc links.
+
+**`loft-lang.org/libraries` HTML view.**  The markdown
+page renders cleanly on GitHub as `doc/library-catalog.md`;
+a polished HTML version lives at `loft-lang.org/libraries`,
+rendered by a small static-site script from the same
+markdown source.  No additional infrastructure beyond the
+markdown generator + an HTML rendering step.
+
+**CI auto-update.**  When `loft-lang/registry` merges a
+new version PR, a workflow re-runs
+`scripts/gen_library_catalog.py` and commits the updated
+catalog to a `library-catalog` branch on the `loft-lang.org`
+repo (or similar).  No human in the loop.
+
+**Implementation outline (S, ~half day):**
+
+1. **Script** — Python (mirrors `tools/validate.py`'s
+   choice).  Fetches the index; emits markdown.  ~150
+   lines.
+2. **CI workflow** in `loft-lang/registry`:
+   ```yaml
+   on:
+     push:
+       branches: [main]
+   jobs:
+     update-catalog:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+         - run: python3 scripts/gen_library_catalog.py > /tmp/catalog.md
+         - run: gh api ... # push to loft-lang.org repo
+   ```
+3. **HTML rendering** — a separate workflow in
+   `loft-lang/loft-lang.org` that renders the markdown
+   into the public site.  Reuses whatever static-site
+   generator the rest of `loft-lang.org` uses.
+
+**Tests:**
+
+- Fixture index.json with 3 packages → catalog markdown
+  with the right entries.
+- Yanked-security-critical version → skipped from
+  "Latest" column; mentioned in the per-library page.
+- Missing license info → emit "License: unknown"; gate-1
+  validator update can require license eventually
+  (out-of-scope here).
+
+**Open questions:**
+
+1. **Catalog freshness.**  Push-driven (registry CI) vs
+   pull-driven (loft-lang.org cron)?  Recommendation:
+   push-driven — catalog updates within seconds of a
+   registry PR merging.
+2. **`loft search <term>` CLI vs catalog browse.**
+   `loft search` was mentioned as a Section B "important
+   gap" earlier; should it ALSO live in 6.15 since both
+   are discoverability features?  Recommendation: file
+   `loft search` as a small follow-up after 6.15 ships;
+   the CLI is independently useful but the catalog page
+   is the primary discoverability surface.
+3. **Per-package "popular" / "recommended" status.**
+   Some libraries are stdlib-tier (high quality, audited);
+   others are early experiments.  Mark in the catalog?
+   Recommendation: out of scope.  Quality signal is the
+   author + version history; opinionated curation is a
+   separate ecosystem-policy decision.
+
+**Why this is small.**  Python script + a CI workflow +
+~100 lines of templating logic.  Most of the work is in
+deciding the categorisation taxonomy; the actual
+generation is straightforward.
