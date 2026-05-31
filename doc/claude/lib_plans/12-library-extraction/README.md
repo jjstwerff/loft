@@ -884,31 +884,58 @@ hello world
 
 **Verification timing — when hashes get checked.**
 
-Five orthogonal moments.  Each is cheap; the defaults are
-designed so a script run feels free of network or compute
-overhead while still surfacing tampering and recalls.
+Five orthogonal moments.  The design goal: **steady-state
+script runs pay nothing for verification.**  Loft is being
+optimised for "many runs of small scripts" (cold-start work in
+CS.C1/C2/C3); per-invocation hashing would noise the wrong
+axis.  Verification binds to compile-cache invalidation
+instead.
 
 | # | Moment | What's verified | Default | Off-switch |
 |---|---|---|---|---|
 | 1 | **Install / auto-install** | sha256 (matches `index.json`) + Ed25519 sig on tarball | always | — (cannot disable) |
-| 2 | **Per-invocation library hash** | for each library tuple resolved this process: cached install's sha256 matches `index.json` (one hash per package per process) | on | `LOFT_NO_RUNTIME_VERIFY=1` |
-| 3 | **Advisory feed refresh** | every 24h: re-fetch `advisories.json`, verify sig, re-check cached tuples | on | `LOFT_OFFLINE=1` (uses cache) |
-| 4 | **Per-invocation advisory check** | each loaded (name, version) tuple compared against cached advisories | on | none — advisories always checked when feed cached |
-| 5 | **`loft audit`** | exhaustive: every cached package's sha256 + advisory match for every entry in cache and current lockfile | manual | — |
+| 2′ | **At compile (cache miss)** | every library in the dep graph being compiled: cached install's sha256 matches `index.json`.  Amortised into compile time — when bytecode is being regenerated anyway, hashing N libraries adds milliseconds to an operation already costing hundreds. | on | `LOFT_NO_BUILD_VERIFY=1` |
+| 3 | **Advisory feed refresh** | every 24h: re-fetch `advisories.json`, verify sig | on | `LOFT_OFFLINE=1` (uses cache) |
+| 4 | **Per-invocation advisory check** | each loaded (name, version) tuple compared against cached advisories — µs in-memory lookup once feed is loaded | on | none — advisories always checked when feed cached |
+| 5 | **`loft audit`** | exhaustive: re-hash every cached package + advisory match for every entry in cache and current lockfile.  Ignores all caches/markers — the explicit deep-scan path. | manual | — |
 
-Moments 2 + 4 together are the steady-state "every run" cost:
-~one hash per loaded package (~5-30ms total for a typical
-script importing 3-5 libraries) + advisory lookup (~µs once
-the feed is in memory).  Cached `*-version.sha256.verified`
-marker files amortize the hash to near-zero on warm cache
-(touch-the-marker after first verify; skip-if-marker-newer-than-
-package-mtime on subsequent runs).
+**Steady-state cost** (warm bytecode cache, no source / lockfile
+changes): only moment 4.  µs per run.  Effectively free.
+
+**What triggers a recompile (and thus moment 2′ firing):**
+
+- Source mtime drift on any `.loft` file in the dep graph.
+- Lockfile changed (auto-install fired or `loft update` ran).
+- Compiler version changed (different `loft --version`).
+- Target changed (`--interpret` ↔ `--native` ↔ `--html`).
+- **NEW** — cached install's mtime drifted since last compile.
+  Catches post-install tamper of `~/.loft/registry/<pkg>-<ver>/`.
+  Cost: one `stat` per loaded library on compile-cache-hit
+  path (microseconds).
+
+That last invalidation rule is the closes-the-gap addition.
+Without it, a modify-cached-library-and-restore-its-mtime attack
+sails through cache hits forever; with it, ANY mtime change on
+the cached install triggers a recompile and the recompile path
+re-hashes (moment 2′) → mismatch caught.
+
+**Threat model honesty.**  The retired moment "per-invocation
+library hash" was only catching a narrow attack model
+(modify-cached-library-WITHOUT-touching-mtime) that already
+assumes the attacker has write access to `~/.loft/registry/`.
+At that access level, they could equally replace the loft
+binary, modify shell rc to set `LOFT_NO_BUILD_VERIFY=1`, or
+tamper `~/.loft/installed.toml`.  Per-invocation hashing was
+paying ~5-30ms per run for ~1% of the threat surface; that
+tradeoff is wrong for a "many small runs" target.
+`loft audit` (moment 5) remains the explicit escape hatch for
+users who want to re-hash everything on demand.
 
 Stdlib coverage is implicit: `default/*.loft` lives inside the
 loft binary via `include_str!`, so verifying the loft binary's
-bytes (lib-plan 30 Phase 30.4 step "binary self-check")
-verifies the embedded stdlib by transitivity.  No separate
-stdlib-file hash check needed.
+bytes (lib-plan 30 § Phase 30.4 — stat-on-startup with
+hash-on-drift) verifies the embedded stdlib by transitivity.
+No separate stdlib-file hash check needed.
 
 **Implementation outline (~1-2 work-days):**
 
@@ -926,15 +953,20 @@ stdlib-file hash check needed.
    `src/registry_advisories.rs`: load + verify signature +
    cache `advisories.json` with 24h TTL (verification moment 3).
    Honours `LOFT_OFFLINE=1` (use cache; error if cache empty).
-4. **Loft binary — per-invocation library hash** (verification
-   moment 2).  Hook in the parser's package-resolution path
-   (mirror `probe_registry_installed`'s trigger surface):
-   when a cached library is loaded for the first time in this
-   process, hash its on-disk bytes and compare to the entry
-   in `index.json`.  Touch a sidecar
-   `<install-dir>/.sha256.verified` marker after success; skip
-   the hash on subsequent runs while the marker's mtime ≥ the
-   package's mtime.  Off-switch: `LOFT_NO_RUNTIME_VERIFY=1`.
+4. **Loft binary — compile-time library hash** (verification
+   moment 2′).  Hook in the bytecode-cache miss path: when the
+   compiler is about to regenerate bytecode for a script + its
+   dep graph, hash each cached library's on-disk bytes and
+   compare to the entry in `index.json`.  Mismatch → refuse to
+   compile.  Cache-hit path: skip hashing entirely; the cached
+   bytecode already encoded the verified state.  ALSO add a
+   new cache-invalidation rule: cache-hit becomes a cache-miss
+   if any loaded library's on-disk mtime drifted since the
+   cache was written.  Off-switch: `LOFT_NO_BUILD_VERIFY=1`
+   (intended for fully-offline development against
+   known-trusted local builds).  The bytecode cache key
+   itself encodes the verification state, so a successful
+   verify is implicitly cached alongside the compile output.
 5. **Loft binary — per-invocation advisory check**
    (verification moment 4).  After a (name, version) tuple
    lands, classify against the cached advisories.  Defer
@@ -968,21 +1000,29 @@ stdlib-file hash check needed.
 - `loft audit` against a fixture lockfile with multiple severities
   → exit code matches worst.
 
-Plus, for verification timing (moments 2 + 5 above):
+Plus, for verification timing (moments 2′ + 5 above):
 
-- **Per-invocation hash matches** → silent, marker touched.
-- **Per-invocation hash mismatch** (tamper a byte in a cached
-  install) → refuse to load, surface the mismatch + the
-  expected sha256.
-- **Marker reuse**: hash skipped on second run; tampering the
-  install AFTER the marker → still caught on `loft audit`
-  (moment 5 ignores markers).
-- **`LOFT_NO_RUNTIME_VERIFY=1`** → marker check + hash both
-  skipped; explicit stderr note `[verify] runtime verify
-  disabled (LOFT_NO_RUNTIME_VERIFY)`.
-- **`loft audit` mismatch detection**: tamper a cached install
-  → `loft audit` reports the bad sha256 + exit code reflects
-  the tamper.
+- **Cold-cache compile** (bytecode cache miss): hashes fire,
+  match → compile proceeds; mismatch → compile refused with
+  expected vs actual sha256.
+- **Warm-cache run** (bytecode cache hit, no mtime drift):
+  no hashing, no I/O beyond `stat`; steady-state cost is µs.
+- **Mtime drift invalidation**: modify a cached library's
+  bytes + touch the file → next run sees mtime drift,
+  invalidates bytecode cache, re-hashes (moment 2′) → mismatch
+  caught.
+- **Mtime drift WITHOUT content change** (e.g. `touch` after
+  a benign rebuild): cache invalidates, re-hash succeeds,
+  compile proceeds normally — slightly slower but correct.
+- **`LOFT_NO_BUILD_VERIFY=1`** → moment 2′ skipped at compile
+  time; explicit stderr note `[verify] build verify disabled
+  (LOFT_NO_BUILD_VERIFY)`.  Used for offline dev against
+  locally-trusted libraries.
+- **`loft audit` mismatch detection**: tamper a cached
+  install (with OR without mtime restoration) → audit reports
+  the bad sha256; exit code reflects worst severity.  This
+  catches the `modify-then-restore-mtime` attack that bypasses
+  moment 2′'s mtime trigger.
 
 **Open questions:**
 

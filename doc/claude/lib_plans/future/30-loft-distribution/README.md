@@ -209,24 +209,54 @@ its own integrity on every invocation (the binary's analogue of
 library hash check).
 
 **Verification timing for the binary** (mirrors and extends
-6.7's library-side timing table):
+6.7's library-side timing table — and uses the SAME
+verify-on-recompile model to keep steady-state cost near zero
+for the "many small runs of small scripts" use case loft is
+optimised for):
 
 | # | Moment | What's verified | Default | Off-switch |
 |---|---|---|---|---|
 | 1 | **Install / self-update** | sha256 (matches `index.json` toolchain entry) + Ed25519 sig + sanity `--version` invocation on the downloaded artifact | always | — |
-| 2 | **Startup self-check** | running binary's on-disk bytes hashed and compared to `~/.loft/installed.toml`'s recorded sha256 (which was written at install time) | on | `LOFT_NO_SELF_VERIFY=1` |
+| 2′ | **Startup mtime check** | `stat` the running binary; compare mtime to recorded value in `~/.loft/installed.toml`.  Match → skip hash, proceed.  Drift → hash binary, compare to recorded sha256, refuse on mismatch. | on | `LOFT_NO_SELF_VERIFY=1` |
 | 3 | **Advisory check** | `(loft, version)` tuple checked against cached `advisories.json` (6.7's feed); fail/warn per severity for the binary the same way as for libraries | on | `LOFT_OFFLINE=1` only suppresses the feed refresh, not the check itself |
 | 4 | **Embedded-key check on self-update** | downloaded binary's Ed25519 public key (extracted from a known offset) matches expected key → catches an attacker that swapped the binary AND its sig with a binary signed by a different (attacker-controlled) key | always | — |
-| 5 | **`loft audit`** | re-hash the running binary; re-check tuple against advisories; report drift | manual | — |
+| 5 | **`loft audit`** | re-hash the running binary (ignoring any cached mtime sentinel); re-check tuple against advisories; report drift | manual | — |
 
-Moment 2 is the cheapest meaningful check: hashing a 10-20MB
-binary at startup is ~30-50ms on modern hardware.  A cached
-`.sha256.verified` marker next to the binary (touched after
-each successful self-check) shrinks this to a single-stat
-operation on warm restarts — set the marker mtime to the
-binary's mtime + 1s after verify; skip if marker is newer.
-A binary tamper modifies the binary's mtime → marker is older
-→ re-verify fires → mismatch detected.
+**Steady-state cost** (no binary tamper, no self-update):
+just moment 2′'s `stat` (~1µs) and moment 3's in-memory
+advisory lookup (~µs).  Effectively free.
+
+**When the hash actually fires** (moment 2′'s drift branch):
+
+- After a successful `loft self-update` — installed.toml gets
+  rewritten with the new (mtime, sha256); next startup sees
+  mtime match, no hash.  But the install step itself already
+  hashed (moment 1).
+- After an OS package update (Homebrew, apt) replaces the
+  binary — mtime drifts → next startup hashes → mismatch
+  surfaces in stderr "binary integrity check failed; was this
+  installed via `loft self-update`?  Re-run installation."
+  This is intentional: OS-package-manager installs need their
+  own trust chain.  Users on apt should hash via apt's
+  signature, not loft's.
+- After a tamper that modifies the binary's bytes — drift
+  detected, hash fires, mismatch caught.
+- After a tamper that modifies the bytes AND restores the
+  mtime — moment 2′ misses; caught by `loft audit` (moment 5)
+  or by next `loft self-update` cycle when installed.toml
+  rewrites.
+
+**Threat model honesty.**  The retired moment "hash binary on
+every startup" was paying ~30-50ms per invocation (or ~1ms
+with markers) to catch the modify-and-restore-mtime attack
+— a specific tamper that requires write access to the loft
+binary's install path.  At that access level, the attacker
+could equally swap installed.toml itself, set
+`LOFT_NO_SELF_VERIFY=1` in the user's shell rc, replace the
+shell entirely, etc.  The verify-on-drift model gives
+99% of the security with effectively zero ongoing cost; the
+remaining 1% (modify + mtime restore) is the explicit
+`loft audit` escape hatch's job.
 
 Stdlib coverage: `default/01_code.loft`, `default/02_files.loft`,
 `default/03_text.loft` are baked into the binary via
@@ -256,18 +286,34 @@ verification path needed for those files.
    startups).
 10. Print "loft 0.8.4 → 0.8.5; release notes: <url>".
 
-**Startup self-check flow** (every `loft` invocation):
+**Startup self-check flow** (every `loft` invocation —
+moment 2′):
 
-1. Read `~/.loft/installed.toml` for the recorded sha256 of the
-   running binary's expected bytes.
-2. Stat the running binary path + the cached
-   `.sha256.verified` marker.
-3. If marker mtime ≥ binary mtime → skip hash, proceed.
-4. Else hash the binary; compare to recorded sha256.
-5. Match → touch marker, proceed.
-6. Mismatch → refuse to start; print "binary integrity check
-   failed: <expected> vs <actual>; run `loft self-update`".
-7. `LOFT_NO_SELF_VERIFY=1` skips steps 1-6 with a stderr note.
+1. Stat the running binary path.
+2. Read `~/.loft/installed.toml`.  If absent (e.g.
+   user built from source rather than installed via
+   `loft self-update`) → skip self-check, proceed; no
+   warning (build-from-source is a legitimate trust path).
+3. If installed.toml's recorded mtime matches the running
+   binary's mtime → skip hash, proceed.  Cost: one `stat`,
+   microseconds.
+4. Else (drift detected) hash the binary's bytes; compare
+   to installed.toml's recorded sha256.
+5. Match → rewrite installed.toml with the new mtime
+   (keeps subsequent invocations on the cheap path); proceed.
+6. Mismatch → refuse to start; print "binary integrity
+   check failed: expected <sha> got <sha>; ran
+   `loft self-update` or replaced via OS package manager?
+   Re-install or run `loft self-update` to restore the
+   trust record."
+7. `LOFT_NO_SELF_VERIFY=1` skips steps 1-6 with a one-line
+   stderr note `[verify] self-verify disabled
+   (LOFT_NO_SELF_VERIFY)`.
+
+The mtime-as-cache-key approach mirrors @PLAN12 § Phase 6.7
+moment 2′ (compile-time library hash + mtime invalidation).
+Both the binary and the libraries follow the same shape:
+trust-on-install, re-verify only when something changed.
 
 **Done when:** `loft self-update` on Linux/macOS/Windows
 correctly upgrades a running install with no shell state
