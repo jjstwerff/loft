@@ -56,10 +56,23 @@ sidesteps it.
 **per-library JSON snapshot** (loft's own database JSON, not serde —
 user-accepted 2026-05-31) that re-parses + rebuilds native `Data` on
 load.  Second-class (JSON is re-parsed, not mmap'd) but delivers the
-cold-start win without the IR rewrite.  This plan **supersedes** it:
-the store struct-enum format replaces JSON and turns the rebuild into a
-zero-copy mmap.  @PLAN28 builds the stop-gap format-agnostic so this
-plan swaps the encoder underneath without touching startup wiring.
+cold-start win without the IR rewrite.  This plan **supersedes** it for
+the stdlib/bundle path: the store struct-enum format replaces JSON and
+turns the rebuild into a zero-copy mmap.
+
+**One thing the JSON stop-gap does that this plan's mmap does NOT:
+per-library first-landing.**  Because JSON loads by *replaying*
+`add_def` into the current `Data` (a relocation), a library can ship its
+own JSON snapshot as a build-time side deliverable encoded with
+name/source-relative refs, and it drops into *any* prefix — so even the
+**first** run of a new script using already-built libraries is fast.
+This plan's mmap is whole-prefix and position-fixed (absolute offsets at
+snapshot time), so its runtime bundle cache is warm only on the
+**second** run.  Consequence: the relocatable per-library JSON
+deliverable may **coexist with / outlive** the mmap path as the
+first-landing + cross-arch fallback, rather than being fully replaced.
+@PLAN28 builds the stop-gap format-agnostic so this plan swaps the
+*bundle* encoder underneath without touching startup wiring.
 
 ## Why the global-index model is fine for this scope
 

@@ -292,16 +292,45 @@ index-based as an earlier draft of this step wrongly claimed).
 fine as the interim format.**  Serialise `Data` by hand using **loft's
 own database JSON** (`write_json_escaped` + the `src/database/` path for
 encode, `src/json.rs::parse` → `Parsed` tree for decode) — never serde /
-bincode.  Emit the compiled stdlib prefix (and optionally per-`use`d
-library segments) as JSON, load it back, and rebuild native `Data`.
-This is acknowledged second-class — JSON is re-parsed, not mmap'd, and
-gets discarded — but it ships the cold-start win without the IR rewrite.
-It is **superseded by** [plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
-which replaces JSON with the store struct-enum format and turns the
-rebuild into a zero-copy mmap.  Build the JSON stop-gap so its
-call-sites (snapshot key, write, load+rebuild) are **format-agnostic** —
-plan-54 swaps the encoder/decoder underneath without touching the
-startup wiring.
+bincode.  Emit the compiled stdlib prefix and the per-`use`d library
+segments as JSON, load them back, and rebuild native `Data`.
+Acknowledged second-class — JSON is re-parsed, not mmap'd, and gets
+discarded — but it ships the cold-start win without the IR rewrite.
+
+**Per-library JSON is a build-time side deliverable, and that buys
+first-landing speed (user nuance, 2026-05-31).**  The snapshot is not
+only a runtime cache keyed per-script — a **library emits its own
+compiled-`Data` JSON when it is packaged/built**, shipped beside its
+source.  So the **first** run of a brand-new script that `use`s
+already-built libraries is *also* fast: core ships its JSON, each
+library ships its own, and only the user's own (small) script parses
+fresh.  This kills the "first run of a new `use` combination parses
+everything" caveat — it parses only genuinely-uncompiled user code.
+mmap (plan-54) is quicker per access, but a *runtime whole-bundle* mmap
+cache is warm only on the **second** run; per-library JSON deliverables
+win on the **first**.  Both layers coexist: JSON-per-lib for
+first-landing, mmap-bundle for repeats.
+
+**Why per-library JSON composes (where per-library mmap can't):** the
+load path **replays `add_def` in order into the current `Data`**, which
+*is* a relocation.  So a library's JSON must encode cross-references
+**by name or source-relative position, never by absolute global
+`def_nr`** (those depend on parse-order prefix).  Given that, the rebuild
+remaps every reference to the live global index as it appends — a
+library JSON drops into whatever prefix is already loaded.  This is
+exactly the property plan-54's mmap path *lacks* (absolute offsets,
+fixed at snapshot time → whole-prefix only), and the reason per-library
+is a JSON-stop-gap capability, not an mmap one.
+
+It is **superseded for the bundle/stdlib path by**
+[plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
+which replaces JSON with the store struct-enum format and turns those
+loads into zero-copy mmap.  Build the JSON stop-gap so its call-sites
+(snapshot key, write, load+rebuild) are **format-agnostic** — plan-54
+swaps the encoder/decoder underneath without touching the startup
+wiring.  (The relocatable per-library JSON deliverable may outlive the
+stop-gap as the cross-arch / first-landing fallback even after mmap
+lands.)
 
 **Implementation.**
 - Emit `Data` → JSON via the database JSON path (no serde); key the
