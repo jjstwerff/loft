@@ -10,6 +10,51 @@ Drafted on the `scripting` branch (2026-05-31) after the
 lib-extraction approach was **measured** to deliver ~0 ms and rejected
 (see [`lib_plans/future/03-lazy-stdlib`](../../../lib_plans/future/03-lazy-stdlib/README.md)).
 
+## STATUS (2026-06-01) — encode/decode/validate DONE; swap-in BLOCKED
+
+Branch `scripting`, last committed `e1d63d8`.
+
+**Committed & green (the JSON codec foundation):** the full IR → JSON
+encode/decode is done and proven on the real stdlib.
+- `src/ir_schema.rs` — codecs for `Type` (24 variants), `Value` (34, V1–V4),
+  `Attribute` (C1), `Definition` (C2), whole `Data` (C3), and the per-function
+  **variable table** (C4 — debug symbols + final `stack_pos`).
+- `data_from_json` / `load_snapshot` (decode) and `compare_data` (read-only,
+  localized `DataDiff`, no mutation) — the validator the load path leans on.
+- `src/cache.rs` — `stdlib_cache_key` + `collect_stdlib_sources` +
+  `stdlib_cache_path`.
+- `LOFT_DUMP_SNAPSHOT=<path>` debug hook emits the ~800 KB snapshot.
+- Tests: ir_schema 32 unit + 6 integration (real-stdlib round-trip +
+  load-compare: 587 defs identical), 10 cache tests; clippy 0.
+
+This half **met its sub-goal**: encode → decode → `compare_data` is lossless
+on the real stdlib.
+
+**NOT done — the cold-start win itself (Step 3 swap-in):** wiring
+`LOFT_STDLIB_CACHE=1` to load instead of parse is **attempted but broken and
+uncommitted**.  Confirmed deterministic panics on cache HIT for
+text/file/struct-heavy programs (`03-text`, `19-files`, `43-aggregates`, … →
+`database/structures.rs:52 "Cannot add to none-structure 'StructField'"`).
+
+**Root cause (diagnosed):** the database `Stores` *schema* is derived from
+`Data`, but reconstructing it on load by re-running the parse-tail functions
+(`typedef::actual_types_deferred` + `fill_all` + `database.finish()`) does NOT
+work — those functions assume **raw parser output**, not already-resolved
+`Data`.  Re-running them over a restored `Data` double-processes (enums
+re-registered, struct fields appended to a half-built `Stores`), corrupting the
+schema.  A `known_type`-only reset (slots 0–8 by name, the rest `u16::MAX`)
+fixed the *first* panic but not this deeper one.
+
+**Two ways forward (decision pending):**
+1. A **dedicated schema-rebuild** path that takes already-resolved `Data` and
+   reproduces `Stores` without re-running stub-resolution / enum-registration.
+2. **Serialize `Stores` into the snapshot** too (it's derived, but
+   reconstructing it faithfully is the brittle part) — whose logic likely
+   belongs in **plan-54** (near-term store-format mmap), not this JSON stopgap.
+
+See [Step 3 § Implementation status](#step-3--stdlib-prefix-cache-strategy-2-the-universal-win)
+for detail.
+
 ## Why this, not lib extraction
 
 The stdlib is parsed by **every** program on **every** run, and is
@@ -587,8 +632,47 @@ flag to revert.
 
 ### Step 3 — Stdlib-prefix cache (Strategy 2, the universal win)
 
-**Design.** Use Step 2's `Data` cache (no Step-1 `State` cache —
-codegen is recomputed fresh, ~0.5 ms),
+> **IMPLEMENTATION STATUS (2026-06-01): ATTEMPTED, BLOCKED, UNCOMMITTED.**
+> The swap-in was built end-to-end and **does not work** — it is not on the
+> branch (the 7 modified files sit uncommitted in the working tree; last
+> committed state is `e1d63d8`, the cache-dir helpers).
+>
+> **What was wired (the broken attempt):**
+> - `main.rs`: gate `LOFT_STDLIB_CACHE=1` (+ `LOFT_NO_CACHE` kill-switch) →
+>   compute the content key → on hit `load_snapshot` + `rebuild_after_load`,
+>   on miss parse + write the JSON cache.  Key + self-validate; any decode/
+>   schema error falls back to a cold parse (cache never load-bearing).
+> - `parser::rebuild_after_load()`: `rebuild_indices` + `actual_types_deferred`
+>   + `fill_all` + `database.finish()` + `enum_fn` over the whole def range.
+> - `variables::from_snapshot` sets `Function.done = true` (real bug fix:
+>   the snapshot's `code` is already post-`scopes::check`, so re-running it
+>   over the user delta must skip these defs or it double-inserts free-ops).
+>
+> **What works:** integer/arithmetic programs run byte-identical cold == hit
+> (e.g. `01-integers.loft`).
+>
+> **What's broken:** deterministic panics on cache HIT for text/file/
+> struct-heavy programs — `03-text`, `19-files`, `20-binary`,
+> `43-aggregates`, … → `database/structures.rs:52 "Cannot add to
+> none-structure 'StructField'"`.  (A measured HIT on the arithmetic path
+> did skip the parse — ~15.6 ms cold → ~4.9 ms load+rebuild — so the *idea*
+> pays off; the *schema rebuild* is the unsolved part.)
+>
+> **Root cause:** the `Stores` schema is derived from `Data`, but the
+> parse-tail functions (`actual_types_deferred` / `fill_all`) assume **raw
+> parser output**.  Re-running them over an already-resolved restored `Data`
+> double-processes (enum re-registration, struct fields appended into a
+> half-built `Stores`).  Resetting `known_type` to its pristine state cleared
+> the first panic but not this one — the rebuild needs a path designed for
+> already-resolved input, OR the `Stores` schema must be serialized too
+> (candidate plan-54 work).
+>
+> The design sketch below (a `.bin` `State` prefix cache) is the ORIGINAL
+> Strategy-2 framing and is **superseded** by the as-built JSON `Data` +
+> schema-rebuild approach; kept for context.
+
+**Design (superseded — original `.bin` State framing).** Use Step 2's `Data`
+cache (no Step-1 `State` cache — codegen is recomputed fresh, ~0.5 ms),
 keyed on **version + flags + `default/` content only** (user file
 excluded). Split point = `start_def` (`src/main.rs:2274`). Shared
 cache dir (`~/.cache/loft/stdlib-<key>.bin`), not beside the script.
@@ -695,26 +779,36 @@ Expected: documented before/after (e.g. "1.72 s → X s / 100 runs, N×"),
 
 ## Sequencing & effort
 
-| Step | Effort | Ships value? | Blocks |
+| Step | Effort | Status (2026-06-01) | Blocks |
 |---|---|---|---|
-| 0 Phase attribution | XS | done — informs design | — |
-| ~~1 Whole-program cache~~ | — | **dropped** (saves only ~0.5 ms codegen; see Step 0) | — |
-| 2 `Data` JSON (encode-walk + name-replay decode) | M | enabler | Step 3 |
-| 3 Stdlib-prefix cache | M | **yes (universal)** | 2, 4 |
-| 4 Key completeness | S | correctness | 3 |
-| 5 Default-on + closeout | XS | yes | 2-4 |
+| 0 Phase attribution | XS | ✅ done (committed) | — |
+| ~~1 Whole-program cache~~ | — | ⛔ dropped (saves only ~0.5 ms codegen) | — |
+| 2 `Data` JSON codec (encode + decode + `compare_data`) | M | ✅ **done & committed** (`e1d63d8`); proven lossless on real stdlib | Step 3 |
+| 3 Stdlib-prefix cache (swap-in) | M | 🔴 **attempted, BLOCKED, uncommitted** — schema rebuild from resolved `Data` corrupts `Stores` | 2, 4 |
+| 4 Key completeness | S | ◐ key + cache-dir helpers committed; not wired (blocked by 3) | 3 |
+| 5 Default-on + closeout | XS | ⬜ not started | 2-4 |
 
 Total ≈ M (Step 1 dropped). Step 2 (`Data` JSON) is the load-bearing
-enabler; **Step 3 is the headline** — the universal cold-start win on
-the always-loaded `default`.
+enabler and is **complete**; **Step 3 is the headline** — the universal
+cold-start win — and is the **open blocker** (see Step 3 § Implementation
+status for the diagnosed root cause and the two ways forward).
 
 ## What "done" looks like
 
-- `LOFT_TIMING` attributes the ~17 ms (Step 0).
-- A brand-new, never-seen script starts with `parse_default ≈ 0`
-  (Step 3).
-- Editing any `default/*.loft` forces a recompile, never stale output
-  (Step 4 + regression test).
-- `make ci` green throughout; default-on with `LOFT_NO_CACHE=1`
+- ✅ `LOFT_TIMING` attributes the ~17 ms (Step 0).
+- ✅ The `Data` JSON codec round-trips the real stdlib losslessly; a snapshot
+  can be emitted (`LOFT_DUMP_SNAPSHOT`) and loaded + `compare_data`'d against a
+  fresh parse (Step 2).
+- 🔴 A brand-new, never-seen script starts with `parse_default ≈ 0` (Step 3)
+  — **NOT achieved**; the swap-in's schema rebuild is the open blocker.
+- ⬜ Editing any `default/*.loft` forces a recompile, never stale output
+  (Step 4 + regression test) — key built, not wired.
+- ⬜ `make ci` green throughout; default-on with `LOFT_NO_CACHE=1`
   escape (Step 5).
-- This doc + @PLAN28 README carry the final before/after numbers.
+- ⬜ This doc + @PLAN28 README carry the final before/after numbers.
+
+**Current verdict:** the JSON snapshot foundation (encode / decode / validate)
+is complete and proven; the cold-start performance win is not yet delivered
+because rebuilding the derived `Stores` schema from a restored `Data` is
+unsolved.  Either build a resolved-`Data` schema-rebuild path, or fold the
+`Stores` serialization into plan-54's store-format work.
