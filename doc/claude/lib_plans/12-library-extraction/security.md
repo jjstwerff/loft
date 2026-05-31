@@ -59,10 +59,25 @@ Severity tiers, with default loft-binary behaviour:
 
 | Tier | Behavior |
 |---|---|
-| `security_critical` | **Refuse to build / run.**  Exit non-zero with the advisory URL.  Override: `LOFT_SECURITY_OVERRIDE=<advisory-id>` (env var, audit-trail). |
-| `security_high` | **Warn loudly** at start of every run; non-zero exit only under `--strict-security` (CI flag). |
+| `security_critical` | **Loud error block** at start of run; **continue running by default**.  Refusal is opt-in via `LOFT_STRICT_SECURITY=1` (env var) or `--strict-security` (CLI flag, intended for CI gates) — in strict mode, exit 3 with the advisory URL.  Override: `LOFT_SECURITY_OVERRIDE=<advisory-id>` (env var, audit-trail) — only needed under strict mode. |
+| `security_high` | **Warn loudly** at start of every run; non-zero exit only under strict mode. |
 | `security_low` / `bug` | One-line warning per run. |
 | `deprecated` | One-line note per day (suppressed by daily-cadence state). |
+
+**Why default-warn instead of default-refuse for critical** (design
+revision 2026-05-31, after the chunk-4 ship of the consumer side):
+the Cargo / npm precedent applies — `cargo audit` defaults to
+warn, `--deny warnings` is the opt-in for CI gates.  Pure refusal
+blocks the user precisely when they're trying to ship a fix or
+test the upgrade; security fixes can introduce breaking changes,
+and the user often needs to run their tests against the cached
+vulnerable version while they're porting.  The information must
+be impossible to miss (loud error block on every run), but the
+"can you proceed?" decision belongs to the user — not to the
+loft binary unilaterally.  CI environments that want hard
+refusal opt into it via `LOFT_STRICT_SECURITY=1`; `loft audit`'s
+exit-coded semantics (1 / 2 / 3 by worst severity) is the
+primary CI gate; the runtime check is informational by default.
 
 **Advisory feed — `advisories.json`.**  Sibling to `index.json`
 in the registry, signed by the same Ed25519 key.  Schema:

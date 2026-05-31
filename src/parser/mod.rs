@@ -4335,13 +4335,23 @@ impl Parser {
     /// process), classifies the tuple, and emits severity-tiered
     /// output:
     ///
-    /// - `security_critical` → refuse to proceed; `process::exit(3)`.
-    ///   Override: `LOFT_SECURITY_OVERRIDE=<advisory-id>` (comma-
-    ///   separated for multiple) bypasses with an audit-trail
-    ///   stderr line.
+    /// - `security_critical` → loud `error:` block; **continue
+    ///   running** (the user may be running their code precisely to
+    ///   test the upgrade, and security fixes can introduce
+    ///   breaking changes; refusing here is worse than warning).
+    ///   Opt-in refusal: `LOFT_STRICT_SECURITY=1` (env var) OR
+    ///   `--strict-security` (CLI flag, intended for CI gates) — in
+    ///   either, critical aborts with `process::exit(3)` UNLESS
+    ///   `LOFT_SECURITY_OVERRIDE=<advisory-id>` is set (comma-
+    ///   separated for multiple).
     /// - `security_high` → loud `warning:` block; continue.
     /// - `security_low` / `bug` → one-line warning.
     /// - `deprecated` → one-line note.
+    ///
+    /// The Cargo / npm precedent: `cargo audit` defaults to warn,
+    /// `--deny warnings` is opt-in for CI.  Pure refusal blocks the
+    /// user precisely when they're trying to ship a fix or assess
+    /// the upgrade — the wrong default.
     ///
     /// Dedupes via `self.advisory_checked` so a package surfaced by
     /// multiple `use` paths (sidecar + auto-install re-probe) only
@@ -4361,6 +4371,7 @@ impl Parser {
         if hits.is_empty() {
             return;
         }
+        let strict = std::env::var("LOFT_STRICT_SECURITY").is_ok();
         let overrides: std::collections::HashSet<String> =
             std::env::var("LOFT_SECURITY_OVERRIDE")
                 .unwrap_or_default()
@@ -4372,7 +4383,10 @@ impl Parser {
             use crate::registry_advisories::Severity;
             let overridden = overrides.contains(&hit.advisory_id);
             match hit.severity {
-                Severity::SecurityCritical if !overridden => {
+                Severity::SecurityCritical => {
+                    // Loud error block — same in strict and non-strict
+                    // mode.  The DIFFERENCE is only whether we then
+                    // refuse to proceed.
                     eprintln!(
                         "error: {} {} was yanked for a security vulnerability",
                         hit.package, hit.version
@@ -4385,18 +4399,25 @@ impl Parser {
                             hit.package, fix, hit.package, fix
                         );
                     }
-                    eprintln!(
-                        "  override (audit-trail required): LOFT_SECURITY_OVERRIDE={}",
-                        hit.advisory_id
-                    );
-                    std::process::exit(3);
-                }
-                Severity::SecurityCritical => {
-                    // Override applied — log the audit line + continue.
-                    eprintln!(
-                        "[security] override applied: {} ({} {})",
-                        hit.advisory_id, hit.package, hit.version
-                    );
+                    if strict && !overridden {
+                        eprintln!(
+                            "  refused under LOFT_STRICT_SECURITY=1"
+                        );
+                        eprintln!(
+                            "  override (audit-trail required): LOFT_SECURITY_OVERRIDE={}",
+                            hit.advisory_id
+                        );
+                        std::process::exit(3);
+                    }
+                    if strict && overridden {
+                        eprintln!(
+                            "[security] override applied: {} ({} {})",
+                            hit.advisory_id, hit.package, hit.version
+                        );
+                    }
+                    // Non-strict mode: error block printed, but we
+                    // proceed.  User retains the right to run their
+                    // code while they investigate / fix.
                 }
                 Severity::SecurityHigh => {
                     eprintln!(
