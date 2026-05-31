@@ -591,10 +591,7 @@ fn p310_graphics_vector_ffi_checks_clean() {
     // loft).  This test still pins the vector<integer> → *const i64 path
     // end-to-end against a real `graphics::save_png` consumer.
     let out = std::process::Command::new(loft_binary())
-        .args([
-            "--check",
-            "tests/fixtures/p310/p310_save_png.loft",
-        ])
+        .args(["--check", "tests/fixtures/p310/p310_save_png.loft"])
         .current_dir(project_root())
         .output()
         .expect("run --check on the @P310 graphics save_png fixture");
