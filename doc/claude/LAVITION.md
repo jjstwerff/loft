@@ -93,7 +93,7 @@ visually adjacent.
 | `loft-libs-core` | `arguments`, `random`, `crypto` | all shipped |
 | `loft-libs-net` | `web`, `server`, `game_protocol` | all shipped |
 | `loft-libs-graphics` | `graphics`, `shapes`, `gridmesh` | all shipped 0.1.x |
-| `loft-libs-assets` | `imaging`, `glb` | imaging shipped (currently under graphics chunk; migrates at next major); glb to promote out of graphics submodule (W.0) |
+| `loft-libs-assets` | `mesh3d`, `glb` (+ `imaging` migrating in at next major) | **chunk bootstrapped 2026-05-31** ([loft-lang/loft-libs-assets](https://github.com/loft-lang/loft-libs-assets)).  `mesh3d 0.1.0` + `glb 0.1.0` shipped (registry PR #8, validator 3-of-3 gates green).  imaging migration deferred to next major-version boundary. |
 | `loft-libs-game` | `physics_2body`, `particles`, `input`, `time`, `audio_bus` | chunk not yet bootstrapped; first inhabitant is `time` (already exists as `lib/time/`) |
 | `loft-libs-world` | `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | chunk not yet bootstrapped; `hex_world` exists as `lib/world/` in monorepo (rename pending) |
 
@@ -544,9 +544,9 @@ consumer migration + monorepo cleanup).
 
 | # | Step | Effort | Depends on |
 |---|---|---|---|
-| **W.0** | Promote `glb` out of `graphics` submodule into `lib/glb/` (monorepo).  Add a re-export shim so existing graphics consumers keep working. | S | — |
+| ~~W.0~~ | ~~Promote `glb` out of `graphics` submodule into `lib/glb/` (monorepo).~~  **Dropped 2026-05-31** — superseded by direct-to-chunk path (W.0b writes the package directly into `loft-libs-assets`, no monorepo round-trip).  Monorepo-first pattern is legacy from the era when `lib/graphics/` lived there; with the chunk already extracted, the cheaper path is to harvest from the registry-shipped graphics 0.1.0 into the new chunk. | — | superseded |
 | **W.0a** | Bootstrap `loft-libs-assets` chunk (GitHub repo + CI from net template). | S | — |
-| **W.0b** | Extract `glb` Stage A → Stage B → `loft-libs-assets/glb 0.1.0`. | M | W.0, W.0a |
+| **W.0b** | Write `mesh3d` + `glb` packages directly into `loft-libs-assets`; tag + release + registry PR. | M | W.0a |
 | **W.0c** | Bootstrap `loft-libs-game` chunk. | S | — |
 | **W.0d** | Extract `lib/time` → `loft-libs-game/time 0.1.0` (uses time as the chunk's bootstrap inhabitant — it's already a complete library, cheaper than starting with brand-new design work). | M | W.0c |
 | **W.0e** | Bootstrap `loft-libs-world` chunk. | S | — |
@@ -577,16 +577,23 @@ per chunk milestone (`loft-libs-assets` bootstrap + glb extraction →
 one PR; `loft-libs-world` foundation = hex_world + hex_walls → next
 PR; etc.).  Avoid one-PR-per-library — too much review overhead.
 
+**Shipped so far (2026-05-31):**
+- ✓ W.0a — `loft-libs-assets` chunk bootstrapped.
+- ✓ W.0b — `mesh3d 0.1.0` + `glb 0.1.0` shipped directly into the
+  chunk (registry PR [#8](https://github.com/loft-lang/registry/pull/8)
+  merged at 21:02 UTC; both packages live + installable).
+
 **Open sequencing notes:**
-- W.0 / W.0a / W.0b (glb promotion) can ship before any hex work since
-  they touch different libraries.  Good "first session of the new
-  topology" candidate.
-- W.0c / W.0d (game chunk + time migration) similar — independent of
-  the world chunk work.
+- W.0c / W.0d (game chunk + time migration) — independent of the
+  world chunk work, can ship next.
 - W.1 / W.2 (hex_world rename + extract) is the foundation for W.3-W.8.
 - W.9 / W.10 (physics_2body) depends ON nothing new but lavition's
   glue layer would want it before authoring real plugins.  Ship after
   the data layer is stable.
+- **Direct-to-chunk pattern** (used in W.0b) preferred over
+  monorepo-first for libraries not already in the monorepo.
+  Monorepo-first stays the right path for W.1 (hex_world rename) +
+  W.3 (hex_walls split) since those libs already live at `lib/world/`.
 
 ## Discoverability — the practical reason for brand visibility
 
