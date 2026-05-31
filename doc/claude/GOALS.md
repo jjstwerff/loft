@@ -63,9 +63,9 @@ behaviour, and stays that way across toolchain bumps.
 ## Goal B — Resolve the stack layout (V1 vs V2), once
 
 **Definition.** Decide and validate the eval-stack layout instead of leaving it
-permanently half-flagged.  Today production ships V1 (the byte-packed *unaligned*
-stack, which carries the latent cluster-2 alignment UB); V2 (the aligned
-stepping + V2 slot allocator) is fixed but gated behind `LOFT_ALIGN`.
+permanently half-flagged.  The aligned stepping + V2 slot allocator removes the
+cluster-2 alignment UB structurally; the question was whether to make it the
+default or stay on the byte-packed unaligned V1 stack.
 
 **Done when** EITHER:
 - **(B1)** V2 is the production default with the full validation in
@@ -76,11 +76,15 @@ stepping + V2 slot allocator) is fixed but gated behind `LOFT_ALIGN`.
   (Goal A) as the safety net, and the V1 alignment UB accepted as
   detected-but-tolerated on the supported platforms.
 
-**Status (2026-05-31): NOT switch-ready, big open arc.**  The first full-suite
-V2 run found **11 failures** beyond `issues` (2f `#remove`-during-iteration,
-native-backend tuples, par-fn-ref-return, plus `.slots()` V1-layout assertion
-artifacts).  TESTING.md's exit criteria are unmet on every axis.  No decision
-recorded.
+**Status (2026-05-31): B1 LANDED.**  V2 is the production default (merged in
+#235); the V1 allocator + the `LOFT_ALIGN`/`LOFT_SLOT_V2` flag plumbing have been
+removed (`plan53-v1-cleanup`), so there is no longer a layout to choose between —
+the half-flagged state is gone.  Evidence: all 11 original full-suite failures
+closed; full suite green under V2 on ubuntu + macOS-ARM (the `#235` standard CI
+is green on all 3 OS); both Miri lanes clean; `stack_align_guard` zero-fires
+corpus-wide; V1-vs-V2 perf within ±1% (recursive fib 0.996, measured before V1
+removal).  Residual: the standalone V2 3-OS validation matrix
+(`v2-validation.yml`) is now redundant with `ci.yml` and can be retired.
 
 ---
 

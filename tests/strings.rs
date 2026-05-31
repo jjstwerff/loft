@@ -48,32 +48,8 @@ fn string_scope() {
     // shapes in protective work-buffers so the interpreter's
     // clear-before-evaluate text-Set semantics don't destroy the
     // accumulator.  See `parser/expressions.rs:1273-1295`.
+    // @PLAN53 — aligned layout: every slot step rounds up to 8.
     .slots(
-        "\
-  block:1
-  __work_5+24=4 [0..145]
-  __work_4+24=28 [3..144]
-  __work_3+24=52 [6..143]
-  __work_2+24=76 [9..142]
-  __work_1+24=100 [12..141]
-  test_value+24=124 [15..140]
-  │ block:2
-  │ a+8=148 [17..102]
-  │ b+24=156 [18..119]
-  │ │ for:3
-  │ │ n#index+8=180 [22..98]
-  │ │ │ loop:4L [seq 23..99]
-  │ │ │ n+8=188 [35..81]
-  │ │ │ │ block:6
-  │ │ │ │ t+24=196 [36..98]
-  │ │ │ │ │ for:9
-  │ │ │ │ │ _m#index+8=220 [65..81]
-  │ │ │ │ │ │ loop:10L [seq 66..82]
-  │ │ │ │ │ │ _m+8=228 [78..78]",
-    )
-    // @PLAN53 — aligned (V2) layout: every slot step rounds up to 8,
-    // so offsets differ while behaviour is identical.
-    .slots_aligned(
         "\
   block:1
   __work_5+24=8 [0..145]
@@ -102,23 +78,9 @@ fn string_scope() {
 #[test]
 fn loop_variable() {
     expr!("a = 0; for _t in 1..5 { b = \"123\"; a += b as integer; if a > 200 { break; }}; a")
+        // @PLAN53 — aligned layout; `test_value` sorts last as its 8-rounded
+        // slot lands above the loop body.
         .slots(
-            "\
-  block:1
-  test_value+8=4 [34..41]
-  __work_1+24=12 [0..56]
-  │ block:2
-  │ a+8=36 [4..33]
-  │ │ for:3
-  │ │ _t#index+8=44 [6..32]
-  │ │ │ loop:4L [seq 7..33]
-  │ │ │ _t+8=52 [19..19]
-  │ │ │ │ block:6
-  │ │ │ │ b+24=60 [20..32]",
-        )
-        // @PLAN53 — aligned (V2) layout; `test_value` sorts last as its
-        // 8-rounded slot lands above the loop body.
-        .slots_aligned(
             "\
   block:1
   __work_1+24=8 [0..56]

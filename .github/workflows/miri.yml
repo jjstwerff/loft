@@ -1,20 +1,26 @@
-# @PLAN53 — the sanitizer CI lever.  Runs the loft interpreter UNDER Miri to
-# catch hard memory-safety UB (alignment, out-of-bounds, use-after-free,
-# uninitialised reads, leaks) before a rustc/LLVM toolchain bump exposes it as
-# silent corruption (the @P383 incident this plan was triggered by).
+# @PLAN53 — the nightly UB-sanitizer + toolchain-matrix lever.  Catches the
+# "passes today, corrupts tomorrow" failure (the @P383 incident) BEFORE a
+# rustc/LLVM bump or an untested path turns latent UB into silent corruption.
 #
-# WHY A SEPARATE WORKFLOW (not a job in ci.yml) AND NIGHTLY-ONLY: the loft
-# interpreter executes bytecode, so running it under Miri is
-# interpreter-on-interpreter — ~20 min (almost all sysroot + under-Miri compile).
-# That is far too slow to gate every PR, so this runs NIGHTLY on `main` plus on
-# manual dispatch.  A hard-UB regression lands red within ≤24h, always before any
-# (deliberate, never-auto) release.  The intended cheap, every-PR companion is
-# the homegrown `stack_align_guard` (`--features stack_align_guard`, normal test
-# speed), which catches the alignment-UB class — the class a stack/codegen change
-# is most likely to regress — and lands as a ci.yml job in the follow-up.  Miri
-# remains the gold-standard backstop for the broader UB classes the guard can't
-# see (store aliasing, uninit padding, leaks).
-name: Miri (hard-UB sanitizer)
+# Three complementary nightly checks, all too slow / too churny to gate every
+# PR (the cheap per-PR companion is the `stack_align_guard` job in ci.yml,
+# which covers the alignment class at normal test speed):
+#
+#   - miri  — gold-standard hard-UB (alignment/OOB/UAF/uninit/leak), but
+#     interpreter-on-Miri is ~20 min, so it runs a curated representative set.
+#   - asan  — AddressSanitizer over the WHOLE interpreter corpus at near-native
+#     speed: the broad UAF/OOB sweep Miri's curated set can't afford.  loft's
+#     intentional store aliasing lives WITHIN single allocations, so ASan (which
+#     checks allocation bounds, not borrow models) runs clean where Miri needs
+#     -Zmiri-disable-stacked-borrows.  Leaks off for now (detect_leaks=0) pending
+#     triage of the live-at-exit baseline.
+#   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
+#     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
+#     std/lint churn must never page us.
+#
+# A regression lands red within ≤24h, always before any (deliberate, never-auto)
+# release.
+name: Nightly checks (UB sanitizers + toolchain matrix)
 
 on:
   schedule:
@@ -54,25 +60,94 @@ jobs:
       - name: miri setup (build the Miri sysroot)
         run: cargo +nightly miri setup
 
-      # The curated set is pure-compute `issues` tests (no threads / FFI — Miri
-      # blocks those) that exercise the UB-relevant surface (eval stack, store
-      # claim/copy, fn-refs, text) and are validated Miri-clean for hard UB on the
-      # aligned interpreter.  Grow the list as more tests are validated.
-      #
-      # Run on the ALIGNED interpreter (LOFT_ALIGN=1 LOFT_SLOT_V2=drive): that is
-      # the configuration where cluster 2 (eval-stack alignment) is fixed, so the
-      # interpreter is hard-UB-clean and any Miri finding is a genuine regression.
-      #
-      # -Zmiri-disable-stacked-borrows gates the HARD memory-safety UB
-      # (alignment / OOB / UAF / uninit / leak), NOT the aliasing MODEL: loft's
-      # store layer uses intentional raw-pointer aliasing across distinct records
-      # that Stacked/Tree Borrows reject by design.  -Zmiri-disable-isolation lets
-      # the interpreter read its `LOFT_*` env config.
-      - name: Miri hard-UB gate (aligned interpreter)
+      # Curated pure-compute `issues` tests (no threads / FFI — Miri blocks
+      # those) exercising the UB-relevant surface (eval stack, store claim/copy,
+      # fn-refs, text), validated Miri-clean for hard UB.  Grow the list as more
+      # tests are validated.  -Zmiri-disable-stacked-borrows gates the HARD
+      # memory-safety UB (alignment/OOB/UAF/uninit/leak), NOT the aliasing MODEL:
+      # loft's store layer uses intentional raw-pointer aliasing across distinct
+      # records that Stacked/Tree Borrows reject by design.
+      # -Zmiri-disable-isolation lets the interpreter read its `LOFT_*` config.
+      - name: Miri hard-UB gate
         env:
-          LOFT_ALIGN: '1'
-          LOFT_SLOT_V2: drive
           MIRIFLAGS: '-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows'
         run: |
           cargo +nightly miri test --test issues -- --exact \
             p213_struct_field_basic_int
+
+  asan:
+    name: ASan UAF/OOB sweep (interpreter corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-asan-cargo-
+
+      # The interpreter test targets (issues/wrap/strings/frame_vars + lib unit
+      # tests) run in-process, so ASan instruments the interpreter itself —
+      # native/wasm/html tests spawn separate uninstrumented binaries and add no
+      # ASan coverage.  An explicit --target makes RUSTFLAGS instrument the whole
+      # build.  detect_leaks=0 keeps this a clean UAF/OOB gate until the
+      # LeakSanitizer live-at-exit baseline (~108 allocations) is triaged.
+      - name: ASan sweep (UAF / OOB; leaks off pending triage)
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+          ASAN_OPTIONS: 'detect_leaks=0'
+        run: >
+          cargo +nightly test --release --target x86_64-unknown-linux-gnu
+          --lib --test issues --test wrap --test strings --test frame_vars
+
+  toolchain-matrix:
+    name: Suite under ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Non-blocking: beta/nightly std + lint churn must not page us.  A red here
+    # is an early signal to investigate, not a release blocker.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [beta, nightly]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-${{ matrix.toolchain }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-${{ matrix.toolchain }}-cargo-
+
+      # Interpreter test targets only — the core where UB lives and where a
+      # toolchain change is most likely to surface it.  Skips the heavy
+      # native/wasm build-prep an early-warning check doesn't need.
+      - name: Test (ubuntu, ${{ matrix.toolchain }})
+        run: >
+          cargo +${{ matrix.toolchain }} test --release
+          --lib --test issues --test wrap --test strings --test frame_vars

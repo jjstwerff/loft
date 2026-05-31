@@ -29,20 +29,14 @@
 //! See `slots.rs` for the algorithm.
 
 mod intervals;
-mod slots;
 mod slots_v2;
 mod validate;
 
 pub use intervals::compute_intervals;
-pub use slots::assign_slots;
-// Phase 2b: V2 scaffolding.  Re-export the types so Phase 2c can
-// hook them into the `LOFT_SLOT_V2=validate` shadow path without
-// another mod-public-ing pass.
+// @PLAN53 — the aligned V2 allocator is the only allocator; scopes.rs drives
+// it directly via `assign_slots_v2` + `apply_v2_result`.
 #[allow(unused_imports)]
-pub use slots_v2::{
-    AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2, dump_v1_v2_slots,
-    v2_mode_for,
-};
+pub use slots_v2::{AllocatorResult, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2};
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
 // shadow mode can invoke it from any build profile (integration
@@ -1517,39 +1511,6 @@ pub fn align(tp: &Type) -> u8 {
     }
 }
 
-/// @PLAN53 cluster 2 / S4 — eval-TOS alignment harness flag.
-///
-/// Returns `true` when the aligned-stack mode is requested via the
-/// `LOFT_ALIGN` env var.  This is the **whole-program** S4 switch:
-/// when on, the eval-stack push/pop step and the frame reserve round
-/// up to the 8-byte max-alignment so a typed write at `stack_pos`
-/// (the cluster-2 Miri finding — unaligned `&mut Str`/`&mut String`/
-/// `i64` on the byte-packed eval stack) can never be unaligned.
-///
-/// It is a *separate, explicit* knob — NOT derived from
-/// `LOFT_SLOT_V2` — so it never auto-activates under the frame-slot
-/// `drive` shadow.  S4 is exercised with both set together
-/// (`LOFT_ALIGN=1 LOFT_SLOT_V2=drive`): V2 supplies aligned frame
-/// slots, this supplies the aligned eval-TOS + frame base.  Default
-/// (unset) leaves V1 execution byte-for-byte unchanged.
-///
-/// Read once at `State` construction (runtime) and `Stack`
-/// construction (codegen) so both sides agree for a whole run; they
-/// MUST agree or the emitted `pos` operands won't match the runtime
-/// `stack_pos` advances.
-#[must_use]
-pub fn aligned_stack_enabled() -> bool {
-    // @PLAN53 — the aligned eval stack is the production default.  Only an
-    // explicit `LOFT_ALIGN=0`/`off`/`false` opts back to the legacy V1
-    // unaligned layout (the escape hatch until the V1 paths are removed in
-    // the follow-up cleanup).  Kept as the single source of truth so the
-    // eval-TOS stepping and the V2 slot allocator never desync.
-    !matches!(
-        std::env::var("LOFT_ALIGN").as_deref(),
-        Ok("0" | "off" | "false")
-    )
-}
-
 /// @PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance step.
 ///
 /// When `aligned`, round `size` up to 8 (the max alignment on the
@@ -1563,12 +1524,8 @@ pub fn aligned_stack_enabled() -> bool {
 /// through it so codegen and runtime advance in lockstep (S1).
 #[must_use]
 #[inline]
-pub fn aligned_stack_step(size: u32, aligned: bool) -> u32 {
-    if aligned {
-        size.next_multiple_of(8)
-    } else {
-        size
-    }
+pub fn aligned_stack_step(size: u32) -> u32 {
+    size.next_multiple_of(8)
 }
 
 #[cfg(test)]
@@ -1588,20 +1545,15 @@ mod align_tests {
         assert_eq!(align(&crate::data::I64), 8);
     }
 
-    // S4 (@PLAN53 cluster 2): the eval-TOS step seam.  Off → real size
-    // (V1, byte-identical); on → rounded to the 8-byte max-alignment.
+    // S4 (@PLAN53 cluster 2): the eval-TOS step — every advance rounds up to
+    // the 8-byte max-alignment so typed writes always land on their boundary.
     #[test]
     fn aligned_stack_step_contract() {
-        // aligned off: identity (V1 tight step)
-        assert_eq!(aligned_stack_step(1, false), 1);
-        assert_eq!(aligned_stack_step(12, false), 12);
-        assert_eq!(aligned_stack_step(8, false), 8);
-        // aligned on: round up to 8
-        assert_eq!(aligned_stack_step(1, true), 8);
-        assert_eq!(aligned_stack_step(4, true), 8);
-        assert_eq!(aligned_stack_step(8, true), 8);
-        assert_eq!(aligned_stack_step(12, true), 16);
-        assert_eq!(aligned_stack_step(16, true), 16);
-        assert_eq!(aligned_stack_step(0, true), 0);
+        assert_eq!(aligned_stack_step(1), 8);
+        assert_eq!(aligned_stack_step(4), 8);
+        assert_eq!(aligned_stack_step(8), 8);
+        assert_eq!(aligned_stack_step(12), 16);
+        assert_eq!(aligned_stack_step(16), 16);
+        assert_eq!(aligned_stack_step(0), 0);
     }
 }

@@ -157,6 +157,48 @@ jobs:
         continue-on-error: true
         run: find "${{ github.workspace }}/target/loft-native-cache" -type f -mtime +30 -delete || true
 
+  # @PLAN53 — the cheap per-PR sanitizer.  `stack_align_guard` asserts every
+  # typed eval-stack access lands on its alignment boundary; it runs at normal
+  # test speed (just offset checks), so it is the per-PR gate for the
+  # alignment-UB class — the class a stack/codegen change is most likely to
+  # regress.  The heavier Miri hard-UB sweep (UAF/uninit/leak/OOB) runs NIGHTLY
+  # (see miri.yml), not per-PR.  Ubuntu-only: the guard is an arch-independent
+  # offset check, so one platform suffices.  Only the in-process interpreter
+  # suites are run — the guard cannot see the separate binaries that native /
+  # wasm / html tests spawn, so running those here would add cost without
+  # coverage.
+  guard:
+    name: stack_align_guard sweep (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-guard-cargo-
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      # Exclude `wrap::library_suite`: it builds/runs the lib/* NATIVE suites
+      # (graphics/moros_*/shapes FFI), which need the GL/ALSA + graphics-cdylib
+      # build-prep this lean job deliberately omits — and the guard can't see
+      # those spawned native builds anyway.  The alignment-relevant interpreter
+      # tests it leaves are fully covered by the other wrap tests + issues/
+      # strings/frame_vars; the full lib suite runs in the main `test` job.
+      - name: Guard sweep (interpreter suites, zero fires expected)
+        run: >
+          cargo nextest run --profile ci --features stack_align_guard
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not test(library_suite)'
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -345,3 +387,78 @@ jobs:
             scripts/check_doc_drift.sh -q 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # @PLAN53 — surface the latest nightly (Miri / ASan / toolchain-matrix, see
+  # miri.yml) health as a sticky PR comment.  INFORMATIONAL, never a merge gate:
+  # the job always succeeds (continue-on-error + a try/catch that never throws),
+  # and it is not a required check.  A red nightly is a fact the reviewer weighs
+  # for THIS PR — not a block.  Reads per-JOB conclusions (not the run
+  # conclusion) so the toolchain matrix's `continue-on-error` can't hide a red
+  # beta/nightly behind a green run.
+  nightly-status:
+    name: Nightly health (informational)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    continue-on-error: true
+    steps:
+      - name: Sticky-comment the latest nightly health
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- nightly-status-comment -->';
+            try {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'miri.yml',
+                branch: context.payload.repository.default_branch,
+                status: 'completed',
+                per_page: 1,
+              });
+              let body;
+              if (!runs.data.workflow_runs.length) {
+                body = `${marker}\n🌙 **Nightly health** — no completed nightly run yet. `
+                  + `Informational; not a merge gate.`;
+              } else {
+                const run = runs.data.workflow_runs[0];
+                const jobs = await github.rest.actions.listJobsForWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: run.id, per_page: 100,
+                });
+                const icon = (c) => c === 'success' ? '✅'
+                  : (c === 'skipped' || c === 'cancelled') ? '⤵️' : '❌';
+                const lines = jobs.data.jobs
+                  .map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ');
+                const attention = jobs.data.jobs.some(
+                  (j) => j.conclusion && !['success', 'skipped', 'cancelled'].includes(j.conclusion));
+                const date = run.created_at.slice(0, 10);
+                body = `${marker}\n🌙 **Nightly health** (${date}): `
+                  + `${attention ? '⚠️ needs attention' : 'all clear'}\n\n`
+                  + `${lines}\n\n[run #${run.run_number}](${run.html_url}) — per-*job* status `
+                  + `(sees through the toolchain matrix's \`continue-on-error\`). `
+                  + `Informational; **not a merge gate**.`;
+              }
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, per_page: 100,
+              });
+              const existing = comments.find((c) => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  comment_id: existing.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: context.issue.number, body,
+                });
+              }
+            } catch (e) {
+              // Informational only — never fail the PR over a reporting hiccup.
+              core.warning(`nightly-status reporter skipped: ${e.message}`);
+            }

@@ -27,13 +27,6 @@ pub struct Stack<'a> {
     pub function: Function,
     pub def_nr: u32,
     pub logging: bool,
-    /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), codegen
-    /// advances `position` in 8-rounded steps so the emitted `pos`
-    /// operands match an aligned runtime `stack_pos`.  MUST equal the
-    /// runtime `State::aligned_stack` for the same run (both read the
-    /// same env).  Off by default → tight V1 advances, bytecode
-    /// unchanged.
-    pub aligned: bool,
     loops: Vec<Loop>,
 }
 
@@ -44,25 +37,20 @@ impl<'a> Stack<'a> {
             data,
             def_nr,
             logging,
-            aligned: variables::aligned_stack_enabled(),
             loops: Vec::new(),
             function,
         }
     }
 
-    /// @PLAN53 cluster 2 / S4 — codegen mirror of `State::stack_step`:
-    /// one eval-stack advance, 8-rounded when `aligned`.  The S4 work
-    /// routes codegen's `position += size(..)` advances through this so
-    /// compile-time and runtime move in lockstep (S1).
-    ///
-    /// Not yet wired: routing codegen's ~dozen `position` advances (plus
-    /// the `text.rs` `pos - N` offsets) is the S4 implementation itself,
-    /// which must move them all together or corrupt.  The scaffold only
-    /// provides the seam + the `aligned` flag; wiring is S4's job.
+    /// @PLAN53 cluster 2 / S4 — codegen mirror of `State::stack_step`: one
+    /// eval-stack advance, always 8-rounded so the emitted `pos` operands
+    /// match the aligned runtime `stack_pos` (compile-time and runtime move
+    /// in lockstep, S1).
     #[inline]
     #[must_use]
+    #[allow(clippy::unused_self)]
     pub fn step(&self, size: u16) -> u16 {
-        variables::aligned_stack_step(u32::from(size), self.aligned) as u16
+        variables::aligned_stack_step(u32::from(size)) as u16
     }
 
     /** Return the amount of space on stack is needed as calculated from code */
