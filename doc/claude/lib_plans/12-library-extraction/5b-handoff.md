@@ -5,16 +5,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 5b — Stage A handoff
 
-State: Stage A content for `graphics` + `imaging` is **prepared in
-`/tmp/`**.  Next: push to chunk repo + GitHub release + registry PR.
-Subsequent monorepo steps (5b-4..6) wait on registry-merge.
+State (2026-05-31):
+
+- ✓ Chunk repo `loft-libs-graphics` updated (commits `40e0a3d`
+  graphics + `86613ca` imaging on `main`).
+- ✓ Tags pushed: `graphics-v0.1.0`, `imaging-v0.1.0`.
+- ✓ GitHub releases live with deterministic tarballs:
+  - https://github.com/loft-lang/loft-libs-graphics/releases/tag/graphics-v0.1.0
+  - https://github.com/loft-lang/loft-libs-graphics/releases/tag/imaging-v0.1.0
+- ⏳ Registry PR pending — paste the two `index.json` entries
+  below into a `loft-lang/registry` PR.
+- ⏳ Subsequent monorepo steps (5b-4..6) wait on registry merge.
 
 ## Stage A artifacts ready
 
 | Package | Tarball | sha256 | Size | Staged at |
 |---|---|---|---|---|
 | graphics 0.1.0 | `/tmp/graphics-0.1.0.tar.gz` | `762271f637cbedaff4c3cda73ef9c6da0bcc826b8c81d9bb08eae03a645510db` | 88,828 B | `/tmp/loft-libs-graphics/graphics/` |
-| imaging 0.1.0 | `/tmp/imaging-0.1.0.tar.gz` | `0be1629668a0ab057b25430def282db23e49ed3bf3accf9dc4dc19990cf73110` | 12,751 B | `/tmp/loft-libs-graphics/imaging/` |
+| imaging 0.1.0 | `/tmp/imaging-0.1.0.tar.gz` | `1eceb3771cfbefed9809b2efec39fd8180bba0336cc959e2e0ed6ddb369cf4ce` | 12,320 B | `/tmp/loft-libs-graphics/imaging/` |
 
 Both tarballs were built by `loft package` (deterministic — zero
 mtime in gzip + tar headers).  Re-run from the staging dir produces
@@ -117,8 +125,8 @@ git checkout -b add-graphics-imaging-stage-a
   "versions": {
     "0.1.0": {
       "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/imaging-v0.1.0/imaging-0.1.0.tar.gz",
-      "sha256": "0be1629668a0ab057b25430def282db23e49ed3bf3accf9dc4dc19990cf73110",
-      "size": 12751,
+      "sha256": "1eceb3771cfbefed9809b2efec39fd8180bba0336cc959e2e0ed6ddb369cf4ce",
+      "size": 12320,
       "loft": ">=0.8",
       "subpath": "imaging",
       "published": "<ISO-8601 UTC at PR-open time>"
