@@ -96,8 +96,14 @@ Ordered by readiness.  Each is independently verifiable.
    **landed** (#220 `clean native binding pattern` merged 2026-05-26,
    followed by #221/#223/#224).  **Status:** `loft-libs-core` re-clean
    landed via PR #2 (2026-05-30) — bundled with the YAML refresh and
-   the arguments warning sweep.  `loft-libs-net`'s re-clean remains
-   pending.
+   the arguments warning sweep.  `loft-libs-net`'s re-clean is
+   **in flight** as `loft-libs-net` PR #2 (all-green CI as of
+   2026-05-31, awaiting merge) — same omnibus shape as core: canonical
+   YAML + per-symbol 6r re-clean (9 `tcp_*` sites; the 16 `ws_*` sites
+   kept because the loft fn name differs from the native symbol) +
+   warning sweep (16 `_ = self;` insertions across web/server) + new
+   `web/tests/byte_at.loft` (5 tests for the previously-uncovered
+   `byte_at` helper).
 
    **Per-symbol decision rule** (learned from loft-libs-core 2026-05-30):
    the re-clean **only applies where the `#native "n_<fn>"` string is
@@ -296,7 +302,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED** 2026-05-24 |
 | 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **partial** — shapes/gridmesh shipped; graphics+imaging **now unblocked** |
 | 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED** 2026-05-24 |
-| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **OPEN** — S–M; lands before 6w |
+| 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **partial** — `loft-libs-core` green (PR #2 2026-05-30); `loft-libs-net` green and **awaiting merge** (PR #2 2026-05-31); `loft-libs-graphics` + registry `pr-validate.yml` still pending |
 | 6w-w | Retire every `lib/*/.allow_warnings` opt-out — clean each library's warnings until the gate runs strict everywhere | 6.5 (gate landed) | **OPEN** — variable per package; tracks the ratchet to zero |
 | 6t | Library test self-sufficiency — Tier 1 gridmesh script copies, Tier 2 `graphics_gold.rs` port, Tier 3 `multiplayer_v{2,3,5}.rs` port, Tier 4 `loft test --deps`, Tier 5 (NEW) coverage gaps with no Rust-harness home (`imaging` / `world` / `markdown`) | 4–6 | **partial** — Tiers 1+2+4 DONE; Tier 3 OPEN; Tier 5 OPEN; blocks Phase 5 (`imaging`), Phase 6r re-clean (Tier 3), Phase 6w (`world`) |
 | 6w | Extract `loft-libs-world` (world, Phase-7a-expanded) | 7a + 6.5 + 6t | OPEN — M |
@@ -702,6 +708,28 @@ deleting all three monorepo harnesses
 Tier 2 next (blocks Phase 5 graphics extraction).  Tier 3 last
 (can land alongside Phase 6r since `loft-libs-net` is already
 extracted; the integration suite is additive to that repo).
+
+**Tier 3 blocker — cross-package `--native` link on Linux CI**
+(surfaced 2026-05-31 during the `loft-libs-net` 6r/6.5 sweep, PR #2).
+The omnibus first tried to lift the HTTP round-trip + WebSocket
+echo tests from `lib/game_protocol/examples/` into
+`server/tests/`.  Each test uses **both** `use server;` and
+`use web;` in the same loft program — server to listen on a port,
+web's http_get / ws_handler to drive a client arm via
+`parallel { server_arm; client_arm }`.  Builds and runs locally
+on macOS; fails on `ubuntu-latest` CI at the `rustc` link step
+("linking with `cc` failed: exit status: 1") when both cdylibs
+plus their transitive deps (ureq + rustls + ring from web,
+TCP sockets from server) are pulled into one generated binary.
+A server-only smoke (`listen` + `close`, no `web::`) passes —
+the gate is specifically "two `#native` cdylibs from sibling
+packages composed into one `loft --native test` binary."
+**Filed** as @P389 in PROBLEMS.md.  Tests dropped from PR #2
+(commit `c27198b`) and game_protocol-style two-process
+multiplayer harnesses remain the path forward (Tier 3 above).
+The gap reinforces option (a) for Tier 3 ship-site choice —
+the workspace integration crate sidesteps the single-binary
+limit by running clients and servers as separate processes.
 
 **Tier 4 — `loft test --deps` — SHIPPED 2026-05-28.**  Consumer-side
 walker that runs `loft test` on every dependency in the current
