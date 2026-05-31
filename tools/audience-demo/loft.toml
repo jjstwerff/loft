@@ -6,13 +6,10 @@
 # `audience_crystal` + `gridmesh` for the rendering data model,
 # and `graphics` for the actual canvas drawing.
 #
-# `web` + `server` resolve via the loft package registry after
-# Phase 6b removed `lib/web/` + `lib/server/` from the monorepo.
-# `audience_crystal` + `gridmesh` + `graphics` stay path-resolved
-# until their chunks finish Stage B (audience_crystal is the
-# monorepo-paired demo library; gridmesh + graphics live in
-# `loft-libs-graphics` but the monorepo `lib/<pkg>/` is still
-# present pending Phase 5b).
+# `web` + `server` + `gridmesh` + `graphics` resolve via the loft
+# package registry.  `audience_crystal` is the monorepo-paired demo
+# library and stays path-resolved (Phase 8 will retire it as a
+# `tools/audience-demo/` test dir).
 
 [package]
 name    = "audience_demo"
@@ -23,5 +20,5 @@ loft    = ">=0.8"
 web                = ">=0.1"
 server             = ">=0.1"
 audience_crystal   = { path = "../../lib/audience_crystal" }
-gridmesh           = { path = "../../lib/gridmesh" }
-graphics           = { path = "../../lib/graphics" }
+gridmesh           = ">=0.1"
+graphics           = ">=0.1"

@@ -8,4 +8,4 @@ entry = "src/moros_render.loft"
 
 [dependencies]
 moros_map = { path = "../moros_map" }
-graphics  = { path = "../graphics" }
+graphics  = ">=0.1"
