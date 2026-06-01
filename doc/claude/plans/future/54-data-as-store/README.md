@@ -88,12 +88,20 @@ emit the same bytes as `show_json`, because the IR does not yet live in store
 records.  **The convergence is exactly arc B:** once the IR is materialised
 into store records (arc A schema + B write), `Stores::show_json` walks the IR
 *directly* — and the hand-rolled native walk is subsumed by the database's own
-serialiser.  So the right framing is: the @PLAN28 codec is the **interim,
-native-side** inspection layer; polishing it *into* `show_json`'s format (or
-retiring it in favour of `show_json` once the IR is store-backed) is part of
-this plan's payoff, not a thing already done.  Either way the serialisation
-work is permanent value — but it is a *separate* facility today that converges
-on the database's one true JSON as the IR moves into the store.
+serialiser.
+
+**Decision (user, 2026-06-02) — the JSON codec is bootstrap scaffolding, slated
+to go.**  The @PLAN28 JSON layer (`ir_schema::*_to_json` / `*_from_json` /
+`compare_data` / `LOFT_DUMP_SNAPSHOT`) "was useful to get the wagon rolling but
+[is] not for the final goal."  It earns its keep *now* — exhaustive native-IR
+walk reused as arc B's traversal skeleton (just swap the JSON sink for a
+store-writer sink), and `compare_data` as arc B's equivalence oracle — but it is
+**not** a permanent facility and is **not** to be polished into a parallel
+`show_json` alternative.  The final state is `Stores::show_json` over the
+store-backed IR; the native-JSON codec is **retired** once arc B's store walk is
+proven (its `compare_data` validation having served its purpose).  Treat it as
+interim throughout: lean on it freely while building, but do not invest in it as
+an end state.
 
 ## Goal
 
@@ -117,9 +125,27 @@ parse-order prefixes* — never independent per-library files:
    content hashes).  A repeated run of the *same* script / app mmaps its
    whole compiled `Data` — stdlib **and** its libs — with zero parse.
 
-**Explicitly out of scope:** independent per-library mmap that composes
-arbitrary libs on demand.  Not needed — caching the whole bundle
-sidesteps it.
+**Explicitly out of scope — settled, not just deferred (user, 2026-06-02):**
+independent per-library mmap / per-library IR snapshot that composes arbitrary
+libs on demand.  Two reasons, both permanent:
+
+1. **A library cannot cleanly write its own IR.**  The IR is global-index
+   (def_nr / `known_type` are absolute, parse-order-dependent — see § Why the
+   global-index model is fine), so a library snapshotted in isolation would need
+   name-based relocation into whatever prefix it lands in.  That relocation is
+   the brittlest possible part of the system and it buys the least-common case.
+2. **The loft source is the better representation of a library's state anyway.**
+   For distributing / versioning / inspecting a library, the `.loft` source —
+   not a serialized IR image — is the right artifact.  And there is **no
+   efficiency case** for a serialized per-library form: @PLAN28 already
+   established that (de)serialization is not faster than parsing natural loft
+   source (~15–24 ms load ≈ ~11–23 ms parse — see § Status).  So a per-library
+   IR cache would be a worse, harder-to-relocate stand-in for something the
+   source already expresses well *and* parses just as fast.
+
+Caching the **whole bundle** (core + the script's sorted lib-set) sidesteps both
+— every index inside one image is internally consistent, no relocation anywhere.
+Closed in the decision register: [DESIGN_DECISIONS.md § C69](../../../DESIGN_DECISIONS.md#c69--no-per-library-ir-snapshot--cache).
 
 **Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
 **whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
@@ -129,15 +155,17 @@ cold-start win without the IR rewrite.  This plan **supersedes** it: the
 store struct-enum format replaces JSON and turns the rebuild into a
 zero-copy mmap of the same whole bundle.
 
-**Per-library JSON was considered and deferred** (likely dropped — user,
-2026-05-31): a per-library deliverable would close the first-landing gap
-for a brand-new `use` combination, but it needs name-based relocation
-(it drops into an arbitrary prefix), which is the brittlest part of the
-stop-gap and optimizes the least-common case.  So neither @PLAN28 nor
-this plan does per-library: both operate on the **whole bundle as one
-image** with absolute, internally-consistent indices — no relocation
-anywhere.  @PLAN28 builds the stop-gap format-agnostic so this plan
-swaps the bundle encoder underneath without touching startup wiring.
+**Per-library snapshot — dropped, not deferred (user, 2026-06-02; first raised
+2026-05-31):** a per-library deliverable would close the first-landing gap for a
+brand-new `use` combination, but a library **cannot cleanly write its own IR**
+(global indices need name-based relocation into an arbitrary prefix — the
+brittlest part of the stop-gap, optimizing the least-common case), and the
+`.loft` **source is the better representation of a library's state anyway** (see
+§ What gets cached).  So neither @PLAN28 nor this plan does per-library: both
+operate on the **whole bundle as one image** with absolute, internally-
+consistent indices — no relocation anywhere.  @PLAN28 builds the stop-gap
+format-agnostic so this plan swaps the bundle encoder underneath without
+touching startup wiring.
 
 ## Why the global-index model is fine for this scope
 
@@ -365,7 +393,7 @@ seam).  The two compose; neither alone is the deliverable.
 |---|---|---|
 | **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (cursor `a07ed8d`, superseded by the typed handle layer `src/data_store.rs` in commit `9d860c5`); see § Arc A0 — handle layer |
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
-| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
+| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one — so the store write path does not exist yet.  What it *does* reuse: `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (swap the JSON sink for a `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  Needs full write-accessor coverage in `data_store.rs` (today: 4/34 Node variants, 0/24 TypeT, one write accessor) — the bulk of the arc. | Open |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` — `Value`/`ValuesVector`/`ValueType`, covering `NdNull`/`NdInt`/`NdCall`/`NdBlock`) is implemented; bulk migration is open. | Open — minimum seam landed (commit `9d860c5`); bulk migration is the remainder |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
@@ -378,8 +406,10 @@ seam).  The two compose; neither alone is the deliverable.
    `src/ir_schema_gen.rs` register the full IR schema.  Finding 2 (box-of-one
    `vector<Self>` for recursive single-child) resolved in the transcription.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
-   before touching read sites.  If @PLAN28 Step 2 shipped a store-format
-   snapshot, B is largely done.
+   before touching read sites.  Greenfield (@PLAN28 shipped JSON, not a
+   store-format snapshot — see arc B row); reuses `data_to_json`'s walk as the
+   traversal skeleton + `compare_data` as the oracle.  **Prerequisite — resolve
+   the `ir_schema` module fork** (below) first.
 3. **D (mmap load, read-mostly)** — load a store-backed `Data` and run
    execution against it *while the parser still builds native `Data`*.
    Proves the read path on the hot loop before the full migration.
@@ -388,6 +418,27 @@ seam).  The two compose; neither alone is the deliverable.
    generation/, then parser/).
 5. **E (bundle snapshots)** — core snapshot first (deterministic, shared);
    per-script bundle snapshot second.
+
+## Module fork to reconcile before arc B (found 2026-06-02)
+
+Arc A left **two `ir_schema` modules with two same-named `register_ir_schema`
+functions** in the tree.  This is a transition artifact, not a design — clean it
+up before arc B builds on top of it:
+
+| Module | `register_ir_schema` | Role | Disposition |
+|---|---|---|---|
+| `src/ir_schema_gen.rs` (arc A, generated) | `-> IrSchemaIds` | the **complete** store schema (all fields/variants/offsets, `db.finish()`) | **keep** — this is arc A's deliverable |
+| `src/ir_schema.rs` (@PLAN28) | `-> usize` | **shells-only** schema (S1 rung, no fields wired); only its own test (`ir_schema.rs:1541`) calls it | **dead — delete** the shells-only register; its job is done by `ir_schema_gen` |
+| `src/ir_schema.rs` (@PLAN28) | — | the **JSON codec** (`*_to_json`/`*_from_json`/`compare_data`) | **interim — keep until arc B lands**, then retire (see § Standalone upside decision); reused as arc B's traversal skeleton + oracle meanwhile |
+
+Concretely, before arc B:
+
+1. Delete the shells-only `ir_schema::register_ir_schema` (and its collision
+   test) so there is exactly one schema registration in the codebase
+   (`ir_schema_gen`).  The name collision is otherwise a live trap.
+2. Keep the JSON codec **only** as arc B's scaffolding — its walk is copied into
+   the store-writer, and `compare_data` validates the result; it is deleted once
+   that validation has run green and `show_json`-over-store works.
 
 ## Arc A0 — handle layer (landed; supersedes the cursor design)
 
@@ -603,10 +654,12 @@ finish-before-continue rule governs @PLAN28's S1–S5 rungs.
 
 - **[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
   — direct predecessor.  @PLAN28's rebuild-on-load snapshot delivers the
-  cold-start win first; this plan removes the rebuild.  If @PLAN28 Step 2
-  serializes into the **store struct-enum format**, arc B here is mostly
-  done.  serde is forbidden project-wide (CODE.md) — this plan uses the
-  store format, consistent with that.
+  cold-start win first; this plan removes the rebuild.  @PLAN28 shipped a
+  **JSON** snapshot (native-side), **not** the store struct-enum format — so
+  arc B is greenfield, not "mostly done"; what carries over is the JSON codec's
+  IR walk (as arc B's skeleton) and `compare_data` (as its oracle), both interim
+  (§ Standalone upside decision).  serde is forbidden project-wide (CODE.md) —
+  this plan uses the store format, consistent with that.
 - **[@PLAN38 loft-store-durable](../38-loft-store-durable/)** — shares the
   `Store::open_durable` / persistence surface; coordinate the on-disk
   store format so the IR store and durable user stores stay compatible.
