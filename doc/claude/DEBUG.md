@@ -279,9 +279,12 @@ running the program.
 | `--show-rust` | Generated Rust (`--native-emit` shape) | Native-codegen bugs, rustc errors |
 | `--show-slots` | Stack-slot table per fn (name, type, scope, slot, live interval) | Slot conflicts, lifetime bugs |
 | `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
+| `--bc-roundtrip` | Re-assemble each fn's bytecode from its own dump and compare (`ok`/`DIFFERS`) | Verify the dump is a faithful, editable bytecode representation — see [Bytecode round-trip](#bytecode-round-trip---bc-roundtrip) |
 
-Combine flags freely; they emit in fixed order.  No flags = all
-four sections.  `--all-fns` includes the default/* stdlib.  `--fn
+Combine the four dump flags freely; they emit in fixed order, and
+no flags = all four.  `--bc-roundtrip` is **opt-in only** (a
+verification check, not a dump — it never runs in the no-flags
+default).  `--all-fns` includes the default/* stdlib.  `--fn
 <name>` filters to one function.
 
 ### `--show-types` for dep-tracking bugs
@@ -351,6 +354,77 @@ loft --introspect --show-bytecode --diff before.bc myprog.loft
 
 Per-section `--*-out` redirects still write to their files;
 `--diff` only covers stdout-bound sections.
+
+### Labelled jump targets in the bytecode dump
+
+`--show-bytecode` anchors every jumped-to offset with a `:POS<rel>`
+label and rewrites each goto to reference it, so the dump reads as
+editable labelled assembly instead of raw byte offsets:
+
+```
+ 28[48]: GotoFalseWord(jump=:POS46, if_false: boolean)
+ 43[40]: GotoWord(jump=:POS58)
+:POS46
+ 46[40]: ConstInt(val=2) -> integer var=r[16]:integer
+...
+127[40]: GotoWord(jump=:POS62)   ← backward loop edge, binds to the label
+:POS130
+```
+
+Jumps bind to a label *identity*, not a byte offset, so inserting or
+removing ops shifts no jumps.  The label `<rel>` is the target's
+relative offset within the function (`collect_jump_targets` /
+`instruction_len` in `src/compile.rs` — `instruction_len` decodes
+each op's real length, so variable-length `ConstText`/`Iterate`
+operands advance correctly).
+
+### Bytecode round-trip (`--bc-roundtrip`)
+
+`loft --introspect --bc-roundtrip <file>` dumps each function's
+bytecode, re-assembles it from that text via
+`compile::reassemble_function` (the inverse of the disassembler),
+and compares to the original byte stream — reporting `ok` /
+`DIFFERS` / `error` per function plus a tally.
+
+```bash
+loft --introspect --bc-roundtrip --all-fns myprog.loft
+#   ok      n_classify  (139 bytes)
+#   ok      n_main      (95 bytes)
+#   ── 201 identical, 0 differing/error ──
+```
+
+A clean run proves the labelled dump is a **faithful, editable
+representation of the bytecode** — every byte is recoverable from
+the text.  Constants encode inline (`ConstText` carries its escaped
+string); jumps resolve from `:POS` labels; call targets dump as the
+function *name* (`fn=n_classify`, relocation-safe) and static calls
+as the native name, both resolved back to offsets on re-assembly.
+
+**Why it's a tool, not just a test** — it's the front half of an
+"edit bytecode *outside the parser*" loop: dump a function, change
+an op / a constant / a jump / drop in a free, re-assemble, and the
+round-trip confirms it's well-formed.  For any **stack-neutral**
+tweak that is a real way to ask "what does *this exact* bytecode
+do?" without going through the parser.
+
+**Limits** (honest boundaries of the edit workflow):
+- *Stack-neutral edits* (swap an op, change a constant, redirect a
+  jump, add a free) re-assemble correctly — slot positions and the
+  `Return` discard are unchanged.
+- *Stack-depth or local-set changes* do **not** round-trip a hand
+  edit: var slots are stack-relative (`pos = stack − slot`) and
+  `Return(…, discard=N)` is the frame size, both of which shift.
+  Re-deriving them needs the slot/layout pass (`scopes.rs`), not a
+  text edit.
+- The last 20% — **splice-and-run** (append the re-assembled
+  function to the code array, repoint `code_position` + caller `to`,
+  execute) — is **not built**.  Relative gotos make a single
+  function relocatable, so it's a small, self-contained add when the
+  need is real.
+
+Implementation: `compile::reassemble_function` + `escape_text` /
+`unescape_text` (`src/compile.rs`); the `Roundtrip` section in
+`src/introspect.rs`.
 
 ### Native-codegen source map
 

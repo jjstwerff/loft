@@ -247,7 +247,9 @@ pub fn emit_all(
             emit_types(&mut writer, data, end_def, opts)?;
         }
     }
-    if opts.includes(Section::Roundtrip) {
+    // Opt-in only (a verification check, not a dump) — NOT part of the
+    // no-flags "all sections" default, so it never pollutes a plain dump.
+    if opts.sections.contains(&Section::Roundtrip) {
         let mut writer = stdout.lock();
         writeln!(writer)?;
         writeln!(writer, "=== roundtrip ===")?;
