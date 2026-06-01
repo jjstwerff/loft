@@ -53,6 +53,7 @@ loft-libs-graphics  imaging-v0.1.0           imaging
 loft-libs-net       game_protocol-v0.1.1     game_protocol
 loft-libs-net       web-v0.1.1               web
 loft-libs-world     hex_world-v0.1.0         hex_world
+loft-libs-game      time-v0.1.0              time
 EOF
 )
 

@@ -94,8 +94,8 @@ visually adjacent.
 | `loft-libs-net` | `web`, `server`, `game_protocol` | all shipped |
 | `loft-libs-graphics` | `graphics`, `shapes`, `gridmesh` | all shipped 0.1.x |
 | `loft-libs-assets` | `mesh3d`, `glb` (+ `imaging` migrating in at next major) | **chunk bootstrapped 2026-05-31** ([loft-lang/loft-libs-assets](https://github.com/loft-lang/loft-libs-assets)).  `mesh3d 0.1.0` + `glb 0.1.0` shipped (registry PR #8, validator 3-of-3 gates green).  imaging migration deferred to next major-version boundary. |
-| `loft-libs-game` | `physics_2body`, `particles`, `input`, `time`, `audio_bus` | chunk not yet bootstrapped; first inhabitant is `time` (already exists as `lib/time/`) |
-| `loft-libs-world` | `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | chunk not yet bootstrapped; `hex_world` exists as `lib/world/` in monorepo (rename pending) |
+| `loft-libs-game` | `physics_2body`, `particles`, `input`, `time`, `audio_bus` | **chunk bootstrapped 2026-06-01** ([loft-lang/loft-libs-game](https://github.com/loft-lang/loft-libs-game)).  `time 0.1.0` shipped (registry PR #11, validator green).  Other inhabitants pending design. |
+| `loft-libs-world` | `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | **chunk bootstrapped 2026-06-01** ([loft-lang/loft-libs-world](https://github.com/loft-lang/loft-libs-world)).  `hex_world 0.1.0` shipped (registry PR #10, validator green; renamed from `lib/world` in monorepo W.1).  Other hex_* inhabitants pending design. |
 
 **Naming the hex_* family.**  Each library covers ONE data axis of
 the hex world.  The `hex_*` prefix marks the family + leaves room for
@@ -477,10 +477,13 @@ pub fn rebind(s: InputState, action: text, raw: RawEvent)                       
 access, scheduling primitives (timers, repeating tasks, defer-to-
 next-frame).
 
-**Migration path:** `lib/time/` already exists in the monorepo as a
-fully-designed library.  When `loft-libs-game` chunk bootstraps, time
-moves over as the first inhabitant — cheaper than starting the chunk
-with a brand-new library still being designed.
+**Migration path:** **shipped 2026-06-01.**  `time 0.1.0` is the
+first inhabitant of `loft-libs-game` (W.0c + W.0d) — the package
+moved from the monorepo `lib/time/` to the chunk repo unchanged
+(preserving the existing API), tagged + released + added to the
+registry.  Monorepo's own consumers (`tests/docs/32-time.loft`)
+resolve via `tests/fixtures/libs/time/` (the Phase 6.12 fixture
+mirror).
 
 **Lavition pairing:** editor uses time for animation playback + UI
 transitions + auto-save scheduling.
@@ -488,8 +491,9 @@ transitions + auto-save scheduling.
 **Game roles:** the game loop's tick driver; animation timing; AI
 schedules.
 
-**API:** preserve current `lib/time/` API; mark version 0.1.0 with
-whatever it currently exposes; iterate post-extraction.
+**API:** version 0.1.0 preserves the monorepo `lib/time/` API
+verbatim — post-0.1 iterations land via the chunk repo's own release
+cadence (W.0c+W.0d-style tag + GH release + registry PR).
 
 ### `audio_bus` — game-side audio triggers
 
@@ -547,8 +551,8 @@ consumer migration + monorepo cleanup).
 | ~~W.0~~ | ~~Promote `glb` out of `graphics` submodule into `lib/glb/` (monorepo).~~  **Dropped 2026-05-31** — superseded by direct-to-chunk path (W.0b writes the package directly into `loft-libs-assets`, no monorepo round-trip).  Monorepo-first pattern is legacy from the era when `lib/graphics/` lived there; with the chunk already extracted, the cheaper path is to harvest from the registry-shipped graphics 0.1.0 into the new chunk. | — | superseded |
 | **W.0a** | Bootstrap `loft-libs-assets` chunk (GitHub repo + CI from net template). | S | — |
 | **W.0b** | Write `mesh3d` + `glb` packages directly into `loft-libs-assets`; tag + release + registry PR. | M | W.0a |
-| **W.0c** | Bootstrap `loft-libs-game` chunk. | S | — |
-| **W.0d** | Extract `lib/time` → `loft-libs-game/time 0.1.0` (uses time as the chunk's bootstrap inhabitant — it's already a complete library, cheaper than starting with brand-new design work). | M | W.0c |
+| ~~W.0c~~ | ~~Bootstrap `loft-libs-game` chunk.~~  **Shipped 2026-06-01** — repo created at [`loft-lang/loft-libs-game`](https://github.com/loft-lang/loft-libs-game), CI workflow + LICENSE + README + `.gitignore` cloned from the loft-libs-assets template (matrix scoped to `[time]`). | S | — |
+| ~~W.0d~~ | ~~Extract `lib/time` → `loft-libs-game/time 0.1.0`~~  **Shipped 2026-06-01** — Stage A: package copied into chunk, [time-v0.1.0 release](https://github.com/loft-lang/loft-libs-game/releases/tag/time-v0.1.0) (5937 bytes, sha256 `fb078def…`), registry [PR #11](https://github.com/loft-lang/registry/pull/11) (validator green).  Stage B: `lib/time/` removed from monorepo, `tests/fixtures/libs/time/` populated via `scripts/sync-fixtures.sh` (PINNED_REFS row), `tests/docs/32-time.loft` `@ARGS` repointed at the fixtures dir. | M | W.0c |
 | ~~W.0e~~ | ~~Bootstrap `loft-libs-world` chunk.~~  **Shipped 2026-06-01** — repo created at [`loft-lang/loft-libs-world`](https://github.com/loft-lang/loft-libs-world), CI workflow + LICENSE + README + `.gitignore` cloned from the loft-libs-assets template (matrix scoped to `[hex_world]`). | S | — |
 | ~~W.1~~ | ~~Rename `lib/world` → `lib/hex_world` (monorepo, internal churn) + update consumer loft.tomls + `src/wasm.rs` `include_str!` paths.~~  **Shipped 2026-06-01** — dir + entry-file renamed, `name` in loft.toml bumped to `hex_world`, all consumer `use world;` / `world::` refs updated (tests/integration/multiplayer, tests/fixtures/libs/game_protocol/examples, tests/multilib/p379_lib_namespace, lib/hex_world/tests/02-persist).  No `src/wasm.rs` `include_str!` paths were needed — `lib/world` was never WASM-bridged. | S | — |
 | ~~W.2~~ | ~~Extract `hex_world` Stage A → Stage B → `loft-libs-world/hex_world 0.1.0`.~~  **Shipped 2026-06-01** — Stage A: package copied into chunk, [hex_world-v0.1.0 release](https://github.com/loft-lang/loft-libs-world/releases/tag/hex_world-v0.1.0) (18009 bytes, sha256 `e537960b…`), registry [PR #10](https://github.com/loft-lang/registry/pull/10) (validator green).  Stage B: `lib/hex_world/` removed from monorepo, `tests/fixtures/libs/hex_world/` populated via `scripts/sync-fixtures.sh` (PINNED_REFS row), `tests/issues.rs::p379_two_libs_same_struct_name` repointed at the fixtures dir, fixture broken-link false-positives suppressed via `link_source_is_fixture` filter in `tools/indexer/src/scan.loft`. | M | W.0e, W.1 |
