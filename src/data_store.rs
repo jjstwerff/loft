@@ -27,6 +27,7 @@ const DISC_CALL: u8 = 11;
 const DISC_BLOCK: u8 = 13;
 
 /// Field byte offsets within their record, relative to the record's `pos`.
+const NDINT_N: u32 = 8;
 const NDCALL_ARGS: u32 = 4;
 const NDCALL_DEF_NR: u32 = 8;
 const NDBLOCK_BLOCK: u32 = 8;
@@ -145,9 +146,77 @@ impl Value {
             },
         }
     }
+
+    /// `NdInt.n` — the integer literal.
+    #[must_use]
+    pub fn int_value(&self, stores: &Stores) -> i64 {
+        stores
+            .store(&self.rec)
+            .get_int(self.rec.rec, self.rec.pos + NDINT_N)
+    }
+
+    // ─── Write side (arc B materializer) ─────────────────────────────────────
+    //
+    // Each setter writes the discriminant byte then any scalar fields, via the
+    // same baked offsets the readers use.  Vector children (`NdCall.args`,
+    // `NdBlock.operators`) are filled by the caller through the matching
+    // `call_parameters()` / `block_operators()` handle + `ValuesVector::push`.
+
+    /// Stamp the variant discriminant byte (offset 0).
+    fn set_discriminant(&self, stores: &mut Stores, disc: u8) {
+        stores
+            .store_mut(&self.rec)
+            .set_byte(self.rec.rec, self.rec.pos, 0, i32::from(disc));
+    }
+
+    /// Write this slot as `NdNull`.
+    pub fn write_null(&self, stores: &mut Stores) {
+        self.set_discriminant(stores, DISC_NULL);
+    }
+
+    /// Write this slot as `NdInt`.
+    pub fn write_int(&self, stores: &mut Stores, n: i64) {
+        self.set_discriminant(stores, DISC_INT);
+        stores
+            .store_mut(&self.rec)
+            .set_int(self.rec.rec, self.rec.pos + NDINT_N, n);
+    }
+
+    /// Write this slot as `NdCall` (`def_nr` only — fill `args` via
+    /// [`Value::call_parameters`] + [`ValuesVector::push`]).
+    pub fn write_call(&self, stores: &mut Stores, def_nr: u32) {
+        self.set_discriminant(stores, DISC_CALL);
+        stores.store_mut(&self.rec).set_int(
+            self.rec.rec,
+            self.rec.pos + NDCALL_DEF_NR,
+            i64::from(def_nr),
+        );
+    }
+
+    /// Write this slot as `NdBlock` with `name` (fill `operators` via
+    /// [`Value::block_operators`] + [`ValuesVector::push`]).
+    pub fn write_block(&self, stores: &mut Stores, name: &str) {
+        self.set_discriminant(stores, DISC_BLOCK);
+        self.block_name_set(stores, name);
+    }
 }
 
 impl ValuesVector {
+    /// Wrap the field slot where a `vector<Node>` header lives (e.g. a host
+    /// record's field, for the arc B materializer's root).
+    #[must_use]
+    #[inline]
+    pub fn new(rec: DbRef) -> Self {
+        ValuesVector { rec }
+    }
+
+    /// The hidden `DbRef` of the vector field slot.
+    #[must_use]
+    #[inline]
+    pub fn db_ref(&self) -> DbRef {
+        self.rec
+    }
+
     /// Number of elements.
     #[must_use]
     pub fn len(&self, stores: &Stores) -> u32 {
@@ -166,16 +235,20 @@ impl ValuesVector {
         let rec = vector::get_vector(&self.rec, NODE_STRIDE, i64::from(i), &stores.allocations);
         Value { rec }
     }
+
+    /// Append one element slot and return a handle to it (the slot's bytes are
+    /// zeroed — write a variant into it via `Value::write_*`).
+    pub fn push(&self, stores: &mut Stores) -> Value {
+        let len = i64::from(self.len(stores));
+        let rec = vector::insert_vector(&self.rec, NODE_STRIDE, len, &mut stores.allocations);
+        Value { rec }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir_schema_gen::register_ir_schema;
-
-    /// `NdInt.n` offset — test-only scaffolding until a production int accessor
-    /// needs it; guarded in [`baked_layout_mirrors_loft_schema`] like the rest.
-    const NDINT_N: u32 = 8;
 
     /// Claim a fresh `Node` record and write its discriminant.
     fn new_node(stores: &mut Stores, disc: u8) -> DbRef {
@@ -186,17 +259,16 @@ mod tests {
         rec
     }
 
-    /// Append an element slot into the `vector<Node>` field at `field`.
+    /// Append an element slot into the `vector<Node>` field at `field`
+    /// (delegates to the production [`ValuesVector::push`]).
     fn push(stores: &mut Stores, field: DbRef) -> DbRef {
-        let len = i64::from(vector::length_vector(&field, &stores.allocations));
-        vector::insert_vector(&field, NODE_STRIDE, len, &mut stores.allocations)
+        ValuesVector::new(field).push(stores).db_ref()
     }
 
-    /// Write an `NdInt` (disc + `n`) into `slot`.
+    /// Write an `NdInt` (disc + `n`) into `slot` (delegates to the production
+    /// [`Value::write_int`]).
     fn write_int(stores: &mut Stores, slot: DbRef, n: i64) {
-        let store = stores.store_mut(&slot);
-        store.set_byte(slot.rec, slot.pos, 0, i32::from(DISC_INT));
-        store.set_int(slot.rec, slot.pos + NDINT_N, n);
+        Value::new(slot).write_int(stores, n);
     }
 
     #[test]

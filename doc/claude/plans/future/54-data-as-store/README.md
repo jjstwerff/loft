@@ -7,11 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**In-progress — arc A0 and arc A landed; first typed handle layer (accessor seam) implemented and green.**
+**In-progress — arc A0 + arc A landed; arc B's write path opened (first native→store materializer slice green).**
 
 - **Arc A0** (typed field cursor, commit `a07ed8d`) — landed as `RecordCursor`/`RecordCursorMut` wrapping `Store`'s raw primitives.  That cursor form has since been superseded by the typed handle layer (see § Arc A0 — handle layer below); `src/data_store.rs` is now the accessor seam, not a bare cursor.
 - **Arc A** (IR store schema, commit `ed21b3e`) — landed as `tools/ir_schema/` (hybrid generate-extract pipeline) + `src/ir_schema_gen.rs` (generated, checked-in).  The full IR is registered via `register_ir_schema(db: &mut Stores) -> IrSchemaIds`; every struct/enum is in the schema; `db.finish()` computes all field positions, record sizes, and discriminants including the 34-variant `Node` enum size.
-- **Typed handle layer** (`src/data_store.rs`, commit `9d860c5`) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.  Remaining arcs (B write, C full migration, D mmap, E bundle snapshots) are open.
+- **Typed handle layer** (`src/data_store.rs`, commit `9d860c5`) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.
+- **Arc B fork-cleanup (prerequisite, done)** — removed the dead shells-only `ir_schema::register_ir_schema` + its consts/tests, leaving exactly one schema registration (`ir_schema_gen`).  The @PLAN28 JSON codec stays (interim — arc B's traversal skeleton + `compare_data` oracle); its 30 lib tests + 6 round-trip tests still pass.
+- **Arc B write path (opened)** — `src/data_store.rs` grew the write side (`ValuesVector::push`, `Value::write_null/write_int/write_call/write_block`, `int_value` reader), and `src/ir_store.rs` adds `materialize_node` (native `data::Value` → store records, the `data_to_json` walk with a store-writer sink).  Two round-trip tests green (`materialize_call_tree`, `materialize_block`).  Coverage so far is the handle subset (Null/Int/Call/Block); the remaining variants (the bulk of the arc) are the next increment.  Arcs C/D/E remain open.
 
 Original note: This is the **mmap end-goal** that
 [@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
@@ -393,7 +395,7 @@ seam).  The two compose; neither alone is the deliverable.
 |---|---|---|
 | **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (cursor `a07ed8d`, superseded by the typed handle layer `src/data_store.rs` in commit `9d860c5`); see § Arc A0 — handle layer |
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
-| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one — so the store write path does not exist yet.  What it *does* reuse: `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (swap the JSON sink for a `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  Needs full write-accessor coverage in `data_store.rs` (today: 4/34 Node variants, 0/24 TypeT, one write accessor) — the bulk of the arc. | Open |
+| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one.  Reuses `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (JSON sink → `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  **Opened:** `src/ir_store.rs::materialize_node` + the `data_store.rs` write side cover the handle subset (Null/Int/Call/Block), two round-trip tests green.  **Remaining:** grow write-accessor + `materialize_node` coverage to all 34 Node + 24 TypeT variants + Definition/Attribute/etc. (the bulk), then a whole-`Data` materializer validated by `compare_data` against a fresh parse. | In-progress — handle subset materialized + round-trip tested |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` — `Value`/`ValuesVector`/`ValueType`, covering `NdNull`/`NdInt`/`NdCall`/`NdBlock`) is implemented; bulk migration is open. | Open — minimum seam landed (commit `9d860c5`); bulk migration is the remainder |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
@@ -408,8 +410,10 @@ seam).  The two compose; neither alone is the deliverable.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
    before touching read sites.  Greenfield (@PLAN28 shipped JSON, not a
    store-format snapshot — see arc B row); reuses `data_to_json`'s walk as the
-   traversal skeleton + `compare_data` as the oracle.  **Prerequisite — resolve
-   the `ir_schema` module fork** (below) first.
+   traversal skeleton + `compare_data` as the oracle.  Prerequisite (module
+   fork, below) ✅ done.  **Opened:** `ir_store::materialize_node` covers the
+   handle subset; next increment grows it to all variants + a whole-`Data`
+   materializer.
 3. **D (mmap load, read-mostly)** — load a store-backed `Data` and run
    execution against it *while the parser still builds native `Data`*.
    Proves the read path on the hot loop before the full migration.
@@ -419,11 +423,11 @@ seam).  The two compose; neither alone is the deliverable.
 5. **E (bundle snapshots)** — core snapshot first (deterministic, shared);
    per-script bundle snapshot second.
 
-## Module fork to reconcile before arc B (found 2026-06-02)
+## Module fork to reconcile before arc B (found 2026-06-02; step 1 ✅ done)
 
 Arc A left **two `ir_schema` modules with two same-named `register_ir_schema`
-functions** in the tree.  This is a transition artifact, not a design — clean it
-up before arc B builds on top of it:
+functions** in the tree.  This is a transition artifact, not a design — cleaned
+up (step 1) before arc B built on top of it:
 
 | Module | `register_ir_schema` | Role | Disposition |
 |---|---|---|---|
@@ -433,9 +437,11 @@ up before arc B builds on top of it:
 
 Concretely, before arc B:
 
-1. Delete the shells-only `ir_schema::register_ir_schema` (and its collision
-   test) so there is exactly one schema registration in the codebase
-   (`ir_schema_gen`).  The name collision is otherwise a live trap.
+1. ✅ **Done** — deleted the shells-only `ir_schema::register_ir_schema` (and its
+   `shells_register_without_collision` / `prefix_is_not_a_legal_identifier`
+   tests + the `IR_PREFIX`/`IR_ENUMS`/`IR_STRUCTS` consts), so there is exactly
+   one schema registration in the codebase (`ir_schema_gen`).  The JSON codec
+   (`*_to_json` / `compare_data`) stays.
 2. Keep the JSON codec **only** as arc B's scaffolding — its walk is copied into
    the store-writer, and `compare_data` validates the result; it is deleted once
    that validation has run green and `show_json`-over-store works.
