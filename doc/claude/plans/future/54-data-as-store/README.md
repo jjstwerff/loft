@@ -45,19 +45,36 @@ but it shipped the **reusable foundation** this plan needs:
 `Store`'s raw int primitives (§ Arc A0), the precondition for the accessor
 seam.  Pure-additive, ships standalone.
 
-**Standalone upside — a functional inspection library inside the database
-(2026-06-01).**  Independent of the cold-start goal, @PLAN28's codec already
-gives `Database` a rich, working **serialise / deserialise / compare** layer
-over the IR and the store schema (`*_to_json` / `*_from_json` /
-`schema_to_json` / `compare_data` / `LOFT_DUMP_SNAPSHOT`), proven lossless on
-the real stdlib.  That is immediately useful as **inspection + debugging
-tooling** — dump any parsed `Data` or `Stores` schema to readable JSON, diff
-two compilations field-by-field, regression-pin IR shapes in tests — and it
-keeps paying off *throughout* this plan: every arc (A schema, B write, C
-per-subsystem swap, D mmap) can dump-and-eyeball or `compare_data` its
-intermediate state against a fresh parse.  So the serialisation work is not
-sunk cost from a closed JSON-cache idea; it is a permanent database facility
-that also happens to seed the mmap path.
+**Standalone upside — a functional serialise/inspect layer that *converges*
+on the database's own JSON (2026-06-01).**  Independent of the cold-start
+goal, @PLAN28's codec already gives a rich, working **serialise / deserialise
+/ compare** layer over the IR and the store schema (`ir_schema::*_to_json` /
+`*_from_json`, `database::snapshot::schema_to_json`, `compare_data`,
+`LOFT_DUMP_SNAPSHOT`), proven lossless on the real stdlib — immediately useful
+as inspection + debugging tooling (dump any parsed `Data`/`Stores` to readable
+JSON, diff two compilations field-by-field, regression-pin IR shapes), and
+useful *throughout* this plan (every arc can dump-and-eyeball or `compare_data`
+its intermediate state against a fresh parse).
+
+**But it is NOT yet the database's own JSON — and that gap is the point.**
+There are two distinct JSON producers today:
+
+| Producer | Walks | Driven by | Shape |
+|---|---|---|---|
+| `Stores::show_json` (`src/database/format.rs:69`) | **store records** via `DbRef` + `tp` | the database type schema | the database's native record-JSON |
+| `ir_schema::data_to_json` + `database::snapshot::schema_to_json` | the **native** `Data` / `Vec<Definition>` / `Box<Value>` graph (+ `Stores.types` as native structs) | hand-rolled per-type walks | tagged objects `{"k":…}` |
+
+The @PLAN28 codec is a *hand-rolled walk over native Rust IR* — it does **not**
+emit the same bytes as `show_json`, because the IR does not yet live in store
+records.  **The convergence is exactly arc B:** once the IR is materialised
+into store records (arc A schema + B write), `Stores::show_json` walks the IR
+*directly* — and the hand-rolled native walk is subsumed by the database's own
+serialiser.  So the right framing is: the @PLAN28 codec is the **interim,
+native-side** inspection layer; polishing it *into* `show_json`'s format (or
+retiring it in favour of `show_json` once the IR is store-backed) is part of
+this plan's payoff, not a thing already done.  Either way the serialisation
+work is permanent value — but it is a *separate* facility today that converges
+on the database's one true JSON as the IR moves into the store.
 
 ## Goal
 
