@@ -355,12 +355,11 @@ const LIB_TESTS_SKIP: &[&str] = &[
 /// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
 /// interpreter crashes can't be run file-by-file here.
 const LIB_PKGS_SKIP: &[&str] = &[
-    // (empty) — the moros_* chunk was parked here for @P319 (a closure
-    // capturing a struct local and appending to its `vector<Struct>` field
-    // prematurely freed the captured struct, corrupting the interpreter).
-    // Fixed by control.rs's void-return write-back skip for shared-reference
-    // captures; the whole chunk is now gated.  Keep this list as the
-    // mechanism for parking a future crashing chunk.
+    // input — design + API draft landed 2026-06-01 (LAVITION W.13);
+    // runtime blocked on @P391 (cross-package struct constructor lands
+    // in CONST_STORE → `Write to read-only store` panic on the first
+    // field write in `input_tick_from_state`).  Un-skip once @P391 ships.
+    "input",
 ];
 
 /// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the

@@ -475,6 +475,10 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
     // without a JS host bridge (out of scope for now).  Un-skip if a future
     // JS-host VirtFS bridge ships.
     "hex_world",
+    // input — design draft landed 2026-06-01 (LAVITION W.13); blocked on
+    // @P391 on every backend (cross-package constructor → CONST_STORE).
+    // Un-skip once @P391 ships.
+    "input",
 ];
 
 /// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for

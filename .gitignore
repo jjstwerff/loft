@@ -38,6 +38,11 @@ tools/audience-demo/world.bin
 # deps fresh; committing the lock would pin a specific tarball sha256
 # across environments with different cache states.
 tests/fixtures/*/loft.lock
+tests/fixtures/libs/*/loft.lock
+# Monorepo libs that declare registry deps in their loft.toml get a
+# loft.lock written next to it when the parser resolves them; same
+# rationale as the fixture lockfiles above.
+lib/*/loft.lock
 # FUSE filesystem hidden files: created when a file is deleted while still
 # open by another process (e.g. an editor or watcher). They're stale OS
 # artefacts, never source code.

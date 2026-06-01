@@ -566,8 +566,8 @@ consumer migration + monorepo cleanup).
 | W.10 | Extract `physics_2body` Stage A → Stage B → `loft-libs-game`. | M | W.9 |
 | W.11 | Design + implement `lib/particles/` (from existing plan slot). | M | plan-27 design |
 | W.12 | Extract `particles` Stage A → Stage B → `loft-libs-game`. | M | W.11 |
-| W.13 | Design + implement `lib/input/`.  Wraps `graphics::poll_events()` → abstract action state + bindings. | MH | — (parallel with hex work) |
-| W.14 | Extract `input` Stage A → Stage B → `loft-libs-game`. | M | W.13 |
+| W.13 | Design + implement `lib/input/`.  Wraps `graphics`'s polled key/mouse primitives → abstract action state, bindings, edge detection.  **Partial 2026-06-01** — design + API + 5-test suite drafted (`lib/input/{src/input.loft, tests/01-basics.loft}`, ~250 LOC), `loft.toml` declares the `graphics >=0.1` dep, but the lib is **PARKED on [@P391](PROBLEMS.md#open-issues--quick-reference)** (cross-package struct constructor lands in CONST_STORE → `Write to read-only store` panic on the first field write through `&InputState`).  Tests are gated by `LIB_PKGS_SKIP` in `tests/wrap.rs` + `tests/native.rs::LIB_PKGS_NATIVE_SKIP` + `tests/html_wasm.rs::LIB_PKGS_NODE_SKIP`.  Un-park when @P391 ships. | MH | @P391 blocker |
+| W.14 | Extract `input` Stage A → Stage B → `loft-libs-game`. | M | W.13 unpark (waits on @P391) |
 | W.15 | Audit graphics's existing audio surface (`audio_play_raw` + `sfx_*`) — clarify the boundary between graphics's mixer and game's `audio_bus`. | S | — |
 | W.16 | Design + implement `lib/audio_bus/` + extract Stage A → Stage B → `loft-libs-game`. | MH | W.15 |
 | W.17 | Bootstrap `loft-libs-meta` chunk + ship `lavition_stack 0.1.0` meta-package. | S | enough chunks live to make the meta-package meaningful (typically after W.2 + W.0b ship) |
