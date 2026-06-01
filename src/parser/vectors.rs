@@ -57,6 +57,23 @@ impl Parser {
         {
             // RefVar(Vector): append directly without an identity Set(v, Var(v)).
             // find_written_vars detects the write via the OpAppendVector in the parts loop.
+            // The first operand `code` must BE the accumulator (`out = out + x`,
+            // in-place grow); a DIFFERENT first operand (`out = a + x`) is a
+            // REPLACEMENT, which the `&`-ref mechanism cannot express — the ref
+            // shares the caller's store in place (OpCreateStack/OpGetStackRef);
+            // there is no op that repoints it at a different store.  The old code
+            // silently dropped `code`/`a` and appended only the trailing parts (a
+            // half-wrong `out += x`).  Reject it instead — mirrors the existing
+            // `out = a` "& but is never modified" rejection.
+            if !self.first_pass && !matches!(code.unspan(), Value::Var(x) if *x == orig_var) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot replace a `&` vector parameter; a `&` ref grows the \
+                     caller's vector in place — append with `{} += …`, it cannot be reassigned",
+                    self.vars.name(orig_var)
+                );
+            }
             orig_var
         } else if matches!(code.unspan(), Value::Var(x) if *x != orig_var) {
             // The concat's first operand is a NAMED LOCAL other than the

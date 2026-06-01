@@ -36,6 +36,14 @@ fn test_vector_concat_method_receiver() {
   assert((v + [9]).len() == 4, "concat method receiver");
 }
 
+// @EXPECT_ERROR: cannot replace a `&` vector parameter
+// A `&vector` ref grows the caller's vector in place; reassigning it to a concat
+// (`out = a + x`) used to silently DROP the first operand `a` (appending only the
+// trailing parts).  Now rejected — append with `out += …` instead.
+fn ref_vector_replace(out: & vector < integer >, a: vector<integer>, x: vector<integer>) {
+  out = a + x;
+}
+
 // ── From 10-match.loft ──────────────────────────────────────────
 
 // @EXPECT_ERROR: match on Direction is not exhaustive
