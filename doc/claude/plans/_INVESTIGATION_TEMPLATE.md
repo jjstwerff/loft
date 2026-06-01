@@ -51,10 +51,28 @@ Two settings make this acute:
 Investigation plans pay for the higher up-front cost (probes +
 cluster docs + per-cluster commit discipline) by leaving the
 class CLOSED — provably, by the probe sweep — rather than just
-the one shape that prompted the report.  If the goal is "fix
-this bug and move on," use a P-issue.  If the goal is "stop
-seeing this CLASS of bug in this subsystem," use the
+the one shape that prompted the report.
+
+**A plan is warranted ONLY when the scope is genuinely hard to
+pin down** — when you can't yet write the fix because you don't
+know what you're dealing with, and a probe-driven investigation
+is the way to find out.  Once a bug's scope and root cause ARE
+pinned, there is nothing left to investigate: **fix it** (with a
+regression test).  Don't open a plan around a fix you could
+already write.  And don't file a P-issue for a bug you understand
+well enough to fix — filing only *documents a bug for later*;
+fixing removes the need to.  If the goal is "stop seeing this
+CLASS of bug in this subsystem" — siblings keep re-appearing and
+the scope spans several interacting mechanisms — use the
 investigation-plan shape.
+
+**The investigation plan IS the future-documentation.**  Its
+probes + cluster docs already record every shape and mechanism,
+which is the whole reason filing exists.  So findings discovered
+*during* the investigation are FIXED in-plan and recorded in the
+cluster catalogue — never *also* filed as separate P-issues.
+Double-documenting the same shape in PROBLEMS.md is redundant
+(see § In-plan vs spinoff policy).
 
 Investigation plans tend to have **more files** than standard plans
 (probes + cluster docs + RESULTS + README).  This is justified
@@ -103,9 +121,11 @@ implementation — NOT a vague "understand X better".
 
 ## In-plan vs spinoff policy (default: in-plan)
 
-Findings discovered during the investigation stay **in-plan** by
-default.  Spin off as a separate P-issue / mini-plan ONLY when one
-of:
+Findings discovered during the investigation are **fixed in-plan**
+and recorded in the cluster catalogue — **not** filed as separate
+PROBLEMS.md P-issues (the plan's probes + cluster docs already
+document them; a P-issue would double-document the same shape).
+Spin off as a separate P-issue / mini-plan ONLY when one of:
 
 1. **Truly an edge case users won't hit** — e.g., parser refusal on
    a syntactically-invalid construct nobody writes deliberately.

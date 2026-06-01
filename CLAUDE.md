@@ -299,54 +299,58 @@ states that are harder to debug than the original problem.
 
 ## Bug-filing policy — MANDATORY
 
-**File pre-existing bugs encountered during a bug hunt before moving on to any
-other bug or feature.**
+**When you surface a bug, the default is to FIX it — not to file it.**
 
-While diagnosing or fixing a bug you will often surface *other* bugs:
+While diagnosing or fixing a bug you will often surface *other* bugs — sibling
+shapes, latent issues flagged in code comments, symptoms unrelated to the active
+fix.  These are the **cheapest bugs you will ever fix**: the code paths are loaded
+into your head, the diagnostic infrastructure is warm, a reproducer is within
+reach.  That is an argument for *fixing* them on the spot (with a regression
+test) — **not** for filing them.  Filing only documents a bug *for later*, and
+"later" pays again to re-derive the scope, repro, and mechanism you have right
+now.  We are usually hunting and solving bugs with no deadline; solving is the
+work, and a backlog of filed-but-unfixed rows is not progress.
 
-- Sibling shapes ("the original P-issue was `out + s`; my variant probes show
-  `s = s + s` and `s = "lit" + s` are also broken differently").
-- Latent issues flagged in code comments that never made it to PROBLEMS.md
-  (for example, a `// loft text fields initialised to "" read back as null`
-  comment in a working example).
-- Symptoms surfaced during diagnosis but unrelated to the active fix
-  ("native E0502 in this unrelated borrow path").
+**Origin is never worth recording.**  Which commit introduced a bug, or its
+history, tells you nothing about making it correct.  Scope (what triggers it —
+the edges) and root cause (the mechanism in the *present* code) are what you fix
+from — never a `git bisect` / archaeology narrative.
 
-These findings are the **cheapest bugs you will ever file** — the relevant
-code paths are loaded into your head, the diagnostic infrastructure is warmed
-up, and a working reproducer is within reach.  Moving on without filing
-means re-discovering each one from scratch in a future session.
+**Filing documents a bug for the future, so file only when you are NOT fixing it
+now.**  Two cases:
 
-**Required action before picking up the next bug or feature:**
+- **It blocks the task you're on.**  File a bookmark + use a workaround so you
+  can keep moving, then come back.  This is the clearest reason to file.
+- **It's genuinely too big to fix now** (M+ effort / needs design).  Route it to
+  its canonical home (see [DEVELOPMENT.md § Inserting Discovered
+  Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)).
 
-1. Add a P-issue row to [PROBLEMS.md](doc/claude/PROBLEMS.md) with a minimal
-   reproducer (path, expected output, observed output on each backend),
-   severity tier, and the workaround if any.
-2. If user-visible, mirror the row in
-   [USER_FACING.md](doc/claude/USER_FACING.md).
-3. If the bug is small enough to test cheaply, save the reproducer to
-   `/tmp/p_followups/` (so re-validation later is one command) or, when the
-   shape deserves CI lock-in, add a regression test to `tests/scripts/`.
+When you DO file: minimal reproducer (path, expected vs observed on each backend),
+severity tier, workaround; mirror user-visible rows in
+[USER_FACING.md](doc/claude/USER_FACING.md); save the repro to `/tmp/p_followups/`
+or add a `tests/scripts/` regression if it deserves CI lock-in.  But do **not**
+file a row for a bug you just *fixed* — the fix + its regression test ARE the
+record.
 
-The rule applies even when the bug looks obvious, narrow, or "clearly
-unrelated."  One row in PROBLEMS.md costs ~30 seconds.  The cost of
-re-discovering the bug six months later — relearning the surrounding
-code, rebuilding a reproducer, re-running the diagnostic — is two orders
-of magnitude higher.
+**Inside an investigation plan, don't file at all** — the plan's probes + cluster
+docs already document every shape (see
+[`plans/_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md)).
+A separate P-issue would double-document the same shape.
 
-This rule is **not** a license to scope-creep the active fix.  Continue to
-ship the original-report fix as a focused change.  File the follow-ups as
-*new* P-issue rows; do not bundle them into the same patch unless they share
-a single fix site.
+This is **not** a license to scope-creep the active fix.  When you're focused on
+shipping fix X, an unrelated bug Y you can't fix without derailing X is exactly
+the "not fixing it now" case — file Y (or pick it up as its own focused change
+next); don't bundle it into X's patch unless they share a single fix site.
 
 ### Inserting fixes vs filing — see DEVELOPMENT.md
 
-The rule above covers **filing**.  When the discovered gap is XS or S
-(under half a day) AND the consumer code that uses the workaround is
-fresh in working memory, prefer **inserting a step into the active plan
-that fixes the gap directly**, then resuming the feature work — the
-language / stdlib gets sturdier and the workaround never enters
-shipped code.
+The rule above already defaults to **fixing**.  This section is the
+related *consumer-gap* case — a missing language/stdlib feature a real
+consumer needs.  When the gap is XS or S (under half a day) AND the
+consumer code that uses the workaround is fresh in working memory,
+prefer **inserting a step into the active plan that fixes the gap
+directly**, then resuming the feature work — the language / stdlib gets
+sturdier and the workaround never enters shipped code.
 
 Routing the discovered item to its canonical home (P-issue / `## Open
 work` row in STDLIB.md / NATIVE.md / COMPILER.md / new lib_plans slot)
