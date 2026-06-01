@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Self-concat reassignment `v = v + [...]` must KEEP v's original contents
+// (sibling of @P390's self-slice `v = v[a..b]`).
+//
+// Pre-fix: `create_vector` (src/parser/operators.rs) spliced a `vector_db`
+// allocation in front of the rewritten RHS for `op == "="`, allocating a FRESH
+// store for `v` and repointing `v` to it (empty) BEFORE the concat's leading
+// identity `Set(v, Var(v))` and the append read v's OLD contents.  So
+// `v = [1,2]; v = v + [9]` lost the [1,2] and yielded just `[9]`.
+//
+// Fix: when the rewritten body is self-referential (its first statement is the
+// identity `Set(var_nr, Var(var_nr))` that `parse_append_vector` emits when the
+// concat's accumulator IS the reassignment target), skip the new-store
+// allocation and drop that identity-set — the parts append IN PLACE to v's
+// existing store, exactly as `v += [...]` does.
+
+fn test_self_concat_keeps_contents() {
+  v: vector<integer> = [1, 2];
+  v = v + [9];
+  assert(v.len() == 3, "self-concat length");
+  assert(v[0] == 1 && v[1] == 2 && v[2] == 9, "self-concat preserves originals + appends");
+}
+
+fn test_self_concat_chain() {
+  v: vector<integer> = [1, 2];
+  v = v + [9] + [8];
+  assert(v.len() == 4, "self-concat chain length");
+  assert(v[0] == 1 && v[1] == 2 && v[2] == 9 && v[3] == 8, "self-concat chain values");
+}
+
+fn test_self_concat_vector_operand() {
+  v: vector<integer> = [1, 2];
+  more: vector<integer> = [7, 8];
+  v = v + more;
+  assert(v.len() == 4, "self-concat with a vector operand");
+  assert(v[2] == 7 && v[3] == 8, "self-concat appended the operand's elements");
+}
+
+fn test_self_concat_repeated() {
+  v: vector<integer> = [5, 6];
+  v = v + [7];
+  v = v + [8];
+  assert(v.len() == 4 && v[0] == 5 && v[3] == 8, "repeated self-concat reassign accumulates");
+}
+
+fn test_self_concat_text() {
+  v: vector<text> = ["a", "b"];
+  v = v + ["c"];
+  assert(v.len() == 3 && v[0] == "a" && v[2] == "c", "self-concat on a text vector");
+}
+
+// The non-self forms must be unaffected by the fix.
+
+fn test_inplace_append_unaffected() {
+  v: vector<integer> = [1, 2];
+  v += [9];
+  assert(v.len() == 3 && v[2] == 9, "v += [..] in-place append unchanged");
+}
+
+fn test_concat_to_new_var_result() {
+  // The RESULT of `u = v + [9]` is correct.  (NOTE: `u = v + [9]` and
+  // `v = a + b` also currently MUTATE/alias their first operand — a SEPARATE,
+  // pre-existing concat-path aliasing bug, untouched by this fix and not
+  // asserted here so this regression stays focused + green.)
+  v: vector<integer> = [1, 2];
+  u = v + [9];
+  assert(u.len() == 3 && u[0] == 1 && u[1] == 2 && u[2] == 9, "u = v + [..] result");
+}
+
+fn test_concat_distinct_operands_result() {
+  a: vector<integer> = [1, 2];
+  b: vector<integer> = [3, 4];
+  v = a + b;
+  assert(v.len() == 4 && v[0] == 1 && v[3] == 4, "v = a + b result value");
+}

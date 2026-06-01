@@ -139,15 +139,38 @@ impl Parser {
                 );
             }
             if op == "=" {
-                for (s_nr, s) in self.vector_db(tp, var_nr).iter().enumerate() {
-                    ls.insert(s_nr, s.clone());
-                }
-                if ls.is_empty()
-                    && !self.first_pass
-                    && var_nr != u16::MAX
-                    && matches!(f_type, Type::Vector(_, _))
-                {
-                    ls.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                // Self-concat reassign `v = v + [...]` (sibling of @P390's
+                // self-slice `v = v[a..b]`): `parse_append_vector` emitted a
+                // leading identity `Set(v, Var(v))` because the concat's
+                // accumulator IS the reassignment target.  The `vector_db` splice
+                // below allocates a FRESH store for v and repoints v to it (empty)
+                // BEFORE that Set / the append read v's OLD contents → v's original
+                // elements are lost (only the appended tail survives; `v=[1,2];
+                // v=v+[9]` gave `[9]`).  When the body is self-referential, skip
+                // the new-store allocation and drop the now-useless identity-set
+                // so the parts append IN PLACE to v's existing store — exactly what
+                // `v += [...]` does.  The discriminator is the IR shape
+                // `Set(var_nr, Var(var_nr))` (absent for `u = v + [9]` →
+                // `Set(u, Var(v))` and `v = a + b` → `Set(v, Var(a))`), identical
+                // on both parser passes — pass-stable, no @P384 alloc divergence.
+                let self_ref = ls.first().is_some_and(|first| {
+                    matches!(first.unspan(), Value::Set(s, rhs)
+                        if *s == var_nr
+                            && matches!(rhs.unspan(), Value::Var(r) if *r == var_nr))
+                });
+                if self_ref {
+                    ls.remove(0);
+                } else {
+                    for (s_nr, s) in self.vector_db(tp, var_nr).iter().enumerate() {
+                        ls.insert(s_nr, s.clone());
+                    }
+                    if ls.is_empty()
+                        && !self.first_pass
+                        && var_nr != u16::MAX
+                        && matches!(f_type, Type::Vector(_, _))
+                    {
+                        ls.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                    }
                 }
             }
             true
