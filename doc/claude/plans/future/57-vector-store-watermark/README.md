@@ -5,9 +5,16 @@
 | Stage | Status |
 |---|---|
 | A — Probe catalogue | ✅ complete (15 probes, both backends) |
-| B — Mechanism investigation | 🟡 3/3 clusters *characterised by trace*; root-cause source-reading not started |
-| C — Fix design (OPTIONAL) | ⏸️ pending Stage B — design call (deliberate scope-free vs missed last-use-free) |
-| D — Implementation | ⏸️ pending Stage C — fix in-plan, one cluster per commit |
+| B — Mechanism investigation | 🟢 cluster II root-caused + FIXED; I/III remain trace-level (benign) |
+| C — Fix design (OPTIONAL) | clusters I/III only — deliberate scope-free vs last-use/overwrite-free design call |
+| D — Implementation | 🟢 cluster II shipped (`ff8b0730`); I/III deferred (benign design call) |
+
+**Cluster II fix (`ff8b0730`) resolved @P393's user-visible symptom.** The 2× literal-init
+double-allocation was the dominant watermark contributor; removing it dropped
+`11-vectors`'s watermark from **44 → 26**, below the hardcoded `LOFT_STORES=warn` floor of
+30 — so the ~14 "possible leak" warnings that prompted @P393 are **gone**. Clusters I
+(scope-end pinning) and III (reassignment leak) still make the watermark O(locals) but no
+longer cross the threshold; both are benign (exit-safe) and left as a design call.
 
 **What triggered this.** Filed as [@P393](../../../PROBLEMS.md) on 2026-06-01 while
 verifying the @P390 self-slice fix: `LOFT_STORES=warn loft --tests tests/scripts/11-vectors.loft`
@@ -61,7 +68,7 @@ cluster I/III fix-safety.
 | ID | Cluster | Severity (corruption / leak) | Backend asymmetry | Probes | Doc |
 |---|---|---|---|---|---|
 | I | Store-backed locals pin to **function exit**, not last-use. Only LOOP bodies reuse their store in-place; `if`/non-loop-block locals pin like top-level statements (probe 15) | none / none (exit-safe) — watermark O(distinct bindings) | both (interp 44, native 42) | 02, 07, 09, 15, 11-vectors | [cluster-I-scope-end-batching.md](cluster-I-scope-end-batching.md) |
-| II | `local = <materialised vector>` double-allocates a scope-pinned init-temp — for **literal / comprehension / struct-vector** init (2×/local). **Concat (`a+b`) and slice (`v[a..b]`) do NOT double** (the result store becomes the local, 1×) | none / none (exit-safe) — watermark ×2 on affected init forms | both | 07, 09, 10, 11, 12, 13 | [cluster-II-literal-init-double-alloc.md](cluster-II-literal-init-double-alloc.md) |
+| II | ✅ **FIXED** (`ff8b0730`) — `local = [literal]` / comprehension / struct-vector init double-allocated a scope-pinned store (2×/local): the literal body allocated v's store, then `create_vector`'s `=` `vector_db` allocated a second, orphaned one. Fix: `create_vector` skips its `vector_db` when the body already allocated (head `Set(v, OpGetField)`). Now 1×, like concat/slice. **11-vectors watermark 44 → 26 (below the warn floor → @P393's warnings gone).** | none / none (exit-safe) — was watermark ×2 | both | 07, 09, 10, 11, 12, 13 | [cluster-II-literal-init-double-alloc.md](cluster-II-literal-init-double-alloc.md) |
 | III | Reassigning `v = [new]` does **not** free the previous store; every overwrite pins the now-unreachable old value to scope exit (probe 14) | none / none (exit-safe) — watermark O(reassignments) | both | 14 | [cluster-III-reassignment-pin.md](cluster-III-reassignment-pin.md) |
 
 No cluster is a leak (every store frees at scope exit). Transient *unbound* temps
@@ -122,7 +129,7 @@ watermark 44 interp / 42 native, all freed at scope exit.
 | Cluster | Mechanism status | Action needed | Effort |
 |---|---|---|---|
 | I | 🟢 Characterised by trace (pins to fn exit, both backends; only loops reuse). Root cause 🤔: is store-free decoupled from variable last-use by design (LIFETIME.md scope model) or a missed last-use-free? | Read `src/scopes.rs` + `src/state/codegen.rs` free-emission; confirm where store-free is anchored (scope-end vs live-interval end). | M |
-| II | 🟢 Characterised by trace (2 stores per **literal/comprehension/struct** init, both pinned; concat/slice are 1×; annotation-independent). Root cause 🤔: materialise temp copied into the local's store rather than *becoming* it (the way concat/slice do); the temp's free deferred to the scope sweep. | Diff the `local = [literal]`/comprehension codegen against the `local = a+b`/slice path in `src/state/codegen.rs`; find why the former allocs a separate local store. | S–M |
+| II | ✅ **FIXED `ff8b0730`** — root cause was the redundant `create_vector` `=` `vector_db` (the literal body already allocated v's store via `build_vector_list`). `create_vector` now skips it when the body has the head `Set(v, OpGetField)` repoint. 1× now; literal-init watermark halved. | — | done |
 | III | 🟢 Characterised by trace (overwritten store pinned to scope exit, both backends). Root cause 🤔: assignment to an existing store-backed local does not free the prior DbRef before rebinding. Shares cluster I's dead-store-free surface + aliasing guard. | Read the assignment codegen for `existing_local = <new vector>`; confirm no free of the old DbRef is emitted at the overwrite. | S–M |
 
 **Recommended sequence.** Stage B reading (cluster II first — smallest surface, clear
