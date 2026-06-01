@@ -23,8 +23,41 @@ Large and invasive — touches the ~940 `data.def(...)` read sites and
 every `match value { Value::Call(..) }` in parser / codegen / scope
 analysis / native generation.  **Not** required for @PLAN28's cold-start
 win (a rebuild-on-load snapshot gets that); required for the
-*zero-rebuild, mmap-the-shipped-file* model.  Open it only when the
-@PLAN28 snapshot has shipped and the mmap payoff is next.
+*zero-rebuild, mmap-the-shipped-file* model.
+
+**Now promoted to next (2026-06-01).**  @PLAN28 proved by measurement that
+a JSON snapshot **cannot** beat the parser — both deserialize text into the
+same heap graph (~15–24 ms load ≈ ~11–23 ms parse; see @PLAN28 § Step 3).
+So the cold-start goal is unreachable by any serialization format and falls
+to *this* plan's zero-copy mmap.  @PLAN28 did not ship the cold-start win,
+but it shipped the **reusable foundation** this plan needs:
+
+- the exhaustive `Data` / `Value` / `Type` / `Definition` / `Function`
+  traversal (`src/ir_schema.rs`) — arc B's native→store materializer is the
+  same walk with a store-writer sink instead of a JSON sink;
+- the database-schema enumeration (`src/database/snapshot.rs`) — arc A's
+  schema spec;
+- `compare_data` — arc C's native-vs-store equivalence oracle;
+- `LOFT_DUMP_SNAPSHOT` + the `from_snapshot` `done=true` skip-`scopes::check`
+  insight — arc D debugging / load wiring.
+
+**First concrete step: arc A0** — a typed `Record` field cursor over
+`Store`'s raw int primitives (§ Arc A0), the precondition for the accessor
+seam.  Pure-additive, ships standalone.
+
+**Standalone upside — a functional inspection library inside the database
+(2026-06-01).**  Independent of the cold-start goal, @PLAN28's codec already
+gives `Database` a rich, working **serialise / deserialise / compare** layer
+over the IR and the store schema (`*_to_json` / `*_from_json` /
+`schema_to_json` / `compare_data` / `LOFT_DUMP_SNAPSHOT`), proven lossless on
+the real stdlib.  That is immediately useful as **inspection + debugging
+tooling** — dump any parsed `Data` or `Stores` schema to readable JSON, diff
+two compilations field-by-field, regression-pin IR shapes in tests — and it
+keeps paying off *throughout* this plan: every arc (A schema, B write, C
+per-subsystem swap, D mmap) can dump-and-eyeball or `compare_data` its
+intermediate state against a fresh parse.  So the serialisation work is not
+sunk cost from a closed JSON-cache idea; it is a permanent database facility
+that also happens to seed the mmap path.
 
 ## Goal
 
@@ -130,7 +163,8 @@ Mirroring `--native` rather than inventing a third format buys:
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — IR store schema | Define the struct-enum schema for `Value`/`Type`/`Definition`/`Function`/`Attribute` as loft type registrations (the `init`-equivalent for the compiler's own types). | Open — needs design |
+| **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | Open — **next**; see § Arc A0 |
+| **A** — IR store schema | Define the struct-enum schema for `Value`/`Type`/`Definition`/`Function`/`Attribute` as loft type registrations (the `init`-equivalent for the compiler's own types).  Reuse @PLAN28's `ir_schema` / `database::snapshot` field enumeration as the schema spec. | Open — needs design |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration). | Open — the bulk |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
@@ -138,9 +172,13 @@ Mirroring `--native` rather than inventing a third format buys:
 
 ## Phase ordering
 
+0. **A0 (typed field cursor)** — wrap `Store`'s raw int primitives in a
+   `Record`/`RecordMut` cursor.  Pure-additive, no forced callers, green +
+   shippable on its own.  Everything in A/C reads through it, so it lands
+   first.  See § Arc A0.
 1. **A (schema)** — pin the store schema for the IR types.  Load-bearing;
    everything depends on it.  Prototype by hand-registering `Value`/`Type`
-   schemas and round-tripping one `Definition`.
+   schemas and round-tripping one `Definition` **through the A0 cursor**.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
    before touching read sites.  If @PLAN28 Step 2 shipped a store-format
    snapshot, B is largely done.
@@ -152,6 +190,83 @@ Mirroring `--native` rather than inventing a third format buys:
    generation/, then parser/).
 5. **E (bundle snapshots)** — core snapshot first (deterministic, shared);
    per-script bundle snapshot second.
+
+## Arc A0 — typed `Store` field cursor (the precondition, next)
+
+**Why this is the first move.**  This plan's safety rests on the *accessor
+seam* (§ Incremental migration): every IR read goes through a method, so a
+representation can be swapped behind it without touching call-sites.  But the
+seam's methods will ultimately read **store records**, and `Store`'s current
+read API is untyped offset arithmetic:
+
+```rust
+// today — src/store.rs, the raw primitives every store read uses:
+store.get_int(rec, fld) -> i64          // i64::MIN sentinel on invalid
+store.get_u32_raw(rec, fld) -> u32      // raw 4-byte (collection headers)
+store.get_i32_raw / get_long / get_short / get_byte / get_float /
+store.get_single / get_boolean / get_str(rec) -> &str
+store.addr::<T>(rec, fld) -> &T         // unchecked typed pointer
+store.set_int(rec, fld, val) -> bool    // … + the set_* counterparts
+```
+
+Building ~940 IR accessors directly on `(rec, fld)` arithmetic means 940
+chances to fumble a field offset or pick the wrong width.  A typed cursor
+collapses each read to a named, bounds-checked call **before** any IR type
+moves into a store — a pure refactor with no behaviour change, exactly the
+"additive, off the critical path, reversible" property the rest of the plan
+requires.
+
+**The wrapper (shape, not final API).**
+
+```rust
+/// A typed, read-only view of one record in one Store.  All offset
+/// arithmetic and width selection lives here, not at the call-site.
+pub struct Record<'a> { store: &'a Store, rec: u32 }
+pub struct RecordMut<'a> { store: &'a mut Store, rec: u32 }
+
+impl<'a> Record<'a> {
+    pub fn int(&self, fld: u32) -> i64;        // → get_int
+    pub fn u32(&self, fld: u32) -> u32;        // → get_u32_raw (headers)
+    pub fn i32(&self, fld: u32) -> i32;        // → get_i32_raw
+    pub fn long(&self, fld: u32) -> i64;
+    pub fn float(&self, fld: u32) -> f64;
+    pub fn single(&self, fld: u32) -> f32;
+    pub fn boolean(&self, fld: u32, mask: u8) -> bool;
+    pub fn byte(&self, fld: u32, min: i32) -> i32;
+    pub fn dbref(&self, fld: u32) -> DbRef;    // 12-byte stored pointer
+    pub fn str(&self, fld: u32) -> &str;       // follow Str record
+}
+// RecordMut mirrors with set_* ; both obtained via Store::record(rec) /
+// Store::record_mut(rec).
+```
+
+**Scope of A0 (deliberately narrow — one PR):**
+- add `Record`/`RecordMut` + `Store::record(rec)` / `record_mut(rec)`;
+- delegate each method to the existing `get_*`/`set_*` primitive (no new
+  unsafe — reuse the validated paths, including their sentinel semantics);
+- **do NOT** migrate any caller in this PR — additive only.  Optionally
+  convert one self-contained reader (e.g. a `database/format.rs` debug dump)
+  as a proof-of-use, but the 940-site sweep is later arcs.
+
+**Why it ships standalone (value independent of plan-54):** the same raw
+`get_int(rec, fld)` arithmetic is used pervasively by `--native` codegen and
+the 233 `fill.rs` opcode bodies.  A typed cursor is a readability + safety win
+there immediately, so A0 is a clean green PR on its own merits — not dead
+weight waiting on the rest of the arc.
+
+**Acceptance:** unit tests round-trip each width through `Record`/`RecordMut`
+on a scratch store and assert identical results to the raw `get_*`/`set_*`
+calls (the cursor is a faithful pass-through, including invalid-access
+sentinels).  `make ci` green; no behaviour change anywhere else.
+
+**Open A0 questions:**
+- Width-by-`Parts`: a record's field widths come from its `Type.parts`
+  schema; does the cursor stay schema-agnostic (caller passes the width
+  method, as above) or take a `&Type` and dispatch?  Start schema-agnostic
+  (smaller, matches the raw API 1:1); a schema-aware layer can wrap it later.
+- Lifetime of `str()`: `Store::get_str` returns `&'a str` from a raw pointer
+  (`Str` semantics) — the cursor inherits that contract unchanged; document
+  it, don't try to fix it in A0.
 
 ## Incremental migration — arc C is many small plans, never one
 
