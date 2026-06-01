@@ -189,7 +189,7 @@ jobs:
       # so they would red-flag the matrix on a non-runtime concern.
       - name: Test (ubuntu, ${{ matrix.toolchain }})
         run: >
-          cargo +${{ matrix.toolchain }} test --release
+          cargo +${{ matrix.toolchain }} test --release --no-fail-fast
           --lib --test issues --test wrap --test strings --test frame_vars
           -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
           --skip native_rs_functions_up_to_date
