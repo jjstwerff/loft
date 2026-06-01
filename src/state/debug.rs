@@ -795,7 +795,10 @@ impl State {
     ) -> Result<(), Error> {
         if (def.name == "OpGotoFalseWord" || def.name == "OpGotoWord") && a_nr == 0 {
             let to = i64::from(p) + 3 + i64::from(self.code::<i16>()) - i64::from(start_pos);
-            write!(f, "jump={to}")?;
+            write!(f, "jump=:POS{to}")?;
+        } else if (def.name == "OpGoto" || def.name == "OpGotoFalse") && a_nr == 0 {
+            let to = i64::from(p) + 2 + i64::from(self.code::<i8>()) - i64::from(start_pos);
+            write!(f, "jump=:POS{to}")?;
         } else if def.name == "OpCall" && a_nr == 2 {
             self.fn_name(f, data)?;
         } else if def.name == "OpStaticCall" {
@@ -852,6 +855,18 @@ impl State {
     ) -> Result<(), Error> {
         let stack_pos = Self::dump_fn_signature(f, d_nr, data)?;
         let start_pos = data.def(d_nr).code_position;
+        // Pre-scan for jump targets so each is anchored by a `:POS<rel>`
+        // label that the goto statements reference instead of a raw byte
+        // offset.  This keeps the dump editable — inserting / removing ops
+        // shifts no jumps, because they bind to the label, not the offset.
+        let op_len = crate::compile::build_opcode_len_table(data);
+        let jump_targets = crate::compile::collect_jump_targets(
+            &self.bytecode,
+            start_pos as usize,
+            (start_pos + data.def(d_nr).code_length) as usize,
+            data,
+            &op_len,
+        );
         self.code_pos = start_pos;
         writeln!(
             f,
@@ -860,6 +875,9 @@ impl State {
         )?;
         while self.code_pos < start_pos + data.def(d_nr).code_length {
             let p = self.code_pos;
+            if jump_targets.contains(&(p as usize)) {
+                writeln!(f, ":POS{}", p - start_pos)?;
+            }
             let first = self.code::<u8>();
             let op: u16 = if first == 255 {
                 let ext = self.code::<u8>();

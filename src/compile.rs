@@ -425,16 +425,20 @@ pub fn show_code(
 
 // ── Standalone bytecode disassembler ─────────────────────────────────────────
 
-/// Build a 256-entry table mapping opcode → instruction byte-length.
-/// Length = 1 (opcode) + sum of const-argument sizes from the definition.
+/// Build a table mapping opcode → instruction byte-length, indexed by the
+/// FULL opcode number.  Extended opcodes encode as a `255` lead byte plus
+/// an `ext` byte (`op = 255 + ext`, so `op ≥ 256`); the table therefore
+/// runs past 256 and counts **2** lead bytes for them (1 for a base op
+/// `0..=254`), plus the sum of the const-argument sizes.  `0` = unknown.
 #[must_use]
-pub fn build_opcode_len_table(data: &Data) -> [u8; 256] {
+pub fn build_opcode_len_table(data: &Data) -> Vec<u8> {
     use crate::data::Context;
     use crate::variables::size;
-    let mut table = [0u8; 256]; // 0 = unknown opcode
+    let max_op = data.operators.keys().copied().max().unwrap_or(0);
+    let mut table = vec![0u8; max_op as usize + 1]; // 0 = unknown opcode
     for (&op, &d_nr) in &data.operators {
         let def = &data.definitions[d_nr as usize];
-        let mut len = 1u16; // opcode byte
+        let mut len = if op >= 255 { 2u16 } else { 1u16 }; // opcode lead byte(s)
         for a in &def.attributes {
             if a.constant {
                 len += size(&a.typedef, &Context::Constant);
@@ -473,7 +477,7 @@ pub fn disassemble(
     bytecode: &[u8],
     d_nr: u32,
     data: &Data,
-    op_len: &[u8; 256],
+    op_len: &[u8],
 ) -> Result<(), Error> {
     let def = data.def(d_nr);
     let start = def.code_position as usize;
@@ -492,8 +496,8 @@ pub fn disassemble(
         } else {
             (u16::from(first), 1)
         };
-        let ilen = op_len[first as usize] as usize + (op_byte_len - 1);
-        if op_len[first as usize] == 0 {
+        let ilen = op_len.get(op as usize).copied().unwrap_or(0) as usize;
+        if ilen == 0 {
             writeln!(writer, "{rel:4}: ??? (opcode {op})")?;
             break;
         }
@@ -518,25 +522,28 @@ pub fn disassemble(
 }
 
 /// Pre-pass: scan the bytecode for goto-style instructions and collect
-/// their target offsets.  The outer disassembler emits `.L{offset}:`
-/// labels at each target so forward / backward jumps are readable.
-fn collect_jump_targets(
+/// their target offsets.  Disassemblers emit a label at each target so
+/// forward / backward jumps are readable — and so a re-assembler can
+/// re-derive relative offsets after ops are inserted or removed (the jump
+/// binds to a label identity, not a byte offset).  `op_len` is indexed by
+/// the FULL opcode number (see [`build_opcode_len_table`]).
+pub(crate) fn collect_jump_targets(
     bytecode: &[u8],
     start: usize,
     end: usize,
     data: &Data,
-    op_len: &[u8; 256],
+    op_len: &[u8],
 ) -> std::collections::BTreeSet<usize> {
     let mut targets = std::collections::BTreeSet::new();
     let mut pc = start;
     while pc < end && pc < bytecode.len() {
         let first = bytecode[pc];
-        let (op, op_bytes): (u16, usize) = if first == 255 && pc + 1 < bytecode.len() {
-            (255u16 + u16::from(bytecode[pc + 1]), 2)
+        let op: u16 = if first == 255 && pc + 1 < bytecode.len() {
+            255u16 + u16::from(bytecode[pc + 1])
         } else {
-            (u16::from(first), 1)
+            u16::from(first)
         };
-        let ilen = op_len[first as usize] as usize + (op_bytes - 1);
+        let ilen = op_len.get(op as usize).copied().unwrap_or(0) as usize;
         if ilen == 0 {
             break;
         }
