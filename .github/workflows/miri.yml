@@ -148,9 +148,13 @@ jobs:
     name: Suite under ${{ matrix.toolchain }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Non-blocking: beta/nightly std + lint churn must not page us.  A red here
-    # is an early signal to investigate, not a release blocker.
-    continue-on-error: true
+    # Full interpreter suite under beta + nightly — an early-warning signal for
+    # std / lint / toolchain churn.  `fail-fast: false` so BOTH legs run to
+    # completion (we want the whole picture, not the first failure).  NOT
+    # `continue-on-error`: a real break must surface as a red nightly we can
+    # inspect and act on — `continue-on-error` hid failures behind a green
+    # overall (a scheduled run reported success while `library_suite` was
+    # broken).  Nothing gates on the nightly, so a red here never blocks.
     strategy:
       fail-fast: false
       matrix:
