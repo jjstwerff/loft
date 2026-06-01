@@ -399,6 +399,22 @@ finish-before-continue rule governs @PLAN28's S1–S5 rungs.
    layout actually faster to traverse?"  Treat the locality win as a
    hypothesis to confirm with numbers, not a given.
 
+   **Risk-posture consequence (user, 2026-06-01) — why "slow IR" is not a
+   thing to fear.**  The locality argument is **not a clear win**; it may net
+   out slower.  Its real value is as a *floor on the downside*: the store is a
+   rigorous, contiguous, cache-coherent layout, so even in the worst case the
+   store-backed IR is **a reasonable representation, not a pathological one**.
+   That is what makes it safe to commit to the store representation directly,
+   rather than treating "land in the store" as risky "slow IR" territory to be
+   avoided.  Combined with the migration safety net (the accessor seam +
+   dual-backing + per-subsystem equivalence assertion, § Incremental
+   migration), the perf question stops being a gate on *whether* to migrate
+   and becomes a tuning question *after*: if a hot subsystem measures slower,
+   add a read-through cache or keep that subsystem native — the dual-backing
+   makes either reversible.  So the design proceeds on "the store layout is
+   good enough to build on," with the locality upside as a possible bonus, not
+   a load-bearing assumption.
+
 ## Cross-arc dependencies
 
 - **[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
