@@ -30,29 +30,29 @@
 //   v5-t5: tick=46 cells=0           # centre cascaded
 //   v5-t5: ok
 
-use hex_world;
+use world;
 
 BASE_LIFETIME    = 10;
 NEIGHBOUR_LEASE  = 10;
 DECAY_WINDOW     = 5;
 
-fn report(self: hex_world::World, label: text) {
+fn report(self: world::World, label: text) {
   println("v5-t5: tick={self.tick} cells={self.cell_count()}");
 }
 
 fn main() {
-  w = hex_world::world_empty();
+  w = world::world_empty();
   // Isolated cell — far from the cluster so neighbour reads don't
   // see each other.
-  w.set_cell(0, 0, hex_world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+  w.set_cell(0, 0, world::Cell { c_color: 1, c_height: 0, c_age: 0 });
   // Cluster: centre + 6 axial neighbours at (50, 50).
-  w.set_cell(50, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(51, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(49, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(50, 51, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(50, 49, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(51, 49, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  w.set_cell(49, 51, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(50, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(51, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(49, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(50, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(50, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(51, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  w.set_cell(49, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
   println("v5-t5: setup placed={w.cell_count()} isolated=1 cluster=7");
 
   // Spin the world for 50 ticks; report at the inflection points.

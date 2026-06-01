@@ -1548,11 +1548,21 @@ struct TargetCache {
     seen: hash<TargetExists[target]>,
 }
 
+// True when `file` is under `tests/fixtures/libs/<pkg>/` — the
+// extracted-library fixture mirror.  Fixtures are imported
+// snapshots of chunk-repo packages; broken intra-fixture links
+// reflect chunk-repo doc state, not monorepo source-of-truth, so
+// the monorepo broken-link gate shouldn't flag them.
+fn link_source_is_fixture(file: text) -> boolean {
+    file.starts_with("tests/fixtures/libs/")
+}
+
 fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
     // Build the per-distinct existence cache first (one stat per
     // distinct target rather than per LinkRef).
     cache = TargetCache {};
     for lr in links {
+        if link_source_is_fixture(lr.file) { continue; }
         if cache.seen[lr.target] == null {
             cache.seen += [TargetExists{
                 target: lr.target,
@@ -1562,6 +1572,7 @@ fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
     }
     distinct = DistinctSets {};
     for lr in links {
+        if link_source_is_fixture(lr.file) { continue; }
         hit = cache.seen[lr.target];
         if hit != null && hit.exists { continue; }
         if distinct.tags[lr.target] == null {
@@ -1577,6 +1588,7 @@ fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
         print("    {{\"target\":\"{slot.name}\",\"refs\":[");
         ref_first = true;
         for lr in links {
+            if link_source_is_fixture(lr.file) { continue; }
             if lr.target != slot.name { continue; }
             if !ref_first { print(","); }
             ref_first = false;
