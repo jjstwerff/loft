@@ -313,12 +313,50 @@ The other open questions (`&'static str` interning, `OnceLock` caller-index,
 `Option` mapping, mutability of a locked mmap) are unchanged from § Open design
 questions; finding 2 in particular is the first concrete arc A decision.
 
+### What the generated `--native` Rust gives us — and what it does NOT (2026-06-01)
+
+Running `loft --introspect --show-rust` on the transcription (after
+dependency-ordering the defs per finding 3) produces ~139 KB of Rust.  Reading
+it settles exactly how much of arc A/A0/C the compiler hands us for free:
+
+| Generated artifact | Form | Reuse verdict |
+|---|---|---|
+| **Schema registration** — the `init(db)` body: `db.enumerate("Node")`, `db.structure("Block",0)`, `db.field(t98,"name",t5)`, `db.value(t65,"NdCall",…)`, `db.vector(...)` | declarative calls into `Stores`, **all offsets / widths / enum discriminants / vector wrappers resolved by the compiler** | **Directly reusable — this IS arc A.**  Arc A's deliverable can be exactly this `init` block (emitted by the build, not hand-written). |
+| **Field access** — every read is inline `stores.store(&db).get_int(db.rec, db.pos + 8)`, the enum tag via `get_byte(db.rec, db.pos + 32, 0)`, strings via `get_str(get_u32_raw(...))` | open-coded raw `(rec, fld)` arithmetic at each use site | **Template, not code.**  It documents the exact width + offset recipe per field; it is *not* factored into anything callable. |
+| **A Rust `struct`/`enum` for the IR types, or per-type accessor fns** | — | **Does not exist.**  Confirmed: there is no `enum Node`, no `Node::call_def_nr(r)`.  An IR "type" exists only as a store schema + scattered inline reads.  The ~171 generated `fn`s are the program's own functions (each doing inline `get_*`), never type accessors. |
+
+**Consequences for the plan:**
+
+1. **Arc A becomes "extract the generated `init`," not "hand-design a schema."**
+   The compiler already computes the authoritative layout; arc A's job is to
+   capture that `init` block for the IR types (and topo-order it, finding 3) as
+   the schema artifact.  This is the efficiency the transcribe-and-generate
+   approach was after.
+2. **Arc A0 is confirmed necessary and non-redundant with codegen.**  The
+   generated reads are precisely the raw `db.pos + N` / `get_byte(…,32,0)`
+   arithmetic A0's typed cursor wraps.  `--native` does **not** emit an
+   accessor layer — in a normal loft program the *parser* holds field offsets
+   and inlines them, so there is no "accessor object" to generate.  That gap is
+   exactly arc A0 (the cursor) + arc C (the seam).  The generated inline reads
+   are the **reference recipe** for the bodies of those accessors (which width,
+   which offset, per field).
+3. **`Data`-as-store is not a generated Rust type.**  It is
+   `{ stores: Stores, <the init schema> }` plus a hand-built (A0-cursor-based)
+   accessor layer mapping `data.def(d).name()` → `record(rec).str(FLD_NAME)`.
+   The generated `get_*(db.pos+offset)` lines are the field-offset source of
+   truth for writing those accessors; they are not themselves the accessors.
+
+**Net:** the generated Rust is useful as the **schema source-of-truth (reuse
+directly)** and the **per-field access recipe (reuse as template)** — not as
+linkable code.  Schema = generated; typed accessor layer = built by us (A0 +
+seam).  The two compose; neither alone is the deliverable.
+
 ## Sub-arcs
 
 | Item | Concern | Status |
 |---|---|---|
 | **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | Open — **next**; see § Arc A0 |
-| **A** — IR store schema | Define the struct-enum schema for `Value`/`Type`/`Definition`/`Function`/`Attribute` as loft type registrations (the `init`-equivalent for the compiler's own types).  Reuse @PLAN28's `ir_schema` / `database::snapshot` field enumeration as the schema spec. | Open — needs design |
+| **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | Open — design mostly done; see § Arc A reference |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration). | Open — the bulk |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
@@ -330,9 +368,12 @@ questions; finding 2 in particular is the first concrete arc A decision.
    `Record`/`RecordMut` cursor.  Pure-additive, no forced callers, green +
    shippable on its own.  Everything in A/C reads through it, so it lands
    first.  See § Arc A0.
-1. **A (schema)** — pin the store schema for the IR types.  Load-bearing;
-   everything depends on it.  Prototype by hand-registering `Value`/`Type`
-   schemas and round-tripping one `Definition` **through the A0 cursor**.
+1. **A (schema)** — pin the store schema for the IR types by **extracting the
+   generated `init` block** (§ Arc A reference): transcribe the IR as loft
+   types, `--native --show-rust`, capture the resolved `db.structure/value/
+   field` registrations.  Load-bearing; everything depends on it.  Decide
+   finding 2 (recursive-child modeling) first, then round-trip one
+   `Definition` **through the A0 cursor**.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
    before touching read sites.  If @PLAN28 Step 2 shipped a store-format
    snapshot, B is largely done.
