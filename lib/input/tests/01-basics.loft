@@ -1,0 +1,184 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ⚠️  PARKED — blocked on [@P391](../../../doc/claude/PROBLEMS.md#open-issues--quick-reference)
+// (cross-package struct constructor lands in CONST_STORE).  Gated by
+// `LIB_PKGS_SKIP` in tests/wrap.rs + tests/native.rs + `LIB_PKGS_NODE_SKIP`
+// in tests/html_wasm.rs.  Un-skip once @P391 is fixed.
+//
+// Smoke test for the input library.  Drives state via
+// `input_tick_from_state` (no GL context needed); validates:
+//   - construction from bindings
+//   - pressed / just_pressed / just_released for actions
+//   - axis pair direction + cancellation
+//   - mouse button bitmask + edge detection
+//   - unknown action / axis names return safe defaults
+//
+// Action coverage: every public symbol of the library is exercised
+// at least once here.
+
+use input;
+
+KEY_SPACE = 32;
+KEY_LEFT  = 130;
+KEY_RIGHT = 131;
+KEY_A     = 97;
+
+// Build a snapshot of length KEY_MAX with `down` set on the given
+// keys.  Mirrors the shape `input_tick_from_state` expects.
+fn snap(keys: vector<integer>) -> vector<boolean> {
+  v: vector<boolean> = [];
+  for _ in 0..256 { v += [false]; }
+  for k in keys { if k >= 0 && k < 256 { v[k] = true; } }
+  v
+}
+
+fn make_state() -> input::InputState {
+  b = input::Bindings{
+    bnd_actions: [
+      input::ActionBinding{ab_name: "jump", ab_keys: [KEY_SPACE]},
+      input::ActionBinding{ab_name: "use",  ab_keys: [KEY_A]}
+    ],
+    bnd_axes: [
+      input::AxisBinding{ax_name: "horizontal", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT}
+    ]
+  };
+  input::input_new(b)
+}
+
+fn test_pressed_and_edges() {
+  s = make_state();
+
+  // Tick 1: SPACE down — pressed AND just_pressed (rises from idle).
+  s.input_tick_from_state(snap([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("jump"), "tick1: jump pressed");
+  assert(s.is_action_just_pressed("jump"), "tick1: jump just pressed");
+  assert(!s.is_action_just_released("jump"), "tick1: jump NOT just released");
+
+  // Tick 2: SPACE still down — pressed but no edge.
+  s.input_tick_from_state(snap([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("jump"), "tick2: jump still pressed");
+  assert(!s.is_action_just_pressed("jump"), "tick2: jump NOT just pressed");
+  assert(!s.is_action_just_released("jump"), "tick2: jump NOT just released");
+
+  // Tick 3: SPACE released — just_released fires once.
+  s.input_tick_from_state(snap([]), 0.0, 0.0, 0, 0);
+  assert(!s.is_action_pressed("jump"), "tick3: jump released");
+  assert(!s.is_action_just_pressed("jump"), "tick3: jump NOT just pressed");
+  assert(s.is_action_just_released("jump"), "tick3: jump just released");
+
+  // Tick 4: idle — no edges.
+  s.input_tick_from_state(snap([]), 0.0, 0.0, 0, 0);
+  assert(!s.is_action_just_released("jump"), "tick4: edge cleared");
+
+  // Unknown action name — all queries return safe defaults.
+  assert(!s.is_action_pressed("nope"), "unknown action !pressed");
+  assert(!s.is_action_just_pressed("nope"), "unknown action !just_pressed");
+}
+
+fn test_axis_pair() {
+  s = make_state();
+
+  // Neutral: zero.
+  s.input_tick_from_state(snap([]), 0.0, 0.0, 0, 0);
+  assert(s.get_axis("horizontal") == 0.0, "axis neutral=0");
+
+  // Right only: +1.
+  s.input_tick_from_state(snap([KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  assert(s.get_axis("horizontal") == 1.0, "axis right=+1");
+
+  // Left only: -1.
+  s.input_tick_from_state(snap([KEY_LEFT]), 0.0, 0.0, 0, 0);
+  assert(s.get_axis("horizontal") == -1.0, "axis left=-1");
+
+  // Both: cancel to 0.
+  s.input_tick_from_state(snap([KEY_LEFT, KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  assert(s.get_axis("horizontal") == 0.0, "axis both=cancel");
+
+  // Unknown axis name: 0.0.
+  assert(s.get_axis("vertical") == 0.0, "unknown axis=0");
+}
+
+fn test_mouse() {
+  s = make_state();
+
+  // Tick 1: left button down, mouse at (10, 20).
+  s.input_tick_from_state(snap([]), 10.0, 20.0, input::MB_LEFT, 3);
+  assert(s.mouse_x() == 10.0, "mouse_x");
+  assert(s.mouse_y() == 20.0, "mouse_y");
+  assert(s.mouse_button_down(input::MB_LEFT), "left button down");
+  assert(!s.mouse_button_down(input::MB_RIGHT), "right NOT down");
+  assert(s.mouse_button_just_pressed(input::MB_LEFT), "left just pressed");
+  assert(s.mouse_wheel() == 3, "wheel=+3");
+
+  // Tick 2: left still down + right also down — left edge cleared,
+  // right edge fires.
+  s.input_tick_from_state(snap([]), 10.0, 20.0,
+    input::MB_LEFT | input::MB_RIGHT, 0);
+  assert(s.mouse_button_down(input::MB_LEFT), "left still down");
+  assert(s.mouse_button_down(input::MB_RIGHT), "right now down");
+  assert(!s.mouse_button_just_pressed(input::MB_LEFT), "left edge cleared");
+  assert(s.mouse_button_just_pressed(input::MB_RIGHT), "right just pressed");
+  assert(s.mouse_wheel() == 0, "wheel resets per tick");
+
+  // Tick 3: all released — just_released fires for both.
+  s.input_tick_from_state(snap([]), 10.0, 20.0, 0, 0);
+  assert(!s.mouse_button_down(input::MB_LEFT), "left released");
+  assert(s.mouse_button_just_released(input::MB_LEFT), "left just released");
+  assert(s.mouse_button_just_released(input::MB_RIGHT), "right just released");
+}
+
+fn test_multi_key_action() {
+  // Action bound to MULTIPLE keys — pressing either fires it.
+  b = input::Bindings{
+    bnd_actions: [
+      input::ActionBinding{ab_name: "fire", ab_keys: [KEY_SPACE, KEY_A]}
+    ],
+    bnd_axes: []
+  };
+  s = input::input_new(b);
+
+  s.input_tick_from_state(snap([KEY_A]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("fire"), "fire via A");
+  assert(s.is_action_just_pressed("fire"), "fire edge via A");
+
+  s.input_tick_from_state(snap([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("fire"), "fire via SPACE");
+  // A went up, SPACE went down — both transitions in one tick.  The
+  // SPACE-down transition fires `just_pressed` even though the
+  // action was held last tick (different key, different transition).
+  assert(s.is_action_just_pressed("fire"), "fire edge via SPACE");
+}
+
+fn test_rebind() {
+  s = make_state();
+
+  // SPACE down → jump fires.
+  s.input_tick_from_state(snap([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("jump"), "pre-rebind jump pressed");
+
+  // Rebind: "jump" now needs A instead.  SPACE is still held but no
+  // longer counts.
+  new_b = input::Bindings{
+    bnd_actions: [
+      input::ActionBinding{ab_name: "jump", ab_keys: [KEY_A]}
+    ],
+    bnd_axes: []
+  };
+  s.input_set_bindings(new_b);
+  // Re-tick at the SAME hardware state — SPACE no longer triggers.
+  s.input_tick_from_state(snap([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(!s.is_action_pressed("jump"), "post-rebind: SPACE no longer triggers");
+
+  s.input_tick_from_state(snap([KEY_A]), 0.0, 0.0, 0, 0);
+  assert(s.is_action_pressed("jump"), "post-rebind: A triggers");
+}
+
+fn main() {
+  test_pressed_and_edges();
+  test_axis_pair();
+  test_mouse();
+  test_multi_key_action();
+  test_rebind();
+  println("input lib: all checks passed");
+}

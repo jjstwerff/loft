@@ -425,9 +425,9 @@ pub fn test() {
 ///
 /// Reproducer is intentionally tiny: two appends of a fn-returning-
 /// struct into a local `vector<Chunk>`.  Before the fix this leaked 2
-/// stores; after, zero.  The natural consumer is `lib/world`'s
+/// stores; after, zero.  The natural consumer is `lib/hex_world`'s
 /// `ensure_chunk(w, q, r)` → `w.chunks += [build_chunk(cx, cz)]`
-/// pattern which surfaced this when running `lib/world/tests/world.loft`.
+/// pattern which surfaced this when running `lib/hex_world/tests/hex_world.loft`.
 #[test]
 fn p291_vector_append_fn_call_result_no_leak() {
     let mut p = Parser::new();
@@ -472,7 +472,7 @@ pub fn test() {
     );
 }
 
-/// P291 broader case: the actual lib/world `build_chunk` (1024 inner
+/// P291 broader case: the actual lib/hex_world `build_chunk` (1024 inner
 /// cells) plus three appends covering the negative-chunk path.
 /// Combines the leak fix with vector-of-struct construction inside
 /// the callee, validating that BOTH the outer `__ref_N` (chunk) and

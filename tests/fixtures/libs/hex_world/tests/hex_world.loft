@@ -4,11 +4,11 @@
 // world: smoke test for the sparse 32x32-chunk World data model.
 // Validates that get/set round-trips, chunks are created on demand,
 // and the floor-division addressing handles negative coordinates.
-use world;
+use hex_world;
 
 fn main() {
   // Empty world has no chunks.
-  w = world::world_empty();
+  w = hex_world::world_empty();
   assert(len(w.chunks) == 0, "fresh world has no chunks");
   assert(w.tick == 0, "fresh world tick=0");
 
@@ -19,7 +19,7 @@ fn main() {
   assert(c.c_age == 0, "missing cell age = 0");
 
   // Writing creates the chunk on demand.
-  w.set_cell(5, 7, world::Cell { c_color: 3, c_height: 12, c_age: 100 });
+  w.set_cell(5, 7, hex_world::Cell { c_color: 3, c_height: 12, c_age: 100 });
   assert(len(w.chunks) == 1, "one chunk after first write");
   c2 = w.get_cell(5, 7);
   assert(c2.c_color == 3, "round-trip color");
@@ -27,33 +27,33 @@ fn main() {
   assert(c2.c_age == 100, "round-trip age");
 
   // Different (q, r) in the same chunk doesn't add a new chunk.
-  w.set_cell(6, 8, world::Cell { c_color: 5, c_height: 0, c_age: 0 });
+  w.set_cell(6, 8, hex_world::Cell { c_color: 5, c_height: 0, c_age: 0 });
   assert(len(w.chunks) == 1, "second write in same chunk reuses it");
 
   // Negative coordinates land in a different chunk.
-  w.set_cell(-1, 0, world::Cell { c_color: 7, c_height: 0, c_age: 0 });
+  w.set_cell(-1, 0, hex_world::Cell { c_color: 7, c_height: 0, c_age: 0 });
   assert(len(w.chunks) == 2, "negative coord lands in chunk -1, fresh chunk");
   c3 = w.get_cell(-1, 0);
   assert(c3.c_color == 7, "negative round-trip works");
 
   // chunk_idx_32 / hex_idx_32 — boundary spot-checks.
-  assert(world::chunk_idx_32(0) == 0, "0 → chunk 0");
-  assert(world::chunk_idx_32(31) == 0, "31 → chunk 0");
-  assert(world::chunk_idx_32(32) == 1, "32 → chunk 1");
-  assert(world::chunk_idx_32(-1) == -1, "-1 → chunk -1");
-  assert(world::chunk_idx_32(-32) == -1, "-32 → chunk -1");
-  assert(world::chunk_idx_32(-33) == -2, "-33 → chunk -2");
+  assert(hex_world::chunk_idx_32(0) == 0, "0 → chunk 0");
+  assert(hex_world::chunk_idx_32(31) == 0, "31 → chunk 0");
+  assert(hex_world::chunk_idx_32(32) == 1, "32 → chunk 1");
+  assert(hex_world::chunk_idx_32(-1) == -1, "-1 → chunk -1");
+  assert(hex_world::chunk_idx_32(-32) == -1, "-32 → chunk -1");
+  assert(hex_world::chunk_idx_32(-33) == -2, "-33 → chunk -2");
 
-  assert(world::hex_idx_32(0) == 0, "hex 0");
-  assert(world::hex_idx_32(31) == 31, "hex 31");
-  assert(world::hex_idx_32(32) == 0, "hex 32 wraps to 0");
-  assert(world::hex_idx_32(-1) == 31, "hex -1 wraps to 31");
+  assert(hex_world::hex_idx_32(0) == 0, "hex 0");
+  assert(hex_world::hex_idx_32(31) == 31, "hex 31");
+  assert(hex_world::hex_idx_32(32) == 0, "hex 32 wraps to 0");
+  assert(hex_world::hex_idx_32(-1) == 31, "hex -1 wraps to 31");
 
   // ── tick + decay ──────────────────────────────────────────────
   // Fresh world for the timing checks so the earlier set-cell calls
   // don't pollute neighbour counts.
-  td_w = world::world_empty();
-  td_w.set_cell(100, 100, world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+  td_w = hex_world::world_empty();
+  td_w.set_cell(100, 100, hex_world::Cell { c_color: 1, c_height: 0, c_age: 0 });
   assert(td_w.cell_count() == 1, "isolated cell placed");
   assert(td_w.neighbour_count(100, 100) == 0, "isolated cell: 0 neighbours");
   // base=10, lease=10, window=5 → effective_lifetime=10, removed at age 15.
@@ -72,14 +72,14 @@ fn main() {
   //   surrounding eff = 10 + 10*3 = 40 → removed at age 45
   //   centre      eff = 10 + 10*6 = 70 → removed at age 75 if all
   //               neighbours stay alive
-  cl_w = world::world_empty();
-  cl_w.set_cell(50, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(51, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(49, 50, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(50, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(50, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(51, 49, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
-  cl_w.set_cell(49, 51, world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w = hex_world::world_empty();
+  cl_w.set_cell(50, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(51, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(49, 50, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(50, 51, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(50, 49, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(51, 49, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
+  cl_w.set_cell(49, 51, hex_world::Cell { c_color: 2, c_height: 0, c_age: 0 });
   assert(cl_w.cell_count() == 7, "cluster: 7 cells placed");
   assert(cl_w.neighbour_count(50, 50) == 6, "centre has 6 neighbours");
   assert(cl_w.neighbour_count(51, 50) == 3, "surrounding has 3 neighbours");
@@ -94,18 +94,18 @@ fn main() {
   // Build a small world spanning two chunks + a negative-coord chunk
   // so save/load exercises both the file-format header counters and
   // the chunk_idx_32 negative path.
-  sv_w = world::world_empty();
+  sv_w = hex_world::world_empty();
   sv_w.tick = 17;
-  sv_w.set_cell(5, 7,    world::Cell { c_color: 3, c_height: 12, c_age: 100 });
-  sv_w.set_cell(6, 8,    world::Cell { c_color: 5, c_height: 0,  c_age: 0   });
-  sv_w.set_cell(100, 0,  world::Cell { c_color: 9, c_height: 4,  c_age: 42  });
-  sv_w.set_cell(-1, 0,   world::Cell { c_color: 7, c_height: 3,  c_age: 200 });
+  sv_w.set_cell(5, 7,    hex_world::Cell { c_color: 3, c_height: 12, c_age: 100 });
+  sv_w.set_cell(6, 8,    hex_world::Cell { c_color: 5, c_height: 0,  c_age: 0   });
+  sv_w.set_cell(100, 0,  hex_world::Cell { c_color: 9, c_height: 4,  c_age: 42  });
+  sv_w.set_cell(-1, 0,   hex_world::Cell { c_color: 7, c_height: 3,  c_age: 200 });
 
   sv_path = "/tmp/loft_world_test.bin";
   sv_w.world_save(sv_path);
 
   // Load into a fresh world and round-trip every value.
-  ld_w = world::world_empty();
+  ld_w = hex_world::world_empty();
   ld_n = ld_w.world_load(sv_path);
   assert(ld_n == 4, "loaded 4 cells");
   assert(ld_w.tick == 17, "loaded tick=17");
@@ -120,7 +120,7 @@ fn main() {
   assert(ld_d.c_color == 7 && ld_d.c_height == 3 && ld_d.c_age == 200, "negative-chunk round-trip");
 
   // Missing file → 0 cells, no panic.
-  miss_w = world::world_empty();
+  miss_w = hex_world::world_empty();
   miss_n = miss_w.world_load("/tmp/loft_world_does_not_exist.bin");
   assert(miss_n == 0, "missing file loads 0 cells");
   assert(miss_w.tick == 0, "missing file leaves tick unchanged");

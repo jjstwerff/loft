@@ -1,0 +1,282 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ⚠️  STATUS — PARKED 2026-06-01 (W.13 Stage 1 design landed; runtime
+// blocked on [@P391](../../doc/claude/PROBLEMS.md#open-issues--quick-reference)).
+// The lib compiles + parses clean and the API is final, but `input_new`'s
+// returned `InputState` is currently allocated in CONST_STORE under the
+// cross-package call path (`use input;` + `input::input_new(b)`), so any
+// subsequent `self.<field> = …` write through `&InputState` panics with
+// `Write to read-only store`.  Tests are gated by `LIB_PKGS_SKIP` (interp,
+// native) + `LIB_PKGS_NODE_SKIP` (wasm) until @P391 fixes the compiler-
+// side issue.  Source kept here so the design + comments are reviewable
+// and the lib is one compiler-bug-fix away from a Stage A extraction.
+//
+// input — abstract input state + key bindings for loft games.
+//
+// Wraps the polled input primitives exposed by the `graphics` library
+// (`gl_key_pressed`, `gl_mouse_x`/`gl_mouse_y`, `gl_mouse_button`,
+// `gl_mouse_wheel`) into:
+//
+//   - **Action bindings**: map a high-level action name (e.g. "jump")
+//     to one or more key codes — game code queries `is_action_pressed`
+//     instead of hardcoding `gl_key_pressed(KEY_SPACE)`.
+//   - **Edge detection**: `is_action_just_pressed` returns true on the
+//     exact tick a binding went from up to down (single-tick edge);
+//     same for `mouse_button_just_pressed`.  Built by keeping
+//     last-frame state alongside this-frame state.
+//   - **Axis abstraction**: pair of keys → -1.0 / 0.0 / +1.0 (e.g.
+//     "horizontal" binds Left=-1 / Right=+1; query with `get_axis`).
+//
+// Per-tick contract:
+//
+//     state.input_tick();           // poll graphics primitives
+//     if state.is_action_just_pressed("jump") { ... }
+//     vx = state.get_axis("horizontal");
+//
+// Headless / replay / test usage: `input_tick_from_state` advances
+// the state from a caller-supplied snapshot instead of polling
+// graphics — the same edge-detection logic runs on either input
+// source, so tests don't need a real GL context.
+//
+// Plan slot: LAVITION.md § input library; loft-libs-game inhabitant
+// once the design is exercised in a real consumer.
+
+use graphics;
+
+// Maximum key code the library tracks.  Graphics's highest constant
+// today is `KEY_F12 = 146`; 256 leaves room for future additions and
+// matches the byte-indexable shape of a typical keyboard scan-code
+// table.  Bindings referencing a key code >= this are silently
+// ignored at query time (a `pressed` query for an out-of-range
+// binding returns false).
+KEY_MAX = 256;
+
+// Mouse-button bitmask values (mirrors `graphics::gl_mouse_button`).
+pub const MB_LEFT   = 1;
+pub const MB_RIGHT  = 2;
+pub const MB_MIDDLE = 4;
+
+// One named action: "jump" → [KEY_SPACE, KEY_UP] (any of the listed
+// keys triggers the action).  An empty `ab_keys` is degenerate but
+// valid — the action will simply never fire.
+pub struct ActionBinding {
+  ab_name: text not null,
+  ab_keys: vector<integer>
+}
+
+// One named axis: pair of (negative key, positive key) → -1.0 / 0.0
+// / +1.0.  If both are down simultaneously the axis reads 0.0 (they
+// cancel) — same convention as Unity / Godot's built-in axis pairs.
+pub struct AxisBinding {
+  ax_name: text not null,
+  ax_neg: integer not null,
+  ax_pos: integer not null
+}
+
+// Full binding set — game code constructs this once and passes it
+// into `input_new`.  Re-binding at runtime: mutate this struct in
+// place (or build a new one) and call `input_set_bindings`.
+pub struct Bindings {
+  bnd_actions: vector<ActionBinding>,
+  bnd_axes: vector<AxisBinding>
+}
+
+// Abstract input state.  Fields are documented but considered
+// opaque — query via the `is_action_*` / `get_axis` / `mouse_*`
+// functions below.
+//
+// `is_keys_now[i]` is true if key code `i` is currently down;
+// `is_keys_prev[i]` holds the same flag from the previous tick so
+// edge detection compares the two.  Mouse buttons are a bitmask
+// (`MB_LEFT | MB_RIGHT | …`).
+pub struct InputState {
+  is_bindings: Bindings not null,
+  is_keys_now: vector<boolean> not null,
+  is_keys_prev: vector<boolean> not null,
+  is_mouse_x: float not null,
+  is_mouse_y: float not null,
+  is_mouse_buttons_now: integer not null,
+  is_mouse_buttons_prev: integer not null,
+  is_mouse_wheel: integer not null
+}
+
+// Construct an `InputState` from a `Bindings` set.  Both key tables
+// start fully released; the first call to `input_tick` populates
+// `is_keys_now` (and `is_keys_prev` stays all-false, so any key down
+// on the first tick fires its `just_pressed` edge — the documented
+// "first frame counts as a transition" semantics).
+pub fn input_new(b: Bindings) -> InputState {
+  keys_now: vector<boolean> = [];
+  keys_prev: vector<boolean> = [];
+  for _ in 0..KEY_MAX {
+    keys_now += [false];
+    keys_prev += [false];
+  }
+  InputState{
+    is_bindings: b,
+    is_keys_now: keys_now,
+    is_keys_prev: keys_prev,
+    is_mouse_x: 0.0,
+    is_mouse_y: 0.0,
+    is_mouse_buttons_now: 0,
+    is_mouse_buttons_prev: 0,
+    is_mouse_wheel: 0
+  }
+}
+
+// Replace the binding set on a live state (e.g. after the player
+// remaps keys in a settings menu).  Does NOT clear the key tables —
+// in-flight key presses survive the rebind so a remap doesn't
+// strand an already-held key.
+pub fn input_set_bindings(self: &InputState, b: Bindings) {
+  self.is_bindings = b;
+}
+
+// Internal: shift `is_keys_now → is_keys_prev` and zero `is_keys_now`
+// in preparation for the next poll.  Same for mouse buttons.  Public
+// surface uses `input_tick` (or `input_tick_from_state` for tests).
+fn advance_tick(self: &InputState) {
+  for i in 0..KEY_MAX {
+    self.is_keys_prev[i] = self.is_keys_now[i];
+    self.is_keys_now[i] = false;
+  }
+  self.is_mouse_buttons_prev = self.is_mouse_buttons_now;
+  self.is_mouse_buttons_now = 0;
+  self.is_mouse_wheel = 0;
+}
+
+// Poll the graphics input primitives and refresh state for one tick.
+// Reads `gl_key_pressed` for every key code referenced by the
+// current bindings (avoids a 256-call sweep — only ask about keys
+// the game actually cares about), plus `gl_mouse_x`/`gl_mouse_y`/
+// `gl_mouse_button`/`gl_mouse_wheel` unconditionally.
+pub fn input_tick(self: &InputState) {
+  self.advance_tick();
+  for ab in self.is_bindings.bnd_actions {
+    for k in ab.ab_keys {
+      if k >= 0 && k < KEY_MAX {
+        self.is_keys_now[k] = graphics::gl_key_pressed(k);
+      }
+    }
+  }
+  for ax in self.is_bindings.bnd_axes {
+    if ax.ax_neg >= 0 && ax.ax_neg < KEY_MAX {
+      self.is_keys_now[ax.ax_neg] = graphics::gl_key_pressed(ax.ax_neg);
+    }
+    if ax.ax_pos >= 0 && ax.ax_pos < KEY_MAX {
+      self.is_keys_now[ax.ax_pos] = graphics::gl_key_pressed(ax.ax_pos);
+    }
+  }
+  self.is_mouse_x = graphics::gl_mouse_x();
+  self.is_mouse_y = graphics::gl_mouse_y();
+  self.is_mouse_buttons_now = graphics::gl_mouse_button();
+  self.is_mouse_wheel = graphics::gl_mouse_wheel();
+}
+
+// Advance state from a caller-supplied snapshot instead of polling
+// `graphics`.  Used by tests (no GL context) and by network replay
+// / record-playback systems.  `keys` length is clamped to KEY_MAX;
+// out-of-range entries are ignored.
+pub fn input_tick_from_state(
+  self: &InputState,
+  keys: vector<boolean>,
+  mx: float, my: float,
+  mbtn: integer, wheel: integer
+) {
+  self.advance_tick();
+  n = len(keys);
+  if n > KEY_MAX { n = KEY_MAX; }
+  for i in 0..n {
+    self.is_keys_now[i] = keys[i];
+  }
+  self.is_mouse_x = mx;
+  self.is_mouse_y = my;
+  self.is_mouse_buttons_now = mbtn;
+  self.is_mouse_wheel = wheel;
+}
+
+// True if ANY of the action's bound keys is currently down.
+pub fn is_action_pressed(self: const InputState, action: text) -> boolean {
+  for ab in self.is_bindings.bnd_actions {
+    if ab.ab_name != action { continue; }
+    for k in ab.ab_keys {
+      if k >= 0 && k < KEY_MAX && self.is_keys_now[k] { return true; }
+    }
+    return false;
+  }
+  false
+}
+
+// True for exactly one tick: the moment any of the action's bound
+// keys transitions from up to down.  If multiple bound keys all
+// transition on the same tick it still fires once.
+pub fn is_action_just_pressed(self: const InputState, action: text) -> boolean {
+  for ab in self.is_bindings.bnd_actions {
+    if ab.ab_name != action { continue; }
+    for k in ab.ab_keys {
+      if k >= 0 && k < KEY_MAX && self.is_keys_now[k] && !self.is_keys_prev[k] { return true; }
+    }
+    return false;
+  }
+  false
+}
+
+// True for exactly one tick: the moment any of the action's bound
+// keys transitions from down to up.
+pub fn is_action_just_released(self: const InputState, action: text) -> boolean {
+  for ab in self.is_bindings.bnd_actions {
+    if ab.ab_name != action { continue; }
+    for k in ab.ab_keys {
+      if k >= 0 && k < KEY_MAX && !self.is_keys_now[k] && self.is_keys_prev[k] { return true; }
+    }
+    return false;
+  }
+  false
+}
+
+// Read an axis pair: -1.0 if only `ax_neg` is down, +1.0 if only
+// `ax_pos` is down, 0.0 if neither or both.  Unknown axis name
+// returns 0.0.
+pub fn get_axis(self: const InputState, axis: text) -> float {
+  for ax in self.is_bindings.bnd_axes {
+    if ax.ax_name != axis { continue; }
+    neg = ax.ax_neg >= 0 && ax.ax_neg < KEY_MAX && self.is_keys_now[ax.ax_neg];
+    pos = ax.ax_pos >= 0 && ax.ax_pos < KEY_MAX && self.is_keys_now[ax.ax_pos];
+    if neg && !pos { return -1.0; }
+    if pos && !neg { return 1.0; }
+    return 0.0;
+  }
+  0.0
+}
+
+// Mouse position — pixels from the top-left of the window
+// (matches `graphics::gl_mouse_x` / `gl_mouse_y`).
+pub fn mouse_x(self: const InputState) -> float { self.is_mouse_x }
+pub fn mouse_y(self: const InputState) -> float { self.is_mouse_y }
+
+// True if the given mouse button (`MB_LEFT` / `MB_RIGHT` / `MB_MIDDLE`)
+// is currently down.  Pass the constant, not a bitmask of multiple.
+pub fn mouse_button_down(self: const InputState, button: integer) -> boolean {
+  (self.is_mouse_buttons_now & button) != 0
+}
+
+// True for exactly one tick — the moment the button transitions
+// from up to down.
+pub fn mouse_button_just_pressed(self: const InputState, button: integer) -> boolean {
+  now_down = (self.is_mouse_buttons_now & button) != 0;
+  prev_down = (self.is_mouse_buttons_prev & button) != 0;
+  now_down && !prev_down
+}
+
+// True for exactly one tick — the moment the button transitions
+// from down to up.
+pub fn mouse_button_just_released(self: const InputState, button: integer) -> boolean {
+  now_down = (self.is_mouse_buttons_now & button) != 0;
+  prev_down = (self.is_mouse_buttons_prev & button) != 0;
+  prev_down && !now_down
+}
+
+// Accumulated scroll-wheel delta since the last `input_tick` —
+// positive = scroll up.  Mirrors `graphics::gl_mouse_wheel`.
+pub fn mouse_wheel(self: const InputState) -> integer { self.is_mouse_wheel }

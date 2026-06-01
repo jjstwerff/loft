@@ -54,7 +54,7 @@ audience can see who's where without needing to read labels.
   and stays static.  The audience demo is the consumer; the dryopea
   editor is the author tool.
 - **One file format.**  MapFile JSON loaded via
-  [`world::load_mapfile()`](../../../../../lib/world/MAPFILE.md) (the
+  [`hex_world::load_mapfile()`](https://github.com/loft-lang/loft-libs-world/blob/main/hex_world/MAPFILE.md) (the
   cross-project schema documented for moros / dryopea / bumper), or
   the eventual path-backed `Store` (`store_persist_bind` from
   [@PLAN38 phase 01c](../38-loft-store-durable/README.md)) — both
@@ -658,7 +658,7 @@ projector — are already proven.  What this demo would surface as
 | Twin-strip touch input | Phone-side: capture two simultaneous touches by x-coordinate band, report `{L, R}` ∈ `[0, 1]²` over WS at ~30 Hz | New on the HTML/JS side; pure client work |
 | Per-frame WS pose sync | 30 Hz `(L, R, L_on, R_on)` input per phone → server; 30 Hz per-plane pose broadcast back, **sight-filtered per recipient** (`net.peer_sight_range`) so each phone only receives poses for OTHER planes within visual range.  Total throughput scales with typical visible-peer count, not N − 1 — substantially under naïve worst-case.  Pose frames are ~32 bytes fixed-point (see `net.pose_frame_bytes_budget`), not JSON | Reuses [`lib_plans/future/08-server/` § Gap 8 — `BroadcastTopology`](../../../lib_plans/future/08-server/README.md#gap-8--per-recipient-broadcast-qos-sight--rate-lod--forecast); the sight + rate-LOD + forecast pattern is generalised there for dryopea reuse |
 | Phone-side first-person 3D | WebGL view from the cockpit: extruded world geometry + other planes' positions + their smoke trails.  Own plane mostly invisible (nose section + frame overlay only) — no chase-camera tuning since the camera IS the cockpit | New on the HTML/JS side; same world payload as projector, simpler camera |
-| Static world load | Read a dryopea MapFile JSON OR a `store_persist_bind`'d hash, extrude per palette; serve as a single download to phone + projector at session start | Loader is [`world::load_mapfile()`](../../../../../lib/world/MAPFILE.md) (Phase 7a wraps the existing moros_map shape behind a documented schema); palette extrusion fields live on `MaterialDef.md_extrude` per the schema doc.  Stencil-pipeline supplement after @PLAN46 plan 06 lands |
+| Static world load | Read a dryopea MapFile JSON OR a `store_persist_bind`'d hash, extrude per palette; serve as a single download to phone + projector at session start | Loader is [`hex_world::load_mapfile()`](https://github.com/loft-lang/loft-libs-world/blob/main/hex_world/MAPFILE.md) (Phase 7a wraps the existing moros_map shape behind a documented schema); palette extrusion fields live on `MaterialDef.md_extrude` per the schema doc.  Stencil-pipeline supplement after @PLAN46 plan 06 lands |
 | 3D continuous physics | Plane integrator (pose + velocity + angular vel); sphere-vs-geometry + sphere-vs-sphere collision; reflection with damping | Uses [`lib_plans/future/26-physics-2body/`](../../../lib_plans/future/26-physics-2body/README.md) — shared rigid-body library; PLAN50's "0.7 outward / 0.2 tangent" target kick is `reflect(v, n, 0.7, 0.2)` in that slot's API |
 | Smoke trails + score confetti | Ring buffer of recent positions per plane (~90 entries at 30 Hz / 3 sec); ribbon mesh.  Plus point-burst score confetti at collision points | Uses [`lib_plans/future/27-particles/`](../../../lib_plans/future/27-particles/README.md) — two-flavour particle library (Trail + Burst) shared with dryopea explosions / scramble exhaust |
 | Centroid camera (projector only) | Weighted-mean position with decay; smooth lookat lerp; auto-zoom to keep active group in frame | Trivial helper; lib/graphics extension |
@@ -759,7 +759,7 @@ This demo:
 | 0a | [Network throughput probe](00a-network-probe.md) — synthetic 30 Hz × N WS load against the existing @PLAN36 server; resolves the dominant unknown (does the broadcast pump hold at 12 / 20 / 30 clients?) before phase 0 commits substantial code | XS | @PLAN36 phase 1.9 (Tier A′ pump + WsGroup) |
 | 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples + **per-peer smooth-rendering (linear interp between received frames + fade in/out on sight-range crossings)** | S-M | phase 0a verdict + @PLAN36 phase 0 |
 | 1  | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLAN36 phase 1 (Tier A′) |
-| 2  | Static world loader — `world::load_mapfile()` + per-palette extrusion (palette-`md_extrude` → 3D pillars / cliffs / ramps) | XS | [`lib/world/MAPFILE.md`](../../../../../lib/world/MAPFILE.md); @PLAN46 plan 01 E4 |
+| 2  | Static world loader — `hex_world::load_mapfile()` + per-palette extrusion (palette-`md_extrude` → 3D pillars / cliffs / ramps) | XS | [`hex_world/MAPFILE.md`](https://github.com/loft-lang/loft-libs-world/blob/main/hex_world/MAPFILE.md); @PLAN46 plan 01 E4 |
 | 3  | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLAN36 phase 3; [`lib_plans/future/27-particles/`](../../../lib_plans/future/27-particles/README.md) Phase 1 (Trail) + Phase 2 (Burst) |
 | 4  | Physics — plane integrator + bounce + stall | M | [`lib_plans/future/26-physics-2body/`](../../../lib_plans/future/26-physics-2body/README.md) Phases 1-5; the existing [`tools/audience-demo-50/forecast_test.loft`](../../../../../tools/audience-demo-50/forecast_test.loft) (Q1/Q2/Q4/Q5 — 4/4 PASS) is the acceptance rig for the slot's reflect-with-energy-split + nose/body 2-collider |
 | 5  | Scoring + ambience — targets file + off-axis collision rule + leaderboard + "the storm" difficulty ramp | S | particles Phase 3 (score-burst factory) |
@@ -790,9 +790,9 @@ cadence is the same flat-2D-MVP-first sequence that worked for
 - [`lib_plans/future/08-server/` § Gap 8](../../../lib_plans/future/08-server/README.md#gap-8--per-recipient-broadcast-qos-sight--rate-lod--forecast)
   — broadcast QoS layer (sight + rate-LOD + bounce-forecast);
   sub-arc 7 consumes.
-- [`lib/world/MAPFILE.md`](../../../../../lib/world/MAPFILE.md) —
+- [`hex_world/MAPFILE.md`](https://github.com/loft-lang/loft-libs-world/blob/main/hex_world/MAPFILE.md) —
   cross-project MapFile schema; sub-arc 2 consumes via
-  `world::load_mapfile()`.
+  `hex_world::load_mapfile()`.
 - [`lib/graphics`](../../../../../lib/graphics/) — projector renderer
   base.
 - [`lib/server`](../../../../../lib/server/) — multi-client WS hub.

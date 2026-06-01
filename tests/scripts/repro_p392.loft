@@ -1,0 +1,17 @@
+// @P392 regression — the parser used to silently mis-resolve a
+// typed-local declaration `name: T = expr;` when LHS `name` collided
+// with a stdlib function (e.g. `now`).  The function-ref path in
+// parse_var ate the identifier and the `=` check only caught the
+// un-annotated form, so the typed form left the lexer parked on `:`
+// and the user saw a confusing `Expect token ;`.  After the fix the
+// typed form emits the same clear diagnostic as the un-annotated
+// form: `Cannot redefine function 'now' as a variable`.
+//
+// Driven by `tests/parse_errors.rs` via the @EXPECT_ERROR header.
+
+// @EXPECT_ERROR: Cannot redefine function 'now' as a variable
+
+fn main() {
+  now: integer = 42;
+  println("{now}");
+}

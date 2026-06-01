@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Time
 // @TITLE: The time library — dates and times as epoch milliseconds.
-// @ARGS: --lib lib
+// @ARGS: --lib tests/fixtures/libs
 //
 // The `time` library represents a point in time as a plain `integer`
 // (i64) holding milliseconds since the Unix epoch — the same unit

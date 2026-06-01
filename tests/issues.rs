@@ -14251,15 +14251,19 @@ fn run() -> integer {
 
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
 // Two libraries each defining `struct Chunk` with DIFFERENT field layouts
-// (moros_map's holds vector<Hex>, world's holds vector<Cell>) must load
+// (moros_map's holds vector<Hex>, hex_world's holds vector<Cell>) must load
 // together without the `Double structure type Chunk` internal panic, and each
 // library's Chunk-bearing collections must resolve to the CORRECT per-library
-// content type.  Before the fix, `use world; use moros_map;` panicked at
+// content type.  Before the fix, `use hex_world; use moros_map;` panicked at
 // src/database/types.rs:53.
 #[test]
 fn p379_two_libs_same_struct_name() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
+    // hex_world was extracted to loft-libs-world 2026-06-01 (W.2); the
+    // fixture lives under tests/fixtures/libs/ from Phase 6.12 onwards.
+    // moros_map still lives in `lib/`.
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
     p.lib_dirs.push("lib".to_string());
     p.parse("tests/multilib/p379_lib_namespace.loft", false);
     let errors: Vec<String> = p

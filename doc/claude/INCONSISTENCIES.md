@@ -210,7 +210,7 @@ fields:
 
 The asymmetry is the only place where "I want this thing
 immutable" can't be expressed.  The first concrete consumer is
-[lib/world's `Cell`](../../lib/world/src/world.loft):
+[lib/hex_world's `Cell`](../../lib/hex_world/src/hex_world.loft):
 `c_color`, `c_height`, `c_age` should ALL be const after
 construction (the tick loop rebuilds the entire cell via
 `chunk.ck_cells[idx] = Cell{…}`, never via in-place field

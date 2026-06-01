@@ -6,7 +6,7 @@
 // then sync().  Two save passes round-trip with the payload from the
 // most recent save (no leftover bytes from the longer first save).
 // This is the pattern used by tools/audience-demo/single_port_server.loft
-// and lib/world/src/world.loft once `+=` becomes append-only.
+// and lib/hex_world/src/hex_world.loft once `+=` becomes append-only.
 
 fn cleanup() { delete("test_loft_snap.bin"); }
 

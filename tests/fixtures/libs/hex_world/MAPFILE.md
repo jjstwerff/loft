@@ -20,14 +20,14 @@ a backwards-compatible loader for the old version.
 **v1 of the schema is implicitly defined by `lib/moros_map`'s `Map`
 struct.**  Per
 [lib_plans/12 Phase 7a](../../doc/claude/lib_plans/12-library-extraction/README.md#phase-7a--moros-world-split-cross-project-unlock-appears-monorepo-internal),
-the schema migrates to `lib/world/` along with the moros_map fold.
+the schema migrates to `lib/hex_world/` along with the moros_map fold.
 Until that lands:
 
 - The schema **is** what `lib/moros_map/src/moros_map.loft` declares.
-- `pub fn world::load_mapfile(path)` and `pub fn world::save_mapfile`
-  do not yet exist in `lib/world/` — consumers use
+- `pub fn hex_world::load_mapfile(path)` and `pub fn hex_world::save_mapfile`
+  do not yet exist in `lib/hex_world/` — consumers use
   `moros_map::map_to_json` / `moros_map::map_from_json` directly.
-- The migration to `lib/world/` is **blocked on the consumer stall**
+- The migration to `lib/hex_world/` is **blocked on the consumer stall**
   ([memory: project_consumer_stall](../../doc/claude/lib_plans/12-library-extraction/README.md#why-a-separate-plan-from-packagesmd)).
 
 This document captures the schema NOW so the eventual migration is a
@@ -111,7 +111,7 @@ unknown fields (forward-compat) and preserve them on round-trip
 added).
 
 Breaking changes (renames, removals, type narrowing) require a
-version bump + a per-version loader path in `world::load_mapfile`.
+version bump + a per-version loader path in `hex_world::load_mapfile`.
 Goal: no breaking change has shipped to date.
 
 ## Per-consumer overlays
@@ -129,21 +129,21 @@ Overlay fields are **opt-in** and have sensible defaults — moros maps
 without `md_slope` (e.g. content authored before that field
 existed) load cleanly under all three consumers.
 
-## Migration plan to `world::load_mapfile()`
+## Migration plan to `hex_world::load_mapfile()`
 
 When the consumer stall lifts and Phase 7a's moros_map fold proceeds:
 
 1. Move `Map` + `Chunk` + `Hex` from `lib/moros_map/src/{moros_map,types}.loft`
-   → `lib/world/src/world.loft`.  Field names stay identical so
+   → `lib/hex_world/src/hex_world.loft`.  Field names stay identical so
    existing JSON loads cleanly.
 2. Move `MaterialDef` + `WallDef` + `ItemDef` from
-   `lib/moros_map/src/palette.loft` → `lib/world/src/palette.loft`
+   `lib/moros_map/src/palette.loft` → `lib/hex_world/src/palette.loft`
    (new sibling module).
 3. Move `SpawnPoint` + `NpcWaypoint` + `NpcRoutine` from
-   `lib/moros_map/src/spawn.loft` → `lib/world/src/spawn.loft`.
+   `lib/moros_map/src/spawn.loft` → `lib/hex_world/src/spawn.loft`.
 4. Add `pub fn world::load_mapfile(path: text) -> Map` and
    `pub fn world::save_mapfile(self: Map, path: text) -> FileResult`
-   to `lib/world/src/world.loft`.  Loader passes `text as Map`
+   to `lib/hex_world/src/world.loft`.  Loader passes `text as Map`
    under the hood (the `{m:j}` / `text as T` machinery is shipped
    language behaviour).
 5. Update `lib/moros_map/src/moros_map.loft` to be a thin shim:

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// Regression tests for lib/world's save/load + chunk addressing
+// Regression tests for lib/hex_world's save/load + chunk addressing
 // surface (lib_plans/12 Phase 6t Tier 5).  The companion smoke test
-// (world.loft) covers get/set + chunk count + negative-coord get.
+// (hex_world.loft) covers get/set + chunk count + negative-coord get.
 // This file pins:
 //   * world_save / world_load binary round-trip (single cell, many
 //     cells across chunks, negative coords, tick preserved, age
@@ -17,7 +17,7 @@
 // gitignored.  Each test re-creates its tmp file, so leftover
 // artefacts from a previous run are harmless.
 
-use world;
+use hex_world;
 
 // ── chunk addressing ─────────────────────────────────────────────
 

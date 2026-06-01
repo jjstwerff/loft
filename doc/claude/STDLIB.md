@@ -382,7 +382,7 @@ today — it writes a few bytes of the internal storage handle
 (struct ref / store pos), not the user-visible field values.  Direct
 `f#read as MyStruct` is also NOT implemented.  Workaround: read /
 write each field individually (see
-[`lib/world/src/world.loft::world_save`](../../lib/world/src/world.loft)
+[`lib/hex_world/src/hex_world.loft::world_save`](../../lib/hex_world/src/hex_world.loft)
 and [`tools/audience-demo/single_port_server.loft`](../../tools/audience-demo/single_port_server.loft)).
 The user-facing `for cell in world.cells { f += cell.x; f += cell.y;
 f += cell.color }` pattern is the current canonical idiom.

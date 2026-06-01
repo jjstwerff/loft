@@ -317,21 +317,40 @@ impl Parser {
                 }
             };
             if fn_d_nr != u32::MAX && matches!(self.data.def_type(fn_d_nr), DefType::Function) {
-                if self.lexer.peek_token("=") && !self.lexer.peek_token("==") {
+                // @P392: the un-annotated form `<name> = …` is caught by the
+                // `=` check; the typed-local form `<name>: T = …` lands here
+                // with the lexer parked on `:`.  Without the typed-position
+                // branch the parser silently produces a function-ref
+                // `Value::Int`, back in parse_assign the `if let Value::Var(_)
+                // = code` arm doesn't match, the `:` is never consumed, and
+                // the user sees a confusing `Expect token ;` at the `:`.
+                let un_annotated = self.lexer.peek_token("=") && !self.lexer.peek_token("==");
+                let typed_local = self.lexer.peek_token(":");
+                if un_annotated || typed_local {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
                         "Cannot redefine function '{nm}' as a variable"
                     );
+                    // RECOVER as a Var so parse_assign's downstream arms
+                    // (typed-annotation `:` consumer; bare `=` assignment)
+                    // run on a sane shape — otherwise the function-ref
+                    // `Value::Int` below leaves the `:`/`=` un-consumed and
+                    // we double-emit `Expect token ;`.  Both un-annotated
+                    // and typed-local now recover with a single, clear
+                    // diagnostic.
+                    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+                    t = Type::Unknown(0);
+                } else {
+                    *code = Value::Int(fn_d_nr as i32);
+                    self.data.def_used(fn_d_nr);
+                    let n_args = self.data.attributes(fn_d_nr);
+                    let arg_types: Vec<Type> = (0..n_args)
+                        .map(|a| self.data.attr_type(fn_d_nr, a))
+                        .collect();
+                    let ret_type = self.data.def(fn_d_nr).returned.clone();
+                    t = Type::Function(arg_types, Box::new(ret_type), vec![]);
                 }
-                *code = Value::Int(fn_d_nr as i32);
-                self.data.def_used(fn_d_nr);
-                let n_args = self.data.attributes(fn_d_nr);
-                let arg_types: Vec<Type> = (0..n_args)
-                    .map(|a| self.data.attr_type(fn_d_nr, a))
-                    .collect();
-                let ret_type = self.data.def(fn_d_nr).returned.clone();
-                t = Type::Function(arg_types, Box::new(ret_type), vec![]);
             } else if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
                 t = Type::Unknown(0);

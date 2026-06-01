@@ -433,7 +433,7 @@ impl Stores {
     // at codegen_runtime.rs which were already feature-gated, not
     // target-gated).  Without this, get_file's wasm-unknown stub
     // short-circuited every exists()/file() under wasip2 → the
-    // world_load assert in lib/world failed → `wasm unreachable`.
+    // world_load assert in lib/hex_world failed → `wasm unreachable`.
     #[cfg(all(
         not(feature = "wasm"),
         any(not(target_arch = "wasm32"), target_os = "wasi")
