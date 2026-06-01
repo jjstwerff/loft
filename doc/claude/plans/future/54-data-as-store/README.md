@@ -187,6 +187,132 @@ Mirroring `--native` rather than inventing a third format buys:
   *def_nr* indices are a separate axis, handled by whole-prefix
   snapshotting above.)
 
+## Arc A reference — the IR transcribed as loft types (verified 2026-06-01)
+
+The most efficient way to pin arc A's store schema is **not** to hand-write
+`db.structure`/`enumerate`/`value` calls — it is to **transcribe the whole IR
+as loft `struct`/`enum` declarations and let `loft --native` generate the
+schema + record accessors for it.**  The generated Rust *is* arc A's
+`init`-equivalent, produced by loft itself.
+
+The transcription below **parses + lays out + runs under `--interpret`**
+(empty `Data`), exercising every type:
+
+```loft
+// Mapping from native Rust IR (src/data.rs) to loft types:
+//   Box<Self>          -> see findings: reference<OtherType> works; a SELF
+//                         reference must be vector<Self> (box-of-one)
+//   Vec<Self>          -> vector<Self>
+//   u8/u16/u32/i32/i64 -> integer   ;  bool -> boolean
+//   f64 -> float ; f32 -> single ; String -> text
+//   Vec<u16>           -> vector<integer>
+//   Vec<(String,bool)> -> vector<SortKey>   ;  Vec<String> -> vector<NameRef>
+//   Option<T>          -> sentinel field (0 / "" = None)
+
+struct Position { file: text, line: integer, pos: integer }
+struct Key { type_nr: integer, position: integer }      // i8, u16
+struct SortKey { name: text, asc: boolean }
+struct NameRef { name: text }
+struct IntegerSpec { min: integer, max: integer, not_null: boolean, forced_size: integer }
+
+// Enum variant names are GLOBAL type names → must be unique across all enums
+// and not collide with builtins; hence the Ty / Nd CamelCase prefixes.
+enum TypeT {
+  TyUnknown { n: integer }, TyNull, TyVoid, TyNever,
+  TyInteger { spec: IntegerSpec }, TyBoolean, TyFloat, TySingle, TyCharacter,
+  TyText { dep: vector<integer> }, TyKeys,
+  TyEnum { n: integer, is_ref: boolean, dep: vector<integer> },
+  TyReference { n: integer, dep: vector<integer> },
+  TyRefVar { inner: vector<TypeT> },
+  TyVector { inner: vector<TypeT>, dep: vector<integer> },
+  TyRoutine { n: integer },
+  TyIterator { step: vector<TypeT>, inner: vector<TypeT> },
+  TySorted { n: integer, keys: vector<SortKey>, dep: vector<integer> },
+  TyIndex { n: integer, keys: vector<SortKey>, dep: vector<integer> },
+  TySpacial { n: integer, names: vector<NameRef>, dep: vector<integer> },
+  TyHash { n: integer, names: vector<NameRef>, dep: vector<integer> },
+  TyFunction { args: vector<TypeT>, result: vector<TypeT>, dep: vector<integer> },
+  TyRewritten { inner: vector<TypeT> }, TyTuple { elems: vector<TypeT> }
+}
+
+enum Node {
+  NdNull, NdLine { n: integer },
+  NdSpan { pos: Position, inner: vector<Node> },
+  NdInt { n: integer }, NdEnum { ord: integer, tp: integer },
+  NdBoolean { b: boolean }, NdFloat { f: float }, NdLong { n: integer },
+  NdSingle { f: single }, NdText { s: text },
+  NdCall { def_nr: integer, args: vector<Node> },
+  NdCallRef { var: integer, args: vector<Node> },
+  NdBlock { block: reference<Block> }, NdInsert { items: vector<Node> },
+  NdVar { n: integer }, NdSet { var: integer, inner: vector<Node> },
+  NdReturn { inner: vector<Node> }, NdBreak { n: integer },
+  NdBreakWith { n: integer, inner: vector<Node> }, NdContinue { n: integer },
+  NdIf { cond: vector<Node>, t: vector<Node>, f: vector<Node> },
+  NdLoop { block: reference<Block> }, NdDrop { inner: vector<Node> },
+  NdIter { var: integer, create: vector<Node>, next: vector<Node>, init: vector<Node> },
+  NdKeys { keys: vector<Key> }, NdTuple { items: vector<Node> },
+  NdTupleGet { var: integer, idx: integer },
+  NdTuplePut { var: integer, idx: integer, inner: vector<Node> },
+  NdYield { inner: vector<Node> },
+  NdFnRef { def_nr: integer, var: integer, t: vector<TypeT> },
+  NdFnRefDnr { n: integer }, NdParallel { arms: vector<Node> },
+  NdParFor { body: reference<ParForBody> }, NdRawExpr { s: text }
+}
+
+struct Block { name: text, operators: vector<Node>, result: vector<TypeT>, scope: integer, var_size: integer }
+struct ParForBody { input: vector<Node>, x_var: integer, r_var: integer,
+                    worker: vector<Node>, threads: vector<Node>, body: vector<Node>, stitch_id: integer }
+struct Attribute { name: text, typedef: vector<TypeT>, mutable: boolean, constant: boolean,
+                   init: boolean, nullable: boolean, primary: boolean, hidden: boolean,
+                   value: vector<Node>, check: vector<Node>, check_message: vector<Node>,
+                   alias_d_nr: integer, assigned_lambda_d_nr: integer }
+struct Variable { name: text, type_def: vector<TypeT>, stack_pos: integer, uses: integer,
+                  argument: boolean, stack_allocated: boolean, skip_free: boolean,
+                  captured: boolean, caller_hidden_buf: boolean }
+struct Function { name: text, file: text, variables: vector<Variable> }
+struct LinkedFieldGroup { kind: integer, instance: integer, field_indices: vector<integer>, alignment: integer, size: integer }
+struct Definition { name: text, source: integer, def_type: integer, parent: integer, position: Position,
+                    attributes: vector<Attribute>, code: vector<Node>, returned: vector<TypeT>,
+                    returned_not_null: boolean, rust: text, native: text, op_code: integer, known_type: integer,
+                    variables: Function, pub_visible: boolean, closure_record: integer,
+                    mutated_captures: vector<NameRef>, scalars_to_box: vector<NameRef>, bounds: vector<integer>,
+                    forced_size: integer, purity: integer, field_groups: vector<LinkedFieldGroup>, synthetic: text }
+struct Data { definitions: vector<Definition>, source: integer }
+```
+
+**Findings (these are the arc A design constraints, learned the cheap way):**
+
+1. **Enum variant names are global type names.**  Every variant (`TyBoolean`,
+   `NdCall`, …) registers a `db.structure(name, ord)` whose name lives in the
+   one global type namespace, so it must be unique across *all* enums and must
+   not collide with a builtin (`boolean`, `vector`, `text`, …).  The real IR
+   has `Value::Boolean` *and* `Type::Boolean`; in the store model these need
+   distinct registered names (the `Ty`/`Nd` prefixes here).  Variant names must
+   also be CamelCase (no underscores).
+
+2. **A self-referential single child cannot be `reference<Self>`; use
+   `vector<Self>` (box-of-one).**  `reference<OtherType>` lays out fine
+   (`NdBlock { block: reference<Block> }` works — `Block` is a distinct type),
+   but `reference<Node>` *inside* `Node` fails layout (`inner:Node@?..?`,
+   unresolved size).  The recursion has to route through either a distinct
+   wrapper type or a `vector<Self>` (which is a length-prefixed out-of-line
+   chunk, so it has a fixed in-record size).  Every `Box<Value>` /
+   `Box<Type>` single-child in the real IR maps to a `vector<…>` of length ≤ 1
+   here.  **Arc A must decide:** box-of-one vector, or a dedicated indirection
+   record (a `NodeRef { target: reference<NodeBox> }` shim).  The box-of-one is
+   simplest and is what laid out.
+
+3. **`--native` needs definition order to be dependency-respecting.**  The
+   interpreter lays out the whole graph regardless of order, but the generated
+   native code referenced `Block`'s type id (`t112`) before it was bound
+   (`E0425`) because `Block` is declared after `Node` (which references it).
+   Arc A's emitter must topologically order (or forward-declare) type
+   registrations; for the reference script under `--interpret` this is moot.
+
+The other open questions (`&'static str` interning, `OnceLock` caller-index,
+`Option` mapping, mutability of a locked mmap) are unchanged from § Open design
+questions; finding 2 in particular is the first concrete arc A decision.
+
 ## Sub-arcs
 
 | Item | Concern | Status |
