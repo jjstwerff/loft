@@ -1,0 +1,24 @@
+struct Pt { x: integer, y: integer }
+fn main() {
+  total = 0;
+  p0 = Pt {x: 0, y: 1}; total += p0.x;
+  p1 = Pt {x: 1, y: 2}; total += p1.x;
+  p2 = Pt {x: 2, y: 3}; total += p2.x;
+  p3 = Pt {x: 3, y: 4}; total += p3.x;
+  p4 = Pt {x: 4, y: 5}; total += p4.x;
+  p5 = Pt {x: 5, y: 6}; total += p5.x;
+  p6 = Pt {x: 6, y: 7}; total += p6.x;
+  p7 = Pt {x: 7, y: 8}; total += p7.x;
+  p8 = Pt {x: 8, y: 9}; total += p8.x;
+  p9 = Pt {x: 9, y: 10}; total += p9.x;
+  s0 = "text literal number 0 with some length"; total += s0.len();
+  s1 = "text literal number 1 with some length"; total += s1.len();
+  s2 = "text literal number 2 with some length"; total += s2.len();
+  s3 = "text literal number 3 with some length"; total += s3.len();
+  s4 = "text literal number 4 with some length"; total += s4.len();
+  s5 = "text literal number 5 with some length"; total += s5.len();
+  s6 = "text literal number 6 with some length"; total += s6.len();
+  s7 = "text literal number 7 with some length"; total += s7.len();
+  s8 = "text literal number 8 with some length"; total += s8.len();
+  s9 = "text literal number 9 with some length"; total += s9.len();
+  println("gen total={total}"); }

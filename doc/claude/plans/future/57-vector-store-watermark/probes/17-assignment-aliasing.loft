@@ -1,0 +1,6 @@
+fn main() {
+  a = [1, 2, 3];
+  b = a;
+  b += [4];
+  println("a.len={len(a)} b.len={len(b)}");
+}

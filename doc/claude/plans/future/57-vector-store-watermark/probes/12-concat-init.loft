@@ -1,0 +1,18 @@
+// 12 — 10 concat-init locals (c = a + b).  Result: ~1/local (NOT 2×) → the concat
+// result store BECOMES the local; no redundant init-temp.  Reference for "init
+// done right" — contrast cluster II.  @P393.
+fn main() {
+  a = [1, 2]; b = [3, 4];
+  total = 0;
+  c0 = a + b; total += c0[0];
+  c1 = a + b; total += c1[1];
+  c2 = a + b; total += c2[0];
+  c3 = a + b; total += c3[1];
+  c4 = a + b; total += c4[0];
+  c5 = a + b; total += c5[1];
+  c6 = a + b; total += c6[0];
+  c7 = a + b; total += c7[1];
+  c8 = a + b; total += c8[0];
+  c9 = a + b; total += c9[1];
+  println("concat total={total}");
+}

@@ -1,0 +1,18 @@
+// 15 — 10 locals each declared inside a separate if-block.  Do non-loop block
+// scopes free their locals at block-end (like loop bodies) or pin to fn exit?
+// Result: 22 allocs, all freed at scope-end (aaa…fff) → if-block locals PIN to
+// function exit; only LOOP bodies reuse.  Refines cluster I.  @P393.
+fn main() {
+  total = 0;
+  if total >= 0 { w0 = [0, 1]; total += w0[0]; }
+  if total >= 0 { w1 = [1, 2]; total += w1[0]; }
+  if total >= 0 { w2 = [2, 3]; total += w2[0]; }
+  if total >= 0 { w3 = [3, 4]; total += w3[0]; }
+  if total >= 0 { w4 = [4, 5]; total += w4[0]; }
+  if total >= 0 { w5 = [5, 6]; total += w5[0]; }
+  if total >= 0 { w6 = [6, 7]; total += w6[0]; }
+  if total >= 0 { w7 = [7, 8]; total += w7[0]; }
+  if total >= 0 { w8 = [8, 9]; total += w8[0]; }
+  if total >= 0 { w9 = [9, 10]; total += w9[0]; }
+  println("ifblock total={total}");
+}

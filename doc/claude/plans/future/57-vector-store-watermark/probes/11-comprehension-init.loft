@@ -1,0 +1,17 @@
+// 11 — 10 comprehension-init locals (c = [for n in .. {..}]).  Does cluster II's
+// literal-init doubling generalise to comprehensions?  Result: 22 allocs = 2/local
+// → YES, comprehension init also double-allocates (build temp + bind).  @P393.
+fn main() {
+  total = 0;
+  c0 = [for n in 0..3 {n + 0}]; total += c0[0];
+  c1 = [for n in 0..3 {n + 1}]; total += c1[0];
+  c2 = [for n in 0..3 {n + 2}]; total += c2[0];
+  c3 = [for n in 0..3 {n + 3}]; total += c3[0];
+  c4 = [for n in 0..3 {n + 4}]; total += c4[0];
+  c5 = [for n in 0..3 {n + 5}]; total += c5[0];
+  c6 = [for n in 0..3 {n + 6}]; total += c6[0];
+  c7 = [for n in 0..3 {n + 7}]; total += c7[0];
+  c8 = [for n in 0..3 {n + 8}]; total += c8[0];
+  c9 = [for n in 0..3 {n + 9}]; total += c9[0];
+  println("comp total={total}");
+}

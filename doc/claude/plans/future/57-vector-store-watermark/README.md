@@ -4,10 +4,10 @@
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | ✅ complete (9 probes, both backends) |
-| B — Mechanism investigation | 🟡 2/2 clusters *characterised by trace*; root-cause source-reading not started |
+| A — Probe catalogue | ✅ complete (15 probes, both backends) |
+| B — Mechanism investigation | 🟡 3/3 clusters *characterised by trace*; root-cause source-reading not started |
 | C — Fix design (OPTIONAL) | ⏸️ pending Stage B — design call (deliberate scope-free vs missed last-use-free) |
-| D — Implementation | ⏸️ pending Stage C |
+| D — Implementation | ⏸️ pending Stage C — fix in-plan, one cluster per commit |
 
 **What triggered this.** Filed as [@P393](../../../PROBLEMS.md) on 2026-06-01 while
 verifying the @P390 self-slice fix: `LOFT_STORES=warn loft --tests tests/scripts/11-vectors.loft`
@@ -20,38 +20,55 @@ function-scope accumulation, and across which vector shapes.
 **Stage-A verdict (verified by `LOFT_STORES=log` traces — see [RESULTS.md](RESULTS.md)):**
 the `possible leak` warnings are a **false positive for an actual leak** — every store
 frees at function-scope exit (11-vectors trace is `aaaa…(44 allocs)…ffff…(42 frees)`,
-**zero interleaving**; exit gate passes). The high watermark is real and has two
-verified contributing mechanisms (clusters I + II below). It is a **memory-watermark /
-heuristic-false-positive** concern, **not** a correctness/leak concern.
+**zero interleaving**; exit gate passes). The high watermark is real and has three
+verified contributing mechanisms (clusters I + II + III below). It is a **memory-watermark
+/ heuristic-false-positive** concern, **not** a correctness/leak concern.
 
 ## Goal (REQUIRED)
 
-Decide and ship the watermark reduction for function-local vector lifetime: either
-(a) free dead store-backed locals at last-use instead of scope-end (cluster I), and/or
-(b) stop the literal-init temp from pinning to scope (cluster II) — plus a heuristic
-fix so `LOFT_STORES=warn` stops flagging legitimately-long functions. The "do nothing,
-it's benign" outcome is on the table and must be argued explicitly, not assumed.
+Reduce the function-local vector-store watermark by fixing the three clusters in-plan:
+(I) free dead store-backed locals at last-use instead of scope-end, (II) stop the
+literal/comprehension init-temp from pinning, (III) free the overwritten store on
+reassignment — plus a heuristic fix so `LOFT_STORES=warn` stops flagging legitimately-long
+functions. The "do nothing, it's benign" outcome is on the table for clusters I/III (they
+share the aliasing-guard surface) and must be argued explicitly, not assumed; cluster II
+is a clear redundancy worth removing regardless.
 
 ## In-plan vs spinoff policy (default: in-plan)
 
-Both clusters stay in-plan — they share the function-scope free-sweep surface (a
-last-use-free pass would touch both). **One orthogonal finding is flagged for spinoff**
-(not in-class): probe 08's original `total += (base + [i]).len();`×35 form panics with
-a codegen slot mismatch (`Incorrect var total[504] versus 496`, `src/state/codegen.rs:2669`)
-— a slot-assignment bug in functions with many inline-concat `+=` statements, unrelated
-to store lifetime. Recorded in [RESULTS.md](RESULTS.md) § Spinoff; candidate standalone
-P-issue (user's call — not filed, per the investigation-plan convention that in-plan
-findings stay in the catalogue).
+All three clusters stay **in-plan** and are fixed here — this plan exists to fix @P393,
+not merely characterise it. Findings discovered during the investigation are **not** filed
+as separate P-issues; the cumulative probe suite is the regression guard.
+
+**Two orthogonal codegen bugs surfaced during the edge probing and are FILED separately**
+(a different subsystem — slot / stack-position assignment, not store lifetime). Both turned
+out scope-pinned + root-caused, so per the spin-out rule they need **no plan** — they are
+tracked as standalone P-issues and fixed directly:
+
+- **[@P394](../../../PROBLEMS.md)** — `b = a` (new local ← bare vector var) → LHS on slot
+  `u16::MAX` → `codegen.rs:2669` panic / hang / silent-empty. Root: the `uses>0` guard at
+  `expressions.rs:1333`.
+- **[@P395](../../../PROBLEMS.md)** — `(v+[x]).len()` (concat-temp method receiver) in an
+  assignment RHS → 8-byte stack drift → silent garbage / panic. Root: incomplete concat-temp
+  guard at `vectors.rs:39`.
+
+Full edge matrices in [RESULTS.md](RESULTS.md) § Orthogonal codegen bugs. The aliasing
+answer that fell out of the @P394 probing (vectors copy on expression-assignment) resolved
+cluster I/III fix-safety.
 
 ## Cluster catalogue (REQUIRED)
 
 | ID | Cluster | Severity (corruption / leak) | Backend asymmetry | Probes | Doc |
 |---|---|---|---|---|---|
-| I | Named store-backed locals freed at **scope-end**, not last-use → dead locals hold their store for the rest of the function | none / none (exit-safe) — watermark O(locals) | both (interp 44, native 42) | 02, 07, 09, 11-vectors | [cluster-I-scope-end-batching.md](cluster-I-scope-end-batching.md) |
-| II | `a = [literal]` allocates **2** scope-pinned stores (literal temp not freed/reused after copy into the local) → doubles the watermark | none / none (exit-safe) — watermark ×2 constant | both | 07, 09 | [cluster-II-literal-init-double-alloc.md](cluster-II-literal-init-double-alloc.md) |
+| I | Store-backed locals pin to **function exit**, not last-use. Only LOOP bodies reuse their store in-place; `if`/non-loop-block locals pin like top-level statements (probe 15) | none / none (exit-safe) — watermark O(distinct bindings) | both (interp 44, native 42) | 02, 07, 09, 15, 11-vectors | [cluster-I-scope-end-batching.md](cluster-I-scope-end-batching.md) |
+| II | `local = <materialised vector>` double-allocates a scope-pinned init-temp — for **literal / comprehension / struct-vector** init (2×/local). **Concat (`a+b`) and slice (`v[a..b]`) do NOT double** (the result store becomes the local, 1×) | none / none (exit-safe) — watermark ×2 on affected init forms | both | 07, 09, 10, 11, 12, 13 | [cluster-II-literal-init-double-alloc.md](cluster-II-literal-init-double-alloc.md) |
+| III | Reassigning `v = [new]` does **not** free the previous store; every overwrite pins the now-unreachable old value to scope exit (probe 14) | none / none (exit-safe) — watermark O(reassignments) | both | 14 | [cluster-III-reassignment-pin.md](cluster-III-reassignment-pin.md) |
 
-Neither cluster is a leak. Transient *unbound* temps (slice-in-format, probe 08) free/
-reuse correctly at statement-end — they are **not** part of the problem.
+No cluster is a leak (every store frees at scope exit). Transient *unbound* temps
+(slice-in-format, probe 08) free/reuse correctly at statement-end — **not** part of the
+problem. Clusters I and III share a root cause (store-free anchored only at scope exit,
+never at last-use or overwrite) and a fix surface (dead-store freeing with the PLAN51/52
+aliasing guard); cluster II is an independent init-codegen redundancy.
 
 ## Probe suite (REQUIRED)
 
@@ -66,6 +83,16 @@ reuse correctly at statement-end — they are **not** part of the problem.
 | `07-sequential-named-locals.loft` | 35 **typed** named vector locals | I + II | **watermark 72** (≈2× per local), all freed at scope-end |
 | `08-sequential-transient-temps.loft` | 35 unbound slice-in-format temps | — (control) | passes — watermark **4**; temps free/reuse at statement-end |
 | `09-untyped-named-locals.loft` | 35 **untyped** named vector locals | II | **watermark 72** — identical to 07; annotation is *not* the cause |
+| `10-struct-vectors.loft` | 10 `vector<Item>` (struct) locals | II | **2×/local** (22 allocs) — elements inline, no per-element store |
+| `11-comprehension-init.loft` | 10 `c = [for…]` locals | II | **2×/local** (22) — comprehension init also doubles |
+| `12-concat-init.loft` | 10 `c = a + b` locals | II (reference) | **1×/local** (26 at N=20) — concat result *becomes* the local; no double |
+| `13-slice-init.loft` | 10 `t = base[a..b]` locals | II (reference) | **1×/local** (14) — slice materialises into the local; no double |
+| `14-reassignment.loft` | 1 local reassigned 10× | III | **~1×/assign, all pinned** (14, `aaa…fff`) — old store not freed on overwrite |
+| `15-if-block-locals.loft` | 10 locals in separate `if` blocks | I | **2×/local, all pinned to fn exit** (22) — non-loop blocks do *not* free at block-end |
+| `16-generality-struct-text.loft` | 10 struct + 10 text locals | I (scope) | **12 allocs** — scalars/structs/text are *inline*; cluster I is collection-specific |
+| `17-assignment-aliasing.loft` | `b = a` then mutate | (fix-safety) | tripped **@P394**; via `b = a[..]`: independent **copy** (a=3, b=4) |
+| `18-parse-init.loft` | 10 `as vector<T>` parse locals | II (reference) | **1×/local** — parse result becomes the local |
+| `19-while-loop.loft` | `while` loop, per-iter local | I (reference) | store **reused** — flat; all loops reuse |
 
 `tests/scripts/11-vectors.loft` is the field repro (not copied into `probes/`): 44 allocs,
 watermark 44 interp / 42 native, all freed at scope exit.
@@ -77,6 +104,9 @@ watermark 44 interp / 42 native, all freed at scope exit.
 | 07 (35 named locals, watermark 72) | 02 (loop local, watermark 4) | A loop body is a scope that exits each iteration → store **reused**; 35 sibling statements in one scope each allocate + pin. The watermark is driven by *distinct scope-lived bindings*, not by total allocations. |
 | 07 (watermark 72) | 08 (35 unbound temps, watermark 4) | Binding to a named local is what pins the store to scope-end; the same value produced as an *unbound* temp frees at statement-end. Cluster I is specifically about **named** locals. |
 | 09 (untyped, 72) | 07 (typed, 72) | The `: vector<integer>` annotation does **not** change the count → cluster II's doubling comes from the literal-init temp, not the type annotation. |
+| 07/11 (literal/comprehension, 2×) | 12/13 (concat/slice, 1×) | The diff isolates cluster II to *which* init form: `+`/slice emit the result store *as* the local (1×); literal/comprehension build a fresh temp then bind (2×). The fix target is the literal/comprehension materialise-then-copy path, not all inits. |
+| 15 (`if`-block locals, all pinned to fn exit) | 02 (loop body, reused) | Both are nested blocks, but only the loop reuses its store; the `if`-block local pins to function exit. So cluster I is **not** "blocks free at block-end" — it is "only loops reuse, everything else pins." |
+| 14 (reassignment, old store pinned) | 02 (loop reassign, reused) | A loop's per-iteration `v = [..]` reuses one store; a straight-line `v = [..]; v = [..]` pins each overwritten store to scope exit (cluster III). The divergence is loop-reuse vs overwrite-pin. |
 
 ## Tool gaps (OPTIONAL but recommended)
 
@@ -85,27 +115,32 @@ watermark 44 interp / 42 native, all freed at scope exit.
 | `LOFT_STORES=log` | Verified-essential | Full alloc/free/dec_rc trace (`src/database/allocation.rs:131`). The alloc/free *interleaving* (`aaaa…ffff…` vs `afafaf…`) is the whole diagnosis. |
 | `LOFT_STORES=warn` | Verified-suitable but **coarse** | Threshold hardcoded at `active > 30` (`allocation.rs:142`) — not configurable, and fires on any legitimately-long function. A Stage-C tool fix should make it watermark-relative or raise the floor. |
 | Per-alloc source label | **Gap** | Interpreter allocs log an empty `name` field, so the trace can't say which alloc is which local/temp. Native attaches names via `OpFreeRef(var_name)` only on free. Labelling interp allocs would let a future probe attribute the watermark per-binding. |
+| `LOFT_TIMEOUT=<secs>` (+ `LOFT_TIMEOUT_GRACE`) | Verified-essential | Watchdog (`src/timeout.rs`). On a hang it prints `phase=… fn=… last op=…` — `last op:(none — crash outside interpreter)` localized @P394's hang variant to the **compile/codegen** phase (not the bytecode loop), which tied it to the `codegen.rs:2669` slot bug. Far better than an external `timeout` SIGTERM. |
 
 ## Status & next-session roadmap (REQUIRED)
 
 | Cluster | Mechanism status | Action needed | Effort |
 |---|---|---|---|
-| I | 🟢 Characterised by trace (scope-end batching, both backends). Root cause 🤔: is store-free decoupled from variable last-use by design (LIFETIME.md scope model) or a missed last-use-free? | Read `src/scopes.rs` + `src/state/codegen.rs` free-emission; confirm where store-free is anchored (scope-end vs live-interval end). | M |
-| II | 🟢 Characterised by trace (2 stores per literal-init local, both pinned; annotation-independent). Root cause 🤔: literal temp copied into the local's store rather than *becoming* it; the temp's free is deferred to the scope sweep. | Read the `=`/init codegen path for `local = [literal]`; find the literal-temp alloc + its free site. | S–M |
+| I | 🟢 Characterised by trace (pins to fn exit, both backends; only loops reuse). Root cause 🤔: is store-free decoupled from variable last-use by design (LIFETIME.md scope model) or a missed last-use-free? | Read `src/scopes.rs` + `src/state/codegen.rs` free-emission; confirm where store-free is anchored (scope-end vs live-interval end). | M |
+| II | 🟢 Characterised by trace (2 stores per **literal/comprehension/struct** init, both pinned; concat/slice are 1×; annotation-independent). Root cause 🤔: materialise temp copied into the local's store rather than *becoming* it (the way concat/slice do); the temp's free deferred to the scope sweep. | Diff the `local = [literal]`/comprehension codegen against the `local = a+b`/slice path in `src/state/codegen.rs`; find why the former allocs a separate local store. | S–M |
+| III | 🟢 Characterised by trace (overwritten store pinned to scope exit, both backends). Root cause 🤔: assignment to an existing store-backed local does not free the prior DbRef before rebinding. Shares cluster I's dead-store-free surface + aliasing guard. | Read the assignment codegen for `existing_local = <new vector>`; confirm no free of the old DbRef is emitted at the overwrite. | S–M |
 
-**Recommended sequence.** Stage B reading (cluster II first — smaller surface, and the
-fix likely halves the watermark on its own) → decide Stage C (do-nothing vs last-use-free
-vs literal-temp-reuse) → if fixing, cluster II then cluster I, one commit each. The
-**quickest user-visible win** is the `LOFT_STORES=warn` heuristic floor (raise/relativise
-the threshold) — it removes the false-positive noise regardless of whether the watermark
-itself is touched, and is XS.
+**Recommended sequence.** Stage B reading (cluster II first — smallest surface, clear
+redundancy, and the concat/slice path is a ready-made reference for the fix) → clusters
+III then I (shared dead-store-free surface; do them together with the aliasing guard) →
+decide Stage C only if the I/III fix needs option comparison. The **quickest user-visible
+win** is the `LOFT_STORES=warn` heuristic floor (raise/relativise the threshold) — it
+removes the false-positive noise regardless of whether the watermark itself is touched,
+and is XS. Fix in-plan, one cluster per commit (§ template Fix-application discipline).
 
 **Open design question for the user (Stage C).** loft's scope-based freeing
-([LIFETIME.md](../../../LIFETIME.md)) frees locals at scope exit by design. Cluster I asks
-whether store-backed locals should additionally free at last-use. That trades a smaller
-watermark for added free-emission complexity (and interacts with dep-tracking / aliasing —
-the same surface as PLAN51/52). This is a deliberate language-design call, not a
-mechanical fix — left for the user.
+([LIFETIME.md](../../../LIFETIME.md)) frees locals at scope exit by design. Clusters I and
+III ask whether store-backed locals should additionally free at last-use (I) and on
+overwrite (III). That trades a smaller watermark for added free-emission complexity (and
+interacts with dep-tracking / aliasing — the same surface as PLAN51/52: a local whose store
+is aliased by a still-live binding must not be freed early). This is a deliberate
+language-design call, not a mechanical fix — left for the user. Cluster II is independent of
+this question (an init redundancy) and is worth fixing regardless.
 
 ## Relationship to the store-lifetime/aliasing class
 

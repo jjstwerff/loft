@@ -1,0 +1,19 @@
+// 14 — ONE local reassigned 10× (v = [..]; v = [..]; ...).  Does the OLD store free
+// at the reassignment point?  Result: all stores free only at scope-end (aaa…fff),
+// so each reassignment PINS the now-unreachable old value → cluster III.  @P393.
+fn main() {
+  total = 0;
+  v = [0, 1];
+  v = [1, 2];
+  v = [2, 3];
+  v = [3, 4];
+  v = [4, 5];
+  v = [5, 6];
+  v = [6, 7];
+  v = [7, 8];
+  v = [8, 9];
+  v = [9, 10];
+  v = [10, 11];
+  total += v[0];
+  println("reassign total={total}");
+}

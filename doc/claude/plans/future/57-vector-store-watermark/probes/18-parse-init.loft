@@ -1,0 +1,13 @@
+fn main() {
+  total = 0;
+  p0 = "[1, 2, 3]" as vector<integer>; total += p0[0];
+  p1 = "[1, 2, 3]" as vector<integer>; total += p1[0];
+  p2 = "[1, 2, 3]" as vector<integer>; total += p2[0];
+  p3 = "[1, 2, 3]" as vector<integer>; total += p3[0];
+  p4 = "[1, 2, 3]" as vector<integer>; total += p4[0];
+  p5 = "[1, 2, 3]" as vector<integer>; total += p5[0];
+  p6 = "[1, 2, 3]" as vector<integer>; total += p6[0];
+  p7 = "[1, 2, 3]" as vector<integer>; total += p7[0];
+  p8 = "[1, 2, 3]" as vector<integer>; total += p8[0];
+  p9 = "[1, 2, 3]" as vector<integer>; total += p9[0];
+  println("parse total={total}"); }

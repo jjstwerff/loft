@@ -1,0 +1,10 @@
+fn main() {
+  total = 0;
+  i = 0;
+  while i < 20 {
+    v = [i, i + 1];
+    total += v[0];
+    i += 1;
+  }
+  println("while total={total}");
+}
