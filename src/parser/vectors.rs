@@ -264,6 +264,35 @@ impl Parser {
                 Type::Tuple(types)
             } else {
                 self.lexer.token(")");
+                // @P395 — a parenthesised vector concat consumed by a trailing
+                // `.method()` reused the OUTER assignment LHS as its accumulator
+                // (the inner concat inherited `orig_var` from the live `val`),
+                // lowering to a void `Value::Insert` that leaves no stack value;
+                // the method then reads a misaligned slot → garbage value / the
+                // `codegen.rs:2669` +8 drift.  This is the same shape the P103
+                // guard in `parse_append_vector` already rejects for
+                // `f([1,2] + [3])` (tests/scripts/102-expected-errors.loft):
+                // inline vector concat consumed by a call/sub-expression must be
+                // assigned to a variable first.  Fire the same clean error here
+                // instead of silently corrupting.  Direct assignment `v = (a+c)`
+                // (no trailing `.`) keeps its reuse path; `(a+c)[i]` indexing
+                // already lowers correctly and is not guarded.
+                if !self.first_pass && matches!(val, Value::Insert(_)) && self.lexer.peek_token(".")
+                {
+                    let tv = if let Type::Rewritten(inner) = &t {
+                        (**inner).clone()
+                    } else {
+                        t.clone()
+                    };
+                    if matches!(tv, Type::Vector(_, _)) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "vector concatenation in an expression creates a temporary; \
+                             assign to a variable first for correct results in compound expressions"
+                        );
+                    }
+                }
                 t
             }
         } else if self.lexer.peek_token("{") {

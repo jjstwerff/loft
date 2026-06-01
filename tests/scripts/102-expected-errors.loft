@@ -26,6 +26,16 @@ fn test_vector_argument() {
   assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
 }
 
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
+// @P395 — a `.method()` on an inline vector-concat receiver must error (was a
+// silent 8-byte stack drift: `len 4` read back as 8589934592, escalating to a
+// `codegen.rs:2669` panic).  The concat had reused the outer LHS as its
+// accumulator; bind it first instead: `w = v + [9]; w.len()`.
+fn test_vector_concat_method_receiver() {
+  v = [1, 2, 3];
+  assert((v + [9]).len() == 4, "concat method receiver");
+}
+
 // ── From 10-match.loft ──────────────────────────────────────────
 
 // @EXPECT_ERROR: match on Direction is not exhaustive
