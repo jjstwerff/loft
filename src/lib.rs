@@ -50,6 +50,7 @@ pub mod data_store;
 pub mod database;
 pub mod hash;
 pub mod ir_schema;
+pub mod ir_schema_gen;
 pub mod json;
 pub mod keys;
 mod lexer;

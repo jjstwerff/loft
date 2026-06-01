@@ -7,7 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design, no implementation.  This is the **mmap end-goal** that
+**In-progress — arc A0 and arc A landed; first typed handle layer (accessor seam) implemented and green.**
+
+- **Arc A0** (typed field cursor, commit `a07ed8d`) — landed as `RecordCursor`/`RecordCursorMut` wrapping `Store`'s raw primitives.  That cursor form has since been superseded by the typed handle layer (see § Arc A0 — handle layer below); `src/data_store.rs` is now the accessor seam, not a bare cursor.
+- **Arc A** (IR store schema, commit `ed21b3e`) — landed as `tools/ir_schema/` (hybrid generate-extract pipeline) + `src/ir_schema_gen.rs` (generated, checked-in).  The full IR is registered via `register_ir_schema(db: &mut Stores) -> IrSchemaIds`; every struct/enum is in the schema; `db.finish()` computes all field positions, record sizes, and discriminants including the 34-variant `Node` enum size.
+- **Typed handle layer** (`src/data_store.rs`, current, uncommitted) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.  Remaining arcs (B write, C full migration, D mmap, E bundle snapshots) are open.
+
+Original note: This is the **mmap end-goal** that
 [@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
 named but deferred: rework the compiler's in-memory IR (`Data` and the
 `Value` / `Type` / `Definition` / `Function` graph) so it lives in a
@@ -41,9 +47,11 @@ but it shipped the **reusable foundation** this plan needs:
 - `LOFT_DUMP_SNAPSHOT` + the `from_snapshot` `done=true` skip-`scopes::check`
   insight — arc D debugging / load wiring.
 
-**First concrete step: arc A0** — a typed `Record` field cursor over
-`Store`'s raw int primitives (§ Arc A0), the precondition for the accessor
-seam.  Pure-additive, ships standalone.
+**First concrete steps: arc A0 and arc A (both done, 2026-06-01).**  Arc A0
+landed as a typed field cursor (`a07ed8d`), then evolved into the typed handle
+layer (§ Arc A0 — handle layer).  Arc A landed as the `tools/ir_schema/`
+hybrid pipeline + `src/ir_schema_gen.rs` (`ed21b3e`).  The minimum accessor
+seam (`src/data_store.rs`) is implemented.
 
 **A second, mmap-independent payoff — IR locality (user, 2026-06-01).**  The
 win here is not only zero-copy load.  The native IR is a pointer graph of
@@ -159,8 +167,8 @@ matters.
 ## Effort + design
 
 - **Effort:** L (large multi-arc — IR rewrite + access-site migration)
-- **Design:** — (needs design; this README is the seed)
-- **Last touched:** 2026-05-31
+- **Design:** arc A0/A settled; arc C seam minimum landed; B/D/E open
+- **Last touched:** 2026-06-01
 
 ## Why mirror `--native` specifically
 
@@ -355,25 +363,20 @@ seam).  The two compose; neither alone is the deliverable.
 
 | Item | Concern | Status |
 |---|---|---|
-| **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | Open — **next**; see § Arc A0 |
-| **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | Open — design mostly done; see § Arc A reference |
+| **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (commit `a07ed8d`) — cursor form superseded by the typed handle layer (`src/data_store.rs`); see § Arc A0 — handle layer |
+| **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
-| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration). | Open — the bulk |
+| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` — `Value`/`ValuesVector`/`ValueType`, covering `NdNull`/`NdInt`/`NdCall`/`NdBlock`) is implemented; bulk migration is open. | Open — minimum seam landed (uncommitted); bulk migration is the remainder |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
 
 ## Phase ordering
 
-0. **A0 (typed field cursor)** — wrap `Store`'s raw int primitives in a
-   `Record`/`RecordMut` cursor.  Pure-additive, no forced callers, green +
-   shippable on its own.  Everything in A/C reads through it, so it lands
-   first.  See § Arc A0.
-1. **A (schema)** — pin the store schema for the IR types by **extracting the
-   generated `init` block** (§ Arc A reference): transcribe the IR as loft
-   types, `--native --show-rust`, capture the resolved `db.structure/value/
-   field` registrations.  Load-bearing; everything depends on it.  Decide
-   finding 2 (recursive-child modeling) first, then round-trip one
-   `Definition` **through the A0 cursor**.
+0. **A0 (typed field cursor)** — ✅ done (`a07ed8d`).  Cursor form superseded by
+   the typed handle layer; see § Arc A0 — handle layer.
+1. **A (schema)** — ✅ done (`ed21b3e`).  `tools/ir_schema/` pipeline + generated
+   `src/ir_schema_gen.rs` register the full IR schema.  Finding 2 (box-of-one
+   `vector<Self>` for recursive single-child) resolved in the transcription.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
    before touching read sites.  If @PLAN28 Step 2 shipped a store-format
    snapshot, B is largely done.
@@ -386,82 +389,96 @@ seam).  The two compose; neither alone is the deliverable.
 5. **E (bundle snapshots)** — core snapshot first (deterministic, shared);
    per-script bundle snapshot second.
 
-## Arc A0 — typed `Store` field cursor (the precondition, next)
+## Arc A0 — handle layer (landed; supersedes the cursor design)
 
-**Why this is the first move.**  This plan's safety rests on the *accessor
-seam* (§ Incremental migration): every IR read goes through a method, so a
-representation can be swapped behind it without touching call-sites.  But the
-seam's methods will ultimately read **store records**, and `Store`'s current
-read API is untyped offset arithmetic:
+**Original plan:** a `RecordCursor`/`RecordCursorMut` that bound `&Store + rec`
+once and named the width method, so no accessor did open-coded `(rec, fld)`
+arithmetic.  That cursor landed in commit `a07ed8d`.
+
+**As-built:** `src/data_store.rs` has since been rewritten as the **typed
+handle layer** — the minimum accessor seam the plan's arc C migration requires.
+The cursor form (still green at `a07ed8d`) is superseded; the handles subsume
+it.
+
+### Design (three principles, user, 2026-06-01)
+
+**Principle 1 — reuse, don't reimplement.**  Each accessor locates its field
+and hands the read or write to an *already-written* primitive:
+`Store::get_int`/`get_str`/`set_str`/`get_u32_raw`/`get_byte`,
+`vector::length_vector`/`get_vector`/`insert_vector`.  NOT `Stores::show_json`
+or `field_content` — that would rebuild the database's schema-walker from
+scratch.
+
+**Principle 2 — baked layout constants, no runtime indirection.**  Variant
+discriminants (`DISC_NULL=1`, `DISC_INT=4`, `DISC_CALL=11`, `DISC_BLOCK=13`),
+field byte offsets (`NDCALL_ARGS=4`, `NDCALL_DEF_NR=8`, `NDBLOCK_BLOCK=8`,
+`BLOCK_NAME=16`, `BLOCK_OPERATORS=20`), and the `vector<Node>` element stride
+(`NODE_STRIDE=48`) are hard-coded `const`s mirroring loft's schema.  Rationale:
+accessors run **millions of times** on every IR walk; a runtime `position()`
+lookup or schema name-match is indirection the compiler cannot fold, making the
+layer unusable.  Each accessor folds to one store primitive at one constant
+offset.  Methods take `&Stores`/`&mut Stores`; `IrSchemaIds` is not needed at
+runtime.
+
+**Principle 3 — guard test pins hand-typed consts to loft's real layout.**
+`baked_layout_mirrors_loft_schema` (`src/data_store.rs::tests`) asserts every
+const equals what `register_ir_schema` + `db.finish()` actually computed
+(`stores.position(tp, field)`, `stores.size(node)`, variant discriminants).
+The most important assertion is `NODE_STRIDE == size(node)`: the enum size
+aggregates over all 34 variants and cannot be eyeballed; it is correct only
+because `register_ir_schema` is the **complete** definition run through loft's
+layout routine.  A mistyped constant compiles fine and silently reads the wrong
+bytes millions of times — the guard turns that into an immediate CI failure.
+
+### Public API (`src/data_store.rs`)
 
 ```rust
-// today — src/store.rs, the raw primitives every store read uses:
-store.get_int(rec, fld) -> i64          // i64::MIN sentinel on invalid
-store.get_u32_raw(rec, fld) -> u32      // raw 4-byte (collection headers)
-store.get_i32_raw / get_long / get_short / get_byte / get_float /
-store.get_single / get_boolean / get_str(rec) -> &str
-store.addr::<T>(rec, fld) -> &T         // unchecked typed pointer
-store.set_int(rec, fld, val) -> bool    // … + the set_* counterparts
-```
+pub enum ValueType { Null, Int, Call, Block, Other(u8) }
 
-Building ~940 IR accessors directly on `(rec, fld)` arithmetic means 940
-chances to fumble a field offset or pick the wrong width.  A typed cursor
-collapses each read to a named, bounds-checked call **before** any IR type
-moves into a store — a pure refactor with no behaviour change, exactly the
-"additive, off the critical path, reversible" property the rest of the plan
-requires.
+pub struct Value { rec: DbRef }       // handle to one Node record
+pub struct ValuesVector { rec: DbRef } // handle to a vector<Node> field
 
-**The wrapper (shape, not final API).**
-
-```rust
-/// A typed, read-only view of one record in one Store.  All offset
-/// arithmetic and width selection lives here, not at the call-site.
-pub struct Record<'a> { store: &'a Store, rec: u32 }
-pub struct RecordMut<'a> { store: &'a mut Store, rec: u32 }
-
-impl<'a> Record<'a> {
-    pub fn int(&self, fld: u32) -> i64;        // → get_int
-    pub fn u32(&self, fld: u32) -> u32;        // → get_u32_raw (headers)
-    pub fn i32(&self, fld: u32) -> i32;        // → get_i32_raw
-    pub fn long(&self, fld: u32) -> i64;
-    pub fn float(&self, fld: u32) -> f64;
-    pub fn single(&self, fld: u32) -> f32;
-    pub fn boolean(&self, fld: u32, mask: u8) -> bool;
-    pub fn byte(&self, fld: u32, min: i32) -> i32;
-    pub fn dbref(&self, fld: u32) -> DbRef;    // 12-byte stored pointer
-    pub fn str(&self, fld: u32) -> &str;       // follow Str record
+impl Value {
+    pub fn new(rec: DbRef) -> Self;
+    pub fn db_ref(&self) -> DbRef;     // for callers driving existing fns
+    pub fn value_type(&self, stores: &Stores) -> ValueType;
+    pub fn call_to(&self, stores: &Stores) -> u32;          // NdCall.def_nr
+    pub fn call_parameters(&self) -> ValuesVector;          // NdCall.args
+    pub fn block_name<'a>(&self, stores: &'a Stores) -> &'a str;  // NdBlock → Block.name
+    pub fn block_name_set(&self, stores: &mut Stores, name: &str); // NdBlock → Block.name
+    pub fn block_operators(&self) -> ValuesVector;           // NdBlock → Block.operators
 }
-// RecordMut mirrors with set_* ; both obtained via Store::record(rec) /
-// Store::record_mut(rec).
+impl ValuesVector {
+    pub fn len(&self, stores: &Stores) -> u32;
+    pub fn is_empty(&self, stores: &Stores) -> bool;
+    pub fn get(&self, i: u32, stores: &Stores) -> Value;
+}
 ```
 
-**Scope of A0 (deliberately narrow — one PR):**
-- add `Record`/`RecordMut` + `Store::record(rec)` / `record_mut(rec)`;
-- delegate each method to the existing `get_*`/`set_*` primitive (no new
-  unsafe — reuse the validated paths, including their sentinel semantics);
-- **do NOT** migrate any caller in this PR — additive only.  Optionally
-  convert one self-contained reader (e.g. a `database/format.rs` debug dump)
-  as a proof-of-use, but the 940-site sweep is later arcs.
+### Verified layout facts (from probing the registered schema)
 
-**Why it ships standalone (value independent of plan-54):** the same raw
-`get_int(rec, fld)` arithmetic is used pervasively by `--native` codegen and
-the 233 `fill.rs` opcode bodies.  A typed cursor is a readability + safety win
-there immediately, so A0 is a clean green PR on its own merits — not dead
-weight waiting on the rest of the arc.
+- `reference<Block>` inside `NdBlock` is **inlined**: a 28-byte `Block` struct
+  at offset 8 — no pointer deref.
+- `vector<Node>` is stored **inline** (the `is_linked`/P376 `Array` promotion
+  is not triggered here); stride = 48 bytes.
+- `integer` fields are 8 bytes, read via `Store::get_int` (returns `i64`).
 
-**Acceptance:** unit tests round-trip each width through `Record`/`RecordMut`
-on a scratch store and assert identical results to the raw `get_*`/`set_*`
-calls (the cursor is a faithful pass-through, including invalid-access
-sentinels).  `make ci` green; no behaviour change anywhere else.
+### Status and tests
 
-**Open A0 questions:**
-- Width-by-`Parts`: a record's field widths come from its `Type.parts`
-  schema; does the cursor stay schema-agnostic (caller passes the width
-  method, as above) or take a `&Type` and dispatch?  Start schema-agnostic
-  (smaller, matches the raw API 1:1); a schema-aware layer can wrap it later.
-- Lifetime of `str()`: `Store::get_str` returns `&'a str` from a raw pointer
-  (`Str` semantics) — the cursor inherits that contract unchanged; document
-  it, don't try to fix it in A0.
+Minimum implementation: covers `NdNull`/`NdInt`/`NdCall`/`NdBlock` and the
+`Block.name`/`Block.operators` sub-fields.  Three tests pass:
+`ndcall_reads_back_through_handles`, `ndblock_name_and_operators_round_trip`,
+`baked_layout_mirrors_loft_schema`.  Fmt-clean, clippy-0.
+
+### Future direction (not done)
+
+Replace the hand-typed const block by generating it from loft's own output:
+write the accessors as *methods* in `ir.loft` (compiling to
+`t_<len><Type>_<method>` functions with the offsets baked, uninstrumented
+unlike `n_` free functions), then a script lifts those functions and their
+offset literals into the generated layer.  The handle API and the layout guard
+stay identical across that swap; it is a generation-automation improvement, not
+a design change.
 
 ## Incremental migration — arc C is many small plans, never one
 
