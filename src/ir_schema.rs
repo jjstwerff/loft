@@ -334,7 +334,9 @@ fn field<'a>(obj: &'a Parsed, name: &str) -> Result<&'a Parsed, TypeDecodeError>
             .map(|(_, _, v)| v)
             .ok_or_else(|| TypeDecodeError::Shape(format!("missing field '{name}'")))
     } else {
-        Err(TypeDecodeError::Shape(format!("expected object for '{name}'")))
+        Err(TypeDecodeError::Shape(format!(
+            "expected object for '{name}'"
+        )))
     }
 }
 
@@ -609,7 +611,10 @@ fn write_value(out: &mut String, v: &Value) {
             out.push('}');
         }
         Value::TuplePut(var, idx, inner) => {
-            let _ = write!(out, "{{\"k\":\"TuplePut\",\"var\":{var},\"idx\":{idx},\"v\":");
+            let _ = write!(
+                out,
+                "{{\"k\":\"TuplePut\",\"var\":{var},\"idx\":{idx},\"v\":"
+            );
             write_value(out, inner);
             out.push('}');
         }
@@ -679,7 +684,11 @@ fn write_key_list(out: &mut String, keys: &[Key]) {
         if i > 0 {
             out.push(',');
         }
-        let _ = write!(out, "{{\"type_nr\":{},\"position\":{}}}", k.type_nr, k.position);
+        let _ = write!(
+            out,
+            "{{\"type_nr\":{},\"position\":{}}}",
+            k.type_nr, k.position
+        );
     }
     out.push(']');
 }
@@ -703,7 +712,11 @@ fn write_block(out: &mut String, b: &Block) {
 fn write_parforbody(out: &mut String, b: &ParForBody) {
     out.push_str("{\"input\":");
     write_value(out, &b.input);
-    let _ = write!(out, ",\"x_var\":{},\"r_var\":{},\"worker\":", b.x_var, b.r_var);
+    let _ = write!(
+        out,
+        ",\"x_var\":{},\"r_var\":{},\"worker\":",
+        b.x_var, b.r_var
+    );
     write_value(out, &b.worker);
     out.push_str(",\"threads\":");
     write_value(out, &b.threads);
@@ -843,9 +856,11 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
         "Drop" => Value::Drop(boxed(p, "v")?),
         "Yield" => Value::Yield(boxed(p, "v")?),
         "BreakWith" => Value::BreakWith(as_u16(field(p, "n")?)?, boxed(p, "v")?),
-        "TuplePut" => {
-            Value::TuplePut(as_u16(field(p, "var")?)?, as_u16(field(p, "idx")?)?, boxed(p, "v")?)
-        }
+        "TuplePut" => Value::TuplePut(
+            as_u16(field(p, "var")?)?,
+            as_u16(field(p, "idx")?)?,
+            boxed(p, "v")?,
+        ),
         "If" => Value::If(boxed(p, "cond")?, boxed(p, "t")?, boxed(p, "f")?),
         "Iter" => Value::Iter(
             as_u16(field(p, "var")?)?,
@@ -1018,7 +1033,11 @@ fn write_purity(out: &mut String, p: Purity) {
         Purity::Unknown => out.push_str("{\"k\":\"Unknown\"}"),
         Purity::Pure => out.push_str("{\"k\":\"Pure\"}"),
         Purity::Impure(c) => {
-            let _ = write!(out, "{{\"k\":\"Impure\",\"cat\":\"{}\"}}", impure_category_str(c));
+            let _ = write!(
+                out,
+                "{{\"k\":\"Impure\",\"cat\":\"{}\"}}",
+                impure_category_str(c)
+            );
         }
     }
 }
@@ -1059,7 +1078,12 @@ fn write_field_group_list(out: &mut String, list: &[LinkedFieldGroup]) {
 fn write_definition(out: &mut String, d: &Definition) {
     out.push_str("{\"name\":");
     write_str(out, &d.name);
-    let _ = write!(out, ",\"source\":{},\"def_type\":\"{}\"", d.source, def_type_str(&d.def_type));
+    let _ = write!(
+        out,
+        ",\"source\":{},\"def_type\":\"{}\"",
+        d.source,
+        def_type_str(&d.def_type)
+    );
     let _ = write!(out, ",\"parent\":{}", d.parent);
     out.push_str(",\"position\":");
     write_position(out, &d.position);
@@ -1185,7 +1209,11 @@ fn impure_category_from_str(s: &str) -> Result<ImpureCategory, TypeDecodeError> 
         "Io" => ImpureCategory::Io,
         "ParentWrite" => ImpureCategory::ParentWrite,
         "ParCall" => ImpureCategory::ParCall,
-        other => return Err(TypeDecodeError::UnknownTag(format!("ImpureCategory::{other}"))),
+        other => {
+            return Err(TypeDecodeError::UnknownTag(format!(
+                "ImpureCategory::{other}"
+            )));
+        }
     })
 }
 
@@ -1211,7 +1239,11 @@ fn linked_field_group_from_parsed(p: &Parsed) -> Result<LinkedFieldGroup, TypeDe
     let kind = match as_str(field(p, "kind")?)?.as_str() {
         "Tuple" => LinkedFieldKind::Tuple,
         "Index" => LinkedFieldKind::Index,
-        other => return Err(TypeDecodeError::UnknownTag(format!("LinkedFieldKind::{other}"))),
+        other => {
+            return Err(TypeDecodeError::UnknownTag(format!(
+                "LinkedFieldKind::{other}"
+            )));
+        }
     };
     Ok(LinkedFieldGroup {
         kind,
@@ -1248,7 +1280,9 @@ fn variables_from_parsed(
 ) -> Result<crate::variables::Function, TypeDecodeError> {
     let vars_arr = field(p, "vars")?;
     let Parsed::Array(items) = vars_arr else {
-        return Err(TypeDecodeError::Shape("variables.vars: expected array".into()));
+        return Err(TypeDecodeError::Shape(
+            "variables.vars: expected array".into(),
+        ));
     };
     let mut vars = Vec::with_capacity(items.len());
     for it in items {
@@ -1266,7 +1300,9 @@ fn variables_from_parsed(
     }
     let names_arr = field(p, "names")?;
     let Parsed::Array(name_items) = names_arr else {
-        return Err(TypeDecodeError::Shape("variables.names: expected array".into()));
+        return Err(TypeDecodeError::Shape(
+            "variables.names: expected array".into(),
+        ));
     };
     let mut names = Vec::with_capacity(name_items.len());
     for it in name_items {
@@ -1454,7 +1490,10 @@ pub fn compare_data(reference: &Data, loaded: &Data) -> Result<(), DataDiff> {
     let rn = reference.definitions();
     let ln = loaded.definitions();
     if rn != ln {
-        return Err(DataDiff::Count { reference: rn, loaded: ln });
+        return Err(DataDiff::Count {
+            reference: rn,
+            loaded: ln,
+        });
     }
     for d_nr in 0..rn {
         let r = definition_to_json(reference.def(d_nr));
@@ -1483,7 +1522,10 @@ pub fn compare_data(reference: &Data, loaded: &Data) -> Result<(), DataDiff> {
     let r = data_to_json(reference);
     let l = data_to_json(loaded);
     if r != l {
-        return Err(DataDiff::Header { reference: r, loaded: l });
+        return Err(DataDiff::Header {
+            reference: r,
+            loaded: l,
+        });
     }
     Ok(())
 }
@@ -1732,8 +1774,14 @@ mod tests {
             Value::FnRefDnr(8),
             Value::TupleGet(1, 2),
             Value::Keys(vec![
-                Key { type_nr: -1, position: 5 },
-                Key { type_nr: 3, position: 0 },
+                Key {
+                    type_nr: -1,
+                    position: 5,
+                },
+                Key {
+                    type_nr: 3,
+                    position: 0,
+                },
             ]),
         ];
         for v in &samples {
@@ -1750,16 +1798,28 @@ mod tests {
     fn value_golden_leaf_format() {
         assert_eq!(value_to_json(&Value::Null), r#"{"k":"Null"}"#);
         assert_eq!(value_to_json(&Value::Int(-5)), r#"{"k":"Int","n":-5}"#);
-        assert_eq!(value_to_json(&Value::Boolean(true)), r#"{"k":"Boolean","b":true}"#);
-        assert_eq!(value_to_json(&Value::Enum(3, 12)), r#"{"k":"Enum","ord":3,"tp":12}"#);
+        assert_eq!(
+            value_to_json(&Value::Boolean(true)),
+            r#"{"k":"Boolean","b":true}"#
+        );
+        assert_eq!(
+            value_to_json(&Value::Enum(3, 12)),
+            r#"{"k":"Enum","ord":3,"tp":12}"#
+        );
         assert_eq!(value_to_json(&Value::Var(4)), r#"{"k":"Var","n":4}"#);
-        assert_eq!(value_to_json(&Value::TupleGet(1, 2)), r#"{"k":"TupleGet","var":1,"idx":2}"#);
+        assert_eq!(
+            value_to_json(&Value::TupleGet(1, 2)),
+            r#"{"k":"TupleGet","var":1,"idx":2}"#
+        );
         assert_eq!(
             value_to_json(&Value::Text("a\"b".to_string())),
             r#"{"k":"Text","s":"a\"b"}"#
         );
         assert_eq!(
-            value_to_json(&Value::Keys(vec![Key { type_nr: -1, position: 5 }])),
+            value_to_json(&Value::Keys(vec![Key {
+                type_nr: -1,
+                position: 5
+            }])),
             r#"{"k":"Keys","keys":[{"type_nr":-1,"position":5}]}"#
         );
     }
@@ -1788,7 +1848,11 @@ mod tests {
             Value::Loop(Box::new(block)),
             Value::FnRef(2, 1, Box::new(Type::Boolean)),
             Value::Span(Box::new((
-                Position { file: "f.loft".to_string(), line: 3, pos: 7 },
+                Position {
+                    file: "f.loft".to_string(),
+                    line: 3,
+                    pos: 7,
+                },
                 Value::Int(42),
             ))),
             Value::ParFor(Box::new(ParForBody {
@@ -1888,7 +1952,11 @@ mod tests {
             Value::Block(Box::new(block.clone())),
             Value::Loop(Box::new(block)),
             Value::Span(Box::new((
-                Position { file: "src/x.loft".to_string(), line: 12, pos: 4 },
+                Position {
+                    file: "src/x.loft".to_string(),
+                    line: 12,
+                    pos: 4,
+                },
                 Value::Call(3, vec![Value::Int(9)]),
             ))),
             // empty-body block — the degenerate operators=[] case
@@ -1923,7 +1991,11 @@ mod tests {
         );
         assert_eq!(
             value_to_json(&Value::Span(Box::new((
-                Position { file: "f.loft".to_string(), line: 3, pos: 7 },
+                Position {
+                    file: "f.loft".to_string(),
+                    line: 3,
+                    pos: 7
+                },
                 Value::Int(42),
             )))),
             r#"{"k":"Span","pos":{"file":"f.loft","line":3,"pos":7},"v":{"k":"Int","n":42}}"#
@@ -1937,7 +2009,11 @@ mod tests {
         let samples = [
             Value::FnRef(2, 1, Box::new(Type::Boolean)),
             // negative dnr + sentinel var (the to_default shape, data.rs:536)
-            Value::FnRef(-1, u16::MAX, Box::new(Type::Function(vec![], Box::new(Type::Null), vec![]))),
+            Value::FnRef(
+                -1,
+                u16::MAX,
+                Box::new(Type::Function(vec![], Box::new(Type::Null), vec![])),
+            ),
             Value::ParFor(Box::new(ParForBody {
                 input: Value::Var(0),
                 x_var: 1,
@@ -1994,7 +2070,11 @@ mod tests {
             Value::Block(Box::new(block.clone())),
             Value::Loop(Box::new(block)),
             Value::Span(Box::new((
-                Position { file: "f".into(), line: 1, pos: 1 },
+                Position {
+                    file: "f".into(),
+                    line: 1,
+                    pos: 1,
+                },
                 Value::Null,
             ))),
             Value::FnRef(0, 0, Box::new(Type::Null)),
@@ -2010,8 +2090,8 @@ mod tests {
         ];
         for v in &all {
             let json = value_to_json(v);
-            let back = value_from_json(&json)
-                .unwrap_or_else(|e| panic!("decode error for {json}: {e:?}"));
+            let back =
+                value_from_json(&json).unwrap_or_else(|e| panic!("decode error for {json}: {e:?}"));
             assert_eq!(&back, v, "round trip mismatch via {json}");
         }
     }
@@ -2124,7 +2204,11 @@ mod tests {
             source: 1,
             def_type: DefType::Struct,
             parent: u32::MAX,
-            position: Position { file: "geo.loft".to_string(), line: 4, pos: 0 },
+            position: Position {
+                file: "geo.loft".to_string(),
+                line: 4,
+                pos: 0,
+            },
             attributes: vec![
                 Attribute {
                     name: "x".to_string(),
@@ -2220,7 +2304,11 @@ mod tests {
             source: 0,
             def_type: DefType::Type,
             parent: u32::MAX,
-            position: Position { file: String::new(), line: 0, pos: 0 },
+            position: Position {
+                file: String::new(),
+                line: 0,
+                pos: 0,
+            },
             attributes: Vec::new(),
             attr_names: std::collections::HashMap::new(),
             code: Value::Null,

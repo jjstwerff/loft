@@ -50,11 +50,18 @@ fn stdlib_types_round_trip() {
             let json = type_to_json(ty);
             let back = type_from_json(&json)
                 .unwrap_or_else(|e| panic!("type decode failed in {}: {json}: {e:?}", def.name));
-            assert_eq!(&back, ty, "type round-trip mismatch in {}: {json}", def.name);
+            assert_eq!(
+                &back, ty,
+                "type round-trip mismatch in {}: {json}",
+                def.name
+            );
             checked += 1;
         }
     }
-    assert!(checked > 100, "expected to exercise many stdlib types, got {checked}");
+    assert!(
+        checked > 100,
+        "expected to exercise many stdlib types, got {checked}"
+    );
     eprintln!("stdlib_types_round_trip: {checked} types checked");
 }
 
@@ -78,7 +85,10 @@ fn stdlib_values_round_trip() {
         }
     }
     assert!(checked > 100, "expected many definitions, got {checked}");
-    assert!(non_null > 50, "expected many non-trivial code bodies, got {non_null}");
+    assert!(
+        non_null > 50,
+        "expected many non-trivial code bodies, got {non_null}"
+    );
     eprintln!("stdlib_values_round_trip: {checked} bodies checked ({non_null} non-null)");
 }
 
@@ -104,7 +114,10 @@ fn stdlib_attributes_round_trip() {
             checked += 1;
         }
     }
-    assert!(checked > 50, "expected many stdlib attributes, got {checked}");
+    assert!(
+        checked > 50,
+        "expected many stdlib attributes, got {checked}"
+    );
     eprintln!("stdlib_attributes_round_trip: {checked} attributes checked");
 }
 
@@ -136,7 +149,10 @@ fn stdlib_definitions_round_trip() {
         }
         checked += 1;
     }
-    assert!(checked > 100, "expected the full stdlib def table, got {checked}");
+    assert!(
+        checked > 100,
+        "expected the full stdlib def table, got {checked}"
+    );
     eprintln!("stdlib_definitions_round_trip: {checked} definitions checked");
 }
 
@@ -160,7 +176,11 @@ fn stdlib_whole_data_round_trip() {
     assert_eq!(data_to_json(&back), json, "whole-Data re-encode drift");
 
     // Same definition table size.
-    assert_eq!(back.definitions(), n, "definition count changed across round-trip");
+    assert_eq!(
+        back.definitions(),
+        n,
+        "definition count changed across round-trip"
+    );
 
     // def_names rebuilt: every original name resolves to the same def_nr.
     let mut name_checks = 0usize;
@@ -169,8 +189,16 @@ fn stdlib_whole_data_round_trip() {
         // Skip the rare duplicate-name case (last-wins); check the forward map
         // is at least present and points at a def of the same name.
         let resolved = back.def_nr(name);
-        assert_ne!(resolved, u32::MAX, "name {name} did not resolve after round-trip");
-        assert_eq!(&back.def(resolved).name, name, "def_nr({name}) points at wrong def");
+        assert_ne!(
+            resolved,
+            u32::MAX,
+            "name {name} did not resolve after round-trip"
+        );
+        assert_eq!(
+            &back.def(resolved).name,
+            name,
+            "def_nr({name}) points at wrong def"
+        );
         name_checks += 1;
     }
     assert!(name_checks > 100, "expected to resolve the full name table");

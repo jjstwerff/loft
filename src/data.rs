@@ -2066,7 +2066,10 @@ impl Data {
                 }
                 for op in OPERATORS {
                     if def.name.starts_with(op) {
-                        self.possible.entry((*op).to_string()).or_default().push(d_nr);
+                        self.possible
+                            .entry((*op).to_string())
+                            .or_default()
+                            .push(d_nr);
                     }
                 }
             }

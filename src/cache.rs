@@ -280,14 +280,24 @@ mod tests {
     fn collect_stdlib_sources_reads_default_dir_sorted() {
         // The real default/ dir relative to the crate root.
         let srcs = collect_stdlib_sources("default");
-        assert!(srcs.len() >= 3, "expected the stdlib .loft files, got {}", srcs.len());
-        assert!(srcs.iter().all(|(n, _)| std::path::Path::new(n).extension() == Some("loft".as_ref())));
+        assert!(
+            srcs.len() >= 3,
+            "expected the stdlib .loft files, got {}",
+            srcs.len()
+        );
+        assert!(
+            srcs.iter()
+                .all(|(n, _)| std::path::Path::new(n).extension() == Some("loft".as_ref()))
+        );
         // Sorted by filename → deterministic key.
         let mut sorted = srcs.clone();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(srcs, sorted, "sources must be returned sorted by filename");
         // 01_code.loft is always present and non-empty.
-        assert!(srcs.iter().any(|(n, c)| n == "01_code.loft" && !c.is_empty()));
+        assert!(
+            srcs.iter()
+                .any(|(n, c)| n == "01_code.loft" && !c.is_empty())
+        );
     }
 
     #[test]
