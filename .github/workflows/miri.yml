@@ -148,9 +148,13 @@ jobs:
     name: Suite under ${{ matrix.toolchain }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Non-blocking: beta/nightly std + lint churn must not page us.  A red here
-    # is an early signal to investigate, not a release blocker.
-    continue-on-error: true
+    # Full interpreter suite under beta + nightly — an early-warning signal for
+    # std / lint / toolchain churn.  `fail-fast: false` so BOTH legs run to
+    # completion (we want the whole picture, not the first failure).  NOT
+    # `continue-on-error`: a real break must surface as a red nightly we can
+    # inspect and act on — `continue-on-error` hid failures behind a green
+    # overall (a scheduled run reported success while `library_suite` was
+    # broken).  Nothing gates on the nightly, so a red here never blocks.
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +189,34 @@ jobs:
       # so they would red-flag the matrix on a non-runtime concern.
       - name: Test (ubuntu, ${{ matrix.toolchain }})
         run: >
-          cargo +${{ matrix.toolchain }} test --release
+          cargo +${{ matrix.toolchain }} test --release --no-fail-fast
           --lib --test issues --test wrap --test strings --test frame_vars
           -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
           --skip native_rs_functions_up_to_date
+
+  # Doc-index hygiene (plan-37) — the authoritative DAILY catch.  The per-PR
+  # `index-hygiene` job in ci.yml is advisory (non-blocking), so a broken
+  # `@`-tag / markdown link can land on `main`; this nightly run surfaces it
+  # within a day.  Same single-binary check, on stable.
+  index-hygiene:
+    name: doc index hygiene (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-hygiene-cargo-
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Index hygiene (broken @-tags + markdown links)
+        run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
