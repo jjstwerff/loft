@@ -12,7 +12,9 @@ lib-extraction approach was **measured** to deliver ~0 ms and rejected
 
 ## STATUS (2026-06-01) — encode/decode/validate DONE; swap-in BLOCKED
 
-Branch `scripting`, last committed `e1d63d8`.
+Branch `scripting`, last committed `4b0017d` (adds `src/database/snapshot.rs`,
+the schema codec).  Disproven swap-in preserved on tag
+`plan28-disproven-swapin`.
 
 **Committed & green (the JSON codec foundation):** the full IR → JSON
 encode/decode is done and proven on the real stdlib.
@@ -30,30 +32,46 @@ encode/decode is done and proven on the real stdlib.
 This half **met its sub-goal**: encode → decode → `compare_data` is lossless
 on the real stdlib.
 
-**NOT done — the cold-start win itself (Step 3 swap-in):** wiring
-`LOFT_STDLIB_CACHE=1` to load instead of parse is **attempted but broken and
-uncommitted**.  Confirmed deterministic panics on cache HIT for
-text/file/struct-heavy programs (`03-text`, `19-files`, `43-aggregates`, … →
-`database/structures.rs:52 "Cannot add to none-structure 'StructField'"`).
+**The cold-start win itself (Step 3 swap-in) — ATTEMPTED, MEASURED, ABANDONED.**
+Two swap-in designs were built and tested end-to-end; **neither is committed**
+(the disproven work is preserved on tag `plan28-disproven-swapin`).
 
-**Root cause (diagnosed):** the database `Stores` *schema* is derived from
-`Data`, but reconstructing it on load by re-running the parse-tail functions
-(`typedef::actual_types_deferred` + `fill_all` + `database.finish()`) does NOT
-work — those functions assume **raw parser output**, not already-resolved
-`Data`.  Re-running them over a restored `Data` double-processes (enums
-re-registered, struct fields appended to a half-built `Stores`), corrupting the
-schema.  A `known_type`-only reset (slots 0–8 by name, the rest `u16::MAX`)
-fixed the *first* panic but not this deeper one.
+- **Recompute design** (re-run `typedef::fill_all` over the loaded `Data` to
+  rebuild the `Stores` schema): **incorrect** — those passes assume raw parser
+  output, so re-running them over an already-resolved `Data` double-processes
+  and corrupts the schema (deterministic HIT panics on text/file/struct
+  programs).
+- **Design A — store the schema, don't recompute** (serialize `Stores.types` +
+  `Stores.names` alongside `Data`, restore both verbatim; new
+  `src/database/snapshot.rs` schema codec): **correct** — the panics largely
+  went away and the schema round-trips losslessly (64 types, ~19 KB). But it
+  **delivers ~0 ms**:
 
-**Two ways forward (decision pending):**
-1. A **dedicated schema-rebuild** path that takes already-resolved `Data` and
-   reproduces `Stores` without re-running stub-resolution / enum-registration.
-2. **Serialize `Stores` into the snapshot** too (it's derived, but
-   reconstructing it faithfully is the brittle part) — whose logic likely
-   belongs in **plan-54** (near-term store-format mmap), not this JSON stopgap.
+  | | cold parse | JSON load + rebuild |
+  |---|---|---|
+  | stdlib (587 defs) | ~11–23 ms | ~15–24 ms |
+
+  Loading the ~800 KB `Data` JSON (`json::parse` → reconstruct the
+  `Box<Value>`/`Vec`/`HashMap` graph + `Box::leak` interning) costs **the same
+  as lexing+parsing the 3 stdlib source files, or more.**
+
+**THE MEASURED CONCLUSION (2026-06-01).** A JSON snapshot **cannot beat the
+parser**, because both are *text-deserialization into the same heap graph* — a
+good hand-written parser over ~200 KB of source is as fast as `json::parse`
+over an 800 KB serialized tree.  This is the **same ~0 ms null result** the
+plan opened by rejecting for lib-extraction.  The cold-start goal is
+**unreachable by any serialization format**; it requires **not deserializing at
+all** — mmap a pre-laid-out binary image used zero-copy in place.  That is
+**plan-54** (Data-as-store / mmap), now the sole path to the goal.
+
+**What this plan leaves behind (genuinely useful, committed & green):** the
+full lossless JSON codec for `Data` + the database schema, `compare_data`, and
+`LOFT_DUMP_SNAPSHOT`.  This is exactly the serialization + validation machinery
+plan-54 needs (and a standalone debug/inspection tool).  The JSON-stopgap
+*idea* is closed by measurement; its *foundation* is the on-ramp to mmap.
 
 See [Step 3 § Implementation status](#step-3--stdlib-prefix-cache-strategy-2-the-universal-win)
-for detail.
+for the per-design detail.
 
 ## Why this, not lib extraction
 
@@ -632,44 +650,46 @@ flag to revert.
 
 ### Step 3 — Stdlib-prefix cache (Strategy 2, the universal win)
 
-> **IMPLEMENTATION STATUS (2026-06-01): ATTEMPTED, BLOCKED, UNCOMMITTED.**
-> The swap-in was built end-to-end and **does not work** — it is not on the
-> branch (the 7 modified files sit uncommitted in the working tree; last
-> committed state is `e1d63d8`, the cache-dir helpers).
+> **IMPLEMENTATION STATUS (2026-06-01): ATTEMPTED, MEASURED, ABANDONED.**
+> Two swap-in designs were built end-to-end and tested.  **Neither is
+> committed** (last committed state is `4b0017d`); the disproven work is
+> preserved on tag `plan28-disproven-swapin` for reference.
 >
-> **What was wired (the broken attempt):**
-> - `main.rs`: gate `LOFT_STDLIB_CACHE=1` (+ `LOFT_NO_CACHE` kill-switch) →
->   compute the content key → on hit `load_snapshot` + `rebuild_after_load`,
->   on miss parse + write the JSON cache.  Key + self-validate; any decode/
->   schema error falls back to a cold parse (cache never load-bearing).
-> - `parser::rebuild_after_load()`: `rebuild_indices` + `actual_types_deferred`
->   + `fill_all` + `database.finish()` + `enum_fn` over the whole def range.
-> - `variables::from_snapshot` sets `Function.done = true` (real bug fix:
->   the snapshot's `code` is already post-`scopes::check`, so re-running it
->   over the user delta must skip these defs or it double-inserts free-ops).
+> **Design 1 — recompute the schema on load (WRONG):** `main.rs` gated on
+> `LOFT_STDLIB_CACHE=1`; on hit, `load_snapshot` the `Data` then
+> `rebuild_after_load` = `rebuild_indices` + `actual_types_deferred` +
+> `fill_all` + `database.finish()` + `enum_fn` over the whole def range.
+> Deterministic HIT panics on text/file/struct programs
+> (`database/structures.rs:52 "Cannot add to none-structure 'StructField'"`).
+> Root cause: those parse-tail passes assume **raw parser output**; re-running
+> them over an already-resolved restored `Data` double-processes (enum
+> re-registration, struct fields appended into a half-built `Stores`).
 >
-> **What works:** integer/arithmetic programs run byte-identical cold == hit
-> (e.g. `01-integers.loft`).
+> **Design 2 — store the schema, restore verbatim (CORRECT but ~0 ms):** added
+> `src/database/snapshot.rs` (`schema_to_json` / `schema_from_json` over
+> `Stores.types` + `Stores.names`); the snapshot became two sibling files
+> (`<key>.json` + `<key>.schema.json`); `rebuild_after_load` shrank to just
+> `rebuild_indices`.  The panics largely cleared and the schema round-trips
+> losslessly.  **But it delivered no speedup:**
 >
-> **What's broken:** deterministic panics on cache HIT for text/file/
-> struct-heavy programs — `03-text`, `19-files`, `20-binary`,
-> `43-aggregates`, … → `database/structures.rs:52 "Cannot add to
-> none-structure 'StructField'"`.  (A measured HIT on the arithmetic path
-> did skip the parse — ~15.6 ms cold → ~4.9 ms load+rebuild — so the *idea*
-> pays off; the *schema rebuild* is the unsolved part.)
+> | | cold parse | JSON load + rebuild |
+> |---|---|---|
+> | stdlib (587 defs), 5 runs | ~11–23 ms | ~15–24 ms |
 >
-> **Root cause:** the `Stores` schema is derived from `Data`, but the
-> parse-tail functions (`actual_types_deferred` / `fill_all`) assume **raw
-> parser output**.  Re-running them over an already-resolved restored `Data`
-> double-processes (enum re-registration, struct fields appended into a
-> half-built `Stores`).  Resetting `known_type` to its pristine state cleared
-> the first panic but not this one — the rebuild needs a path designed for
-> already-resolved input, OR the `Stores` schema must be serialized too
-> (candidate plan-54 work).
+> Loading the ~800 KB `Data` JSON costs as much as parsing the source.
+>
+> **CONCLUSION:** a JSON snapshot cannot beat the parser — both are
+> text-deserialization into the same heap graph.  The cold-start goal is
+> unreachable by any serialization format and needs **plan-54** (mmap a
+> pre-laid-out image, zero-copy).  The committed JSON codec + schema codec +
+> `compare_data` + `LOFT_DUMP_SNAPSHOT` are the reusable foundation for that.
+>
+> `variables::from_snapshot` carries a real fix worth porting to plan-54: set
+> `Function.done = true` so a later `scopes::check` over the user delta skips
+> the restored defs (else it double-inserts the free-ops already in `code`).
 >
 > The design sketch below (a `.bin` `State` prefix cache) is the ORIGINAL
-> Strategy-2 framing and is **superseded** by the as-built JSON `Data` +
-> schema-rebuild approach; kept for context.
+> Strategy-2 framing and is **superseded**; kept for context.
 
 **Design (superseded — original `.bin` State framing).** Use Step 2's `Data`
 cache (no Step-1 `State` cache — codegen is recomputed fresh, ~0.5 ms),
