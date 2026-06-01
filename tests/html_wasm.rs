@@ -493,6 +493,11 @@ const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
     // false, breaking `assert(img.width == 256)`.  Browsers handle this
     // fine.
     "imaging",
+    // input — design draft landed 2026-06-01 (LAVITION W.13); the
+    // graphics native crate isn't present in the wasmtime sysroot →
+    // E0463 at lib resolution; same root cause as @P391 on the other
+    // backends.  Un-skip once @P391 ships.
+    "input",
 ];
 
 /// Collect every `lib/<pkg>/tests/*.loft`, sorted.
