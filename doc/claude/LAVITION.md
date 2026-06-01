@@ -550,7 +550,7 @@ consumer migration + monorepo cleanup).
 | **W.0c** | Bootstrap `loft-libs-game` chunk. | S | — |
 | **W.0d** | Extract `lib/time` → `loft-libs-game/time 0.1.0` (uses time as the chunk's bootstrap inhabitant — it's already a complete library, cheaper than starting with brand-new design work). | M | W.0c |
 | **W.0e** | Bootstrap `loft-libs-world` chunk. | S | — |
-| W.1 | Rename `lib/world` → `lib/hex_world` (monorepo, internal churn) + update consumer loft.tomls + `src/wasm.rs` `include_str!` paths. | S | — |
+| ~~W.1~~ | ~~Rename `lib/world` → `lib/hex_world` (monorepo, internal churn) + update consumer loft.tomls + `src/wasm.rs` `include_str!` paths.~~  **Shipped 2026-06-01** — dir + entry-file renamed, `name` in loft.toml bumped to `hex_world`, all consumer `use world;` / `world::` refs updated (tests/integration/multiplayer, tests/fixtures/libs/game_protocol/examples, tests/multilib/p379_lib_namespace, lib/hex_world/tests/02-persist).  No `src/wasm.rs` `include_str!` paths were needed — `lib/world` was never WASM-bridged. | S | — |
 | W.2 | Extract `hex_world` Stage A → Stage B → `loft-libs-world/hex_world 0.1.0`. | M | W.0e, W.1 |
 | W.3 | Split `hex_walls` out of `lib/hex_world/src/wall.loft` into `lib/hex_walls/`.  Defines the API boundary. | M | W.2 |
 | W.4 | Extract `hex_walls` Stage A → Stage B. | M | W.3 + curve-detection design |

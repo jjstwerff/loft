@@ -491,7 +491,7 @@ fn v5_t4_catch_up_after_reconnect() {
 // ── t5: world tick + decay timings ─────────────────────────────────────
 
 /// Standalone (no server, no client subprocess pairing).  Spins
-/// `lib/world::tick_and_decay` over compressed timing constants and
+/// `lib/hex_world::tick_and_decay` over compressed timing constants and
 /// confirms the expected lifecycle markers appear in stdout in the
 /// right order.  Validates:
 ///   - isolated cells decay around `base_lifetime + decay_window`
@@ -507,15 +507,15 @@ fn v5_t4_catch_up_after_reconnect() {
 ///
 /// @PLAN12 Phase 6b — temporarily ignored after Stage B removed
 /// `lib/web/`, `lib/server/`, `lib/game_protocol/` from the
-/// monorepo.  `v5_t5_world_timings.loft` uses `use world;` which
-/// still resolves via the monorepo's `lib/world/`, but the test
+/// monorepo.  `v5_t5_world_timings.loft` uses `use hex_world;` which
+/// still resolves via the monorepo's `lib/hex_world/`, but the test
 /// harness invokes loft from `tests/integration/multiplayer/`
 /// (a different project root), so the parser's walk-up no longer
-/// finds `lib/world/` as a sibling.  Un-ignore when Phase 6w
-/// extracts `world` to a chunk (then it resolves via the
+/// finds `lib/hex_world/` as a sibling.  Un-ignore when Phase 6w
+/// extracts `hex_world` to a chunk (then it resolves via the
 /// registry alongside web/server/game_protocol).
 #[test]
-#[ignore = "@PLAN12 Phase 6b — world dep unresolvable from tests/integration/; un-ignore when Phase 6w extracts loft-libs-world"]
+#[ignore = "@PLAN12 Phase 6b — hex_world dep unresolvable from tests/integration/; un-ignore when Phase 6w extracts loft-libs-world"]
 fn v5_t5_world_tick_and_decay() {
     let mut cmd = Command::new(loft_bin());
     cmd.arg("--interpret")

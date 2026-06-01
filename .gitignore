@@ -21,7 +21,7 @@ lib/imaging/tests/_tmp_*.png
 # World save/load regression tests (Phase 6t Tier 5) write binary
 # snapshots into the package's tests/ dir.  Same convention as
 # imaging: each test recreates its tmp file; never commit.
-lib/world/tests/_tmp_*.bin
+lib/hex_world/tests/_tmp_*.bin
 # Canvas demo writes this into its CWD (typically repo root) — gold lives at
 # tests/gold/10-canvas-demo.png; the working-directory copy is transient.
 /10-canvas-demo.png
@@ -34,6 +34,10 @@ tools/audience-demo/world.bin
 # the fixture's own lockfile leaks into the runner's cwd).  Real
 # consumer projects should commit their own loft.lock.
 /loft.lock
+# Test-fixture mini-packages' loft.lock files — each test re-resolves
+# deps fresh; committing the lock would pin a specific tarball sha256
+# across environments with different cache states.
+tests/fixtures/*/loft.lock
 # FUSE filesystem hidden files: created when a file is deleted while still
 # open by another process (e.g. an editor or watcher). They're stale OS
 # artefacts, never source code.

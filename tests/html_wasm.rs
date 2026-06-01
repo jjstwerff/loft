@@ -470,11 +470,11 @@ const LIB_TESTS_WASM_SKIP: &[&str] = &[];
 /// Use this for libraries that genuinely need the filesystem — the browser
 /// has none by construction (correct platform behaviour, not a bug to fix).
 const LIB_PKGS_NODE_SKIP: &[&str] = &[
-    // world's tests save+load a binary world file.  Wasmtime can do this via
+    // hex_world's tests save+load a binary world file.  Wasmtime can do this via
     // `--dir <tmp>` (see @P334 fix); the browser has no filesystem at all
     // without a JS host bridge (out of scope for now).  Un-skip if a future
     // JS-host VirtFS bridge ships.
-    "world",
+    "hex_world",
 ];
 
 /// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
@@ -622,7 +622,7 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
     // traps the moment it opens a path.
     //
     // Robustness: preopen a SET of roots, not just `std::env::temp_dir()`.
-    // A test that hardcodes a `/tmp/...` literal (e.g. lib/world's save/load
+    // A test that hardcodes a `/tmp/...` literal (e.g. lib/hex_world's save/load
     // fixture) traps when the harness's TMPDIR points elsewhere
     // (`/tmp/claude-1000`, a CI sandbox dir, …) and only that dir is preopened.
     // Preopening the literal `/tmp` mount AND the temp dir AND the CWD covers

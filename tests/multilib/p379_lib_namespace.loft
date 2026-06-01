@@ -8,7 +8,7 @@
 // (moros_map's Chunk holds vector<Hex>; world's holds vector<Cell>).
 // Run by tests/issues.rs::p379_two_libs_same_struct_name (lib_dirs=["lib"]).
 
-use world;
+use hex_world;
 use moros_map;
 
 fn main() {
@@ -30,5 +30,5 @@ fn main() {
   assert(rc.c_color == 9, "world Cell.c_color={rc.c_color} (expected 9)");
   assert(rc.c_height == 4, "world Cell.c_height={rc.c_height} (expected 4)");
 
-  println("ok: world::Chunk and moros_map::Chunk are distinct");
+  println("ok: hex_world::Chunk and moros_map::Chunk are distinct");
 }

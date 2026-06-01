@@ -1,7 +1,7 @@
 [package]
-name    = "world"
+name    = "hex_world"
 version = "0.1.0"
 loft    = ">=0.8"
 
 [library]
-entry = "src/world.loft"
+entry = "src/hex_world.loft"

@@ -14251,10 +14251,10 @@ fn run() -> integer {
 
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
 // Two libraries each defining `struct Chunk` with DIFFERENT field layouts
-// (moros_map's holds vector<Hex>, world's holds vector<Cell>) must load
+// (moros_map's holds vector<Hex>, hex_world's holds vector<Cell>) must load
 // together without the `Double structure type Chunk` internal panic, and each
 // library's Chunk-bearing collections must resolve to the CORRECT per-library
-// content type.  Before the fix, `use world; use moros_map;` panicked at
+// content type.  Before the fix, `use hex_world; use moros_map;` panicked at
 // src/database/types.rs:53.
 #[test]
 fn p379_two_libs_same_struct_name() {
