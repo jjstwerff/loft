@@ -1,109 +1,37 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! IR store schema + Value-free `Type` JSON — @PLAN28 startup-cache Step 2.
+//! Interim native-IR ↔ JSON codec — @PLAN28 startup-cache bootstrap.
 //!
-//! Two pieces today, both deliberately Value-free:
-//!   * [`register_ir_schema`] (rung S1) — registers the compiler's own IR
-//!     types as a `Stores` struct-enum schema, the **same representation
-//!     `loft --native` emits for user struct-enums** (NATIVE.md § `output_init`).
-//!   * [`type_to_json`] / [`type_from_json`] (Step 2 first slice) — a
-//!     hand-written `Type` ↔ JSON round-trip.  `Type` is the Value-free half
-//!     of the IR, so this exercises the recursive-enum + string-escape +
-//!     `crate::json` machinery without the 34-variant `Value` encoder (the
-//!     next slice).  Decode reuses loft's own JSON parser — never serde.
+//! A hand-written `Data` / `Definition` / `Value` / `Type` ↔ JSON round-trip
+//! (`*_to_json` / `*_from_json`) plus [`compare_data`] (native-vs-native
+//! equivalence) and [`load_snapshot`] (file load).  Decode reuses loft's own
+//! JSON parser — never serde.  Absolute `def_nr` / `known_type` indices are
+//! stored verbatim: this is the whole-bundle image (internally consistent),
+//! not the deferred per-library form ([`DESIGN_DECISIONS.md` § C69]).
 //!
-//! ## Status — dead code today
+//! ## Interim — slated for retirement (@PLAN54)
 //!
-//! Nothing in the live compile path calls into this module yet.  The
-//! native↔store bridge (S2/S3) and the cache wiring (S4) land in later
-//! passes, each its own green PR.  Absolute `def_nr` / `known_type` indices
-//! are stored verbatim — this is the whole-bundle image (internally
-//! consistent), not the deferred per-library form.
+//! This codec walks the **native** Rust IR graph.  @PLAN54 (Data-as-store)
+//! moves the IR into `Stores` records, after which `Stores::show_json`
+//! serialises it directly and this hand-rolled native walk is retired.  Until
+//! then it earns its keep two ways: as the **traversal skeleton** @PLAN54
+//! arc B's native→store materializer mirrors, and as arc B's **equivalence
+//! oracle** ([`compare_data`]).  See `plans/future/54-data-as-store`
+//! § Standalone upside decision.  Nothing in the live compile path calls into
+//! this module yet — only the `LOFT_DUMP_SNAPSHOT` debug hook in `main.rs`.
 //!
-//! ## Why the schema names are prefixed
-//!
-//! IR type names are prefixed with [`IR_PREFIX`] (`$ir.`) so they can never
-//! collide with a user program's `struct Value` / `struct Type` / etc.  The
-//! prefix is not a legal loft identifier.
-//!
-//! ## Two-phase registration (required for recursion)
-//!
-//! `Value` embeds `Box<Value>` / `Vec<Value>` and `Block`; `Type` embeds
-//! `Box<Type>` / `Vec<Type>`.  A field can only reference a type that already
-//! has a number, so registration is two-phase: (1) shells — `enumerate()` /
-//! `structure()` every IR type; (2) fields + variants that reference those
-//! numbers.  S1 lands shells first.
+//! [`DESIGN_DECISIONS.md` § C69]: ../../doc/claude/DESIGN_DECISIONS.md
 
 use crate::data::{
     Attribute, Block, Data, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
     LinkedFieldKind, ParForBody, Purity, Type, Value,
 };
-use crate::database::Stores;
 use crate::json::Parsed;
 use crate::keys::Key;
 use crate::lexer::Position;
 use std::fmt::Write as _;
 use std::num::NonZeroU8;
-
-/// Prefix on every IR schema type name, so they cannot collide with a
-/// user program's own `struct Value` etc.  Not a legal loft identifier.
-pub const IR_PREFIX: &str = "$ir.";
-
-/// The IR enum / struct type names registered as schema shells.  The two
-/// recursive enums (`Value`, `Type`) plus the structs they and
-/// `Definition` own.  Order is irrelevant for shell registration — every
-/// name simply needs a slot before phase-2 field wiring references it.
-const IR_ENUMS: &[&str] = &["Value", "Type"];
-
-const IR_STRUCTS: &[&str] = &[
-    // Top-level definition graph.
-    "Data",
-    "Definition",
-    "Attribute",
-    "Argument",
-    "Block",
-    "ParForBody",
-    "Function",
-    "Variable",
-    "IntegerSpec",
-    "Position",
-    "Key",
-    // Small payload shapes used by Type/Value variants that don't map to
-    // a single scalar (e.g. the `(field-name, ascending)` pairs in
-    // `Type::Sorted` / `Index`).
-    "SortKey", // (name: text, ascending: boolean)
-];
-
-/// Register the IR schema shells into `stores`.  S1: shells only — each
-/// IR type gets a `known_type`, no fields/variants wired yet.  Must be
-/// called once on a fresh schema; calling twice panics on the
-/// duplicate-name guard in `structure()` (by design — double registration
-/// is a bug).
-///
-/// Returns the number of IR types registered, for the collision test.
-pub fn register_ir_schema(stores: &mut Stores) -> usize {
-    let mut count = 0;
-    for name in IR_ENUMS {
-        let qualified = format!("{IR_PREFIX}{name}");
-        debug_assert!(
-            !stores.has_type(&qualified),
-            "IR schema enum {qualified} already registered"
-        );
-        stores.enumerate(&qualified);
-        count += 1;
-    }
-    for name in IR_STRUCTS {
-        let qualified = format!("{IR_PREFIX}{name}");
-        debug_assert!(
-            !stores.has_type(&qualified),
-            "IR schema struct {qualified} already registered"
-        );
-        stores.structure(&qualified, 0);
-        count += 1;
-    }
-    count
-}
 
 // ─── Type JSON round-trip (Step 2 first slice — Value-free) ──────────────────
 //
@@ -1533,41 +1461,6 @@ pub fn compare_data(reference: &Data, loaded: &Data) -> Result<(), DataDiff> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shells_register_without_collision() {
-        let mut stores = Stores::new();
-        let before = stores.types.len();
-        let registered = register_ir_schema(&mut stores);
-        let after = stores.types.len();
-
-        // Every IR shell got a distinct new slot — no name collided with a
-        // base type or with another IR type (a collision would have
-        // panicked in structure(), or silently merged in enumerate()).
-        assert_eq!(
-            after - before,
-            registered,
-            "every IR shell must register as a new type"
-        );
-        assert_eq!(registered, IR_ENUMS.len() + IR_STRUCTS.len());
-
-        // Each registered name is present and prefixed (so it cannot clash
-        // with a user type).
-        for name in IR_ENUMS.iter().chain(IR_STRUCTS.iter()) {
-            let qualified = format!("{IR_PREFIX}{name}");
-            assert!(
-                stores.has_type(&qualified),
-                "IR shell {qualified} should be registered"
-            );
-        }
-    }
-
-    #[test]
-    fn prefix_is_not_a_legal_identifier() {
-        // The prefix must contain a char that can't start/continue a loft
-        // identifier, guaranteeing user code can never name a colliding type.
-        assert!(IR_PREFIX.contains('$') && IR_PREFIX.contains('.'));
-    }
 
     // ── Type JSON round-trip (Step 2 first slice) ───────────────────────────
 
