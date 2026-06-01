@@ -1,0 +1,221 @@
+// @PLAN54 arc A — the COMPLETE compiler IR transcribed as loft types, so
+// `loft --native` generates the store schema + record accessors for the whole
+// thing.  The generated Rust IS arc A's schema (db.structure/enumerate/value/
+// vector/field registrations) plus the read/write record patterns.
+//
+// Mapping from the native Rust IR (src/data.rs) to loft types:
+//   Box<Self>            -> reference<Self>      (cycle-breaker, per Type docs)
+//   Vec<Self>            -> vector<Self>
+//   u8/u16/u32/i32/i64   -> integer             (width tuning is later; layout probe)
+//   bool                 -> boolean
+//   f64 -> float ; f32   -> single ; String -> text
+//   Vec<u16> (dep lists) -> vector<integer>
+//   Vec<(String,bool)>   -> vector<SortKey>
+//   Vec<String>          -> vector<text>   (modelled as vector<NameRef>)
+//   Option<T>            -> a sentinel field + the value (loft has no Option)
+
+// ---- small leaf structs -----------------------------------------------------
+
+struct Position {
+  file: text,
+  line: integer,
+  pos: integer
+}
+
+struct Key {           // src/keys.rs::Key
+  type_nr: integer,    // i8
+  position: integer    // u16
+}
+
+struct SortKey {       // one (String, bool) entry of a sort/index key list
+  name: text,
+  asc: boolean
+}
+
+struct NameRef {       // one String entry of a Vec<String> (spacial/hash keys)
+  name: text
+}
+
+struct IntegerSpec {   // src/data.rs::IntegerSpec
+  min: integer,        // i32
+  max: integer,        // u32
+  not_null: boolean,
+  forced_size: integer // Option<NonZeroU8> -> 0 = None
+}
+
+// ---- Type (24 variants) -----------------------------------------------------
+
+// Every enum variant name is a GLOBAL type name in loft, so each must be
+// unique across all enums AND not collide with a builtin (boolean, vector, …).
+// Hence the Ty / Nd CamelCase prefixes on Type / Node variants (loft enum
+// variants must be CamelCase — no underscores).
+enum TypeT {
+  TyUnknown { n: integer },
+  TyNull,
+  TyVoid,
+  TyNever,
+  TyInteger { spec: IntegerSpec },
+  TyBoolean,
+  TyFloat,
+  TySingle,
+  TyCharacter,
+  TyText { dep: vector<integer> },
+  TyKeys,
+  TyEnum { n: integer, is_ref: boolean, dep: vector<integer> },
+  TyReference { n: integer, dep: vector<integer> },
+  TyRefVar { inner: vector<TypeT> },
+  TyVector { inner: vector<TypeT>, dep: vector<integer> },
+  TyRoutine { n: integer },
+  TyIterator { step: vector<TypeT>, inner: vector<TypeT> },
+  TySorted { n: integer, keys: vector<SortKey>, dep: vector<integer> },
+  TyIndex { n: integer, keys: vector<SortKey>, dep: vector<integer> },
+  TySpacial { n: integer, names: vector<NameRef>, dep: vector<integer> },
+  TyHash { n: integer, names: vector<NameRef>, dep: vector<integer> },
+  TyFunction { args: vector<TypeT>, result: vector<TypeT>, dep: vector<integer> },
+  TyRewritten { inner: vector<TypeT> },
+  TyTuple { elems: vector<TypeT> }
+}
+
+// ---- Value (34 variants) ----------------------------------------------------
+// Block / ParForBody are folded inline as their own structs that hold Value.
+
+enum Node {
+  NdNull,
+  NdLine { n: integer },
+  NdSpan { pos: Position, inner: vector<Node> },
+  NdInt { n: integer },
+  NdEnum { ord: integer, tp: integer },
+  NdBoolean { b: boolean },
+  NdFloat { f: float },
+  NdLong { n: integer },
+  NdSingle { f: single },
+  NdText { s: text },
+  NdCall { def_nr: integer, args: vector<Node> },
+  NdCallRef { var: integer, args: vector<Node> },
+  NdBlock { block: reference<Block> },
+  NdInsert { items: vector<Node> },
+  NdVar { n: integer },
+  NdSet { var: integer, inner: vector<Node> },
+  NdReturn { inner: vector<Node> },
+  NdBreak { n: integer },
+  NdBreakWith { n: integer, inner: vector<Node> },
+  NdContinue { n: integer },
+  NdIf { cond: vector<Node>, t: vector<Node>, f: vector<Node> },
+  NdLoop { block: reference<Block> },
+  NdDrop { inner: vector<Node> },
+  NdIter { var: integer, create: vector<Node>, next: vector<Node>, init: vector<Node> },
+  NdKeys { keys: vector<Key> },
+  NdTuple { items: vector<Node> },
+  NdTupleGet { var: integer, idx: integer },
+  NdTuplePut { var: integer, idx: integer, inner: vector<Node> },
+  NdYield { inner: vector<Node> },
+  NdFnRef { def_nr: integer, var: integer, t: vector<TypeT> },
+  NdFnRefDnr { n: integer },
+  NdParallel { arms: vector<Node> },
+  NdParFor { body: reference<ParForBody> },
+  NdRawExpr { s: text }
+}
+
+struct Block {         // src/data.rs::Block
+  name: text,
+  operators: vector<Node>,
+  result: vector<TypeT>,
+  scope: integer,
+  var_size: integer
+}
+
+struct ParForBody {    // src/data.rs::ParForBody
+  input: vector<Node>,
+  x_var: integer,
+  r_var: integer,
+  worker: vector<Node>,
+  threads: vector<Node>,
+  body: vector<Node>,
+  stitch_id: integer
+}
+
+// ---- Definition / Attribute / Function / Variable ---------------------------
+
+struct Attribute {     // src/data.rs::Attribute
+  name: text,
+  typedef: vector<TypeT>,
+  mutable: boolean,
+  constant: boolean,
+  init: boolean,
+  nullable: boolean,
+  primary: boolean,
+  hidden: boolean,
+  value: vector<Node>,
+  check: vector<Node>,
+  check_message: vector<Node>,
+  alias_d_nr: integer,
+  assigned_lambda_d_nr: integer
+}
+
+struct Variable {      // src/variables/mod.rs::Variable (debug-symbol subset)
+  name: text,
+  type_def: vector<TypeT>,
+  stack_pos: integer,
+  uses: integer,
+  argument: boolean,
+  stack_allocated: boolean,
+  skip_free: boolean,
+  captured: boolean,
+  caller_hidden_buf: boolean
+}
+
+struct Function {      // src/variables/mod.rs::Function (the stored subset)
+  name: text,
+  file: text,
+  variables: vector<Variable>
+}
+
+struct LinkedFieldGroup {
+  kind: integer,       // Tuple=0 / Index=1
+  instance: integer,
+  field_indices: vector<integer>,
+  alignment: integer,
+  size: integer
+}
+
+struct Definition {    // src/data.rs::Definition (portable IR subset)
+  name: text,
+  source: integer,
+  def_type: integer,   // DefType ordinal
+  parent: integer,
+  position: Position,
+  attributes: vector<Attribute>,
+  code: vector<Node>,
+  returned: vector<TypeT>,
+  returned_not_null: boolean,
+  rust: text,
+  native: text,
+  op_code: integer,
+  known_type: integer,
+  variables: Function,
+  pub_visible: boolean,
+  closure_record: integer,
+  mutated_captures: vector<NameRef>,
+  scalars_to_box: vector<NameRef>,
+  bounds: vector<integer>,
+  forced_size: integer,    // Option<u8> -> 0 = None
+  purity: integer,         // Purity ordinal
+  field_groups: vector<LinkedFieldGroup>,
+  synthetic: text          // Option<&'static str> -> "" = None
+}
+
+struct Data {          // src/data.rs::Data (the stored core)
+  definitions: vector<Definition>,
+  source: integer
+}
+
+fn main() {
+  // An empty Data is enough to force the parser to lay out + register the
+  // full type graph above; the value of this script is the GENERATED SCHEMA
+  // (db.structure/enumerate/value/vector/field for every type), inspected via
+  //   loft --introspect --show-rust --rust-out out.rs ir_full.loft
+  // Constructing deeply-nested records would additionally need each recursive
+  // field wrapped as a reference literal — not needed to study the schema.
+  d = Data { definitions: [], source: 0 };
+  print("data with {d.definitions.len()} defs");
+}
