@@ -51,6 +51,43 @@ fn test_self_concat_text() {
   assert(v.len() == 3 && v[0] == "a" && v[2] == "c", "self-concat on a text vector");
 }
 
+// Trailing self-reference: the target appears as a NON-first operand
+// (`v = a + v`).  The old v must be read BEFORE its store is cleared.
+
+fn test_trailing_self_ref() {
+  a: vector<integer> = [1, 2];
+  v: vector<integer> = [3, 4];
+  v = a + v;
+  assert(v.len() == 4 && v[0] == 1 && v[1] == 2 && v[2] == 3 && v[3] == 4, "v = a + v keeps old v");
+  assert(a.len() == 2 && a[0] == 1, "first operand a intact");
+  v[0] = 99;
+  assert(a[0] == 1, "v independent of a");
+}
+
+fn test_trailing_self_ref_middle() {
+  a: vector<integer> = [1];
+  v: vector<integer> = [2, 3];
+  b: vector<integer> = [4];
+  v = a + v + b;
+  assert(v.len() == 4 && v[0] == 1 && v[1] == 2 && v[2] == 3 && v[3] == 4, "v in the middle of a chain");
+  assert(a.len() == 1 && b.len() == 1, "other operands intact");
+}
+
+fn test_trailing_self_ref_twice() {
+  a: vector<integer> = [1];
+  v: vector<integer> = [2, 3];
+  v = a + v + v;
+  assert(v.len() == 5, "v appearing twice: len");
+  assert(v[0] == 1 && v[1] == 2 && v[2] == 3 && v[3] == 2 && v[4] == 3, "v twice: [1,2,3,2,3]");
+}
+
+fn test_trailing_self_ref_parenthesised() {
+  a: vector<integer> = [1, 2];
+  v: vector<integer> = [3, 4];
+  v = (a + v);
+  assert(v.len() == 4 && v[0] == 1 && v[2] == 3 && v[3] == 4, "parenthesised v = (a + v)");
+}
+
 // The non-self forms must be unaffected by the fix.
 
 fn test_inplace_append_unaffected() {

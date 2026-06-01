@@ -161,8 +161,49 @@ impl Parser {
                 if self_ref {
                     ls.remove(0);
                 } else {
-                    for (s_nr, s) in self.vector_db(tp, var_nr).iter().enumerate() {
-                        ls.insert(s_nr, s.clone());
+                    // Trailing self-reference `v = a + v` (the accumulator `v`
+                    // appears as a NON-first operand): the parts loop emitted
+                    // `OpAppendVector(v, <operand mentioning v>)` which would read
+                    // v AFTER the `vector_db` clear below empties it → v's OLD
+                    // contents are lost (the trailing read sees the freshly-copied
+                    // prefix instead).  Sibling of @P390's self-slice.  Materialise
+                    // each such operand's OLD value into a fresh temp BEFORE the
+                    // clear (deep copy while v still holds its contents), then
+                    // rewrite the operand to read the temp.  The first-operand
+                    // deep-copy (`OpAppendVector(v, Var(a))`, a != v) never matches;
+                    // the self-concat first-operand case is the `self_ref` branch
+                    // above.  Pass-2 work (vector_db / create_unique are pass-2),
+                    // matching the @P390 / @P287 temp precedent.
+                    let mut prefix: Vec<Value> = Vec::new();
+                    if !self.first_pass {
+                        let append_nr = self.data.def_nr("OpAppendVector");
+                        for stmt in ls.iter_mut() {
+                            if let Value::Call(d, args) = stmt
+                                && *d == append_nr
+                                && args.len() == 3
+                                && matches!(args[0].unspan(), Value::Var(t) if *t == var_nr)
+                                && code_references_var(&args[1], var_nr)
+                            {
+                                let rec = args[2].clone();
+                                let tmp = self.create_unique("__trail_tmp", f_type);
+                                self.vars.defined(tmp);
+                                let mut mat = self.vector_db(tp, tmp);
+                                mat.push(self.cl(
+                                    "OpAppendVector",
+                                    &[Value::Var(tmp), Value::Var(var_nr), rec],
+                                ));
+                                prefix.extend(mat);
+                                args[1] = Value::Var(tmp);
+                            }
+                        }
+                    }
+                    // The materialise prefix reads v while it is still intact, so
+                    // it MUST precede the `vector_db` clear: insert prefix ++
+                    // vector_db ops together, ahead of the body (prefix first).
+                    let mut front = prefix;
+                    front.extend(self.vector_db(tp, var_nr));
+                    for (i, p) in front.into_iter().enumerate() {
+                        ls.insert(i, p);
                     }
                     if ls.is_empty()
                         && !self.first_pass
