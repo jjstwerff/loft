@@ -1,0 +1,9 @@
+// 03 — same as 02 but vector<text> (text has its own store/free path).  @P393.
+fn main() {
+  n = 0;
+  for i in 0..20 {
+    v: vector<text> = ["a", "b", "c"];
+    for x in v { n += x.len(); }
+  }
+  println("loop-text n={n}");
+}

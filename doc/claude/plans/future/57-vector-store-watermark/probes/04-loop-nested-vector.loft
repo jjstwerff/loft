@@ -1,0 +1,9 @@
+// 04 — same as 02 but vector<vector<integer>> (nested handles).  @P393.
+fn main() {
+  n = 0;
+  for i in 0..20 {
+    v: vector<vector<integer>> = [[i], [i + 1, i + 2]];
+    n += v.len();
+  }
+  println("nested n={n}");
+}

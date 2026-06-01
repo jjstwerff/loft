@@ -1,0 +1,8 @@
+// 01 — baseline control: one small vector, built + read once.  Establishes the
+// minimal active-store watermark a clean run should sit at.  @P393.
+fn main() {
+  v: vector<integer> = [1, 2, 3];
+  s = 0;
+  for x in v { s += x; }
+  println("baseline sum={s}");
+}

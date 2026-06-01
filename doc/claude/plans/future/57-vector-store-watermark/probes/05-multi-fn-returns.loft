@@ -1,0 +1,13 @@
+// 05 — a helper builds + returns a vector-derived value, called 20× from main.
+// Tests whether per-CALL local vectors free at call return or accumulate.  @P393.
+fn make(seed: integer) -> integer {
+  v: vector<integer> = [seed, seed * 2, seed * 3];
+  s = 0;
+  for x in v { s += x; }
+  return s;
+}
+fn main() {
+  total = 0;
+  for i in 0..20 { total += make(i); }
+  println("multi-fn total={total}");
+}

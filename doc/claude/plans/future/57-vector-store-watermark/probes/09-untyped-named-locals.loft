@@ -1,0 +1,43 @@
+// 09 — 35 UNTYPED named vector locals (a = [..]).  A/B vs probe 07's typed
+// form (a: vector<integer> = [..], 72 stores ≈ 2× per local).  If untyped is
+// ~35 the annotation triggers a redundant init-temp store; if also ~70 the
+// literal-temp pins regardless of annotation.  Splits @P393 cluster II.  @P393.
+fn main() {
+  total = 0;
+  a0 = [0, 1]; total += a0[0];
+  a1 = [1, 2]; total += a1[0];
+  a2 = [2, 3]; total += a2[0];
+  a3 = [3, 4]; total += a3[0];
+  a4 = [4, 5]; total += a4[0];
+  a5 = [5, 6]; total += a5[0];
+  a6 = [6, 7]; total += a6[0];
+  a7 = [7, 8]; total += a7[0];
+  a8 = [8, 9]; total += a8[0];
+  a9 = [9, 10]; total += a9[0];
+  a10 = [10, 11]; total += a10[0];
+  a11 = [11, 12]; total += a11[0];
+  a12 = [12, 13]; total += a12[0];
+  a13 = [13, 14]; total += a13[0];
+  a14 = [14, 15]; total += a14[0];
+  a15 = [15, 16]; total += a15[0];
+  a16 = [16, 17]; total += a16[0];
+  a17 = [17, 18]; total += a17[0];
+  a18 = [18, 19]; total += a18[0];
+  a19 = [19, 20]; total += a19[0];
+  a20 = [20, 21]; total += a20[0];
+  a21 = [21, 22]; total += a21[0];
+  a22 = [22, 23]; total += a22[0];
+  a23 = [23, 24]; total += a23[0];
+  a24 = [24, 25]; total += a24[0];
+  a25 = [25, 26]; total += a25[0];
+  a26 = [26, 27]; total += a26[0];
+  a27 = [27, 28]; total += a27[0];
+  a28 = [28, 29]; total += a28[0];
+  a29 = [29, 30]; total += a29[0];
+  a30 = [30, 31]; total += a30[0];
+  a31 = [31, 32]; total += a31[0];
+  a32 = [32, 33]; total += a32[0];
+  a33 = [33, 34]; total += a33[0];
+  a34 = [34, 35]; total += a34[0];
+  println("untyped total={total}");
+}

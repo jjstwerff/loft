@@ -1,0 +1,11 @@
+// 06 — slice ops in a loop (the 11-vectors theme): build, slice into a new
+// local, read.  Tests whether slice-derived locals free per iteration.  @P393.
+fn main() {
+  total = 0;
+  for i in 0..20 {
+    v: vector<integer> = [i, i + 1, i + 2, i + 3];
+    t = v[1..3];
+    for x in t { total += x; }
+  }
+  println("slice-loop total={total}");
+}

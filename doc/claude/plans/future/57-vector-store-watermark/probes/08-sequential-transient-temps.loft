@@ -1,0 +1,46 @@
+// 08 — 35 UNBOUND transient slice temps, each a slice inside a format string
+// (11-vectors' real pattern, e.g. "{pows[1..3]}"), produced + discarded in one
+// statement.  If temps free at statement-end the watermark stays ~baseline; if
+// they pin to function scope like named locals it climbs to ~35.  Crux of @P393:
+// are dead temporaries scope-lived or statement-lived?  @P393.
+// (prior total+= form hit an orthogonal codegen slot panic, codegen.rs:2669 —
+//  recorded as a probe finding, see RESULTS.md.)
+fn main() {
+  base: vector<integer> = [1, 2, 3, 4];
+  assert("{base[0..2]}" == "[1,2]", "slice temp 0");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 1");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 2");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 3");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 4");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 5");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 6");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 7");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 8");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 9");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 10");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 11");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 12");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 13");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 14");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 15");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 16");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 17");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 18");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 19");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 20");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 21");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 22");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 23");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 24");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 25");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 26");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 27");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 28");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 29");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 30");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 31");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 32");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 33");
+  assert("{base[0..2]}" == "[1,2]", "slice temp 34");
+  println("temps done");
+}
