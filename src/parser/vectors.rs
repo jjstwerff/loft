@@ -58,6 +58,23 @@ impl Parser {
             // RefVar(Vector): append directly without an identity Set(v, Var(v)).
             // find_written_vars detects the write via the OpAppendVector in the parts loop.
             orig_var
+        } else if matches!(code.unspan(), Value::Var(x) if *x != orig_var) {
+            // The concat's first operand is a NAMED LOCAL other than the
+            // accumulator (`v = a + b`, `u = v + [9]`).  Emitting `Set(v, Var(a))`
+            // would repoint v's runtime slot at a's store — aliasing v to a,
+            // mutating a when the parts append, AND orphaning the fresh
+            // vector_db store create_vector allocated for v.  Deep-COPY a's
+            // elements into v's own store instead (OpAppendVector deep-copies),
+            // so a stays intact and v is independent.  The self-reference case
+            // (`code == Var(orig_var)`, excluded by `x != orig_var`) keeps the
+            // `Set(v, Var(v))` below so create_vector's self_ref / in-place path
+            // still fires; a fresh-storage temp (Call/Block, not a Var) also
+            // keeps `Set` so v adopts the temp's store with no extra copy.
+            ls.push(self.cl(
+                "OpAppendVector",
+                &[Value::Var(orig_var), code.clone(), Value::Int(rec_tp)],
+            ));
+            orig_var
         } else {
             ls.push(v_set(orig_var, code.clone()));
             orig_var

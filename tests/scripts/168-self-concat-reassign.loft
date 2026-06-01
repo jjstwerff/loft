@@ -59,19 +59,24 @@ fn test_inplace_append_unaffected() {
   assert(v.len() == 3 && v[2] == 9, "v += [..] in-place append unchanged");
 }
 
-fn test_concat_to_new_var_result() {
-  // The RESULT of `u = v + [9]` is correct.  (NOTE: `u = v + [9]` and
-  // `v = a + b` also currently MUTATE/alias their first operand — a SEPARATE,
-  // pre-existing concat-path aliasing bug, untouched by this fix and not
-  // asserted here so this regression stays focused + green.)
+fn test_concat_to_new_var_leaves_source_intact() {
+  // `u = v + [9]` must produce u correctly AND leave the source v intact /
+  // independent (previously the concat aliased u to v's store and the append
+  // mutated v — fixed by the deep-copy of the first operand).
   v: vector<integer> = [1, 2];
   u = v + [9];
   assert(u.len() == 3 && u[0] == 1 && u[1] == 2 && u[2] == 9, "u = v + [..] result");
+  assert(v.len() == 2 && v[0] == 1 && v[1] == 2, "source v left intact");
+  u[0] = 99;
+  assert(v[0] == 1, "u and v are independent (no shared storage)");
 }
 
-fn test_concat_distinct_operands_result() {
+fn test_concat_distinct_operands_intact() {
   a: vector<integer> = [1, 2];
   b: vector<integer> = [3, 4];
   v = a + b;
   assert(v.len() == 4 && v[0] == 1 && v[3] == 4, "v = a + b result value");
+  assert(a.len() == 2 && a[0] == 1 && b.len() == 2 && b[0] == 3, "both operands left intact");
+  v[0] = 99;
+  assert(a[0] == 1, "result independent of the first operand a");
 }
