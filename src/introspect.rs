@@ -36,6 +36,10 @@ pub enum Section {
     /// for diagnosing lifetime / dep-propagation bugs (e.g. P197
     /// where `s: text` should have read `s: text[a]`).
     Types,
+    /// Round-trip check: dump each function's bytecode, re-assemble it
+    /// from that text, and compare to the original byte stream.  Proves
+    /// the labelled disassembly is a faithful, editable representation.
+    Roundtrip,
 }
 
 /// Options for `loft --introspect`.
@@ -243,9 +247,81 @@ pub fn emit_all(
             emit_types(&mut writer, data, end_def, opts)?;
         }
     }
+    if opts.includes(Section::Roundtrip) {
+        let mut writer = stdout.lock();
+        writeln!(writer)?;
+        writeln!(writer, "=== roundtrip ===")?;
+        emit_roundtrip(&mut writer, state, data, opts)?;
+    }
     if let Some(baseline) = &opts.diff_against {
         run_diff_against_baseline(baseline, &buffer)?;
     }
+    Ok(())
+}
+
+/// Dump each user function's bytecode, re-assemble it from that text via
+/// [`compile::reassemble_function`], and compare to the original byte
+/// stream.  Reports `ok` / `DIFFERS` / `error` per function plus a tally.
+fn emit_roundtrip(
+    w: &mut dyn Write,
+    state: &mut State,
+    data: &mut Data,
+    opts: &Options,
+) -> std::io::Result<()> {
+    let (mut ok, mut bad) = (0u32, 0u32);
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function | DefType::Dynamic)
+            || def.is_operator()
+            || def.code_length == 0
+        {
+            continue;
+        }
+        let from_default =
+            def.position.file.starts_with("default/") || def.position.file.starts_with("default\\");
+        let pass_filter =
+            opts.fn_filter.is_empty() || opts.fn_filter.iter().any(|f| def.name.contains(f));
+        if (from_default && !opts.all_fns) || !pass_filter {
+            continue;
+        }
+        let name = def.name.clone();
+        let start = def.code_position as usize;
+        let len = def.code_length as usize;
+        let original = state.bytecode[start..start + len].to_vec();
+
+        let mut buf: Vec<u8> = Vec::new();
+        if let Err(e) = state.dump_code(&mut buf, d_nr, data, true) {
+            writeln!(w, "  {name}: dump error: {e}")?;
+            bad += 1;
+            continue;
+        }
+        let dump = String::from_utf8_lossy(&buf);
+        match compile::reassemble_function(&dump, data, &state.library_names) {
+            Ok(rebuilt) if rebuilt == original => {
+                writeln!(w, "  ok      {name}  ({len} bytes)")?;
+                ok += 1;
+            }
+            Ok(rebuilt) => {
+                let at = original
+                    .iter()
+                    .zip(&rebuilt)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(original.len().min(rebuilt.len()));
+                writeln!(
+                    w,
+                    "  DIFFERS {name}  (orig {} B, rebuilt {} B, first diff at byte {at})",
+                    original.len(),
+                    rebuilt.len()
+                )?;
+                bad += 1;
+            }
+            Err(e) => {
+                writeln!(w, "  error   {name}: {e}")?;
+                bad += 1;
+            }
+        }
+    }
+    writeln!(w, "  ── {ok} identical, {bad} differing/error ──")?;
     Ok(())
 }
 

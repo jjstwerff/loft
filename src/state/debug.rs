@@ -859,13 +859,11 @@ impl State {
         // label that the goto statements reference instead of a raw byte
         // offset.  This keeps the dump editable — inserting / removing ops
         // shifts no jumps, because they bind to the label, not the offset.
-        let op_len = crate::compile::build_opcode_len_table(data);
         let jump_targets = crate::compile::collect_jump_targets(
             &self.bytecode,
             start_pos as usize,
             (start_pos + data.def(d_nr).code_length) as usize,
             data,
-            &op_len,
         );
         self.code_pos = start_pos;
         writeln!(
@@ -982,7 +980,7 @@ impl State {
                 if s == STRING_NULL {
                     "null".to_string()
                 } else {
-                    format!("\"{s}\"")
+                    format!("\"{}\"", crate::compile::escape_text(s))
                 }
             }
             Type::Character => format!("{}", self.code::<char>()),

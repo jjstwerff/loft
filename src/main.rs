@@ -3169,6 +3169,8 @@ fn main() {
             native_mode = false;
         } else if a == "--show-bytecode" {
             introspect_sections.push(loft::introspect::Section::Bytecode);
+        } else if a == "--bc-roundtrip" {
+            introspect_sections.push(loft::introspect::Section::Roundtrip);
         } else if a == "--show-rust" {
             introspect_sections.push(loft::introspect::Section::Rust);
         } else if a == "--show-slots" {

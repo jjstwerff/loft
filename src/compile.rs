@@ -425,30 +425,6 @@ pub fn show_code(
 
 // ── Standalone bytecode disassembler ─────────────────────────────────────────
 
-/// Build a table mapping opcode → instruction byte-length, indexed by the
-/// FULL opcode number.  Extended opcodes encode as a `255` lead byte plus
-/// an `ext` byte (`op = 255 + ext`, so `op ≥ 256`); the table therefore
-/// runs past 256 and counts **2** lead bytes for them (1 for a base op
-/// `0..=254`), plus the sum of the const-argument sizes.  `0` = unknown.
-#[must_use]
-pub fn build_opcode_len_table(data: &Data) -> Vec<u8> {
-    use crate::data::Context;
-    use crate::variables::size;
-    let max_op = data.operators.keys().copied().max().unwrap_or(0);
-    let mut table = vec![0u8; max_op as usize + 1]; // 0 = unknown opcode
-    for (&op, &d_nr) in &data.operators {
-        let def = &data.definitions[d_nr as usize];
-        let mut len = if op >= 255 { 2u16 } else { 1u16 }; // opcode lead byte(s)
-        for a in &def.attributes {
-            if a.constant {
-                len += size(&a.typedef, &Context::Constant);
-            }
-        }
-        table[op as usize] = len as u8;
-    }
-    table
-}
-
 /// Resolve opcode number by operator name.  Returns `u16::MAX` if not found.
 #[must_use]
 pub fn opcode_by_name(data: &Data, name: &str) -> u16 {
@@ -477,14 +453,13 @@ pub fn disassemble(
     bytecode: &[u8],
     d_nr: u32,
     data: &Data,
-    op_len: &[u8],
 ) -> Result<(), Error> {
     let def = data.def(d_nr);
     let start = def.code_position as usize;
     let end = start + def.code_length as usize;
     let vars = &def.variables;
 
-    let targets = collect_jump_targets(bytecode, start, end, data, op_len);
+    let targets = collect_jump_targets(bytecode, start, end, data);
     writeln!(writer, "--- {} ---", def.name)?;
 
     let mut pc = start;
@@ -496,7 +471,7 @@ pub fn disassemble(
         } else {
             (u16::from(first), 1)
         };
-        let ilen = op_len.get(op as usize).copied().unwrap_or(0) as usize;
+        let ilen = instruction_len(bytecode, pc, data).unwrap_or(0);
         if ilen == 0 {
             writeln!(writer, "{rel:4}: ??? (opcode {op})")?;
             break;
@@ -521,18 +496,49 @@ pub fn disassemble(
     Ok(())
 }
 
+/// Decode the byte length of the single instruction at `pc`, reading the
+/// actual operands so variable-length constants advance correctly:
+/// `Text` is `[len:u8][bytes]` and `Keys` is `[len:u8][(i8,u16) × len]`.
+/// A fixed per-opcode table cannot express these (`size(Text)` reports the
+/// in-memory pointer width, not the inline byte count).  `None` if the
+/// opcode is unknown or its operands run past the buffer.
+fn instruction_len(bytecode: &[u8], pc: usize, data: &Data) -> Option<usize> {
+    use crate::data::Context;
+    use crate::variables::size as type_size;
+    let first = *bytecode.get(pc)?;
+    let (op, lead) = if first == 255 {
+        (255u16 + u16::from(*bytecode.get(pc + 1)?), 2usize)
+    } else {
+        (u16::from(first), 1usize)
+    };
+    if !data.has_op(op) {
+        return None;
+    }
+    let mut cursor = pc + lead;
+    for a in &data.operator(op).attributes {
+        if !a.constant {
+            continue;
+        }
+        let n = match &a.typedef {
+            Type::Text(_) => 1 + *bytecode.get(cursor)? as usize,
+            Type::Keys => 1 + (*bytecode.get(cursor)? as usize) * 3,
+            t => type_size(t, &Context::Constant) as usize,
+        };
+        cursor += n;
+    }
+    Some(cursor - pc)
+}
+
 /// Pre-pass: scan the bytecode for goto-style instructions and collect
 /// their target offsets.  Disassemblers emit a label at each target so
 /// forward / backward jumps are readable — and so a re-assembler can
 /// re-derive relative offsets after ops are inserted or removed (the jump
-/// binds to a label identity, not a byte offset).  `op_len` is indexed by
-/// the FULL opcode number (see [`build_opcode_len_table`]).
+/// binds to a label identity, not a byte offset).
 pub(crate) fn collect_jump_targets(
     bytecode: &[u8],
     start: usize,
     end: usize,
     data: &Data,
-    op_len: &[u8],
 ) -> std::collections::BTreeSet<usize> {
     let mut targets = std::collections::BTreeSet::new();
     let mut pc = start;
@@ -543,10 +549,9 @@ pub(crate) fn collect_jump_targets(
         } else {
             u16::from(first)
         };
-        let ilen = op_len.get(op as usize).copied().unwrap_or(0) as usize;
-        if ilen == 0 {
+        let Some(ilen) = instruction_len(bytecode, pc, data) else {
             break;
-        }
+        };
         if data.has_op(op) {
             let name = &data.operator(op).name;
             if (name == "OpGoto" || name == "OpGotoFalse") && ilen == 2 && pc + 1 < end {
@@ -704,4 +709,314 @@ fn find_fn_at_addr(data: &Data, addr: u32) -> Option<String> {
         }
     }
     None
+}
+
+// ── Re-assembler: dump text → bytecode (inverse of `dump_code`) ───────────────
+
+/// Escape a string constant for the bytecode dump so control characters
+/// (newline, tab, …) and the delimiters `"` / `\` stay on one line and
+/// round-trip through [`unescape_text`].
+#[must_use]
+pub(crate) fn escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Inverse of [`escape_text`].
+fn unescape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Find the matching `)` for a `(` already consumed, honouring quoted
+/// strings (with `\"` escapes) and nested parens.  `s` starts just after
+/// the opening `(`.
+fn matching_paren(s: &str) -> Option<usize> {
+    let mut depth = 1i32;
+    let mut in_str = false;
+    let mut esc = false;
+    for (idx, c) in s.char_indices() {
+        if esc {
+            esc = false;
+            continue;
+        }
+        match c {
+            '\\' if in_str => esc = true,
+            '"' => in_str = !in_str,
+            '(' if !in_str => depth += 1,
+            ')' if !in_str => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract the value rendered after `name=` in a dumped arg list.  Returns
+/// the raw token (text values keep their surrounding quotes).
+fn arg_value<'a>(args: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = args.as_bytes();
+    let mut i = 0;
+    while i + name.len() < args.len() {
+        let boundary = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        if boundary && args[i..].starts_with(name) && bytes.get(i + name.len()) == Some(&b'=') {
+            let rest = &args[i + name.len() + 1..];
+            if let Some(stripped) = rest.strip_prefix('"') {
+                // closing quote = first `"` not preceded by an odd run of `\`
+                let sb = stripped.as_bytes();
+                let mut j = 0;
+                while j < sb.len() {
+                    match sb[j] {
+                        b'\\' => j += 2,
+                        b'"' => return Some(&rest[..j + 2]),
+                        _ => j += 1,
+                    }
+                }
+                return Some(rest);
+            }
+            let end = rest.find(',').unwrap_or(rest.len());
+            return Some(rest[..end].trim());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split a dumped instruction line into `(stack_annotation, op_name, args)`.
+/// Returns `None` for non-instruction lines (signature, blank, label).
+fn parse_instr_line(line: &str) -> Option<(Option<i64>, &str, &str)> {
+    let t = line.trim_start();
+    let b = t.as_bytes();
+    if b.is_empty() || !b[0].is_ascii_digit() {
+        return None;
+    }
+    let mut i = 0;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let mut stack = None;
+    if i < b.len() && b[i] == b'[' {
+        let close = t[i..].find(']')? + i;
+        stack = t[i + 1..close].parse().ok();
+        i = close + 1;
+    }
+    let colon = t[i..].find(':')? + i;
+    i = colon + 1;
+    while i < b.len() && b[i] == b' ' {
+        i += 1;
+    }
+    if i < b.len() && b[i] == b'[' {
+        let close = t[i..].find(']')? + i;
+        i = close + 1;
+        while i < b.len() && b[i] == b' ' {
+            i += 1;
+        }
+    }
+    let paren = t[i..].find('(')? + i;
+    let op_name = t[i..paren].trim();
+    let args_start = paren + 1;
+    let args_end = matching_paren(&t[args_start..])? + args_start;
+    Some((stack, op_name, &t[args_start..args_end]))
+}
+
+/// Encode one constant attribute's rendered value, mirroring the size
+/// logic of `State::dump_attribute`.
+fn encode_const(out: &mut Vec<u8>, a: &crate::data::Attribute, val: &str) -> Result<(), String> {
+    let bad = |t: &str| format!("cannot parse {t} value {val:?} for `{}`", a.name);
+    match &a.typedef {
+        Type::Integer(s) if s.range() - 1 <= 256 && s.min == 0 => {
+            out.push(val.parse::<i32>().map_err(|_| bad("u8"))? as u8);
+        }
+        Type::Integer(s) if s.range() - 1 <= 65536 && s.min == 0 => {
+            out.extend_from_slice(
+                &(val.parse::<i32>().map_err(|_| bad("u16"))? as u16).to_le_bytes(),
+            );
+        }
+        Type::Integer(s) if s.range() - 1 <= 256 => {
+            out.push(val.parse::<i32>().map_err(|_| bad("i8"))? as i8 as u8);
+        }
+        Type::Integer(s) if s.range() - 1 <= 65536 => {
+            out.extend_from_slice(
+                &(val.parse::<i32>().map_err(|_| bad("i16"))? as i16).to_le_bytes(),
+            );
+        }
+        Type::Integer(_) => {
+            out.extend_from_slice(&val.parse::<i64>().map_err(|_| bad("i64"))?.to_le_bytes());
+        }
+        Type::Boolean => out.push(u8::from(val == "true")),
+        Type::Enum(_, false, _) => out.push(val.parse::<u8>().map_err(|_| bad("enum"))?),
+        Type::Single => {
+            out.extend_from_slice(&val.parse::<f32>().map_err(|_| bad("f32"))?.to_le_bytes());
+        }
+        Type::Float => {
+            out.extend_from_slice(&val.parse::<f64>().map_err(|_| bad("f64"))?.to_le_bytes());
+        }
+        Type::Text(_) => {
+            let inner = val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(val);
+            let s = unescape_text(inner);
+            let len = u8::try_from(s.len()).map_err(|_| bad("text-len"))?;
+            out.push(len);
+            out.extend_from_slice(s.as_bytes());
+        }
+        Type::Character => {
+            let c = val.chars().next().ok_or_else(|| bad("char"))?;
+            out.extend_from_slice(&(c as u32).to_le_bytes());
+        }
+        _ => return Err(format!("unsupported const type for `{}`", a.name)),
+    }
+    Ok(())
+}
+
+/// Re-assemble one function's bytecode from its `dump_code` text (the
+/// `:POS`-labelled disassembly).  For an UNEDITED dump the result equals
+/// the original function bytecode byte-for-byte — the round-trip property
+/// that proves the dump is a faithful, editable representation.
+///
+/// `library_names` (name → index) inverts the `OpStaticCall` rendering,
+/// which shows the resolved native-function name rather than its index.
+///
+/// # Errors
+/// Returns a description of the first construct it cannot invert (unknown
+/// opcode, unsupported attribute type, dangling label, …).
+pub fn reassemble_function(
+    dump: &str,
+    data: &Data,
+    library_names: &std::collections::HashMap<String, u16>,
+) -> Result<Vec<u8>, String> {
+    use std::collections::BTreeMap;
+    let mut out: Vec<u8> = Vec::new();
+    let mut labels: BTreeMap<String, usize> = BTreeMap::new();
+    let mut fixups: Vec<(usize, String, usize)> = Vec::new(); // (byte_pos, label, width)
+
+    for raw in dump.lines() {
+        let line = raw.trim_end();
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || line.contains("return-address") || line.contains("byte-code for") {
+            continue;
+        }
+        if let Some(name) = trimmed.strip_prefix(':') {
+            labels.insert(name.trim().to_string(), out.len());
+            continue;
+        }
+        let Some((stack, op_name, args)) = parse_instr_line(line) else {
+            continue; // signature / annotation line
+        };
+        let op = opcode_by_name(data, &format!("Op{op_name}"));
+        if op == u16::MAX {
+            return Err(format!("unknown opcode `Op{op_name}` in: {line}"));
+        }
+        if op >= 255 {
+            out.push(255);
+            out.push((op - 255) as u8);
+        } else {
+            out.push(op as u8);
+        }
+        for (a_nr, a) in data.operator(op).attributes.iter().enumerate() {
+            if !a.constant {
+                continue; // mutable arg = stack operand, no bytes
+            }
+            if op_name.starts_with("Goto") {
+                let v = arg_value(args, "jump")
+                    .ok_or_else(|| format!("goto without `jump=`: {line}"))?;
+                let width = match &a.typedef {
+                    Type::Integer(s) if s.range() - 1 <= 256 => 1,
+                    _ => 2,
+                };
+                fixups.push((out.len(), v.trim_start_matches(':').to_string(), width));
+                out.extend(std::iter::repeat_n(0u8, width));
+            } else if op_name == "Call" && a_nr == 2 {
+                let name =
+                    arg_value(args, "fn").ok_or_else(|| format!("call without `fn=`: {line}"))?;
+                let pos = data
+                    .definitions
+                    .iter()
+                    .find(|d| d.name == name)
+                    .ok_or_else(|| format!("call target `{name}` not found"))?
+                    .code_position;
+                out.extend_from_slice(&i64::from(pos).to_le_bytes());
+            } else if op_name == "StaticCall" {
+                let name = args.trim();
+                let idx = library_names
+                    .get(name)
+                    .ok_or_else(|| format!("unknown static call `{name}`"))?;
+                out.extend_from_slice(&idx.to_le_bytes());
+            } else if a.name == "pos"
+                && a_nr == 0
+                && let Some(vs) = args.find("var[").map(|x| x + 4)
+            {
+                let s = stack.ok_or_else(|| format!("var-slot needs stack annotation: {line}"))?;
+                let ve = args[vs..]
+                    .find(']')
+                    .map(|x| x + vs)
+                    .ok_or_else(|| format!("unterminated var[ in: {line}"))?;
+                let slot: i64 = args[vs..ve]
+                    .parse()
+                    .map_err(|_| format!("bad slot in: {line}"))?;
+                out.extend_from_slice(&((s - slot) as u16).to_le_bytes());
+            } else {
+                let v = arg_value(args, &a.name)
+                    .ok_or_else(|| format!("missing arg `{}` in: {line}", a.name))?;
+                encode_const(&mut out, a, v)?;
+            }
+        }
+    }
+
+    for (pos, name, width) in fixups {
+        let target = *labels
+            .get(&name)
+            .ok_or_else(|| format!("jump to undefined label :{name}"))?;
+        let delta = target as i64 - (pos + width) as i64;
+        let bytes: [u8; 2] = if width == 1 {
+            [
+                i8::try_from(delta).map_err(|_| format!("jump :{name} out of i8 range"))? as u8,
+                0,
+            ]
+        } else {
+            i16::try_from(delta)
+                .map_err(|_| format!("jump :{name} out of i16 range"))?
+                .to_le_bytes()
+        };
+        for (k, b) in bytes.iter().take(width).enumerate() {
+            if let Some(slot) = out.get_mut(pos + k) {
+                *slot = *b;
+            }
+        }
+    }
+    Ok(out)
 }
