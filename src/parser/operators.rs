@@ -197,11 +197,30 @@ impl Parser {
                             }
                         }
                     }
+                    // plan-57 cluster II — a literal / comprehension / struct-vector
+                    // init already allocated v's store in the RHS body (the literal's
+                    // own `vector_db` emitted a head `Set(v, OpGetField(__vdb))`).  The
+                    // `=` `vector_db` below would allocate a SECOND, immediately-
+                    // orphaned store for v (the 2× store high-watermark).  Skip it when
+                    // the body already allocated.  Concat (`OpAppendVector` / `Set(v,
+                    // <temp>)`) and reassignment (`a=[1,2,3]; a=[4,5]` — no head alloc)
+                    // have no such repoint, so they KEEP the `vector_db`: concat needs
+                    // it for v's store, reassignment relies on the fresh store as its
+                    // clear (cluster III — unchanged by this fix).  Pure watermark
+                    // optimisation; results + lifetimes are identical.
+                    let get_field_nr = self.data.def_nr("OpGetField");
+                    let body_allocates = ls.iter().any(|stmt| {
+                        matches!(stmt.unspan(),
+                            Value::Set(s, rhs) if *s == var_nr
+                                && matches!(rhs.unspan(), Value::Call(d, _) if *d == get_field_nr))
+                    });
                     // The materialise prefix reads v while it is still intact, so
                     // it MUST precede the `vector_db` clear: insert prefix ++
                     // vector_db ops together, ahead of the body (prefix first).
                     let mut front = prefix;
-                    front.extend(self.vector_db(tp, var_nr));
+                    if !body_allocates {
+                        front.extend(self.vector_db(tp, var_nr));
+                    }
                     for (i, p) in front.into_iter().enumerate() {
                         ls.insert(i, p);
                     }
