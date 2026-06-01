@@ -45,6 +45,17 @@ but it shipped the **reusable foundation** this plan needs:
 `Store`'s raw int primitives (§ Arc A0), the precondition for the accessor
 seam.  Pure-additive, ships standalone.
 
+**A second, mmap-independent payoff — IR locality (user, 2026-06-01).**  The
+win here is not only zero-copy load.  The native IR is a pointer graph of
+separately-allocated `Box<Value>` / `Vec<Definition>` / `String` / `Box<Type>`
+nodes scattered across the heap; the store packs a record's fields contiguously
+in one rigorously-laid-out buffer.  That tight layout is cache/prefetch-
+friendly, so traversing the store-backed IR may touch far fewer cache lines
+than chasing the equivalent `Box` graph — potentially a **net speedup on the
+hot walk even before mmap**.  A hypothesis to confirm with numbers (open
+question 5), but it means "Data-as-store" can be a structural optimisation in
+its own right, not just the cold-start enabler.
+
 **Standalone upside — a functional serialise/inspect layer that *converges*
 on the database's own JSON (2026-06-01).**  Independent of the cold-start
 goal, @PLAN28's codec already gives a rich, working **serialise / deserialise
@@ -363,9 +374,30 @@ finish-before-continue rule governs @PLAN28's S1–S5 rungs.
    inputs changed — reuse + extend the @PLAN28 `stdlib_cache_key`
    (version + build-id + feature set) with the sorted lib list and lib
    content hashes.
-5. **Store-read vs `Vec`-index perf.**  `data.def()` is a `Vec` index
-   today (~940 sites, hot).  A `DbRef` read adds store indirection;
-   measure the hot-path delta and whether a read-through cache is needed.
+5. **Store-read vs `Vec`-index perf — cost AND a locality upside (user,
+   2026-06-01).**  `data.def()` is a `Vec` index today (~940 sites, hot); a
+   `DbRef` read adds a store indirection — measure the hot-path delta and
+   whether a read-through cache is needed.  **But the store layout is not
+   purely a cost.**  The native IR is a graph of separately-heap-allocated
+   nodes — `Box<Value>`, `Vec<Definition>`, `String`, nested `Box<Type>` —
+   scattered across the allocator, so walking a definition's `code` chases
+   pointers into cold cache lines.  The store packs a record's fields (and,
+   with co-located `ChildRec`/inline layouts, its sub-records) **contiguously
+   in one rigorously-laid-out buffer**.  That tight, sequential layout is
+   exactly what caches and prefetchers reward: walking an IR node in the
+   store can touch far fewer cache lines than chasing the equivalent `Box`
+   graph.  Rust's per-node layout is locally optimal but globally scattered;
+   the store trades a small per-access indirection for **whole-IR locality**.
+
+   So the honest hypothesis is a *trade*, not a strict regression: indirection
+   cost vs. locality/prefetch win, and the balance is empirical.  It may even
+   come out **net-positive on the hot walk** before mmap is considered —
+   making "Data-as-store" a structural optimisation in its own right, not only
+   the enabler for zero-copy load.  This is the second thing arc C's
+   per-subsystem equivalence/bench harness must measure (alongside
+   correctness): not just "is store-read fast enough?" but "is the packed
+   layout actually faster to traverse?"  Treat the locality win as a
+   hypothesis to confirm with numbers, not a given.
 
 ## Cross-arc dependencies
 
