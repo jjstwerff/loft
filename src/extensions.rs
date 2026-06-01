@@ -1934,15 +1934,50 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
-    for root in &search_roots {
-        for profile in ["release", "debug"] {
-            let dir = root.join(profile);
-            let lib = dir.join(&lib_name);
-            let rlib = dir.join(&rlib_name);
-            if lib.exists() && rlib.exists() {
-                return Some(lib.to_string_lossy().to_string());
+    let find_existing = || {
+        for root in &search_roots {
+            for profile in ["release", "debug"] {
+                let dir = root.join(profile);
+                let lib = dir.join(&lib_name);
+                let rlib = dir.join(&rlib_name);
+                if lib.exists() && rlib.exists() {
+                    return Some(lib.to_string_lossy().to_string());
+                }
             }
         }
+        None
+    };
+    if let Some(p) = find_existing() {
+        return Some(p);
+    }
+
+    // @P388: serialise on-demand native builds ACROSS PROCESSES.  Parallel test
+    // binaries (nextest runs one process per test) and parallel end-user `loft`
+    // invocations otherwise each run an unlocked `cargo build` that re-resolves
+    // the dependency tree concurrently, racing cargo's shared registry index +
+    // package cache → transient "required to be available in rlib format" errors
+    // and non-deterministic version picks.  A single cross-process advisory file
+    // lock serialises the builds.  (The CI pre-build already serialises CI; this
+    // covers the latent end-user-parallelism half of @P388.)  The `--locked`
+    // route is unavailable: the repo deliberately gitignores every `Cargo.lock`,
+    // and these crates.io-sourced native deps would drift against the actively-
+    // versioned loft-ffi crates.  Best-effort: if the lock can't be opened/taken
+    // we proceed unserialised — no worse than before.  `File::lock` blocks until
+    // acquired and releases when `_build_lock` drops at function exit (so a crash
+    // mid-build can't strand the lock).
+    let _build_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(std::env::temp_dir().join("loft-native-build.lock"))
+        .ok();
+    if let Some(f) = &_build_lock {
+        let _ = f.lock();
+    }
+    // Re-check under the lock: a process we waited on may have just produced the
+    // artifact, in which case we must NOT rebuild.
+    if let Some(p) = find_existing() {
+        return Some(p);
     }
 
     // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo
