@@ -11,7 +11,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 - **Arc A0** (typed field cursor, commit `a07ed8d`) — landed as `RecordCursor`/`RecordCursorMut` wrapping `Store`'s raw primitives.  That cursor form has since been superseded by the typed handle layer (see § Arc A0 — handle layer below); `src/data_store.rs` is now the accessor seam, not a bare cursor.
 - **Arc A** (IR store schema, commit `ed21b3e`) — landed as `tools/ir_schema/` (hybrid generate-extract pipeline) + `src/ir_schema_gen.rs` (generated, checked-in).  The full IR is registered via `register_ir_schema(db: &mut Stores) -> IrSchemaIds`; every struct/enum is in the schema; `db.finish()` computes all field positions, record sizes, and discriminants including the 34-variant `Node` enum size.
-- **Typed handle layer** (`src/data_store.rs`, current, uncommitted) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.  Remaining arcs (B write, C full migration, D mmap, E bundle snapshots) are open.
+- **Typed handle layer** (`src/data_store.rs`, commit `9d860c5`) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.  Remaining arcs (B write, C full migration, D mmap, E bundle snapshots) are open.
 
 Original note: This is the **mmap end-goal** that
 [@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
@@ -51,7 +51,7 @@ but it shipped the **reusable foundation** this plan needs:
 landed as a typed field cursor (`a07ed8d`), then evolved into the typed handle
 layer (§ Arc A0 — handle layer).  Arc A landed as the `tools/ir_schema/`
 hybrid pipeline + `src/ir_schema_gen.rs` (`ed21b3e`).  The minimum accessor
-seam (`src/data_store.rs`) is implemented.
+seam (`src/data_store.rs`) landed in commit `9d860c5`.
 
 **A second, mmap-independent payoff — IR locality (user, 2026-06-01).**  The
 win here is not only zero-copy load.  The native IR is a pointer graph of
@@ -363,17 +363,17 @@ seam).  The two compose; neither alone is the deliverable.
 
 | Item | Concern | Status |
 |---|---|---|
-| **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (commit `a07ed8d`) — cursor form superseded by the typed handle layer (`src/data_store.rs`); see § Arc A0 — handle layer |
+| **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (cursor `a07ed8d`, superseded by the typed handle layer `src/data_store.rs` in commit `9d860c5`); see § Arc A0 — handle layer |
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema; reuses @PLAN28 snapshot work if it landed store-format). | Open |
-| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` — `Value`/`ValuesVector`/`ValueType`, covering `NdNull`/`NdInt`/`NdCall`/`NdBlock`) is implemented; bulk migration is open. | Open — minimum seam landed (uncommitted); bulk migration is the remainder |
+| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` — `Value`/`ValuesVector`/`ValueType`, covering `NdNull`/`NdInt`/`NdCall`/`NdBlock`) is implemented; bulk migration is open. | Open — minimum seam landed (commit `9d860c5`); bulk migration is the remainder |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Open |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
 
 ## Phase ordering
 
 0. **A0 (typed field cursor)** — ✅ done (`a07ed8d`).  Cursor form superseded by
-   the typed handle layer; see § Arc A0 — handle layer.
+   the typed handle layer (commit `9d860c5`); see § Arc A0 — handle layer.
 1. **A (schema)** — ✅ done (`ed21b3e`).  `tools/ir_schema/` pipeline + generated
    `src/ir_schema_gen.rs` register the full IR schema.  Finding 2 (box-of-one
    `vector<Self>` for recursive single-child) resolved in the transcription.
@@ -396,9 +396,9 @@ once and named the width method, so no accessor did open-coded `(rec, fld)`
 arithmetic.  That cursor landed in commit `a07ed8d`.
 
 **As-built:** `src/data_store.rs` has since been rewritten as the **typed
-handle layer** — the minimum accessor seam the plan's arc C migration requires.
-The cursor form (still green at `a07ed8d`) is superseded; the handles subsume
-it.
+handle layer** (commit `9d860c5`) — the minimum accessor seam the plan's arc C
+migration requires.  The cursor form (still green at `a07ed8d`) is superseded;
+the handles subsume it.
 
 ### Design (three principles, user, 2026-06-01)
 
