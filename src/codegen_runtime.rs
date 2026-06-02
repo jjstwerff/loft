@@ -317,6 +317,46 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
     stores.free_named(&db, name);
 }
 
+/// Plan-57 store-identity gate (`OpStoreTag`) — native runtime parity with the
+/// interpreter's `State::store_tag` (`src/state/io.rs`).  Stamps the allocation-site
+/// `tag` on the store `db` points to, so a later `OpFreeRefTag` can verify the free
+/// corresponds.  Emitted only under the `LOFT_STORE_TAG` gate (a testing build);
+/// absent from normal native code.
+pub fn OpStoreTag(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, tag: i64) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if db.store_nr != u16::MAX && (db.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[db.store_nr as usize].tag = tag as u32;
+    }
+}
+
+/// Plan-57 store-identity gate (`OpFreeRefTag`) — native runtime parity with the
+/// interpreter's `State::free_ref_tag`.  Verifies the store's stamped tag against
+/// the free site, then frees (via [`OpFreeRef`]).  Emitted only under the
+/// `LOFT_STORE_TAG` gate.
+///
+/// # Panics
+/// Panics on a store-tag mismatch — a wrong-store / cross-owner free — exactly as
+/// the interpreter does, so the native and interpreter gates report the same bug.
+pub fn OpFreeRefTag(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, tag: i64) {
+    {
+        let stores: &Stores = unsafe { &*cell.get() };
+        if db.store_nr != u16::MAX && (db.store_nr as usize) < stores.allocations.len() {
+            let st = &stores.allocations[db.store_nr as usize];
+            // `tag == 0` covers a slot reused by a NON-OpDatabase allocator after a
+            // tagged store freed it (`free_named` resets the tag to 0).  Mirrors the
+            // interpreter's `State::free_ref_tag` exactly.
+            assert!(
+                st.free || st.tag == 0 || st.tag == tag as u32,
+                "store-tag mismatch on free: store #{} has tag {} but OpFreeRefTag expected {}",
+                db.store_nr,
+                st.tag,
+                tag as u32,
+            );
+        }
+    }
+    OpFreeRef(cell, db, "");
+}
+
 /// conditionally free `placeholder` — only when its `store_nr`
 /// differs from `witness`'s.  Emitted for `__ref_N` work-refs whose
 /// value might alias a still-live Reference variable in the current

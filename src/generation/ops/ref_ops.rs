@@ -89,6 +89,91 @@ impl OpEmitter for OpFreeRefEmitter {
     }
 }
 
+/// `OpStoreTag` — Plan-57 store-identity gate.  `args`: `[db, tag]`.  Stamps the
+/// allocation-site `tag` on the store, mirroring the interpreter's `store_tag`.
+/// Emitted only under `LOFT_STORE_TAG`; absent from normal builds.
+pub struct OpStoreTagEmitter;
+
+impl OpEmitter for OpStoreTagEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        if let [db_val, tag_val] = args {
+            write!(ctx.w, "OpStoreTag(cell,")?;
+            ctx.emit(db_val)?;
+            write!(ctx.w, ", ")?;
+            ctx.emit(tag_val)?;
+            write!(ctx.w, ")")?;
+        }
+        Ok(())
+    }
+}
+
+/// `OpFreeRefTag` — Plan-57 store-identity gate.  `args`: `[db, tag]`.  Byte-for-byte
+/// the `OpFreeRef` emission (skip_free → `()`, fn-ref → closure-component free, plain
+/// → free + null-reset) but routed through the verifying `OpFreeRefTag` runtime, so a
+/// tagged native build behaves exactly like the untagged one plus the tag check.
+/// Emitted only under `LOFT_STORE_TAG`.
+pub struct OpFreeRefTagEmitter;
+
+impl OpEmitter for OpFreeRefTagEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        if let [db_val, tag_val] = args {
+            // skip_free variables share a slot with an owner — suppress, as OpFreeRef.
+            if let Value::Var(v) = db_val
+                && ctx
+                    .output
+                    .data
+                    .def(ctx.output.def_nr)
+                    .variables
+                    .is_skip_free(*v)
+            {
+                write!(ctx.w, "()")?;
+                return Ok(());
+            }
+            // fn-ref: free + verify only the closure component when set.
+            if let Value::Var(v) = db_val
+                && matches!(
+                    ctx.output.data.def(ctx.output.def_nr).variables.tp(*v),
+                    Type::Function(_, _, _)
+                )
+            {
+                let vn = format!(
+                    "var_{}",
+                    super::super::sanitize(
+                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                    )
+                );
+                write!(
+                    ctx.w,
+                    "if {vn}.1.store_nr != u16::MAX {{ OpFreeRefTag(cell,{vn}.1, "
+                )?;
+                ctx.emit(tag_val)?;
+                write!(ctx.w, "); {vn}.1.store_nr = u16::MAX }}")?;
+                return Ok(());
+            }
+            let var_name = if let Value::Var(v) = db_val {
+                format!(
+                    "var_{}",
+                    super::super::sanitize(
+                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                    )
+                )
+            } else {
+                String::new()
+            };
+            write!(ctx.w, "OpFreeRefTag(cell,")?;
+            ctx.emit(db_val)?;
+            write!(ctx.w, ", ")?;
+            ctx.emit(tag_val)?;
+            write!(ctx.w, ")")?;
+            // Reset variable to null sentinel after free (mirrors OpFreeRef).
+            if let Value::Var(_) = db_val {
+                write!(ctx.w, "; {var_name}.store_nr = u16::MAX")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// `OpFreeRefIfDistinct` — free the placeholder only when its `store_nr`
 /// differs from the witness's, so the fresh-store path reclaims the orphan and
 /// the adoption path leaves both slots alone.  `args`: `[placeholder, witness]`.

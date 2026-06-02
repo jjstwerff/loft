@@ -206,6 +206,11 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "OpFreeRefIfDistinct",
         Box::new(ref_ops::OpFreeRefIfDistinctEmitter),
     );
+    // Plan-57 store-identity gate (LOFT_STORE_TAG only): native parity for the
+    // verifying store ops.  Absent from normal builds (the IR post-pass emits them
+    // only under the gate), so registering them is inert otherwise.
+    r.insert("OpStoreTag", Box::new(ref_ops::OpStoreTagEmitter));
+    r.insert("OpFreeRefTag", Box::new(ref_ops::OpFreeRefTagEmitter));
     r.insert("OpCopyRecord", Box::new(ref_ops::OpCopyRecordEmitter));
     r.insert("OpSizeofRef", Box::new(ref_ops::OpSizeofRefEmitter));
 

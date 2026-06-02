@@ -338,8 +338,18 @@ pub fn check(data: &mut Data) {
         // variants (gated; no-op in normal builds).
         if tag_mode {
             let db_nr = data.def_nr("OpDatabase");
+            let gf_nr = data.def_nr("OpGetField");
             let store_tag_nr = data.def_nr("OpStoreTag");
             let free_ref_tag_nr = data.def_nr("OpFreeRefTag");
+            // Scope the gate to the reclaim-eligible stores (the same `owning` set
+            // `lastuse_reclaim` acts on).  Adopted / shared / file-reused stores are
+            // NOT eligible, so they stay untagged with plain OpFreeRef — the gate
+            // verifies exactly the frees reclaim is responsible for and cannot
+            // false-positive on legitimate store-sharing.
+            let d = &data.definitions[d_nr as usize];
+            let (owning, _intent) =
+                reclaim_free_intent(&d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+            let tagset: HashSet<u16> = owning.into_iter().collect();
             let mut ids: HashMap<u16, u16> = HashMap::new();
             tag_stores(
                 &mut data.definitions[d_nr as usize].code,
@@ -347,6 +357,7 @@ pub fn check(data: &mut Data) {
                 free_ref_nr,
                 store_tag_nr,
                 free_ref_tag_nr,
+                &tagset,
                 &mut ids,
                 &mut tag_counter,
             );
@@ -4259,6 +4270,7 @@ fn tag_stores(
     fr_nr: u32,
     store_tag_nr: u32,
     free_ref_tag_nr: u32,
+    tagset: &HashSet<u16>,
     ids: &mut HashMap<u16, u16>,
     counter: &mut u16,
 ) {
@@ -4272,14 +4284,18 @@ fn tag_stores(
                     fr_nr,
                     store_tag_nr,
                     free_ref_tag_nr,
+                    tagset,
                     ids,
                     counter,
                 );
-                // Identify a top-level OpDatabase / OpFreeRef on a Var.
+                // Identify a top-level OpDatabase / OpFreeRef on a tracked Var.  Only
+                // reclaim-eligible stores (`tagset`) are tagged/verified — adopted /
+                // shared / file stores carry no tag (no OpStoreTag) and keep their
+                // plain OpFreeRef, so the gate cannot false-positive on them.
                 let hit = match bl.operators[i].unspan() {
                     Value::Call(op, args) if *op == db_nr || (*op == fr_nr && args.len() == 1) => {
                         match args.first().map(Value::unspan) {
-                            Some(Value::Var(v)) => Some((*op == db_nr, *v)),
+                            Some(Value::Var(v)) if tagset.contains(v) => Some((*op == db_nr, *v)),
                             _ => None,
                         }
                     }
@@ -4302,17 +4318,62 @@ fn tag_stores(
             }
         }
         Value::If(c, t, e) => {
-            tag_stores(c, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
-            tag_stores(t, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
-            tag_stores(e, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            tag_stores(
+                c,
+                db_nr,
+                fr_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                tagset,
+                ids,
+                counter,
+            );
+            tag_stores(
+                t,
+                db_nr,
+                fr_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                tagset,
+                ids,
+                counter,
+            );
+            tag_stores(
+                e,
+                db_nr,
+                fr_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                tagset,
+                ids,
+                counter,
+            );
         }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
             for o in ops {
-                tag_stores(o, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+                tag_stores(
+                    o,
+                    db_nr,
+                    fr_nr,
+                    store_tag_nr,
+                    free_ref_tag_nr,
+                    tagset,
+                    ids,
+                    counter,
+                );
             }
         }
         Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            tag_stores(v, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            tag_stores(
+                v,
+                db_nr,
+                fr_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                tagset,
+                ids,
+                counter,
+            );
         }
         Value::Span(b) => {
             tag_stores(
@@ -4321,6 +4382,7 @@ fn tag_stores(
                 fr_nr,
                 store_tag_nr,
                 free_ref_tag_nr,
+                tagset,
                 ids,
                 counter,
             );

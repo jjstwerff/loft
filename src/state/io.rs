@@ -632,6 +632,11 @@ impl State {
             // Hard assert (not debug_assert): this op only exists when the
             // LOFT_STORE_TAG gate emitted it — a deliberate testing build — so it
             // must fire in release too. Zero cost when the gate is off (op absent).
+            // `tag == 0` covers a slot reused by a NON-`OpDatabase` allocator (e.g.
+            // `file()`) after a tagged store freed it — `free_named` resets the tag
+            // to 0, so the stale tag never false-positives.  What remains a hard
+            // error: a free of a REUSED store re-tagged by a different `OpDatabase`
+            // owner (the wrong-store / cross-owner free this gate exists to catch).
             assert!(
                 st.free || st.tag == 0 || st.tag == tag,
                 "store-tag mismatch on free: store #{} has tag {} but OpFreeRefTag expected {}",

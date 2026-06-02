@@ -122,7 +122,7 @@ the next alloc. Outcome:
 - **Conclusion:** free-insertion is necessary but **not sufficient**. The fix needs the
   allocation-relocation half. Spike kept gated as the record (commit `bb237b7a`).
 
-### Phase 2.5 — Tag/verify gate (store identity — the safety net) — **DONE (interpreter), 2026-06**
+### Phase 2.5 — Tag/verify gate (store identity — the safety net) — **DONE (interpreter + native), 2026-06**
 
 A `tag: u32` on each `Store` (`src/store.rs`), stamped by a new `OpStoreTag(vdb, id)` right
 after each `OpDatabase` and verified by a new `OpFreeRefTag(vdb, id)` replacing each
@@ -131,17 +131,31 @@ after each `OpDatabase` and verified by a new `OpFreeRefTag(vdb, id)` replacing 
 post-pass (`tag_stores` in `src/scopes.rs`, env `LOFT_STORE_TAG`) — normal builds are
 **byte-identical** (the user's "no bytecode bloat" requirement; two new ops over an extra
 operand on the existing ones). `id` is a per-function-var allocation-site number, globally
-unique. Verified: gate-off runs normally; gate-on shows **0 mismatches** on correct code
-(`172`, wrap sample); and it independently **confirmed the Phase-2 spike freed the right
-store** (0 mismatches under `LASTUSE_FREE=1 LOFT_STORE_TAG=1`).
+unique.
 
-- **Interpreter-only for now.** Normal `--native` is unaffected (verified). But under
-  `LOFT_STORE_TAG` + `--native`, native codegen emits the tagged ops as Rust calls to
-  functions that don't exist → compile error. **Native verification is a deferred
-  follow-up** (not unwanted — Goal D parity will want it for the relocation fix): it needs
-  native runtime handlers for `OpStoreTag`/`OpFreeRefTag`, the way `pre_eval.rs` special-
-  cases `OpFreeRef`. The interpreter gate is the immediate safety net for the interpreter
-  relocation fix; native follows when the fix lands on native.
+**Scoped to the reclaim-eligible stores (2026-06).** The first cut tagged *every* `OpDatabase`
+and verified *every* `OpFreeRef`, which **false-positives on store-sharing**: when two work-refs
+share one store via *adoption* (`{f = file(...)}` across sibling blocks — `f` reuses one slot,
+site-1 tags it, site-2 frees it) the per-var tag mismatches even though the free is correct.
+This fired on **both backends** (`20-binary` — the interpreter "0 mismatches" was only ever a
+curated sample that avoided adoption). Fix: `tag_stores` now takes the reclaim **`owning`** set
+(from `reclaim_free_intent`) and tags/verifies *only* those stores — exactly the frees reclaim is
+responsible for. Adopted / shared / `file()` stores stay untagged with a plain `OpFreeRef`, so
+the gate **cannot false-positive** on them. Verified clean on both backends: `20-binary`,
+`issues` (684), `leak`, `native` (6) all 0 mismatches under `LOFT_STORE_TAG=1 LASTUSE_RECLAIM=1`,
+and the reclaim win-probes (07/09/11/14) verify clean on interpreter **and** `--native`.
+
+- **Native parity DONE (2026-06).** Native runtime handlers `OpStoreTag` / `OpFreeRefTag`
+  (`src/codegen_runtime.rs`) + emitters (`OpStoreTagEmitter` / `OpFreeRefTagEmitter` in
+  `src/generation/ops/ref_ops.rs`, registered in `ops/mod.rs`).  `OpFreeRefTag` mirrors
+  `OpFreeRefEmitter` byte-for-byte (skip_free → `()`, fn-ref → closure free, plain → free +
+  null-reset) but routes through the verifying runtime, so a tagged native build behaves exactly
+  like the untagged one plus the tag check.  Native and interpreter now report the **same**
+  mismatch on a wrong-store free (faithful parity).
+- **Remaining gap: wasm.** `wasm_library_suite` fails under `LOFT_STORE_TAG` because the wasm
+  runtime has no `OpStoreTag`/`OpFreeRefTag` handlers (the same gap native had pre-this-session).
+  The gate is an interpreter/native diagnostic — don't run it against the wasm suite.  Wiring wasm
+  handlers is a small follow-up if Goal-D wasm watermark verification is ever wanted.
 
 ### Phase 3 — Freeing + null-init relocation — **DONE: thesis CONFIRMED, gated + HARDENED (2026-06)**
 
@@ -220,8 +234,8 @@ too).  Win probes keep their watermark and verify tag-clean (0 mismatches):
 - **Risk (the I-a lesson) — handled:** relocating the null-init changes `first_def`; the pass runs
   *before* `compute_intervals`, so the interval / `assign_slots` / `validate_slots` graph sees the
   moved def.  Native confirmed (peak drop + correct output on `--native`, the default mode).
-- **Remaining for production:** Phase 5 (watermark regression test + un-gate).  Native handlers for
-  `OpStoreTag`/`OpFreeRefTag` (the tag gate under `--native`) stay a deferred follow-up.
+- **Remaining for production:** Phase 5 (watermark regression test + un-gate).  The tag gate now
+  covers interpreter **and** `--native` (Phase 2.5); only the wasm handlers remain a small follow-up.
 
 ### Phase 4 — Permanent Goal-E enforcement assert — **DONE (2026-06)**
 
