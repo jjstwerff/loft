@@ -1,0 +1,2 @@
+// Plain vector<text> build + read.  Baseline (expect no rc dependency).
+fn test_t1() { v: vector<text> = ["a", "bb", "ccc"]; t = 0; for s in v { t = t + len(s); } assert(t == 6, "vec text build"); }

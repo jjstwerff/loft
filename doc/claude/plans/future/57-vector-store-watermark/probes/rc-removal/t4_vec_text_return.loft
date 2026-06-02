@@ -1,0 +1,3 @@
+// vector<text> built in a fn and returned (sret + text elements).
+fn build() -> vector<text> { v: vector<text> = ["p", "q"]; v += ["r"]; v }
+fn test_t4() { v = build(); assert(len(v) == 3 && v[2] == "r", "vec text return"); }

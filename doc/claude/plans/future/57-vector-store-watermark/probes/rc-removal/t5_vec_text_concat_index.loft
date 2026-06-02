@@ -1,0 +1,8 @@
+// vector<text> where elements come from text concat / interpolation (work-buffer
+// text stores feeding into the vector).
+fn test_t5() {
+  v: vector<text> = [];
+  for i in 0..4 { name = "row-" + "{i}"; v += [name]; }
+  total = 0; for s in v { total = total + len(s); }
+  assert(total == 4 * 5, "vec text concat total={total}");
+}

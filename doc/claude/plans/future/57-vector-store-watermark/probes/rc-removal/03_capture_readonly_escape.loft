@@ -1,0 +1,4 @@
+// Closure READS the captured cell but never mutates it.  Read-only capture —
+// does it still need rc to keep the cell alive past the frame?
+fn make(base: integer) -> fn() -> integer { fn() -> integer { base + 10 } }
+fn test_03() { f = make(5); assert(f() == 15 && f() == 15, "readonly capture"); }

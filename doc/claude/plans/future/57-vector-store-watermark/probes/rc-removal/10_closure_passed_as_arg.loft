@@ -1,0 +1,4 @@
+// Closure passed to another function (escapes via the call boundary).
+fn apply(f: fn() -> integer) -> integer { f() + f() }
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_10() { assert(apply(make()) == 3, "closure passed as arg"); }
