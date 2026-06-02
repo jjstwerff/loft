@@ -4,16 +4,18 @@
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue | ✅ complete (15 probes, both backends) |
+| A — Probe catalogue | ✅ complete (15 baseline + 38 cluster-I edge probes, both backends) |
 | B — Mechanism investigation | 🟢 cluster II FIXED; I + III root-caused + **unified** (same fix surface = free a store at its data's last use) |
-| C — Fix design | ✅ **written** — [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md) (clusters I + III): decouple heap-store lifetime from slot scope.  Verification harness `LOFT_STORE_GUARD` shipped (`0a45e880`).  **Blocking first step: the rc crux** (why relocating the `__vdb` free is a runtime no-op). |
-| D — Implementation | 🟢 cluster II shipped (`ff8b0730`); I + III **designed, not yet implemented** — pending the rc crux. |
+| C — Fix design | ✅ **written** — [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md) (clusters I + III): decouple heap-store lifetime from slot scope.  **rc crux DISSOLVED** — no vector store holds a ref past rc=1 (`dec_rc=0` every shape; `probes/cluster-I/00_rc_trace`), so the fix is simply "emit the free at the confined last use", no rc surgery.  Confinement analysis **adversarially hardened** (3 probe rounds; sound vs return/yield/break, block-result, tuple-element, dep-aliasing, borrow chains; loop-internal excluded). |
+| D — Implementation | 🟢 cluster II shipped (`ff8b0730`); I + III **designed + de-risked, ready to implement** — emit the confined-last-use free, drive `LOFT_STORE_GUARD` silent corpus-wide, promote it to a `debug_assertions` assert. |
 
-> **Reframed (not benign).** Clusters I + III are no longer "benign watermark" —
-> a block-scoped vector living to function exit means a program holds **more heap
-> than the source implies**, an unpredictable-memory liability.  The fix design +
-> the `LOFT_STORE_GUARD` detector live in
-> [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md).
+> **Reframed (not benign) — this is [GOALS.md Goal E](../../GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth).** A
+> block-scoped vector living to function exit means a program holds **more heap
+> than the source implies** — an unpredictable-memory liability, not a watermark.
+> The fix design + the `LOFT_STORE_GUARD` detector live in
+> [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md); the probe
+> landmarks (incl. 2 sibling crash bugs) in
+> [`probes/cluster-I/`](probes/cluster-I/) + [`probes/bugs/`](probes/bugs/).
 
 **Cluster II fix (`ff8b0730`) resolved @P393's user-visible symptom.** The 2× literal-init
 double-allocation was the dominant watermark contributor; removing it dropped
