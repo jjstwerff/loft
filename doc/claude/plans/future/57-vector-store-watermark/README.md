@@ -5,9 +5,15 @@
 | Stage | Status |
 |---|---|
 | A — Probe catalogue | ✅ complete (15 probes, both backends) |
-| B — Mechanism investigation | 🟢 cluster II root-caused + FIXED; I/III remain trace-level (benign) |
-| C — Fix design (OPTIONAL) | clusters I/III only — deliberate scope-free vs last-use/overwrite-free design call |
-| D — Implementation | 🟢 cluster II shipped (`ff8b0730`); I/III deferred (benign design call) |
+| B — Mechanism investigation | 🟢 cluster II FIXED; I + III root-caused + **unified** (same fix surface = free a store at its data's last use) |
+| C — Fix design | ✅ **written** — [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md) (clusters I + III): decouple heap-store lifetime from slot scope.  Verification harness `LOFT_STORE_GUARD` shipped (`0a45e880`).  **Blocking first step: the rc crux** (why relocating the `__vdb` free is a runtime no-op). |
+| D — Implementation | 🟢 cluster II shipped (`ff8b0730`); I + III **designed, not yet implemented** — pending the rc crux. |
+
+> **Reframed (not benign).** Clusters I + III are no longer "benign watermark" —
+> a block-scoped vector living to function exit means a program holds **more heap
+> than the source implies**, an unpredictable-memory liability.  The fix design +
+> the `LOFT_STORE_GUARD` detector live in
+> [`fix-design-store-lifetime.md`](fix-design-store-lifetime.md).
 
 **Cluster II fix (`ff8b0730`) resolved @P393's user-visible symptom.** The 2× literal-init
 double-allocation was the dominant watermark contributor; removing it dropped
