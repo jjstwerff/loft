@@ -202,14 +202,8 @@ fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
             carry
         }
         Value::If(c, t, e) => {
-            let ni = match prepend_to_scope(c, target, ni) {
-                None => return None,
-                Some(n) => n,
-            };
-            let ni = match prepend_to_scope(t, target, ni) {
-                None => return None,
-                Some(n) => n,
-            };
+            let ni = prepend_to_scope(c, target, ni)?;
+            let ni = prepend_to_scope(t, target, ni)?;
             prepend_to_scope(e, target, ni)
         }
         Value::Span(b) => prepend_to_scope(&mut b.1, target, ni),
@@ -278,11 +272,7 @@ pub fn check(data: &mut Data) {
             free_ref_nr,
         );
         if std::env::var("CONF_DBG").is_ok() && data.def(d_nr).name.starts_with("n_") {
-            eprintln!(
-                "[conf] {} confined={:?}",
-                data.def(d_nr).name,
-                confined
-            );
+            eprintln!("[conf] {} confined={:?}", data.def(d_nr).name, confined);
         }
         if !confined.is_empty() && std::env::var("CONF_OFF").is_err() {
             let mut cmap: HashMap<u16, u16> = HashMap::new();
@@ -3546,10 +3536,11 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 /// Returns `vdb -> (backed local, block scope)` for every store-backed local
 /// confined to a non-loop block deeper than where its store is currently
 /// registered.  Two consumers share this one analysis:
-///   * the cluster-I fix — re-register the confined `__vdb` (+ its local) at the
-///     block scope so the standard block-exit `free_vars` sweep frees it there;
-///   * the `LOFT_STORE_GUARD` detector ([`store_lifetime_guard`]) — a thin
-///     wrapper that reports each entry.
+/// - the cluster-I fix — re-register the confined `__vdb` (+ its local) at the
+///   block scope so the standard block-exit `free_vars` sweep frees it there;
+/// - the `LOFT_STORE_GUARD` detector ([`store_lifetime_guard`]) — a thin
+///   wrapper that reports each entry.
+///
 /// Soundness (adversarially hardened across the probe rounds): excludes escapes
 /// (return/yield/break, block-result, tuple/vector element via `guard_escapes`),
 /// loop-internal confinement (per-iteration reuse, not a watermark), and any
@@ -3748,7 +3739,9 @@ fn store_liveness_walk(
             store_liveness_walk(v, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
         }
         Value::Span(b) => {
-            store_liveness_walk(&b.1, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            store_liveness_walk(
+                &b.1, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read,
+            );
         }
         _ => {}
     }
@@ -3780,6 +3773,152 @@ fn contains_alloc(node: &Value, store: u16, db_nr: u32) -> bool {
     }
 }
 
+/// Plan-57 Phase-3 soundness gate (dominance): true only if `store`'s `OpDatabase`
+/// allocation is reached **unconditionally** from the body — never gated by an
+/// `If`/`Loop`/`Parallel` branch.  A reclaim that early-frees / drops the scope-exit
+/// free of a store allocated in an untaken branch leaks or double-frees
+/// (`20-binary`).  Plain nested blocks always run, so they stay unconditional.
+fn contains_alloc_unconditional(node: &Value, store: u16, db_nr: u32) -> bool {
+    match node.unspan() {
+        Value::Call(op, args) => {
+            (*op == db_nr
+                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
+                || args
+                    .iter()
+                    .any(|a| contains_alloc_unconditional(a, store, db_nr))
+        }
+        Value::Set(_, val) => contains_alloc_unconditional(val, store, db_nr),
+        Value::Block(bl) => bl
+            .operators
+            .iter()
+            .any(|o| contains_alloc_unconditional(o, store, db_nr)),
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
+            contains_alloc_unconditional(v, store, db_nr)
+        }
+        Value::Insert(ops) | Value::Tuple(ops) => ops
+            .iter()
+            .any(|o| contains_alloc_unconditional(o, store, db_nr)),
+        Value::Span(b) => contains_alloc_unconditional(&b.1, store, db_nr),
+        // If / Loop / Parallel / Iter / ParFor — conditional, so an alloc inside is
+        // NOT unconditional.
+        _ => false,
+    }
+}
+
+/// Plan-57 Phase-3 soundness gate (retention): true if a `holder` var (the store or
+/// any local that holds it) appears in a value position that could keep the store's
+/// data reachable **past the early-free point** — embedded in a tuple/vector literal,
+/// stored as a struct-field / keyed value, returned/yielded, copied to an alias, or
+/// passed as a non-receiver argument.  A holder as the FIRST argument of a call (the
+/// receiver of an index/len/field read, or an in-place append target) does not
+/// retain — that is exactly the straight-line shape this pass targets.  Everything
+/// else is treated as retention (conservative — errs toward leaving the store alone).
+fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
+    match node {
+        Value::Var(h) => holders.contains(h),
+        Value::Call(_, args) | Value::CallRef(_, args) => args.iter().enumerate().any(|(i, a)| {
+            // The receiver (first arg) being a bare holder Var is a read, not a
+            // retention; any nested expression there is still scanned.
+            if i == 0 && matches!(a.unspan(), Value::Var(h) if holders.contains(h)) {
+                false
+            } else {
+                holder_retained(a, holders)
+            }
+        }),
+        Value::Set(_, val) => holder_retained(val, holders),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|o| holder_retained(o, holders))
+        }
+        Value::If(c, t, e) => {
+            holder_retained(c, holders)
+                || holder_retained(t, holders)
+                || holder_retained(e, holders)
+        }
+        Value::Insert(xs) | Value::Tuple(xs) | Value::Parallel(xs) => {
+            xs.iter().any(|x| holder_retained(x, holders))
+        }
+        Value::Return(v) | Value::Yield(v) | Value::Drop(v) | Value::BreakWith(_, v) => {
+            holder_retained(v, holders)
+        }
+        Value::TuplePut(_, _, v) => holder_retained(v, holders),
+        Value::Iter(_, c, n, e) => {
+            holder_retained(c, holders)
+                || holder_retained(n, holders)
+                || holder_retained(e, holders)
+        }
+        Value::Span(b) => holder_retained(&b.1, holders),
+        Value::ParFor(b) => {
+            holder_retained(&b.input, holders)
+                || holder_retained(&b.worker, holders)
+                || holder_retained(&b.threads, holders)
+                || holder_retained(&b.body, holders)
+        }
+        _ => false,
+    }
+}
+
+/// Plan-57 Phase-3 soundness gate: is store `st` (a `__vdb` work-ref) safe to
+/// early-free + relocate + strip-its-scope-exit-free?  Mirrors `store_confinement`'s
+/// per-store predicates (the I-a soundness model) for the function-scoped case:
+///
+/// - not `skip_free` / `captured` / a `RefVar` alias, and not directly escaping
+///   (`guard_escapes`);
+/// - every var that *holds* it (`st ∈ depend`) is a non-arg, non-captured,
+///   non-`skip_free`, non-`RefVar`, non-escaping local; at most one is a *user*
+///   local; a multi-store user local must pass `confine_reassign_safe`;
+/// - none of the holders is *retained* anywhere (`holder_retained`).
+///
+/// Orphaned stores (no holder — the reassignment case, `__vdb_1..10` in probe 14)
+/// are safe-because-dead: nothing reaches them after the rebind.  Conservative by
+/// design — an escape/alias/capture/struct-field case falls back to the (sound)
+/// scope-exit free.
+fn reclaim_safe(code: &Value, vars: &Function, st: u16) -> bool {
+    if !vars.name(st).starts_with("__vdb") {
+        return false;
+    }
+    if vars.is_skip_free(st) || vars.is_captured(st) || matches!(vars.tp(st), Type::RefVar(_)) {
+        return false;
+    }
+    if guard_escapes(code, st) {
+        return false;
+    }
+    let depers: Vec<u16> = (0..vars.count())
+        .filter(|&v| vars.tp(v).depend().contains(&st))
+        .collect();
+    let mut user_locals = 0;
+    for &v in &depers {
+        if vars.is_argument(v)
+            || vars.is_captured(v)
+            || vars.is_skip_free(v)
+            || matches!(vars.tp(v), Type::RefVar(_))
+            || guard_escapes(code, v)
+        {
+            return false;
+        }
+        if !vars.name(v).starts_with('_') {
+            user_locals += 1;
+            if vars.tp(v).depend().len() != 1 && !confine_reassign_safe(code, v) {
+                return false;
+            }
+        }
+    }
+    if user_locals > 1 {
+        return false; // multiple live aliases — leave the store alone
+    }
+    // Holders for the retention scan: the raw store plus its NON-`_` user-var
+    // holders.  `_`-prefixed compiler temps (`_elm`, nested `__vdb`) are build-
+    // internal — confined to the store they construct, not external aliases — so
+    // they are skipped, mirroring `store_confinement`'s dep-escape treatment.
+    // Without this, a comprehension's per-iteration element record (`_elm`, which
+    // deps the result `__vdb`) false-positives as retention.
+    let mut holders: HashSet<u16> = depers
+        .into_iter()
+        .filter(|&v| !vars.name(v).starts_with('_'))
+        .collect();
+    holders.insert(st);
+    !holder_retained(code, &holders)
+}
+
 /// Plan-57 last-use freeing, Phase 2 — reclaim SPIKE (throwaway, `LASTUSE_FREE`).
 ///
 /// For each function-scoped store whose data dies before a later store allocates,
@@ -3787,7 +3926,13 @@ fn contains_alloc(node: &Value, store: u16, db_nr: u32) -> bool {
 /// allocation and set `skip_free` (so the scope-exit sweep does not double-free).
 /// Purpose: prove an explicit def-point free actually reclaims the slot at runtime
 /// — the I-a wall was that an IR free *position* was inert.  Flat-body only.
-fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: u32, fr_nr: u32) -> usize {
+fn lastuse_free_spike(
+    code: &mut Value,
+    vars: &mut Function,
+    db_nr: u32,
+    gf_nr: u32,
+    fr_nr: u32,
+) -> usize {
     let body_scope = match code.unspan() {
         Value::Block(bl) => bl.scope,
         _ => return 0,
@@ -3798,9 +3943,21 @@ fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: 
     let mut last_read: HashMap<u16, u32> = HashMap::new();
     let mut seq = 0u32;
     store_liveness_walk(
-        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+        code,
+        &mut seq,
+        db_nr,
+        gf_nr,
+        fr_nr,
+        &mut holds,
+        &mut alloc,
+        &mut dead,
+        &mut last_read,
     );
-    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
+    let dead_at = |st: u16| {
+        dead.get(&st)
+            .copied()
+            .or_else(|| last_read.get(&st).copied())
+    };
     let mut stores: Vec<u16> = alloc.keys().copied().collect();
     stores.sort_unstable();
     // group: the later store -> the dead stores to free right before its alloc.
@@ -3828,7 +3985,7 @@ fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: 
                 .map(|idx| (idx, sts))
         })
         .collect();
-    inserts.sort_by(|a, b| b.0.cmp(&a.0)); // descending — insert high indices first
+    inserts.sort_by_key(|x| std::cmp::Reverse(x.0)); // descending — insert high indices first
     let mut count = 0;
     for (idx, sts) in inserts {
         for st in sts {
@@ -3878,14 +4035,33 @@ fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr
     let mut last_read: HashMap<u16, u32> = HashMap::new();
     let mut seq = 0u32;
     store_liveness_walk(
-        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+        code,
+        &mut seq,
+        db_nr,
+        gf_nr,
+        fr_nr,
+        &mut holds,
+        &mut alloc,
+        &mut dead,
+        &mut last_read,
     );
-    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
-    // Function-scoped owning stores only (block-confined ones leave via I-a).
+    let dead_at = |st: u16| {
+        dead.get(&st)
+            .copied()
+            .or_else(|| last_read.get(&st).copied())
+    };
+    // Function-scoped owning stores, restricted to the provably-safe straight-line
+    // shape: the alloc is unconditional (dominance gate) AND the store passes the
+    // escape/alias/capture/retention gate.  Everything else falls back to the sound
+    // scope-exit free.
     let mut owning: Vec<u16> = alloc
         .keys()
         .copied()
-        .filter(|&st| vars.scope(st) == body_scope)
+        .filter(|&st| {
+            vars.scope(st) == body_scope
+                && contains_alloc_unconditional(code, st, db_nr)
+                && reclaim_safe(code, vars, st)
+        })
         .collect();
     owning.sort_unstable();
     // Early-free groups: before[later] = dead stores to free right before `later`
@@ -3951,8 +4127,7 @@ fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr
         for &st in &allocs_here {
             if let Some(frees) = before.get(&st) {
                 for &f in frees {
-                    bl.operators
-                        .push(Value::Call(fr_nr, vec![Value::Var(f)]));
+                    bl.operators.push(Value::Call(fr_nr, vec![Value::Var(f)]));
                     count += 1;
                 }
             }
@@ -4057,7 +4232,15 @@ fn tag_stores(
             tag_stores(v, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
         }
         Value::Span(b) => {
-            tag_stores(&mut b.1, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            tag_stores(
+                &mut b.1,
+                db_nr,
+                fr_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                ids,
+                counter,
+            );
         }
         _ => {}
     }
@@ -4092,10 +4275,22 @@ fn last_use_guard(
     let mut last_read: HashMap<u16, u32> = HashMap::new();
     let mut seq = 0u32;
     store_liveness_walk(
-        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+        code,
+        &mut seq,
+        db_nr,
+        gf_nr,
+        fr_nr,
+        &mut holds,
+        &mut alloc,
+        &mut dead,
+        &mut last_read,
     );
     // data-death point: rebind-away if any, else last read of the data.
-    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
+    let dead_at = |st: u16| {
+        dead.get(&st)
+            .copied()
+            .or_else(|| last_read.get(&st).copied())
+    };
     let mut count = 0;
     let mut stores: Vec<u16> = alloc.keys().copied().collect();
     stores.sort_unstable();

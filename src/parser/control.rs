@@ -4431,9 +4431,10 @@ impl Parser {
     /// only *reading* an enclosing local is sound (the value is copied in).
     /// Everything else is the unbuilt/broken surface and must be a clean compile
     /// error, not a silent no-op or a crash:
-    ///   * **writing or mutating** an enclosing local — the write is dropped
-    ///     (scalar/text) or crashes on the read-only store clone (heap);
-    ///   * **capturing a parameter** (read or write) — SIGSEGVs at teardown.
+    /// - **writing or mutating** an enclosing local — the write is dropped
+    ///   (scalar/text) or crashes on the read-only store clone (heap);
+    /// - **capturing a parameter** (read or write) — SIGSEGVs at teardown.
+    ///
     /// Reads of enclosing locals (any position/type) stay legal — that is the
     /// proven-sound P245 surface that test-81 guards.  Known residual: passing a
     /// captured heap value to a function that mutates it is transitive and is not
@@ -4499,10 +4500,10 @@ impl Parser {
             }
             // In-place / element / field mutation hides the host in args[0].
             Value::Call(d, args) => {
-                if is_mutating_op(&self.data.def(*d).name) {
-                    if let Some(host) = args.first().and_then(base_host_var) {
-                        self.note_mutation(host, encl, out);
-                    }
+                if is_mutating_op(&self.data.def(*d).name)
+                    && let Some(host) = args.first().and_then(base_host_var)
+                {
+                    self.note_mutation(host, encl, out);
                 }
                 for a in args {
                     self.collect_parallel_violations(a, encl, out);
@@ -4523,13 +4524,14 @@ impl Parser {
             Value::FnRef(_, v, _) => self.note_param(*v, encl, out),
             // Container recursion.
             Value::Insert(ls) | Value::Tuple(ls) | Value::Parallel(ls) => {
-                ls.iter()
-                    .for_each(|x| self.collect_parallel_violations(x, encl, out));
+                for x in ls {
+                    self.collect_parallel_violations(x, encl, out);
+                }
             }
             Value::Block(b) | Value::Loop(b) => {
-                b.operators
-                    .iter()
-                    .for_each(|x| self.collect_parallel_violations(x, encl, out));
+                for x in &b.operators {
+                    self.collect_parallel_violations(x, encl, out);
+                }
             }
             Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
                 self.collect_parallel_violations(b, encl, out);

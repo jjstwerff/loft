@@ -619,12 +619,15 @@ impl State {
     /// allocation-site `tag` operand, verify it against the store's recorded tag
     /// (a mismatch means a wrong-store / cross-owner free that `free_named` would
     /// otherwise silently no-op), then free.  Verification build only.
+    ///
+    /// # Panics
+    /// Panics (release included) on a store-tag mismatch — a wrong-store /
+    /// cross-owner free.  Only reachable when the `LOFT_STORE_TAG` gate emitted
+    /// this op (a deliberate testing build); the op is absent otherwise.
     pub fn free_ref_tag(&mut self) {
         let db = *self.get_stack::<DbRef>();
         let tag = u32::from(self.code::<u16>());
-        if db.store_nr != u16::MAX
-            && (db.store_nr as usize) < self.database.allocations.len()
-        {
+        if db.store_nr != u16::MAX && (db.store_nr as usize) < self.database.allocations.len() {
             let st = &self.database.allocations[db.store_nr as usize];
             // Hard assert (not debug_assert): this op only exists when the
             // LOFT_STORE_TAG gate emitted it — a deliberate testing build — so it

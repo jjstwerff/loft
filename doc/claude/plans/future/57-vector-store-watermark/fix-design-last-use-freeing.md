@@ -143,7 +143,7 @@ store** (0 mismatches under `LASTUSE_FREE=1 LOFT_STORE_TAG=1`).
   cases `OpFreeRef`. The interpreter gate is the immediate safety net for the interpreter
   relocation fix; native follows when the fix lands on native.
 
-### Phase 3 — Freeing + null-init relocation — **SPIKE DONE: thesis CONFIRMED + soundness boundary mapped (2026-06)**
+### Phase 3 — Freeing + null-init relocation — **DONE: thesis CONFIRMED, gated + HARDENED (2026-06)**
 
 `lastuse_reclaim` (`src/scopes.rs`, gated `LASTUSE_RECLAIM`) does both coordinated edits per
 dead store, in the post-pass before `compute_intervals`:
@@ -176,29 +176,53 @@ no longer hits an already-free store — it hits the slot now owned by the live 
 functionally because the last read precedes it, but a genuine wrong-owner free.) **Fix:** reclaim
 removes the scope-exit free for every early-freed store. Tag gate then clean (0 mismatches).
 
-**Soundness boundary mapped — the spike is UNSOUND on escape/alias/branch cases (by design: it
-omits the gates).** Sweep of 208 `tests/scripts/*.loft` on the interpreter, baseline vs gate:
-**200 identical, 8 divergent (4 crash, 1 hang, 1 leak, 2 other):**
+**Soundness boundary mapped — then HARDENED with the gates (2026-06).** The first cut (no gates)
+diverged from baseline on **8 / 208** `tests/scripts` — every one an escape/alias/branch case the
+plan predicted:
 
-| script | failure | escape mechanism the real fix must gate |
+| script | failure (pre-gate) | escape mechanism the gate must catch |
 |---|---|---|
 | `98-struct-order-in-use` | `index oob` in `free_named` | stale DbRef over-free (struct-field alias) |
-| `131-keyed-nested-struct-uaf` | crash | nested-struct field escape |
-| `repro_p346`, `29-strings` | crash | data live past the early free |
+| `131-keyed-nested-struct-uaf` | crash | nested-struct field escape, loop body |
+| `repro_p346`, `29-strings` | crash | data live past the early free (refvar / loop) |
 | `172-store-confinement-soundness` | hang | corruption → loop |
 | `20-binary` | leak (1 store) | scope-exit free removed, early free in untaken branch |
 
-This is the precise list of soundness gates the production Phase 3 must add before un-gating:
-**copy-semantics (`&`/`RefVar`), `guard_escapes`, `is_captured`, branch-awareness** (free only
-when the `later` alloc *dominates* — the `20-binary` leak). The clean straight-line / sequential
-shapes the plan targets are already sound under the spike; the gates fence off the escape cases.
+**The gate — `reclaim_safe` + `contains_alloc_unconditional` + `holder_retained`** (`src/scopes.rs`),
+mirroring `store_confinement`'s I-a soundness model.  A store is reclaim-eligible only when ALL hold:
 
-- **Default path byte-identical** (env-gated; clippy clean; baselines unchanged).
+- **dominance** — its `OpDatabase` is reached unconditionally (never inside an `If`/`Loop`/`Parallel`
+  branch).  Kills the `20-binary` branch-leak and the loop cases (`131`).
+- **no escape / capture / alias** — not `skip_free` / `captured` / a `RefVar`, and `!guard_escapes`;
+  every holder local is non-arg, non-captured, non-`RefVar`, non-escaping; ≤1 user-var holder; a
+  multi-store holder passes `confine_reassign_safe`.
+- **no retention** — no holder appears in a value position that keeps the store reachable past the
+  free (tuple/vector element, struct-field/keyed value, return, alias-copy, non-receiver arg).
+  `_`-prefixed build-internal temps (`_elm`, nested `__vdb`) are skipped — they are part of the store
+  being built, not external aliases (matches `store_confinement`'s dep-escape treatment; without it a
+  comprehension's per-iteration `_elm` false-positives).
+
+Orphaned stores (no holder — the reassignment case `__vdb_1..10` in probe 14) are safe-because-dead.
+**Conservative by design**: an escape/alias case falls back to the (sound) scope-exit free.
+
+**Result — sweep of 208 scripts, baseline vs gate: 0 real divergences, 0 crashes** (3 remaining
+diffs are pre-existing nondeterminism — threading/stress/hash-order — that differ baseline-vs-baseline
+too).  Win probes keep their watermark and verify tag-clean (0 mismatches):
+
+| probe | peak base → gate | tag gate |
+|---|---|---|
+| 07 / 09 (distinct locals) | 37 → 3 | clean |
+| 11 (comprehension) | 12 → 3 | clean |
+| 14 (reassign) | 13 → 4 | clean |
+
+- **Default path byte-identical** (env-gated; `cargo clippy -- -D warnings` + `--all-targets` + `fmt`
+  all clean; baselines unchanged).
 - **Risk (the I-a lesson) — handled:** relocating the null-init changes `first_def`; the pass runs
   *before* `compute_intervals`, so the interval / `assign_slots` / `validate_slots` graph sees the
-  moved def. Native confirmed (peak drop + correct output on `--native`).
-- **Remaining for production Phase 3:** add the four soundness gates above; then the watermark
-  regression test (Phase 5) + un-gate.
+  moved def.  Native confirmed (peak drop + correct output on `--native`, the default mode).
+- **Remaining for production:** Phase 4 (promote the diagnostic to a debug-assert) + Phase 5
+  (watermark regression test + un-gate).  Native handlers for `OpStoreTag`/`OpFreeRefTag` (the tag
+  gate under `--native`) stay a deferred follow-up.
 
 ### Phase 4 — Promote the (now-silent) guard to a permanent Goal-E assert
 
