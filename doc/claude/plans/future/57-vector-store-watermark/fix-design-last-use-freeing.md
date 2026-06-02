@@ -26,14 +26,41 @@ It is the Goal-E model expressed as a per-step check: *is anything alive that th
 says is dead?* The same hook unifies straight-line reassign, sequential distinct locals,
 and (subsumes) block-confined — no sub-block required.
 
-### Why this sidesteps the I-a wall
+### REFUTED (Phase-2 + investigation, 2026-06): free-insertion alone cannot lower the watermark — it is locked at body-0
 
-The I-a crux was "the runtime free follows the **slot** (the body-0 null-init / `first_def`);
-an IR `OpFreeRef`'s *position* was inert." This design does **not** move a slot or a scope —
-it emits a real `OpFreeRef` at the def point and suppresses the scope-exit one. The runtime
-backs this: `State::free_ref` (`src/state/io.rs:613`) does `self.database.free(&db)` — frees
-the store **immediately**; the next `OpDatabase` reuses the slot via the free-bitmap. So the
-reclaim genuinely happens at the def point, and the watermark drops.
+The original thesis ("emit a real `OpFreeRef` at the def point, the watermark drops") is
+**wrong** for the straight-line case, and the spike proved it. The decisive mechanism:
+
+- Every `__vdb` work-ref's **null-init** (`Set(__vdb, Null)`, hoisted to body-0 by
+  `parse_code` `src/parser/expressions.rs:354-369`) **allocates a store** at runtime
+  (`OpInitRef` → `database.null` → `database_named`). `work_refs` is a `BTreeSet` (ascending
+  var_nr) and the hoist `insert(0, …)` **prepends**, so the null-inits run in *reverse*:
+  for `v=[a]; v=[b]; v=[c]`, body-0 allocates `__vdb_3→#2, __vdb_2→#3, __vdb_1→#4`.
+- So **all three stores coexist the instant body-0 finishes** — `max`/`peak` = 5 *before any
+  data is live and before any free can run*. The later `OpDatabase`s only *reuse* those
+  stores (`claim` keeps the store_nr; no new alloc). Verified: `+#2 +#3 +#4` all up front,
+  then `-#4 -#3 -#2`.
+- `Stores::peak` is **monotonic** and `max` only shrinks when the **top** slot frees
+  (`src/database/allocation.rs:~289`). An inserted free of a low/dead store reuses its slot
+  but never lowers a `peak` already recorded at body-0. So straight-line measures 5 ON==OFF.
+- The spike's "frees the wrong store" was a **misread** — the reversed order means
+  `__vdb_1`'s slot legitimately holds `ref(4)`, and the free is correct (it frees `#4`, even
+  trimming `max` 5→4 momentarily). It just can't move the already-locked `peak`.
+
+**Why `11-vectors` partially drops (26→23) but straight-line doesn't:** 11-vectors' peak is
+reached *mid-function* (named-local pins + transient/loop stores at the worst moment), so an
+early free *before* a later growth point keeps `max` from climbing there. Straight-line's
+peak is entirely body-0.
+
+### The real lever — relocate the **allocation**, not (only) the free
+
+The peak is set by *when the null-store is allocated*. To lower it, move each `__vdb`'s
+null-init **out of body-0 to immediately before its own `OpDatabase`** — the I-a
+`relocate_null_init` lever (`src/scopes.rs:227`), extended from "into a sub-block" to "to an
+index within the body block." Then the stores stop coexisting up front and interleave
+(`+alloc, -free, +alloc, -free`) — paired with the early free, `max` stays ~1-2. This is the
+I-a mechanism (which works precisely *because* it relocates the null-init) applied to the
+no-sub-block case.
 
 ### Data — the real liveness needs a flow walk (Phase-1 finding, 2026-06)
 
@@ -81,27 +108,59 @@ then reports each function-scoped store whose data dies before a later store all
 - **Env-gated, no harm** — normal path untouched; `172` green both backends.
 - Strictly more general than the scope-exit `store_lifetime_guard`.
 
-### Phase 2 — Reclaim spike (de-risk the runtime, throwaway)
+### Phase 2 — Reclaim spike — **DONE; thesis refuted (2026-06)**
 
-Before wiring the general fix, hand-emit `OpFreeRef(__vdb_1)` + `skip_free` at the
-reassignment point of the straight-line case and confirm peak 5 → 3 and `172` stays green.
-This proves the explicit def-point free reclaims (vs the I-a inertness) on the smallest
-case. Revert after; gate Phase 3 on it.
+`lastuse_free_spike` (`src/scopes.rs`, gated `LASTUSE_FREE`) inserts `OpFreeRef(dead)` before
+the next alloc. Outcome:
+- v1 set `skip_free` to avoid double-free → **codegen suppresses every `OpFreeRef` for a
+  `skip_free` var** (`src/state/codegen.rs:2202`), killing the inserted free too. (Found via
+  the codegen free point — the "gate at that point" instinct.)
+- v2 drops `skip_free` (scope-exit free becomes an idempotent double-free). Result:
+  `11-vectors` 26→23, no leaks, `172` sound — but **straight-line / seq-stores don't move**,
+  because the peak is locked at body-0 (see "REFUTED" above). The spike's free is *correct*,
+  just powerless against a monotonic peak set before it runs.
+- **Conclusion:** free-insertion is necessary but **not sufficient**. The fix needs the
+  allocation-relocation half. Spike kept gated as the record (commit `bb237b7a`).
 
-### Phase 3 — Freeing (the fix)
+### Phase 2.5 — Tag/verify gate (store identity — the safety net) — **DONE (interpreter), 2026-06**
 
-Flip Phase 1's report to emission: at each def-point `S`, for each swept dead `v`, insert
-`OpFreeRef(v)` into the IR immediately before `S`'s statement (the `prepend`-into-block
-shape `relocate_null_init` already uses) and set `v.skip_free = true` so the scope-exit
-`get_free_vars` (`src/scopes.rs:1467`) does not double-free.
+A `tag: u32` on each `Store` (`src/store.rs`), stamped by a new `OpStoreTag(vdb, id)` right
+after each `OpDatabase` and verified by a new `OpFreeRefTag(vdb, id)` replacing each
+`OpFreeRef` (`assert!(store.tag == id)`). Catches **wrong-store / cross-owner free** that
+`free_named` otherwise silently no-ops. The two ops are emitted **only** by a gated IR
+post-pass (`tag_stores` in `src/scopes.rs`, env `LOFT_STORE_TAG`) — normal builds are
+**byte-identical** (the user's "no bytecode bloat" requirement; two new ops over an extra
+operand on the existing ones). `id` is a per-function-var allocation-site number, globally
+unique. Verified: gate-off runs normally; gate-on shows **0 mismatches** on correct code
+(`172`, wrap sample); and it independently **confirmed the Phase-2 spike freed the right
+store** (0 mismatches under `LASTUSE_FREE=1 LOFT_STORE_TAG=1`).
 
-- **Soundness gates (reuse, do not reinvent):** copy-semantics (plain locals unaliased
-  except explicit `&`/`RefVar` — `variables/mod.rs:1466`), `guard_escapes` (return/yield/
-  break, block-result, tuple/vector-literal escape), `is_captured` (closure capture),
-  `is_skip_free`, and `confine_reassign_safe` for the reassignment-dead proof (the old
-  value must be provably reassigned before any later read).
-- **Verify:** peak drops on probe 14 (5→3) and `11-vectors`/probe-07 (O(N)→O(1));
-  `172` green both backends; full suite green; no double-free under the leak gate.
+- **Interpreter-only for now.** Normal `--native` is unaffected (verified). But under
+  `LOFT_STORE_TAG` + `--native`, native codegen emits the tagged ops as Rust calls to
+  functions that don't exist → compile error. **Native verification is a deferred
+  follow-up** (not unwanted — Goal D parity will want it for the relocation fix): it needs
+  native runtime handlers for `OpStoreTag`/`OpFreeRefTag`, the way `pre_eval.rs` special-
+  cases `OpFreeRef`. The interpreter gate is the immediate safety net for the interpreter
+  relocation fix; native follows when the fix lands on native.
+
+### Phase 3 — Freeing + null-init relocation (the fix) — **reframed**
+
+Two coordinated edits per dead store, in the post-pass:
+1. **Relocate the null-init** out of body-0 to immediately before the store's own
+   `OpDatabase` (extend `relocate_null_init` to target a body-block *index*, not only a named
+   sub-scope) — so allocations stop batching at body-0 and the peak can drop.
+2. **Emit the early free** before the next store allocates — so consecutive stores interleave
+   (`+alloc, -free`) instead of stacking. Do NOT `skip_free` (codegen suppression); instead
+   *remove* the scope-exit free node (or rely on the idempotent double-free, measured safe).
+
+- **Under the Phase-2.5 tag gate** the whole time, so a mis-relocation surfaces loudly.
+- **Soundness gates (reuse):** copy-semantics (`&`/`RefVar` `variables/mod.rs:1466`),
+  `guard_escapes`, `is_captured`, `is_skip_free`, `confine_reassign_safe` (reassignment-dead).
+- **Risk (the I-a lesson):** relocating the null-init changes `first_def` → the interval /
+  `assign_slots` graph / `validate_slots` invariants; `compute_intervals` must run *after* the
+  relocation. Native required the declaration in-scope.
+- **Verify:** peak drops on probe 14 + `11-vectors`/probe-07; `172` + tag-gate + full suite
+  green; no leak.
 
 ### Phase 4 — Promote the (now-silent) guard to a permanent Goal-E assert
 
