@@ -315,6 +315,15 @@ pub fn check(data: &mut Data) {
             let d = &mut data.definitions[d_nr as usize];
             lastuse_free_spike(&mut d.code, &mut d.variables, db_nr, gf_nr, free_ref_nr);
         }
+        // Plan-57 last-use freeing, Phase 3 (gated): null-init relocation + early
+        // free — the combination that actually lowers the body-0-locked watermark.
+        // Runs before compute_intervals so the moved first_def is reflected.
+        if std::env::var("LASTUSE_RECLAIM").is_ok() {
+            let db_nr = data.def_nr("OpDatabase");
+            let gf_nr = data.def_nr("OpGetField");
+            let d = &mut data.definitions[d_nr as usize];
+            lastuse_reclaim(&mut d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+        }
         // Plan-57 store-identity gate (Phase 2.5): rewrite store ops to verifying
         // variants (gated; no-op in normal builds).
         if tag_mode {
@@ -3833,6 +3842,134 @@ fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: 
         }
     }
     let _ = vars;
+    count
+}
+
+/// Plan-57 last-use freeing, Phase 3 — reclaim via null-init RELOCATION + early
+/// free (gated `LASTUSE_RECLAIM`).
+///
+/// Phase 2 proved free-alone is inert: every `__vdb`'s null-init (`Set(vdb, Null)`,
+/// hoisted to body-0 by `parse_code`) ALLOCATES its store up front, so the runtime
+/// watermark is locked before any inserted free can run (probe 14: peak 11 = the 11
+/// null-inits stacking at body-0).  This pass closes that with two coordinated edits
+/// per dead store:
+///
+/// 1. **Relocate the null-init** out of body-0 to immediately before its own
+///    `OpDatabase` build — so the stores stop batching at body-0 and allocate
+///    interleaved.  (The I-a `relocate_null_init` lever, applied to a body *index*
+///    instead of a sub-block.)
+/// 2. **Early free** before the next store allocates — so a freed slot is reused by
+///    the following null-init (`+alloc, -free, +alloc, -free`) instead of stacking.
+///
+/// The scope-exit `OpFreeRef` is left in place as an idempotent double-free
+/// (`free_named` no-ops an already-free store — measured safe in Phase 2).  Both
+/// edits run **before** `compute_intervals`, so the moved `first_def` is reflected
+/// in the slot intervals.  Flat-body straight-line / sequential shapes only — the
+/// I-b / III-straight-line cases block-confinement (I-a) cannot reach.  Returns the
+/// count of relocations + frees applied.
+fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr_nr: u32) -> usize {
+    let body_scope = match code.unspan() {
+        Value::Block(bl) => bl.scope,
+        _ => return 0,
+    };
+    let mut holds: HashMap<u16, u16> = HashMap::new();
+    let mut alloc: HashMap<u16, u32> = HashMap::new();
+    let mut dead: HashMap<u16, u32> = HashMap::new();
+    let mut last_read: HashMap<u16, u32> = HashMap::new();
+    let mut seq = 0u32;
+    store_liveness_walk(
+        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+    );
+    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
+    // Function-scoped owning stores only (block-confined ones leave via I-a).
+    let mut owning: Vec<u16> = alloc
+        .keys()
+        .copied()
+        .filter(|&st| vars.scope(st) == body_scope)
+        .collect();
+    owning.sort_unstable();
+    // Early-free groups: before[later] = dead stores to free right before `later`
+    // allocates.  Identical selection to the Phase-2 spike.
+    let mut before: HashMap<u16, Vec<u16>> = HashMap::new();
+    for &st in &owning {
+        let Some(d) = dead_at(st) else { continue };
+        if let Some(&later) = owning
+            .iter()
+            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
+            .min_by_key(|&&w| alloc[&w])
+        {
+            before.entry(later).or_default().push(st);
+        }
+    }
+    // The set of stores we will early-free.  Their scope-exit `OpFreeRef` must be
+    // REMOVED, not kept as an "idempotent double-free": under reclaim the freed slot
+    // is reused by a later store, so a stale scope-exit free of `st` would target a
+    // *different live owner's* store (the tag gate catches exactly this).  The early
+    // free becomes the store's sole free.
+    let freed_set: HashSet<u16> = before.values().flatten().copied().collect();
+    let Value::Block(bl) = code else { return 0 };
+    // Reloc set: owning stores whose null-init sits at body top-level AND whose
+    // OpDatabase build is a top-level body op (so the null-init can be placed right
+    // before it).  Excludes any store I-a already relocated into a sub-block.
+    let reloc: Vec<u16> = owning
+        .iter()
+        .copied()
+        .filter(|&st| {
+            bl.operators.iter().any(|o| is_var_null_init(o, st))
+                && bl.operators.iter().any(|o| contains_alloc(o, st, db_nr))
+        })
+        .collect();
+    // Pull the relocatable null-inits out of the body (keyed by store), and DROP the
+    // existing scope-exit `OpFreeRef(Var(st))` for every store we early-free.
+    let mut saved: HashMap<u16, Value> = HashMap::new();
+    let kept: Vec<Value> = std::mem::take(&mut bl.operators)
+        .into_iter()
+        .filter_map(|op| {
+            if let Some(&st) = reloc.iter().find(|&&st| is_var_null_init(&op, st)) {
+                saved.insert(st, op);
+                return None;
+            }
+            if let Value::Call(o, args) = op.unspan()
+                && *o == fr_nr
+                && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+                && freed_set.contains(v)
+            {
+                return None; // scope-exit free of an early-freed store — drop it
+            }
+            Some(op)
+        })
+        .collect();
+    // Rebuild: before each op that allocates store `st`, emit the early frees of the
+    // stores that died before it, then `st`'s relocated null-init, then the op.
+    let mut count = 0;
+    for op in kept {
+        let allocs_here: Vec<u16> = owning
+            .iter()
+            .copied()
+            .filter(|&st| contains_alloc(&op, st, db_nr))
+            .collect();
+        for &st in &allocs_here {
+            if let Some(frees) = before.get(&st) {
+                for &f in frees {
+                    bl.operators
+                        .push(Value::Call(fr_nr, vec![Value::Var(f)]));
+                    count += 1;
+                }
+            }
+        }
+        for &st in &allocs_here {
+            if let Some(ni) = saved.remove(&st) {
+                bl.operators.push(ni);
+                count += 1;
+            }
+        }
+        bl.operators.push(op);
+    }
+    // Safety: restore any null-init whose alloc was not matched, so first_def is
+    // never lost (should not happen given the reloc filter, but keep it sound).
+    for (_st, ni) in saved {
+        bl.operators.insert(0, ni);
+    }
     count
 }
 

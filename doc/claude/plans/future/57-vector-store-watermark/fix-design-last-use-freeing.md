@@ -143,24 +143,62 @@ store** (0 mismatches under `LASTUSE_FREE=1 LOFT_STORE_TAG=1`).
   cases `OpFreeRef`. The interpreter gate is the immediate safety net for the interpreter
   relocation fix; native follows when the fix lands on native.
 
-### Phase 3 — Freeing + null-init relocation (the fix) — **reframed**
+### Phase 3 — Freeing + null-init relocation — **SPIKE DONE: thesis CONFIRMED + soundness boundary mapped (2026-06)**
 
-Two coordinated edits per dead store, in the post-pass:
-1. **Relocate the null-init** out of body-0 to immediately before the store's own
-   `OpDatabase` (extend `relocate_null_init` to target a body-block *index*, not only a named
-   sub-scope) — so allocations stop batching at body-0 and the peak can drop.
-2. **Emit the early free** before the next store allocates — so consecutive stores interleave
-   (`+alloc, -free`) instead of stacking. Do NOT `skip_free` (codegen suppression); instead
-   *remove* the scope-exit free node (or rely on the idempotent double-free, measured safe).
+`lastuse_reclaim` (`src/scopes.rs`, gated `LASTUSE_RECLAIM`) does both coordinated edits per
+dead store, in the post-pass before `compute_intervals`:
+1. **Relocate the null-init** out of body-0 to immediately before the store's own `OpDatabase`
+   build (the I-a `relocate_null_init` lever, applied to a body-block *index*).
+2. **Early free** before the next store allocates, and **REMOVE the scope-exit `OpFreeRef`** for
+   that store (the early free is now its sole free — see the tag-gate finding below).
 
-- **Under the Phase-2.5 tag gate** the whole time, so a mis-relocation surfaces loudly.
-- **Soundness gates (reuse):** copy-semantics (`&`/`RefVar` `variables/mod.rs:1466`),
-  `guard_escapes`, `is_captured`, `is_skip_free`, `confine_reassign_safe` (reassignment-dead).
-- **Risk (the I-a lesson):** relocating the null-init changes `first_def` → the interval /
-  `assign_slots` graph / `validate_slots` invariants; `compute_intervals` must run *after* the
-  relocation. Native required the declaration in-scope.
-- **Verify:** peak drops on probe 14 + `11-vectors`/probe-07; `172` + tag-gate + full suite
-  green; no leak.
+**Thesis CONFIRMED — the body-0 watermark lock is broken, on BOTH backends** (the pass is a
+shared IR phase, so it applies to `--native` — the default — and `--interpret` alike; the
+relocation-to-body-index keeps the declaration in body scope, so it is native-safe, unlike I-a's
+sub-block move):
+
+| probe | shape | peak base → gate | output |
+|---|---|---|---|
+| 14-reassignment | 1 local reassigned 11× | **11 → 2** | identical |
+| 07-sequential-named-locals | 35 distinct locals | **35 → 2** | identical |
+| 09-untyped-named-locals | 35 untyped locals | **35 → 2** | identical |
+| 11-comprehension-init | 10 comprehensions | **10 → 2** | identical |
+| 01 / 08 / 15 / 17 | already-minimal | 2 → 2 (no regression) | identical |
+
+The probe-14 trace shows the perfect `+alloc, -free, +alloc, -free` interleave: all 11 stores
+cycle through 2 physical slots.
+
+**The tag gate (2.5) earned its keep.** The first spike kept the scope-exit free as an
+"idempotent double-free" (the Phase-2 assumption). `LOFT_STORE_TAG=1 LASTUSE_RECLAIM=1` flagged
+it immediately: `store-tag mismatch on free: store #2 has tag 11 but expected 1`. Mechanism: under
+reclaim the freed slot is **reused** by a later store, so the stale scope-exit `OpFreeRef(__vdb_1)`
+no longer hits an already-free store — it hits the slot now owned by the live `__vdb_11`. (Masked
+functionally because the last read precedes it, but a genuine wrong-owner free.) **Fix:** reclaim
+removes the scope-exit free for every early-freed store. Tag gate then clean (0 mismatches).
+
+**Soundness boundary mapped — the spike is UNSOUND on escape/alias/branch cases (by design: it
+omits the gates).** Sweep of 208 `tests/scripts/*.loft` on the interpreter, baseline vs gate:
+**200 identical, 8 divergent (4 crash, 1 hang, 1 leak, 2 other):**
+
+| script | failure | escape mechanism the real fix must gate |
+|---|---|---|
+| `98-struct-order-in-use` | `index oob` in `free_named` | stale DbRef over-free (struct-field alias) |
+| `131-keyed-nested-struct-uaf` | crash | nested-struct field escape |
+| `repro_p346`, `29-strings` | crash | data live past the early free |
+| `172-store-confinement-soundness` | hang | corruption → loop |
+| `20-binary` | leak (1 store) | scope-exit free removed, early free in untaken branch |
+
+This is the precise list of soundness gates the production Phase 3 must add before un-gating:
+**copy-semantics (`&`/`RefVar`), `guard_escapes`, `is_captured`, branch-awareness** (free only
+when the `later` alloc *dominates* — the `20-binary` leak). The clean straight-line / sequential
+shapes the plan targets are already sound under the spike; the gates fence off the escape cases.
+
+- **Default path byte-identical** (env-gated; clippy clean; baselines unchanged).
+- **Risk (the I-a lesson) — handled:** relocating the null-init changes `first_def`; the pass runs
+  *before* `compute_intervals`, so the interval / `assign_slots` / `validate_slots` graph sees the
+  moved def. Native confirmed (peak drop + correct output on `--native`).
+- **Remaining for production Phase 3:** add the four soundness gates above; then the watermark
+  regression test (Phase 5) + un-gate.
 
 ### Phase 4 — Promote the (now-silent) guard to a permanent Goal-E assert
 
