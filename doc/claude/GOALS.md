@@ -177,6 +177,37 @@ not decoration: **a team that tolerates hidden machinery in its own reasoning
 cannot credibly ship a language whose whole promise is no-hidden-machinery.**  The
 process is the proof of concept for the product.
 
+### Bugs are veils — clearing them is a precondition for Goal E, not a sibling
+
+A bug is not just a broken spot.  It is a **veil**: it blinds you to everything
+downstream of it, and — worse — it can make *broken things look fine*.  The
+evidence is routine:
+
+- a `parallel {}` block that silently no-ops on `--native` made test-80 and
+  test-81 **pass** — the veil ("arms ran, asserts held") hid that native runs *no
+  arm at all*;
+- a read-only-store crash masks what a heap mutation would actually do;
+- an over-retained store under the refcount **never crashes**, so a *wrong free
+  site looks correct*.
+
+That last one is the key: **a bug is a local refcount.**  The objection to rc is
+not unsoundness — it is that rc *glosses over the lifetime*, sound-looking
+machinery that makes a wrong thing look fine.  A leftover bug does exactly that to
+the system around it.  "Bugs hide things from our view" and "rc glosses over
+details" are the **same objection — transparency — generalised** from one
+mechanism to all of them.
+
+So clearing bugs is a **precondition** for Goal E, not a parallel goal: *you
+cannot verify "the model is the truth" through a veil.*  Every unfixed bug is a
+region where the runtime is doing something you can't see, so it is a region where
+the model **cannot be confirmed to hold** — soundness isn't merely violated
+locally, your ability to *check it anywhere downstream* is compromised.  This is
+why the standing detectors (the sanitizer for A, `LOFT_STORE_GUARD` for E, a
+differential backend-parity sweep for D) and the soundness-floor pattern (turn a
+silent no-op/crash into a visible compile error) all earn their place: **they are
+veil-lifters** — they convert masking into signal so the model becomes checkable.
+Lift them in dependency order; the lowest veil is the one hiding the most.
+
 ---
 
 ## The two floors — why dogfood is paused, and when it resumes

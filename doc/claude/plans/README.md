@@ -78,6 +78,12 @@ file — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-poli
 you just characterise the region first.  This lowers the bar to probe-first vs
 fix-from-one-repro.
 
+*Why clear them at all, not just the reported one:* a left bug is a **veil** — it
+blinds you downstream and can make broken things look fine (a `--native`
+`parallel{}` no-op once made test-80/81 *pass*).  Clearing bugs is the
+precondition for verifying the model holds anywhere — see
+[GOALS.md § Bugs are veils](../GOALS.md#bugs-are-veils--clearing-them-is-a-precondition-for-goal-e-not-a-sibling).
+
 ### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
 
 Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —
