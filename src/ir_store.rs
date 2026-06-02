@@ -23,8 +23,8 @@ use crate::data::{
     Purity, Type, Value,
 };
 use crate::data_store::{self as ds, RecVector, Record, Value as Node, ValuesVector};
-use crate::database::Stores;
-use crate::keys::DbRef;
+use crate::database::{Field as SchemaField, Parts, Stores, Type as SchemaType};
+use crate::keys::{Content, DbRef};
 use crate::variables::{Function, VarSnapshot};
 
 /// Materialize one native `Value` into a freshly-appended slot of `dst`
@@ -439,6 +439,166 @@ pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
     for d in &data.definitions {
         let dr = defs.push(stores);
         write_definition(stores, &dr, d);
+    }
+}
+
+// ─── Database type schema materializer (D2a) ─────────────────────────────────
+
+/// Materialize the database type schema (`Stores.types`) into the
+/// `vector<DbType>` field at `off` of `parent` (@PLAN54 arc D / D2a) so a
+/// cache-loaded `Data`'s baked `known_type`s stay valid with no parse-time
+/// `fill_all` rebuild.  `Type.parents` is a derived back-reference index
+/// (rebuilt on load) and is **not** written.
+pub fn materialize_schema(stores: &mut Stores, parent: &Record, off: u32, schema: &[SchemaType]) {
+    let v = parent.field_recvec(off, ds::DBTYPE_STRIDE);
+    for t in schema {
+        let r = v.push(stores);
+        write_db_type(stores, &r, t);
+    }
+}
+
+/// Write one native `database::Type` into the already-allocated `DbType` record.
+fn write_db_type(stores: &mut Stores, r: &Record, t: &SchemaType) {
+    r.set_field_str(stores, ds::DBTYPE_NAME, &t.name);
+    r.set_field_int(stores, ds::DBTYPE_SIZE, i64::from(t.size_bytes()));
+    r.set_field_int(stores, ds::DBTYPE_ALIGN, i64::from(t.align_bytes()));
+    r.set_field_bool(stores, ds::DBTYPE_COMPLEX, t.is_complex());
+    r.set_field_bool(stores, ds::DBTYPE_LINKED, t.is_linked_flag());
+    // parts: single Parts -> one-element vector<DbParts> (box-of-one).
+    let pr = r
+        .field_recvec(ds::DBTYPE_PARTS, ds::DBPARTS_STRIDE)
+        .push(stores);
+    write_db_parts(stores, &pr, &t.parts);
+    // keys: vector<Key> (same record as the IR's NdKeys element).
+    let kv = r.field_recvec(ds::DBTYPE_KEYS, ds::KEY_STRIDE);
+    for k in &t.keys {
+        let e = kv.push(stores);
+        e.set_field_int(stores, ds::KEY_TYPE_NR, i64::from(k.type_nr));
+        e.set_field_int(stores, ds::KEY_POSITION, i64::from(k.position));
+    }
+    materialize_field_groups(stores, r, ds::DBTYPE_FIELD_GROUPS, &t.field_groups);
+}
+
+/// Write one native `database::Parts` into the already-allocated `DbParts` record.
+fn write_db_parts(stores: &mut Stores, r: &Record, parts: &Parts) {
+    match parts {
+        Parts::Base => r.set_discriminant(stores, ds::PT_BASE),
+        Parts::Struct(fields) => {
+            r.set_discriminant(stores, ds::PT_STRUCT);
+            write_db_fields(stores, r, ds::PTSTRUCT_FIELDS, fields);
+        }
+        Parts::Enum(values) => {
+            r.set_discriminant(stores, ds::PT_ENUM);
+            let v = r.field_recvec(ds::PTENUM_VALUES, ds::ENUMPAIR_STRIDE);
+            for (nr, name) in values {
+                let e = v.push(stores);
+                e.set_field_int(stores, ds::ENUMPAIR_NR, i64::from(*nr));
+                e.set_field_str(stores, ds::ENUMPAIR_NAME, name);
+            }
+        }
+        Parts::EnumValue(value, fields) => {
+            r.set_discriminant(stores, ds::PT_ENUM_VALUE);
+            r.set_field_int(stores, ds::PTENUMVALUE_VALUE, i64::from(*value));
+            write_db_fields(stores, r, ds::PTENUMVALUE_FIELDS, fields);
+        }
+        Parts::Byte(start, nullable) => write_pt_num(stores, r, ds::PT_BYTE, *start, *nullable),
+        Parts::Short(start, nullable) => write_pt_num(stores, r, ds::PT_SHORT, *start, *nullable),
+        Parts::Int(start, nullable) => write_pt_num(stores, r, ds::PT_INT, *start, *nullable),
+        Parts::ShortRaw(start, nullable) => {
+            write_pt_num(stores, r, ds::PT_SHORT_RAW, *start, *nullable);
+        }
+        Parts::Vector(c) => write_pt_content(stores, r, ds::PT_VECTOR, *c),
+        Parts::Array(c) => write_pt_content(stores, r, ds::PT_ARRAY, *c),
+        Parts::Sorted(c, keys) => {
+            r.set_discriminant(stores, ds::PT_SORTED);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            write_key_fields(stores, r, ds::PTKEYS, keys);
+        }
+        Parts::Ordered(c, keys) => {
+            r.set_discriminant(stores, ds::PT_ORDERED);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            write_key_fields(stores, r, ds::PTKEYS, keys);
+        }
+        Parts::Hash(c, fields) => {
+            r.set_discriminant(stores, ds::PT_HASH);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            dep_list(stores, r, ds::PTFIELDS, fields);
+        }
+        Parts::Index(c, keys, left) => {
+            r.set_discriminant(stores, ds::PT_INDEX);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            write_key_fields(stores, r, ds::PTKEYS, keys);
+            r.set_field_int(stores, ds::PTINDEX_LEFT, i64::from(*left));
+        }
+        Parts::Spacial(c, fields) => {
+            r.set_discriminant(stores, ds::PT_SPACIAL);
+            r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
+            dep_list(stores, r, ds::PTFIELDS, fields);
+        }
+        Parts::DbRef => r.set_discriminant(stores, ds::PT_DB_REF),
+        Parts::ChildRec(c) => write_pt_content(stores, r, ds::PT_CHILD_REC, *c),
+    }
+}
+
+/// A narrow-integer `Parts` variant (`Byte`/`Short`/`Int`/`ShortRaw`): `(i32, bool)`.
+fn write_pt_num(stores: &mut Stores, r: &Record, disc: u8, start: i32, nullable: bool) {
+    r.set_discriminant(stores, disc);
+    r.set_field_int(stores, ds::PTNUM_START, i64::from(start));
+    r.set_field_bool(stores, ds::PTNUM_NULLABLE, nullable);
+}
+
+/// A content-only `Parts` variant (`Vector`/`Array`/`ChildRec`): one `u16` type-nr.
+fn write_pt_content(stores: &mut Stores, r: &Record, disc: u8, content: u16) {
+    r.set_discriminant(stores, disc);
+    r.set_field_int(stores, ds::PTCONTENT, i64::from(content));
+}
+
+/// Write a `Vec<Field>` into the `vector<DbField>` at `off` of record `parent`.
+fn write_db_fields(stores: &mut Stores, parent: &Record, off: u32, fields: &[SchemaField]) {
+    let v = parent.field_recvec(off, ds::DBFIELD_STRIDE);
+    for f in fields {
+        let r = v.push(stores);
+        r.set_field_str(stores, ds::DBFIELD_NAME, &f.name);
+        r.set_field_int(stores, ds::DBFIELD_CONTENT, i64::from(f.content));
+        r.set_field_int(stores, ds::DBFIELD_POSITION, i64::from(f.position));
+        // default: single Content -> one-element vector<DbContent> (box-of-one).
+        let dr = r
+            .field_recvec(ds::DBFIELD_DEFAULT, ds::DBCONTENT_STRIDE)
+            .push(stores);
+        write_db_content(stores, &dr, &f.default);
+        dep_list(stores, &r, ds::DBFIELD_OTHER_INDEXES, f.other_indexes());
+    }
+}
+
+/// Write one native `keys::Content` into the already-allocated `DbContent` record.
+fn write_db_content(stores: &mut Stores, r: &Record, c: &Content) {
+    match c {
+        Content::Long(n) => {
+            r.set_discriminant(stores, ds::DC_LONG);
+            r.set_field_int(stores, ds::DCLONG_V, *n);
+        }
+        Content::Float(f) => {
+            r.set_discriminant(stores, ds::DC_FLOAT);
+            r.set_field_float(stores, ds::DCFLOAT_V, *f);
+        }
+        Content::Single(f) => {
+            r.set_discriminant(stores, ds::DC_SINGLE);
+            r.set_field_single(stores, ds::DCSINGLE_V, *f);
+        }
+        Content::Str(s) => {
+            r.set_discriminant(stores, ds::DC_STR);
+            r.set_field_str(stores, ds::DCSTR_V, s.str());
+        }
+    }
+}
+
+/// Write a `Vec<(u16, bool)>` key list into the `vector<KeyField>` at `off`.
+fn write_key_fields(stores: &mut Stores, parent: &Record, off: u32, keys: &[(u16, bool)]) {
+    let v = parent.field_recvec(off, ds::KEYFIELD_STRIDE);
+    for (nr, asc) in keys {
+        let e = v.push(stores);
+        e.set_field_int(stores, ds::KEYFIELD_NR, i64::from(*nr));
+        e.set_field_bool(stores, ds::KEYFIELD_ASC, *asc);
     }
 }
 
@@ -1309,5 +1469,54 @@ mod tests {
         }
         assert!(saw_attrs, "some stdlib def should have attributes");
         assert!(saw_vars, "some stdlib def should have variables");
+    }
+
+    /// @PLAN54 D2a step 2 — materialize the real stdlib's database type schema
+    /// (`Stores.types`) into a `vector<DbType>` and verify it structurally:
+    /// the type count round-trips, every `DbType` name matches, and each
+    /// `Parts::Struct`'s field count survives.  (Full field-equivalence is the
+    /// step-3 `read_schema` job.)
+    #[test]
+    fn materialize_stdlib_schema_smoke() {
+        use crate::database::Parts;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let schema = &p.database.types;
+        assert!(
+            schema.len() > 50,
+            "stdlib schema should have many types, got {}",
+            schema.len()
+        );
+
+        let mut ir = Stores::new();
+        let _ids = register_ir_schema(&mut ir);
+        let host = Record::new(ir.database(16));
+        materialize_schema(&mut ir, &host, 0, schema);
+
+        let dst = host.field_recvec(0, ds::DBTYPE_STRIDE);
+        assert_eq!(dst.len(&ir) as usize, schema.len(), "type count");
+
+        let mut saw_struct = false;
+        for (i, t) in schema.iter().enumerate() {
+            let r = dst.get(i as u32, &ir);
+            assert_eq!(r.field_str(&ir, ds::DBTYPE_NAME), t.name, "type {i} name");
+            if let Parts::Struct(fields) = &t.parts {
+                let pr = r
+                    .field_recvec(ds::DBTYPE_PARTS, ds::DBPARTS_STRIDE)
+                    .get(0, &ir);
+                assert_eq!(pr.discriminant(&ir), ds::PT_STRUCT, "type {i} parts disc");
+                let fv = pr.field_recvec(ds::PTSTRUCT_FIELDS, ds::DBFIELD_STRIDE);
+                assert_eq!(
+                    fv.len(&ir) as usize,
+                    fields.len(),
+                    "type {i} ({}) field count",
+                    t.name
+                );
+                saw_struct = true;
+            }
+        }
+        assert!(saw_struct, "stdlib schema should have struct types");
     }
 }

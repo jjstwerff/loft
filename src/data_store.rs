@@ -319,6 +319,85 @@ pub(crate) const DATA_DEFINITIONS: u32 = 8; // vector<Definition>
 pub(crate) const IR_ROOT_REC: u32 = 1;
 pub(crate) const IR_ROOT_POS: u32 = 8;
 
+// ─── Database type schema (D2a) — `Stores.types` cached alongside the IR ──────
+//
+// Mirrors `src/database`: `DbType` (`database::Type`), `DbParts`
+// (`database::Parts`, 17 variants), `DbField` (`database::Field`), `DbContent`
+// (`keys::Content`), plus `EnumPair`/`KeyField` tuple-element records and the
+// `Bundle { data, types }` store root.  `Key` / `LinkedFieldGroup` are reused.
+
+/// `DbContent` (a field's default value) — enum record.
+pub(crate) const DBCONTENT_STRIDE: u32 = 16;
+pub(crate) const DC_LONG: u8 = 1;
+pub(crate) const DC_FLOAT: u8 = 2;
+pub(crate) const DC_SINGLE: u8 = 3;
+pub(crate) const DC_STR: u8 = 4;
+pub(crate) const DCLONG_V: u32 = 8; // integer (i64)
+pub(crate) const DCFLOAT_V: u32 = 8; // float
+pub(crate) const DCSINGLE_V: u32 = 4; // single
+pub(crate) const DCSTR_V: u32 = 4; // text
+
+/// `DbField` record (element of `Parts::Struct` / `EnumValue` field vectors).
+pub(crate) const DBFIELD_STRIDE: u32 = 28;
+pub(crate) const DBFIELD_CONTENT: u32 = 0; // u16 known_type
+pub(crate) const DBFIELD_POSITION: u32 = 8; // u16 byte offset
+pub(crate) const DBFIELD_NAME: u32 = 16;
+pub(crate) const DBFIELD_DEFAULT: u32 = 20; // vector<DbContent> (box-of-one)
+pub(crate) const DBFIELD_OTHER_INDEXES: u32 = 24; // vector<integer>
+
+/// `EnumPair` `(u16, text)` element of `Parts::Enum`.
+pub(crate) const ENUMPAIR_STRIDE: u32 = 12;
+pub(crate) const ENUMPAIR_NR: u32 = 0;
+pub(crate) const ENUMPAIR_NAME: u32 = 8;
+
+/// `KeyField` `(u16, bool)` element of a Sorted/Ordered/Index key list.
+pub(crate) const KEYFIELD_STRIDE: u32 = 9;
+pub(crate) const KEYFIELD_NR: u32 = 0;
+pub(crate) const KEYFIELD_ASC: u32 = 8;
+
+/// `DbParts` (`database::Parts`) — enum record, 17 variants.
+pub(crate) const DBPARTS_STRIDE: u32 = 24;
+pub(crate) const PT_BASE: u8 = 1;
+pub(crate) const PT_STRUCT: u8 = 2;
+pub(crate) const PT_ENUM: u8 = 3;
+pub(crate) const PT_ENUM_VALUE: u8 = 4;
+pub(crate) const PT_BYTE: u8 = 5;
+pub(crate) const PT_SHORT: u8 = 6;
+pub(crate) const PT_INT: u8 = 7;
+pub(crate) const PT_SHORT_RAW: u8 = 8;
+pub(crate) const PT_VECTOR: u8 = 9;
+pub(crate) const PT_ARRAY: u8 = 10;
+pub(crate) const PT_SORTED: u8 = 11;
+pub(crate) const PT_ORDERED: u8 = 12;
+pub(crate) const PT_HASH: u8 = 13;
+pub(crate) const PT_INDEX: u8 = 14;
+pub(crate) const PT_SPACIAL: u8 = 15;
+pub(crate) const PT_DB_REF: u8 = 16;
+pub(crate) const PT_CHILD_REC: u8 = 17;
+// `DbParts` field offsets (shared where variant shapes coincide).
+pub(crate) const PTSTRUCT_FIELDS: u32 = 4; // vector<DbField>
+pub(crate) const PTENUM_VALUES: u32 = 4; // vector<EnumPair>
+pub(crate) const PTENUMVALUE_VALUE: u32 = 8;
+pub(crate) const PTENUMVALUE_FIELDS: u32 = 4; // vector<DbField>
+pub(crate) const PTNUM_START: u32 = 8; // Byte/Short/Int/ShortRaw (i32)
+pub(crate) const PTNUM_NULLABLE: u32 = 7; // Byte/Short/Int/ShortRaw
+pub(crate) const PTCONTENT: u32 = 8; // Vector/Array/Sorted/Ordered/Hash/Index/Spacial/ChildRec
+pub(crate) const PTKEYS: u32 = 4; // Sorted/Ordered/Index (vector<KeyField>)
+pub(crate) const PTFIELDS: u32 = 4; // Hash/Spacial (vector<integer>)
+pub(crate) const PTINDEX_LEFT: u32 = 16;
+
+/// `DbType` (`database::Type`) record — `parents` is derived, not stored.
+pub(crate) const DBTYPE_STRIDE: u32 = 34;
+pub(crate) const DBTYPE_SIZE: u32 = 0; // u16
+pub(crate) const DBTYPE_ALIGN: u32 = 8; // u8
+pub(crate) const DBTYPE_NAME: u32 = 16;
+pub(crate) const DBTYPE_PARTS: u32 = 20; // vector<DbParts> (box-of-one)
+pub(crate) const DBTYPE_KEYS: u32 = 24; // vector<Key>
+pub(crate) const DBTYPE_FIELD_GROUPS: u32 = 28; // vector<LinkedFieldGroup>
+pub(crate) const DBTYPE_COMPLEX: u32 = 32;
+pub(crate) const DBTYPE_LINKED: u32 = 33;
+// `Bundle { data, types }` store-root consts land with step 4 (save/open wiring).
+
 /// The bit mask loft uses for a stored `boolean` field (`generation` emits
 /// `get_boolean(rec, off, 1)`).
 pub(crate) const BOOL_MASK: u8 = 1;
@@ -837,6 +916,36 @@ impl Record {
             .set_int(self.rec.rec, self.rec.pos + off, v);
     }
 
+    /// Read the `float` (f64) field at `off`.
+    #[must_use]
+    pub fn field_float(&self, stores: &Stores, off: u32) -> f64 {
+        stores
+            .store(&self.rec)
+            .get_float(self.rec.rec, self.rec.pos + off)
+    }
+
+    /// Write the `float` (f64) field at `off`.
+    pub fn set_field_float(&self, stores: &mut Stores, off: u32, v: f64) {
+        stores
+            .store_mut(&self.rec)
+            .set_float(self.rec.rec, self.rec.pos + off, v);
+    }
+
+    /// Read the `single` (f32) field at `off`.
+    #[must_use]
+    pub fn field_single(&self, stores: &Stores, off: u32) -> f32 {
+        stores
+            .store(&self.rec)
+            .get_single(self.rec.rec, self.rec.pos + off)
+    }
+
+    /// Write the `single` (f32) field at `off`.
+    pub fn set_field_single(&self, stores: &mut Stores, off: u32, v: f32) {
+        stores
+            .store_mut(&self.rec)
+            .set_single(self.rec.rec, self.rec.pos + off, v);
+    }
+
     /// Read the `boolean` field at `off`.
     #[must_use]
     pub fn field_bool(&self, stores: &Stores, off: u32) -> bool {
@@ -1312,5 +1421,89 @@ mod tests {
         assert_eq!(pos(ids.data, "definitions"), DATA_DEFINITIONS);
 
         assert_eq!(u32::from(stores.size(ids.node)), NODE_STRIDE);
+
+        // ── Database type schema (D2a) ──
+        assert_eq!(u32::from(stores.size(ids.db_content)), DBCONTENT_STRIDE);
+        assert_eq!(disc(ids.dc_long), DC_LONG);
+        assert_eq!(disc(ids.dc_float), DC_FLOAT);
+        assert_eq!(disc(ids.dc_single), DC_SINGLE);
+        assert_eq!(disc(ids.dc_str), DC_STR);
+        assert_eq!(pos(ids.dc_long, "v"), DCLONG_V);
+        assert_eq!(pos(ids.dc_float, "v"), DCFLOAT_V);
+        assert_eq!(pos(ids.dc_single, "v"), DCSINGLE_V);
+        assert_eq!(pos(ids.dc_str, "v"), DCSTR_V);
+
+        assert_eq!(u32::from(stores.size(ids.db_field)), DBFIELD_STRIDE);
+        assert_eq!(pos(ids.db_field, "content"), DBFIELD_CONTENT);
+        assert_eq!(pos(ids.db_field, "position"), DBFIELD_POSITION);
+        assert_eq!(pos(ids.db_field, "name"), DBFIELD_NAME);
+        assert_eq!(pos(ids.db_field, "default"), DBFIELD_DEFAULT);
+        assert_eq!(pos(ids.db_field, "other_indexes"), DBFIELD_OTHER_INDEXES);
+
+        assert_eq!(u32::from(stores.size(ids.enum_pair)), ENUMPAIR_STRIDE);
+        assert_eq!(pos(ids.enum_pair, "nr"), ENUMPAIR_NR);
+        assert_eq!(pos(ids.enum_pair, "name"), ENUMPAIR_NAME);
+
+        assert_eq!(u32::from(stores.size(ids.key_field)), KEYFIELD_STRIDE);
+        assert_eq!(pos(ids.key_field, "nr"), KEYFIELD_NR);
+        assert_eq!(pos(ids.key_field, "asc"), KEYFIELD_ASC);
+
+        assert_eq!(u32::from(stores.size(ids.db_parts)), DBPARTS_STRIDE);
+        assert_eq!(disc(ids.pt_base), PT_BASE);
+        assert_eq!(disc(ids.pt_struct), PT_STRUCT);
+        assert_eq!(disc(ids.pt_enum), PT_ENUM);
+        assert_eq!(disc(ids.pt_enum_value), PT_ENUM_VALUE);
+        assert_eq!(disc(ids.pt_byte), PT_BYTE);
+        assert_eq!(disc(ids.pt_short), PT_SHORT);
+        assert_eq!(disc(ids.pt_int), PT_INT);
+        assert_eq!(disc(ids.pt_short_raw), PT_SHORT_RAW);
+        assert_eq!(disc(ids.pt_vector), PT_VECTOR);
+        assert_eq!(disc(ids.pt_array), PT_ARRAY);
+        assert_eq!(disc(ids.pt_sorted), PT_SORTED);
+        assert_eq!(disc(ids.pt_ordered), PT_ORDERED);
+        assert_eq!(disc(ids.pt_hash), PT_HASH);
+        assert_eq!(disc(ids.pt_index), PT_INDEX);
+        assert_eq!(disc(ids.pt_spacial), PT_SPACIAL);
+        assert_eq!(disc(ids.pt_db_ref), PT_DB_REF);
+        assert_eq!(disc(ids.pt_child_rec), PT_CHILD_REC);
+        assert_eq!(pos(ids.pt_struct, "fields"), PTSTRUCT_FIELDS);
+        assert_eq!(pos(ids.pt_enum, "values"), PTENUM_VALUES);
+        assert_eq!(pos(ids.pt_enum_value, "value"), PTENUMVALUE_VALUE);
+        assert_eq!(pos(ids.pt_enum_value, "fields"), PTENUMVALUE_FIELDS);
+        // The four narrow-integer variants share (start, nullable).
+        for v in [ids.pt_byte, ids.pt_short, ids.pt_int, ids.pt_short_raw] {
+            assert_eq!(pos(v, "start"), PTNUM_START);
+            assert_eq!(pos(v, "nullable"), PTNUM_NULLABLE);
+        }
+        // Every content-carrying variant shares `content` at PTCONTENT.
+        for v in [
+            ids.pt_vector,
+            ids.pt_array,
+            ids.pt_sorted,
+            ids.pt_ordered,
+            ids.pt_hash,
+            ids.pt_index,
+            ids.pt_spacial,
+            ids.pt_child_rec,
+        ] {
+            assert_eq!(pos(v, "content"), PTCONTENT);
+        }
+        for v in [ids.pt_sorted, ids.pt_ordered, ids.pt_index] {
+            assert_eq!(pos(v, "keys"), PTKEYS);
+        }
+        for v in [ids.pt_hash, ids.pt_spacial] {
+            assert_eq!(pos(v, "fields"), PTFIELDS);
+        }
+        assert_eq!(pos(ids.pt_index, "left"), PTINDEX_LEFT);
+
+        assert_eq!(u32::from(stores.size(ids.db_type)), DBTYPE_STRIDE);
+        assert_eq!(pos(ids.db_type, "size"), DBTYPE_SIZE);
+        assert_eq!(pos(ids.db_type, "align"), DBTYPE_ALIGN);
+        assert_eq!(pos(ids.db_type, "name"), DBTYPE_NAME);
+        assert_eq!(pos(ids.db_type, "parts"), DBTYPE_PARTS);
+        assert_eq!(pos(ids.db_type, "keys"), DBTYPE_KEYS);
+        assert_eq!(pos(ids.db_type, "field_groups"), DBTYPE_FIELD_GROUPS);
+        assert_eq!(pos(ids.db_type, "complex"), DBTYPE_COMPLEX);
+        assert_eq!(pos(ids.db_type, "linked"), DBTYPE_LINKED);
     }
 }

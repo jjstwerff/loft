@@ -111,6 +111,15 @@ pub struct Field {
     pub(self) other_indexes: Vec<u16>, // For now only fields on the same record
 }
 
+impl Field {
+    /// @PLAN54 D2a read seam — `other_indexes` is module-private; expose it
+    /// `pub(crate)` so the schema materializer (`crate::ir_store`) can cache it.
+    #[must_use]
+    pub(crate) fn other_indexes(&self) -> &[u16] {
+        &self.other_indexes
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Parts {
     Base,                              // One of the simple base types or text.

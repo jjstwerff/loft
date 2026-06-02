@@ -1774,6 +1774,27 @@ pub struct Type {
 }
 
 impl Type {
+    // @PLAN54 D2a read seam — `complex`/`linked`/`size`/`align` are `pub(super)`
+    // (computed by `finish`); expose them `pub(crate)` so the schema
+    // materializer (`crate::ir_store`) can cache them.  `parents` stays private
+    // (a derived back-reference index, rebuilt on load, never serialized).
+    #[must_use]
+    pub(crate) fn is_complex(&self) -> bool {
+        self.complex
+    }
+    #[must_use]
+    pub(crate) fn is_linked_flag(&self) -> bool {
+        self.linked
+    }
+    #[must_use]
+    pub(crate) fn size_bytes(&self) -> u16 {
+        self.size
+    }
+    #[must_use]
+    pub(crate) fn align_bytes(&self) -> u8 {
+        self.align
+    }
+
     pub(super) fn new(name: &str, parts: Parts, size: u16) -> Type {
         Type {
             name: name.to_string(),
