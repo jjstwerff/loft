@@ -172,11 +172,22 @@ impl Stores {
         let al = db.store_nr;
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         let store = &mut self.allocations[al as usize];
+        if std::env::var("FREE_DBG").is_ok() {
+            eprintln!(
+                "[free_named] #{al} {name:>10} rc={} already_free={}",
+                store.ref_count, store.free
+            );
+        }
         if store.free {
             return; // Already freed — no-op (replaces Issue #120 tolerance hack).
         }
         // Reference counting: decrement and only free when rc drops to 0.
-        if store.ref_count > 1 {
+        // RC_OFF (plan-57 experiment): force the free path — treat every store as
+        // single-owner.  Tests whether rc gates the cluster-I block-exit free, and
+        // doubles as the rc-removal probe (what breaks reveals rc's real users,
+        // chiefly closure capture).
+        let rc_off = std::env::var("RC_OFF").is_ok();
+        if store.ref_count > 1 && !rc_off {
             store.ref_count -= 1;
             if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
                 let label = if name.is_empty() { "" } else { name };
