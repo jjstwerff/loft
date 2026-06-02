@@ -7,13 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Two crashes the store-lifetime probing turned up — *separate* from the
 confinement work, characterised here so they're fixable from a clear scope.
 **Status:** Bug 1 **fixed** (`19eebc98`).  Bug 2 is a *sibling discovery*, **not**
-part of this (store-lifetime / Goal E) investigation — it surfaced here but is
-being investigated as its own scoped case (see
+part of this (store-lifetime / Goal E) investigation — it surfaced here but was
+investigated as its own scoped case (see
 [plans/README.md § Sibling bugs are discoveries](../../../../README.md#sibling-bugs-are-discoveries-to-record-not-cases-to-fix-in-place)).
-A first fix attempt (a rejecting diagnostic) was **reverted** — it was built on a
-coarse characterisation and would have broken `tests/scripts/81` (parent-var
-*reads* are legal + P245-guarded; only *writes* corrupt).  Re-investigating now
-from a proper probe battery, observation-first, both backends (verdict below).
+**Soundness floor LANDED:** every unbuilt/broken capture (writing or mutating an
+enclosing local, capturing a parameter) is now a clean **compile error on both
+backends**; parent-var *reads* stay legal (the P245 surface test-81 guards).  The
+full capture *feature* (copy-out / channels) stays deferred to its driving consumer
+(the server/client library).  See the verdict's **Implementation** section for the
+rule, the residuals, and the regression test.
 
 ## Bug 1 — returning a tuple that contains a vector CRASHES (`store.rs:1374`)
 
@@ -72,32 +74,42 @@ The bug-vs-feature framing holds; the *boundary* is narrower than first written.
   the **broken set** — writes to parent locals, plus any read position later shown
   to still crash — while leaving parent-var *reads* (which P245 fixed) compiling.
 
-  Implementation state: the first fix attempt was **reverted** (tree clean) — it
-  was scope-creep into this investigation and was built on the coarse table, so it
-  rejected *all* enclosing-scope references and would have failed test 81.  The
-  design notes survive for when this case is investigated properly: a complete
-  read+write var-ref walk (`Set`/`TuplePut` *targets* matter — `code_references_var`
-  drops them, so it can't be reused) + a `parse_parallel` `base = self.vars.count()`
-  snapshot (nr < base ⇒ enclosing local), narrowed to **writes** (plus any read
-  position the probes show still crashes).  Sub-decision settled: hard `Error` (a
-  `Warning` leaves a construct that still compiles to a segfault).
+  **Implementation — LANDED** (`src/parser/control.rs::reject_unsound_parallel_captures`,
+  fired from `parse_parallel`; regression `tests/scripts/170-parallel-capture-soundness.loft`;
+  both backends).  Mapped against a 67-probe battery, then built precise:
+  - **Rule.** An arm may only *read* enclosing state.  Reject (compile `Error`):
+    (a) a **write/mutation** of an enclosing user local — detected as a `Set`
+    target or the host (descended through `args[0]`) of an in-place mutating op
+    (`OpAppendVector`/`OpSetInt`/…); (b) capture of a **parameter** (`is_argument`).
+  - **The hard part was telling enclosing from arm-local.**  The two-pass parser
+    pre-populates the whole function's var table in pass 1, so `vars.count()` /
+    var-nr ordering can't separate them.  The working signal is **`is_defined`
+    snapshotted at the block's opening brace** — a var defined before the block is
+    enclosing; one first defined inside an arm is arm-local.  Compiler temps
+    (`_`/`#` names) and for-loop vars (`was_loop_var`) are excluded so loop/format
+    desugar never false-flags.
+  - **Residuals (documented, not regressions):** `l01` — passing a captured heap
+    value to a function that *mutates* it is transitive and still faults at runtime
+    (needs callee analysis).  `i04` (`vv[0] += [2]`) — a `data.rs:3036
+    "Unknown definition"` **compile-time codegen assertion that fires outside
+    `parallel {}` too**, so it is a *separate* nested-vec element-compound-assign
+    bug, not a capture issue (new sibling discovery).
+  - **Candidate for a direct machinery fix later:** param-read SIGSEGVs only at
+    *teardown* (the read value is correct) — likely a small frame-cleanup bug that
+    could promote param-read to *sound* rather than rejected, when a consumer wants
+    it.
 
-  **Next step — observation-first, no fix yet:** run the 13-probe battery
-  (`/tmp/par_probe/`, both backends) to map the true read/write × position ×
-  scope-depth × type boundary.  Hypothesis under test: P245 fixed reads wholesale
-  ⇒ rejecting *writes* only is the complete, test-81-safe boundary.  Then decide
-  the permanent home for the probes + the narrowed fix (its own scoped case, per
-  the sibling-bug rule).
+- **The feature (supporting writes) — deferred to its consumer, not built.**
+  The real use case for `parallel {}` (vs `for…par`, which owns data-parallelism)
+  is **server/client async I/O**: long-lived heterogeneous I/O arms that
+  *coordinate* (accept-arm → worker-arms, shared shutdown).  The right primitive is
+  almost certainly **message-passing / channels** between isolated arms (keeps
+  "no shared mutable state ⇒ no data race", Goal A/E), not parent-writes — so the
+  design must be driven by the server/client library consumer, per the dogfood
+  cadence.  Until then the surface errors honestly (the floor above).  The unbuilt
+  feature errors at compile time *by design* — you opt into a feature by building
+  it, not by the grammar accepting the syntax.
 
-- **The feature (supporting writes) — deferrable, an enhancement not a bug.**
-  Making `parallel { x = parent; }` *work* needs real concurrency-semantics design:
-  copy-in/copy-out vs shared+locks; two arms writing the same parent var (race /
-  last-writer / reduction model); the likely vehicle is the existing closure-capture
-  machinery (the `par(...)`/`par_light(...)` builtins already capture via closure
-  records + `inc_rc`), but wiring explicit `parallel {}` arms to it changes the
-  block's semantics, not just its codegen.  That alone routes to a THREADING slot.
-
-**Next action:** probe the read boundary → narrow the diagnostic to the broken set
-→ verify test 80 + test 81 still pass → promote `parallel_read_parentvar_SIGSEGV.loft`
-and `parallel_assign_arms_WRONG.loft` to expect-compile-error tests.  The write
-*feature* is the only future-routed item.
+**Done:** soundness floor landed (compile errors for the unbuilt surface, both
+backends; regression `tests/scripts/170`).  **Deferred:** the channel/coordination
+model, consumer-driven by `lib_plans/future/08-server` + `10-game-client`.

@@ -40,6 +40,57 @@ fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
     }
 }
 
+/// Why an enclosing-scope capture inside a `parallel {}` arm is rejected.
+/// See `parse_parallel` — each arm runs in an isolated worker (read-only heap
+/// clone + private stack), so only *reading* an enclosing local is sound.
+#[derive(Clone, Copy, PartialEq)]
+enum ParViolation {
+    /// Capturing a function parameter (read or write) — SIGSEGVs at teardown.
+    Param,
+    /// Writing or mutating an enclosing local — write is silently dropped
+    /// (scalar/text) or crashes on the read-only store clone (heap).
+    Mutation,
+}
+
+/// True for the IR ops that MUTATE their host — the var reachable from the
+/// op's `args[0]` spine.  `Set(v, _)` is handled separately (the target var is
+/// the node's first field); these are the in-place / element / field forms that
+/// hide the host inside a read-projection chain.  (See the plan-57 capture
+/// investigation for the exhaustive shape list.)
+fn is_mutating_op(name: &str) -> bool {
+    matches!(
+        name,
+        "OpSetInt"
+            | "OpSetByte"
+            | "OpSetShort"
+            | "OpSetInt4"
+            | "OpSetFloat"
+            | "OpSetSingle"
+            | "OpSetEnum"
+            | "OpSetCharacter"
+            | "OpSetText"
+            | "OpSetKeyed"
+            | "OpReplaceKeyed"
+            | "OpClearKeyed"
+            | "OpAppendVector"
+            | "OpClearVector"
+            | "OpNewRecord"
+            | "OpFinishRecord"
+            | "OpCopyRecord"
+    )
+}
+
+/// Descend a mutating op's host expression (`args[0]`) through any nesting of
+/// read projections (`OpGetVector`/`OpVectorRef`/`OpGetRecord`/`OpGetField`/
+/// `OpGetInt`/…) to the base `Var(nr)` it ultimately mutates.
+fn base_host_var(node: &Value) -> Option<u16> {
+    match node.unspan() {
+        Value::Var(v) => Some(*v),
+        Value::Call(_, args) if !args.is_empty() => base_host_var(&args[0]),
+        _ => None,
+    }
+}
+
 /// A7.1: walk a body-tail expression and report whether it ends in
 /// a literal `Value::Tuple(...)` at any reachable tail position.  Used
 /// by `block_result` to decide whether the synthetic-struct rewrite
@@ -4338,6 +4389,19 @@ impl Parser {
     /// Each semicolon-separated expression in the block becomes one concurrent arm.
     pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
         self.lexer.token("{");
+        // Every enclosing-scope var has nr < `base`; an arm-declared local gets
+        // nr >= `base`.  Used by the capture check to tell an enclosing capture
+        // from a purely arm-local var.
+        // Snapshot which vars are already DEFINED at the block's opening brace.
+        // The two-pass parser pre-populates the whole function's var table in
+        // pass 1, so var-nr ordering can't tell an enclosing var from an
+        // arm-local one — but in this (non-first) pass `is_defined` is set in
+        // source order, so a var defined *before* the block is enclosing and one
+        // first defined *inside* an arm is arm-local.  Params read as defined
+        // (set by `become_argument`), so they count as enclosing too.
+        let enclosing: Vec<bool> = (0..self.vars.count())
+            .map(|v| self.vars.is_defined(v))
+            .collect();
         let mut arms = Vec::new();
         while !self.lexer.peek_token("}") {
             let mut arm = Value::Null;
@@ -4348,9 +4412,169 @@ impl Parser {
             self.lexer.has_token(";");
         }
         self.lexer.token("}");
-        if arms.is_empty() && !self.first_pass {
-            diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+        if !self.first_pass {
+            if arms.is_empty() {
+                diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+            }
+            self.reject_unsound_parallel_captures(&arms, &enclosing);
         }
         *code = Value::Parallel(arms);
+    }
+
+    /// Soundness floor for `parallel {}` (plan-57 Bug 2).  An arm runs in an
+    /// isolated worker — a read-only clone of the heap plus a private stack — so
+    /// only *reading* an enclosing local is sound (the value is copied in).
+    /// Everything else is the unbuilt/broken surface and must be a clean compile
+    /// error, not a silent no-op or a crash:
+    ///   * **writing or mutating** an enclosing local — the write is dropped
+    ///     (scalar/text) or crashes on the read-only store clone (heap);
+    ///   * **capturing a parameter** (read or write) — SIGSEGVs at teardown.
+    /// Reads of enclosing locals (any position/type) stay legal — that is the
+    /// proven-sound P245 surface that test-81 guards.  Known residual: passing a
+    /// captured heap value to a function that mutates it is transitive and is not
+    /// caught here (it still faults at runtime); catching it needs callee
+    /// analysis.  The full capture model is deferred to its driving consumer (the
+    /// server/client library) — see the plan-57 deferred-follow-ups.
+    fn reject_unsound_parallel_captures(&mut self, arms: &[Value], enclosing: &[bool]) {
+        let mut viol: Vec<(u16, ParViolation)> = Vec::new();
+        for arm in arms {
+            self.collect_parallel_violations(arm, enclosing, &mut viol);
+        }
+        let mut reported: Vec<u16> = Vec::new();
+        for (v, _) in &viol {
+            if reported.contains(v) {
+                continue;
+            }
+            reported.push(*v);
+            // A var flagged as both Param and Mutation reads clearest as Param.
+            let is_param = viol
+                .iter()
+                .any(|(v2, k)| v2 == v && *k == ParViolation::Param);
+            let name = self.vars.name(*v).to_string();
+            if is_param {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot capture function parameter '{name}' inside a parallel arm — \
+                     a parallel arm runs in an isolated worker with no safe access to the \
+                     parent frame; copy '{name}' into a local before the block, or pass it \
+                     to a function-call arm"
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot write or mutate enclosing-scope variable '{name}' inside a \
+                     parallel arm — an arm runs in an isolated worker, so the write does not \
+                     propagate (and heap mutation crashes); a parallel arm may only READ \
+                     enclosing state, not write it"
+                );
+            }
+        }
+    }
+
+    /// Recursive walk collecting capture violations in one arm (see
+    /// `reject_unsound_parallel_captures`).  Reads of enclosing non-parameter
+    /// locals are sound and are never flagged.
+    fn collect_parallel_violations(
+        &self,
+        node: &Value,
+        encl: &[bool],
+        out: &mut Vec<(u16, ParViolation)>,
+    ) {
+        match node.unspan() {
+            // Direct assignment target (scalar `=`/`+=`, vector concat-reassign).
+            Value::Set(v, rhs) => {
+                self.note_mutation(*v, encl, out);
+                self.collect_parallel_violations(rhs, encl, out);
+            }
+            Value::TuplePut(v, _, rhs) => {
+                self.note_mutation(*v, encl, out);
+                self.collect_parallel_violations(rhs, encl, out);
+            }
+            // In-place / element / field mutation hides the host in args[0].
+            Value::Call(d, args) => {
+                if is_mutating_op(&self.data.def(*d).name) {
+                    if let Some(host) = args.first().and_then(base_host_var) {
+                        self.note_mutation(host, encl, out);
+                    }
+                }
+                for a in args {
+                    self.collect_parallel_violations(a, encl, out);
+                }
+            }
+            // CallRef's first field is the var holding the fn-ref — a capture if
+            // it is an enclosing parameter.
+            Value::CallRef(v, args) => {
+                self.note_param(*v, encl, out);
+                for a in args {
+                    self.collect_parallel_violations(a, encl, out);
+                }
+            }
+            // Any reference to a var: flagged only if it is a captured parameter.
+            Value::Var(v) | Value::TupleGet(v, _) | Value::FnRefDnr(v) => {
+                self.note_param(*v, encl, out);
+            }
+            Value::FnRef(_, v, _) => self.note_param(*v, encl, out),
+            // Container recursion.
+            Value::Insert(ls) | Value::Tuple(ls) | Value::Parallel(ls) => {
+                ls.iter()
+                    .for_each(|x| self.collect_parallel_violations(x, encl, out));
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                b.operators
+                    .iter()
+                    .for_each(|x| self.collect_parallel_violations(x, encl, out));
+            }
+            Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+                self.collect_parallel_violations(b, encl, out);
+            }
+            Value::If(c, t, e) => {
+                self.collect_parallel_violations(c, encl, out);
+                self.collect_parallel_violations(t, encl, out);
+                self.collect_parallel_violations(e, encl, out);
+            }
+            Value::Iter(_, a, b, c) => {
+                self.collect_parallel_violations(a, encl, out);
+                self.collect_parallel_violations(b, encl, out);
+                self.collect_parallel_violations(c, encl, out);
+            }
+            _ => {}
+        }
+    }
+
+    /// True if `v` was already defined when the parallel block opened — i.e. it
+    /// is an enclosing-scope variable, not one declared inside an arm.
+    fn is_enclosing(v: u16, encl: &[bool]) -> bool {
+        (v as usize) < encl.len() && encl[v as usize]
+    }
+
+    /// Flag a write/mutation of an enclosing **user** local.  Compiler temps
+    /// (`__work`/`__vdb`) carry the codegen for reads/format-strings and are not
+    /// user captures.
+    fn note_mutation(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
+        if Self::is_enclosing(v, encl) && self.is_user_var(v) {
+            out.push((v, ParViolation::Mutation));
+        }
+    }
+
+    /// Flag a capture of an enclosing **parameter** (read or write both fault).
+    fn note_param(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
+        if Self::is_enclosing(v, encl) && self.is_user_var(v) && self.vars.is_argument(v) {
+            out.push((v, ParViolation::Param));
+        }
+    }
+
+    /// Whether `v` is a user variable that an arm could genuinely capture —
+    /// excludes the codegen artefacts that `is_defined` would otherwise misread
+    /// as enclosing:
+    ///   * compiler temps, named with a leading `_` (`__work`, `__vdb`,
+    ///     `_match_subj`, `_elm`, `_vector`) or a `#` (`i#index`, `i#next`);
+    ///   * for-loop iteration variables (`was_loop_var`) — the loop desugar
+    ///     marks them defined in pass 1, but the loop's own advance of its var
+    ///     must not read as an enclosing write.
+    fn is_user_var(&self, v: u16) -> bool {
+        let n = self.vars.name(v);
+        !n.starts_with('_') && !n.contains('#') && !self.vars.was_loop_var(v)
     }
 }

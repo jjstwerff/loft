@@ -172,16 +172,20 @@ this plan's thesis
    distrust as the statistical gloss) + the experiment design in
    [`fix-design-store-lifetime.md` § Tail-end](fix-design-store-lifetime.md#tail-end-experiment--disable-store-ref-counting-once-scoping-is-correct).
 
-2. **Fix the `parallel {}` capture cases** — Goal A + Goal D; **its own scoped
-   case**, not this plan's store-lifetime work.  The probe battery
-   ([`probes/bugs/`](probes/bugs/)) mapped it fully: **native silently no-ops arm
-   bodies** (the `pg1` no-capture probe never prints `ARM-RAN`); interpret has ~5
-   *deterministic* modes — read-into-arm-local garbage, scalar/text write
-   silent-loss, **heap-mutation crash** on the read-only worker clone
-   (`clone_locked_for_worker`), cross-scope-depth SIGSEGV — plus a probable **3rd
-   sibling** (`OpConstLongText`-obsolete panic on the param-write path).  Earns its
-   own plan (native codegen + interpret runtime + the sibling); a `cross_mode!`
-   parallel-capture matrix is its regression net.
+2. **`parallel {}` capture — soundness floor LANDED; feature deferred.**  Goal A +
+   Goal D; **its own scoped case**, not this plan's store-lifetime work.  A
+   67-probe battery mapped it fully ([`probes/bugs/`](probes/bugs/)): native
+   silently no-ops arm bodies; interpret has ~5 deterministic failure modes
+   (scalar/text write silent-loss, heap-mutation crash on the read-only worker
+   clone, cross-scope SIGSEGV, param SIGSEGV).  **Built:** a precise compile-time
+   diagnostic (`reject_unsound_parallel_captures`) that rejects every unbuilt
+   capture (writes/mutation/param) on both backends while leaving reads legal —
+   regression `tests/scripts/170`.  **Deferred:** the capture *feature* itself
+   (channels/coordination), whose real use case is **server/client async I/O** and
+   must be driven by that consumer (`lib_plans` 08-server / 10-game-client), not
+   designed abstractly.  Residual sibling discovered: `vv[0] += [2]` hits a
+   `data.rs:3036` codegen assertion *outside* `parallel {}` too — a separate
+   nested-vec element-compound-assign bug.
 
 3. **Nightly differential backend-parity sweep** — the **Goal D standing
    detector** (A has the sanitizer, E has `LOFT_STORE_GUARD`, D has none).  *Gate:*
