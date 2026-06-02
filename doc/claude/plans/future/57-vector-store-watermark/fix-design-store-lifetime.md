@@ -297,3 +297,26 @@ either (a) a scoping gap to fix (the bug rc hid), or (b) a genuine closure-captu
 dependency to handle explicitly.  Outcome = either rc is droppable (delete the mechanism)
 or the exact residual set of stores that still need it.  Own plan/branch — careful
 refactor.  See [[project_drop_store_refcount]] + [[project_predictable_memory_model]].
+
+### Diagnostic run — RC_OFF over the full suite (2026-06, gate now open)
+
+Reclaim is the default and the Goal-E guard is silent, so the gate is met.  `RC_OFF=1`
+(`free_named` frees at rc≤0 always) over the full **1923-test** suite, both backends, fails
+**only 4 test groups** — confirming rc is droppable for essentially everything.  The residual
+resolves to exactly **two root causes**:
+
+1. **Closure capture (the genuine rc dependency).**  `p22_phase03_multi_factory` +
+   `wrap loft_suite`: a `make() -> fn()` factory returns a closure capturing a mutable cell
+   `n`; the cell must outlive `make()`'s frame.  rc keeps it alive (`inc_rc` on capture);
+   `RC_OFF` frees it when the factory frame exits → the closure reads a freed cell
+   (`store()` UAF, `allocation.rs:472`).  **This is the load-bearing rc use** — removing rc
+   requires making a closure OWN its captured cells (explicit capture-cell lifetime tied to
+   the closure value, not the defining scope).  The substantial sub-project.
+2. **One text-vector scoping gap.**  `03-text.loft` leaks `kt=29 main_vector<text>×1` under
+   `RC_OFF` — **no closures** (a plain `vector<text>` build/reassign does not repro), so a
+   specific shape whose scope-free relied on rc.  An independent, smaller fix.
+
+**So rc is NOT a simple delete.**  The path: (Phase A) locate + fix the `03-text` scoping
+gap; (Phase B) closure-cell ownership so capture works without rc — the real blocker;
+(Phase C) delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc` and verify both backends.
+Phase B is its own design (how a closure value owns its cells).
