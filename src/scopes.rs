@@ -166,6 +166,11 @@ pub fn check(data: &mut Data) {
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
         let free_ref_nr = data.def_nr("OpFreeRef");
+        // Plan-57 cluster I: store-lifetime guard (diagnostic, gated).
+        if std::env::var("LOFT_STORE_GUARD").is_ok() {
+            let d = &data.definitions[d_nr as usize];
+            store_lifetime_guard(&d.code, &d.variables, free_ref_nr, &d.name);
+        }
         let code_ref = data.definitions[d_nr as usize].code.clone();
         let mut seq = 0u32;
         compute_intervals(
@@ -3063,4 +3068,150 @@ mod par_deep_tests {
     // full Function with a promoted hidden attribute, which the
     // parser does multi-step; the integration test is the cleaner
     // verification.
+}
+
+// ── Plan-57 cluster I: store-lifetime guard (diagnostic) ─────────────────────
+//
+// Fires (under LOFT_STORE_GUARD) when a vector local's references are all
+// confined to one non-loop nested block, yet its backing `__vdb_N` store is
+// scoped to an ancestor (function) and so frees late — the lifetime model
+// under-freeing a block-confined store.  A detector for the watermark; once
+// the model scopes such stores to their block it goes silent.
+
+#[derive(Clone, Copy, PartialEq)]
+enum GConfine {
+    Unseen,
+    Block(u16),
+    Escaped,
+}
+
+impl GConfine {
+    fn join(self, other: GConfine) -> GConfine {
+        match (self, other) {
+            (GConfine::Escaped, _) | (_, GConfine::Escaped) => GConfine::Escaped,
+            (GConfine::Unseen, s) | (s, GConfine::Unseen) => s,
+            (GConfine::Block(a), GConfine::Block(b)) if a == b => GConfine::Block(a),
+            _ => GConfine::Escaped,
+        }
+    }
+}
+
+fn guard_confine(node: &Value, target: u16, free_ref_nr: u32, cur: Option<u16>, in_loop: bool, acc: &mut GConfine) {
+    let site = match cur {
+        Some(s) if !in_loop => GConfine::Block(s),
+        _ => GConfine::Escaped,
+    };
+    match node {
+        Value::Var(v) if *v == target => *acc = acc.join(site),
+        Value::Set(v, val) => {
+            if *v == target && !matches!(val.unspan(), Value::Null) {
+                *acc = acc.join(site);
+            }
+            guard_confine(val, target, free_ref_nr, cur, in_loop, acc);
+        }
+        Value::Call(op, args) => {
+            if *op == free_ref_nr && args.len() == 1 && matches!(args[0].unspan(), Value::Var(v) if *v == target) {
+                return;
+            }
+            for a in args {
+                guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
+            }
+        }
+        Value::Block(bl) => {
+            let nc = if in_loop { None } else { Some(bl.scope) };
+            for op in &bl.operators {
+                guard_confine(op, target, free_ref_nr, nc, in_loop, acc);
+            }
+        }
+        Value::Loop(lp) => {
+            for op in &lp.operators {
+                guard_confine(op, target, free_ref_nr, cur, true, acc);
+            }
+        }
+        Value::If(t, a, b) => {
+            guard_confine(t, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(b, target, free_ref_nr, cur, in_loop, acc);
+        }
+        Value::Iter(idx, c, n, e) => {
+            if *idx == target {
+                *acc = acc.join(site);
+            }
+            guard_confine(c, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(n, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(e, target, free_ref_nr, cur, in_loop, acc);
+        }
+        Value::CallRef(v, args) => {
+            if *v == target {
+                *acc = acc.join(site);
+            }
+            for a in args {
+                guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
+            }
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => guard_confine(v, target, free_ref_nr, cur, in_loop, acc),
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            for op in ops {
+                guard_confine(op, target, free_ref_nr, cur, in_loop, acc);
+            }
+        }
+        Value::TupleGet(v, _) if *v == target => *acc = acc.join(site),
+        Value::TuplePut(v, _, inner) => {
+            if *v == target {
+                *acc = acc.join(site);
+            }
+            guard_confine(inner, target, free_ref_nr, cur, in_loop, acc);
+        }
+        Value::Span(b) => guard_confine(&b.1, target, free_ref_nr, cur, in_loop, acc),
+        Value::ParFor(b) => {
+            guard_confine(&b.input, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(&b.worker, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(&b.threads, target, free_ref_nr, cur, in_loop, acc);
+            guard_confine(&b.body, target, free_ref_nr, cur, in_loop, acc);
+        }
+        _ => {}
+    }
+}
+
+/// Returns the number of block-confined vector stores that are scoped late.
+/// Prints each under LOFT_STORE_GUARD.
+fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
+    let mut fired = 0usize;
+    for vdb in 0..vars.count() {
+        if !vars.name(vdb).starts_with("__vdb") {
+            continue;
+        }
+        // single backed local: exactly one non-arg, non-captured var with dep == [vdb]
+        let mut backed: Option<u16> = None;
+        let mut ambiguous = false;
+        for v in 0..vars.count() {
+            if vars.tp(v).depend().contains(&vdb) {
+                if vars.tp(v).depend().len() != 1 || vars.is_argument(v) || vars.is_captured(v) || backed.is_some() {
+                    ambiguous = true;
+                    break;
+                }
+                backed = Some(v);
+            }
+        }
+        if ambiguous {
+            continue;
+        }
+        let Some(local) = backed else {
+            continue;
+        };
+        let mut acc = GConfine::Unseen;
+        guard_confine(code, local, free_ref_nr, None, false, &mut acc);
+        if let GConfine::Block(b) = acc
+            && vars.scope(vdb) != b
+        {
+            eprintln!(
+                "[store-guard] {fn_name}: store {} (local '{}') confined to block scope {b} but stored at scope {} — frees late",
+                vars.name(vdb),
+                vars.name(local),
+                vars.scope(vdb),
+            );
+            fired += 1;
+        }
+    }
+    fired
 }
