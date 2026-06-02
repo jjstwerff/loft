@@ -126,6 +126,25 @@ past it.  We hold our own claims to the exceptionless-transparency standard loft
 holds its memory model to — because a team that tolerates hidden machinery in its
 reasoning cannot credibly ship a language whose promise is no-hidden-machinery.
 
+### Preserve a failed/partial attempt as a diff + hash — don't revert it to a summary
+
+When an attempt **works partially or fails informatively**, the instinct to
+`git`-revert it is a trap: it discards the one artifact that teaches — the actual
+code, whose behaviour under the tracer you can re-examine — and leaves only a
+degraded prose summary.  This plan's own history is the proof: two cluster-I/III
+reverts came back as *misdiagnoses* (rc, then "timing") precisely because the work
+was thrown away and re-derived from a summary.  **We learn from failures; we do
+not hide them.**
+
+So instead of reverting, **preserve the attempt as a diff pinned to the exact
+build hash, inside the plan** (`experiments/<name>.diff` + a `.md` with
+`git checkout <hash> && git apply <diff>`, what it does, and the *real* lessons —
+see [`57-vector-store-watermark/experiments/`](future/57-vector-store-watermark/experiments/)).
+A future session re-applies it verbatim and studies the live behaviour rather than
+re-deriving from a degraded copy.  Don't ship a known-broken or oracle-fooling
+state to `main`; the diff is the durable, re-appliable record, and the working
+code can stay uncommitted in-tree to continue from.
+
 ### When a problem should escalate to an investigation plan
 
 Just *fixing* the bug (focused fix + regression + commit, after the edge-probe
