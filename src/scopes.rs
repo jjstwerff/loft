@@ -254,6 +254,11 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
 }
 
 pub fn check(data: &mut Data) {
+    // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
+    // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
+    // functions (a cross-function wrong-store free mismatches).
+    let tag_mode = std::env::var("LOFT_STORE_TAG").is_ok();
+    let mut tag_counter = 1u16;
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
             continue;
@@ -309,6 +314,23 @@ pub fn check(data: &mut Data) {
             let gf_nr = data.def_nr("OpGetField");
             let d = &mut data.definitions[d_nr as usize];
             lastuse_free_spike(&mut d.code, &mut d.variables, db_nr, gf_nr, free_ref_nr);
+        }
+        // Plan-57 store-identity gate (Phase 2.5): rewrite store ops to verifying
+        // variants (gated; no-op in normal builds).
+        if tag_mode {
+            let db_nr = data.def_nr("OpDatabase");
+            let store_tag_nr = data.def_nr("OpStoreTag");
+            let free_ref_tag_nr = data.def_nr("OpFreeRefTag");
+            let mut ids: HashMap<u16, u16> = HashMap::new();
+            tag_stores(
+                &mut data.definitions[d_nr as usize].code,
+                db_nr,
+                free_ref_nr,
+                store_tag_nr,
+                free_ref_tag_nr,
+                &mut ids,
+                &mut tag_counter,
+            );
         }
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
@@ -3812,6 +3834,96 @@ fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: 
     }
     let _ = vars;
     count
+}
+
+/// Per-function allocation-site id for a store-owning var (1-based; 0 is the
+/// "untagged" sentinel). Stable within a function so a var's `OpDatabase` and its
+/// `OpFreeRef` share the same id; the global `counter` keeps ids unique across
+/// functions so a cross-function wrong-store free mismatches.
+fn store_site_id(v: u16, ids: &mut HashMap<u16, u16>, counter: &mut u16) -> u16 {
+    *ids.entry(v).or_insert_with(|| {
+        let id = *counter;
+        *counter = counter.wrapping_add(1);
+        if *counter == 0 {
+            *counter = 1;
+        }
+        id
+    })
+}
+
+/// Plan-57 store-identity gate (Phase 2.5) — gated IR post-pass (`LOFT_STORE_TAG`).
+///
+/// Rewrites store ops to their verifying variants so a free can be checked against
+/// the allocation that owns the store: insert `OpStoreTag(vdb, id)` right after each
+/// `OpDatabase(vdb, …)`, and replace `OpFreeRef(vdb)` with `OpFreeRefTag(vdb, id)`.
+/// Normal builds (no env) never run this, so the bytecode stays byte-identical.
+#[allow(clippy::too_many_arguments)]
+fn tag_stores(
+    code: &mut Value,
+    db_nr: u32,
+    fr_nr: u32,
+    store_tag_nr: u32,
+    free_ref_tag_nr: u32,
+    ids: &mut HashMap<u16, u16>,
+    counter: &mut u16,
+) {
+    match code {
+        Value::Block(bl) | Value::Loop(bl) => {
+            let mut i = 0;
+            while i < bl.operators.len() {
+                tag_stores(
+                    &mut bl.operators[i],
+                    db_nr,
+                    fr_nr,
+                    store_tag_nr,
+                    free_ref_tag_nr,
+                    ids,
+                    counter,
+                );
+                // Identify a top-level OpDatabase / OpFreeRef on a Var.
+                let hit = match bl.operators[i].unspan() {
+                    Value::Call(op, args) if *op == db_nr || (*op == fr_nr && args.len() == 1) => {
+                        match args.first().map(Value::unspan) {
+                            Some(Value::Var(v)) => Some((*op == db_nr, *v)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((is_alloc, vdb)) = hit {
+                    let id = i32::from(store_site_id(vdb, ids, counter));
+                    if is_alloc {
+                        bl.operators.insert(
+                            i + 1,
+                            Value::Call(store_tag_nr, vec![Value::Var(vdb), Value::Int(id)]),
+                        );
+                        i += 1; // skip the inserted tag op
+                    } else {
+                        bl.operators[i] =
+                            Value::Call(free_ref_tag_nr, vec![Value::Var(vdb), Value::Int(id)]);
+                    }
+                }
+                i += 1;
+            }
+        }
+        Value::If(c, t, e) => {
+            tag_stores(c, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            tag_stores(t, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            tag_stores(e, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            for o in ops {
+                tag_stores(o, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+            }
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            tag_stores(v, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+        }
+        Value::Span(b) => {
+            tag_stores(&mut b.1, db_nr, fr_nr, store_tag_nr, free_ref_tag_nr, ids, counter);
+        }
+        _ => {}
+    }
 }
 
 /// Plan-57 last-use freeing, Phase 1 — definition-point liveness diagnostic.

@@ -179,6 +179,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     null_ref_sentinel,
     init_ref_sentinel,
     free_ref,
+    store_tag,
+    free_ref_tag,
     free_ref_if_distinct,
     sizeof_ref,
     var_ref,
@@ -1269,6 +1271,14 @@ fn init_ref_sentinel(s: &mut State) {
 
 fn free_ref(s: &mut State) {
     s.free_ref();
+}
+
+fn store_tag(s: &mut State) {
+    s.store_tag();
+}
+
+fn free_ref_tag(s: &mut State) {
+    s.free_ref_tag();
 }
 
 fn free_ref_if_distinct(s: &mut State) {

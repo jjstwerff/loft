@@ -612,6 +612,49 @@ impl State {
 
     pub fn free_ref(&mut self) {
         let db = *self.get_stack::<DbRef>();
+        self.free_ref_db(db);
+    }
+
+    /// Plan-57 store-identity gate (`OpFreeRefTag`): pop the DbRef, read the
+    /// allocation-site `tag` operand, verify it against the store's recorded tag
+    /// (a mismatch means a wrong-store / cross-owner free that `free_named` would
+    /// otherwise silently no-op), then free.  Verification build only.
+    pub fn free_ref_tag(&mut self) {
+        let db = *self.get_stack::<DbRef>();
+        let tag = u32::from(self.code::<u16>());
+        if db.store_nr != u16::MAX
+            && (db.store_nr as usize) < self.database.allocations.len()
+        {
+            let st = &self.database.allocations[db.store_nr as usize];
+            // Hard assert (not debug_assert): this op only exists when the
+            // LOFT_STORE_TAG gate emitted it — a deliberate testing build — so it
+            // must fire in release too. Zero cost when the gate is off (op absent).
+            assert!(
+                st.free || st.tag == 0 || st.tag == tag,
+                "store-tag mismatch on free: store #{} has tag {} but OpFreeRefTag expected {}",
+                db.store_nr,
+                st.tag,
+                tag,
+            );
+        }
+        self.free_ref_db(db);
+    }
+
+    /// Plan-57 store-identity gate (`OpStoreTag`): pop the DbRef, read the
+    /// allocation-site `tag` operand, stamp it on the store so a later
+    /// `OpFreeRefTag` can verify the free corresponds.  Verification build only.
+    pub fn store_tag(&mut self) {
+        let db = *self.get_stack::<DbRef>();
+        let tag = u32::from(self.code::<u16>());
+        if db.store_nr != u16::MAX && (db.store_nr as usize) < self.database.allocations.len() {
+            self.database.allocations[db.store_nr as usize].tag = tag;
+        }
+    }
+
+    /// The body of [`free_ref`], factored so [`free_ref_tag`] reuses it after the
+    /// DbRef is already popped (the tag operand sits between the popped ref and the
+    /// free in the tagged op).
+    pub fn free_ref_db(&mut self, db: DbRef) {
         // S37: coroutine DbRefs use store_nr == COROUTINE_STORE (u16::MAX).
         // database.free() is a no-op for this sentinel.  Free the coroutine frame
         // explicitly so that text_owned, stack_bytes, and call_frames are released

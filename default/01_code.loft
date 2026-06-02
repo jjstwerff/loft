@@ -764,6 +764,13 @@ fn OpNullRefSentinel() -> reference;
 // to a pre-reserved slot.
 fn OpInitRefSentinel(pos: const u16);
 fn OpFreeRef(v1: reference);
+// Plan-57 store-identity gate (verification builds only — emitted by the gated
+// `LOFT_STORE_TAG` IR post-pass, never in normal builds, so the bytecode stays
+// byte-identical).  OpStoreTag stamps the store with an allocation-site id;
+// OpFreeRefTag verifies it on free, catching wrong-store / cross-owner frees that
+// `free_named` would otherwise silently no-op.  Interpreter-only.
+fn OpStoreTag(v1: reference, tag: const u16);
+fn OpFreeRefTag(v1: reference, tag: const u16);
 // Free `placeholder` only when its store differs from `witness`.
 // Emitted for `__ref_N` work-refs that were passed to a user-fn call
 // whose Reference result is still live at the scope where the placeholder

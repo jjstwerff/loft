@@ -153,6 +153,12 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
+    /// Plan-57 store-identity gate (verification builds only): the allocation-site
+    /// id written by `OpStoreTag` and verified by `OpFreeRefTag`.  `0` = untagged
+    /// (no verification emitted for this store).  Catches wrong-store / cross-owner
+    /// frees that `free_named` otherwise silently no-ops.  Set/checked only when the
+    /// gated IR post-pass emits the tagged ops; inert in normal builds.
+    pub tag: u32,
     /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
     /// Bytecode position that allocated this store (via OpDatabase).
@@ -295,6 +301,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            tag: 0,
             ref_count: 0,
             lock_origin: String::new(),
             known_type: u16::MAX,
@@ -357,6 +364,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            tag: 0,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -848,6 +856,7 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -878,6 +887,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
@@ -909,6 +919,7 @@ impl Store {
             free_root: self.free_root,
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: true,
             created_at: 0,
             last_op_at: 0,
