@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1,2,3]; t += a[0]; } else { b: vector<integer> = [7,8]; t += b[1]; }
+  t
+}
+fn test_p19() { assert(f(5) == 1 && f(-1) == 8, "per-branch confined"); }

@@ -1,0 +1,5 @@
+fn f(n: integer) -> integer {
+  if n > 0 { a: vector<integer> = [9,8,7]; return a[0] + a[2]; }
+  0
+}
+fn test_p24() { assert(f(5) == 16 && f(-1) == 0, "early return"); }

@@ -49,14 +49,13 @@ once → one `__vdb` reused in place via `OpDatabase` clear+claim each iteration
 
 ## Verification harness (already shipped: `0a45e880`)
 
-`LOFT_STORE_GUARD=1` fires when a vector local's references are all confined to one
+`LOFT_STORE_GUARD=1` fires when a vector local's references are confined to one
 non-loop nested block yet its `__vdb` store is scoped to an ancestor.  Built on the
-`guard_confine` confinement walk (block-scope stack, loop-aware, mirrors
-`compute_intervals`' traversal so no Value-bearing variant is missed).  Read-only,
-gated, zero behaviour change.
+`guard_refs` confinement walk (mirrors `compute_intervals`' traversal so no
+Value-bearing variant is missed).  Read-only, gated, zero behaviour change.
 
-- Fires on the cluster-I shape: `one_block`, `many_blocks`, `168` (7), `03-text` (6).
-- **Silent on escape cases** (a local read after its block → confinement `Escaped`).
+- Fires on the cluster-I shape: `one_block`, `many_blocks` (5), `168` (7), `03-text` (6).
+- **Silent on escape cases** (a local read after its block).
 - **Does NOT fire on `11-vectors`** — that watermark is function-level sequential
   locals, a *distinct* mechanism (a local at function scope with no nested block to
   free it earlier; needs last-use freeing of *function-level* locals, a follow-on).
@@ -64,6 +63,37 @@ gated, zero behaviour change.
 **Use it as the driving regression test:** fix the model until the guard is silent
 suite-wide, then promote it to a `debug_assertions` assertion so the model can't
 silently regress.
+
+### Confinement = least-common-ancestor, NOT exact scope-match (probes 16-27)
+
+A first cut compared every reference's *innermost* block scope and required them
+**equal**.  Probes 16-27 proved that wrong — it UNDER-fires, missing the most
+common shapes, which would make the fix skip them:
+
+| Probe | Shape | exact-match | LCA (correct) |
+|---|---|---|---|
+| 20 | vector created in a block, **iterated** there (`for x in a`) | missed (0) | confined ✅ |
+| 25 | vector **read inside a loop body** (declared outside the loop) | missed (0) | confined ✅ |
+| 26 | vector created in a block, used in a **nested `if`** | missed (0) | confined ✅ |
+| 17 | vector local in a **match arm** | confined | confined ✅ |
+| 19 | distinct vectors in then / else branches | both confined | both confined ✅ |
+| 18 | set in both branches, **read after** (escape) | silent | silent ✅ |
+| 27 | reassigned in a branch, **read after** (escape) | silent | silent ✅ |
+
+Root cause of the miss: a for-loop lowers to a nested `#For block`, a nested `if`
+adds a sub-block — so the creating refs sit in block `B` and the using refs in a
+**sub-block of `B`**.  Their innermost scopes differ, but the data is still
+confined to `B`.
+
+**The fix's confinement (and the guard) MUST track the full block/loop scope-PATH
+at each reference and take the least-common-ancestor:** `LCA([B]) ⊔ LCA([B,sub]) =
+[B]`.  The store frees at the LCA block's exit.  If the LCA's innermost element is
+a **loop** scope, the local lives only inside that loop (per-iteration reuse) →
+**not** relocatable.  `guard_refs` now does exactly this; probes 16-27 are its
+catalogue (`probes/16_*.loft` … `probes/27_*.loft`).
+
+> Probe hygiene note: avoid stdlib names in probe bodies (`sum`, `first`, …) — a
+> name collision is a parse error, not a lifetime finding (probe 21 false alarm).
 
 ## THE OPEN CRUX — pin this FIRST (blocks the design)
 

@@ -3072,109 +3072,113 @@ mod par_deep_tests {
 
 // ── Plan-57 cluster I: store-lifetime guard (diagnostic) ─────────────────────
 //
-// Fires (under LOFT_STORE_GUARD) when a vector local's references are all
-// confined to one non-loop nested block, yet its backing `__vdb_N` store is
-// scoped to an ancestor (function) and so frees late — the lifetime model
-// under-freeing a block-confined store.  A detector for the watermark; once
-// the model scopes such stores to their block it goes silent.
+// Fires (under LOFT_STORE_GUARD) when a vector local's references are confined
+// to one non-loop nested block, yet its backing `__vdb_N` store is scoped to an
+// ancestor (function) and so frees late — the lifetime model under-freeing a
+// block-confined store.  A detector for the watermark; once the model scopes
+// such stores to their block it goes silent.  Read-only, gated, no behaviour
+// change.
+//
+// Confinement = the least-common-ancestor of the block/loop scope-paths of every
+// reference.  Tracking the full path (not just the innermost block) is required:
+// a vector created in block B and read in a nested sub-block (nested `if`, a
+// for-loop's `#For` block, or inside a loop body) is still confined to B — the
+// LCA of `[B]` and `[B, sub]` is `B`.  Exact-scope-match misses these (probes
+// 20/25/26).  The LCA's last element being a LOOP scope means the local lives
+// only inside that loop (per-iteration reuse) → not relocatable.
 
-#[derive(Clone, Copy, PartialEq)]
-enum GConfine {
-    Unseen,
-    Block(u16),
-    Escaped,
+/// Record a reference at the current scope-path: fold it into the running LCA
+/// (longest common prefix of all reference paths).
+fn guard_note(stack: &[(u16, bool)], lca: &mut Option<Vec<(u16, bool)>>) {
+    *lca = Some(match lca.take() {
+        None => stack.to_vec(),
+        Some(prev) => prev
+            .iter()
+            .zip(stack)
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| *a)
+            .collect(),
+    });
 }
 
-impl GConfine {
-    fn join(self, other: GConfine) -> GConfine {
-        match (self, other) {
-            (GConfine::Escaped, _) | (_, GConfine::Escaped) => GConfine::Escaped,
-            (GConfine::Unseen, s) | (s, GConfine::Unseen) => s,
-            (GConfine::Block(a), GConfine::Block(b)) if a == b => GConfine::Block(a),
-            _ => GConfine::Escaped,
-        }
-    }
-}
-
-fn guard_confine(node: &Value, target: u16, free_ref_nr: u32, cur: Option<u16>, in_loop: bool, acc: &mut GConfine) {
-    let site = match cur {
-        Some(s) if !in_loop => GConfine::Block(s),
-        _ => GConfine::Escaped,
-    };
+fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16, bool)>, lca: &mut Option<Vec<(u16, bool)>>) {
     match node {
-        Value::Var(v) if *v == target => *acc = acc.join(site),
+        Value::Var(v) if *v == target => guard_note(stack, lca),
         Value::Set(v, val) => {
             if *v == target && !matches!(val.unspan(), Value::Null) {
-                *acc = acc.join(site);
+                guard_note(stack, lca);
             }
-            guard_confine(val, target, free_ref_nr, cur, in_loop, acc);
+            guard_refs(val, target, free_ref_nr, stack, lca);
         }
         Value::Call(op, args) => {
             if *op == free_ref_nr && args.len() == 1 && matches!(args[0].unspan(), Value::Var(v) if *v == target) {
                 return;
             }
             for a in args {
-                guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
+                guard_refs(a, target, free_ref_nr, stack, lca);
             }
         }
         Value::Block(bl) => {
-            let nc = if in_loop { None } else { Some(bl.scope) };
+            stack.push((bl.scope, false));
             for op in &bl.operators {
-                guard_confine(op, target, free_ref_nr, nc, in_loop, acc);
+                guard_refs(op, target, free_ref_nr, stack, lca);
             }
+            stack.pop();
         }
         Value::Loop(lp) => {
+            stack.push((lp.scope, true));
             for op in &lp.operators {
-                guard_confine(op, target, free_ref_nr, cur, true, acc);
+                guard_refs(op, target, free_ref_nr, stack, lca);
             }
+            stack.pop();
         }
         Value::If(t, a, b) => {
-            guard_confine(t, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(b, target, free_ref_nr, cur, in_loop, acc);
+            guard_refs(t, target, free_ref_nr, stack, lca);
+            guard_refs(a, target, free_ref_nr, stack, lca);
+            guard_refs(b, target, free_ref_nr, stack, lca);
         }
         Value::Iter(idx, c, n, e) => {
             if *idx == target {
-                *acc = acc.join(site);
+                guard_note(stack, lca);
             }
-            guard_confine(c, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(n, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(e, target, free_ref_nr, cur, in_loop, acc);
+            guard_refs(c, target, free_ref_nr, stack, lca);
+            guard_refs(n, target, free_ref_nr, stack, lca);
+            guard_refs(e, target, free_ref_nr, stack, lca);
         }
         Value::CallRef(v, args) => {
             if *v == target {
-                *acc = acc.join(site);
+                guard_note(stack, lca);
             }
             for a in args {
-                guard_confine(a, target, free_ref_nr, cur, in_loop, acc);
+                guard_refs(a, target, free_ref_nr, stack, lca);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => guard_confine(v, target, free_ref_nr, cur, in_loop, acc),
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => guard_refs(v, target, free_ref_nr, stack, lca),
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
             for op in ops {
-                guard_confine(op, target, free_ref_nr, cur, in_loop, acc);
+                guard_refs(op, target, free_ref_nr, stack, lca);
             }
         }
-        Value::TupleGet(v, _) if *v == target => *acc = acc.join(site),
+        Value::TupleGet(v, _) if *v == target => guard_note(stack, lca),
         Value::TuplePut(v, _, inner) => {
             if *v == target {
-                *acc = acc.join(site);
+                guard_note(stack, lca);
             }
-            guard_confine(inner, target, free_ref_nr, cur, in_loop, acc);
+            guard_refs(inner, target, free_ref_nr, stack, lca);
         }
-        Value::Span(b) => guard_confine(&b.1, target, free_ref_nr, cur, in_loop, acc),
+        Value::Span(b) => guard_refs(&b.1, target, free_ref_nr, stack, lca),
         Value::ParFor(b) => {
-            guard_confine(&b.input, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(&b.worker, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(&b.threads, target, free_ref_nr, cur, in_loop, acc);
-            guard_confine(&b.body, target, free_ref_nr, cur, in_loop, acc);
+            guard_refs(&b.input, target, free_ref_nr, stack, lca);
+            guard_refs(&b.worker, target, free_ref_nr, stack, lca);
+            guard_refs(&b.threads, target, free_ref_nr, stack, lca);
+            guard_refs(&b.body, target, free_ref_nr, stack, lca);
         }
         _ => {}
     }
 }
 
-/// Returns the number of block-confined vector stores that are scoped late.
-/// Prints each under LOFT_STORE_GUARD.
+/// Returns the number of late-freed block-confined vector stores; prints each
+/// under LOFT_STORE_GUARD.
 fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
     let mut fired = 0usize;
     for vdb in 0..vars.count() {
@@ -3199,9 +3203,14 @@ fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name
         let Some(local) = backed else {
             continue;
         };
-        let mut acc = GConfine::Unseen;
-        guard_confine(code, local, free_ref_nr, None, false, &mut acc);
-        if let GConfine::Block(b) = acc
+        let mut stack: Vec<(u16, bool)> = Vec::new();
+        let mut lca: Option<Vec<(u16, bool)>> = None;
+        guard_refs(code, local, free_ref_nr, &mut stack, &mut lca);
+        // Confined iff the LCA's innermost element is a NON-LOOP block, deeper
+        // than where the store is currently scoped.
+        if let Some(path) = lca
+            && let Some(&(b, is_loop)) = path.last()
+            && !is_loop
             && vars.scope(vdb) != b
         {
             eprintln!(

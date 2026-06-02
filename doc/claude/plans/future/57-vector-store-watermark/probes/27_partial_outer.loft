@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  v: vector<integer> = [0];
+  if n > 0 { v = [1,2,3]; }
+  v[0]
+}
+fn test_p27() { assert(f(5) == 1 && f(-1) == 0, "partial outer (escape)"); }

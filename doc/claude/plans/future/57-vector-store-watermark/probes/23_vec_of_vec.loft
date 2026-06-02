@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<vector<integer>> = [[1,2],[3,4]]; t += a[0][1] + a[1][0]; }
+  t
+}
+fn test_p23() { assert(f(5) == 5, "vec of vec"); }

@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1,2,3]; if n > 1 { t += a[0] + a[2]; } }
+  t
+}
+fn test_p26() { assert(f(5) == 4, "nested-if use"); }

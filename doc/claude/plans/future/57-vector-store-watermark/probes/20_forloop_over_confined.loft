@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1,2,3,4]; for x in a { t += x; } }
+  t
+}
+fn test_p20() { assert(f(5) == 10, "for over confined"); }
