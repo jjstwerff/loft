@@ -857,4 +857,146 @@ mod tests {
         }
         assert!(checked > 20, "expected many function defs, got {checked}");
     }
+
+    /// @PLAN54 arc D probe — the full mmap loop end-to-end: materialize the
+    /// real stdlib `Data` into a **file-backed** store, drop it (flush to
+    /// disk), reopen the file via mmap, and reconstruct native `Data` with
+    /// `read_data` — **no re-parse, no schema registration** (the reader walks
+    /// the mapped bytes through baked offsets).  The rebuilt `Data` is
+    /// bit-for-bit identical to the fresh parse (`compare_data`).  This proves
+    /// "serialize the IR to a Store file, mmap it back, push it into a native
+    /// `Data`" works today.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn mmap_file_round_trip_stdlib() {
+        use crate::ir_schema::compare_data;
+        use crate::ir_store::materialize_data_at;
+        use crate::store::Store;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let fresh = p.data;
+
+        let path = std::env::temp_dir().join(format!("loft_ir_mmap_{}.store", std::process::id()));
+        let path_str = path.to_str().expect("utf-8 temp path");
+        let _ = std::fs::remove_file(&path);
+
+        // ── write: materialize the IR straight into a file-backed store ──
+        let root = {
+            let fstore = Store::open(path_str); // create + mmap (writable)
+            let mut stores = Stores::new();
+            let nr = stores.adopt_store(fstore);
+            let rec = stores.allocations[nr as usize].claim(16);
+            let root = DbRef {
+                store_nr: nr,
+                rec,
+                pos: 8,
+            };
+            materialize_data_at(&mut stores, root, &fresh);
+            root
+            // `stores` dropped here → the file-backed Store is unmapped/flushed
+        };
+
+        // ── load: mmap the file back, reconstruct native Data (no re-parse) ──
+        let fstore2 = Store::open(path_str);
+        let mut s2 = Stores::new();
+        let nr2 = s2.adopt_store(fstore2);
+        let root2 = DbRef {
+            store_nr: nr2,
+            rec: root.rec,
+            pos: root.pos,
+        };
+        let loaded = read_data(&s2, root2);
+
+        let result = compare_data(&fresh, &loaded);
+        let _ = std::fs::remove_file(&path);
+        if let Err(diff) = result {
+            panic!("mmap file round-trip diverged from fresh parse: {diff:?}");
+        }
+    }
+
+    /// @PLAN54 arc D micro-bench — wall-clock of producing the native stdlib
+    /// `Data` two ways: a fresh `parse_dir` (today's cold-start path) vs
+    /// `Store::open` + `read_data` (mmap the precompiled store, rebuild native).
+    /// Run with: `cargo test --release --lib bench_stdlib_load -- --ignored --nocapture`.
+    #[cfg(feature = "mmap")]
+    #[test]
+    #[ignore = "perf bench — run manually with --ignored --nocapture"]
+    #[allow(clippy::cast_precision_loss)] // micro-second counts are tiny
+    fn bench_stdlib_load_mmap_vs_parse() {
+        use crate::ir_store::materialize_data_at;
+        use crate::store::Store;
+        use std::time::Instant;
+
+        let parse = || {
+            let mut p = crate::parser::Parser::new();
+            p.parse_dir("default", true, false).expect("parse default/");
+            p.data
+        };
+
+        // Build the .store file once.
+        let path = std::env::temp_dir().join(format!("loft_ir_bench_{}.store", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let (rec, pos) = {
+            let fresh = parse();
+            let fstore = Store::open(path_str);
+            let mut stores = Stores::new();
+            let nr = stores.adopt_store(fstore);
+            let rec = stores.allocations[nr as usize].claim(16);
+            let root = DbRef {
+                store_nr: nr,
+                rec,
+                pos: 8,
+            };
+            materialize_data_at(&mut stores, root, &fresh);
+            (rec, root.pos)
+        };
+
+        let iters = 25;
+        let median = |mut v: Vec<u128>| {
+            v.sort_unstable();
+            v[v.len() / 2]
+        };
+
+        let mut parse_us = Vec::new();
+        for _ in 0..iters {
+            let t = Instant::now();
+            let d = parse();
+            std::hint::black_box(&d);
+            parse_us.push(t.elapsed().as_micros());
+        }
+
+        let mut load_us = Vec::new();
+        for _ in 0..iters {
+            let t = Instant::now();
+            let fstore = Store::open(path_str);
+            let mut s2 = Stores::new();
+            let nr2 = s2.adopt_store(fstore);
+            let root2 = DbRef {
+                store_nr: nr2,
+                rec,
+                pos,
+            };
+            let d = read_data(&s2, root2);
+            std::hint::black_box(&d);
+            load_us.push(t.elapsed().as_micros());
+        }
+
+        let file_bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
+        let _ = std::fs::remove_file(&path);
+
+        let (p_min, p_med) = (parse_us.iter().copied().min().unwrap(), median(parse_us));
+        let (l_min, l_med) = (load_us.iter().copied().min().unwrap(), median(load_us));
+        eprintln!("\n=== stdlib load: parse vs mmap+read_data ({iters} iters) ===");
+        eprintln!("store file size : {} KiB", file_bytes / 1024);
+        eprintln!("parse_dir       : min {p_min} us   median {p_med} us");
+        eprintln!("mmap+read_data  : min {l_min} us   median {l_med} us");
+        eprintln!(
+            "speedup (median): {:.2}x   (min) {:.2}x",
+            p_med as f64 / l_med as f64,
+            p_min as f64 / l_min as f64
+        );
+    }
 }

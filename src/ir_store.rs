@@ -417,7 +417,20 @@ fn write_definition(stores: &mut Stores, r: &Record, d: &Definition) {
 /// return its `DbRef` (the root).  Arc B's capstone entry point.
 pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
     let root = stores.database(16);
-    // Clear the root's Data fields (database() does not zero) so the
+    materialize_data_at(stores, root, data);
+    root
+}
+
+/// Materialize a whole native `Data` into a caller-provided root `Data` record.
+///
+/// Same as [`materialize_data`] but writes into an already-claimed `root`
+/// (16-word `Data` record) instead of allocating a fresh in-memory store —
+/// e.g. a record claimed in a **file-backed** store (`Store::open`), so the
+/// materialised IR lands directly on disk for the mmap load path (@PLAN54 arc
+/// D).  The whole IR (records, inline vectors, and interned strings) lives in
+/// `root`'s store, so persisting/mmapping that one store captures everything.
+pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
+    // Clear the root's Data fields (claim/database do not zero) so the
     // `definitions` vector header starts empty.
     stores.store_mut(&root).zero_range(root.rec, root.pos, 16);
     let r = Record::new(root);
@@ -427,7 +440,6 @@ pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
         let dr = defs.push(stores);
         write_definition(stores, &dr, d);
     }
-    root
 }
 
 /// Write `v` into the already-allocated `slot` (its bytes are zeroed).
