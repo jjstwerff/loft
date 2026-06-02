@@ -311,6 +311,14 @@ pub(crate) const DEF_PUB_VISIBLE: u32 = 149;
 pub(crate) const DATA_SOURCE: u32 = 0;
 pub(crate) const DATA_DEFINITIONS: u32 = 8; // vector<Definition>
 
+/// Well-known location of the `Data` root record in a saved IR store
+/// (@PLAN54 arc D).  A freshly-opened file-backed store's first `claim(16)`
+/// deterministically yields record `1`, data at byte offset `8` — so a
+/// persisted IR store always has its root here, and `open` needs no sidecar
+/// to find it (the save path asserts the root landed at `IR_ROOT_REC`).
+pub(crate) const IR_ROOT_REC: u32 = 1;
+pub(crate) const IR_ROOT_POS: u32 = 8;
+
 /// The bit mask loft uses for a stored `boolean` field (`generation` emits
 /// `get_boolean(rec, off, 1)`).
 pub(crate) const BOOL_MASK: u8 = 1;

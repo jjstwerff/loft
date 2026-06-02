@@ -442,6 +442,47 @@ pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
     }
 }
 
+/// Serialize `data` to a file-backed IR store at `path` (@PLAN54 arc D).
+///
+/// Materializes the whole `Data` into a fresh file-backed store (`Store::open`),
+/// with the root claimed as record [`ds::IR_ROOT_REC`] so [`crate::ir_read::open_data`]
+/// can find it with no sidecar.  Dropping the store unmaps + flushes it to disk.
+/// The file is removed first so the root lands at the well-known first record.
+///
+/// # Errors
+/// Propagates a file-remove error other than "not found"; `Store::open` itself
+/// panics on an unopenable path (consistent with the rest of the store layer).
+///
+/// # Panics
+/// If the materialized root does not land at [`ds::IR_ROOT_REC`] (would mean the
+/// store was not fresh) — a guard so `open_data` never reads from the wrong record.
+#[cfg(feature = "mmap")]
+pub fn save_data(data: &Data, path: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let fstore = crate::store::Store::open(path);
+    let mut stores = Stores::new();
+    let nr = stores.adopt_store(fstore);
+    let rec = stores.allocations[nr as usize].claim(16);
+    assert_eq!(
+        rec,
+        ds::IR_ROOT_REC,
+        "IR store root must be the first record of a fresh store"
+    );
+    let root = DbRef {
+        store_nr: nr,
+        rec,
+        pos: ds::IR_ROOT_POS,
+    };
+    materialize_data_at(&mut stores, root, data);
+    // Drop `stores` → the file-backed Store is unmapped and flushed to `path`.
+    drop(stores);
+    Ok(())
+}
+
 /// Write `v` into the already-allocated `slot` (its bytes are zeroed).
 fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
     match v {

@@ -388,6 +388,34 @@ pub fn read_data(stores: &Stores, root: DbRef) -> Data {
     data
 }
 
+/// Load a native [`Data`] from a file-backed IR store written by
+/// [`crate::ir_store::save_data`] (@PLAN54 arc D): mmap the file
+/// (`Store::open`) and rebuild the native `Data` from the well-known root
+/// record ([`ds::IR_ROOT_REC`]) — no re-parse, no schema registration.
+///
+/// # Errors
+/// Returns `NotFound` if `path` does not exist (a cache miss — the caller
+/// falls back to parsing).  `Store::open` panics on an unreadable/corrupt
+/// file; integrity-checked loading is arc E's drift-detection job (Q4).
+#[cfg(feature = "mmap")]
+pub fn open_data(path: &str) -> std::io::Result<Data> {
+    if !std::path::Path::new(path).exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("IR store not found: {path}"),
+        ));
+    }
+    let fstore = crate::store::Store::open(path);
+    let mut stores = Stores::new();
+    let nr = stores.adopt_store(fstore);
+    let root = DbRef {
+        store_nr: nr,
+        rec: ds::IR_ROOT_REC,
+        pos: ds::IR_ROOT_POS,
+    };
+    Ok(read_data(&stores, root))
+}
+
 /// Rebuild one native [`Definition`] from a store `Definition` record.
 ///
 /// `attr_names` is re-derived from the restored attribute list (a derived
@@ -914,6 +942,40 @@ mod tests {
         if let Err(diff) = result {
             panic!("mmap file round-trip diverged from fresh parse: {diff:?}");
         }
+    }
+
+    /// @PLAN54 arc D step D1 — the public `Data::save` / `Data::open` API:
+    /// save the stdlib to a `.store` file, load it back (mmap, no re-parse),
+    /// and confirm bit-for-bit equality.  Also checks that opening a missing
+    /// file is a clean `NotFound` (the cache-miss path the caller falls back on).
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn data_save_open_round_trip_stdlib() {
+        use crate::data::Data;
+        use crate::ir_schema::compare_data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let fresh = p.data;
+
+        let path = std::env::temp_dir().join(format!("loft_data_api_{}.store", std::process::id()));
+        let path_str = path.to_str().unwrap();
+
+        fresh.save(path_str).expect("Data::save");
+        let loaded = Data::open(path_str).expect("Data::open");
+        let result = compare_data(&fresh, &loaded);
+        let _ = std::fs::remove_file(&path);
+        if let Err(diff) = result {
+            panic!("Data::save/open round-trip diverged: {diff:?}");
+        }
+
+        // Opening a non-existent store is a clean cache-miss (NotFound).
+        let miss = Data::open("/nonexistent/loft_no_such_store.store");
+        assert_eq!(
+            miss.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::NotFound)
+        );
     }
 
     /// @PLAN54 arc D micro-bench — wall-clock of producing the native stdlib

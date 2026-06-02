@@ -639,7 +639,7 @@ needed; this is mostly startup wiring and delivers the big user-visible win.
 
 | Step | Deliverable | Validation | Effort |
 |---|---|---|---|
-| **D1** | `Data::save(path)` / `Data::open(path)` wrappers over `materialize_data_at` + `Store::open` + `read_data`; skip `scopes::check` on load (`done=true`). | extend `mmap_file_round_trip_stdlib` to the file API | S |
+| **D1** ✅ | `Data::save(path)` / `Data::open(path)` (thin wrappers over `ir_store::save_data` / `ir_read::open_data`).  Save materializes into a fresh file-backed store with the root at the well-known first record (`IR_ROOT_REC`=1, pos 8) so load needs no sidecar; open mmaps + `read_data`, returning `NotFound` on a missing file (clean cache-miss).  `scopes::check`-skip is deferred to **D2** (only matters once the loaded `Data` is compiled). | `data_save_open_round_trip_stdlib`: save→open→`compare_data` bit-for-bit + `NotFound` check | S — done |
 | **D2** | Startup wiring: after parsing the stdlib bundle, write `stdlib.store`; next run `Data::open` it instead of parsing when the cache key matches. | cold-start timing; existing suite unchanged | M |
 | **E1** | Bundle cache key = stdlib key + sorted lib-set + content hashes; drift ⇒ reparse (Q4). | drift unit tests | M |
 | **E2** | Mutability split (Q1): locked mmap bundle store + writable store for user-program defs; `caller_index` rebuilt on load (Q3). | full suite under cache-on | M |
