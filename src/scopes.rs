@@ -247,6 +247,12 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
     }
 }
 
+/// Scope / lifetime analysis pass over every function definition.
+///
+/// # Panics
+/// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
+/// reclaim pass left a store the model says is dead un-freed past a later
+/// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
@@ -313,6 +319,20 @@ pub fn check(data: &mut Data) {
             let gf_nr = data.def_nr("OpGetField");
             let d = &mut data.definitions[d_nr as usize];
             lastuse_reclaim(&mut d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+            // Plan-57 Phase 4 — Goal-E enforcement.  Hard assert (gated, so
+            // zero-cost when reclaim is off): every store the model says is dead
+            // and reclaim claimed (its `intent`) must now be freed before its
+            // sibling allocates.  A non-zero count is a reclaim regression — the
+            // watermark rule silently re-acquired an exception.  When Phase 3 is
+            // un-gated (Phase 5) this becomes the default Goal-E watermark guard.
+            let d = &data.definitions[d_nr as usize];
+            let unfreed =
+                reclaim_unfreed_eligible(&d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+            assert_eq!(
+                unfreed, 0,
+                "plan-57 Phase 4: {} left {unfreed} reclaim-eligible store(s) live-but-dead past a later alloc",
+                d.name,
+            );
         }
         // Plan-57 store-identity gate (Phase 2.5): rewrite store ops to verifying
         // variants (gated; no-op in normal builds).
@@ -3919,6 +3939,110 @@ fn reclaim_safe(code: &Value, vars: &Function, st: u16) -> bool {
     !holder_retained(code, &holders)
 }
 
+/// Plan-57 — the reclaim PLAN, the single source of truth shared by
+/// [`lastuse_reclaim`] (which acts on it) and [`reclaim_unfreed_eligible`] (the
+/// Phase-4 guard, which verifies the frees landed), so the two cannot drift.
+/// Returns `(owning, intent)`:
+/// - `owning` — function-scoped owning stores passing the dominance + soundness
+///   gates (the ones whose null-init may relocate);
+/// - `intent` — `(store, trigger)` pairs: `store`'s data dies before the eligible
+///   sibling `trigger` allocates, so `store` must be freed before `trigger`'s build.
+fn reclaim_free_intent(
+    code: &Value,
+    vars: &Function,
+    db_nr: u32,
+    gf_nr: u32,
+    fr_nr: u32,
+) -> (Vec<u16>, Vec<(u16, u16)>) {
+    let body_scope = match code.unspan() {
+        Value::Block(bl) => bl.scope,
+        _ => return (Vec::new(), Vec::new()),
+    };
+    let mut holds: HashMap<u16, u16> = HashMap::new();
+    let mut alloc: HashMap<u16, u32> = HashMap::new();
+    let mut dead: HashMap<u16, u32> = HashMap::new();
+    let mut last_read: HashMap<u16, u32> = HashMap::new();
+    let mut seq = 0u32;
+    store_liveness_walk(
+        code,
+        &mut seq,
+        db_nr,
+        gf_nr,
+        fr_nr,
+        &mut holds,
+        &mut alloc,
+        &mut dead,
+        &mut last_read,
+    );
+    let dead_at = |st: u16| {
+        dead.get(&st)
+            .copied()
+            .or_else(|| last_read.get(&st).copied())
+    };
+    let mut owning: Vec<u16> = alloc
+        .keys()
+        .copied()
+        .filter(|&st| {
+            vars.scope(st) == body_scope
+                && contains_alloc_unconditional(code, st, db_nr)
+                && reclaim_safe(code, vars, st)
+        })
+        .collect();
+    owning.sort_unstable();
+    let mut intent: Vec<(u16, u16)> = Vec::new();
+    for &st in &owning {
+        let Some(d) = dead_at(st) else { continue };
+        if let Some(&later) = owning
+            .iter()
+            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
+            .min_by_key(|&&w| alloc[&w])
+        {
+            intent.push((st, later));
+        }
+    }
+    (owning, intent)
+}
+
+/// True if `op` is a top-level `OpFreeRef(Var(st))`.
+fn is_top_free(op: &Value, st: u16, fr_nr: u32) -> bool {
+    matches!(op.unspan(), Value::Call(o, args) if *o == fr_nr
+        && matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == st))
+}
+
+/// Plan-57 Phase-4 guard (Goal-E enforcement): after [`lastuse_reclaim`] has run,
+/// every store in the reclaim plan's `intent` must have its `OpFreeRef` placed at
+/// body top-level BEFORE the op that allocates its `trigger`.  Returns the count of
+/// reclaim-eligible stores left live-but-dead past a later alloc — must be 0.  A
+/// non-zero result means reclaim silently failed to stop a store the model says is
+/// dead (a regression the watermark rule must not re-acquire).  Escape/alias cases
+/// are not in `intent` (the soundness gate excluded them) — they legitimately keep
+/// their scope-exit free and are not asserted on.
+fn reclaim_unfreed_eligible(
+    code: &Value,
+    vars: &Function,
+    db_nr: u32,
+    gf_nr: u32,
+    fr_nr: u32,
+) -> usize {
+    let (_owning, intent) = reclaim_free_intent(code, vars, db_nr, gf_nr, fr_nr);
+    let Value::Block(bl) = code.unspan() else {
+        return 0;
+    };
+    let mut count = 0;
+    for &(st, later) in &intent {
+        let free_idx = bl.operators.iter().position(|o| is_top_free(o, st, fr_nr));
+        let alloc_idx = bl
+            .operators
+            .iter()
+            .position(|o| contains_alloc(o, later, db_nr));
+        match (free_idx, alloc_idx) {
+            (Some(f), Some(a)) if f < a => {} // freed before the trigger allocates — good
+            _ => count += 1,
+        }
+    }
+    count
+}
+
 /// Plan-57 last-use freeing, Phase 2 — reclaim SPIKE (throwaway, `LASTUSE_FREE`).
 ///
 /// For each function-scoped store whose data dies before a later store allocates,
@@ -4025,64 +4149,23 @@ fn lastuse_free_spike(
 /// I-b / III-straight-line cases block-confinement (I-a) cannot reach.  Returns the
 /// count of relocations + frees applied.
 fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr_nr: u32) -> usize {
-    let body_scope = match code.unspan() {
-        Value::Block(bl) => bl.scope,
-        _ => return 0,
-    };
-    let mut holds: HashMap<u16, u16> = HashMap::new();
-    let mut alloc: HashMap<u16, u32> = HashMap::new();
-    let mut dead: HashMap<u16, u32> = HashMap::new();
-    let mut last_read: HashMap<u16, u32> = HashMap::new();
-    let mut seq = 0u32;
-    store_liveness_walk(
-        code,
-        &mut seq,
-        db_nr,
-        gf_nr,
-        fr_nr,
-        &mut holds,
-        &mut alloc,
-        &mut dead,
-        &mut last_read,
-    );
-    let dead_at = |st: u16| {
-        dead.get(&st)
-            .copied()
-            .or_else(|| last_read.get(&st).copied())
-    };
-    // Function-scoped owning stores, restricted to the provably-safe straight-line
-    // shape: the alloc is unconditional (dominance gate) AND the store passes the
-    // escape/alias/capture/retention gate.  Everything else falls back to the sound
-    // scope-exit free.
-    let mut owning: Vec<u16> = alloc
-        .keys()
-        .copied()
-        .filter(|&st| {
-            vars.scope(st) == body_scope
-                && contains_alloc_unconditional(code, st, db_nr)
-                && reclaim_safe(code, vars, st)
-        })
-        .collect();
-    owning.sort_unstable();
-    // Early-free groups: before[later] = dead stores to free right before `later`
-    // allocates.  Identical selection to the Phase-2 spike.
-    let mut before: HashMap<u16, Vec<u16>> = HashMap::new();
-    for &st in &owning {
-        let Some(d) = dead_at(st) else { continue };
-        if let Some(&later) = owning
-            .iter()
-            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
-            .min_by_key(|&&w| alloc[&w])
-        {
-            before.entry(later).or_default().push(st);
-        }
+    // Eligibility + free-intent come from the shared plan, so the Phase-4 guard
+    // (`reclaim_unfreed_eligible`) verifies exactly what this pass acts on.
+    let (owning, intent) = reclaim_free_intent(code, vars, db_nr, gf_nr, fr_nr);
+    if owning.is_empty() {
+        return 0;
     }
-    // The set of stores we will early-free.  Their scope-exit `OpFreeRef` must be
-    // REMOVED, not kept as an "idempotent double-free": under reclaim the freed slot
-    // is reused by a later store, so a stale scope-exit free of `st` would target a
-    // *different live owner's* store (the tag gate catches exactly this).  The early
-    // free becomes the store's sole free.
-    let freed_set: HashSet<u16> = before.values().flatten().copied().collect();
+    // Early-free groups: before[trigger] = dead stores to free right before
+    // `trigger` allocates.  Their scope-exit `OpFreeRef` is REMOVED, not kept as an
+    // "idempotent double-free": under reclaim the freed slot is reused by a later
+    // store, so a stale scope-exit free of `st` would target a *different live
+    // owner's* store (the tag gate catches exactly this).  The early free becomes
+    // the store's sole free.
+    let mut before: HashMap<u16, Vec<u16>> = HashMap::new();
+    for &(st, later) in &intent {
+        before.entry(later).or_default().push(st);
+    }
+    let freed_set: HashSet<u16> = intent.iter().map(|&(st, _)| st).collect();
     let Value::Block(bl) = code else { return 0 };
     // Reloc set: owning stores whose null-init sits at body top-level AND whose
     // OpDatabase build is a top-level body op (so the null-init can be placed right

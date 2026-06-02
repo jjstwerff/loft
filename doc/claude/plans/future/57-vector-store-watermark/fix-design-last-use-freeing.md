@@ -220,17 +220,42 @@ too).  Win probes keep their watermark and verify tag-clean (0 mismatches):
 - **Risk (the I-a lesson) — handled:** relocating the null-init changes `first_def`; the pass runs
   *before* `compute_intervals`, so the interval / `assign_slots` / `validate_slots` graph sees the
   moved def.  Native confirmed (peak drop + correct output on `--native`, the default mode).
-- **Remaining for production:** Phase 4 (promote the diagnostic to a debug-assert) + Phase 5
-  (watermark regression test + un-gate).  Native handlers for `OpStoreTag`/`OpFreeRefTag` (the tag
-  gate under `--native`) stay a deferred follow-up.
+- **Remaining for production:** Phase 5 (watermark regression test + un-gate).  Native handlers for
+  `OpStoreTag`/`OpFreeRefTag` (the tag gate under `--native`) stay a deferred follow-up.
 
-### Phase 4 — Promote the (now-silent) guard to a permanent Goal-E assert
+### Phase 4 — Permanent Goal-E enforcement assert — **DONE (2026-06)**
 
-With Phase 3 making the divergence set empty corpus-wide, promote Phase 1's guard to a
-`#[cfg(debug_assertions)]` assertion (per Goal E's "Check"): a store live-but-dead at a
-def-point is now a hard failure, so the rule cannot silently re-acquire exceptions. This is
-the permanent enforcement deliverable (option 3) — supersedes the scope-exit
-`store_lifetime_guard` as THE Goal-E watermark guard.
+**Reframed from the original plan.** Phase 1's `last_use_guard` detects a *static data-flow shape*
+("store `st`'s data dies before a later store allocates") — which is present for **every**
+sequential-store function and which reclaim does **not** remove (reclaim adds a *free*; the data
+still dies before the later alloc).  Promoting it verbatim to a hard assert would panic on nearly
+every program.  The coherent Goal-E assert is **runtime, not static**: *did reclaim actually stop the
+store before the sibling allocates?*
+
+The implementation (`src/scopes.rs`):
+
+- **`reclaim_free_intent`** — the single source of truth, shared by `lastuse_reclaim` (which acts on
+  it) and the guard (which verifies it), so the two cannot drift.  Returns `(owning, intent)` where
+  `intent` is the `(store, trigger)` pairs the reclaim must free.
+- **`reclaim_unfreed_eligible`** — the guard: after reclaim ran, for each `(store, trigger)` in the
+  plan, asserts `store`'s `OpFreeRef` sits at body top-level **before** the op that allocates
+  `trigger`.  Returns the count left live-but-dead — must be 0.
+- A **hard `assert_eq!`** in `check()`, **gated** by `LASTUSE_RECLAIM` (zero-cost when reclaim is off,
+  so the default build is unaffected).  Active in release (unlike `#[cfg(debug_assertions)]`) so it
+  guards the release test suite.  When Phase 3 is un-gated (Phase 5) it becomes the default Goal-E
+  watermark guard with no rewrite.
+
+**Honest scope:** the assert covers the reclaim-*eligible* stores — the shapes the model says are
+dead-and-reclaimable.  The escape/alias/branch cases the soundness gate excludes are **not** in
+`intent`; they keep their (sound) scope-exit free and are a documented, non-silent exception (still
+visible via the `LOFT_LASTUSE_GUARD` diagnostic), not a watermark win.  Superseding the scope-exit
+`store_lifetime_guard` entirely waits on un-gating.
+
+**Verified:** the full suite runs **green with `LASTUSE_RECLAIM=1` and the assert compiled in —
+1921 passed, 0 failed, no panics** (both backends; fresh `--lib` rebuild — the first gated run's
+native failures were the stale-rlib false-failure, not reclaim).  Default path byte-identical;
+`clippy -D warnings` + `--all-targets` + `fmt` clean.  This green full-suite-under-gate run is also
+the **un-gate prerequisite** for Phase 5.
 
 ### Phase 5 — CI lock-in + scaffolding cleanup
 
