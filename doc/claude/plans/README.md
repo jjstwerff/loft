@@ -69,13 +69,56 @@ shippable corruption).
 
 So a batch of throwaway `.loft` probes (`--interpret`, vary one condition each)
 costs minutes and tells you the real boundary (the tuple-return bug = the *return*
-path only; local tuples fine), whether it's even a clean fix (the `parallel {}`
-bug = a capture-model design call, not a patch), and which edges a naive fix would
-corrupt.  **Keep the probes** — they become permanent regression landmarks
+path only; local tuples fine; the `parallel {}` bug = a *write*-to-parent-local
+corruption, **not** reads — which P245 already fixed and `tests/scripts/81` guards)
+and which edges a naive fix would corrupt.  **Keep the probes** — they become
+permanent regression landmarks
 (`plans/future/57-vector-store-watermark/probes/`).  The *fix* still happens (don't
 file — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory));
 you just characterise the region first.  This lowers the bar to probe-first vs
 fix-from-one-repro.
+
+### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
+
+Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —
+that's a *good* sign (the probing is working), and it will happen in every
+investigation.  plan-57's store-lifetime probing surfaced both the tuple-return
+crash *and* the `parallel {}` capture bug.  The trap is to then fix the sibling
+**on the spot, inside the current investigation**, because it looks simple.  Don't.
+
+**Why it's a problem** (steerable — not a disaster, just a thing to catch early):
+
+1. **The sibling gets a fix-grade decision on discovery-grade evidence.**  It
+   skips the very probe-first rigor the investigation exists to enforce.  Concrete:
+   the `parallel {}` bug was handed a confident verdict ("reject *any*
+   enclosing-scope reference, zero blast radius") off a coarse 4-row table — and a
+   test *already in the repo* (`tests/scripts/81`, the P245 guard) disproved it
+   (parent-var **reads** are legal and tested; only **writes** corrupt).  A fix
+   built on that verdict would have broken a passing test.  That is the exact
+   "fix-from-one-repro under-fixes a complex-variant bug" trap the section above
+   warns about — re-entered, ironically, *during* a disciplined investigation.
+2. **It contaminates the investigation's record and its landmark set.**  An
+   investigation is a clean account of *one* thesis (plan-57 = store lifetime /
+   [Goal E](../GOALS.md)).  Bolt an unrelated bug's fix into it and the probes stop
+   telling you which landmarks are thoroughly mapped and which are half-probed
+   imports — the ledger lies about its own reliability.
+
+**The steer:** when a sibling bug surfaces, **record the discovery** (one note:
+shape + minimal repro + "investigated separately") and give it its **own** scoped
+edge-probe before any fix — same rigor, separate ledger.  This is just the
+[DEVELOPMENT.md route-to-canonical-home rule](../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
+applied to investigations: a discovered bug that is not part of the active thesis
+goes to its own home unless it **shares a fix site** with the bug you're on.  The
+discovery note stays in the investigation's log (faithful record of what the
+probing found); the *case* and the *fix* live in their own scope.
+
+This whole discipline is not a separate process rule — it is
+[Goal E](../GOALS.md#the-method-mirrors-the-goal) applied to our own reasoning:
+the stated model (the investigation's thesis, a bug's verdict) must match the
+verified reality, and a divergence is fixed by removing the gloss, not asserting
+past it.  We hold our own claims to the exceptionless-transparency standard loft
+holds its memory model to — because a team that tolerates hidden machinery in its
+reasoning cannot credibly ship a language whose promise is no-hidden-machinery.
 
 ### When a problem should escalate to an investigation plan
 

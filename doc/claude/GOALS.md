@@ -154,6 +154,29 @@ Met-and-healthy when the guard is silent corpus-wide *and* the assertion holds
 *and keeps holding*.  A guard that starts firing is the alarm that the model and
 the runtime have drifted apart.
 
+### The method mirrors the goal
+
+Goal E's law — *the stated model must match reality; a divergence is a bug, fixed
+by **removing** hidden machinery, not by adding cleverness* — is also how loft is
+**developed**, not only what it ships.  The same law, one level up, governs our
+own reasoning:
+
+- an investigation's stated thesis must match its contents — don't smuggle an
+  unrelated bug's fix into it (that makes the ledger diverge from what it claims
+  to be);
+- a bug verdict must match the bug's **verified** shape — don't assert "zero blast
+  radius" over a region you haven't probed.  An unverified confidence is the rc
+  *"the count handles it"* gloss wearing a new hat: a clean story laid over a
+  reality you didn't check.
+
+The edge-probe-first discipline, the kept probe landmarks, and the sibling-bug
+scope hygiene
+([plans/README.md § Edge-probe](plans/README.md#edge-probe-before-fixing--the-lightweight-default-for-lofts-complex-variant-bugs))
+are this same exceptionless-transparency law turned on our own claims.  This is
+not decoration: **a team that tolerates hidden machinery in its own reasoning
+cannot credibly ship a language whose whole promise is no-hidden-machinery.**  The
+process is the proof of concept for the product.
+
 ---
 
 ## The two floors — why dogfood is paused, and when it resumes
