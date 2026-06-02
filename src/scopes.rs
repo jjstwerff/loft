@@ -3101,7 +3101,13 @@ fn guard_note(stack: &[(u16, bool)], lca: &mut Option<Vec<(u16, bool)>>) {
     });
 }
 
-fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16, bool)>, lca: &mut Option<Vec<(u16, bool)>>) {
+fn guard_refs(
+    node: &Value,
+    target: u16,
+    free_ref_nr: u32,
+    stack: &mut Vec<(u16, bool)>,
+    lca: &mut Option<Vec<(u16, bool)>>,
+) {
     match node {
         Value::Var(v) if *v == target => guard_note(stack, lca),
         Value::Set(v, val) => {
@@ -3111,7 +3117,10 @@ fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16,
             guard_refs(val, target, free_ref_nr, stack, lca);
         }
         Value::Call(op, args) => {
-            if *op == free_ref_nr && args.len() == 1 && matches!(args[0].unspan(), Value::Var(v) if *v == target) {
+            if *op == free_ref_nr
+                && args.len() == 1
+                && matches!(args[0].unspan(), Value::Var(v) if *v == target)
+            {
                 return;
             }
             for a in args {
@@ -3153,7 +3162,9 @@ fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16,
                 guard_refs(a, target, free_ref_nr, stack, lca);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => guard_refs(v, target, free_ref_nr, stack, lca),
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            guard_refs(v, target, free_ref_nr, stack, lca)
+        }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
             for op in ops {
                 guard_refs(op, target, free_ref_nr, stack, lca);
@@ -3188,30 +3199,46 @@ fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16,
 fn escapes_value(v: &Value, target: u16) -> bool {
     match v.unspan() {
         Value::Var(t) => *t == target,
-        Value::Tuple(elems) | Value::Insert(elems) => elems.iter().any(|e| escapes_value(e, target)),
+        Value::Tuple(elems) | Value::Insert(elems) => {
+            elems.iter().any(|e| escapes_value(e, target))
+        }
         _ => false,
     }
 }
 
 fn guard_escapes(node: &Value, target: u16) -> bool {
     match node {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target) || guard_escapes(v, target),
+        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            escapes_value(v, target) || guard_escapes(v, target)
+        }
         Value::Block(bl) | Value::Loop(bl) => {
             // The block's VALUE is its last operator; if that hands out the local
             // (directly or in a tuple/literal), it escapes (block-result `x = {
             // …; a }` U3; `return (a, n)` t2).
-            bl.operators.last().is_some_and(|o| escapes_value(o, target)) || bl.operators.iter().any(|op| guard_escapes(op, target))
+            bl.operators
+                .last()
+                .is_some_and(|o| escapes_value(o, target))
+                || bl.operators.iter().any(|op| guard_escapes(op, target))
         }
-        Value::If(t, a, b) => guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target),
+        Value::If(t, a, b) => {
+            guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target)
+        }
         Value::Set(_, val) | Value::Drop(val) => guard_escapes(val, target),
-        Value::Iter(_, c, n, e) => guard_escapes(c, target) || guard_escapes(n, target) || guard_escapes(e, target),
-        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
-            args.iter().any(|a| guard_escapes(a, target))
+        Value::Iter(_, c, n, e) => {
+            guard_escapes(c, target) || guard_escapes(n, target) || guard_escapes(e, target)
         }
+        Value::Call(_, args)
+        | Value::CallRef(_, args)
+        | Value::Insert(args)
+        | Value::Tuple(args)
+        | Value::Parallel(args) => args.iter().any(|a| guard_escapes(a, target)),
         Value::TuplePut(_, _, inner) => guard_escapes(inner, target),
         Value::Span(b) => guard_escapes(&b.1, target),
         Value::ParFor(b) => {
-            guard_escapes(&b.input, target) || guard_escapes(&b.worker, target) || guard_escapes(&b.threads, target) || guard_escapes(&b.body, target)
+            guard_escapes(&b.input, target)
+                || guard_escapes(&b.worker, target)
+                || guard_escapes(&b.threads, target)
+                || guard_escapes(&b.body, target)
         }
         _ => false,
     }
@@ -3230,7 +3257,11 @@ fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name
         let mut ambiguous = false;
         for v in 0..vars.count() {
             if vars.tp(v).depend().contains(&vdb) {
-                if vars.tp(v).depend().len() != 1 || vars.is_argument(v) || vars.is_captured(v) || backed.is_some() {
+                if vars.tp(v).depend().len() != 1
+                    || vars.is_argument(v)
+                    || vars.is_captured(v)
+                    || backed.is_some()
+                {
                     ambiguous = true;
                     break;
                 }

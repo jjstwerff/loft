@@ -3198,8 +3198,10 @@ impl Parser {
                 // header) keeps `OpSetInt4` in the arm below.
                 let vec_tp = self.vector_of(content);
                 let elem_db_tp = self.database.content(vec_tp);
-                let field_ref =
-                    self.cl("OpGetField", &[ref_code, pos_val, Value::Int(i32::from(vec_tp))]);
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[ref_code, pos_val, Value::Int(i32::from(vec_tp))],
+                );
                 self.cl(
                     "OpAppendVector",
                     &[field_ref, val_code, Value::Int(i32::from(elem_db_tp))],
