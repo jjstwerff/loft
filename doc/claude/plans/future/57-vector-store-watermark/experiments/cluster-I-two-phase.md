@@ -35,7 +35,7 @@ foundation (`00dc10ae`):
   `OpFreeRef(__vdb)` *inside* the confined block.
 - Debug/measurement scaffolding included: `CONF_OFF` env disables phase 2 (A/B),
   `CONF_DBG` prints the confined map, `FREE_DBG` (allocation.rs) logs every
-  `free_named` with rc + already-free.
+  `free_named` with rc + already-free, `RC_OFF` forces the free path (rc-removal probe).
 
 ## What we learned (the real lessons — corrected; keep these accurate)
 
@@ -75,6 +75,35 @@ foundation (`00dc10ae`):
 5. **`alloc`-timing is a real but DISTINCT axis** (do not conflate with the free
    problem): the `max active` watermark is also gated by when `OpDatabase` runs.
    Worth its own probe once free-timing actually moves.
+
+## Ruled-out ledger — the accumulated information (the real asset)
+
+Each failed attempt *subtracted* a wrong explanation; the remaining space is small
+and aimed.  (Progress is this subtraction — anything else would be luck.)
+
+| Hypothesis | Experiment | Verdict |
+|---|---|---|
+| Free-node *position* in the IR | relocation post-pass (reverted) | ruled out — moving the node alone does nothing |
+| `compute_intervals` *timing* | two-phase runs before it | ruled out — still inert |
+| **rc** holds the store past block exit | **`RC_OFF` flag** (this diff) | **ruled out — stderr-only free order byte-identical rc on/off; one `free_named`/store at `rc=1`, no `dec_rc`** |
+| scope-registration *label* | two-phase | ruled out — `vars.scope(vdb)` moves to `b`, the runtime free does not |
+| `if true` constant-fold flattening the blocks | non-constant `if n>k` repro | ruled out — same batching |
+
+**Leading hypothesis (verify, do NOT assert):** the runtime free follows the
+`__vdb`'s **slot lifetime**, which is function-scoped because its null-init is
+hoisted to body position 0 — and codegen ties the free to that slot's teardown,
+overriding the IR's block-scoped `OpFreeRef`.  Evidence: allocs are *per-block*
+(sequential `+#2 +#3 +#4 +#5`) but frees *all* defer to function exit (LIFO
+`-#5 -#4 -#3 -#2`).  Every attempt so far operated at the IR/scope level *above*
+the slot; the slot is downstream and unmoved.  This may be a genuine tension, not
+an oversight — the declaration *must* stay at body 0 for native (moving it broke
+the `OpClearVector` attempt), so "free at block exit" and "slot stays
+function-scoped" might be in direct conflict.
+
+**Next experiment:** does codegen emit the `__vdb` free from the in-block
+`OpFreeRef`, or from function-scope slot teardown?  (Trace the linear bytecode /
+`--show-rust`, not the IR pretty-print — which already misled this doc once.)  That
+confirms or kills the slot hypothesis.
 
 ## State
 

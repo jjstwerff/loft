@@ -1,8 +1,8 @@
 diff --git a/src/database/allocation.rs b/src/database/allocation.rs
-index 2cf9aea3..592cc9b7 100644
+index 2cf9aea3..e85e700b 100644
 --- a/src/database/allocation.rs
 +++ b/src/database/allocation.rs
-@@ -172,6 +172,12 @@ impl Stores {
+@@ -172,11 +172,22 @@ impl Stores {
          let al = db.store_nr;
          debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
          let store = &mut self.allocations[al as usize];
@@ -15,6 +15,17 @@ index 2cf9aea3..592cc9b7 100644
          if store.free {
              return; // Already freed — no-op (replaces Issue #120 tolerance hack).
          }
+         // Reference counting: decrement and only free when rc drops to 0.
+-        if store.ref_count > 1 {
++        // RC_OFF (plan-57 experiment): force the free path — treat every store as
++        // single-owner.  Tests whether rc gates the cluster-I block-exit free, and
++        // doubles as the rc-removal probe (what breaks reveals rc's real users,
++        // chiefly closure capture).
++        let rc_off = std::env::var("RC_OFF").is_ok();
++        if store.ref_count > 1 && !rc_off {
+             store.ref_count -= 1;
+             if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
+                 let label = if name.is_empty() { "" } else { name };
 diff --git a/src/scopes.rs b/src/scopes.rs
 index cf75c23c..f97b76c4 100644
 --- a/src/scopes.rs
