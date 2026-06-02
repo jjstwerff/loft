@@ -1,0 +1,265 @@
+diff --git a/src/database/allocation.rs b/src/database/allocation.rs
+index 2cf9aea3..592cc9b7 100644
+--- a/src/database/allocation.rs
++++ b/src/database/allocation.rs
+@@ -172,6 +172,12 @@ impl Stores {
+         let al = db.store_nr;
+         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
+         let store = &mut self.allocations[al as usize];
++        if std::env::var("FREE_DBG").is_ok() {
++            eprintln!(
++                "[free_named] #{al} {name:>10} rc={} already_free={}",
++                store.ref_count, store.free
++            );
++        }
+         if store.free {
+             return; // Already freed — no-op (replaces Issue #120 tolerance hack).
+         }
+diff --git a/src/scopes.rs b/src/scopes.rs
+index cf75c23c..f97b76c4 100644
+--- a/src/scopes.rs
++++ b/src/scopes.rs
+@@ -47,6 +47,11 @@ struct Scopes {
+     var_order: Vec<u16>,
+     /// Variables that are redefined after running out-of-scope get copied with this mapping.
+     var_mapping: HashMap<u16, u16>,
++    /// Plan-57 cluster-I two-phase scan: confined `__vdb`/local var → the block
++    /// scope it should register at instead of function scope, so the block-exit
++    /// `free_vars` sweep frees the store there.  Empty on phase 1; populated from
++    /// `store_confinement` for the gated phase-2 re-scan (`put_scope` consults it).
++    confined: HashMap<u16, u16>,
+     /// The scopes of the currently traversed loops.
+     loops: Vec<u16>,
+     /// Recursion depth counter for `scan`; reset to 0 when scope analysis starts.
+@@ -91,81 +96,111 @@ struct Scopes {
+ }
+ 
+ /// Perform scope analysis on all currently known functions.
++/// One scan pass for [`check`]: scan `orig_code`/`orig_vars`, prepend the
++/// lift-var null-inits, apply the result to `def`, run the debug ref/leak checks,
++/// and set each variable's scope.  Runs once normally; plan-57 cluster I re-runs
++/// it with a non-empty `confined` map (`__vdb`/local → block scope) so a confined
++/// store registers — and therefore frees — at its block exit (`put_scope`).
++fn run_scan_phase(
++    data: &mut Data,
++    d_nr: u32,
++    orig_code: &Value,
++    orig_vars: &Function,
++    confined: &HashMap<u16, u16>,
++) {
++    let mut scopes = Scopes {
++        d_nr,
++        max_scope: 1,
++        scope: 0,
++        stack: Vec::new(),
++        var_scope: BTreeMap::new(),
++        var_order: Vec::new(),
++        var_mapping: HashMap::new(),
++        confined: confined.clone(),
++        loops: vec![],
++        scan_depth: 0,
++        lift_counter: 0,
++        lift_vars: Vec::new(),
++        ret_temp_counter: 0,
++        paired_witness: HashMap::new(),
++        witness_buffer: HashMap::new(),
++    };
++    let mut function = Function::copy(orig_vars);
++    for a in function.arguments() {
++        scopes.var_scope.insert(a, 0);
++    }
++    let mut code = scopes.scan(orig_code, &mut function, data);
++    // lift vars from `scan_args` are assigned inside conditional branches but
++    // their `OpFreeRef` lives at function exit; prepend the null-inits so codegen
++    // reserves their slot along every path (see the original comment in check).
++    if !scopes.lift_vars.is_empty()
++        && let Value::Block(bl) = &mut code
++    {
++        for &v in scopes.lift_vars.iter().rev() {
++            bl.operators.insert(0, v_set(v, Value::Null));
++        }
++    }
++    data.definitions[d_nr as usize].code = code;
++    data.definitions[d_nr as usize].variables = function;
++    #[cfg(debug_assertions)]
++    check_ref_leaks(
++        &data.definitions[d_nr as usize].code,
++        &data.definitions[d_nr as usize].variables,
++        data,
++        &data.definitions[d_nr as usize].name.clone(),
++        &data.definitions[d_nr as usize].returned.clone(),
++        &scopes.var_scope,
++    );
++    #[cfg(debug_assertions)]
++    check_arg_ref_allocs(
++        &data.definitions[d_nr as usize].code,
++        &data.definitions[d_nr as usize].variables,
++        &data.definitions[d_nr as usize].name.clone(),
++    );
++    #[cfg(debug_assertions)]
++    check_text_return(
++        &data.definitions[d_nr as usize].code,
++        &data.definitions[d_nr as usize].variables,
++        &data.definitions[d_nr as usize].name.clone(),
++        &data.definitions[d_nr as usize].returned.clone(),
++        data,
++    );
++    for (v_nr, scope) in scopes.var_scope {
++        data.definitions[d_nr as usize]
++            .variables
++            .set_scope(v_nr, scope);
++    }
++}
++
+ pub fn check(data: &mut Data) {
+     for d_nr in 0..data.definitions() {
+         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
+             continue;
+         }
+-        let mut scopes = Scopes {
+-            d_nr,
+-            max_scope: 1,
+-            scope: 0,
+-            stack: Vec::new(),
+-            var_scope: BTreeMap::new(),
+-            var_order: Vec::new(),
+-            var_mapping: HashMap::new(),
+-            loops: vec![],
+-            scan_depth: 0,
+-            lift_counter: 0,
+-            lift_vars: Vec::new(),
+-            ret_temp_counter: 0,
+-            paired_witness: HashMap::new(),
+-            witness_buffer: HashMap::new(),
+-        };
+-        let mut function = Function::copy(&data.def(d_nr).variables);
+-        for a in function.arguments() {
+-            scopes.var_scope.insert(a, 0);
+-        }
+-        let mut code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
+-        // lift vars from `scan_args` are assigned inside conditional
+-        // branches (if-chains, match arms) but their `OpFreeRef` lives at
+-        // function exit.  Without a Set(v, Null) at function entry, codegen's
+-        // stack.position never reserves their slot along every execution path,
+-        // and `generate_var` asserts when the function-exit free reads a slot
+-        // that some branch never pushed.  Prepend the null-inits now.
+-        if !scopes.lift_vars.is_empty()
+-            && let Value::Block(bl) = &mut code
+-        {
+-            for &v in scopes.lift_vars.iter().rev() {
+-                bl.operators.insert(0, v_set(v, Value::Null));
+-            }
+-        }
+-        data.definitions[d_nr as usize].code = code;
+-        data.definitions[d_nr as usize].variables = function;
+-        // in debug builds, assert that every owned Reference variable emitted an
+-        // OpFreeRef.  Catches scope-registration bugs before they reach the runtime
+-        // "Database N not correctly freed" assertion (which fires with no context).
+-        #[cfg(debug_assertions)]
+-        check_ref_leaks(
+-            &data.definitions[d_nr as usize].code,
+-            &data.definitions[d_nr as usize].variables,
+-            data,
+-            &data.definitions[d_nr as usize].name.clone(),
+-            &data.definitions[d_nr as usize].returned.clone(),
+-            &scopes.var_scope,
+-        );
+-        #[cfg(debug_assertions)]
+-        check_arg_ref_allocs(
+-            &data.definitions[d_nr as usize].code,
+-            &data.definitions[d_nr as usize].variables,
+-            &data.definitions[d_nr as usize].name.clone(),
+-        );
+-        #[cfg(debug_assertions)]
+-        check_text_return(
++        let free_ref_nr = data.def_nr("OpFreeRef");
++        let orig_code = data.definitions[d_nr as usize].code.clone();
++        let orig_vars = Function::copy(&data.def(d_nr).variables);
++        // Phase 1: the normal scan → apply → set-scope pass.
++        run_scan_phase(data, d_nr, &orig_code, &orig_vars, &HashMap::new());
++        // Plan-57 cluster I — gated two-phase scan.  If a vector store is
++        // block-confined, re-scan registering its `__vdb` (+ backed local) at the
++        // confined block scope so the block-exit `free_vars` sweep frees the store
++        // there.  `CONF_OFF` disables phase 2 for A/B watermark measurement.
++        let confined = store_confinement(
+             &data.definitions[d_nr as usize].code,
+             &data.definitions[d_nr as usize].variables,
+-            &data.definitions[d_nr as usize].name.clone(),
+-            &data.definitions[d_nr as usize].returned.clone(),
+-            data,
++            free_ref_nr,
+         );
+-        for (v_nr, scope) in scopes.var_scope {
+-            data.definitions[d_nr as usize]
+-                .variables
+-                .set_scope(v_nr, scope);
++        if !confined.is_empty() && std::env::var("CONF_OFF").is_err() {
++            let mut cmap: HashMap<u16, u16> = HashMap::new();
++            for (&vdb, &(local, b)) in &confined {
++                cmap.insert(vdb, b);
++                cmap.insert(local, b);
++            }
++            run_scan_phase(data, d_nr, &orig_code, &orig_vars, &cmap);
+         }
+         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
+         let free_text_nr = data.def_nr("OpFreeText");
+-        let free_ref_nr = data.def_nr("OpFreeRef");
+         // Plan-57 cluster I: store-lifetime guard (diagnostic, gated).
+         if std::env::var("LOFT_STORE_GUARD").is_ok() {
+             let d = &data.definitions[d_nr as usize];
+@@ -564,6 +599,16 @@ impl Scopes {
+         }
+     }
+ 
++    /// Register `v`'s scope.  Normally the current scope, but on the gated
++    /// phase-2 re-scan a confined `__vdb`/local registers at its block scope
++    /// (plan-57 cluster I) so the block-exit `free_vars` sweep frees its store
++    /// there instead of at function exit.  `confined` is empty on phase 1, so
++    /// this is identical to `var_scope.insert(v, self.scope)` in the common case.
++    fn put_scope(&mut self, v: u16) {
++        let scope = self.confined.get(&v).copied().unwrap_or(self.scope);
++        self.var_scope.insert(v, scope);
++    }
++
+     fn scan_set(&mut self, ov: u16, value: &Value, function: &mut Function, data: &Data) -> Value {
+         assert_ne!(
+             ov,
+@@ -627,12 +672,12 @@ impl Scopes {
+             }
+             if !self.var_scope.contains_key(&d) {
+                 depend.push(d);
+-                self.var_scope.insert(d, self.scope);
++                self.put_scope(d);
+                 self.var_order.push(d);
+             }
+         }
+         if !self.var_scope.contains_key(&v) {
+-            self.var_scope.insert(v, self.scope);
++            self.put_scope(v);
+             self.var_order.push(v);
+         }
+         // When a Reference variable is assigned from a user-function call,
+@@ -797,7 +842,7 @@ impl Scopes {
+             } else {
+                 prefix.push(v_set(d, Value::Null));
+             }
+-            self.var_scope.insert(d, self.scope);
++            self.put_scope(d);
+         }
+         if prefix.is_empty() && ls.is_empty() {
+             Value::Set(v, Box::new(set_value))
+@@ -843,12 +888,12 @@ impl Scopes {
+         // the branch scans see them as already assigned and use the set_var/OpPutRef
+         // re-assignment path instead of claim().
+         for &v in &pre_inits {
+-            self.var_scope.insert(v, self.scope);
++            self.put_scope(v);
+             self.var_order.push(v);
+         }
+         // Register small variables assigned in both branches at the parent scope too.
+         for &v in &small_both {
+-            self.var_scope.insert(v, self.scope);
++            self.put_scope(v);
+             self.var_order.push(v);
+         }
+ 
