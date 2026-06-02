@@ -357,11 +357,11 @@ impl State {
             }
             return Ok(());
         }
-        let vars = &d.def(fn_d_nr).variables;
+        let vars = &d.def(fn_d_nr).variables();
         writeln!(
             f,
             "[STACK] variables for fn_d_nr={fn_d_nr} ({}):",
-            d.def(fn_d_nr).name
+            d.def(fn_d_nr).name()
         )?;
         let mut slots: Vec<(u16, String, String, u16)> = Vec::new();
         for v_nr in 0..vars.count() {
@@ -455,7 +455,7 @@ impl State {
             return out;
         }
         let def = data.def(fn_d_nr);
-        let vars = &def.variables;
+        let vars = &def.variables();
         // Pre-compute bytecode reference ranges per var_nr by scanning
         // self.vars for entries within this function's bytecode range.
         let fn_bc_start = def.code_position;
@@ -670,7 +670,7 @@ impl State {
         // Sort by slot, then by liveness so live variables come first within
         // each slot (slot coalescing groups multiple vars at the same offset).
         vars.sort_by_key(|v| (v.slot, !v.live));
-        let total_vars = data.def(fn_d_nr).variables.count();
+        let total_vars = data.def(fn_d_nr).variables().count();
         let live_count = vars.iter().filter(|v| v.live).count();
         // When LOFT_DUMP_VARS_LIVE is set, hide stale (slot-coalesced inactive)
         // variables — only show what is actually live at this code position.
@@ -681,7 +681,7 @@ impl State {
         writeln!(
             f,
             "[VARS] fn={} code_pos={} stack_pos={} ({} live, {} slot-assigned, {} total)",
-            data.def(fn_d_nr).name,
+            data.def(fn_d_nr).name(),
             self.code_pos,
             self.stack_pos,
             live_count,
@@ -751,7 +751,7 @@ impl State {
         d_nr: u32,
         data: &Data,
     ) -> Result<u16, Error> {
-        write!(f, "{}(", data.def(d_nr).name)?;
+        write!(f, "{}(", data.def(d_nr).name())?;
         let mut stack_pos = 0;
         for a_nr in 0..data.attributes(d_nr) {
             if a_nr > 0 {
@@ -762,18 +762,18 @@ impl State {
                 "{}: {}[{stack_pos}]",
                 data.attr_name(d_nr, a_nr),
                 data.attr_type(d_nr, a_nr)
-                    .show(data, &data.def(d_nr).variables)
+                    .show(data, data.def(d_nr).variables())
             )?;
             stack_pos += size(&data.attr_type(d_nr, a_nr), &Context::Argument);
         }
         write!(f, ")")?;
-        if data.def(d_nr).returned != Type::Void {
+        if *data.def(d_nr).returned() != Type::Void {
             write!(
                 f,
                 " -> {}",
                 data.def(d_nr)
                     .returned
-                    .show(data, &data.def(d_nr).variables)
+                    .show(data, data.def(d_nr).variables())
             )?;
         }
         writeln!(f)?;
@@ -793,15 +793,15 @@ impl State {
         a_nr: usize,
         a: &Attribute,
     ) -> Result<(), Error> {
-        if (def.name == "OpGotoFalseWord" || def.name == "OpGotoWord") && a_nr == 0 {
+        if (def.name() == "OpGotoFalseWord" || def.name() == "OpGotoWord") && a_nr == 0 {
             let to = i64::from(p) + 3 + i64::from(self.code::<i16>()) - i64::from(start_pos);
             write!(f, "jump=:POS{to}")?;
-        } else if (def.name == "OpGoto" || def.name == "OpGotoFalse") && a_nr == 0 {
+        } else if (def.name() == "OpGoto" || def.name() == "OpGotoFalse") && a_nr == 0 {
             let to = i64::from(p) + 2 + i64::from(self.code::<i8>()) - i64::from(start_pos);
             write!(f, "jump=:POS{to}")?;
-        } else if def.name == "OpCall" && a_nr == 2 {
+        } else if def.name() == "OpCall" && a_nr == 2 {
             self.fn_name(f, data)?;
-        } else if def.name == "OpStaticCall" {
+        } else if def.name() == "OpStaticCall" {
             let v = self.code::<u16>();
             for (n, val) in &self.library_names {
                 if *val == v {
@@ -827,7 +827,7 @@ impl State {
                 f,
                 "{}: {}",
                 a.name,
-                a.typedef.show(data, &data.def(d_nr).variables)
+                a.typedef.show(data, data.def(d_nr).variables())
             )?;
         } else {
             write!(f, "{}={}", a.name, self.dump_attribute(a))?;
@@ -886,7 +886,7 @@ impl State {
             assert!(
                 data.has_op(op),
                 "Unknown operator {op} in byte_code of {}",
-                data.def(d_nr).name
+                data.def(d_nr).name()
             );
             let def = data.operator(op);
             write!(f, "{:4}", p - start_pos)?;
@@ -898,19 +898,19 @@ impl State {
             } else {
                 write!(f, ": ")?;
             }
-            write!(f, "{}(", &def.name[2..])?;
-            for (a_nr, a) in def.attributes.iter().enumerate() {
+            write!(f, "{}(", &def.name()[2..])?;
+            for (a_nr, a) in def.attributes().iter().enumerate() {
                 if a_nr > 0 {
                     write!(f, ", ")?;
                 }
                 self.dump_op_arg(f, def, p, start_pos, d_nr, data, a_nr, a)?;
             }
             write!(f, ")")?;
-            if def.returned != Type::Void {
+            if *def.returned() != Type::Void {
                 write!(
                     f,
                     " -> {}",
-                    def.returned.show(data, &data.def(d_nr).variables)
+                    def.returned().show(data, data.def(d_nr).variables())
                 )?;
             }
             if let Some(t) = self.types.get(&p)
@@ -919,7 +919,7 @@ impl State {
                 write!(f, " type={} {t:}", self.database.types[*t as usize].name)?;
             }
             if annotate_slots && let Some(v) = self.vars.get(&p) {
-                let vars = &data.def(d_nr).variables;
+                let vars = data.def(d_nr).variables();
                 write!(
                     f,
                     " var={}[{}]:{}",
@@ -928,9 +928,9 @@ impl State {
                     vars.tp(*v).show(data, vars)
                 )?;
             }
-            if def.name == "OpConvRefFromNull" {
+            if def.name() == "OpConvRefFromNull" {
                 write!(f, " ; [store-alloc]")?;
-            } else if def.name == "OpFreeRef" {
+            } else if def.name() == "OpFreeRef" {
                 write!(f, " ; [store-free]")?;
             }
             writeln!(f)?;
@@ -1263,25 +1263,25 @@ impl State {
         if let Some(line) = self.line_numbers.get(&cur) {
             write!(log, " [{line}]")?;
         }
-        write!(log, " {}(", &def.name[2..])?;
+        write!(log, " {}(", &def.name()[2..])?;
         // Inverse the order of reading the attributes correctly from the stack.
         let mut attr = BTreeMap::new();
-        for (a_nr, a) in def.attributes.iter().enumerate() {
+        for (a_nr, a) in def.attributes().iter().enumerate() {
             if !a.mutable {
-                if def.name == "OpStaticCall" {
+                if def.name() == "OpStaticCall" {
                     let nr = self.code::<i16>();
                     write!(log, "{})", FUNCTIONS[nr as usize].0)?;
                     self.code_pos = cur;
                     self.stack_pos = stack;
                     return Ok(op);
-                } else if def.name == "OpReturn" && a_nr == 0 {
+                } else if def.name() == "OpReturn" && a_nr == 0 {
                     self.return_attr(&mut attr, a_nr);
-                } else if def.name == "OpCall" && a_nr == 2 {
+                } else if def.name() == "OpCall" && a_nr == 2 {
                     self.call_name(&mut attr, a_nr, data);
-                } else if def.name.starts_with("OpGoto") && a_nr == 0 {
+                } else if def.name().starts_with("OpGoto") && a_nr == 0 {
                     let to = i64::from(cur) + 2 + i64::from(self.code::<i16>()) - i64::from(minus);
                     attr.insert(a_nr, format!("jump={to}"));
-                } else if def.name == "OpIterate" {
+                } else if def.name() == "OpIterate" {
                     self.iterate_args(log)?;
                     self.code_pos = cur;
                     self.stack_pos = stack;
@@ -1307,7 +1307,7 @@ impl State {
                     let annotation =
                         if config.annotate_slots && d_nr != u32::MAX && code != u32::MAX {
                             if let Some(&v) = self.vars.get(&code) {
-                                format!("={}", data.def(d_nr).variables.name(v))
+                                format!("={}", data.def(d_nr).variables().name(v))
                             } else {
                                 String::new()
                             }
@@ -1320,16 +1320,16 @@ impl State {
                 }
             }
         }
-        if def.name == "OpGetRecord" {
+        if def.name() == "OpGetRecord" {
             self.get_record_keys(data, &mut attr);
         }
-        for a_nr in (0..def.attributes.len()).rev() {
-            let a = &def.attributes[a_nr];
+        for a_nr in (0..def.attributes().len()).rev() {
+            let a = &def.attributes()[a_nr];
             if a.mutable {
                 // OpPutFnRef/OpVarFnRef _fnref attribute is typed as text but
                 // the stack holds a 16-byte fn-ref (d_nr + closure DbRef).  Reading
                 // it as Str dereferences a garbage pointer → SIGSEGV.
-                if (def.name == "OpPutFnRef" || def.name == "OpVarFnRef")
+                if (def.name() == "OpPutFnRef" || def.name() == "OpVarFnRef")
                     && matches!(a.typedef, Type::Text(_))
                 {
                     self.stack_pos -= 16;
@@ -1449,12 +1449,12 @@ impl State {
     ) -> Result<(), Error> {
         let stack = self.stack_pos;
         let def = data.operator(op);
-        if def.name == "OpReturn" {
+        if def.name() == "OpReturn" {
             writeln!(log, "{}", self.dump_result(code))?;
             return Ok(());
         }
-        if def.returned == Type::Void {
-            if def.name == "OpFreeRef" {
+        if *def.returned() == Type::Void {
+            if def.name() == "OpFreeRef" {
                 writeln!(log, " ; store-free max={}", self.database.max)?;
             } else {
                 writeln!(log)?;
@@ -1463,13 +1463,13 @@ impl State {
         }
         let saved = self.stack_pos;
         let v = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.dump_stack(&def.returned, code, data)
+            self.dump_stack(def.returned(), code, data)
         }))
         .unwrap_or_else(|_| {
             self.stack_pos = saved;
             "<display-error>".to_string()
         });
-        if def.name == "OpConvRefFromNull" {
+        if def.name() == "OpConvRefFromNull" {
             writeln!(log, " -> {v}[{}]", self.stack_pos)?;
             self.stack_pos = stack;
             let db = *self.get_stack::<DbRef>();
@@ -1565,7 +1565,7 @@ impl State {
                     } else if *tp == u32::MAX {
                         code as u16
                     } else {
-                        data.def(*tp).known_type
+                        data.def(*tp).known_type()
                     };
                     let val = *self.get_stack::<u8>();
                     format!("{}({val})", self.database.enum_val(known, val))
@@ -1594,7 +1594,7 @@ impl State {
                 let known = if self.types.contains_key(&code) {
                     self.types[&code]
                 } else {
-                    data.def(*tp).known_type
+                    data.def(*tp).known_type()
                 };
                 let val = *self.get_stack::<DbRef>();
                 if known == u16::MAX || val.store_nr as usize >= self.database.allocations.len() {

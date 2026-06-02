@@ -1746,6 +1746,78 @@ pub struct Definition {
 }
 
 impl Definition {
+    // ─── @PLAN54 arc C — store-backed-field read seam ───────────────────────
+    //
+    // Read accessors for the `Definition` fields that live in the store schema
+    // (`src/ir_schema_gen.rs`).  Routing reads through these methods (rather than
+    // touching the `pub` fields directly) is the precondition for swapping the
+    // representation to store-backed per subsystem (§ Incremental migration):
+    // when the swap lands, the method body reads the store instead of `self`,
+    // and every call site is already correct.  Today they are thin field reads —
+    // no behaviour change.  The codegen-DERIVED fields (`code_position` /
+    // `code_length`) are intentionally NOT seamed: they are recomputed on load,
+    // never stored, so they stay native.
+
+    /// Definition name (`n_<fn>` / type name / …).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// `#native "symbol"` extern symbol, or empty.
+    #[must_use]
+    pub fn native(&self) -> &str {
+        &self.native
+    }
+
+    /// Source-file id this definition was parsed from.
+    #[must_use]
+    pub fn source(&self) -> u16 {
+        self.source
+    }
+
+    /// Source position where this definition is declared.
+    #[must_use]
+    pub fn position(&self) -> &Position {
+        &self.position
+    }
+
+    /// The definition's attributes (struct fields / function parameters).
+    #[must_use]
+    pub fn attributes(&self) -> &[Attribute] {
+        &self.attributes
+    }
+
+    /// The code body (function body / field default / …).
+    #[must_use]
+    pub fn code(&self) -> &Value {
+        &self.code
+    }
+
+    /// The related/return type.
+    #[must_use]
+    pub fn returned(&self) -> &Type {
+        &self.returned
+    }
+
+    /// Interpreter operator code.
+    #[must_use]
+    pub fn op_code(&self) -> u16 {
+        self.op_code
+    }
+
+    /// Index into the database's known-types schema.
+    #[must_use]
+    pub fn known_type(&self) -> u16 {
+        self.known_type
+    }
+
+    /// The per-function variable table.
+    #[must_use]
+    pub fn variables(&self) -> &Function {
+        &self.variables
+    }
+
     #[must_use]
     pub fn is_operator(&self) -> bool {
         matches!(self.def_type, DefType::Function)
