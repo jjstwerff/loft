@@ -302,6 +302,14 @@ pub fn check(data: &mut Data) {
                 }
             }
         }
+        // Plan-57 last-use freeing, Phase 2 spike (gated, throwaway): insert
+        // def-point frees before intervals/codegen see the code.
+        if std::env::var("LASTUSE_FREE").is_ok() {
+            let db_nr = data.def_nr("OpDatabase");
+            let gf_nr = data.def_nr("OpGetField");
+            let d = &mut data.definitions[d_nr as usize];
+            lastuse_free_spike(&mut d.code, &mut d.variables, db_nr, gf_nr, free_ref_nr);
+        }
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
         // Plan-57 cluster I: store-lifetime guard (diagnostic, gated).
@@ -3713,6 +3721,97 @@ fn store_liveness_walk(
         }
         _ => {}
     }
+}
+
+/// True if `node` contains the `OpDatabase(Var(store), …)` allocation of `store`.
+fn contains_alloc(node: &Value, store: u16, db_nr: u32) -> bool {
+    match node.unspan() {
+        Value::Call(op, args) => {
+            (*op == db_nr
+                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
+                || args.iter().any(|a| contains_alloc(a, store, db_nr))
+        }
+        Value::Set(_, val) => contains_alloc(val, store, db_nr),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|o| contains_alloc(o, store, db_nr))
+        }
+        Value::If(c, t, e) => {
+            contains_alloc(c, store, db_nr)
+                || contains_alloc(t, store, db_nr)
+                || contains_alloc(e, store, db_nr)
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            ops.iter().any(|o| contains_alloc(o, store, db_nr))
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => contains_alloc(v, store, db_nr),
+        Value::Span(b) => contains_alloc(&b.1, store, db_nr),
+        _ => false,
+    }
+}
+
+/// Plan-57 last-use freeing, Phase 2 — reclaim SPIKE (throwaway, `LASTUSE_FREE`).
+///
+/// For each function-scoped store whose data dies before a later store allocates,
+/// insert `OpFreeRef(store)` into the body block immediately before that later
+/// allocation and set `skip_free` (so the scope-exit sweep does not double-free).
+/// Purpose: prove an explicit def-point free actually reclaims the slot at runtime
+/// — the I-a wall was that an IR free *position* was inert.  Flat-body only.
+fn lastuse_free_spike(code: &mut Value, vars: &mut Function, db_nr: u32, gf_nr: u32, fr_nr: u32) -> usize {
+    let body_scope = match code.unspan() {
+        Value::Block(bl) => bl.scope,
+        _ => return 0,
+    };
+    let mut holds: HashMap<u16, u16> = HashMap::new();
+    let mut alloc: HashMap<u16, u32> = HashMap::new();
+    let mut dead: HashMap<u16, u32> = HashMap::new();
+    let mut last_read: HashMap<u16, u32> = HashMap::new();
+    let mut seq = 0u32;
+    store_liveness_walk(
+        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+    );
+    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
+    let mut stores: Vec<u16> = alloc.keys().copied().collect();
+    stores.sort_unstable();
+    // group: the later store -> the dead stores to free right before its alloc.
+    let mut before: HashMap<u16, Vec<u16>> = HashMap::new();
+    for &st in &stores {
+        if vars.scope(st) != body_scope {
+            continue;
+        }
+        let Some(d) = dead_at(st) else { continue };
+        if let Some(&later) = stores
+            .iter()
+            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
+            .min_by_key(|&&w| alloc[&w])
+        {
+            before.entry(later).or_default().push(st);
+        }
+    }
+    let Value::Block(bl) = code else { return 0 };
+    let mut inserts: Vec<(usize, Vec<u16>)> = before
+        .into_iter()
+        .filter_map(|(later, sts)| {
+            bl.operators
+                .iter()
+                .position(|o| contains_alloc(o, later, db_nr))
+                .map(|idx| (idx, sts))
+        })
+        .collect();
+    inserts.sort_by(|a, b| b.0.cmp(&a.0)); // descending — insert high indices first
+    let mut count = 0;
+    for (idx, sts) in inserts {
+        for st in sts {
+            bl.operators
+                .insert(idx, Value::Call(fr_nr, vec![Value::Var(st)]));
+            // NB: deliberately NOT set_skip_free — codegen suppresses ALL
+            // OpFreeRef for a skip_free var (codegen.rs:2202), which would kill
+            // this inserted free too.  The scope-exit free stays as an
+            // idempotent double-free (free_named no-ops an already-free store).
+            count += 1;
+        }
+    }
+    let _ = vars;
+    count
 }
 
 /// Plan-57 last-use freeing, Phase 1 — definition-point liveness diagnostic.
