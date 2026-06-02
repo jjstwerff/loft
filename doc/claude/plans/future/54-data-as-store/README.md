@@ -627,6 +627,48 @@ dual-backing + equivalence assertion exist precisely so each such PR is
 independently mergeable without the rest of the arc.  This same
 finish-before-continue rule governs @PLAN28's S1–S5 rungs.
 
+## Migration step plan — native `Data` → store-backed reads (small steps)
+
+Two distinct payoffs, sequenced **cheapest-first**.  Each step is green and
+shippable on its own (one step = one PR, § Incremental migration pacing).
+
+**G1 — cold-start cache (rebuild-on-load).** Parser + codegen stay native; on a
+cache hit, `read_data` rebuilds the native `Data` from a mmap'd store (**12×
+faster than `parse_dir`**, proven — § arc D probe).  No read-site migration
+needed; this is mostly startup wiring and delivers the big user-visible win.
+
+| Step | Deliverable | Validation | Effort |
+|---|---|---|---|
+| **D1** | `Data::save(path)` / `Data::open(path)` wrappers over `materialize_data_at` + `Store::open` + `read_data`; skip `scopes::check` on load (`done=true`). | extend `mmap_file_round_trip_stdlib` to the file API | S |
+| **D2** | Startup wiring: after parsing the stdlib bundle, write `stdlib.store`; next run `Data::open` it instead of parsing when the cache key matches. | cold-start timing; existing suite unchanged | M |
+| **E1** | Bundle cache key = stdlib key + sorted lib-set + content hashes; drift ⇒ reparse (Q4). | drift unit tests | M |
+| **E2** | Mutability split (Q1): locked mmap bundle store + writable store for user-program defs; `caller_index` rebuilt on load (Q3). | full suite under cache-on | M |
+
+**G2 — zero-copy store-backed reads.** Removes even the rebuild: codegen / exec
+read store fields directly.  Larger; the self-hosting foundation.  Incremental,
+behind the accessor seam, validated by a **dual-backing equivalence harness**
+(read native AND store, assert equal) so every step is reversible.
+
+| Step | Deliverable | Validation | Effort |
+|---|---|---|---|
+| **M0** | Dual-backed `Data` (holds native + materialized store) + `LOFT_IR_CHECK` debug harness asserting store-read == native-read per accessor. Additive; nothing switches yet. | harness self-test on stdlib | M |
+| **M1a** ✅ | `state/` `Definition` field-accessor seam (done). | suite green | — |
+| **M1b** | `generation/` `Definition` field-read seam. | suite green | S |
+| **M1c** | `parser/` + `compile.rs` `Definition` read-site seam (read sites only). | suite green | S–M |
+| **M2** | `data.def(d)` returns a `DefView` (native \| store) carrying the accessor methods; point the M1 seam at it. | M0 harness | M |
+| **M3.0** | Design the node-walk handle: a `match`-able dispatch over the IR node (`kind() -> ValueType` + typed child accessors), backed by native first. | — | S (design) |
+| **M3.1…n** | Convert `state/codegen.rs`'s `generate`/`gen_*` `Value`/`Type` matches (451 sites) to the handle, **function-group by function-group** (one commit each, native backing). | suite green per group | several S |
+| **M4** | Same handle conversion for `src/generation/` (native codegen) `Value`/`Type` matches. | native suite green | several S |
+| **M5** | Per-subsystem **representation swap**: flip a fully-seamed subsystem's backing to store-read (state/codegen first, then generation/); equivalence-assert; ship. | M0 harness + suite + Q5 bench | M each |
+| **M6** | Drop the native `Vec<Definition>`/`Box<Value>` body graph once every reader is store-backed — reads become **zero-copy**. | suite green; bench | M |
+| **M7** | (Optional, self-hosting) parser emits store-backed IR directly — removes the post-parse materialize. | compare_data vs golden | L |
+
+**Sequencing note:** G1 ships the speed win without touching read sites, so do
+it first (or in parallel) — it is independently valuable and de-risks G2 by
+exercising the store on the real startup path.  G2's M0 harness is the
+prerequisite for every swap; M3/M4 (the `Value`/`Type` walk, ~451+ matches) is
+the dominant cost and is deliberately the most finely sliced.
+
 ## Open design questions
 
 1. **Mutability.**  The parser mutates `Data` heavily during two-pass
