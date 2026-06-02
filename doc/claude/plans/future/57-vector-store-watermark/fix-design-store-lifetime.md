@@ -97,54 +97,68 @@ catalogue (`probes/16_*.loft` … `probes/27_*.loft`).
 > Probe hygiene note: avoid stdlib names in probe bodies (`sum`, `first`, …) — a
 > name collision is a parse error, not a lifetime finding (probe 21 false alarm).
 
-## THE OPEN CRUX — pin this FIRST (blocks the design)
+## THE CRUX — RESOLVED (it was a misdiagnosis: scope registration, not rc)
 
-Relocating `OpFreeRef(__vdb_N)` into the confined block is **sound** (escape +
-concat/self-ref family stay correct on both backends) but a runtime **no-op**: the
-store is not released there; `active` keeps climbing.  So **something holds the
-store's rc past block exit** — yet there is **no obvious `inc_rc`** in the vector
-fill path (`inc_rc` is only the explicit closure-capture op at `fill.rs:1967`).
+A read-only **investigation agent** (code + runtime verified) overturned the rc
+framing this section used to hold.
 
-At function exit the *same* `OpFreeRef(__vdb)` *does* free it (rc must reach 0
-there).  So between block-exit and function-exit the rc drops.  **What decrements
-it?**  The candidates to trace, on a single block-local store, rc step by step:
+**There is no rc hold.** `dec_rc=0` every shape; rc=1 throughout (`allocation.rs:118`
+sets `ref_count=1`, `free_named` only decrements when `>1`).  A mid-program
+`OpFreeRef(__vdb)` genuinely **does** free the store — proven: a helper fn returning a
+vector, called 3×, keeps `active` flat at 3 (each call's function-exit free releases
+the store before the next call reuses the slot).
 
-- `OpDatabase` — initial rc (1? more?) — `src/database/allocation.rs` alloc path.
-- `OpGetField` (`a = field of __vdb`) — does the local's DbRef carry an rc? — `fill.rs:1374`.
-- `OpPreAllocVector` / `OpNewRecord` / `OpFinishRecord` — does filling bump the store rc?
-- The **frame discard** at `fn_return` (`State::fn_return`, `discard=N`) — does popping
-  the frame drop the local's reference, and is *that* what lets the function-exit free
-  reach 0?
-- `free_named` (`src/database/allocation.rs:166`) — rc>1 path vs the `store.free` guard.
+**So why was the relocation a "no-op"?**  The reverted `sink_dead_store_frees` ran as a
+post-pass **after `compute_intervals`** — it moved the free *node* but the slot
+allocator had already computed the long (to-function-exit) interval, so the move was
+cosmetic and the watermark never changed.  Not rc — **timing**.
 
-**Until this is answered the free site cannot be chosen correctly.**  Method: a
-minimal one-block-local repro (`/tmp/cl1/one.loft` shape) + `LOFT_STORES=log` with rc
-events (add a `dec_rc`/`inc_rc` trace if the log lacks it), watch store #N's rc from
-`OpDatabase` to teardown.
+**The real coupling is the `__vdb`'s scope registration.**  A vector local `v` carries
+`dep=["__vdb_N"]` ⇒ `owns=false` (`get_free_vars`, `scopes.rs:1250`) ⇒ `v` is never
+freed; the `__vdb` (empty dep) is the sole owner that gets `OpFreeRef`, registered at
+**function scope** because its null-init is hoisted to body position 0
+(`work_references`, `expressions.rs:354`), so `get_free_vars` only frees it at function
+exit.  **The fix is a scope-registration change**: register the confined `__vdb` at its
+LCA block scope and the existing block-exit `free_vars` sweep frees it there — **no rc
+surgery, no extra decrements** (the old "`OpFreeRef` + `Set(local,Null)`" idea is
+unnecessary; rc=1 means a single `OpFreeRef` at the block suffices).
 
 ## Failed approaches — do NOT re-walk
 
 | Approach | Result |
 |---|---|
-| Relocate `OpFreeRef(__vdb)` into the confined block (post-pass `sink_dead_store_frees`, confinement + LIFO + loop-exclusion) | **Sound but ineffective** — runtime no-op (the rc crux above).  Reverted. |
-| Re-scope the local/`__vdb` to the block during `scan` | **Chicken-and-egg** — free emission runs during `scan`; inner-block sweeps fire before the full reference picture is known.  Would need a pre-pass replicating scan's scope-numbering, or un-hoisting with parser-side escape analysis. |
-| `OpFreeRef(old __vdb)` at the overwrite (cluster III) | Runtime **no-op** (rc — same crux). |
-| `OpClearVector` store-reuse (cluster III) | Broke native codegen (`var_v` out of scope) + runtime (`+=`, text iter, keyed concat, a SIGSEGV). |
+| Relocate the `OpFreeRef` node as a **post-pass** (`sink_dead_store_frees`) | **Ineffective — timing, not rc**: ran after `compute_intervals`, so the slot interval was already long; the node move was cosmetic.  Reverted. |
+| `OpClearVector` store-reuse (cluster III) | Broke native codegen (`var_v` out of scope — moved the *declaration* into the block) + runtime (`+=`, text iter, keyed concat, a SIGSEGV).  Reverted. |
+| `OpFreeRef(old __vdb)` at the overwrite (cluster III, naive) | No-op — the repoint doesn't drop the old store; needs the dead-store free at the overwrite in `scopes.rs`, not `create_vector`. |
 
-## Fix approach (design — finalise after the rc crux is pinned)
+## Fix approach — gated two-phase scan (scope re-registration)
 
-Once the rc-hold is known, the free site emits, at the **block-confined last use**
-(cluster I) or the **overwrite point** (cluster III), whatever set of decrements is
-needed to bring the store's rc to 0 — likely `OpFreeRef(__vdb)` **plus** releasing
-the local's reference (a `Set(local, Null)` / dec, mirroring what frame-discard does
-at function exit).  Reuse the **`guard_confine` analysis** to locate the block; emit
-the free at the end of that block (LIFO-correct: relocate in reverse-alloc order,
-loops excluded — `Value::Loop`, not `Value::Block`).
+**Foundation landed (`00dc10ae`):** `store_confinement(code, vars, free_ref_nr)`
+returns `vdb → (local, block_scope)` for every provably-confined store (the
+adversarially-hardened analysis; `store_lifetime_guard` is now a thin reporter over
+it).
 
-**Native:** the `__vdb` declaration stays at function scope (slot not re-scoped), so
-a free in a nested Rust block reading a function-scoped var is valid (the existing
-`__lift_N` pattern already does declaration-at-function-scope + conditional-free).
-Verify with `--show-rust` that no relocated free lands where its var is out of scope.
+**Cluster I** — the chicken-and-egg (free emitted *during* scan, at the `__vdb`'s
+body-position-0 null-init, before scan reaches the confining block; `set_scope`
+asserts-once) is resolved by a **gated two-phase scan** (`scan` is fresh per function,
+`scopes.rs:99`, so it is re-runnable):
+1. scan once → `store_confinement` → if the map is **empty, do nothing** (the common
+   case, no second scan);
+2. else re-scan the saved original `def.code`/`variables` with the map threaded into
+   `Scopes`, so `scan_set`'s `var_scope.insert(__vdb, …)` (`scopes.rs:635`) and
+   `scan_if`'s local pre-init (`scopes.rs:846/851`) register the confined `__vdb`(+local)
+   at the **block scope**.  `get_free_vars` then frees it at block exit — the *tested*
+   free-emission path, no node surgery.
+
+**Keep the `Set(__vdb, Null)` declaration at body position 0** — native emits the
+`let mut var___vdb` at function scope, so a free in a nested block is in-scope; moving
+the *declaration* is what broke the `OpClearVector` attempt.  Only the registration/
+free scope moves.  Verify with `--show-rust` that no free lands where its var is out
+of scope.
+
+**Cluster III** (distinct surface, guard-silent — `v` read at fn end ⇒ LCA *is* the
+function scope): at each **unconditional** overwrite free the *prior* `__vdb`, guarded
+by `!is_captured(v)`, in the `scopes.rs` dead-store path (NOT `create_vector`).
 
 ## Soundness constraints (the guards)
 
