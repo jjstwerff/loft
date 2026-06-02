@@ -1,0 +1,13 @@
+fn f(n: integer) -> integer {
+  p = 0;
+  q = 0;
+  if n > 0 {
+    a: vector<integer> = [1, 2, 3, 4];
+    parallel {
+      { p = a[0] + a[1]; }
+      { q = a[2] + a[3]; }
+    }
+  }
+  p + q
+}
+fn test_par6() { assert(f(5) == 10, "parallel arms read confined vector"); }

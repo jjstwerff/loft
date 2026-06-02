@@ -85,3 +85,25 @@ literal element so the confinement stays sound once the tuple bug is fixed.
 **Still to probe** (per "fire away till 500"): deeper aliasing where the dependent
 is itself a block-result temp; `match`-arm destructuring bindings; `parallel { }`
 (the explicit form, vs the fused `for…par`).
+
+## Round 3 — match bindings, struct-escape chain, explicit parallel
+
+| Probe | Shape | Verdict | Lands |
+|---|---|---|---|
+| `m1_match_bind_vec` | `match b { Full { v } => … }` (enum-payload vec) | silent | sound — enum-owned vector is not a `__vdb`-backed local; freed with the enum |
+| `a3_via_struct_escape` | `a; x = { a }; out = Bag{items:x}` returned | silent | sound — inner block-result `{ a }` is caught; struct ctor deep-copies |
+| `par4_explicit` / `par5_novec` / `par6_correct` | explicit `parallel { … }` arms | (crash) | **explicit `parallel {}` with non-call arms SIGSEGVs** — even with NO vector (`par5`). A separate parallel-robustness issue; NOT confinement. The confinement-relevant case (vector under parallel) is `par3` (fused `for…par`) = **sound**. |
+
+**Outcome of round 3:** match-arm bindings and struct-escape chains are sound; the
+only finding is that explicit `parallel {}` with non-function-call arms crashes
+(reproduced with and without a vector) — a parallel-subsystem robustness gap to
+chase in a focused pass, orthogonal to the store-lifetime fix.
+
+## Investigation status (3 rounds, 38 probes)
+
+The `LOFT_STORE_GUARD` confinement analysis is now **adversarially hardened**:
+correct LCA confinement; loop-internal excluded; and sound against every escape
+shape probed — return/yield/break, block-result, tuple-element, dep-aliasing, and
+the borrow chains.  Two real, separate bugs surfaced and were kept as landmarks
+(`bug_tuple_vec`, the `parallel {}` non-call-arm crash).  The fix can now be built
+on an analysis that has been beaten on, not assumed correct.

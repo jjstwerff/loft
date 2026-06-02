@@ -1,0 +1,7 @@
+struct Bag { items: vector<integer> }
+fn f(n: integer) -> Bag {
+  out: Bag = Bag { items: [0] };
+  if n > 0 { a: vector<integer> = [1, 2, 3]; x: vector<integer> = { a }; out = Bag { items: x }; }
+  out
+}
+fn test_a3() { r = f(5); assert(r.items[0] == 1 && r.items.len() == 3, "block-result via struct escapes"); }
