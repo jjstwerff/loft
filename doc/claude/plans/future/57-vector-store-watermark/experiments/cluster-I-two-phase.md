@@ -37,46 +37,50 @@ foundation (`00dc10ae`):
   `CONF_DBG` prints the confined map, `FREE_DBG` (allocation.rs) logs every
   `free_named` with rc + already-free.
 
-## What we learned (the real lessons — keep these accurate)
+## What we learned (the real lessons — corrected; keep these accurate)
 
-**The two dimensions are independent — do not collapse them.**  A wrong read of
-this is what made "ineffective" look like "wrong".
-
-1. **Free-timing — WORKS, on the interpreter.**  Proven by A/B on the SAME binary
-   (`two_read.loft`, 2 read blocks):
+1. **The fix has NO runtime effect — it is sound but INEFFECTIVE** (same outcome
+   as the two prior reverts, reached again).  The **reliable** signal is the
+   stderr-only store log (suppress stdout: `2>&1 >/dev/null`), which is **identical
+   ON vs OFF**:
    ```
-   fix ON : alloc #2, alloc #3, blk1, FREE #3, blk2, FREE #2, end   ← frees at block exits
-   fix OFF: alloc #2, alloc #3, blk1, blk2, end, FREE #3, FREE #2   ← frees at function exit
+   two_read: +#2 +#3 -#3 -#2     (ON == OFF)   ← allocs, then frees, LIFO = function-exit
+   wm_multi: +#2 +#3 +#4 +#5 +#6 -#6 -#5 -#4 -#3 -#2   (ON == OFF)
    ```
-   The IR/bytecode places `OpFreeRef(__vdb_N)` inside each block (verified
-   `LOFT_LOG=static`), and the interpreter honors it (`FREE_DBG`: `free_named` runs
-   at block exit with `rc=1`, i.e. it actually frees).  **So the IR transformation
-   is correct.**
+   One `free_named` per store, `rc=1`, no `dec_rc` — each store frees once, at
+   function teardown, *whether the fix is on or off*.  The IR/bytecode does place
+   `OpFreeRef` inside the block (`LOFT_LOG=static`), but that does **not** translate
+   into the interpreter freeing earlier.  **Why the in-block IR free-position does
+   not move the effective runtime free is the real open crux** — deeper than
+   scope-registration, and the same wall the prior attempts hit.
 
-2. **Alloc-timing — the OPEN problem (separate mechanism).**  `max active` does NOT
-   drop (`wm_multi` 5 blocks: 7 ON == 7 OFF; `11-vectors`: 26 == 26) because both
-   `OpDatabase` allocations execute **up front** (`alloc #2, #3` both before `blk1`),
-   *identically* with the fix on and off.  The watermark is gated by allocation
-   timing, which this fix does not touch.  **Next investigation: why the
-   `OpDatabase` is hoisted / not deferred to block entry.**  (Rule out an
-   `if true` constant-fold artifact first — re-test with a non-constant guard.)
+2. **MEASUREMENT HAZARD that fooled an earlier read of this doc** (now corrected):
+   `print(...)` markers go to **stdout**, the store log to **stderr** — separate
+   streams, different buffering.  Under `2>&1` the stdout markers flush *late*, so
+   the trace *looked* like `…blk1, FREE #3, blk2, FREE #2…` (interleaved → "works").
+   That was an artifact.  **Always use stderr-only ordering (`2>&1 >/dev/null`) or
+   same-stream markers for execution-order claims.**  (Being hasty here — claiming
+   "free-timing works" from the unreliable trace — is exactly the failure this
+   plan keeps warning about.)
 
-3. **Native does not honor the in-block free — a SEPARATE native bug** (native
-   failing to implement the IR), not evidence this work is wrong.
+3. **The `LOFT_STORE_GUARD` guard is fooleable.**  It checks the *scope label*
+   (`vars.scope(vdb) != b`), which the fix changes, so it goes **silent even though
+   the watermark is unchanged**.  The guard is NOT a valid oracle for this fix; the
+   stderr-only store log / watermark is.  A future guard must assert the store
+   actually frees earlier, not just that its scope label moved.
 
-4. **The `LOFT_STORE_GUARD` guard is fooleable.**  It checks the *scope label*
-   (`vars.scope(vdb) != b`), which the fix changes, so it goes **silent even when
-   the watermark is unchanged**.  The real oracle is the watermark / free-position
-   (`LOFT_STORES=log` + `FREE_DBG`), not the guard.  A future guard should assert
-   the store actually frees earlier, not just that its scope label moved.
+4. **Native does not honor the in-block IR free either** — a SEPARATE native bug,
+   to be characterised on its own once the interpreter genuinely frees earlier.
 
-5. **rc correction to the fix-design "resolved misdiagnosis":** rc *is* 1 and the
-   in-block `OpFreeRef` *does* free (lesson 1) — so the misdiagnosis-resolution was
-   right that no rc surgery is needed.  What it missed is lesson 2 (alloc timing).
+5. **`alloc`-timing is a real but DISTINCT axis** (do not conflate with the free
+   problem): the `max active` watermark is also gated by when `OpDatabase` runs.
+   Worth its own probe once free-timing actually moves.
 
 ## State
 
 Sound (the `172` soundness boundary stays green on both backends — escapes are not
-freed early), free-timing correct on interpret, watermark not yet reduced
-(alloc-timing open), native unimplemented.  Not committed to avoid shipping the
-fooleable-guard state on `main`; preserved here for the next pass.
+freed early) but **INEFFECTIVE at runtime** (the stderr-only store order is
+identical fix-on vs fix-off; the interpreter still frees at function exit).  The IR
+correctly moves `OpFreeRef` into the confined block, but that does not translate
+into an earlier *runtime* free — the open crux.  Not committed to `main`; preserved
+here as the durable record for the next pass.
