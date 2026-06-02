@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  out: vector<integer> = [0];
+  if n > 0 { a: vector<integer> = [1, 2, 3]; out = a; }
+  out[0] + out.len()
+}
+fn test_eo() { assert(f(5) == 4, "outer assign"); }

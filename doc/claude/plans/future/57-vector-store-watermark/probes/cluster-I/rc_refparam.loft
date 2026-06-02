@@ -1,0 +1,3 @@
+fn push9(v: & vector<integer>) { v += [9]; }
+fn f() -> integer { a: vector<integer> = [1,2]; push9(a); a[2] }
+fn test_rc2() { assert(f() == 9, "ref param"); }

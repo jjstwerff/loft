@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  for i in 0..n { for j in 0..2 { a: vector<integer> = [i, j]; t += a[0] + a[1]; } }
+  t
+}
+fn test_34() { assert(f(2) == 4, "nested loop"); }

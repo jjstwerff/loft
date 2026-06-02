@@ -1,0 +1,2 @@
+fn f() -> integer { a: vector<vector<integer>> = [[1,2],[3,4]]; a[0][1] + a[1][0] }
+fn test_rc3() { assert(f() == 5, "vec of vec"); }

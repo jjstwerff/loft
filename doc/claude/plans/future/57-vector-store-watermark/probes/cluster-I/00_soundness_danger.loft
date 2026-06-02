@@ -1,0 +1,29 @@
+// escape: v reassigned in a block, read AFTER it — the store must NOT be
+// freed at block-exit (last-use is the for-loop).  The soundness guard.
+fn test_escape_after_block() {
+  v: vector<integer> = [0];
+  if true { v = [1, 2, 3]; }
+  t = 0;
+  for x in v { t += x; }
+  assert(t == 6, "escape: v=[1,2,3] read after block");
+}
+fn test_escape_skipped() {
+  v: vector<integer> = [0];
+  if false { v = [1, 2, 3]; }
+  t = 0;
+  for x in v { t += x; }
+  assert(t == 0, "escape: v stays [0] when branch skipped");
+}
+// dead-at-block-exit: each block-local vector is read only INSIDE its block
+// → relocatable (store can free at block-exit).  Must stay correct.
+fn test_dead_at_block_exit() {
+  total = 0;
+  if true { a: vector<integer> = [1, 2, 3]; total += a[0] + a[2]; }
+  if true { b: vector<integer> = [4, 5, 6]; total += b[1]; }
+  assert(total == (1 + 3) + 5, "dead-at-block-exit sums");
+}
+fn test_loop_reuse_unaffected() {
+  total = 0;
+  for i in 0..5 { v: vector<integer> = [i, i + 1]; total += v[0] + v[1]; }
+  assert(total == 25, "loop-body reuse still correct");
+}

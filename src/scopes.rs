@@ -3177,6 +3177,35 @@ fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16,
     }
 }
 
+/// True if `target` is handed out of the function as-is — directly returned,
+/// yielded, or broken out of a loop (`Return(Var(target))` etc.).  Such a local
+/// escapes; its store must NOT be freed at block exit (probe 30).  (Catches the
+/// direct form; an escape buried in a sub-expression like `return if c { a }`
+/// is left for the fix's full escape analysis.)
+fn guard_escapes(node: &Value, target: u16) -> bool {
+    let is_target = |v: &Value| matches!(v.unspan(), Value::Var(t) if *t == target);
+    match node {
+        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => is_target(v) || guard_escapes(v, target),
+        Value::Block(bl) | Value::Loop(bl) => {
+            // The block's VALUE is its last operator; if that is the local, the
+            // local flows out of the block (block-result `x = { …; a }`, U3).
+            bl.operators.last().is_some_and(is_target) || bl.operators.iter().any(|op| guard_escapes(op, target))
+        }
+        Value::If(t, a, b) => guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target),
+        Value::Set(_, val) | Value::Drop(val) => guard_escapes(val, target),
+        Value::Iter(_, c, n, e) => guard_escapes(c, target) || guard_escapes(n, target) || guard_escapes(e, target),
+        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            args.iter().any(|a| guard_escapes(a, target))
+        }
+        Value::TuplePut(_, _, inner) => guard_escapes(inner, target),
+        Value::Span(b) => guard_escapes(&b.1, target),
+        Value::ParFor(b) => {
+            guard_escapes(&b.input, target) || guard_escapes(&b.worker, target) || guard_escapes(&b.threads, target) || guard_escapes(&b.body, target)
+        }
+        _ => false,
+    }
+}
+
 /// Returns the number of late-freed block-confined vector stores; prints each
 /// under LOFT_STORE_GUARD.
 fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
@@ -3203,15 +3232,41 @@ fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name
         let Some(local) = backed else {
             continue;
         };
+        // An escaping local hands its store to the caller — freeing it at block
+        // exit is a use-after-free.  Exclude direct returns/yields/breaks
+        // (probe 30) and anything scope-analysis already marked skip-free.
+        if vars.is_skip_free(local) || vars.is_skip_free(vdb) || guard_escapes(code, local) {
+            continue;
+        }
         let mut stack: Vec<(u16, bool)> = Vec::new();
         let mut lca: Option<Vec<(u16, bool)>> = None;
         guard_refs(code, local, free_ref_nr, &mut stack, &mut lca);
-        // Confined iff the LCA's innermost element is a NON-LOOP block, deeper
-        // than where the store is currently scoped.
+        // Confined iff the LCA path is a non-empty chain of NON-LOOP blocks
+        // (NO loop anywhere in it — a confinement *inside* a loop is per-
+        // iteration reuse, not a watermark; probes 33/34), and the innermost
+        // block is deeper than where the store is currently scoped.
         if let Some(path) = lca
-            && let Some(&(b, is_loop)) = path.last()
-            && !is_loop
+            && let Some(&(b, _)) = path.last()
+            && path.iter().all(|&(_, is_loop)| !is_loop)
             && vars.scope(vdb) != b
+            // dep-escape: the store must not be aliased by a variable that
+            // OUTLIVES block `b`.  A block-result `x = { …; a }` gives x the
+            // dep `["a"]` and x is read at function level (U3) — freeing a
+            // here would corrupt x.  A fill temp (`_elm`) also depends on the
+            // local but is confined to `b`, so it does not count (b stays on
+            // its reference path).
+            && !(0..vars.count()).any(|w| {
+                w != local
+                    && vars.tp(w).depend().contains(&local)
+                    && {
+                        let mut wst: Vec<(u16, bool)> = Vec::new();
+                        let mut wlca: Option<Vec<(u16, bool)>> = None;
+                        guard_refs(code, w, free_ref_nr, &mut wst, &mut wlca);
+                        // w aliases the store AND is referenced outside `b`
+                        // (b absent from w's confinement path) ⇒ outlives it.
+                        wlca.is_some_and(|p| !p.iter().any(|&(s, _)| s == b))
+                    }
+            })
         {
             eprintln!(
                 "[store-guard] {fn_name}: store {} (local '{}') confined to block scope {b} but stored at scope {} — frees late",

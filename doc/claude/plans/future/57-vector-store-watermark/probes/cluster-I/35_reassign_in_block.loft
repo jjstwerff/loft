@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1, 2]; a = [3, 4, 5]; t += a[2]; }
+  t
+}
+fn test_35() { assert(f(5) == 5, "reassign in block"); }

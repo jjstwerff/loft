@@ -1,0 +1,5 @@
+fn f(n: integer) -> integer {
+  x: vector<integer> = if n > 0 { a: vector<integer> = [1, 2, 3]; a } else { [9] };
+  x[0] + x.len()
+}
+fn test_u3() { assert(f(5) == 4, "block-result vec escapes to x"); }

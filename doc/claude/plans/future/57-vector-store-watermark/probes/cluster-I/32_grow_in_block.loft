@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1, 2]; a += [3, 4]; t += a[3]; }
+  t
+}
+fn test_32() { assert(f(5) == 4, "grow in block"); }

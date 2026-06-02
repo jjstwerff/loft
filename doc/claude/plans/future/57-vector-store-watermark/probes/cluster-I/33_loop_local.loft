@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  for i in 0..n { a: vector<integer> = [i, i + 1]; t += a[0] + a[1]; }
+  t
+}
+fn test_33() { assert(f(3) == 9, "loop-local reused"); }
