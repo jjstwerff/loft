@@ -98,6 +98,19 @@ The bug-vs-feature framing holds; the *boundary* is narrower than first written.
     *teardown* (the read value is correct) — likely a small frame-cleanup bug that
     could promote param-read to *sound* rather than rejected, when a consumer wants
     it.
+  - **Known weakness — harden before this code is next touched.** The
+    enclosing/arm-local split rides an **undocumented invariant**: "in pass 2
+    `is_defined` is set in source order, so a var declared before the block reads
+    defined and one first declared inside an arm reads undefined."  Nothing
+    *enforces* it — a future parser change to when `is_defined` is set would make
+    the diagnostic silently false-positive, a hidden coupling no test guards.  By
+    this floor's own governing principle (no hidden machinery; the model must match
+    reality) this is its least-principled spot.  Cheap principled fix: document the
+    invariant as a contract at the snapshot site **and** add a
+    `debug_assert!` that each arm-declared local reads `!is_defined` at block entry
+    — turning a relied-upon accident into a stated, enforced fact.  (Secondary: the
+    temp exclusion matches *names* `_`/`#` rather than a first-class flag like
+    `was_loop_var`; lower risk since those names are un-typeable by users.)
 
 - **The feature (supporting writes) — deferred to its consumer, not built.**
   The real use case for `parallel {}` (vs `for…par`, which owns data-parallelism)
