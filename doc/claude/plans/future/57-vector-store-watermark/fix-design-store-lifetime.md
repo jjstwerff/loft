@@ -97,68 +97,92 @@ catalogue (`probes/16_*.loft` … `probes/27_*.loft`).
 > Probe hygiene note: avoid stdlib names in probe bodies (`sum`, `first`, …) — a
 > name collision is a parse error, not a lifetime finding (probe 21 false alarm).
 
-## THE CRUX — RESOLVED (it was a misdiagnosis: scope registration, not rc)
+## THE CRUX — RESOLVED: the SLOT lifetime, via the body-0 null-init hoist
 
-A read-only **investigation agent** (code + runtime verified) overturned the rc
-framing this section used to hold.
+Three successive diagnoses were each *incomplete*; the experiments subtracted them
+one by one (full ledger in
+[`experiments/cluster-I-two-phase.md`](experiments/cluster-I-two-phase.md)) until
+the real lever remained.  The progression is itself the record — each was held
+confidently and each was wrong:
 
-**There is no rc hold.** `dec_rc=0` every shape; rc=1 throughout (`allocation.rs:118`
-sets `ref_count=1`, `free_named` only decrements when `>1`).  A mid-program
-`OpFreeRef(__vdb)` genuinely **does** free the store — proven: a helper fn returning a
-vector, called 3×, keeps `active` flat at 3 (each call's function-exit free releases
-the store before the next call reuses the slot).
+1. ~~**rc holds the store**~~ — ruled out by the `RC_OFF` flag: the stderr-only
+   free order is byte-identical rc-on/off; one `free_named` per store at `rc=1`,
+   no `dec_rc`.  rc=1 throughout.
+2. ~~**register the `__vdb` at its block scope**~~ — this moves the IR `OpFreeRef`
+   into the block but the **runtime free is unchanged** (reliable stderr-only order
+   identical on/off).  *The IR free-position does not control the runtime free.*
+3. **The runtime free follows the `__vdb`'s SLOT lifetime.**  A vector local `v`
+   carries `dep=["__vdb_N"]` ⇒ `owns=false` ⇒ `v` is never freed; the `__vdb`
+   (empty dep) is the sole owner.  Its slot is **function-scoped** because its
+   null-init (`Set(__vdb, Null)`, the slot allocator's `first_def`) is **hoisted to
+   body position 0** by `parse_code` (`expressions.rs:354-369`).  Codegen ties the
+   free to that slot.  **Move the `first_def` into the confined block → the slot,
+   and the free, become block-scoped.**  *Verified:* it works (see Fix approach).
 
-**So why was the relocation a "no-op"?**  The reverted `sink_dead_store_frees` ran as a
-post-pass **after `compute_intervals`** — it moved the free *node* but the slot
-allocator had already computed the long (to-function-exit) interval, so the move was
-cosmetic and the watermark never changed.  Not rc — **timing**.
+**Why the hoist exists, and why it over-reaches.** The null-init only has to give
+the slot allocator a `first_def` (without one, `assign_slots` skips the var and
+codegen panics `"Incorrect var __ref_N[65535]"`, `variables/mod.rs:150-159`).
+Body-0 is the *maximally broad* "definitely before first use" placement — **correct
+without lifetime information**, but it function-scopes *every* work-ref's slot.  The
+confinement analysis IS that missing lifetime information; with it, a confined
+`__vdb`'s `first_def` can live in its real (block) scope.  This is the same shape as
+the rc objection (a conservative mechanism that out-lived the information gap that
+justified it) — and the same Goal E resolution (free at the real scope end once you
+*know* it).
 
-**The real coupling is the `__vdb`'s scope registration.**  A vector local `v` carries
-`dep=["__vdb_N"]` ⇒ `owns=false` (`get_free_vars`, `scopes.rs:1250`) ⇒ `v` is never
-freed; the `__vdb` (empty dep) is the sole owner that gets `OpFreeRef`, registered at
-**function scope** because its null-init is hoisted to body position 0
-(`work_references`, `expressions.rs:354`), so `get_free_vars` only frees it at function
-exit.  **The fix is a scope-registration change**: register the confined `__vdb` at its
-LCA block scope and the existing block-exit `free_vars` sweep frees it there — **no rc
-surgery, no extra decrements** (the old "`OpFreeRef` + `Set(local,Null)`" idea is
-unnecessary; rc=1 means a single `OpFreeRef` at the block suffices).
-
-## Failed approaches — do NOT re-walk
+## Failed approaches — do NOT re-walk (the ruled-out path)
 
 | Approach | Result |
 |---|---|
-| Relocate the `OpFreeRef` node as a **post-pass** (`sink_dead_store_frees`) | **Ineffective — timing, not rc**: ran after `compute_intervals`, so the slot interval was already long; the node move was cosmetic.  Reverted. |
-| `OpClearVector` store-reuse (cluster III) | Broke native codegen (`var_v` out of scope — moved the *declaration* into the block) + runtime (`+=`, text iter, keyed concat, a SIGSEGV).  Reverted. |
-| `OpFreeRef(old __vdb)` at the overwrite (cluster III, naive) | No-op — the repoint doesn't drop the old store; needs the dead-store free at the overwrite in `scopes.rs`, not `create_vector`. |
+| Relocate the `OpFreeRef` node as a post-pass (`sink_dead_store_frees`) | Ineffective (then mis-blamed on `compute_intervals` timing; the truer cause is the slot, below).  Reverted. |
+| **Register the `__vdb` at its block scope** (move the IR `OpFreeRef`), slot left at body-0 | **Inert — the lever is the slot, not the IR free-position.** Stderr-only free order byte-identical.  Preserved as `experiments/cluster-I-two-phase`. |
+| rc holds the store | Ruled out by the `RC_OFF` flag (free order identical rc-on/off). |
+| `OpClearVector` store-reuse (cluster III) | Broke native (`var_v` out of scope — moved a *non-confined* declaration into the block) + runtime.  Reverted.  **N.B.** this is why "keep declaration at body-0" was believed — it was learned from a *non-confined* case (see Fix approach). |
+| `OpFreeRef(old __vdb)` at the overwrite in `create_vector` (cluster III) | No-op — the dead-store free belongs in `scopes.rs`, not `create_vector`. |
 
-## Fix approach — gated two-phase scan (scope re-registration)
+## Fix approach — block-scope the SLOT (two-phase scan + null-init relocation)
 
-**Foundation landed (`00dc10ae`):** `store_confinement(code, vars, free_ref_nr)`
-returns `vdb → (local, block_scope)` for every provably-confined store (the
-adversarially-hardened analysis; `store_lifetime_guard` is now a thin reporter over
-it).
+**Foundation (`00dc10ae`):** `store_confinement` → `vdb → (local, block_scope)` for
+every provably-confined store (adversarially hardened; `store_lifetime_guard` is now
+a thin reporter over it).
 
-**Cluster I** — the chicken-and-egg (free emitted *during* scan, at the `__vdb`'s
-body-position-0 null-init, before scan reaches the confining block; `set_scope`
-asserts-once) is resolved by a **gated two-phase scan** (`scan` is fresh per function,
-`scopes.rs:99`, so it is re-runnable):
-1. scan once → `store_confinement` → if the map is **empty, do nothing** (the common
-   case, no second scan);
-2. else re-scan the saved original `def.code`/`variables` with the map threaded into
-   `Scopes`, so `scan_set`'s `var_scope.insert(__vdb, …)` (`scopes.rs:635`) and
-   `scan_if`'s local pre-init (`scopes.rs:846/851`) register the confined `__vdb`(+local)
-   at the **block scope**.  `get_free_vars` then frees it at block exit — the *tested*
-   free-emission path, no node surgery.
+**Cluster I — if-block case — VERIFIED on the interpreter** (working code in
+`experiments/cluster-I-two-phase`).  Two steps, and **step 2 is the lever**:
+1. gated two-phase scan: re-scan registering the confined `__vdb` at its block scope
+   (`put_scope`) so `get_free_vars` emits `OpFreeRef` inside the block — *necessary
+   but inert alone*;
+2. **relocate the null-init** (`relocate_null_init`): move `Set(__vdb, Null)` from
+   body-0 into the confined block, so the slot's `first_def` — and codegen's free —
+   live in the block.
 
-**Keep the `Set(__vdb, Null)` declaration at body position 0** — native emits the
-`let mut var___vdb` at function scope, so a free in a nested block is in-scope; moving
-the *declaration* is what broke the `OpClearVector` attempt.  Only the registration/
-free scope moves.  Verify with `--show-rust` that no free lands where its var is out
-of scope.
+Result on `wm_nonconst` (sequential `if n>k` blocks): stores **interleave**
+`+#2 -#2 +#2 -#2` (slot reused, max 1 vector live) vs batched without it.  Sound
+(`172` green both backends), correct (`f(9)=13` interp + native), debug asserts pass.
 
-**Cluster III** (distinct surface, guard-silent — `v` read at fn end ⇒ LCA *is* the
-function scope): at each **unconditional** overwrite free the *prior* `__vdb`, guarded
-by `!is_captured(v)`, in the `scopes.rs` dead-store path (NOT `create_vector`).
+**Native is fine when the `__vdb` is CONFINED** — its declaration, fill, read, and
+free all live inside the block, so the emitted `let mut var___vdb` is in-scope.  The
+"keep the declaration at body-0 for native" rule came from the *non-confined*
+`OpClearVector` case (the var was used *after* the block); **confinement is exactly
+the gate that makes moving the declaration safe.**
+
+**Cluster I — top-level sequential case — NOT this fix.**  `11-vectors`/`07` locals
+sit at *function* scope, not in a block, so `store_confinement` returns empty and the
+guard is silent — block-scoping cannot free them earlier (watermark unchanged at 26,
+*by design*).  That half needs **last-use freeing within a scope** — a distinct
+mechanism, still open.  Cluster I is therefore *two* sub-problems; this fixes the
+if-block one.
+
+**Cluster III** (distinct, guard-silent): free the prior `__vdb` at each
+unconditional overwrite in `scopes.rs`, guarded by `!is_captured(v)` — not
+`create_vector`.
+
+## Follow-up — the same hoist over-reaches for text (strings)
+
+`parse_code` body-0-hoists `work_texts` / `promoted_text_args`
+(`expressions.rs:347-352`) by the identical pattern, so confined `__work` *text*
+stores pin to function exit the same way.  The same narrowing (a text-confinement
+analysis + null-init relocation) applies once the vector case lands.  Less urgent —
+recorded so it is not rediscovered cold.
 
 ## Soundness constraints (the guards)
 

@@ -172,6 +172,87 @@ fn run_scan_phase(
     }
 }
 
+/// True if `op` is the null-init `Set(vdb, Null)` — a work-ref's `first_def`.
+fn is_var_null_init(op: &Value, vdb: u16) -> bool {
+    matches!(op.unspan(), Value::Set(v, val) if *v == vdb && matches!(val.unspan(), Value::Null))
+}
+
+/// Prepend `ni` to the operators of the Block whose `scope == target`.  Returns
+/// `None` once inserted, or `Some(ni)` (un-consumed) if no such block was found.
+fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
+    match node {
+        Value::Block(bl) if bl.scope == target => {
+            bl.operators.insert(0, ni);
+            None
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            let mut carry = Some(ni);
+            for op in &mut bl.operators {
+                carry = prepend_to_scope(op, target, carry.take().unwrap());
+                carry.as_ref()?;
+            }
+            carry
+        }
+        Value::Insert(ls) => {
+            let mut carry = Some(ni);
+            for op in ls {
+                carry = prepend_to_scope(op, target, carry.take().unwrap());
+                carry.as_ref()?;
+            }
+            carry
+        }
+        Value::If(c, t, e) => {
+            let ni = match prepend_to_scope(c, target, ni) {
+                None => return None,
+                Some(n) => n,
+            };
+            let ni = match prepend_to_scope(t, target, ni) {
+                None => return None,
+                Some(n) => n,
+            };
+            prepend_to_scope(e, target, ni)
+        }
+        Value::Span(b) => prepend_to_scope(&mut b.1, target, ni),
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) => prepend_to_scope(b, target, ni),
+        _ => Some(ni),
+    }
+}
+
+/// Plan-57 cluster-I experiment: move a confined `__vdb`'s null-init
+/// `Set(vdb, Null)` from body position 0 into its confined block, so the slot's
+/// `first_def` (and therefore the SLOT, and codegen's free) live in the block —
+/// not just the IR `OpFreeRef`.  The body-0 hoist (`parse_code`) was a
+/// correctness over-reach made *without* lifetime info; the confinement analysis
+/// now supplies that info, so the slot can live in its real scope.
+fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
+    let ni = {
+        let Value::Block(body) = code else {
+            return false;
+        };
+        let Some(pos) = body
+            .operators
+            .iter()
+            .position(|op| is_var_null_init(op, vdb))
+        else {
+            return false;
+        };
+        body.operators.remove(pos)
+    };
+    if let Some(ni) = prepend_to_scope(code, block_scope, ni) {
+        // Block not found — restore the null-init so the first_def is never lost.
+        if let Value::Block(body) = code {
+            body.operators.insert(0, ni);
+        }
+        debug_assert!(
+            false,
+            "relocate_null_init: block scope {block_scope} not found"
+        );
+        false
+    } else {
+        true
+    }
+}
+
 pub fn check(data: &mut Data) {
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
@@ -198,6 +279,15 @@ pub fn check(data: &mut Data) {
                 cmap.insert(local, b);
             }
             run_scan_phase(data, d_nr, &orig_code, &orig_vars, &cmap);
+            // Block-scope the SLOT: move each confined `__vdb`'s null-init from
+            // body-0 into its confined block so its `first_def` (and codegen's
+            // free) live in the block — not just the IR `OpFreeRef`.  `RELOC_OFF`
+            // isolates this from the scope-registration above for A/B.
+            if std::env::var("RELOC_OFF").is_err() {
+                for (&vdb, &(_local, b)) in &confined {
+                    relocate_null_init(&mut data.definitions[d_nr as usize].code, vdb, b);
+                }
+            }
         }
         // Compute live intervals so validate_slots can check for slot conflicts after codegen.
         let free_text_nr = data.def_nr("OpFreeText");
