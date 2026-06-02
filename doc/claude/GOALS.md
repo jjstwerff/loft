@@ -223,6 +223,58 @@ mistakes to blame; they are the surface where new information turns into progres
 
 ---
 
+## Goal F — Friction-free surface (the language serves the programmer, not the compiler)
+
+**Definition.** No syntax, annotation, or blocking error exists to feed the
+*compiler's* analysis.  The programmer writes what expresses intent; the
+compiler's internal needs — lifetime tracking, confinement proof, slot
+assignment — are the **implementation's** problem and stay invisible.  When the
+compiler cannot prove what it wants, it **absorbs the cost** — a missed
+optimization, a deferred feature — it does **not** hand the programmer a form to
+fill in.  Warnings are the one allowed channel: they describe consequences of the
+programmer's *own* coding choices and are **freely ignorable**.
+
+**Why — the Rust grievance, stated plainly.**  Rust bought safety by pushing its
+analysis onto the syntax: `'a` lifetimes, `move`, turbofish, `Pin` — ceremony
+that serves the borrow checker, not the author.  Once that syntax ships it cannot
+be walked back; the long-running ergonomics effort is the proof of how hard
+un-ringing that bell is.  loft refuses the first step — **rather miss a feature
+than impose friction.**  This is *bought* by Goal E's bet — safety from a
+**runtime discipline**, not a static proof: no static proof means **no
+proof-obligations to discharge on the user**.  E removes the machinery from the
+*model*; F removes it from the *syntax* — the same coin.
+
+**The friction test.**  For any syntax or error, ask: *does this serve the
+programmer or the compiler?*
+- a type on a signature (documents intent), a warning about an unused value (the
+  programmer's choice, ignorable) — programmer's, **keep**;
+- a lifetime annotation, a `move`, a "restructure it so I can prove it" error —
+  the compiler's, **refuse**: infer it, default it, or drop the feature.
+
+**Missing a feature is the *preferred* side — and is not the same as friction.**
+Refusing an operation the language **cannot do soundly** (the `parallel{}`
+unsound-capture error → "use `for par`") is *missing a feature*, not pushing work
+onto the user: it says "this isn't available yet, here is the supported path,"
+never "annotate X so I can allow it."  The boundary is exact — an error that
+**bounds the language** is fine; an error that **bounds the user into serving the
+compiler** is the friction F forbids.
+
+**Check.**  No feature design ever reaches "…and the user must write X so the
+compiler can Y."  When it does, the *feature* is wrong, not the user — infer X,
+default it, or cut it.  The store-confinement analysis is the worked model: zero
+user-facing surface, **silent fallback to a higher watermark** when it cannot
+prove confinement — the programmer never learns the analysis exists.
+
+**Relation.**  F is **orthogonal** to the useful→safe→predictable axis — it
+constrains the *user-friction cost* of delivering any of A–E.  It is closest to E
+(both forbid hidden machinery from leaking out) but distinct in surface: E guards
+the **memory model**, F guards the **whole language syntax**.  And it is the
+compile-time twin of the runtime rule that recoverable faults *warn-and-continue*
+rather than halt — friction at compile time is the same wrong tax as a halt at
+runtime.
+
+---
+
 ## The two floors — why dogfood is paused, and when it resumes
 
 The dogfood loop is the agenda-setter (CLAUDE.md § "Development cadence"), but it
@@ -265,13 +317,19 @@ them.
         │                                     is the truth
         └── paused until the soundness floor (A) and
             structure floor (B) clear, then resumes as agenda-setter
+
+   F (friction-free surface) ── orthogonal: the user-friction cost
+        of delivering any of A–E must stay near zero
 ```
 
 Dogfood makes loft *worth using*; the sanitizer makes it *safe to keep using*;
 Goal E makes it *predictable to reason about* — **safe is not enough if the
 programmer cannot hold the memory model in their head.**  A — *no corruption* —
 and E — *no surprise* — are different properties: Rust achieves the first and not
-the second, and unbundling them is exactly where loft aims to surpass it.
+the second, and unbundling them is exactly where loft aims to surpass it.  Goal F
+sits across all of them: each of A–E must be delivered **without billing the
+programmer** in syntax or proof-obligations — friction is the tax Rust pays for
+its guarantees and the one loft refuses.
 
 ## See also
 
