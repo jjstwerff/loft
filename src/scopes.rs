@@ -281,6 +281,7 @@ pub fn check(data: &mut Data) {
             &data.definitions[d_nr as usize].code,
             &data.definitions[d_nr as usize].variables,
             free_ref_nr,
+            data.def_nr("OpGetField"),
         );
         if !confined.is_empty() {
             let mut cmap: HashMap<u16, u16> = HashMap::new();
@@ -357,8 +358,9 @@ pub fn check(data: &mut Data) {
         let free_text_nr = data.def_nr("OpFreeText");
         // Plan-57 cluster I: store-lifetime guard (diagnostic, gated).
         if std::env::var("LOFT_STORE_GUARD").is_ok() {
+            let gf_nr = data.def_nr("OpGetField");
             let d = &data.definitions[d_nr as usize];
-            store_lifetime_guard(&d.code, &d.variables, free_ref_nr, &d.name);
+            store_lifetime_guard(&d.code, &d.variables, free_ref_nr, gf_nr, &d.name);
         }
         let code_ref = data.definitions[d_nr as usize].code.clone();
         let mut seq = 0u32;
@@ -3553,6 +3555,171 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
     ok
 }
 
+/// Plan-57 cluster-III Route 2: recover the backer of an *orphaned* store — one
+/// the single-valued `dep` no longer records because its holding local was
+/// reassigned.  Returns the local `L` the store flows into via its repoint
+/// `Set(L, OpGetField(Var(vdb), …))` (the canonical `z = [..]` lowering).
+fn recover_backer(code: &Value, vdb: u16, gf_nr: u32) -> Option<u16> {
+    match code {
+        Value::Set(l, val) => {
+            if let Value::Call(op, args) = val.unspan()
+                && *op == gf_nr
+                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == vdb)
+            {
+                return Some(*l);
+            }
+            recover_backer(val, vdb, gf_nr)
+        }
+        Value::Block(bl) | Value::Loop(bl) => bl
+            .operators
+            .iter()
+            .find_map(|o| recover_backer(o, vdb, gf_nr)),
+        Value::If(c, t, e) => recover_backer(c, vdb, gf_nr)
+            .or_else(|| recover_backer(t, vdb, gf_nr))
+            .or_else(|| recover_backer(e, vdb, gf_nr)),
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            ops.iter().find_map(|o| recover_backer(o, vdb, gf_nr))
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            recover_backer(v, vdb, gf_nr)
+        }
+        Value::Span(b) => recover_backer(&b.1, vdb, gf_nr),
+        _ => None,
+    }
+}
+
+/// Does `node` contain a non-null reassignment of `local` anywhere?
+fn assigns_local(node: &Value, local: u16) -> bool {
+    match node {
+        Value::Set(v, val) => {
+            (*v == local && !matches!(val.unspan(), Value::Null)) || assigns_local(val, local)
+        }
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| assigns_local(o, local)),
+        Value::If(c, t, e) => {
+            assigns_local(c, local) || assigns_local(t, local) || assigns_local(e, local)
+        }
+        Value::Iter(_, c, n, e) => {
+            assigns_local(c, local) || assigns_local(n, local) || assigns_local(e, local)
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            ops.iter().any(|o| assigns_local(o, local))
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            assigns_local(v, local)
+        }
+        Value::Span(b) => assigns_local(&b.1, local),
+        _ => false,
+    }
+}
+
+/// Plan-57 cluster-III Route 2 soundness gate (STRONGER than `confine_reassign_safe`,
+/// which only proves the backer is *defined* at every read — the fn-level init
+/// satisfies that even when a confined block store is still live, an empirically
+/// confirmed UAF via `for x in v` after the block).
+///
+/// Dominance walk over the body: `dom` = "`local` is known NOT to hold a confined
+/// block store here" (it holds the fn-level init or an unconditional reassignment).
+/// `dom` starts true and is **invalidated** by any CONDITIONAL reassignment
+/// (inside an `If`/`Loop`/`Iter`) — afterwards `local` might hold that block's store,
+/// which the fix would free at block exit.  A read of `local` while `!dom` is an
+/// over-free hazard → unsound to confine.  Mirrors `confine_reassign_safe` but with
+/// the conditional-reassignment invalidation (the missing soundness property).
+fn store_dead_after_block(code: &Value, local: u16) -> bool {
+    fn walk(node: &Value, local: u16, dom: bool, ok: &mut bool) -> bool {
+        match node {
+            Value::Set(v, val) => {
+                walk(val, local, dom, ok);
+                if *v == local {
+                    return !matches!(val.unspan(), Value::Null);
+                }
+                dom
+            }
+            Value::Var(v) | Value::TupleGet(v, _) => {
+                if *v == local && !dom {
+                    *ok = false;
+                }
+                dom
+            }
+            Value::CallRef(v, args) => {
+                if *v == local && !dom {
+                    *ok = false;
+                }
+                let mut d = dom;
+                for a in args {
+                    d = walk(a, local, d, ok);
+                }
+                dom
+            }
+            Value::Block(bl) => {
+                let mut d = dom;
+                for op in &bl.operators {
+                    d = walk(op, local, d, ok);
+                }
+                d
+            }
+            Value::Loop(lp) => {
+                let mut d = dom;
+                for op in &lp.operators {
+                    d = walk(op, local, d, ok);
+                }
+                // Conditional (0+ iterations): a reassignment inside invalidates dom.
+                if assigns_local(node, local) {
+                    false
+                } else {
+                    dom
+                }
+            }
+            Value::If(c, t, e) => {
+                let dc = walk(c, local, dom, ok);
+                walk(t, local, dc, ok);
+                walk(e, local, dc, ok);
+                // A branch reassignment is conditional → `local` may hold that block's
+                // (confined) store afterwards.  Invalidate.
+                if assigns_local(t, local) || assigns_local(e, local) {
+                    false
+                } else {
+                    dc
+                }
+            }
+            Value::Iter(idx, c, n, e) => {
+                if *idx == local && !dom {
+                    *ok = false;
+                }
+                let d = walk(c, local, dom, ok); // the iteration SOURCE reads `local`
+                let d = walk(n, local, d, ok);
+                walk(e, local, d, ok); // body conditional
+                if assigns_local(node, local) { false } else { d }
+            }
+            Value::Call(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args) => {
+                let mut d = dom;
+                for a in args {
+                    d = walk(a, local, d, ok);
+                }
+                d
+            }
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+                walk(v, local, dom, ok);
+                dom
+            }
+            Value::TuplePut(v, _, inner) => {
+                if *v == local && !dom {
+                    *ok = false;
+                }
+                walk(inner, local, dom, ok);
+                dom
+            }
+            Value::Span(b) => walk(&b.1, local, dom, ok),
+            _ => dom,
+        }
+    }
+    let mut ok = true;
+    walk(code, local, true, &mut ok);
+    ok
+}
+
 /// Per `__vdb` store, the LCA non-loop block scope it is provably confined to —
 /// i.e. the scope at which it could be freed instead of at function exit.
 /// Returns `vdb -> (backed local, block scope)` for every store-backed local
@@ -3567,7 +3734,15 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 /// (return/yield/break, block-result, tuple/vector element via `guard_escapes`),
 /// loop-internal confinement (per-iteration reuse, not a watermark), and any
 /// store aliased by a variable that outlives block `b`.
-fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap<u16, (u16, u16)> {
+fn store_confinement(
+    code: &Value,
+    vars: &Function,
+    free_ref_nr: u32,
+    gf_nr: u32,
+) -> HashMap<u16, (u16, u16)> {
+    // Plan-57 cluster-III Route 2 (gated, experimental): recover the backer of an
+    // orphaned (overwritten) store so its per-block store can confine.
+    let recover = std::env::var("LOFT_CONF_RECOVER").is_ok();
     let mut out: HashMap<u16, (u16, u16)> = HashMap::new();
     for vdb in 0..vars.count() {
         if !vars.name(vdb).starts_with("__vdb") {
@@ -3592,7 +3767,19 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
         if ambiguous {
             continue;
         }
-        let Some(local) = backed else {
+        // Route 2: an orphaned store has no dep-backer (single-valued dep dropped
+        // the link when the local was reassigned).  Recover the local it flows into
+        // via its `OpGetField` repoint; the recovered backer is necessarily
+        // multi-store.  Gated off by default until soundness is locked in.
+        let recovered = backed.is_none();
+        let local = if let Some(l) = backed {
+            l
+        } else if recover {
+            match recover_backer(code, vdb, gf_nr) {
+                Some(l) if !vars.is_argument(l) && !vars.is_captured(l) => l,
+                _ => continue,
+            }
+        } else {
             continue;
         };
         // An escaping local hands its store to the caller — freeing it at block
@@ -3601,7 +3788,7 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
         if vars.is_skip_free(local) || vars.is_skip_free(vdb) || guard_escapes(code, local) {
             continue;
         }
-        let multi_store = vars.tp(local).depend().len() != 1;
+        let multi_store = recovered || vars.tp(local).depend().len() != 1;
         // A multi-store local must never carry `vdb`'s store across a block
         // boundary unreassigned, else block-exit freeing is a UAF.  Gate on the
         // write-dominates-read walk before trusting the per-store span.
@@ -3623,6 +3810,11 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
             && let Some(&(b, _)) = path.last()
             && path.iter().all(|&(_, is_loop)| !is_loop)
             && vars.scope(vdb) != b
+            // Route 2 soundness: the recovered backer's block store must be dead
+            // after its block on EVERY path — `confine_reassign_safe` only proves
+            // the backer is *defined* at reads (the fn-level init satisfies that),
+            // so an extra "no body-scope read of the backer" gate is required.
+            && (!recovered || store_dead_after_block(code, local))
             // dep-escape: the store must not be aliased by a USER variable that
             // OUTLIVES block `b`.  A block-result `x = { …; a }` gives x the dep
             // `["a"]` and x is read at function level (U3) — freeing a here would
@@ -3654,8 +3846,14 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
 /// function exit despite being confined to an inner block.  Thin wrapper over
 /// [`store_confinement`] (the same analysis that drives the cluster-I fix).
 /// Returns the number of late-freed stores.
-fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
-    let confined = store_confinement(code, vars, free_ref_nr);
+fn store_lifetime_guard(
+    code: &Value,
+    vars: &Function,
+    free_ref_nr: u32,
+    gf_nr: u32,
+    fn_name: &str,
+) -> usize {
+    let confined = store_confinement(code, vars, free_ref_nr, gf_nr);
     for (&vdb, &(local, b)) in &confined {
         eprintln!(
             "[store-guard] {fn_name}: store {} (local '{}') confined to block scope {b} but stored at scope {} — frees late",

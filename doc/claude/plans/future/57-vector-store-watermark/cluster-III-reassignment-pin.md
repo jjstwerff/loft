@@ -114,6 +114,39 @@ already computes those intervals (today only for slot validation); the fix drive
 `&`-borrow / `is_captured` / `guard_escapes` checks already in place. This is the higher-
 value mechanism — it closes canonical III *and* I-b at once.
 
+## Route 2 (shared-block variant) — IMPLEMENTED, GATED (`LOFT_CONF_RECOVER`), 2026-06
+
+The straight-line variant + I-b shipped via last-use freeing (reclaim, now default).  The
+**shared-block variant** is implemented as a gated experiment in `store_confinement`
+(`src/scopes.rs`):
+
+- **`recover_backer`** — for an orphaned store (no dep-backer), find the local `L` it flows
+  into via its `L = OpGetField(vdb, …)` repoint.  `L` is treated as a multi-store backer, so
+  the I-a block-confinement + `relocate_null_init` machinery applies per block.
+
+- **The soundness gate was the hard part — the doc's original plan was REFUTED.**
+  `confine_reassign_safe` (the documented gate) only proves the backer is *defined* at every
+  read; the fn-level init `z=[0,0]` satisfies that even when a confined block store is still
+  live.  Empirically confirmed UAF: `z=[0]; if c {z=[1,2];} total += z[1];` returns wrong data
+  on the branch-not-taken path (the confined block store was freed at block exit but z still
+  holds it).  A first "no body-scope read" gate then missed the `for x in v` **loop source**
+  read (172 `esc_after` — crashed native, tolerated by interp).  The correct gate is
+  **`store_dead_after_block`**: a dominance walk where the init's dominance is **invalidated by
+  any conditional reassignment** (inside `If`/`Loop`/`Iter`) — afterwards `local` may hold that
+  block's store, so a read with `!dom` is an over-free hazard.  Descends into loop sources.
+
+- **Result:** `shared_z` (5 sibling blocks) peak **8 → 5**; the post-block-read and escape
+  shapes correctly do NOT confine (sound).  **Full suite 1923 ✅ with `LOFT_CONF_RECOVER=1`,
+  both backends**; cluster-I probes 39/39 identical; `172` green both backends.  Gated off by
+  default; the un-gate is a separate decision (the benefit is narrow — shared accumulator
+  across sibling conditional blocks — and the gate is soundness-delicate, per the journey above).
+
+> **Discovered sibling bug (pre-existing, OUT OF SCOPE):** `fn f() -> vector { z=[a]; z=[b]; z }`
+> **returns `[a]` not `[b]`** — the return buffer binds to the first store; reassign-then-*read*
+> is correct, only reassign-then-*return* is wrong.  Both backends, reclaim- AND recovery-
+> independent (same single-valued-dep family, return-path variant).  A correctness bug, more
+> severe than this watermark residual; not fixed here.
+
 ## Fix options (Stage C) — **active next focus (2026-06)**
 
 Cluster III is the next piece, chosen because the shared-variable residual of cluster I-a
