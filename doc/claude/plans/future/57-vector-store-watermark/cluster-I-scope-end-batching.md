@@ -7,6 +7,31 @@ scope exits**, regardless of when the local is last read. A function with N dist
 store-backed locals therefore holds ~N stores simultaneously near its end, even when most
 are dead.
 
+## Status (2026-06) — split into two sub-cases
+
+Investigation under `LOFT_STORES=log` (the monotonic `database.peak` watermark, added
+2026-06) split cluster I cleanly in two:
+
+- **I-a — block-confined locals: FIXED.** A vector confined to an `if` / `else` / `match`
+  arm / nested block now frees at **block exit**, not function exit. The fix
+  (`relocate_null_init` in `src/scopes.rs`) block-scopes the store's slot — see
+  [fix-design-store-lifetime.md](fix-design-store-lifetime.md). **Verified** across every
+  *single-store / distinct-variable* shape: sequential `if` (peak 7→3), nested `if` (8→4),
+  single `if/else` (3), `if/else` & `match` with distinct vars per branch (3), no-op `else`
+  (3), loops (already 3). `172` soundness boundary green on both backends; no regressions.
+- **I-b — top-level sequential ("stringing"): OPEN.** Named locals at the function-body
+  level (no enclosing block) — probe 07's 35 siblings, `11-vectors` — are **not** block-
+  confined, so I-a's relocation does not reach them. Each is dead after its last read but
+  still pins to scope exit. This is the **last-use freeing** case and is a *distinct
+  mechanism* from I-a (there is no narrower lexical scope to relocate into). The
+  "Verified" / "Hypothesized" / "Fix options" sections below are all about **I-b**.
+- **Residual of I-a — shared variable across sibling blocks → handed to cluster III.** A
+  variable *reassigned* a fresh store per sibling block (shared `z` in three `else`-blocks,
+  shared `x`/`y` across match arms) does **not** confine: the store frees at scope exit
+  (peak stays 7 / 8). Root cause is not lexical scope but **single-valued dep tracking** —
+  see [cluster-III-reassignment-pin.md § The single-valued-dep root](cluster-III-reassignment-pin.md).
+  Paused here; cluster III subsumes it.
+
 ## Severity (two fields)
 
 - **Corruption / panic / hang:** none.

@@ -32,6 +32,45 @@ store per overwrite.
   (stronger than cluster I's dead-but-named), but freeing it early needs the **same
   aliasing guard**: an overwritten store aliased by a still-live binding must not be freed.
 
+## The single-valued-dep root (2026-06) — confirmed mechanism + shared-block variant
+
+Read during the cluster-I if-block work, which surfaced cluster III from a new angle.
+
+- ✅ **The dep field is single-valued (last-write-wins).** A local reassigned a fresh store
+  per block carries a dep of only its *last* store. Concrete: shared `z` across three
+  `else`-blocks (`z=[..]` in each) ends with `z(1):vector<integer>["__vdb_6"]` — dep
+  `[__vdb_6]`, **not** `[__vdb_2, __vdb_4, __vdb_6]`. So the earlier stores `__vdb_2`,
+  `__vdb_4` have **no backing local at all** (the `z`→store link was overwritten), and
+  `__vdb_6`'s sole backing local `z` looks *single-store* with a function-level LCA. This is
+  the same mechanism as probe 14's straight-line overwrite — **the overwrite drops the
+  prior store's owning-variable relationship**, which is exactly why the prior store cannot
+  be freed at the overwrite point: nothing records that it *was* `z`.
+- ✅ **Shared-variable-across-sibling-blocks is a cluster-III variant.** `if {a} else {z=[..]}`
+  ×N (shared `z`) and `match { _ => {x=[..]} _ => {y=[..]} }` ×N (shared `x`/`y`) both stay
+  at the un-confined watermark (peak 7 / 8) where distinct-variable versions confine to 3.
+  Same root: `z` is reassigned per block, so each block's store is an *overwritten* store
+  with no live owner — cluster III, not a lexical-scope gap.
+
+**So the fix is a dep-system change, not a scope-analysis tweak.** Two routes (a focused
+change of its own, paused pending this cluster's turn):
+1. **Dep accumulation** — make a variable's dep hold *every* store it has held, so
+   `multi_store` detection works generally. Root-cause fix; bigger; soundness-sensitive.
+2. **`OpGetField`-backing recovery** — when a store has no dep-backed local, find the local
+   `L` it flows into via the `L = OpGetField(vdb, …)` assignment, then gate on the
+   reassignment walk below. ~15 lines; ad-hoc; needs hard testing against `172` + escapes.
+
+**Foundation already in `src/scopes.rs` (inert until the above lands):**
+- `confine_reassign_safe(code, local)` — the soundness gate: every READ of `local` is
+  dominated by a non-null assignment earlier in the same straight-line block, so the local
+  never carries a store across a block boundary unreassigned (conditional `if`/`loop`
+  assignments do **not** establish dominance — the walk under-claims, stays sound). This is
+  the **same aliasing-safety property** cluster III needs to free an overwritten store: the
+  old value must be provably dead (reassigned) before any later read.
+- `store_confinement` has a `multi_store` branch (store-span LCA + `confine_reassign_safe`
+  gate) wired in — currently never fires because single-valued dep never produces a
+  multi-store local. It is the landing site once dep accumulation or `OpGetField`-backing
+  supplies the missing link.
+
 ## Fix-safety — resolved
 
 The aliasing question for clusters I/III was answered during the @P394/@P395 edge probing:
@@ -41,11 +80,57 @@ explicit `&vector` params alias. So freeing a dead/overwritten local's store is 
 across an explicit `&` borrow, which is already tracked. This removes the main risk from the
 cluster I/III fix.
 
-## Fix options (Stage C)
+## Dep cardinality — RESOLVED (2026-06): single-valued, last-write-wins
+
+Dumped (`LOFT_LOG=fn:f`) the canonical straight-line shape `v=[a]; v=[b]; v=[c]`:
+three distinct work-refs `__vdb_1/2/3` are created, `v` is repointed each time via
+`v = OpGetField(__vdb_N, 0, _)`, but **`v`'s final dep is `["__vdb_3"]` — only the last
+store**. The earlier `__vdb_1`/`__vdb_2` are *orphaned* (no dep-backed local), so
+`store_confinement`'s `backed` scan skips them and all three free at function scope
+(`OpFreeRef(__vdb_1(1)); __vdb_2(1); __vdb_3(1)`). This **refutes** the investigation's
+static "dep appends → multi-valued" reading and **confirms** single-valued, so **Route 2
+(`OpGetField`-backing recovery) is the route, not Route 1** (which would need a parser
+change to accumulate deps).
+
+## III splits by FIX MECHANISM — the convergence (2026-06)
+
+The single-valued-dep root is shared, but the *fix* differs by where the orphaned stores
+live:
+
+- **Shared-block variant** (`if {a} else {z=[..]}` ×N — `z` reassigned across *sibling*
+  blocks): each orphaned store lives in a **distinct block** → **block-confinement** applies
+  (Route 2 backer-recovery + the I-a `relocate_null_init` machinery + `confine_reassign_safe`
+  gate). Smaller; builds on the existing foundation.
+- **Straight-line variant** (`v=[a]; v=[b]; v=[c]` — probe 14, the *canonical* cluster III):
+  all orphaned stores live in **one block** (no sub-scope) → block-confinement gives no
+  finer scope (measured: peak 5 ON == OFF). Needs **last-use freeing** — emit `OpFreeRef`
+  at each `__vdb`'s live-interval end, not scope-end.
+
+**Straight-line cluster III and cluster I-b converge on last-use freeing.** Both are a
+sequence of `__vdb` work-refs in one block, each with a bounded live interval (ending at the
+reassignment / last read) but freed at scope-end. `compute_intervals` (`src/scopes.rs`)
+already computes those intervals (today only for slot validation); the fix drives
+`OpFreeRef` emission from interval-end instead of scope-end, guarded by the copy-semantics /
+`&`-borrow / `is_captured` / `guard_escapes` checks already in place. This is the higher-
+value mechanism — it closes canonical III *and* I-b at once.
+
+## Fix options (Stage C) — **active next focus (2026-06)**
+
+Cluster III is the next piece, chosen because the shared-variable residual of cluster I-a
+overlaps it (both are the single-valued-dep / overwritten-store mechanism above) — doing
+III first subsumes that residual rather than fixing it twice.  Two landing sizes:
+**last-use freeing** (canonical straight-line III + I-b, the bigger/higher-value mechanism)
+vs **Route 2 backer-recovery** (the shared-block variant, smaller, builds on I-a).
+
+**Chosen mechanism: last-use freeing via a definition-point liveness guard** — full
+implementation plan in
+[fix-design-last-use-freeing.md](fix-design-last-use-freeing.md) (diagnostic guard →
+spike → freeing → promote to a permanent Goal-E assert → CI lock-in).
 
 1. **Free the old store at the overwrite** (emit `OpFreeRef` of the prior DbRef before the
    new store is bound), guarded by the `&`-borrow check. Folds into cluster I's last-use
-   freeing — do them together.
+   freeing — do them together. Concretely needs the dep-system change (§ The single-valued-
+   dep root): without it, the overwritten store has no recorded owner to anchor the free.
 2. **Do nothing** (benign) and rely on the heuristic-floor fix to silence the warning.
 
 ## Probes

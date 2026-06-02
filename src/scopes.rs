@@ -272,11 +272,24 @@ pub fn check(data: &mut Data) {
             &data.definitions[d_nr as usize].variables,
             free_ref_nr,
         );
+        if std::env::var("CONF_DBG").is_ok() && data.def(d_nr).name.starts_with("n_") {
+            eprintln!(
+                "[conf] {} confined={:?}",
+                data.def(d_nr).name,
+                confined
+            );
+        }
         if !confined.is_empty() && std::env::var("CONF_OFF").is_err() {
             let mut cmap: HashMap<u16, u16> = HashMap::new();
             for (&vdb, &(local, b)) in &confined {
                 cmap.insert(vdb, b);
-                cmap.insert(local, b);
+                // Register the backed local at the block only when it is
+                // single-store (its lifetime == the store's).  A multi-store
+                // local (shared `z`) spans several sibling blocks, so it stays
+                // function-scoped; only its per-block stores move.
+                if data.def(d_nr).variables.tp(local).depend().len() == 1 {
+                    cmap.insert(local, b);
+                }
             }
             run_scan_phase(data, d_nr, &orig_code, &orig_vars, &cmap);
             // Block-scope the SLOT: move each confined `__vdb`'s null-init from
@@ -306,6 +319,16 @@ pub fn check(data: &mut Data) {
             &mut seq,
             0,
         );
+        // Plan-57 last-use freeing, Phase 1: definition-point liveness diagnostic
+        // (read-only).  Reports each function-scoped owning store held past its
+        // last use while later allocations run — the I-b / III-straight-line
+        // watermark divergence.  See fix-design-last-use-freeing.md.
+        if std::env::var("LOFT_LASTUSE_GUARD").is_ok() {
+            let db_nr = data.def_nr("OpDatabase");
+            let gf_nr = data.def_nr("OpGetField");
+            let d = &data.definitions[d_nr as usize];
+            last_use_guard(&d.code, &d.variables, db_nr, gf_nr, free_ref_nr, &d.name);
+        }
         // Plan-04 close-out (2026-04-22): V1 remains the slot
         // allocator.  The Phase 2h "codegen is the allocator" pivot
         // and the V2-drive alternative both failed on variables
@@ -3379,6 +3402,106 @@ fn guard_escapes(node: &Value, target: u16) -> bool {
     }
 }
 
+/// Soundness gate for confining a *multi-store* local — one reassigned a fresh
+/// store per block (the shared-`z`-across-`else`-blocks / shared-`x`-across-
+/// match-arms shape).  Returns true iff every READ of `local` is dominated by a
+/// non-null assignment of `local` earlier in the same straight-line block, so
+/// the local never carries a store across a block boundary unreassigned.  When
+/// that holds, freeing each store at *its* block exit cannot be a use-after-free
+/// (the local's next read sees a freshly-assigned store, never the freed one).
+/// Conditional assignments (inside `if`/`loop`) do NOT establish dominance for
+/// code after the construct — the walk under-claims, so it stays sound.
+fn confine_reassign_safe(code: &Value, local: u16) -> bool {
+    fn walk(node: &Value, local: u16, dominated: bool, ok: &mut bool) -> bool {
+        match node {
+            Value::Set(v, val) => {
+                // RHS evaluated before the write lands; a read of `local` in it
+                // is gated by the *current* dominance.
+                walk(val, local, dominated, ok);
+                if *v == local {
+                    return !matches!(val.unspan(), Value::Null);
+                }
+                dominated
+            }
+            Value::Var(v) | Value::CallRef(v, _) | Value::TupleGet(v, _) => {
+                if *v == local && !dominated {
+                    *ok = false;
+                }
+                if let Value::CallRef(_, args) = node {
+                    let mut d = dominated;
+                    for a in args {
+                        d = walk(a, local, d, ok);
+                    }
+                }
+                dominated
+            }
+            Value::Block(bl) => {
+                let mut d = dominated;
+                for op in &bl.operators {
+                    d = walk(op, local, d, ok);
+                }
+                d
+            }
+            Value::Loop(lp) => {
+                // Body runs 0+ times → conditional; dominance does not leak out.
+                let mut d = dominated;
+                for op in &lp.operators {
+                    d = walk(op, local, d, ok);
+                }
+                dominated
+            }
+            Value::If(t, a, b) => {
+                let dc = walk(t, local, dominated, ok);
+                walk(a, local, dc, ok);
+                walk(b, local, dc, ok);
+                dc // branch assignments are conditional — no post-`if` dominance.
+            }
+            Value::Call(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args) => {
+                let mut d = dominated;
+                for a in args {
+                    d = walk(a, local, d, ok);
+                }
+                d
+            }
+            Value::Iter(idx, c, n, e) => {
+                if *idx == local && !dominated {
+                    *ok = false;
+                }
+                let mut d = walk(c, local, dominated, ok);
+                d = walk(n, local, d, ok);
+                walk(e, local, d, ok); // body conditional
+                d
+            }
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+                walk(v, local, dominated, ok);
+                dominated
+            }
+            Value::TuplePut(v, _, inner) => {
+                if *v == local && !dominated {
+                    *ok = false;
+                }
+                walk(inner, local, dominated, ok);
+                dominated
+            }
+            Value::Span(b) => walk(&b.1, local, dominated, ok),
+            Value::ParFor(b) => {
+                let mut d = walk(&b.input, local, dominated, ok);
+                d = walk(&b.worker, local, d, ok);
+                d = walk(&b.threads, local, d, ok);
+                walk(&b.body, local, d, ok);
+                d
+            }
+            _ => dominated,
+        }
+    }
+    let mut ok = true;
+    walk(code, local, false, &mut ok);
+    ok
+}
+
 /// Per `__vdb` store, the LCA non-loop block scope it is provably confined to —
 /// i.e. the scope at which it could be freed instead of at function exit.
 /// Returns `vdb -> (backed local, block scope)` for every store-backed local
@@ -3398,16 +3521,16 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
         if !vars.name(vdb).starts_with("__vdb") {
             continue;
         }
-        // single backed local: exactly one non-arg, non-captured var with dep == [vdb]
+        // The single local that holds `vdb` (vdb in its dep), non-arg,
+        // non-captured.  A *single-store* local (dep == [vdb]) shares its store's
+        // span; a *multi-store* local (dep ⊇ vdb, reassigned a fresh store per
+        // block — shared `z` across `else`-blocks, shared `x` across match arms)
+        // spans the whole function even though each store lives in one block.
         let mut backed: Option<u16> = None;
         let mut ambiguous = false;
         for v in 0..vars.count() {
             if vars.tp(v).depend().contains(&vdb) {
-                if vars.tp(v).depend().len() != 1
-                    || vars.is_argument(v)
-                    || vars.is_captured(v)
-                    || backed.is_some()
-                {
+                if vars.is_argument(v) || vars.is_captured(v) || backed.is_some() {
                     ambiguous = true;
                     break;
                 }
@@ -3426,9 +3549,20 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
         if vars.is_skip_free(local) || vars.is_skip_free(vdb) || guard_escapes(code, local) {
             continue;
         }
+        let multi_store = vars.tp(local).depend().len() != 1;
+        // A multi-store local must never carry `vdb`'s store across a block
+        // boundary unreassigned, else block-exit freeing is a UAF.  Gate on the
+        // write-dominates-read walk before trusting the per-store span.
+        if multi_store && !confine_reassign_safe(code, local) {
+            continue;
+        }
+        // Confinement block = the LCA non-loop block of the *store's own* refs
+        // (multi-store) or the local's (single-store — equal to the store's, kept
+        // for the U3 alias path below).
+        let span_target = if multi_store { vdb } else { local };
         let mut stack: Vec<(u16, bool)> = Vec::new();
         let mut lca: Option<Vec<(u16, bool)>> = None;
-        guard_refs(code, local, free_ref_nr, &mut stack, &mut lca);
+        guard_refs(code, span_target, free_ref_nr, &mut stack, &mut lca);
         // Confined iff the LCA path is a non-empty chain of NON-LOOP blocks
         // (NO loop anywhere in it — a confinement *inside* a loop is per-
         // iteration reuse, not a watermark; probes 33/34), and the innermost
@@ -3437,14 +3571,16 @@ fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap
             && let Some(&(b, _)) = path.last()
             && path.iter().all(|&(_, is_loop)| !is_loop)
             && vars.scope(vdb) != b
-            // dep-escape: the store must not be aliased by a variable that
-            // OUTLIVES block `b`.  A block-result `x = { …; a }` gives x the
-            // dep `["a"]` and x is read at function level (U3) — freeing a
-            // here would corrupt x.  A fill temp (`_elm`) also depends on the
-            // local but is confined to `b`, so it does not count (b stays on
-            // its reference path).
+            // dep-escape: the store must not be aliased by a USER variable that
+            // OUTLIVES block `b`.  A block-result `x = { …; a }` gives x the dep
+            // `["a"]` and x is read at function level (U3) — freeing a here would
+            // corrupt x.  Compiler temps (`_elm`, `__vdb`) are confined to their
+            // own block and, for a multi-store local, may legitimately alias the
+            // local in a *sibling* block (holding a different store there) — so
+            // skip them rather than false-positive.
             && !(0..vars.count()).any(|w| {
                 w != local
+                    && !vars.name(w).starts_with('_')
                     && vars.tp(w).depend().contains(&local)
                     && {
                         let mut wst: Vec<(u16, bool)> = Vec::new();
@@ -3477,4 +3613,163 @@ fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name
         );
     }
     confined.len()
+}
+
+/// Which store a `Set`'s RHS binds the assigned local to (so the local now "holds"
+/// that store's data): `OpGetField(Var(s), …)` → `s` (the repoint idiom); a copy
+/// `Var(other)` → whatever `other` currently holds; anything else → unbound.
+fn binding_source(val: &Value, gf_nr: u32, holds: &HashMap<u16, u16>) -> Option<u16> {
+    match val.unspan() {
+        Value::Call(op, args) if *op == gf_nr => match args.first().map(Value::unspan) {
+            Some(Value::Var(s)) => Some(*s),
+            _ => None,
+        },
+        Value::Var(other) => holds.get(other).copied(),
+        _ => None,
+    }
+}
+
+/// Flow walk: trace which store each local **holds** so each store's *data*
+/// liveness is recovered — `alloc` (its `OpDatabase`), `last_read` (last read of
+/// its data via a holding local or a direct build op, EXCLUDING the scope-exit
+/// `OpFreeRef`), and `dead` (the point a holding local is rebound away, the
+/// reassignment case).  This is the real liveness `compute_intervals` cannot give
+/// (its `last_use` is pinned to the teardown `OpFreeRef`).  Sequential approximation
+/// across branches — fine for the straight-line / sequential shapes this targets.
+#[allow(clippy::too_many_arguments)]
+fn store_liveness_walk(
+    node: &Value,
+    seq: &mut u32,
+    db_nr: u32,
+    gf_nr: u32,
+    fr_nr: u32,
+    holds: &mut HashMap<u16, u16>,
+    alloc: &mut HashMap<u16, u32>,
+    dead: &mut HashMap<u16, u32>,
+    last_read: &mut HashMap<u16, u32>,
+) {
+    *seq += 1;
+    let s = *seq;
+    match node {
+        Value::Var(v) => {
+            if let Some(&store) = holds.get(v) {
+                last_read.insert(store, s);
+            }
+        }
+        Value::Set(local, val) => {
+            if matches!(val.unspan(), Value::Null) {
+                return; // null-init — not a real def/rebind
+            }
+            store_liveness_walk(val, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            let new_store = binding_source(val, gf_nr, holds);
+            if let Some(&old) = holds.get(local)
+                && Some(old) != new_store
+            {
+                dead.entry(old).or_insert(s); // local rebound away → old store dead here
+            }
+            match new_store {
+                Some(st) => {
+                    holds.insert(*local, st);
+                }
+                None => {
+                    holds.remove(local);
+                }
+            }
+        }
+        Value::Call(op, args) => {
+            if *op == fr_nr && args.len() == 1 && matches!(args[0].unspan(), Value::Var(_)) {
+                return; // OpFreeRef — not a data read
+            }
+            if *op == db_nr {
+                if let Some(Value::Var(st)) = args.first().map(Value::unspan) {
+                    alloc.insert(*st, s);
+                }
+                return; // OpDatabase(store, size) — alloc point, args are not data reads
+            }
+            for a in args {
+                store_liveness_walk(a, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                store_liveness_walk(op, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            }
+        }
+        Value::If(c, t, e) => {
+            store_liveness_walk(c, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            store_liveness_walk(t, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            store_liveness_walk(e, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            for op in ops {
+                store_liveness_walk(op, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+            }
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            store_liveness_walk(v, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+        }
+        Value::Span(b) => {
+            store_liveness_walk(&b.1, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
+        }
+        _ => {}
+    }
+}
+
+/// Plan-57 last-use freeing, Phase 1 — definition-point liveness diagnostic.
+///
+/// Reports each **function-scoped store** whose *data* dies (last read or a
+/// rebind-away) **before another store allocates** — so it is held dead to scope
+/// exit while the watermark grows.  This is the I-b (sequential distinct) and
+/// III-straight-line (sequential reassign) divergence block-confinement cannot
+/// reach.  Returns the count.  Read-only; gated by `LOFT_LASTUSE_GUARD`.
+///
+/// Block-confined stores (already freed at block exit by I-a) are excluded by the
+/// body-scope filter.  Genuinely live-to-the-end stores self-exclude — nothing
+/// allocates after their last read.
+fn last_use_guard(
+    code: &Value,
+    vars: &Function,
+    db_nr: u32,
+    gf_nr: u32,
+    fr_nr: u32,
+    fn_name: &str,
+) -> usize {
+    let body_scope = match code.unspan() {
+        Value::Block(bl) => bl.scope,
+        _ => return 0,
+    };
+    let mut holds: HashMap<u16, u16> = HashMap::new();
+    let mut alloc: HashMap<u16, u32> = HashMap::new();
+    let mut dead: HashMap<u16, u32> = HashMap::new();
+    let mut last_read: HashMap<u16, u32> = HashMap::new();
+    let mut seq = 0u32;
+    store_liveness_walk(
+        code, &mut seq, db_nr, gf_nr, fr_nr, &mut holds, &mut alloc, &mut dead, &mut last_read,
+    );
+    // data-death point: rebind-away if any, else last read of the data.
+    let dead_at = |st: u16| dead.get(&st).copied().or_else(|| last_read.get(&st).copied());
+    let mut count = 0;
+    let mut stores: Vec<u16> = alloc.keys().copied().collect();
+    stores.sort_unstable();
+    for &st in &stores {
+        if vars.scope(st) != body_scope {
+            continue; // block-confined — freed at block exit by I-a
+        }
+        let Some(d) = dead_at(st) else { continue };
+        if let Some(&later) = stores
+            .iter()
+            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
+            .min_by_key(|&&w| alloc[&w])
+        {
+            eprintln!(
+                "[lastuse-guard] {fn_name}: store '{}' data dead @{d} but held to scope exit \
+                 while '{}' allocates @{} — should have been stopped",
+                vars.name(st),
+                vars.name(later),
+                alloc[&later],
+            );
+            count += 1;
+        }
+    }
+    count
 }

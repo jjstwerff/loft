@@ -196,7 +196,31 @@ recorded so it is not rediscovered cold.
 - **Loops** — excluded; they already reuse in place.
 - **LIFO** — `database::free` enforces reverse-alloc free order.
 
-## Verification plan
+## Verification — status (2026-06)
+
+**I-a (block-confined) verified general, not a one-repro.** A monotonic watermark field —
+`Stores::peak` (`src/database/mod.rs`), the high-water of `max`, readable after a run — was
+added so the watermark is a first-class number (no stderr-trace scraping, no buffering
+hazard). Measured ON vs `CONF_OFF` across every confinement shape:
+
+| shape (5× sequential) | ON | OFF |
+|---|---|---|
+| flat `if` | 3 | 7 |
+| nested `if` | 4 | 8 |
+| single `if/else` | 3 | 3 |
+| `if/else` distinct vars | 3 | 10 |
+| no-op `else` | 3 | — |
+| `match` distinct vars | 3 | 8 |
+| loop body | 3 | 3 |
+
+`172` soundness boundary green on both backends; all main-having cluster-I probes exit
+clean. The one residual — **shared variable reassigned across sibling blocks** (`if/else`
+shared `z` stays 7; `match` shared `x`/`y` stays 8) — is **cluster III**, not a lexical-
+scope gap; see [cluster-III-reassignment-pin.md § The single-valued-dep root](cluster-III-reassignment-pin.md).
+Paused (overlaps III; do III first). `confine_reassign_safe` + a `multi_store` branch are
+wired into `store_confinement` as the inert foundation.
+
+## Verification plan (original)
 
 1. `LOFT_STORE_GUARD` goes **silent** on `one_block` / `many_blocks` / `168` / `03-text`.
 2. Watermark drops O(block-locals) → O(1) on `many_blocks` (peak 7 → ~2-3).
@@ -208,12 +232,32 @@ recorded so it is not rediscovered cold.
    backends.
 6. Promote `LOFT_STORE_GUARD` to a `#[cfg(debug_assertions)]` assertion (regression lock).
 
-## Follow-on (out of scope here, noted)
+## Follow-on — the two open halves (both out of scope here)
 
-Function-level **sequential** locals (the `11-vectors` watermark) are *not* cluster I —
-no nested block frees them earlier.  Reducing those needs **last-use freeing of
-function-scoped locals**, a separate, larger change.  Land the block-confined fix first
-(it's the one with the clean scope boundary), then evaluate the function-level case.
+Cluster I split in two once I-a (block-confined) landed; neither open half is reached by
+`relocate_null_init`:
+
+- **I-b — function-level sequential ("stringing").** Top-level locals (`11-vectors`,
+  probe 07) have no nested block to relocate into; each is dead after last read but pins to
+  scope exit. Needs **last-use freeing of function-scoped locals** — a separate, larger
+  change. (Distinct from "stacking": these have non-overlapping sequential lifetimes that
+  *should* reuse one slot, not nested coexisting ones.)
+- **Shared-variable-across-blocks → cluster III.** A variable reassigned per sibling block
+  shares III's root: **single-valued dep** drops the overwritten store's owning-variable
+  link, so it cannot be freed at the overwrite. This overlaps I-b's last-use need and is
+  taken **first** — see [cluster-III-reassignment-pin.md](cluster-III-reassignment-pin.md).
+
+**Reorganized by fix mechanism (2026-06 investigation), not by cluster:**
+- **Block-confinement** (relocate a store's slot into a narrower block): I-a (done) + the
+  shared-block variant (one var reassigned across *sibling* blocks → Route 2 backer-recovery).
+- **Last-use freeing** (emit `OpFreeRef` at a `__vdb`'s live-interval end, not scope-end):
+  I-b *and* the canonical straight-line cluster III (`v=[a];v=[b]` — measured peak 5 ON==OFF,
+  no sub-block to relocate into) **converge** here. `compute_intervals` already has the
+  intervals.
+
+Order: the **last-use mechanism** is the higher-value next step (closes canonical III + I-b
+together); the shared-block Route-2 piece is smaller and builds on I-a. Full map:
+[cluster-III-reassignment-pin.md](cluster-III-reassignment-pin.md).
 
 ## Tail-end experiment — disable store ref-counting once scoping is correct
 
