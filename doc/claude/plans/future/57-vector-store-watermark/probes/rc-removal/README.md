@@ -36,11 +36,12 @@ compare `RC_OFF=1` vs default, `--interpret` vs native.
    (01), read-only (03), in-frame (04), text (05), nested (07), and *sequential*
    factory closures (11) all survive `RC_OFF`.  The break is **coexistence** (02 / 12 /
    09), and it is NOT about interleaved calls (12 crashes without interleaving).
-   - **Mechanism:** a captured cell lives in the defining frame's store.  Under
-     `RC_OFF` that store is freed at the frame's scope exit and the slot is **reused**
-     by the next `make()`'s cell — so two coexisting closures end up pointing at the
-     same reused slot → corruption / `store()` UAF (`allocation.rs:472`).  rc papers
-     over this by keeping each captured cell alive until its closure dies.
+   - **Mechanism (VERIFIED by store trace, probe 12 + `RC_OFF`):** `make()` allocates
+     the cell (`#3`); on return, `RC_OFF` frees `#3` at the frame's scope exit
+     (`- free #3`); the next `make()` **reuses the slot** (`+ alloc #3`) — so f1 and f2
+     alias the same reused store → `store()` UAF (`allocation.rs:472`).  rc suppressed
+     that frame-exit free (the closure `inc_rc`'d the cell on capture).  Sequential
+     (probe 11) is fine because f1 is done before the slot is reused.
    - **Implication for the fix (Phase B):** a closure value must **own** its captured
      cells (cell lifetime tied to the closure, freed when the closure dies), so the
      defining-frame free no longer reuses a still-referenced slot.
