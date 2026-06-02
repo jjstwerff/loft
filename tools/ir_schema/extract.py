@@ -25,16 +25,18 @@
 import re
 import sys
 
-IR_ENUMS = {"TypeT", "Node"}
+IR_ENUMS = {"TypeT", "Node", "DbParts", "DbContent"}
 IR_STRUCTS = {
     "Position", "Key", "SortKey", "NameRef", "NameNr", "IntegerSpec",
     "Block", "ParForBody", "Attribute", "Variable", "Function",
     "LinkedFieldGroup", "Definition", "Data",
+    # @PLAN54 D2a — database type-schema types (Stores.types).
+    "DbField", "EnumPair", "KeyField", "DbType", "Bundle",
 }
 
 
 def is_ir_name(name: str) -> bool:
-    return name in IR_ENUMS or name in IR_STRUCTS or bool(re.match(r"(Ty|Nd)[A-Z]", name))
+    return name in IR_ENUMS or name in IR_STRUCTS or bool(re.match(r"(Ty|Nd|Pt|Dc)[A-Z]", name))
 
 
 def to_snake(name: str) -> str:
@@ -120,10 +122,9 @@ def main(path: str) -> int:
     out.append("/// [`register_ir_schema`] so the typed accessor layer can bind to them.")
     out.append("#[derive(Clone, Copy, Debug)]")
     out.append("pub struct IrSchemaIds {")
-    out.append("    /// `known_type` of the `TypeT` (compiler `Type`) enum.")
-    out.append("    pub type_t: u16,")
-    out.append("    /// `known_type` of the `Node` (compiler `Value`) enum.")
-    out.append("    pub node: u16,")
+    for nm in sorted(enum_ids):
+        out.append(f"    /// `known_type` of the `{nm}` enum.")
+        out.append(f"    pub {to_snake(nm)}: u16,")
     for nm in sorted(struct_ids):
         out.append(f"    /// `known_type` of `{nm}`.")
         out.append(f"    pub {to_snake(nm)}: u16,")
@@ -140,8 +141,8 @@ def main(path: str) -> int:
         out.append("    " + l.strip())
     out.append("    db.finish();")
     out.append("    IrSchemaIds {")
-    out.append(f"        type_t: {enum_ids['TypeT']},")
-    out.append(f"        node: {enum_ids['Node']},")
+    for nm in sorted(enum_ids):
+        out.append(f"        {to_snake(nm)}: {enum_ids[nm]},")
     for nm in sorted(struct_ids):
         out.append(f"        {to_snake(nm)}: {struct_ids[nm]},")
     out.append("    }")

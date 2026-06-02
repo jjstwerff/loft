@@ -217,6 +217,76 @@ struct Data {          // src/data.rs::Data (the stored core)
   source: integer
 }
 
+// ---- Database type schema (src/database) ------------------------------------
+// @PLAN54 arc D / D2a — the database's own type schema (`Stores.types`), so a
+// cache-loaded `Data`'s baked `known_type`s stay valid without re-running the
+// parse-time `fill_all` (whose incremental known_type assignment defeats a
+// load).  Mirrors src/database/types.rs::Type + Parts + Field + keys::Content.
+// `Type.parents` is a derived back-reference index (rebuilt on load, not
+// stored); `Key` and `LinkedFieldGroup` above are reused verbatim.
+
+enum DbContent {       // src/keys.rs::Content — a field's default value
+  DcLong { v: integer },
+  DcFloat { v: float },
+  DcSingle { v: single },
+  DcStr { v: text }
+}
+
+struct DbField {       // src/database/mod.rs::Field
+  name: text,
+  content: integer,    // u16 known_type of the field value
+  position: integer,   // u16 byte offset
+  default: vector<DbContent>,   // Content (box-of-one)
+  other_indexes: vector<integer>
+}
+
+struct EnumPair {      // one (u16, text) of Parts::Enum
+  nr: integer,
+  name: text
+}
+
+struct KeyField {      // one (u16, bool) of a Sorted/Ordered/Index key list
+  nr: integer,
+  asc: boolean
+}
+
+enum DbParts {         // src/database/mod.rs::Parts (17 variants)
+  PtBase,
+  PtStruct { fields: vector<DbField> },
+  PtEnum { values: vector<EnumPair> },
+  PtEnumValue { value: integer, fields: vector<DbField> },
+  PtByte { start: integer, nullable: boolean },
+  PtShort { start: integer, nullable: boolean },
+  PtInt { start: integer, nullable: boolean },
+  PtShortRaw { start: integer, nullable: boolean },
+  PtVector { content: integer },
+  PtArray { content: integer },
+  PtSorted { content: integer, keys: vector<KeyField> },
+  PtOrdered { content: integer, keys: vector<KeyField> },
+  PtHash { content: integer, fields: vector<integer> },
+  PtIndex { content: integer, keys: vector<KeyField>, left: integer },
+  PtSpacial { content: integer, fields: vector<integer> },
+  PtDbRef,
+  PtChildRec { content: integer }
+}
+
+struct DbType {        // src/database/types.rs::Type (parents = derived, not stored)
+  name: text,
+  parts: vector<DbParts>,         // Parts (box-of-one)
+  keys: vector<Key>,
+  complex: boolean,
+  linked: boolean,
+  size: integer,
+  align: integer,
+  field_groups: vector<LinkedFieldGroup>
+}
+
+// The store root for a saved bundle: the IR plus its database type schema.
+struct Bundle {
+  data: Data,
+  types: vector<DbType>
+}
+
 fn main() {
   // An empty Data is enough to force the parser to lay out + register the
   // full type graph above; the value of this script is the GENERATED SCHEMA
@@ -224,6 +294,6 @@ fn main() {
   //   loft --introspect --show-rust --rust-out out.rs ir_full.loft
   // Constructing deeply-nested records would additionally need each recursive
   // field wrapped as a reference literal — not needed to study the schema.
-  d = Data { definitions: [], source: 0 };
-  print("data with {d.definitions.len()} defs");
+  b = Bundle { data: Data { definitions: [], source: 0 }, types: [] };
+  print("bundle with {b.data.definitions.len()} defs, {b.types.len()} types");
 }

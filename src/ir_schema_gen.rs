@@ -19,24 +19,46 @@ use crate::database::Stores;
 /// [`register_ir_schema`] so the typed accessor layer can bind to them.
 #[derive(Clone, Copy, Debug)]
 pub struct IrSchemaIds {
-    /// `known_type` of the `TypeT` (compiler `Type`) enum.
-    pub type_t: u16,
-    /// `known_type` of the `Node` (compiler `Value`) enum.
+    /// `known_type` of the `DbContent` enum.
+    pub db_content: u16,
+    /// `known_type` of the `DbParts` enum.
+    pub db_parts: u16,
+    /// `known_type` of the `Node` enum.
     pub node: u16,
+    /// `known_type` of the `TypeT` enum.
+    pub type_t: u16,
     /// `known_type` of `Attribute`.
     pub attribute: u16,
     /// `known_type` of `Block`.
     pub block: u16,
+    /// `known_type` of `Bundle`.
+    pub bundle: u16,
     /// `known_type` of `Data`.
     pub data: u16,
+    /// `known_type` of `DbField`.
+    pub db_field: u16,
+    /// `known_type` of `DbType`.
+    pub db_type: u16,
+    /// `known_type` of `DcFloat`.
+    pub dc_float: u16,
+    /// `known_type` of `DcLong`.
+    pub dc_long: u16,
+    /// `known_type` of `DcSingle`.
+    pub dc_single: u16,
+    /// `known_type` of `DcStr`.
+    pub dc_str: u16,
     /// `known_type` of `Definition`.
     pub definition: u16,
+    /// `known_type` of `EnumPair`.
+    pub enum_pair: u16,
     /// `known_type` of `Function`.
     pub function: u16,
     /// `known_type` of `IntegerSpec`.
     pub integer_spec: u16,
     /// `known_type` of `Key`.
     pub key: u16,
+    /// `known_type` of `KeyField`.
+    pub key_field: u16,
     /// `known_type` of `LinkedFieldGroup`.
     pub linked_field_group: u16,
     /// `known_type` of `NameNr`.
@@ -115,6 +137,40 @@ pub struct IrSchemaIds {
     pub par_for_body: u16,
     /// `known_type` of `Position`.
     pub position: u16,
+    /// `known_type` of `PtArray`.
+    pub pt_array: u16,
+    /// `known_type` of `PtBase`.
+    pub pt_base: u16,
+    /// `known_type` of `PtByte`.
+    pub pt_byte: u16,
+    /// `known_type` of `PtChildRec`.
+    pub pt_child_rec: u16,
+    /// `known_type` of `PtDbRef`.
+    pub pt_db_ref: u16,
+    /// `known_type` of `PtEnum`.
+    pub pt_enum: u16,
+    /// `known_type` of `PtEnumValue`.
+    pub pt_enum_value: u16,
+    /// `known_type` of `PtHash`.
+    pub pt_hash: u16,
+    /// `known_type` of `PtIndex`.
+    pub pt_index: u16,
+    /// `known_type` of `PtInt`.
+    pub pt_int: u16,
+    /// `known_type` of `PtOrdered`.
+    pub pt_ordered: u16,
+    /// `known_type` of `PtShort`.
+    pub pt_short: u16,
+    /// `known_type` of `PtShortRaw`.
+    pub pt_short_raw: u16,
+    /// `known_type` of `PtSorted`.
+    pub pt_sorted: u16,
+    /// `known_type` of `PtSpacial`.
+    pub pt_spacial: u16,
+    /// `known_type` of `PtStruct`.
+    pub pt_struct: u16,
+    /// `known_type` of `PtVector`.
+    pub pt_vector: u16,
     /// `known_type` of `SortKey`.
     pub sort_key: u16,
     /// `known_type` of `TyBoolean`.
@@ -183,274 +239,294 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let _ = (t0, t1, t2, t3, t4, t5, t6);
     let t64 = db.enumerate("TypeT");
     let t65 = db.enumerate("Node");
-    let t66 = db.structure("Position", 0);
-    let t67 = db.structure("Key", 0);
-    let t68 = db.structure("SortKey", 0);
-    let t69 = db.structure("NameRef", 0);
-    let t70 = db.structure("NameNr", 0);
-    let t71 = db.structure("IntegerSpec", 0);
-    let t72 = db.structure("TyUnknown", 1);
-    let t73 = db.structure("TyNull", 2);
-    let t74 = db.structure("TyVoid", 3);
-    let t75 = db.structure("TyNever", 4);
-    let t76 = db.structure("TyInteger", 5);
-    let t77 = db.structure("TyBoolean", 6);
-    let t78 = db.structure("TyFloat", 7);
-    let t79 = db.structure("TySingle", 8);
-    let t80 = db.structure("TyCharacter", 9);
-    let t81 = db.structure("TyText", 10);
-    let t82 = db.structure("TyKeys", 11);
-    let t83 = db.structure("TyEnum", 12);
-    let t84 = db.structure("TyReference", 13);
-    let t85 = db.structure("TyRefVar", 14);
-    let t87 = db.structure("TyVector", 15);
-    let t88 = db.structure("TyRoutine", 16);
-    let t89 = db.structure("TyIterator", 17);
-    let t90 = db.structure("TySorted", 18);
-    let t92 = db.structure("TyIndex", 19);
-    let t93 = db.structure("TySpacial", 20);
-    let t95 = db.structure("TyHash", 21);
-    let t96 = db.structure("TyFunction", 22);
-    let t97 = db.structure("TyRewritten", 23);
-    let t98 = db.structure("TyTuple", 24);
-    let t99 = db.structure("NdNull", 1);
-    let t100 = db.structure("NdLine", 2);
-    let t101 = db.structure("NdSpan", 3);
-    let t103 = db.structure("NdInt", 4);
-    let t104 = db.structure("NdEnum", 5);
-    let t105 = db.structure("NdBoolean", 6);
-    let t106 = db.structure("NdFloat", 7);
-    let t107 = db.structure("NdLong", 8);
-    let t108 = db.structure("NdSingle", 9);
-    let t109 = db.structure("NdText", 10);
-    let t110 = db.structure("NdCall", 11);
-    let t111 = db.structure("NdCallRef", 12);
-    let t112 = db.structure("NdBlock", 13);
-    let t113 = db.structure("Block", 0);
-    let t114 = db.structure("NdInsert", 14);
-    let t115 = db.structure("NdVar", 15);
-    let t116 = db.structure("NdSet", 16);
-    let t117 = db.structure("NdReturn", 17);
-    let t118 = db.structure("NdBreak", 18);
-    let t119 = db.structure("NdBreakWith", 19);
-    let t120 = db.structure("NdContinue", 20);
-    let t121 = db.structure("NdIf", 21);
-    let t122 = db.structure("NdLoop", 22);
-    let t123 = db.structure("NdDrop", 23);
-    let t124 = db.structure("NdIter", 24);
-    let t125 = db.structure("NdKeys", 25);
-    let t127 = db.structure("NdTuple", 26);
-    let t128 = db.structure("NdTupleGet", 27);
-    let t129 = db.structure("NdTuplePut", 28);
-    let t130 = db.structure("NdYield", 29);
-    let t131 = db.structure("NdFnRef", 30);
-    let t132 = db.structure("NdFnRefDnr", 31);
-    let t133 = db.structure("NdParallel", 32);
-    let t134 = db.structure("NdParFor", 33);
-    let t135 = db.structure("ParForBody", 0);
-    let t136 = db.structure("NdRawExpr", 34);
-    let t137 = db.structure("Attribute", 0);
-    let t138 = db.structure("Variable", 0);
-    let t139 = db.structure("Function", 0);
-    let t142 = db.structure("LinkedFieldGroup", 0);
-    let t143 = db.structure("Definition", 0);
-    let t146 = db.structure("Data", 0);
-    db.field(t66, "file", t5);
-    db.field(t66, "line", 0);
-    db.field(t66, "pos", 0);
-    db.field(t67, "type_nr", 0);
-    db.field(t67, "position", 0);
-    db.field(t68, "name", t5);
-    db.field(t68, "asc", t4);
-    db.field(t69, "name", t5);
+    let t66 = db.enumerate("DbContent");
+    let t67 = db.enumerate("DbParts");
+    let t68 = db.structure("Position", 0);
+    let t69 = db.structure("Key", 0);
+    let t70 = db.structure("SortKey", 0);
+    let t71 = db.structure("NameRef", 0);
+    let t72 = db.structure("NameNr", 0);
+    let t73 = db.structure("IntegerSpec", 0);
+    let t74 = db.structure("TyUnknown", 1);
+    let t75 = db.structure("TyNull", 2);
+    let t76 = db.structure("TyVoid", 3);
+    let t77 = db.structure("TyNever", 4);
+    let t78 = db.structure("TyInteger", 5);
+    let t79 = db.structure("TyBoolean", 6);
+    let t80 = db.structure("TyFloat", 7);
+    let t81 = db.structure("TySingle", 8);
+    let t82 = db.structure("TyCharacter", 9);
+    let t83 = db.structure("TyText", 10);
+    let t84 = db.structure("TyKeys", 11);
+    let t85 = db.structure("TyEnum", 12);
+    let t86 = db.structure("TyReference", 13);
+    let t87 = db.structure("TyRefVar", 14);
+    let t89 = db.structure("TyVector", 15);
+    let t90 = db.structure("TyRoutine", 16);
+    let t91 = db.structure("TyIterator", 17);
+    let t92 = db.structure("TySorted", 18);
+    let t94 = db.structure("TyIndex", 19);
+    let t95 = db.structure("TySpacial", 20);
+    let t97 = db.structure("TyHash", 21);
+    let t98 = db.structure("TyFunction", 22);
+    let t99 = db.structure("TyRewritten", 23);
+    let t100 = db.structure("TyTuple", 24);
+    let t101 = db.structure("NdNull", 1);
+    let t102 = db.structure("NdLine", 2);
+    let t103 = db.structure("NdSpan", 3);
+    let t105 = db.structure("NdInt", 4);
+    let t106 = db.structure("NdEnum", 5);
+    let t107 = db.structure("NdBoolean", 6);
+    let t108 = db.structure("NdFloat", 7);
+    let t109 = db.structure("NdLong", 8);
+    let t110 = db.structure("NdSingle", 9);
+    let t111 = db.structure("NdText", 10);
+    let t112 = db.structure("NdCall", 11);
+    let t113 = db.structure("NdCallRef", 12);
+    let t114 = db.structure("NdBlock", 13);
+    let t115 = db.structure("Block", 0);
+    let t116 = db.structure("NdInsert", 14);
+    let t117 = db.structure("NdVar", 15);
+    let t118 = db.structure("NdSet", 16);
+    let t119 = db.structure("NdReturn", 17);
+    let t120 = db.structure("NdBreak", 18);
+    let t121 = db.structure("NdBreakWith", 19);
+    let t122 = db.structure("NdContinue", 20);
+    let t123 = db.structure("NdIf", 21);
+    let t124 = db.structure("NdLoop", 22);
+    let t125 = db.structure("NdDrop", 23);
+    let t126 = db.structure("NdIter", 24);
+    let t127 = db.structure("NdKeys", 25);
+    let t129 = db.structure("NdTuple", 26);
+    let t130 = db.structure("NdTupleGet", 27);
+    let t131 = db.structure("NdTuplePut", 28);
+    let t132 = db.structure("NdYield", 29);
+    let t133 = db.structure("NdFnRef", 30);
+    let t134 = db.structure("NdFnRefDnr", 31);
+    let t135 = db.structure("NdParallel", 32);
+    let t136 = db.structure("NdParFor", 33);
+    let t137 = db.structure("ParForBody", 0);
+    let t138 = db.structure("NdRawExpr", 34);
+    let t139 = db.structure("Attribute", 0);
+    let t140 = db.structure("Variable", 0);
+    let t141 = db.structure("Function", 0);
+    let t144 = db.structure("LinkedFieldGroup", 0);
+    let t145 = db.structure("Definition", 0);
+    let t148 = db.structure("Data", 0);
+    let t150 = db.structure("DcLong", 1);
+    let t151 = db.structure("DcFloat", 2);
+    let t152 = db.structure("DcSingle", 3);
+    let t153 = db.structure("DcStr", 4);
+    let t154 = db.structure("DbField", 0);
+    let t156 = db.structure("EnumPair", 0);
+    let t157 = db.structure("KeyField", 0);
+    let t158 = db.structure("PtBase", 1);
+    let t159 = db.structure("PtStruct", 2);
+    let t161 = db.structure("PtEnum", 3);
+    let t163 = db.structure("PtEnumValue", 4);
+    let t164 = db.structure("PtByte", 5);
+    let t165 = db.structure("PtShort", 6);
+    let t166 = db.structure("PtInt", 7);
+    let t167 = db.structure("PtShortRaw", 8);
+    let t168 = db.structure("PtVector", 9);
+    let t169 = db.structure("PtArray", 10);
+    let t170 = db.structure("PtSorted", 11);
+    let t172 = db.structure("PtOrdered", 12);
+    let t173 = db.structure("PtHash", 13);
+    let t174 = db.structure("PtIndex", 14);
+    let t175 = db.structure("PtSpacial", 15);
+    let t176 = db.structure("PtDbRef", 16);
+    let t177 = db.structure("PtChildRec", 17);
+    let t178 = db.structure("DbType", 0);
+    let t180 = db.structure("Bundle", 0);
+    db.field(t68, "file", t5);
+    db.field(t68, "line", 0);
+    db.field(t68, "pos", 0);
+    db.field(t69, "type_nr", 0);
+    db.field(t69, "position", 0);
     db.field(t70, "name", t5);
-    db.field(t70, "nr", 0);
-    db.field(t71, "min", 0);
-    db.field(t71, "max", 0);
-    db.field(t71, "not_null", t4);
-    db.field(t71, "forced_size", 0);
-    let byte_enum = db.byte(0, false);
-    db.field(t72, "enum", byte_enum);
-    db.field(t72, "n", 0);
-    let byte_enum = db.byte(0, false);
-    db.field(t73, "enum", byte_enum);
+    db.field(t70, "asc", t4);
+    db.field(t71, "name", t5);
+    db.field(t72, "name", t5);
+    db.field(t72, "nr", 0);
+    db.field(t73, "min", 0);
+    db.field(t73, "max", 0);
+    db.field(t73, "not_null", t4);
+    db.field(t73, "forced_size", 0);
     let byte_enum = db.byte(0, false);
     db.field(t74, "enum", byte_enum);
+    db.field(t74, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t75, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
     db.field(t76, "enum", byte_enum);
-    db.field(t76, "spec", t71);
     let byte_enum = db.byte(0, false);
     db.field(t77, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
     db.field(t78, "enum", byte_enum);
+    db.field(t78, "spec", t73);
     let byte_enum = db.byte(0, false);
     db.field(t79, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
     db.field(t80, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
     db.field(t81, "enum", byte_enum);
-    let vec_dep = db.vector(t0);
-    db.field(t81, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t82, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
     db.field(t83, "enum", byte_enum);
-    db.field(t83, "n", 0);
-    db.field(t83, "is_ref", t4);
     let vec_dep = db.vector(t0);
     db.field(t83, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t84, "enum", byte_enum);
-    db.field(t84, "n", 0);
-    let vec_dep = db.vector(t0);
-    db.field(t84, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t85, "enum", byte_enum);
-    let vec_inner = db.vector(t64);
-    db.field(t85, "inner", vec_inner);
-    let t86 = db.vector(t64);
-    let _ = t86; // may be unused
+    db.field(t85, "n", 0);
+    db.field(t85, "is_ref", t4);
+    let vec_dep = db.vector(t0);
+    db.field(t85, "dep", vec_dep);
+    let byte_enum = db.byte(0, false);
+    db.field(t86, "enum", byte_enum);
+    db.field(t86, "n", 0);
+    let vec_dep = db.vector(t0);
+    db.field(t86, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t87, "enum", byte_enum);
     let vec_inner = db.vector(t64);
     db.field(t87, "inner", vec_inner);
-    let vec_dep = db.vector(t0);
-    db.field(t87, "dep", vec_dep);
-    let byte_enum = db.byte(0, false);
-    db.field(t88, "enum", byte_enum);
-    db.field(t88, "n", 0);
+    let t88 = db.vector(t64);
+    let _ = t88; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t89, "enum", byte_enum);
-    let vec_step = db.vector(t64);
-    db.field(t89, "step", vec_step);
     let vec_inner = db.vector(t64);
     db.field(t89, "inner", vec_inner);
+    let vec_dep = db.vector(t0);
+    db.field(t89, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t90, "enum", byte_enum);
     db.field(t90, "n", 0);
-    let vec_keys = db.vector(t68);
-    db.field(t90, "keys", vec_keys);
-    let vec_dep = db.vector(t0);
-    db.field(t90, "dep", vec_dep);
-    let t91 = db.vector(t68);
-    let _ = t91; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t91, "enum", byte_enum);
+    let vec_step = db.vector(t64);
+    db.field(t91, "step", vec_step);
+    let vec_inner = db.vector(t64);
+    db.field(t91, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t92, "enum", byte_enum);
     db.field(t92, "n", 0);
-    let vec_keys = db.vector(t68);
+    let vec_keys = db.vector(t70);
     db.field(t92, "keys", vec_keys);
     let vec_dep = db.vector(t0);
     db.field(t92, "dep", vec_dep);
+    let t93 = db.vector(t70);
+    let _ = t93; // may be unused
     let byte_enum = db.byte(0, false);
-    db.field(t93, "enum", byte_enum);
-    db.field(t93, "n", 0);
-    let vec_names = db.vector(t69);
-    db.field(t93, "names", vec_names);
+    db.field(t94, "enum", byte_enum);
+    db.field(t94, "n", 0);
+    let vec_keys = db.vector(t70);
+    db.field(t94, "keys", vec_keys);
     let vec_dep = db.vector(t0);
-    db.field(t93, "dep", vec_dep);
-    let t94 = db.vector(t69);
-    let _ = t94; // may be unused
+    db.field(t94, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t95, "enum", byte_enum);
     db.field(t95, "n", 0);
-    let vec_names = db.vector(t69);
+    let vec_names = db.vector(t71);
     db.field(t95, "names", vec_names);
     let vec_dep = db.vector(t0);
     db.field(t95, "dep", vec_dep);
-    let byte_enum = db.byte(0, false);
-    db.field(t96, "enum", byte_enum);
-    let vec_args = db.vector(t64);
-    db.field(t96, "args", vec_args);
-    let vec_result = db.vector(t64);
-    db.field(t96, "result", vec_result);
-    let vec_dep = db.vector(t0);
-    db.field(t96, "dep", vec_dep);
+    let t96 = db.vector(t71);
+    let _ = t96; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t97, "enum", byte_enum);
-    let vec_inner = db.vector(t64);
-    db.field(t97, "inner", vec_inner);
+    db.field(t97, "n", 0);
+    let vec_names = db.vector(t71);
+    db.field(t97, "names", vec_names);
+    let vec_dep = db.vector(t0);
+    db.field(t97, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t98, "enum", byte_enum);
-    let vec_elems = db.vector(t64);
-    db.field(t98, "elems", vec_elems);
+    let vec_args = db.vector(t64);
+    db.field(t98, "args", vec_args);
+    let vec_result = db.vector(t64);
+    db.field(t98, "result", vec_result);
+    let vec_dep = db.vector(t0);
+    db.field(t98, "dep", vec_dep);
     let byte_enum = db.byte(0, false);
     db.field(t99, "enum", byte_enum);
+    let vec_inner = db.vector(t64);
+    db.field(t99, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t100, "enum", byte_enum);
-    db.field(t100, "n", 0);
+    let vec_elems = db.vector(t64);
+    db.field(t100, "elems", vec_elems);
     let byte_enum = db.byte(0, false);
     db.field(t101, "enum", byte_enum);
-    db.field(t101, "pos", t66);
-    let vec_inner = db.vector(t65);
-    db.field(t101, "inner", vec_inner);
-    let t102 = db.vector(t65);
-    let _ = t102; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t102, "enum", byte_enum);
+    db.field(t102, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t103, "enum", byte_enum);
-    db.field(t103, "n", 0);
-    let byte_enum = db.byte(0, false);
-    db.field(t104, "enum", byte_enum);
-    db.field(t104, "ord", 0);
-    db.field(t104, "tp", 0);
+    db.field(t103, "pos", t68);
+    let vec_inner = db.vector(t65);
+    db.field(t103, "inner", vec_inner);
+    let t104 = db.vector(t65);
+    let _ = t104; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t105, "enum", byte_enum);
-    db.field(t105, "b", t4);
+    db.field(t105, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t106, "enum", byte_enum);
-    db.field(t106, "f", t3);
+    db.field(t106, "ord", 0);
+    db.field(t106, "tp", 0);
     let byte_enum = db.byte(0, false);
     db.field(t107, "enum", byte_enum);
-    db.field(t107, "n", 0);
+    db.field(t107, "b", t4);
     let byte_enum = db.byte(0, false);
     db.field(t108, "enum", byte_enum);
-    db.field(t108, "f", t2);
+    db.field(t108, "f", t3);
     let byte_enum = db.byte(0, false);
     db.field(t109, "enum", byte_enum);
-    db.field(t109, "s", t5);
+    db.field(t109, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t110, "enum", byte_enum);
-    db.field(t110, "def_nr", 0);
-    let vec_args = db.vector(t65);
-    db.field(t110, "args", vec_args);
+    db.field(t110, "f", t2);
     let byte_enum = db.byte(0, false);
     db.field(t111, "enum", byte_enum);
-    db.field(t111, "var", 0);
-    let vec_args = db.vector(t65);
-    db.field(t111, "args", vec_args);
+    db.field(t111, "s", t5);
     let byte_enum = db.byte(0, false);
     db.field(t112, "enum", byte_enum);
-    db.field(t112, "block", t113);
-    db.field(t113, "name", t5);
-    let vec_operators = db.vector(t65);
-    db.field(t113, "operators", vec_operators);
-    let vec_result = db.vector(t64);
-    db.field(t113, "result", vec_result);
-    db.field(t113, "scope", 0);
-    db.field(t113, "var_size", 0);
+    db.field(t112, "def_nr", 0);
+    let vec_args = db.vector(t65);
+    db.field(t112, "args", vec_args);
+    let byte_enum = db.byte(0, false);
+    db.field(t113, "enum", byte_enum);
+    db.field(t113, "var", 0);
+    let vec_args = db.vector(t65);
+    db.field(t113, "args", vec_args);
     let byte_enum = db.byte(0, false);
     db.field(t114, "enum", byte_enum);
-    let vec_items = db.vector(t65);
-    db.field(t114, "items", vec_items);
-    let byte_enum = db.byte(0, false);
-    db.field(t115, "enum", byte_enum);
-    db.field(t115, "n", 0);
+    db.field(t114, "block", t115);
+    db.field(t115, "name", t5);
+    let vec_operators = db.vector(t65);
+    db.field(t115, "operators", vec_operators);
+    let vec_result = db.vector(t64);
+    db.field(t115, "result", vec_result);
+    db.field(t115, "scope", 0);
+    db.field(t115, "var_size", 0);
     let byte_enum = db.byte(0, false);
     db.field(t116, "enum", byte_enum);
-    db.field(t116, "var", 0);
-    let vec_inner = db.vector(t65);
-    db.field(t116, "inner", vec_inner);
+    let vec_items = db.vector(t65);
+    db.field(t116, "items", vec_items);
     let byte_enum = db.byte(0, false);
     db.field(t117, "enum", byte_enum);
-    let vec_inner = db.vector(t65);
-    db.field(t117, "inner", vec_inner);
+    db.field(t117, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t118, "enum", byte_enum);
-    db.field(t118, "n", 0);
+    db.field(t118, "var", 0);
+    let vec_inner = db.vector(t65);
+    db.field(t118, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t119, "enum", byte_enum);
-    db.field(t119, "n", 0);
     let vec_inner = db.vector(t65);
     db.field(t119, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
@@ -458,309 +534,489 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t120, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t121, "enum", byte_enum);
-    let vec_cond = db.vector(t65);
-    db.field(t121, "cond", vec_cond);
-    let vec_t = db.vector(t65);
-    db.field(t121, "t", vec_t);
-    let vec_f = db.vector(t65);
-    db.field(t121, "f", vec_f);
+    db.field(t121, "n", 0);
+    let vec_inner = db.vector(t65);
+    db.field(t121, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t122, "enum", byte_enum);
-    db.field(t122, "block", t113);
+    db.field(t122, "n", 0);
     let byte_enum = db.byte(0, false);
     db.field(t123, "enum", byte_enum);
-    let vec_inner = db.vector(t65);
-    db.field(t123, "inner", vec_inner);
+    let vec_cond = db.vector(t65);
+    db.field(t123, "cond", vec_cond);
+    let vec_t = db.vector(t65);
+    db.field(t123, "t", vec_t);
+    let vec_f = db.vector(t65);
+    db.field(t123, "f", vec_f);
     let byte_enum = db.byte(0, false);
     db.field(t124, "enum", byte_enum);
-    db.field(t124, "var", 0);
-    let vec_create = db.vector(t65);
-    db.field(t124, "create", vec_create);
-    let vec_next = db.vector(t65);
-    db.field(t124, "next", vec_next);
-    let vec_init = db.vector(t65);
-    db.field(t124, "init", vec_init);
+    db.field(t124, "block", t115);
     let byte_enum = db.byte(0, false);
     db.field(t125, "enum", byte_enum);
-    let vec_keys = db.vector(t67);
-    db.field(t125, "keys", vec_keys);
-    let t126 = db.vector(t67);
-    let _ = t126; // may be unused
+    let vec_inner = db.vector(t65);
+    db.field(t125, "inner", vec_inner);
+    let byte_enum = db.byte(0, false);
+    db.field(t126, "enum", byte_enum);
+    db.field(t126, "var", 0);
+    let vec_create = db.vector(t65);
+    db.field(t126, "create", vec_create);
+    let vec_next = db.vector(t65);
+    db.field(t126, "next", vec_next);
+    let vec_init = db.vector(t65);
+    db.field(t126, "init", vec_init);
     let byte_enum = db.byte(0, false);
     db.field(t127, "enum", byte_enum);
-    let vec_items = db.vector(t65);
-    db.field(t127, "items", vec_items);
-    let byte_enum = db.byte(0, false);
-    db.field(t128, "enum", byte_enum);
-    db.field(t128, "var", 0);
-    db.field(t128, "idx", 0);
+    let vec_keys = db.vector(t69);
+    db.field(t127, "keys", vec_keys);
+    let t128 = db.vector(t69);
+    let _ = t128; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t129, "enum", byte_enum);
-    db.field(t129, "var", 0);
-    db.field(t129, "idx", 0);
-    let vec_inner = db.vector(t65);
-    db.field(t129, "inner", vec_inner);
+    let vec_items = db.vector(t65);
+    db.field(t129, "items", vec_items);
     let byte_enum = db.byte(0, false);
     db.field(t130, "enum", byte_enum);
-    let vec_inner = db.vector(t65);
-    db.field(t130, "inner", vec_inner);
+    db.field(t130, "var", 0);
+    db.field(t130, "idx", 0);
     let byte_enum = db.byte(0, false);
     db.field(t131, "enum", byte_enum);
-    db.field(t131, "def_nr", 0);
     db.field(t131, "var", 0);
-    let vec_t = db.vector(t64);
-    db.field(t131, "t", vec_t);
+    db.field(t131, "idx", 0);
+    let vec_inner = db.vector(t65);
+    db.field(t131, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t132, "enum", byte_enum);
-    db.field(t132, "n", 0);
+    let vec_inner = db.vector(t65);
+    db.field(t132, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t133, "enum", byte_enum);
-    let vec_arms = db.vector(t65);
-    db.field(t133, "arms", vec_arms);
+    db.field(t133, "def_nr", 0);
+    db.field(t133, "var", 0);
+    let vec_t = db.vector(t64);
+    db.field(t133, "t", vec_t);
     let byte_enum = db.byte(0, false);
     db.field(t134, "enum", byte_enum);
-    db.field(t134, "body", t135);
-    let vec_input = db.vector(t65);
-    db.field(t135, "input", vec_input);
-    db.field(t135, "x_var", 0);
-    db.field(t135, "r_var", 0);
-    let vec_worker = db.vector(t65);
-    db.field(t135, "worker", vec_worker);
-    let vec_threads = db.vector(t65);
-    db.field(t135, "threads", vec_threads);
-    let vec_body = db.vector(t65);
-    db.field(t135, "body", vec_body);
-    db.field(t135, "stitch_id", 0);
+    db.field(t134, "n", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t135, "enum", byte_enum);
+    let vec_arms = db.vector(t65);
+    db.field(t135, "arms", vec_arms);
     let byte_enum = db.byte(0, false);
     db.field(t136, "enum", byte_enum);
-    db.field(t136, "s", t5);
-    db.field(t137, "name", t5);
-    let vec_typedef = db.vector(t64);
-    db.field(t137, "typedef", vec_typedef);
-    db.field(t137, "mutable", t4);
-    db.field(t137, "constant", t4);
-    db.field(t137, "init", t4);
-    db.field(t137, "nullable", t4);
-    db.field(t137, "primary", t4);
-    db.field(t137, "hidden", t4);
-    let vec_value = db.vector(t65);
-    db.field(t137, "value", vec_value);
-    let vec_check = db.vector(t65);
-    db.field(t137, "check", vec_check);
-    let vec_check_message = db.vector(t65);
-    db.field(t137, "check_message", vec_check_message);
-    db.field(t137, "alias_d_nr", 0);
-    db.field(t137, "assigned_lambda_d_nr", 0);
-    db.field(t138, "name", t5);
-    let vec_type_def = db.vector(t64);
-    db.field(t138, "type_def", vec_type_def);
-    db.field(t138, "stack_pos", 0);
-    db.field(t138, "uses", 0);
-    db.field(t138, "argument", t4);
-    db.field(t138, "stack_allocated", t4);
-    db.field(t138, "skip_free", t4);
-    db.field(t138, "captured", t4);
-    db.field(t138, "caller_hidden_buf", t4);
+    db.field(t136, "body", t137);
+    let vec_input = db.vector(t65);
+    db.field(t137, "input", vec_input);
+    db.field(t137, "x_var", 0);
+    db.field(t137, "r_var", 0);
+    let vec_worker = db.vector(t65);
+    db.field(t137, "worker", vec_worker);
+    let vec_threads = db.vector(t65);
+    db.field(t137, "threads", vec_threads);
+    let vec_body = db.vector(t65);
+    db.field(t137, "body", vec_body);
+    db.field(t137, "stitch_id", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t138, "enum", byte_enum);
+    db.field(t138, "s", t5);
     db.field(t139, "name", t5);
-    db.field(t139, "file", t5);
-    let vec_variables = db.vector(t138);
-    db.field(t139, "variables", vec_variables);
-    let vec_names = db.vector(t70);
-    db.field(t139, "names", vec_names);
+    let vec_typedef = db.vector(t64);
+    db.field(t139, "typedef", vec_typedef);
+    db.field(t139, "mutable", t4);
+    db.field(t139, "constant", t4);
+    db.field(t139, "init", t4);
+    db.field(t139, "nullable", t4);
+    db.field(t139, "primary", t4);
+    db.field(t139, "hidden", t4);
+    let vec_value = db.vector(t65);
+    db.field(t139, "value", vec_value);
+    let vec_check = db.vector(t65);
+    db.field(t139, "check", vec_check);
+    let vec_check_message = db.vector(t65);
+    db.field(t139, "check_message", vec_check_message);
+    db.field(t139, "alias_d_nr", 0);
+    db.field(t139, "assigned_lambda_d_nr", 0);
+    db.field(t140, "name", t5);
+    let vec_type_def = db.vector(t64);
+    db.field(t140, "type_def", vec_type_def);
+    db.field(t140, "stack_pos", 0);
+    db.field(t140, "uses", 0);
+    db.field(t140, "argument", t4);
+    db.field(t140, "stack_allocated", t4);
+    db.field(t140, "skip_free", t4);
+    db.field(t140, "captured", t4);
+    db.field(t140, "caller_hidden_buf", t4);
+    db.field(t141, "name", t5);
+    db.field(t141, "file", t5);
+    let vec_variables = db.vector(t140);
+    db.field(t141, "variables", vec_variables);
+    let vec_names = db.vector(t72);
+    db.field(t141, "names", vec_names);
     let vec_inline_refs = db.vector(t0);
-    db.field(t139, "inline_refs", vec_inline_refs);
-    let t140 = db.vector(t138);
-    let _ = t140; // may be unused
-    let t141 = db.vector(t70);
-    let _ = t141; // may be unused
-    db.field(t142, "kind", 0);
-    db.field(t142, "instance", 0);
+    db.field(t141, "inline_refs", vec_inline_refs);
+    let t142 = db.vector(t140);
+    let _ = t142; // may be unused
+    let t143 = db.vector(t72);
+    let _ = t143; // may be unused
+    db.field(t144, "kind", 0);
+    db.field(t144, "instance", 0);
     let vec_field_indices = db.vector(t0);
-    db.field(t142, "field_indices", vec_field_indices);
-    db.field(t142, "alignment", 0);
-    db.field(t142, "size", 0);
-    db.field(t143, "name", t5);
-    db.field(t143, "source", 0);
-    db.field(t143, "def_type", 0);
-    db.field(t143, "parent", 0);
-    db.field(t143, "position", t66);
-    let vec_attributes = db.vector(t137);
-    db.field(t143, "attributes", vec_attributes);
+    db.field(t144, "field_indices", vec_field_indices);
+    db.field(t144, "alignment", 0);
+    db.field(t144, "size", 0);
+    db.field(t145, "name", t5);
+    db.field(t145, "source", 0);
+    db.field(t145, "def_type", 0);
+    db.field(t145, "parent", 0);
+    db.field(t145, "position", t68);
+    let vec_attributes = db.vector(t139);
+    db.field(t145, "attributes", vec_attributes);
     let vec_code = db.vector(t65);
-    db.field(t143, "code", vec_code);
+    db.field(t145, "code", vec_code);
     let vec_returned = db.vector(t64);
-    db.field(t143, "returned", vec_returned);
-    db.field(t143, "returned_not_null", t4);
-    db.field(t143, "rust", t5);
-    db.field(t143, "native", t5);
-    db.field(t143, "op_code", 0);
-    db.field(t143, "known_type", 0);
-    db.field(t143, "variables", t139);
-    db.field(t143, "pub_visible", t4);
-    db.field(t143, "closure_record", 0);
-    let vec_mutated_captures = db.vector(t69);
-    db.field(t143, "mutated_captures", vec_mutated_captures);
-    let vec_scalars_to_box = db.vector(t69);
-    db.field(t143, "scalars_to_box", vec_scalars_to_box);
+    db.field(t145, "returned", vec_returned);
+    db.field(t145, "returned_not_null", t4);
+    db.field(t145, "rust", t5);
+    db.field(t145, "native", t5);
+    db.field(t145, "op_code", 0);
+    db.field(t145, "known_type", 0);
+    db.field(t145, "variables", t141);
+    db.field(t145, "pub_visible", t4);
+    db.field(t145, "closure_record", 0);
+    let vec_mutated_captures = db.vector(t71);
+    db.field(t145, "mutated_captures", vec_mutated_captures);
+    let vec_scalars_to_box = db.vector(t71);
+    db.field(t145, "scalars_to_box", vec_scalars_to_box);
     let vec_bounds = db.vector(t0);
-    db.field(t143, "bounds", vec_bounds);
-    db.field(t143, "forced_size", 0);
-    db.field(t143, "purity", 0);
-    let vec_field_groups = db.vector(t142);
-    db.field(t143, "field_groups", vec_field_groups);
-    db.field(t143, "synthetic", t5);
-    let t144 = db.vector(t137);
-    let _ = t144; // may be unused
-    let t145 = db.vector(t142);
-    let _ = t145; // may be unused
-    let vec_definitions = db.vector(t143);
-    db.field(t146, "definitions", vec_definitions);
-    db.field(t146, "source", 0);
-    let t147 = db.vector(t143);
+    db.field(t145, "bounds", vec_bounds);
+    db.field(t145, "forced_size", 0);
+    db.field(t145, "purity", 0);
+    let vec_field_groups = db.vector(t144);
+    db.field(t145, "field_groups", vec_field_groups);
+    db.field(t145, "synthetic", t5);
+    let t146 = db.vector(t139);
+    let _ = t146; // may be unused
+    let t147 = db.vector(t144);
     let _ = t147; // may be unused
+    let vec_definitions = db.vector(t145);
+    db.field(t148, "definitions", vec_definitions);
+    db.field(t148, "source", 0);
+    let t149 = db.vector(t145);
+    let _ = t149; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t150, "enum", byte_enum);
+    db.field(t150, "v", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t151, "enum", byte_enum);
+    db.field(t151, "v", t3);
+    let byte_enum = db.byte(0, false);
+    db.field(t152, "enum", byte_enum);
+    db.field(t152, "v", t2);
+    let byte_enum = db.byte(0, false);
+    db.field(t153, "enum", byte_enum);
+    db.field(t153, "v", t5);
+    db.field(t154, "name", t5);
+    db.field(t154, "content", 0);
+    db.field(t154, "position", 0);
+    let vec_default = db.vector(t66);
+    db.field(t154, "default", vec_default);
+    let vec_other_indexes = db.vector(t0);
+    db.field(t154, "other_indexes", vec_other_indexes);
+    let t155 = db.vector(t66);
+    let _ = t155; // may be unused
+    db.field(t156, "nr", 0);
+    db.field(t156, "name", t5);
+    db.field(t157, "nr", 0);
+    db.field(t157, "asc", t4);
+    let byte_enum = db.byte(0, false);
+    db.field(t158, "enum", byte_enum);
+    let byte_enum = db.byte(0, false);
+    db.field(t159, "enum", byte_enum);
+    let vec_fields = db.vector(t154);
+    db.field(t159, "fields", vec_fields);
+    let t160 = db.vector(t154);
+    let _ = t160; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t161, "enum", byte_enum);
+    let vec_values = db.vector(t156);
+    db.field(t161, "values", vec_values);
+    let t162 = db.vector(t156);
+    let _ = t162; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t163, "enum", byte_enum);
+    db.field(t163, "value", 0);
+    let vec_fields = db.vector(t154);
+    db.field(t163, "fields", vec_fields);
+    let byte_enum = db.byte(0, false);
+    db.field(t164, "enum", byte_enum);
+    db.field(t164, "start", 0);
+    db.field(t164, "nullable", t4);
+    let byte_enum = db.byte(0, false);
+    db.field(t165, "enum", byte_enum);
+    db.field(t165, "start", 0);
+    db.field(t165, "nullable", t4);
+    let byte_enum = db.byte(0, false);
+    db.field(t166, "enum", byte_enum);
+    db.field(t166, "start", 0);
+    db.field(t166, "nullable", t4);
+    let byte_enum = db.byte(0, false);
+    db.field(t167, "enum", byte_enum);
+    db.field(t167, "start", 0);
+    db.field(t167, "nullable", t4);
+    let byte_enum = db.byte(0, false);
+    db.field(t168, "enum", byte_enum);
+    db.field(t168, "content", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t169, "enum", byte_enum);
+    db.field(t169, "content", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t170, "enum", byte_enum);
+    db.field(t170, "content", 0);
+    let vec_keys = db.vector(t157);
+    db.field(t170, "keys", vec_keys);
+    let t171 = db.vector(t157);
+    let _ = t171; // may be unused
+    let byte_enum = db.byte(0, false);
+    db.field(t172, "enum", byte_enum);
+    db.field(t172, "content", 0);
+    let vec_keys = db.vector(t157);
+    db.field(t172, "keys", vec_keys);
+    let byte_enum = db.byte(0, false);
+    db.field(t173, "enum", byte_enum);
+    db.field(t173, "content", 0);
+    let vec_fields = db.vector(t0);
+    db.field(t173, "fields", vec_fields);
+    let byte_enum = db.byte(0, false);
+    db.field(t174, "enum", byte_enum);
+    db.field(t174, "content", 0);
+    let vec_keys = db.vector(t157);
+    db.field(t174, "keys", vec_keys);
+    db.field(t174, "left", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t175, "enum", byte_enum);
+    db.field(t175, "content", 0);
+    let vec_fields = db.vector(t0);
+    db.field(t175, "fields", vec_fields);
+    let byte_enum = db.byte(0, false);
+    db.field(t176, "enum", byte_enum);
+    let byte_enum = db.byte(0, false);
+    db.field(t177, "enum", byte_enum);
+    db.field(t177, "content", 0);
+    db.field(t178, "name", t5);
+    let vec_parts = db.vector(t67);
+    db.field(t178, "parts", vec_parts);
+    let vec_keys = db.vector(t69);
+    db.field(t178, "keys", vec_keys);
+    db.field(t178, "complex", t4);
+    db.field(t178, "linked", t4);
+    db.field(t178, "size", 0);
+    db.field(t178, "align", 0);
+    let vec_field_groups = db.vector(t144);
+    db.field(t178, "field_groups", vec_field_groups);
+    let t179 = db.vector(t67);
+    let _ = t179; // may be unused
+    db.field(t180, "data", t148);
+    let vec_types = db.vector(t178);
+    db.field(t180, "types", vec_types);
+    let t181 = db.vector(t178);
+    let _ = t181; // may be unused
     let vec_vector = db.vector(t64);
-    let vec_vector = db.vector(t68);
-    let vec_vector = db.vector(t69);
-    let vec_vector = db.vector(t65);
-    let vec_vector = db.vector(t67);
-    let vec_vector = db.vector(t138);
     let vec_vector = db.vector(t70);
-    let vec_vector = db.vector(t137);
-    let vec_vector = db.vector(t142);
-    let vec_vector = db.vector(t143);
-    db.value(t64, "TyUnknown", t72);
-    db.value(t64, "TyNull", t73);
-    db.value(t64, "TyVoid", t74);
-    db.value(t64, "TyNever", t75);
-    db.value(t64, "TyInteger", t76);
-    db.value(t64, "TyBoolean", t77);
-    db.value(t64, "TyFloat", t78);
-    db.value(t64, "TySingle", t79);
-    db.value(t64, "TyCharacter", t80);
-    db.value(t64, "TyText", t81);
-    db.value(t64, "TyKeys", t82);
-    db.value(t64, "TyEnum", t83);
-    db.value(t64, "TyReference", t84);
-    db.value(t64, "TyRefVar", t85);
-    db.value(t64, "TyVector", t87);
-    db.value(t64, "TyRoutine", t88);
-    db.value(t64, "TyIterator", t89);
-    db.value(t64, "TySorted", t90);
-    db.value(t64, "TyIndex", t92);
-    db.value(t64, "TySpacial", t93);
-    db.value(t64, "TyHash", t95);
-    db.value(t64, "TyFunction", t96);
-    db.value(t64, "TyRewritten", t97);
-    db.value(t64, "TyTuple", t98);
-    db.value(t65, "NdNull", t99);
-    db.value(t65, "NdLine", t100);
-    db.value(t65, "NdSpan", t101);
-    db.value(t65, "NdInt", t103);
-    db.value(t65, "NdEnum", t104);
-    db.value(t65, "NdBoolean", t105);
-    db.value(t65, "NdFloat", t106);
-    db.value(t65, "NdLong", t107);
-    db.value(t65, "NdSingle", t108);
-    db.value(t65, "NdText", t109);
-    db.value(t65, "NdCall", t110);
-    db.value(t65, "NdCallRef", t111);
-    db.value(t65, "NdBlock", t112);
-    db.value(t65, "NdInsert", t114);
-    db.value(t65, "NdVar", t115);
-    db.value(t65, "NdSet", t116);
-    db.value(t65, "NdReturn", t117);
-    db.value(t65, "NdBreak", t118);
-    db.value(t65, "NdBreakWith", t119);
-    db.value(t65, "NdContinue", t120);
-    db.value(t65, "NdIf", t121);
-    db.value(t65, "NdLoop", t122);
-    db.value(t65, "NdDrop", t123);
-    db.value(t65, "NdIter", t124);
-    db.value(t65, "NdKeys", t125);
-    db.value(t65, "NdTuple", t127);
-    db.value(t65, "NdTupleGet", t128);
-    db.value(t65, "NdTuplePut", t129);
-    db.value(t65, "NdYield", t130);
-    db.value(t65, "NdFnRef", t131);
-    db.value(t65, "NdFnRefDnr", t132);
-    db.value(t65, "NdParallel", t133);
-    db.value(t65, "NdParFor", t134);
-    db.value(t65, "NdRawExpr", t136);
+    let vec_vector = db.vector(t71);
+    let vec_vector = db.vector(t65);
+    let vec_vector = db.vector(t69);
+    let vec_vector = db.vector(t140);
+    let vec_vector = db.vector(t72);
+    let vec_vector = db.vector(t139);
+    let vec_vector = db.vector(t144);
+    let vec_vector = db.vector(t145);
+    let vec_vector = db.vector(t66);
+    let vec_vector = db.vector(t154);
+    let vec_vector = db.vector(t156);
+    let vec_vector = db.vector(t157);
+    let vec_vector = db.vector(t67);
+    let vec_vector = db.vector(t178);
+    db.value(t64, "TyUnknown", t74);
+    db.value(t64, "TyNull", t75);
+    db.value(t64, "TyVoid", t76);
+    db.value(t64, "TyNever", t77);
+    db.value(t64, "TyInteger", t78);
+    db.value(t64, "TyBoolean", t79);
+    db.value(t64, "TyFloat", t80);
+    db.value(t64, "TySingle", t81);
+    db.value(t64, "TyCharacter", t82);
+    db.value(t64, "TyText", t83);
+    db.value(t64, "TyKeys", t84);
+    db.value(t64, "TyEnum", t85);
+    db.value(t64, "TyReference", t86);
+    db.value(t64, "TyRefVar", t87);
+    db.value(t64, "TyVector", t89);
+    db.value(t64, "TyRoutine", t90);
+    db.value(t64, "TyIterator", t91);
+    db.value(t64, "TySorted", t92);
+    db.value(t64, "TyIndex", t94);
+    db.value(t64, "TySpacial", t95);
+    db.value(t64, "TyHash", t97);
+    db.value(t64, "TyFunction", t98);
+    db.value(t64, "TyRewritten", t99);
+    db.value(t64, "TyTuple", t100);
+    db.value(t65, "NdNull", t101);
+    db.value(t65, "NdLine", t102);
+    db.value(t65, "NdSpan", t103);
+    db.value(t65, "NdInt", t105);
+    db.value(t65, "NdEnum", t106);
+    db.value(t65, "NdBoolean", t107);
+    db.value(t65, "NdFloat", t108);
+    db.value(t65, "NdLong", t109);
+    db.value(t65, "NdSingle", t110);
+    db.value(t65, "NdText", t111);
+    db.value(t65, "NdCall", t112);
+    db.value(t65, "NdCallRef", t113);
+    db.value(t65, "NdBlock", t114);
+    db.value(t65, "NdInsert", t116);
+    db.value(t65, "NdVar", t117);
+    db.value(t65, "NdSet", t118);
+    db.value(t65, "NdReturn", t119);
+    db.value(t65, "NdBreak", t120);
+    db.value(t65, "NdBreakWith", t121);
+    db.value(t65, "NdContinue", t122);
+    db.value(t65, "NdIf", t123);
+    db.value(t65, "NdLoop", t124);
+    db.value(t65, "NdDrop", t125);
+    db.value(t65, "NdIter", t126);
+    db.value(t65, "NdKeys", t127);
+    db.value(t65, "NdTuple", t129);
+    db.value(t65, "NdTupleGet", t130);
+    db.value(t65, "NdTuplePut", t131);
+    db.value(t65, "NdYield", t132);
+    db.value(t65, "NdFnRef", t133);
+    db.value(t65, "NdFnRefDnr", t134);
+    db.value(t65, "NdParallel", t135);
+    db.value(t65, "NdParFor", t136);
+    db.value(t65, "NdRawExpr", t138);
+    db.value(t66, "DcLong", t150);
+    db.value(t66, "DcFloat", t151);
+    db.value(t66, "DcSingle", t152);
+    db.value(t66, "DcStr", t153);
+    db.value(t67, "PtBase", t158);
+    db.value(t67, "PtStruct", t159);
+    db.value(t67, "PtEnum", t161);
+    db.value(t67, "PtEnumValue", t163);
+    db.value(t67, "PtByte", t164);
+    db.value(t67, "PtShort", t165);
+    db.value(t67, "PtInt", t166);
+    db.value(t67, "PtShortRaw", t167);
+    db.value(t67, "PtVector", t168);
+    db.value(t67, "PtArray", t169);
+    db.value(t67, "PtSorted", t170);
+    db.value(t67, "PtOrdered", t172);
+    db.value(t67, "PtHash", t173);
+    db.value(t67, "PtIndex", t174);
+    db.value(t67, "PtSpacial", t175);
+    db.value(t67, "PtDbRef", t176);
+    db.value(t67, "PtChildRec", t177);
     db.finish();
     IrSchemaIds {
-        type_t: t64,
+        db_content: t66,
+        db_parts: t67,
         node: t65,
-        attribute: t137,
-        block: t113,
-        data: t146,
-        definition: t143,
-        function: t139,
-        integer_spec: t71,
-        key: t67,
-        linked_field_group: t142,
-        name_nr: t70,
-        name_ref: t69,
-        nd_block: t112,
-        nd_boolean: t105,
-        nd_break: t118,
-        nd_break_with: t119,
-        nd_call: t110,
-        nd_call_ref: t111,
-        nd_continue: t120,
-        nd_drop: t123,
-        nd_enum: t104,
-        nd_float: t106,
-        nd_fn_ref: t131,
-        nd_fn_ref_dnr: t132,
-        nd_if: t121,
-        nd_insert: t114,
-        nd_int: t103,
-        nd_iter: t124,
-        nd_keys: t125,
-        nd_line: t100,
-        nd_long: t107,
-        nd_loop: t122,
-        nd_null: t99,
-        nd_par_for: t134,
-        nd_parallel: t133,
-        nd_raw_expr: t136,
-        nd_return: t117,
-        nd_set: t116,
-        nd_single: t108,
-        nd_span: t101,
-        nd_text: t109,
-        nd_tuple: t127,
-        nd_tuple_get: t128,
-        nd_tuple_put: t129,
-        nd_var: t115,
-        nd_yield: t130,
-        par_for_body: t135,
-        position: t66,
-        sort_key: t68,
-        ty_boolean: t77,
-        ty_character: t80,
-        ty_enum: t83,
-        ty_float: t78,
-        ty_function: t96,
-        ty_hash: t95,
-        ty_index: t92,
-        ty_integer: t76,
-        ty_iterator: t89,
-        ty_keys: t82,
-        ty_never: t75,
-        ty_null: t73,
-        ty_ref_var: t85,
-        ty_reference: t84,
-        ty_rewritten: t97,
-        ty_routine: t88,
-        ty_single: t79,
-        ty_sorted: t90,
-        ty_spacial: t93,
-        ty_text: t81,
-        ty_tuple: t98,
-        ty_unknown: t72,
-        ty_vector: t87,
-        ty_void: t74,
-        variable: t138,
+        type_t: t64,
+        attribute: t139,
+        block: t115,
+        bundle: t180,
+        data: t148,
+        db_field: t154,
+        db_type: t178,
+        dc_float: t151,
+        dc_long: t150,
+        dc_single: t152,
+        dc_str: t153,
+        definition: t145,
+        enum_pair: t156,
+        function: t141,
+        integer_spec: t73,
+        key: t69,
+        key_field: t157,
+        linked_field_group: t144,
+        name_nr: t72,
+        name_ref: t71,
+        nd_block: t114,
+        nd_boolean: t107,
+        nd_break: t120,
+        nd_break_with: t121,
+        nd_call: t112,
+        nd_call_ref: t113,
+        nd_continue: t122,
+        nd_drop: t125,
+        nd_enum: t106,
+        nd_float: t108,
+        nd_fn_ref: t133,
+        nd_fn_ref_dnr: t134,
+        nd_if: t123,
+        nd_insert: t116,
+        nd_int: t105,
+        nd_iter: t126,
+        nd_keys: t127,
+        nd_line: t102,
+        nd_long: t109,
+        nd_loop: t124,
+        nd_null: t101,
+        nd_par_for: t136,
+        nd_parallel: t135,
+        nd_raw_expr: t138,
+        nd_return: t119,
+        nd_set: t118,
+        nd_single: t110,
+        nd_span: t103,
+        nd_text: t111,
+        nd_tuple: t129,
+        nd_tuple_get: t130,
+        nd_tuple_put: t131,
+        nd_var: t117,
+        nd_yield: t132,
+        par_for_body: t137,
+        position: t68,
+        pt_array: t169,
+        pt_base: t158,
+        pt_byte: t164,
+        pt_child_rec: t177,
+        pt_db_ref: t176,
+        pt_enum: t161,
+        pt_enum_value: t163,
+        pt_hash: t173,
+        pt_index: t174,
+        pt_int: t166,
+        pt_ordered: t172,
+        pt_short: t165,
+        pt_short_raw: t167,
+        pt_sorted: t170,
+        pt_spacial: t175,
+        pt_struct: t159,
+        pt_vector: t168,
+        sort_key: t70,
+        ty_boolean: t79,
+        ty_character: t82,
+        ty_enum: t85,
+        ty_float: t80,
+        ty_function: t98,
+        ty_hash: t97,
+        ty_index: t94,
+        ty_integer: t78,
+        ty_iterator: t91,
+        ty_keys: t84,
+        ty_never: t77,
+        ty_null: t75,
+        ty_ref_var: t87,
+        ty_reference: t86,
+        ty_rewritten: t99,
+        ty_routine: t90,
+        ty_single: t81,
+        ty_sorted: t92,
+        ty_spacial: t95,
+        ty_text: t83,
+        ty_tuple: t100,
+        ty_unknown: t74,
+        ty_vector: t89,
+        ty_void: t76,
+        variable: t140,
     }
 }
