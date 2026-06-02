@@ -259,6 +259,11 @@ pub fn check(data: &mut Data) {
     // functions (a cross-function wrong-store free mismatches).
     let tag_mode = std::env::var("LOFT_STORE_TAG").is_ok();
     let mut tag_counter = 1u16;
+    // Plan-57 Phase 5: last-use freeing (reclaim) is ON by default.  `LASTUSE_RECLAIM_OFF`
+    // disables it for A/B watermark measurement.  The Goal-E enforcement assert runs in
+    // debug builds always, and in release on demand via `LOFT_STORE_GUARD`.
+    let reclaim_off = std::env::var("LASTUSE_RECLAIM_OFF").is_ok();
+    let reclaim_guard = cfg!(debug_assertions) || std::env::var("LOFT_STORE_GUARD").is_ok();
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
             continue;
@@ -268,19 +273,16 @@ pub fn check(data: &mut Data) {
         let orig_vars = Function::copy(&data.def(d_nr).variables);
         // Phase 1: the normal scan → apply → set-scope pass.
         run_scan_phase(data, d_nr, &orig_code, &orig_vars, &HashMap::new());
-        // Plan-57 cluster I — gated two-phase scan.  If a vector store is
-        // block-confined, re-scan registering its `__vdb` (+ backed local) at the
-        // confined block scope so the block-exit `free_vars` sweep frees the store
-        // there.  `CONF_OFF` disables phase 2 for A/B watermark measurement.
+        // Plan-57 cluster I-a — two-phase scan.  If a vector store is block-confined,
+        // re-scan registering its `__vdb` (+ backed local) at the confined block scope
+        // so the block-exit `free_vars` sweep frees the store there, then relocate the
+        // null-init into that block (so its `first_def` / codegen free live there too).
         let confined = store_confinement(
             &data.definitions[d_nr as usize].code,
             &data.definitions[d_nr as usize].variables,
             free_ref_nr,
         );
-        if std::env::var("CONF_DBG").is_ok() && data.def(d_nr).name.starts_with("n_") {
-            eprintln!("[conf] {} confined={:?}", data.def(d_nr).name, confined);
-        }
-        if !confined.is_empty() && std::env::var("CONF_OFF").is_err() {
+        if !confined.is_empty() {
             let mut cmap: HashMap<u16, u16> = HashMap::new();
             for (&vdb, &(local, b)) in &confined {
                 cmap.insert(vdb, b);
@@ -293,46 +295,35 @@ pub fn check(data: &mut Data) {
                 }
             }
             run_scan_phase(data, d_nr, &orig_code, &orig_vars, &cmap);
-            // Block-scope the SLOT: move each confined `__vdb`'s null-init from
-            // body-0 into its confined block so its `first_def` (and codegen's
-            // free) live in the block — not just the IR `OpFreeRef`.  `RELOC_OFF`
-            // isolates this from the scope-registration above for A/B.
-            if std::env::var("RELOC_OFF").is_err() {
-                for (&vdb, &(_local, b)) in &confined {
-                    relocate_null_init(&mut data.definitions[d_nr as usize].code, vdb, b);
-                }
+            for (&vdb, &(_local, b)) in &confined {
+                relocate_null_init(&mut data.definitions[d_nr as usize].code, vdb, b);
             }
         }
-        // Plan-57 last-use freeing, Phase 2 spike (gated, throwaway): insert
-        // def-point frees before intervals/codegen see the code.
-        if std::env::var("LASTUSE_FREE").is_ok() {
-            let db_nr = data.def_nr("OpDatabase");
-            let gf_nr = data.def_nr("OpGetField");
-            let d = &mut data.definitions[d_nr as usize];
-            lastuse_free_spike(&mut d.code, &mut d.variables, db_nr, gf_nr, free_ref_nr);
-        }
-        // Plan-57 last-use freeing, Phase 3 (gated): null-init relocation + early
-        // free — the combination that actually lowers the body-0-locked watermark.
-        // Runs before compute_intervals so the moved first_def is reflected.
-        if std::env::var("LASTUSE_RECLAIM").is_ok() {
+        // Plan-57 last-use freeing, Phase 3 (DEFAULT since Phase 5): null-init
+        // relocation + early free — the combination that lowers the body-0-locked
+        // watermark.  Runs before compute_intervals so the moved first_def is
+        // reflected.  `LASTUSE_RECLAIM_OFF` disables it for A/B measurement.
+        if !reclaim_off {
             let db_nr = data.def_nr("OpDatabase");
             let gf_nr = data.def_nr("OpGetField");
             let d = &mut data.definitions[d_nr as usize];
             lastuse_reclaim(&mut d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
-            // Plan-57 Phase 4 — Goal-E enforcement.  Hard assert (gated, so
-            // zero-cost when reclaim is off): every store the model says is dead
-            // and reclaim claimed (its `intent`) must now be freed before its
-            // sibling allocates.  A non-zero count is a reclaim regression — the
-            // watermark rule silently re-acquired an exception.  When Phase 3 is
-            // un-gated (Phase 5) this becomes the default Goal-E watermark guard.
-            let d = &data.definitions[d_nr as usize];
-            let unfreed =
-                reclaim_unfreed_eligible(&d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
-            assert_eq!(
-                unfreed, 0,
-                "plan-57 Phase 4: {} left {unfreed} reclaim-eligible store(s) live-but-dead past a later alloc",
-                d.name,
-            );
+            // Plan-57 Phase 4 — Goal-E enforcement (THE watermark guard, supersedes
+            // the scope-exit `store_lifetime_guard`).  Every store the model says is
+            // dead and reclaim claimed (its `intent`) must now be freed before its
+            // sibling allocates; a non-zero count is a reclaim regression — the rule
+            // silently re-acquired an exception.  On in debug; release on demand via
+            // LOFT_STORE_GUARD (`reclaim_guard`); zero-cost otherwise.
+            if reclaim_guard {
+                let d = &data.definitions[d_nr as usize];
+                let unfreed =
+                    reclaim_unfreed_eligible(&d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+                assert_eq!(
+                    unfreed, 0,
+                    "plan-57 Phase 4: {} left {unfreed} reclaim-eligible store(s) live-but-dead past a later alloc",
+                    d.name,
+                );
+            }
         }
         // Plan-57 store-identity gate (Phase 2.5): rewrite store ops to verifying
         // variants (gated; no-op in normal builds).
@@ -4051,89 +4042,6 @@ fn reclaim_unfreed_eligible(
             _ => count += 1,
         }
     }
-    count
-}
-
-/// Plan-57 last-use freeing, Phase 2 — reclaim SPIKE (throwaway, `LASTUSE_FREE`).
-///
-/// For each function-scoped store whose data dies before a later store allocates,
-/// insert `OpFreeRef(store)` into the body block immediately before that later
-/// allocation and set `skip_free` (so the scope-exit sweep does not double-free).
-/// Purpose: prove an explicit def-point free actually reclaims the slot at runtime
-/// — the I-a wall was that an IR free *position* was inert.  Flat-body only.
-fn lastuse_free_spike(
-    code: &mut Value,
-    vars: &mut Function,
-    db_nr: u32,
-    gf_nr: u32,
-    fr_nr: u32,
-) -> usize {
-    let body_scope = match code.unspan() {
-        Value::Block(bl) => bl.scope,
-        _ => return 0,
-    };
-    let mut holds: HashMap<u16, u16> = HashMap::new();
-    let mut alloc: HashMap<u16, u32> = HashMap::new();
-    let mut dead: HashMap<u16, u32> = HashMap::new();
-    let mut last_read: HashMap<u16, u32> = HashMap::new();
-    let mut seq = 0u32;
-    store_liveness_walk(
-        code,
-        &mut seq,
-        db_nr,
-        gf_nr,
-        fr_nr,
-        &mut holds,
-        &mut alloc,
-        &mut dead,
-        &mut last_read,
-    );
-    let dead_at = |st: u16| {
-        dead.get(&st)
-            .copied()
-            .or_else(|| last_read.get(&st).copied())
-    };
-    let mut stores: Vec<u16> = alloc.keys().copied().collect();
-    stores.sort_unstable();
-    // group: the later store -> the dead stores to free right before its alloc.
-    let mut before: HashMap<u16, Vec<u16>> = HashMap::new();
-    for &st in &stores {
-        if vars.scope(st) != body_scope {
-            continue;
-        }
-        let Some(d) = dead_at(st) else { continue };
-        if let Some(&later) = stores
-            .iter()
-            .filter(|&&w| w != st && alloc.get(&w).is_some_and(|&a| a > d))
-            .min_by_key(|&&w| alloc[&w])
-        {
-            before.entry(later).or_default().push(st);
-        }
-    }
-    let Value::Block(bl) = code else { return 0 };
-    let mut inserts: Vec<(usize, Vec<u16>)> = before
-        .into_iter()
-        .filter_map(|(later, sts)| {
-            bl.operators
-                .iter()
-                .position(|o| contains_alloc(o, later, db_nr))
-                .map(|idx| (idx, sts))
-        })
-        .collect();
-    inserts.sort_by_key(|x| std::cmp::Reverse(x.0)); // descending — insert high indices first
-    let mut count = 0;
-    for (idx, sts) in inserts {
-        for st in sts {
-            bl.operators
-                .insert(idx, Value::Call(fr_nr, vec![Value::Var(st)]));
-            // NB: deliberately NOT set_skip_free — codegen suppresses ALL
-            // OpFreeRef for a skip_free var (codegen.rs:2202), which would kill
-            // this inserted free too.  The scope-exit free stays as an
-            // idempotent double-free (free_named no-ops an already-free store).
-            count += 1;
-        }
-    }
-    let _ = vars;
     count
 }
 

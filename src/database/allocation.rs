@@ -178,12 +178,6 @@ impl Stores {
         let al = db.store_nr;
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         let store = &mut self.allocations[al as usize];
-        if std::env::var("FREE_DBG").is_ok() {
-            eprintln!(
-                "[free_named] #{al} {name:>10} rc={} already_free={}",
-                store.ref_count, store.free
-            );
-        }
         if store.free {
             return; // Already freed — no-op (replaces Issue #120 tolerance hack).
         }

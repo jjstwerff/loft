@@ -271,13 +271,30 @@ native failures were the stale-rlib false-failure, not reclaim).  Default path b
 `clippy -D warnings` + `--all-targets` + `fmt` clean.  This green full-suite-under-gate run is also
 the **un-gate prerequisite** for Phase 5.
 
-### Phase 5 — CI lock-in + scaffolding cleanup
+### Phase 5 — Un-gate + CI lock-in + scaffolding cleanup — **DONE (2026-06)**
 
-- Watermark regression test via the `Stores::peak` field (added this session): assert
-  probe-14 / I-b peaks stay at the bound. Both backends.
-- Remove debug scaffolding accumulated across the cluster work (`CONF_DBG`, `FREE_DBG`,
-  the `CONF_OFF`/`RELOC_OFF` A/B gates) once locked in; keep `RC_OFF` deliberately
-  (the rc-removal probe, GOALS.md tail-end experiment).
+- **Un-gated — reclaim is the DEFAULT.** `lastuse_reclaim` runs for every function in
+  `check()`; `LASTUSE_RECLAIM_OFF` disables it for A/B watermark measurement. The Phase-4
+  Goal-E assert is now THE watermark guard: on in debug builds, and in release on demand via
+  `LOFT_STORE_GUARD` (`reclaim_guard`); zero-cost otherwise. Verified safe in **debug** builds
+  too (`validate_slots` I1–I7 + the assert active — the relocation's `first_def` change passes
+  the slot graph).
+- **Watermark regression guard** — `tests/watermark.rs`: asserts the reassign and
+  distinct-locals shapes stay at the small constant peak via `Stores::peak` (reassign ≤ 6,
+  was 13; distinct ≤ 6, was 12). The guard bites — `LASTUSE_RECLAIM_OFF` makes both fail.
+  (Interpreter, in-process; native watermark is covered by the script suite's output-correctness
+  + the per-probe `LOFT_STORES` measurements.)
+- **Scaffolding removed:** the `LASTUSE_FREE` Phase-2 spike (`lastuse_free_spike`), `CONF_DBG`,
+  `FREE_DBG`, and the `CONF_OFF`/`RELOC_OFF` A/B gates (cluster I-a is now unconditional). Kept
+  `RC_OFF` deliberately (the rc-removal probe, GOALS.md tail-end experiment) and `LASTUSE_RECLAIM_OFF`
+  (the new A/B switch).
+- **Full suite 1923 ✅** with reclaim default + the Goal-E assert active (`LOFT_STORE_GUARD=1`),
+  both backends. `clippy -D warnings` + `--all-targets` + `fmt` clean.
+
+This closes the last-use-freeing arc. The remaining plan-57 work is the **cluster III Route 2**
+shared-block residual (its own design), plus the deferred follow-ups (rc removal — now unblocked
+since reclaim is the default — `parallel {}` feature, nightly parity sweep) and the small items
+(wasm tag handlers, `LOFT_STORES=warn` floor).
 
 ## Risks / unknowns (ranked)
 
