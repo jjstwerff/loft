@@ -53,15 +53,38 @@ the work is genuinely multi-phase and benefits from its own
 directory — most TODOs don't, even ones that take several
 sessions.
 
+### Edge-probe BEFORE fixing — the lightweight default for loft's complex-variant bugs
+
+Distinct from (and lighter than) a full investigation **plan**: before fixing any
+non-trivial bug — *especially* one touching a **subsystem intersection** — spend a
+few minutes **edge-probing to find the bug's real shape**.  Most loft bugs are
+*complex-variant*: they live at the crossings of subsystems (tuple × vector,
+parallel × parent-var capture, store-lifetime × block-scope), and those crossings
+are **combinatorial** — a bug is a *region* of condition-combinations, not a point.
+A single repro is one point in that region.  Fixing from it alone tends to either
+(a) close the symptom and miss sibling points, or (b) be **unsound** for points the
+repro never exercised (e.g. plan-57's U3: "block-confined ⇒ freeable" held for
+every case checked and failed for the one block-result case left unprobed — a
+shippable corruption).
+
+So a batch of throwaway `.loft` probes (`--interpret`, vary one condition each)
+costs minutes and tells you the real boundary (the tuple-return bug = the *return*
+path only; local tuples fine), whether it's even a clean fix (the `parallel {}`
+bug = a capture-model design call, not a patch), and which edges a naive fix would
+corrupt.  **Keep the probes** — they become permanent regression landmarks
+(`plans/future/57-vector-store-watermark/probes/`).  The *fix* still happens (don't
+file — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory));
+you just characterise the region first.  This lowers the bar to probe-first vs
+fix-from-one-repro.
+
 ### When a problem should escalate to an investigation plan
 
-Just *fixing* the bug (focused fix + regression + commit) handles the
-overwhelming majority of bug reports — a plan is only for when the
-**scope is genuinely hard to pin down** (you can't yet write the fix
-because you don't know what you're dealing with).  Once scope + root
-cause are pinned, there's nothing to investigate: fix it.  Escalate to
-an investigation plan ONLY when one of these signals fires.  Each
-signal carries an action.
+Just *fixing* the bug (focused fix + regression + commit, after the edge-probe
+above) handles the overwhelming majority of bug reports — a plan is only for when
+the **scope is genuinely hard to pin down** (you can't yet write the fix because
+you don't know what you're dealing with).  Once scope + root cause are pinned,
+there's nothing to investigate: fix it.  Escalate to an investigation plan ONLY
+when one of these signals fires.  Each signal carries an action.
 
 The escalation triggers below all serve one underlying goal: making
 loft **stable** as a class, not just closing the reported shape.
