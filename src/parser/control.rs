@@ -705,7 +705,7 @@ impl Parser {
             if let Type::Text(ls) = t {
                 self.text_return(ls);
             } else if let Type::Vector(_, ls) = t {
-                self.ref_return(ls);
+                self.ref_return(ls, l);
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the
                 // inner call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, ls);
@@ -718,12 +718,12 @@ impl Parser {
                     let last = &l[l.len() - 1];
                     let extra = Self::collect_hidden_ref_args(last, &self.data);
                     if !extra.is_empty() {
-                        self.ref_return(&extra);
+                        self.ref_return(&extra, l);
                         // @P377 / S1: see above.
                         self.nrvo_collapse_tail_set(l, &extra);
                     }
                 } else {
-                    self.ref_return(ls);
+                    self.ref_return(ls, l);
                     // @P377 / S1: see above.
                     self.nrvo_collapse_tail_set(l, ls);
                 }
@@ -3292,7 +3292,68 @@ impl Parser {
         }
     }
 
-    pub(crate) fn ref_return(&mut self, ls: &[u16]) {
+    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &[Value]) {
+        // Plan-57: a returned local that gets a fresh vector literal more than once
+        // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
+        // the buffer (`OpNewRecord(z, …)`), so the second literal appends rather than
+        // replaces, leaving the FIRST value (`z=[a]; z=[b]; z` returned [a]).  Each
+        // literal uses a DISTINCT element-temp (`Set(_elm_k, OpNewRecord(z, …))`), so
+        // the count of distinct element-temps building into `z` is the number of
+        // literal assignments; ≥2 ⇒ reassigned ⇒ leave it a normal local (the `__vdb`
+        // + return-copy path explicit return uses, which handles reassignment).  This
+        // is visible on the FIRST pass (where the promotion happens), unlike the
+        // later `OpPreAllocVector` form.
+        let newrecord_nr = self.data.def_nr("OpNewRecord");
+        fn reassign_count(body: &[Value], v: u16, nr: u32) -> usize {
+            fn collect(node: &Value, v: u16, nr: u32, temps: &mut std::collections::HashSet<u16>) {
+                if let Value::Set(w, val) = node
+                    && let Value::Call(op, args) = val.unspan()
+                    && *op == nr
+                    && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == v)
+                {
+                    temps.insert(*w);
+                }
+                match node {
+                    Value::Set(_, val) => collect(val, v, nr, temps),
+                    Value::Call(_, args)
+                    | Value::Insert(args)
+                    | Value::Tuple(args)
+                    | Value::Parallel(args) => {
+                        for a in args {
+                            collect(a, v, nr, temps);
+                        }
+                    }
+                    Value::Block(bl) | Value::Loop(bl) => {
+                        for o in &bl.operators {
+                            collect(o, v, nr, temps);
+                        }
+                    }
+                    Value::If(c, t, e) => {
+                        collect(c, v, nr, temps);
+                        collect(t, v, nr, temps);
+                        collect(e, v, nr, temps);
+                    }
+                    Value::Iter(_, c, n, e) => {
+                        collect(c, v, nr, temps);
+                        collect(n, v, nr, temps);
+                        collect(e, v, nr, temps);
+                    }
+                    Value::Return(x)
+                    | Value::Drop(x)
+                    | Value::Yield(x)
+                    | Value::BreakWith(_, x) => {
+                        collect(x, v, nr, temps);
+                    }
+                    Value::Span(b) => collect(&b.1, v, nr, temps),
+                    _ => {}
+                }
+            }
+            let mut temps = std::collections::HashSet::new();
+            for o in body {
+                collect(o, v, nr, &mut temps);
+            }
+            temps.len()
+        }
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
@@ -3307,6 +3368,10 @@ impl Parser {
         if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
             let mut dep = cur.clone();
             for v in ls {
+                // A reassigned returned local must NOT be NRVO-promoted (see above).
+                if reassign_count(body, *v, newrecord_nr) >= 2 {
+                    continue;
+                }
                 let n = self.vars.name(*v);
                 // skip related variables that are already attributes
                 if let Some(a) = self.data.def(self.context).attr_names.get(n) {
@@ -3436,17 +3501,21 @@ impl Parser {
             // reference globals/locals which ref_return would promote to hidden
             // ref args, breaking callers (see 01b for full analysis).
             if self.data.def_type(self.context) != DefType::Generic {
+                // Explicit `return <expr>;`: the body (with any reassignments) is not
+                // available here, so pass an empty body — the reassignment guard does
+                // not apply (explicit return already copies the value at the return,
+                // and the Vector arm is skipped above anyway).
                 if let Type::Reference(_, ls) = &t {
                     if ls.is_empty() {
                         let extra = Self::collect_hidden_ref_args(&v, &self.data);
                         if !extra.is_empty() {
-                            self.ref_return(&extra);
+                            self.ref_return(&extra, &[]);
                         }
                     } else {
-                        self.ref_return(ls);
+                        self.ref_return(ls, &[]);
                     }
                 } else if let Type::Enum(_, true, ls) = &t {
-                    self.ref_return(ls);
+                    self.ref_return(ls, &[]);
                 }
             }
             if let Type::Text(ls) = &t {

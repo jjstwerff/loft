@@ -141,11 +141,18 @@ The straight-line variant + I-b shipped via last-use freeing (reclaim, now defau
   default; the un-gate is a separate decision (the benefit is narrow — shared accumulator
   across sibling conditional blocks — and the gate is soundness-delicate, per the journey above).
 
-> **Discovered sibling bug (pre-existing, OUT OF SCOPE):** `fn f() -> vector { z=[a]; z=[b]; z }`
-> **returns `[a]` not `[b]`** — the return buffer binds to the first store; reassign-then-*read*
-> is correct, only reassign-then-*return* is wrong.  Both backends, reclaim- AND recovery-
-> independent (same single-valued-dep family, return-path variant).  A correctness bug, more
-> severe than this watermark residual; not fixed here.
+> **Discovered sibling bug — FIXED (2026-06):** `fn f() -> vector { z=[a]; z=[b]; z }`
+> **returned `[a]` not `[b]`** (a correctness bug, not a watermark one).  Root cause: the
+> implicit (last-expression) return NRVO-promoted the returned local to the caller's buffer and
+> built into it in place, so a second `z=[..]` appended onto the buffer instead of replacing.
+> Fix: `ref_return` (`src/parser/control.rs`) does NOT NRVO-promote a local assigned a vector
+> literal ≥2× (detected first-pass via distinct `OpNewRecord(z,…)` element-temps); it stays a
+> normal local on the `__vdb` + return-copy path that explicit `return z;` already used.
+> Regression `tests/scripts/173-reassign-return.loft` (straight-line / diff-length / nested,
+> correct + leak-free, both backends).  **Residual (benign, known):** the *conditional*
+> reassign-then-return shape (`z=[a]; if c {z=[b];} z`) now returns correctly but leaks the
+> conditionally-allocated returned store at exit — the return-of-conditionally-allocated-vector
+> free is missed; exit-safe, no test exercises it, a cluster-III-family follow-up.
 
 ## Fix options (Stage C) — **active next focus (2026-06)**
 
