@@ -98,6 +98,12 @@ impl Stores {
         // subsequent free() trims to the wrong position.
         if slot >= self.max {
             self.max = slot + 1;
+            // Monotonic watermark: the only site where `max` grows.  `peak`
+            // never decrements, so it survives to end-of-run as the store
+            // high-water (plan-57).
+            if self.max > self.peak {
+                self.peak = self.max;
+            }
         }
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
@@ -714,6 +720,7 @@ impl Stores {
             allocations,
             files: Vec::new(),
             max: self.max,
+            peak: self.max,
             free_bits,
             scratch: Vec::new(),
             const_refs: self.const_refs.clone(),
@@ -795,6 +802,7 @@ impl Stores {
             allocations,
             files: Vec::new(),
             max: self.allocations.len() as u16 + pool_slice.len() as u16,
+            peak: self.allocations.len() as u16 + pool_slice.len() as u16,
             free_bits,
             scratch: Vec::new(),
             const_refs: self.const_refs.clone(),

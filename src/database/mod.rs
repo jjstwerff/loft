@@ -183,6 +183,15 @@ pub struct Stores {
     #[cfg(feature = "wasm")]
     pub files: Vec<()>,
     pub max: u16,
+    /// Monotonic high-water mark of `max` over the whole run — the **store
+    /// watermark** plan-57 tracks (the peak the `LOFT_STORES=log` trace prints
+    /// as `max=`).  Unlike `max`, which shrinks when a top slot frees
+    /// (`allocation.rs` free path), `peak` only ever grows, so it survives to
+    /// the end of execution as a single readable number.  This is what lets a
+    /// Rust test assert "confined block-locals free at block exit" without
+    /// shelling out and parsing the stderr trace (which has a stdout/stderr
+    /// buffering hazard).  Reset to 0 on a fresh runtime.
+    pub peak: u16,
     /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
@@ -420,6 +429,7 @@ impl Clone for Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: self.max,
+            peak: 0,
             free_bits: Vec::new(),
             scratch: Vec::new(),
             const_refs: Vec::new(),
@@ -880,6 +890,7 @@ impl Stores {
             allocations: Vec::new(),
             files: Vec::new(),
             max: 0,
+            peak: 0,
             free_bits: Vec::new(),
             scratch: Vec::new(),
             const_refs: Vec::new(),
