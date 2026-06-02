@@ -25,13 +25,17 @@
 //! [`Box::leak`], exactly as the @PLAN28 JSON decoder does (a loaded image holds
 //! a small fixed set of block names that live for the whole process anyway).
 
-use crate::data::{Block, IntegerSpec, ParForBody, Type, Value};
+use crate::data::{
+    Attribute, Block, Data, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
+    LinkedFieldKind, ParForBody, Purity, Type, Value,
+};
 use crate::data_store::{
     self as ds, Record, TypeKind, Value as Node, ValueType, ValuesVector, type_kind,
 };
 use crate::database::Stores;
-use crate::keys::Key;
+use crate::keys::{DbRef, Key};
 use crate::lexer::Position;
+use crate::variables::{Function, RestoredVar};
 use std::num::NonZeroU8;
 
 /// Rebuild a native [`Value`] from one store `Node` record.
@@ -365,6 +369,225 @@ fn read_keys(stores: &Stores, slot: Node) -> Vec<Key> {
         .collect()
 }
 
+// ─── Definition-level reader (Attribute / Function / Definition / Data) ───────
+
+/// Rebuild a whole native [`Data`] from the store record `root` (the `DbRef`
+/// returned by [`crate::ir_store::materialize_data`]).  Derived indices are
+/// re-derived via [`Data::rebuild_indices`], mirroring the @PLAN28 JSON loader.
+#[must_use]
+pub fn read_data(stores: &Stores, root: DbRef) -> Data {
+    let r = Record::new(root);
+    let mut data = Data::new();
+    data.source = r.field_int(stores, ds::DATA_SOURCE) as u16;
+    let defs = r.field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
+    for i in 0..defs.len(stores) {
+        data.definitions
+            .push(read_definition(stores, defs.get(i, stores)));
+    }
+    data.rebuild_indices();
+    data
+}
+
+/// Rebuild one native [`Definition`] from a store `Definition` record.
+///
+/// `attr_names` is re-derived from the restored attribute list (a derived
+/// index, never stored); `code_position` / `code_length` / `const_ref` are
+/// codegen-derived and reset (recomputed by the compile pass on load), exactly
+/// as the @PLAN28 JSON decoder does.
+///
+/// # Panics
+/// If a stored `def_type` / `purity` code is out of range — only possible on a
+/// record not written by [`crate::ir_store`] (a corrupt or foreign store).
+#[must_use]
+pub fn read_definition(stores: &Stores, r: Record) -> Definition {
+    let name = r.field_str(stores, ds::DEF_NAME).to_string();
+    let position = Position {
+        file: r
+            .field_str(stores, ds::DEF_POSITION + ds::POS_FILE)
+            .to_string(),
+        line: r.field_int(stores, ds::DEF_POSITION + ds::POS_LINE) as u32,
+        pos: r.field_int(stores, ds::DEF_POSITION + ds::POS_POS) as u32,
+    };
+    let attributes = read_attributes(stores, r);
+    let attr_names = attributes
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.name.clone(), i))
+        .collect();
+    let forced = r.field_int(stores, ds::DEF_FORCED_SIZE);
+    let synthetic_s = r.field_str(stores, ds::DEF_SYNTHETIC);
+    Definition {
+        variables: read_function(stores, r, ds::DEF_VARIABLES),
+        attributes,
+        attr_names,
+        // codegen-derived: recomputed by the compile pass on load.
+        code_position: 0,
+        code_length: 0,
+        const_ref: None,
+        source: r.field_int(stores, ds::DEF_SOURCE) as u16,
+        def_type: def_type_from_code(r.field_int(stores, ds::DEF_DEF_TYPE)),
+        parent: r.field_int(stores, ds::DEF_PARENT) as u32,
+        code: read_node_child(stores, r.field_vec(ds::DEF_CODE)),
+        returned: read_type_child(stores, r.field_recvec(ds::DEF_RETURNED, ds::TYPET_STRIDE)),
+        returned_not_null: r.field_bool(stores, ds::DEF_RETURNED_NOT_NULL),
+        rust: r.field_str(stores, ds::DEF_RUST).to_string(),
+        native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
+        op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
+        known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
+        pub_visible: r.field_bool(stores, ds::DEF_PUB_VISIBLE),
+        closure_record: r.field_int(stores, ds::DEF_CLOSURE_RECORD) as u32,
+        mutated_captures: read_name_list(
+            stores,
+            r.field_recvec(ds::DEF_MUTATED_CAPTURES, ds::NAMEREF_STRIDE),
+        ),
+        scalars_to_box: read_name_list(
+            stores,
+            r.field_recvec(ds::DEF_SCALARS_TO_BOX, ds::NAMEREF_STRIDE),
+        ),
+        bounds: read_u32_list(stores, r.field_recvec(ds::DEF_BOUNDS, ds::INT_STRIDE)),
+        forced_size: if forced == 0 {
+            None
+        } else {
+            Some(forced as u8)
+        },
+        purity: purity_from_code(r.field_int(stores, ds::DEF_PURITY)),
+        field_groups: read_field_groups(stores, r),
+        synthetic: if synthetic_s.is_empty() {
+            None
+        } else {
+            Some(Box::leak(synthetic_s.to_owned().into_boxed_str()))
+        },
+        name,
+        position,
+    }
+}
+
+/// Read a `Definition`'s `vector<Attribute>`.
+fn read_attributes(stores: &Stores, parent: Record) -> Vec<Attribute> {
+    let v = parent.field_recvec(ds::DEF_ATTRIBUTES, ds::ATTRIBUTE_STRIDE);
+    (0..v.len(stores))
+        .map(|i| read_attribute(stores, v.get(i, stores)))
+        .collect()
+}
+
+/// Read one `Attribute` record.
+fn read_attribute(stores: &Stores, r: Record) -> Attribute {
+    Attribute {
+        name: r.field_str(stores, ds::ATTR_NAME).to_string(),
+        typedef: read_type_child(stores, r.field_recvec(ds::ATTR_TYPEDEF, ds::TYPET_STRIDE)),
+        mutable: r.field_bool(stores, ds::ATTR_MUTABLE),
+        constant: r.field_bool(stores, ds::ATTR_CONSTANT),
+        init: r.field_bool(stores, ds::ATTR_INIT),
+        nullable: r.field_bool(stores, ds::ATTR_NULLABLE),
+        primary: r.field_bool(stores, ds::ATTR_PRIMARY),
+        hidden: r.field_bool(stores, ds::ATTR_HIDDEN),
+        value: read_node_child(stores, r.field_vec(ds::ATTR_VALUE)),
+        check: read_node_child(stores, r.field_vec(ds::ATTR_CHECK)),
+        check_message: read_node_child(stores, r.field_vec(ds::ATTR_CHECK_MESSAGE)),
+        alias_d_nr: r.field_int(stores, ds::ATTR_ALIAS_D_NR) as u32,
+        assigned_lambda_d_nr: r.field_int(stores, ds::ATTR_ASSIGNED_LAMBDA_D_NR) as u32,
+    }
+}
+
+/// Read a `Definition`'s `vector<LinkedFieldGroup>`.
+fn read_field_groups(stores: &Stores, parent: Record) -> Vec<LinkedFieldGroup> {
+    let v = parent.field_recvec(ds::DEF_FIELD_GROUPS, ds::LFG_STRIDE);
+    (0..v.len(stores))
+        .map(|i| {
+            let r = v.get(i, stores);
+            LinkedFieldGroup {
+                kind: if r.field_int(stores, ds::LFG_KIND) == 0 {
+                    LinkedFieldKind::Tuple
+                } else {
+                    LinkedFieldKind::Index
+                },
+                instance: r.field_int(stores, ds::LFG_INSTANCE) as u16,
+                field_indices: read_dep_list(stores, r, ds::LFG_FIELD_INDICES),
+                alignment: r.field_int(stores, ds::LFG_ALIGNMENT) as u8,
+                size: r.field_int(stores, ds::LFG_SIZE) as u16,
+            }
+        })
+        .collect()
+}
+
+/// Read the inlined `Function` (at `base`) of a `Definition` record.
+///
+/// The store holds `name` / `file` and the nine codegen-read fields of each
+/// `Variable`.  It does **not** hold `Function.names` / `inline_ref_vars`
+/// (@PLAN54 read-path note): `inline_ref_vars` is compile-derived (set by
+/// `insert_inline_ref` during scope analysis) and `names` is pruned on scope
+/// exit (so the var list is not a faithful source).  Here `names` is
+/// reconstructed best-effort (name → last index) and `inline_ref_vars` empty —
+/// adequate for the lossless-subset validation; the full fidelity needed for
+/// `compare_data` requires growing the store schema (see plan README § arc C).
+fn read_function(stores: &Stores, parent: Record, base: u32) -> Function {
+    let name = parent.field_str(stores, base + ds::FN_NAME).to_string();
+    let file = parent.field_str(stores, base + ds::FN_FILE).to_string();
+    let vars_vec = parent.field_recvec(base + ds::FN_VARIABLES, ds::VARIABLE_STRIDE);
+    let mut vars = Vec::with_capacity(vars_vec.len(stores) as usize);
+    let mut names: Vec<(String, u16)> = Vec::new();
+    for i in 0..vars_vec.len(stores) {
+        let vr = vars_vec.get(i, stores);
+        let vname = vr.field_str(stores, ds::VAR_NAME).to_string();
+        names.retain(|(n, _)| n != &vname);
+        names.push((vname.clone(), i as u16));
+        vars.push(RestoredVar {
+            name: vname,
+            type_def: read_type_child(stores, vr.field_recvec(ds::VAR_TYPE_DEF, ds::TYPET_STRIDE)),
+            stack_pos: vr.field_int(stores, ds::VAR_STACK_POS) as u16,
+            uses: vr.field_int(stores, ds::VAR_USES) as u16,
+            argument: vr.field_bool(stores, ds::VAR_ARGUMENT),
+            stack_allocated: vr.field_bool(stores, ds::VAR_STACK_ALLOCATED),
+            skip_free: vr.field_bool(stores, ds::VAR_SKIP_FREE),
+            captured: vr.field_bool(stores, ds::VAR_CAPTURED),
+            caller_hidden_buf: vr.field_bool(stores, ds::VAR_CALLER_HIDDEN_BUF),
+        });
+    }
+    Function::from_snapshot(&name, &file, vars, names, Vec::new())
+}
+
+/// Read a `vector<integer>` (field `off` of `slot`) as a `Vec<u32>`.
+fn read_u32_list(stores: &Stores, v: ds::RecVector) -> Vec<u32> {
+    (0..v.len(stores))
+        .map(|i| v.get(i, stores).field_int(stores, 0) as u32)
+        .collect()
+}
+
+/// `DefType` from its stored integer code (inverse of `ir_store::def_type_code`).
+fn def_type_from_code(c: i64) -> DefType {
+    match c {
+        0 => DefType::Unknown,
+        1 => DefType::Function,
+        2 => DefType::Dynamic,
+        3 => DefType::Enum,
+        4 => DefType::EnumValue,
+        5 => DefType::Struct,
+        6 => DefType::Vector,
+        7 => DefType::Type,
+        8 => DefType::Constant,
+        9 => DefType::Generic,
+        10 => DefType::Interface,
+        other => panic!("ir_read: unknown DefType code {other}"),
+    }
+}
+
+/// `Purity` from its stored integer code (inverse of `ir_store::purity_code`):
+/// `0` Unknown, `1` Pure, `2 + cat` Impure with `ImpureCategory` `cat`.
+fn purity_from_code(c: i64) -> Purity {
+    match c {
+        0 => Purity::Unknown,
+        1 => Purity::Pure,
+        n => Purity::Impure(match n - 2 {
+            0 => ImpureCategory::HostIo,
+            1 => ImpureCategory::Prng,
+            2 => ImpureCategory::Io,
+            3 => ImpureCategory::ParentWrite,
+            4 => ImpureCategory::ParCall,
+            other => panic!("ir_read: unknown Purity/ImpureCategory code {}", other + 2),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,5 +790,101 @@ mod tests {
             panic!("expected Integer");
         };
         assert_eq!(spec.forced_size, NonZeroU8::new(1));
+    }
+
+    // ── Definition / Data reader (whole-stdlib round-trip) ──────────────────
+
+    use crate::ir_schema::definition_to_json;
+    use crate::ir_store::materialize_data;
+
+    /// `definition_to_json` of `d` with its `variables` table blanked — used to
+    /// compare everything *except* the per-function variable block, which the
+    /// store schema deliberately omits `names` / `inline_ref_vars` from.
+    fn def_json_sans_vars(d: &Definition) -> String {
+        let mut d2 = d.clone();
+        d2.variables = Function::new(&d.name, &d.position.file);
+        definition_to_json(&d2)
+    }
+
+    /// Whether two `Function`s carry the same per-variable nine codegen-read
+    /// fields (the data the store *does* hold; `names`/`inline_refs` excluded).
+    fn vars_match(a: &Function, b: &Function) -> bool {
+        if a.snapshot_len() != b.snapshot_len() {
+            return false;
+        }
+        (0..a.snapshot_len()).all(|i| {
+            let (va, vb) = (a.snapshot_var(i), b.snapshot_var(i));
+            va.name == vb.name
+                && va.type_def == vb.type_def
+                && va.stack_pos == vb.stack_pos
+                && va.uses == vb.uses
+                && va.argument == vb.argument
+                && va.stack_allocated == vb.stack_allocated
+                && va.skip_free == vb.skip_free
+                && va.captured == vb.captured
+                && va.caller_hidden_buf == vb.caller_hidden_buf
+        })
+    }
+
+    /// Parse the real `default/` stdlib once, materialize, read back.
+    fn stdlib_round_trip() -> (Data, Data) {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let fresh = p.data;
+        let mut ir = Stores::new();
+        let _ids = register_ir_schema(&mut ir);
+        let root = materialize_data(&mut ir, &fresh);
+        let loaded = read_data(&ir, root);
+        (fresh, loaded)
+    }
+
+    /// Capstone: the whole real stdlib round-trips through the store
+    /// `native → store → native` bit-for-bit for **every** definition field
+    /// except the variable table's `names`/`inline_refs` (not in the schema),
+    /// and the per-variable nine codegen-read fields round-trip exactly.
+    #[test]
+    fn read_whole_stdlib_round_trips_except_var_names() {
+        let (fresh, loaded) = stdlib_round_trip();
+        assert_eq!(fresh.definitions(), loaded.definitions(), "def count");
+        for d_nr in 0..fresh.definitions() {
+            let (rf, lo) = (fresh.def(d_nr), loaded.def(d_nr));
+            assert_eq!(
+                def_json_sans_vars(rf),
+                def_json_sans_vars(lo),
+                "def {d_nr} ({}) non-variable fields differ",
+                rf.name
+            );
+            assert!(
+                vars_match(&rf.variables, &lo.variables),
+                "def {d_nr} ({}) variable fields differ",
+                rf.name
+            );
+        }
+    }
+
+    /// For every **type-level** stdlib definition (empty variable table —
+    /// structs/enums/constants/operators), the FULL `compare_data` oracle is
+    /// green: `definition_to_json` matches including the (empty) variable block.
+    /// This is the real, full-fidelity equivalence for the common case; the
+    /// only gap is function-body defs with populated `names`/`inline_refs`.
+    #[test]
+    fn read_stdlib_type_level_defs_full_compare_data_green() {
+        let (fresh, loaded) = stdlib_round_trip();
+        let mut checked = 0u32;
+        for d_nr in 0..fresh.definitions() {
+            let rf = fresh.def(d_nr);
+            if rf.variables.snapshot_len() != 0 {
+                continue;
+            }
+            assert_eq!(
+                definition_to_json(rf),
+                definition_to_json(loaded.def(d_nr)),
+                "type-level def {d_nr} ({}) differs",
+                rf.name
+            );
+            checked += 1;
+        }
+        assert!(checked > 50, "expected many type-level defs, got {checked}");
     }
 }
