@@ -3244,10 +3244,21 @@ fn guard_escapes(node: &Value, target: u16) -> bool {
     }
 }
 
-/// Returns the number of late-freed block-confined vector stores; prints each
-/// under LOFT_STORE_GUARD.
-fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
-    let mut fired = 0usize;
+/// Per `__vdb` store, the LCA non-loop block scope it is provably confined to —
+/// i.e. the scope at which it could be freed instead of at function exit.
+/// Returns `vdb -> (backed local, block scope)` for every store-backed local
+/// confined to a non-loop block deeper than where its store is currently
+/// registered.  Two consumers share this one analysis:
+///   * the cluster-I fix — re-register the confined `__vdb` (+ its local) at the
+///     block scope so the standard block-exit `free_vars` sweep frees it there;
+///   * the `LOFT_STORE_GUARD` detector ([`store_lifetime_guard`]) — a thin
+///     wrapper that reports each entry.
+/// Soundness (adversarially hardened across the probe rounds): excludes escapes
+/// (return/yield/break, block-result, tuple/vector element via `guard_escapes`),
+/// loop-internal confinement (per-iteration reuse, not a watermark), and any
+/// store aliased by a variable that outlives block `b`.
+fn store_confinement(code: &Value, vars: &Function, free_ref_nr: u32) -> HashMap<u16, (u16, u16)> {
+    let mut out: HashMap<u16, (u16, u16)> = HashMap::new();
     for vdb in 0..vars.count() {
         if !vars.name(vdb).starts_with("__vdb") {
             continue;
@@ -3310,14 +3321,25 @@ fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name
                     }
             })
         {
-            eprintln!(
-                "[store-guard] {fn_name}: store {} (local '{}') confined to block scope {b} but stored at scope {} — frees late",
-                vars.name(vdb),
-                vars.name(local),
-                vars.scope(vdb),
-            );
-            fired += 1;
+            out.insert(vdb, (local, b));
         }
     }
-    fired
+    out
+}
+
+/// `LOFT_STORE_GUARD` detector — reports each store-backed local that frees at
+/// function exit despite being confined to an inner block.  Thin wrapper over
+/// [`store_confinement`] (the same analysis that drives the cluster-I fix).
+/// Returns the number of late-freed stores.
+fn store_lifetime_guard(code: &Value, vars: &Function, free_ref_nr: u32, fn_name: &str) -> usize {
+    let confined = store_confinement(code, vars, free_ref_nr);
+    for (&vdb, &(local, b)) in &confined {
+        eprintln!(
+            "[store-guard] {fn_name}: store {} (local '{}') confined to block scope {b} but stored at scope {} — frees late",
+            vars.name(vdb),
+            vars.name(local),
+            vars.scope(vdb),
+        );
+    }
+    confined.len()
 }
