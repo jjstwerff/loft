@@ -510,29 +510,21 @@ fn read_field_groups(stores: &Stores, parent: Record) -> Vec<LinkedFieldGroup> {
         .collect()
 }
 
-/// Read the inlined `Function` (at `base`) of a `Definition` record.
-///
-/// The store holds `name` / `file` and the nine codegen-read fields of each
-/// `Variable`.  It does **not** hold `Function.names` / `inline_ref_vars`
-/// (@PLAN54 read-path note): `inline_ref_vars` is compile-derived (set by
-/// `insert_inline_ref` during scope analysis) and `names` is pruned on scope
-/// exit (so the var list is not a faithful source).  Here `names` is
-/// reconstructed best-effort (name → last index) and `inline_ref_vars` empty —
-/// adequate for the lossless-subset validation; the full fidelity needed for
-/// `compare_data` requires growing the store schema (see plan README § arc C).
+/// Read the inlined `Function` (at `base`) of a `Definition` record: `name` /
+/// `file`, the nine codegen-read fields of each `Variable`, the `names` map
+/// (name → var_nr), and the `inline_ref_vars` set — all from the store, so the
+/// `Function` is reconstructed losslessly (the store grew to hold `names` /
+/// `inline_refs` because neither is reconstructible from the variable list and
+/// codegen reads both on the load path; see plan README § arc C).
 fn read_function(stores: &Stores, parent: Record, base: u32) -> Function {
     let name = parent.field_str(stores, base + ds::FN_NAME).to_string();
     let file = parent.field_str(stores, base + ds::FN_FILE).to_string();
     let vars_vec = parent.field_recvec(base + ds::FN_VARIABLES, ds::VARIABLE_STRIDE);
     let mut vars = Vec::with_capacity(vars_vec.len(stores) as usize);
-    let mut names: Vec<(String, u16)> = Vec::new();
     for i in 0..vars_vec.len(stores) {
         let vr = vars_vec.get(i, stores);
-        let vname = vr.field_str(stores, ds::VAR_NAME).to_string();
-        names.retain(|(n, _)| n != &vname);
-        names.push((vname.clone(), i as u16));
         vars.push(RestoredVar {
-            name: vname,
+            name: vr.field_str(stores, ds::VAR_NAME).to_string(),
             type_def: read_type_child(stores, vr.field_recvec(ds::VAR_TYPE_DEF, ds::TYPET_STRIDE)),
             stack_pos: vr.field_int(stores, ds::VAR_STACK_POS) as u16,
             uses: vr.field_int(stores, ds::VAR_USES) as u16,
@@ -543,7 +535,18 @@ fn read_function(stores: &Stores, parent: Record, base: u32) -> Function {
             caller_hidden_buf: vr.field_bool(stores, ds::VAR_CALLER_HIDDEN_BUF),
         });
     }
-    Function::from_snapshot(&name, &file, vars, names, Vec::new())
+    let names_vec = parent.field_recvec(base + ds::FN_NAMES, ds::NAMENR_STRIDE);
+    let names = (0..names_vec.len(stores))
+        .map(|i| {
+            let e = names_vec.get(i, stores);
+            (
+                e.field_str(stores, ds::NAMENR_NAME).to_string(),
+                e.field_int(stores, ds::NAMENR_NR) as u16,
+            )
+        })
+        .collect();
+    let inline_refs = read_dep_list(stores, parent, base + ds::FN_INLINE_REFS);
+    Function::from_snapshot(&name, &file, vars, names, inline_refs)
 }
 
 /// Read a `vector<integer>` (field `off` of `slot`) as a `Vec<u32>`.
@@ -794,37 +797,9 @@ mod tests {
 
     // ── Definition / Data reader (whole-stdlib round-trip) ──────────────────
 
-    use crate::ir_schema::definition_to_json;
+    use crate::data::Data;
+    use crate::ir_schema::{compare_data, definition_to_json};
     use crate::ir_store::materialize_data;
-
-    /// `definition_to_json` of `d` with its `variables` table blanked — used to
-    /// compare everything *except* the per-function variable block, which the
-    /// store schema deliberately omits `names` / `inline_ref_vars` from.
-    fn def_json_sans_vars(d: &Definition) -> String {
-        let mut d2 = d.clone();
-        d2.variables = Function::new(&d.name, &d.position.file);
-        definition_to_json(&d2)
-    }
-
-    /// Whether two `Function`s carry the same per-variable nine codegen-read
-    /// fields (the data the store *does* hold; `names`/`inline_refs` excluded).
-    fn vars_match(a: &Function, b: &Function) -> bool {
-        if a.snapshot_len() != b.snapshot_len() {
-            return false;
-        }
-        (0..a.snapshot_len()).all(|i| {
-            let (va, vb) = (a.snapshot_var(i), b.snapshot_var(i));
-            va.name == vb.name
-                && va.type_def == vb.type_def
-                && va.stack_pos == vb.stack_pos
-                && va.uses == vb.uses
-                && va.argument == vb.argument
-                && va.stack_allocated == vb.stack_allocated
-                && va.skip_free == vb.skip_free
-                && va.captured == vb.captured
-                && va.caller_hidden_buf == vb.caller_hidden_buf
-        })
-    }
 
     /// Parse the real `default/` stdlib once, materialize, read back.
     fn stdlib_round_trip() -> (Data, Data) {
@@ -839,52 +814,47 @@ mod tests {
         (fresh, loaded)
     }
 
-    /// Capstone: the whole real stdlib round-trips through the store
-    /// `native → store → native` bit-for-bit for **every** definition field
-    /// except the variable table's `names`/`inline_refs` (not in the schema),
-    /// and the per-variable nine codegen-read fields round-trip exactly.
+    /// Capstone: the whole real `default/` stdlib round-trips
+    /// `native → store → native` **bit-for-bit**.  The full `compare_data`
+    /// oracle — every `Definition` field including the per-function variable
+    /// table (`vars` + `names` + `inline_refs`) — is green across all
+    /// definitions.  This is arc C's read-path milestone: a store-materialised
+    /// `Data` is indistinguishable from a fresh parse.
     #[test]
-    fn read_whole_stdlib_round_trips_except_var_names() {
+    fn read_whole_stdlib_compare_data_green() {
         let (fresh, loaded) = stdlib_round_trip();
-        assert_eq!(fresh.definitions(), loaded.definitions(), "def count");
-        for d_nr in 0..fresh.definitions() {
-            let (rf, lo) = (fresh.def(d_nr), loaded.def(d_nr));
-            assert_eq!(
-                def_json_sans_vars(rf),
-                def_json_sans_vars(lo),
-                "def {d_nr} ({}) non-variable fields differ",
-                rf.name
-            );
-            assert!(
-                vars_match(&rf.variables, &lo.variables),
-                "def {d_nr} ({}) variable fields differ",
-                rf.name
-            );
+        assert!(
+            fresh.definitions() > 100,
+            "stdlib should have many definitions, got {}",
+            fresh.definitions()
+        );
+        if let Err(diff) = compare_data(&fresh, &loaded) {
+            panic!("store round-trip diverged from fresh parse: {diff:?}");
         }
     }
 
-    /// For every **type-level** stdlib definition (empty variable table —
-    /// structs/enums/constants/operators), the FULL `compare_data` oracle is
-    /// green: `definition_to_json` matches including the (empty) variable block.
-    /// This is the real, full-fidelity equivalence for the common case; the
-    /// only gap is function-body defs with populated `names`/`inline_refs`.
+    /// Spot-check that a function-body definition's variable table — the part
+    /// that needed the schema growth — survives intact: `vars` count, the
+    /// `names` map, and `inline_ref_vars` all re-encode identically.
     #[test]
-    fn read_stdlib_type_level_defs_full_compare_data_green() {
+    fn read_stdlib_function_variables_round_trip() {
         let (fresh, loaded) = stdlib_round_trip();
         let mut checked = 0u32;
         for d_nr in 0..fresh.definitions() {
             let rf = fresh.def(d_nr);
-            if rf.variables.snapshot_len() != 0 {
+            if rf.variables.snapshot_len() == 0 {
                 continue;
             }
+            // definition_to_json embeds the full variable block (vars + names +
+            // inline_refs); equality here proves the populated table round-trips.
             assert_eq!(
                 definition_to_json(rf),
                 definition_to_json(loaded.def(d_nr)),
-                "type-level def {d_nr} ({}) differs",
+                "function def {d_nr} ({}) variable table differs",
                 rf.name
             );
             checked += 1;
         }
-        assert!(checked > 50, "expected many type-level defs, got {checked}");
+        assert!(checked > 20, "expected many function defs, got {checked}");
     }
 }

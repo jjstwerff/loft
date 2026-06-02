@@ -271,11 +271,18 @@ pub(crate) const VAR_CALLER_HIDDEN_BUF: u32 = 28;
 pub(crate) const FN_NAME: u32 = 0;
 pub(crate) const FN_FILE: u32 = 4;
 pub(crate) const FN_VARIABLES: u32 = 8; // vector<Variable>
+pub(crate) const FN_NAMES: u32 = 12; // vector<NameNr> (name -> var_nr map)
+pub(crate) const FN_INLINE_REFS: u32 = 16; // vector<integer> (inline_ref_vars)
+
+/// `NameNr` record (element of `Function.names` = `vector<NameNr>`).
+pub(crate) const NAMENR_STRIDE: u32 = 12;
+pub(crate) const NAMENR_NR: u32 = 0; // integer (var_nr)
+pub(crate) const NAMENR_NAME: u32 = 8; // text
 
 /// `Definition` record (element of `Data.definitions` = `vector<Definition>`).
 /// Inlines `Position` (`DEF_POSITION` base) and `Function` (`DEF_VARIABLES`
 /// base).  `def_type` / `purity` store integer codes (see `ir_store`).
-pub(crate) const DEFINITION_STRIDE: u32 = 142;
+pub(crate) const DEFINITION_STRIDE: u32 = 150;
 pub(crate) const DEF_SOURCE: u32 = 0;
 pub(crate) const DEF_DEF_TYPE: u32 = 8;
 pub(crate) const DEF_PARENT: u32 = 16;
@@ -291,14 +298,14 @@ pub(crate) const DEF_CODE: u32 = 92; // vector<Node> (box-of-one)
 pub(crate) const DEF_RETURNED: u32 = 96; // vector<TypeT> (box-of-one)
 pub(crate) const DEF_RUST: u32 = 100;
 pub(crate) const DEF_NATIVE: u32 = 104;
-pub(crate) const DEF_VARIABLES: u32 = 108; // inlined Function base
-pub(crate) const DEF_MUTATED_CAPTURES: u32 = 120; // vector<NameRef>
-pub(crate) const DEF_SCALARS_TO_BOX: u32 = 124; // vector<NameRef>
-pub(crate) const DEF_BOUNDS: u32 = 128; // vector<integer>
-pub(crate) const DEF_FIELD_GROUPS: u32 = 132; // vector<LinkedFieldGroup>
-pub(crate) const DEF_SYNTHETIC: u32 = 136; // Option<&str>; "" = None
-pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 140;
-pub(crate) const DEF_PUB_VISIBLE: u32 = 141;
+pub(crate) const DEF_VARIABLES: u32 = 108; // inlined Function base (20 bytes)
+pub(crate) const DEF_MUTATED_CAPTURES: u32 = 128; // vector<NameRef>
+pub(crate) const DEF_SCALARS_TO_BOX: u32 = 132; // vector<NameRef>
+pub(crate) const DEF_BOUNDS: u32 = 136; // vector<integer>
+pub(crate) const DEF_FIELD_GROUPS: u32 = 140; // vector<LinkedFieldGroup>
+pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
+pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 148;
+pub(crate) const DEF_PUB_VISIBLE: u32 = 149;
 
 /// `Data` record (the root).
 pub(crate) const DATA_SOURCE: u32 = 0;
@@ -1252,6 +1259,13 @@ mod tests {
         assert_eq!(pos(ids.function, "name"), FN_NAME);
         assert_eq!(pos(ids.function, "file"), FN_FILE);
         assert_eq!(pos(ids.function, "variables"), FN_VARIABLES);
+        assert_eq!(pos(ids.function, "names"), FN_NAMES);
+        assert_eq!(pos(ids.function, "inline_refs"), FN_INLINE_REFS);
+
+        // NameNr record (element of Function.names).
+        assert_eq!(u32::from(stores.size(ids.name_nr)), NAMENR_STRIDE);
+        assert_eq!(pos(ids.name_nr, "nr"), NAMENR_NR);
+        assert_eq!(pos(ids.name_nr, "name"), NAMENR_NAME);
 
         // Definition record (inlines Position + Function).
         assert_eq!(u32::from(stores.size(ids.definition)), DEFINITION_STRIDE);

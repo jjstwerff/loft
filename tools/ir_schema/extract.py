@@ -27,7 +27,7 @@ import sys
 
 IR_ENUMS = {"TypeT", "Node"}
 IR_STRUCTS = {
-    "Position", "Key", "SortKey", "NameRef", "IntegerSpec",
+    "Position", "Key", "SortKey", "NameRef", "NameNr", "IntegerSpec",
     "Block", "ParForBody", "Attribute", "Variable", "Function",
     "LinkedFieldGroup", "Definition", "Data",
 }

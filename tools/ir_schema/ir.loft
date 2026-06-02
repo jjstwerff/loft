@@ -36,6 +36,11 @@ struct NameRef {       // one String entry of a Vec<String> (spacial/hash keys)
   name: text
 }
 
+struct NameNr {        // one Function.names entry (variable name -> var_nr)
+  name: text,
+  nr: integer          // u16
+}
+
 struct IntegerSpec {   // src/data.rs::IntegerSpec
   min: integer,        // i32
   max: integer,        // u32
@@ -167,7 +172,10 @@ struct Variable {      // src/variables/mod.rs::Variable (debug-symbol subset)
 struct Function {      // src/variables/mod.rs::Function (the stored subset)
   name: text,
   file: text,
-  variables: vector<Variable>
+  variables: vector<Variable>,
+  names: vector<NameNr>,        // name -> var_nr map (pruned on scope exit; not
+                                // reconstructible from `variables`, so stored)
+  inline_refs: vector<integer>  // inline_ref_vars set (compile-derived; stored)
 }
 
 struct LinkedFieldGroup {

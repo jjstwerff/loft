@@ -338,10 +338,12 @@ fn write_var_snapshot(stores: &mut Stores, r: &Record, v: &VarSnapshot) {
     r.set_field_bool(stores, ds::VAR_CALLER_HIDDEN_BUF, v.caller_hidden_buf);
 }
 
-/// Write a native `Function` inline into `parent` at `base` (name/file plus the
-/// `vector<Variable>` debug-symbol table from the snapshot seam).  `names` /
-/// `inline_refs` are intentionally not in the store schema (rebuildable from
-/// the variable list on load).
+/// Write a native `Function` inline into `parent` at `base`: `name` / `file`,
+/// the `vector<Variable>` debug-symbol table, the `names` map (name → var_nr),
+/// and the `inline_ref_vars` set — all via the `variables/mod.rs` snapshot seam.
+/// `names` and `inline_refs` are stored (not reconstructible from the variable
+/// list: `names` is pruned on scope exit, `inline_ref_vars` is compile-derived)
+/// and are read back by codegen on the load path.
 fn write_function(stores: &mut Stores, parent: &Record, base: u32, f: &Function) {
     parent.set_field_str(stores, base + ds::FN_NAME, &f.name);
     parent.set_field_str(stores, base + ds::FN_FILE, &f.file);
@@ -350,6 +352,19 @@ fn write_function(stores: &mut Stores, parent: &Record, base: u32, f: &Function)
         let v = f.snapshot_var(i);
         let r = vars.push(stores);
         write_var_snapshot(stores, &r, &v);
+    }
+    // names: name -> var_nr.  Store order is irrelevant — the reader collects
+    // into a HashMap and the JSON oracle re-sorts on emit.
+    let names = parent.field_recvec(base + ds::FN_NAMES, ds::NAMENR_STRIDE);
+    for (name, nr) in f.snapshot_names() {
+        let e = names.push(stores);
+        e.set_field_int(stores, ds::NAMENR_NR, i64::from(nr));
+        e.set_field_str(stores, ds::NAMENR_NAME, name);
+    }
+    // inline_ref_vars: the compile-derived set, as a vector<integer>.
+    let refs = parent.field_recvec(base + ds::FN_INLINE_REFS, ds::INT_STRIDE);
+    for v in f.snapshot_inline_refs() {
+        refs.push(stores).set_field_int(stores, 0, i64::from(v));
     }
 }
 
