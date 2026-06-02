@@ -107,6 +107,55 @@ implementations of the same language semantics.
 
 ---
 
+## Goal E — Predictable memory (the programmer's model *is* the truth)
+
+**Definition.** The runtime's memory behaviour matches the **obvious reading of
+the source**: a value's heap allocation dies when its **scope** dies, with **zero
+exceptions a programmer has to learn**.  The model is small enough to hold
+completely in your head — write a block-scoped vector and it is freed at block
+end, full stop.  This is **distinct from Goal A**: a program can be perfectly
+*sound* (no corruption) yet hold far more memory than the source implies because
+the runtime quietly retains it (plan-57 clusters I/III — a block-scoped store
+pinned to function exit).  Goal A asks "is it safe?"; Goal E asks "**can the
+programmer predict it?**"
+
+**Why it's a goal, not a nicety — and the bar this sets.**  The appeal of C is
+*locus of control*: the memory model is small, the source is the truth, and when
+something goes wrong the fault is the programmer's — knowable and fixable.  Rust
+buys safety with a static analysis the programmer must reason about, so debugging
+shifts toward "what did the compiler decide?".  Those are welded together in
+Rust; you cannot have its guarantee without its machinery.  loft makes a
+different bet — safety from a **runtime discipline** instead of a static proof —
+which lets the *rule* be the entire model.  The explicit aim:
+
+> **On the one axis of safe AND predictable (programmer-in-control), surpass
+> Rust** — not at perf, concurrency, or ecosystem, but here, deliberately,
+> because Rust structurally cannot unbundle safety from its opaque machinery and
+> loft can.
+
+The discipline that makes or breaks it: the **programmer-facing rule stays
+exceptionless** ("a value dies when its scope dies").  *All* sophistication —
+last-use / least-common-ancestor confinement analysis, rc handling, slot-vs-heap
+decoupling — lives **only in the implementation, invisible**.  The moment the
+*rule* grows an "except when captured / iterated / reassigned…" the programmer
+must memorise, loft has rebuilt Rust's opacity in a new shape.  When loft's
+behaviour surprises the obvious reading of the source, that is a **loft bug**,
+never "benign" and never documented-around.
+
+**Check.**
+- `LOFT_STORE_GUARD=1` is **silent across the corpus** — no block-confined vector
+  store is scoped (and freed) later than the block it is confined to.  (Detector
+  shipped; see [plans/future/57-vector-store-watermark/fix-design-store-lifetime.md](plans/future/57-vector-store-watermark/fix-design-store-lifetime.md).)
+- That guard is promoted to a `#[cfg(debug_assertions)]` assertion, so the rule
+  cannot silently re-acquire exceptions as new code lands — the guard *forbids*
+  the divergence, it does not merely report it.
+
+Met-and-healthy when the guard is silent corpus-wide *and* the assertion holds
+*and keeps holding*.  A guard that starts firing is the alarm that the model and
+the runtime have drifted apart.
+
+---
+
 ## The two floors — why dogfood is paused, and when it resumes
 
 The dogfood loop is the agenda-setter (CLAUDE.md § "Development cadence"), but it
@@ -143,18 +192,19 @@ them.
 ## How the goals relate
 
 ```
-            useful ──────────────────► safe
-   C (dogfood capability)      A (soundness)  ┐
-   B (release & adoption)      D (parity)     ├── the two floors C/D
-        │                                     ┘   are gated on
+       useful ───────────► safe ───────────► predictable
+   C (capability)      A (soundness)      E (predictable memory)
+   B (release)         D (parity)             the programmer's model
+        │                                     is the truth
         └── paused until the soundness floor (A) and
             structure floor (B) clear, then resumes as agenda-setter
 ```
 
-Dogfood makes loft *worth using*; the sanitizer makes it *safe to keep using*.
-A language that is only one of those is not stable — and right now the dogfood
-loop is deliberately waiting on the two floors it asked the sanitizer/packaging
-work to build.
+Dogfood makes loft *worth using*; the sanitizer makes it *safe to keep using*;
+Goal E makes it *predictable to reason about* — **safe is not enough if the
+programmer cannot hold the memory model in their head.**  A — *no corruption* —
+and E — *no surprise* — are different properties: Rust achieves the first and not
+the second, and unbundling them is exactly where loft aims to surpass it.
 
 ## See also
 
@@ -166,6 +216,9 @@ work to build.
   cross-backend differential.
 - [plans/future/56-sanitizer-coverage-expansion/](plans/future/56-sanitizer-coverage-expansion/README.md)
   — Goal A continuing: remaining sanitizer-coverage items.
+- [plans/future/57-vector-store-watermark/fix-design-store-lifetime.md](plans/future/57-vector-store-watermark/fix-design-store-lifetime.md)
+  — **Goal E**: the predictable-memory fix design + `LOFT_STORE_GUARD` detector
+  (free a vector store at its scope, decoupled from the slot).
 - [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/README.md) — Goal B's structure floor: the package-ecosystem extraction.
 - [PKG_REGISTRY.md](PKG_REGISTRY.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) — Goal B's registry on-ramp.
 - [ROADMAP.md](ROADMAP.md) / [PLANNING.md](PLANNING.md) — feature backlog feeding Goal C.

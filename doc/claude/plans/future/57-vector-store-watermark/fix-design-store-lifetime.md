@@ -6,7 +6,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Why this matters (the real stakes)
 
-Not a watermark cosmetic.  A block-scoped vector that lives until **function exit**
+This is the implementation of **[GOALS.md Goal E — Predictable memory](../../GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth)**
+(the programmer's model *is* the truth).  Not a watermark cosmetic.  A
+block-scoped vector that lives until **function exit**
 means a running program holds **more heap than the source implies** — and a memory
 model the author can't reason about is a liability in itself, especially for a
 data-handling language.  The goal is to make heap lifetime match the obvious mental
