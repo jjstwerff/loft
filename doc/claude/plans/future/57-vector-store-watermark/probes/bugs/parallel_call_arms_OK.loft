@@ -1,0 +1,1 @@
+fn sa(x:integer,y:integer)->integer{ x+y } fn main(){ parallel { sa(1,2); sa(3,4); } assert(true,"ok"); }
