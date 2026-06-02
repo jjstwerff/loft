@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Why this matters (the real stakes)
 
-This is the implementation of **[GOALS.md Goal E — Predictable memory](../../GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth)**
+This is the implementation of **[GOALS.md Goal E — Predictable memory](../../../GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth)**
 (the programmer's model *is* the truth).  Not a watermark cosmetic.  A
 block-scoped vector that lives until **function exit**
 means a running program holds **more heap than the source implies** — and a memory
@@ -176,3 +176,42 @@ Function-level **sequential** locals (the `11-vectors` watermark) are *not* clus
 no nested block frees them earlier.  Reducing those needs **last-use freeing of
 function-scoped locals**, a separate, larger change.  Land the block-confined fix first
 (it's the one with the clean scope boundary), then evaluate the function-level case.
+
+## Tail-end experiment — disable store ref-counting once scoping is correct
+
+**Goal (user, 2026-06):** after the scoping work lands and `LOFT_STORE_GUARD` is silent,
+**turn the store ref-count OFF and see whether it is still needed.**
+
+The primary objection is **NOT that rc is unsound** — it works.  It is that rc **glosses
+over the lifetime details**: it is opaque machinery that decides *behind your back* when a
+store really dies, so the actual memory model is hidden and can't be reasoned about
+directly.  That is precisely the kind of system the user does not trust, and exactly what
+[Goal E](../../../GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth)
+rejects (the C-vs-Rust transparency stance: the *programmer's* model is the truth, not a
+counter's).  Removing rc is therefore a **transparency** goal first — make the lifetime
+explicit (scope-based, source = truth) instead of abstracted away.
+
+Two concrete consequences that follow:
+
+1. **rc HIDES real lifetime bugs** (the diagnostic side of the same coin).  A ref-count
+   masks an incorrect lifetime: an over-retained store (an extra rc holder) never crashes,
+   it just lives too long, so a *wrong* free site silently looks fine.  Flipping rc off
+   turns it into a **detector**: whatever breaks is a place the scoping is still incomplete
+   (a real use-after-free / double-free rc was papering over).  *What breaks is the work.*
+2. **Better parallel.** The shared rc counter is cross-thread contention; removing it
+   helps parallel execution (already largely mitigated, but cleaner).
+
+**Why this is the right tail-end, in this order:** the [rc crux](#the-open-crux--pin-this-first-blocks-the-design)
+already showed **no vector store needs rc** (`dec_rc=0` every shape — `inc_rc` fires only
+for **closure capture**, `fill.rs:1967` / `allocation.rs:299`).  So once correct scoping
+frees stores at scope end, the only remaining rc user is closure capture — and the
+hypothesis is that scoping (or an explicit capture-copy) can cover that too, making the
+whole `ref_count` field droppable.
+
+**Method:** with the scoping fix in place, make `inc_rc` a no-op and `free_named` free at
+rc≤0 always (or compile-out the `ref_count`/`OpIncRc`/`dec_rc` path), then run the full
+suite + `LOFT_STORE_GUARD` on **both backends**.  Triage every new failure: each is
+either (a) a scoping gap to fix (the bug rc hid), or (b) a genuine closure-capture
+dependency to handle explicitly.  Outcome = either rc is droppable (delete the mechanism)
+or the exact residual set of stores that still need it.  Own plan/branch — careful
+refactor.  See [[project_drop_store_refcount]] + [[project_predictable_memory_model]].

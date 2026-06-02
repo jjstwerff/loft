@@ -3182,6 +3182,29 @@ impl Parser {
                     self.cl("OpSetInt", &[ref_code, pos_val, val_code])
                 }
             }
+            Type::Vector(ref content, _)
+                if f_nr != usize::MAX && !matches!(val_code.unspan(), Value::Int(_)) =>
+            {
+                // A real struct/tuple vector FIELD write — e.g. the tuple-return
+                // heap-promotion (`control.rs::rewrite_tail_tuple_with_work_ref`)
+                // hands `val_code` the WHOLE vector.  Deep-copy it into the
+                // field's own freshly-allocated store, exactly as
+                // `emit_set_one_element` (above) and the struct constructor
+                // (`objects.rs`) already do.  A bare `OpSetInt4` here writes the
+                // 8-byte vector DbRef as a 4-byte int → stack skew → garbage
+                // write into the locked CONST_STORE (`store.rs:1374` tuple-return
+                // crash; native rejects the `DbRef as i32` cast).  The
+                // `f_nr == usize::MAX` narrow-vec `insert` path (raw 4-byte
+                // header) keeps `OpSetInt4` in the arm below.
+                let vec_tp = self.vector_of(content);
+                let elem_db_tp = self.database.content(vec_tp);
+                let field_ref =
+                    self.cl("OpGetField", &[ref_code, pos_val, Value::Int(i32::from(vec_tp))]);
+                self.cl(
+                    "OpAppendVector",
+                    &[field_ref, val_code, Value::Int(i32::from(elem_db_tp))],
+                )
+            }
             Type::Vector(_, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
@@ -3189,7 +3212,10 @@ impl Parser {
             | Type::Sorted(_, _, _) => {
                 // Collection header is a 4-byte u32 record pointer.  Post-2c
                 // `OpSetInt` writes 8 bytes (i64), which overflows into the
-                // next field.  Use `OpSetInt4` to write only 4 bytes.
+                // next field.  Use `OpSetInt4` to write only 4 bytes.  Reached
+                // by the narrow-vec `insert` raw-header path (`f_nr ==
+                // usize::MAX`); keyed-collection struct fields deep-copy earlier
+                // in `objects.rs`.
                 self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
             }
             Type::Function(_, _, _) => {
