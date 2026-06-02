@@ -65,3 +65,23 @@ guard SHOULD fire (a real late-free the fix will close); **escape** / **loop-reu
   check only follows direct dependents.
 - `return (a, n)` / tuple- and match-destructuring bindings.
 - `parallel {}` / `par_for` blocks (threading + store ownership).
+
+## Round 2 — aliasing chains, tuples, parallel (the three "still uncertain" edges)
+
+| Probe | Shape | Verdict | Lands |
+|---|---|---|---|
+| `a1_nested_blockresult` | `x = { y = { a }; y }` | escape (silent) | **borrow chains are sound** — block-result fix handles nesting |
+| `a2_blockresult_alias` | `x = { a }; out = x` (outer) | escape (silent) | block-result aliased to outer — silent ✓ |
+| `t1_tuple_return` | `(a, n)` returned | — | **BUG**: vector-in-returned-tuple crashes (`bug_tuple_vec`) |
+| `t2_tuple_in_block` | `return (a, n)` from a block | (moot) | guard sees the tuple-escape (`escapes_value`); shape crashes |
+| `bug_tuple_vec` | minimal `(a,5)` return | **CRASH** | `Write to read-only store … CONST_STORE init` — vector literal → const store, tuple write panics. **Separate bug**, not confinement. `(int,int)` tuples are fine. |
+| `par3_forpar` | `for p in a par(r=dbl(p),4)` | confined | **parallel is sound** — fused for-par over a confined input vector; guard fires correctly, test passes |
+
+**Outcome of round 2:** aliasing chains and parallel are sound; the only finding is
+a real, separate **tuple+vector-return crash** (`bug_tuple_vec` = its minimal repro,
+kept as a landmark).  `escapes_value` now also treats a vector as a direct tuple /
+literal element so the confinement stays sound once the tuple bug is fixed.
+
+**Still to probe** (per "fire away till 500"): deeper aliasing where the dependent
+is itself a block-result temp; `match`-arm destructuring bindings; `parallel { }`
+(the explicit form, vs the fused `for…par`).

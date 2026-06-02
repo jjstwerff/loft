@@ -3182,14 +3182,25 @@ fn guard_refs(node: &Value, target: u16, free_ref_nr: u32, stack: &mut Vec<(u16,
 /// escapes; its store must NOT be freed at block exit (probe 30).  (Catches the
 /// direct form; an escape buried in a sub-expression like `return if c { a }`
 /// is left for the fix's full escape analysis.)
+/// True if `v` hands `target` out as-is: directly (`a`), or as a direct element
+/// of a tuple / vector-literal value (`(a, n)`, `[a, b]`).  A *derived* value
+/// (`a[0]`, `a.len()`) does NOT count — it produces a fresh value, not a's store.
+fn escapes_value(v: &Value, target: u16) -> bool {
+    match v.unspan() {
+        Value::Var(t) => *t == target,
+        Value::Tuple(elems) | Value::Insert(elems) => elems.iter().any(|e| escapes_value(e, target)),
+        _ => false,
+    }
+}
+
 fn guard_escapes(node: &Value, target: u16) -> bool {
-    let is_target = |v: &Value| matches!(v.unspan(), Value::Var(t) if *t == target);
     match node {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => is_target(v) || guard_escapes(v, target),
+        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target) || guard_escapes(v, target),
         Value::Block(bl) | Value::Loop(bl) => {
-            // The block's VALUE is its last operator; if that is the local, the
-            // local flows out of the block (block-result `x = { …; a }`, U3).
-            bl.operators.last().is_some_and(is_target) || bl.operators.iter().any(|op| guard_escapes(op, target))
+            // The block's VALUE is its last operator; if that hands out the local
+            // (directly or in a tuple/literal), it escapes (block-result `x = {
+            // …; a }` U3; `return (a, n)` t2).
+            bl.operators.last().is_some_and(|o| escapes_value(o, target)) || bl.operators.iter().any(|op| guard_escapes(op, target))
         }
         Value::If(t, a, b) => guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target),
         Value::Set(_, val) | Value::Drop(val) => guard_escapes(val, target),

@@ -1,0 +1,2 @@
+fn g() -> (vector<integer>, integer) { a: vector<integer> = [1, 2, 3]; (a, 5) }
+fn main() { (v, k) = g(); print("{v[0]} {k}\n"); }

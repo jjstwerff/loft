@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  out: vector<integer> = [0];
+  if n > 0 { x: vector<integer> = { a: vector<integer> = [1,2,3]; a }; out = x; }
+  out[0] + out.len()
+}
+fn test_a2() { assert(f(5) == 4, "block-result aliased to outer"); }

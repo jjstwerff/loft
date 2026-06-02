@@ -1,0 +1,5 @@
+fn f(n: integer) -> integer {
+  x: vector<integer> = if n > 0 { y: vector<integer> = { a: vector<integer> = [1,2,3]; a }; y } else { [9] };
+  x[0] + x.len()
+}
+fn test_a1() { assert(f(5) == 4, "nested block-result"); }
