@@ -1481,6 +1481,22 @@ impl Store {
         }
     }
 
+    /// Zero `len` bytes at byte offset `pos` within record `rec`.  `claim`
+    /// reuses freed blocks without clearing them, so a freshly-allocated vector
+    /// element (or struct record) carries garbage; callers materialising into
+    /// it must clear it first so unwritten vector-header sub-fields read as
+    /// empty (`vec_rec = 0`) instead of dereferencing a junk record id.
+    #[inline]
+    pub fn zero_range(&mut self, rec: u32, pos: u32, len: u32) {
+        if len == 0 {
+            return;
+        }
+        let ptr: *mut u8 = self.addr_mut::<u8>(rec, pos);
+        // SAFETY: callers pass a record/element's own `pos..pos+len`, which lies
+        // within its claimed allocation.
+        unsafe { std::ptr::write_bytes(ptr, 0, len as usize) }
+    }
+
     #[inline]
     pub fn copy_block(
         &mut self,

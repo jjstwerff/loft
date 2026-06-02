@@ -124,6 +124,186 @@ pub(crate) const PARFOR_WORKER: u32 = 36; // + worker (28)
 pub(crate) const PARFOR_THREADS: u32 = 40; // + threads (32)
 pub(crate) const PARFOR_BODY: u32 = 44; // + body (36)
 
+// `NdKeys` holds a `vector<Key>`; every IR vector is inline `Parts::Vector`
+// (probed — none promoted to a linked `Array`), so a stride-parameterised
+// vector handle ([`RecVector`]) works for it and every other non-`Node` vector.
+pub(crate) const NDKEYS_KEYS: u32 = 4;
+pub(crate) const KEY_STRIDE: u32 = 16; // `Key` record size
+pub(crate) const KEY_TYPE_NR: u32 = 0;
+pub(crate) const KEY_POSITION: u32 = 8;
+
+// `NdFnRef` carries a `vector<TypeT>` — needs the TypeT half below.
+pub(crate) const NDFNREF_T: u32 = 4;
+pub(crate) const NDFNREF_DEF_NR: u32 = 8;
+pub(crate) const NDFNREF_VAR: u32 = 16;
+
+// ─── TypeT half (the IR's second recursive enum) ─────────────────────────────
+
+/// `TypeT` variant discriminants (1-based), in declaration order.
+pub(crate) const TY_UNKNOWN: u8 = 1;
+pub(crate) const TY_NULL: u8 = 2;
+pub(crate) const TY_VOID: u8 = 3;
+pub(crate) const TY_NEVER: u8 = 4;
+pub(crate) const TY_INTEGER: u8 = 5;
+pub(crate) const TY_BOOLEAN: u8 = 6;
+pub(crate) const TY_FLOAT: u8 = 7;
+pub(crate) const TY_SINGLE: u8 = 8;
+pub(crate) const TY_CHARACTER: u8 = 9;
+pub(crate) const TY_TEXT: u8 = 10;
+pub(crate) const TY_KEYS: u8 = 11;
+pub(crate) const TY_ENUM: u8 = 12;
+pub(crate) const TY_REFERENCE: u8 = 13;
+pub(crate) const TY_REF_VAR: u8 = 14;
+pub(crate) const TY_VECTOR: u8 = 15;
+pub(crate) const TY_ROUTINE: u8 = 16;
+pub(crate) const TY_ITERATOR: u8 = 17;
+pub(crate) const TY_SORTED: u8 = 18;
+pub(crate) const TY_INDEX: u8 = 19;
+pub(crate) const TY_SPACIAL: u8 = 20;
+pub(crate) const TY_HASH: u8 = 21;
+pub(crate) const TY_FUNCTION: u8 = 22;
+pub(crate) const TY_REWRITTEN: u8 = 23;
+pub(crate) const TY_TUPLE: u8 = 24;
+
+/// Element strides for the non-`Node` vectors the TypeT half uses.
+pub(crate) const TYPET_STRIDE: u32 = 33; // `TypeT` enum record size
+pub(crate) const INT_STRIDE: u32 = 8; // `vector<integer>` element (dep lists)
+pub(crate) const SORTKEY_STRIDE: u32 = 5; // `SortKey` record size
+pub(crate) const NAMEREF_STRIDE: u32 = 4; // `NameRef` record size
+
+/// `TypeT` field offsets.  `dep` (`vector<integer>`) is at 4 for the leaf-ish
+/// variants and at higher offsets when other vectors precede it.
+pub(crate) const TYUNKNOWN_N: u32 = 8;
+pub(crate) const TYINTEGER_MIN: u32 = 8; // IntegerSpec base (8) + min (0)
+pub(crate) const TYINTEGER_MAX: u32 = 16; // + max (8)
+pub(crate) const TYINTEGER_FORCED: u32 = 24; // + forced_size (16); 0 = None
+pub(crate) const TYINTEGER_NOT_NULL: u32 = 32; // + not_null (24)
+pub(crate) const TYTEXT_DEP: u32 = 4;
+pub(crate) const TYENUM_N: u32 = 8;
+pub(crate) const TYENUM_IS_REF: u32 = 3;
+pub(crate) const TYENUM_DEP: u32 = 4;
+pub(crate) const TYREF_N: u32 = 8;
+pub(crate) const TYREF_DEP: u32 = 4;
+pub(crate) const TYREFVAR_INNER: u32 = 4;
+pub(crate) const TYVECTOR_INNER: u32 = 4;
+pub(crate) const TYVECTOR_DEP: u32 = 8;
+pub(crate) const TYROUTINE_N: u32 = 8;
+pub(crate) const TYITER_STEP: u32 = 4;
+pub(crate) const TYITER_INNER: u32 = 8;
+pub(crate) const TYSORTED_N: u32 = 8;
+pub(crate) const TYSORTED_KEYS: u32 = 4;
+pub(crate) const TYSORTED_DEP: u32 = 16;
+pub(crate) const TYINDEX_N: u32 = 8;
+pub(crate) const TYINDEX_KEYS: u32 = 4;
+pub(crate) const TYINDEX_DEP: u32 = 16;
+pub(crate) const TYSPACIAL_N: u32 = 8;
+pub(crate) const TYSPACIAL_NAMES: u32 = 4;
+pub(crate) const TYSPACIAL_DEP: u32 = 16;
+pub(crate) const TYHASH_N: u32 = 8;
+pub(crate) const TYHASH_NAMES: u32 = 4;
+pub(crate) const TYHASH_DEP: u32 = 16;
+pub(crate) const TYFUNC_ARGS: u32 = 4;
+pub(crate) const TYFUNC_RESULT: u32 = 8;
+pub(crate) const TYFUNC_DEP: u32 = 12;
+pub(crate) const TYREWRITTEN_INNER: u32 = 4;
+pub(crate) const TYTUPLE_ELEMS: u32 = 4;
+
+/// `SortKey` / `NameRef` element fields.
+pub(crate) const SORTKEY_NAME: u32 = 0;
+pub(crate) const SORTKEY_ASC: u32 = 4;
+pub(crate) const NAMEREF_NAME: u32 = 0;
+
+// ─── Top-level component structs (Block tail, Attribute, LinkedFieldGroup) ────
+
+/// `Block` fields beyond name/operators — relative to the `Block` base
+/// (`NDBLOCK_BLOCK`), like `BLOCK_NAME`/`BLOCK_OPERATORS`.
+pub(crate) const BLOCK_RESULT: u32 = 24; // vector<TypeT> (box-of-one)
+pub(crate) const BLOCK_SCOPE: u32 = 0;
+pub(crate) const BLOCK_VAR_SIZE: u32 = 8;
+
+/// `Attribute` record (element of `vector<Attribute>`).
+pub(crate) const ATTRIBUTE_STRIDE: u32 = 42;
+pub(crate) const ATTR_NAME: u32 = 16;
+pub(crate) const ATTR_TYPEDEF: u32 = 20; // vector<TypeT> (box-of-one)
+pub(crate) const ATTR_VALUE: u32 = 24; // vector<Node> (box-of-one)
+pub(crate) const ATTR_CHECK: u32 = 28; // vector<Node> (box-of-one)
+pub(crate) const ATTR_CHECK_MESSAGE: u32 = 32; // vector<Node> (box-of-one)
+pub(crate) const ATTR_MUTABLE: u32 = 36;
+pub(crate) const ATTR_CONSTANT: u32 = 37;
+pub(crate) const ATTR_INIT: u32 = 38;
+pub(crate) const ATTR_NULLABLE: u32 = 39;
+pub(crate) const ATTR_PRIMARY: u32 = 40;
+pub(crate) const ATTR_HIDDEN: u32 = 41;
+pub(crate) const ATTR_ALIAS_D_NR: u32 = 0;
+pub(crate) const ATTR_ASSIGNED_LAMBDA_D_NR: u32 = 8;
+
+/// `LinkedFieldGroup` record (element of `vector<LinkedFieldGroup>`).  `kind`
+/// is the native `LinkedFieldKind` discriminant (`Tuple` = 0, `Index` = 1).
+pub(crate) const LFG_STRIDE: u32 = 36;
+pub(crate) const LFG_KIND: u32 = 0;
+pub(crate) const LFG_INSTANCE: u32 = 8;
+pub(crate) const LFG_FIELD_INDICES: u32 = 32; // vector<integer>
+pub(crate) const LFG_ALIGNMENT: u32 = 16;
+pub(crate) const LFG_SIZE: u32 = 24;
+
+// ─── The top-level Data graph (Definition / Variable / Function / Data) ──────
+
+/// `Position` field offsets, relative to a `Position` base.
+pub(crate) const POS_LINE: u32 = 0;
+pub(crate) const POS_POS: u32 = 8;
+pub(crate) const POS_FILE: u32 = 16;
+
+/// `Variable` record (element of `Function.variables` = `vector<Variable>`) —
+/// the nine codegen-read fields the snapshot seam exposes.
+pub(crate) const VARIABLE_STRIDE: u32 = 29;
+pub(crate) const VAR_NAME: u32 = 16;
+pub(crate) const VAR_TYPE_DEF: u32 = 20; // vector<TypeT> (box-of-one)
+pub(crate) const VAR_STACK_POS: u32 = 0;
+pub(crate) const VAR_USES: u32 = 8;
+pub(crate) const VAR_ARGUMENT: u32 = 24;
+pub(crate) const VAR_STACK_ALLOCATED: u32 = 25;
+pub(crate) const VAR_SKIP_FREE: u32 = 26;
+pub(crate) const VAR_CAPTURED: u32 = 27;
+pub(crate) const VAR_CALLER_HIDDEN_BUF: u32 = 28;
+
+/// `Function` field offsets, relative to a `Function` base (it is inlined in
+/// `Definition`, never stored in a vector).
+pub(crate) const FN_NAME: u32 = 0;
+pub(crate) const FN_FILE: u32 = 4;
+pub(crate) const FN_VARIABLES: u32 = 8; // vector<Variable>
+
+/// `Definition` record (element of `Data.definitions` = `vector<Definition>`).
+/// Inlines `Position` (`DEF_POSITION` base) and `Function` (`DEF_VARIABLES`
+/// base).  `def_type` / `purity` store integer codes (see `ir_store`).
+pub(crate) const DEFINITION_STRIDE: u32 = 142;
+pub(crate) const DEF_SOURCE: u32 = 0;
+pub(crate) const DEF_DEF_TYPE: u32 = 8;
+pub(crate) const DEF_PARENT: u32 = 16;
+pub(crate) const DEF_POSITION: u32 = 24; // inlined Position base
+pub(crate) const DEF_OP_CODE: u32 = 44;
+pub(crate) const DEF_KNOWN_TYPE: u32 = 52;
+pub(crate) const DEF_CLOSURE_RECORD: u32 = 60;
+pub(crate) const DEF_FORCED_SIZE: u32 = 68; // Option<u8>; 0 = None
+pub(crate) const DEF_PURITY: u32 = 76;
+pub(crate) const DEF_NAME: u32 = 84;
+pub(crate) const DEF_ATTRIBUTES: u32 = 88; // vector<Attribute>
+pub(crate) const DEF_CODE: u32 = 92; // vector<Node> (box-of-one)
+pub(crate) const DEF_RETURNED: u32 = 96; // vector<TypeT> (box-of-one)
+pub(crate) const DEF_RUST: u32 = 100;
+pub(crate) const DEF_NATIVE: u32 = 104;
+pub(crate) const DEF_VARIABLES: u32 = 108; // inlined Function base
+pub(crate) const DEF_MUTATED_CAPTURES: u32 = 120; // vector<NameRef>
+pub(crate) const DEF_SCALARS_TO_BOX: u32 = 124; // vector<NameRef>
+pub(crate) const DEF_BOUNDS: u32 = 128; // vector<integer>
+pub(crate) const DEF_FIELD_GROUPS: u32 = 132; // vector<LinkedFieldGroup>
+pub(crate) const DEF_SYNTHETIC: u32 = 136; // Option<&str>; "" = None
+pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 140;
+pub(crate) const DEF_PUB_VISIBLE: u32 = 141;
+
+/// `Data` record (the root).
+pub(crate) const DATA_SOURCE: u32 = 0;
+pub(crate) const DATA_DEFINITIONS: u32 = 8; // vector<Definition>
+
 /// The bit mask loft uses for a stored `boolean` field (`generation` emits
 /// `get_boolean(rec, off, 1)`).
 pub(crate) const BOOL_MASK: u8 = 1;
@@ -172,6 +352,69 @@ pub enum ValueType {
     Other(u8),
 }
 
+/// Which `TypeT` variant a [`Record`] holds (when that record is a `TypeT`).
+/// Mirrors the native `data::Type` variants 1:1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeKind {
+    Unknown,
+    Null,
+    Void,
+    Never,
+    Integer,
+    Boolean,
+    Float,
+    Single,
+    Character,
+    Text,
+    Keys,
+    Enum,
+    Reference,
+    RefVar,
+    Vector,
+    Routine,
+    Iterator,
+    Sorted,
+    Index,
+    Spacial,
+    Hash,
+    Function,
+    Rewritten,
+    Tuple,
+    Other(u8),
+}
+
+/// Map a `TypeT` discriminant byte to its [`TypeKind`].
+#[must_use]
+pub fn type_kind(disc: u8) -> TypeKind {
+    match disc {
+        TY_UNKNOWN => TypeKind::Unknown,
+        TY_NULL => TypeKind::Null,
+        TY_VOID => TypeKind::Void,
+        TY_NEVER => TypeKind::Never,
+        TY_INTEGER => TypeKind::Integer,
+        TY_BOOLEAN => TypeKind::Boolean,
+        TY_FLOAT => TypeKind::Float,
+        TY_SINGLE => TypeKind::Single,
+        TY_CHARACTER => TypeKind::Character,
+        TY_TEXT => TypeKind::Text,
+        TY_KEYS => TypeKind::Keys,
+        TY_ENUM => TypeKind::Enum,
+        TY_REFERENCE => TypeKind::Reference,
+        TY_REF_VAR => TypeKind::RefVar,
+        TY_VECTOR => TypeKind::Vector,
+        TY_ROUTINE => TypeKind::Routine,
+        TY_ITERATOR => TypeKind::Iterator,
+        TY_SORTED => TypeKind::Sorted,
+        TY_INDEX => TypeKind::Index,
+        TY_SPACIAL => TypeKind::Spacial,
+        TY_HASH => TypeKind::Hash,
+        TY_FUNCTION => TypeKind::Function,
+        TY_REWRITTEN => TypeKind::Rewritten,
+        TY_TUPLE => TypeKind::Tuple,
+        other => TypeKind::Other(other),
+    }
+}
+
 /// A handle to one IR `Value` (a `Node` record), hiding its [`DbRef`].
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
@@ -184,6 +427,24 @@ pub struct Value {
 #[derive(Debug, Clone, Copy)]
 pub struct ValuesVector {
     rec: DbRef,
+}
+
+/// A handle to a non-`Node` struct record (`Key`, `SortKey`, `NameRef`,
+/// `IntegerSpec`, …) — generic field access only, no variant discriminant.
+/// The element type produced by [`RecVector`].
+#[derive(Debug, Clone, Copy)]
+pub struct Record {
+    rec: DbRef,
+}
+
+/// A handle to an inline `vector<T>` field of fixed element `stride`, for the
+/// non-`Node` element types.  Every IR vector is inline `Parts::Vector` (probed),
+/// so the same raw `vector::*` primitives the `Node` vector uses apply here with
+/// the element's stride.
+#[derive(Debug, Clone, Copy)]
+pub struct RecVector {
+    rec: DbRef,
+    stride: u32,
 }
 
 impl Value {
@@ -452,6 +713,19 @@ impl Value {
             },
         }
     }
+
+    /// Handle to a non-`Node` `vector<T>` field at `off` with element `stride`.
+    #[must_use]
+    pub fn field_recvec(&self, off: u32, stride: u32) -> RecVector {
+        RecVector {
+            rec: DbRef {
+                store_nr: self.rec.store_nr,
+                rec: self.rec.rec,
+                pos: self.rec.pos + off,
+            },
+            stride,
+        }
+    }
 }
 
 impl ValuesVector {
@@ -489,12 +763,157 @@ impl ValuesVector {
         Value { rec }
     }
 
-    /// Append one element slot and return a handle to it (the slot's bytes are
-    /// zeroed — write a variant into it via `Value::write_*`).
+    /// Append one element slot and return a handle to it.  The slot is zeroed
+    /// (claim reuses dirty memory), so its `enum` byte and nested vector-header
+    /// fields start empty — write a variant into it via `Value::write_*`.
     pub fn push(&self, stores: &mut Stores) -> Value {
         let len = i64::from(self.len(stores));
         let rec = vector::insert_vector(&self.rec, NODE_STRIDE, len, &mut stores.allocations);
+        stores
+            .store_mut(&rec)
+            .zero_range(rec.rec, rec.pos, NODE_STRIDE);
         Value { rec }
+    }
+}
+
+impl Record {
+    /// Wrap a non-`Node` struct record.
+    #[must_use]
+    #[inline]
+    pub fn new(rec: DbRef) -> Self {
+        Record { rec }
+    }
+
+    /// The hidden `DbRef`.
+    #[must_use]
+    #[inline]
+    pub fn db_ref(&self) -> DbRef {
+        self.rec
+    }
+
+    /// The variant discriminant byte at offset 0 — only meaningful when this
+    /// record is an enum value (e.g. a `TypeT`); pair with [`type_kind`].
+    #[must_use]
+    pub fn discriminant(&self, stores: &Stores) -> u8 {
+        stores
+            .store(&self.rec)
+            .get_byte(self.rec.rec, self.rec.pos, 0) as u8
+    }
+
+    /// Stamp the variant discriminant byte at offset 0 (enum-value records).
+    pub fn set_discriminant(&self, stores: &mut Stores, disc: u8) {
+        stores
+            .store_mut(&self.rec)
+            .set_byte(self.rec.rec, self.rec.pos, 0, i32::from(disc));
+    }
+
+    /// Read the `integer` (8-byte) field at `off`.
+    #[must_use]
+    pub fn field_int(&self, stores: &Stores, off: u32) -> i64 {
+        stores
+            .store(&self.rec)
+            .get_int(self.rec.rec, self.rec.pos + off)
+    }
+
+    /// Write the `integer` (8-byte) field at `off`.
+    pub fn set_field_int(&self, stores: &mut Stores, off: u32, v: i64) {
+        stores
+            .store_mut(&self.rec)
+            .set_int(self.rec.rec, self.rec.pos + off, v);
+    }
+
+    /// Read the `boolean` field at `off`.
+    #[must_use]
+    pub fn field_bool(&self, stores: &Stores, off: u32) -> bool {
+        stores
+            .store(&self.rec)
+            .get_boolean(self.rec.rec, self.rec.pos + off, BOOL_MASK)
+    }
+
+    /// Write the `boolean` field at `off`.
+    pub fn set_field_bool(&self, stores: &mut Stores, off: u32, v: bool) {
+        stores
+            .store_mut(&self.rec)
+            .set_boolean(self.rec.rec, self.rec.pos + off, BOOL_MASK, v);
+    }
+
+    /// Read the `text` field at `off`.
+    #[must_use]
+    pub fn field_str<'a>(&self, stores: &'a Stores, off: u32) -> &'a str {
+        let store = stores.store(&self.rec);
+        store.get_str(store.get_u32_raw(self.rec.rec, self.rec.pos + off))
+    }
+
+    /// Write the `text` field at `off`.
+    pub fn set_field_str(&self, stores: &mut Stores, off: u32, s: &str) {
+        let store = stores.store_mut(&self.rec);
+        let idx = store.set_str(s);
+        store.set_u32_raw(self.rec.rec, self.rec.pos + off, idx);
+    }
+
+    /// Handle to a nested non-`Node` `vector<T>` field at `off`, element `stride`.
+    #[must_use]
+    pub fn field_recvec(&self, off: u32, stride: u32) -> RecVector {
+        RecVector {
+            rec: DbRef {
+                store_nr: self.rec.store_nr,
+                rec: self.rec.rec,
+                pos: self.rec.pos + off,
+            },
+            stride,
+        }
+    }
+
+    /// Handle to a nested `vector<Node>` field at `off` (e.g. `Attribute.value`).
+    #[must_use]
+    pub fn field_vec(&self, off: u32) -> ValuesVector {
+        ValuesVector {
+            rec: DbRef {
+                store_nr: self.rec.store_nr,
+                rec: self.rec.rec,
+                pos: self.rec.pos + off,
+            },
+        }
+    }
+}
+
+impl RecVector {
+    /// Wrap an inline `vector<T>` field slot with element `stride`.
+    #[must_use]
+    #[inline]
+    pub fn new(rec: DbRef, stride: u32) -> Self {
+        RecVector { rec, stride }
+    }
+
+    /// Number of elements.
+    #[must_use]
+    pub fn len(&self, stores: &Stores) -> u32 {
+        vector::length_vector(&self.rec, &stores.allocations)
+    }
+
+    /// Whether the vector is empty.
+    #[must_use]
+    pub fn is_empty(&self, stores: &Stores) -> bool {
+        self.len(stores) == 0
+    }
+
+    /// The `i`-th element as a [`Record`].
+    #[must_use]
+    pub fn get(&self, i: u32, stores: &Stores) -> Record {
+        let rec = vector::get_vector(&self.rec, self.stride, i64::from(i), &stores.allocations);
+        Record { rec }
+    }
+
+    /// Append one element slot and return its [`Record`] handle.  The slot is
+    /// zeroed (claim reuses dirty memory) so unwritten fields — including nested
+    /// vector headers — start empty.
+    pub fn push(&self, stores: &mut Stores) -> Record {
+        let len = i64::from(self.len(stores));
+        let rec = vector::insert_vector(&self.rec, self.stride, len, &mut stores.allocations);
+        stores
+            .store_mut(&rec)
+            .zero_range(rec.rec, rec.pos, self.stride);
+        Record { rec }
     }
 }
 
@@ -620,6 +1039,32 @@ mod tests {
         assert_eq!(disc(ids.nd_par_for), DISC_PAR_FOR);
         assert_eq!(disc(ids.nd_raw_expr), DISC_RAW_EXPR);
 
+        // TypeT discriminants — every variant.
+        assert_eq!(disc(ids.ty_unknown), TY_UNKNOWN);
+        assert_eq!(disc(ids.ty_null), TY_NULL);
+        assert_eq!(disc(ids.ty_void), TY_VOID);
+        assert_eq!(disc(ids.ty_never), TY_NEVER);
+        assert_eq!(disc(ids.ty_integer), TY_INTEGER);
+        assert_eq!(disc(ids.ty_boolean), TY_BOOLEAN);
+        assert_eq!(disc(ids.ty_float), TY_FLOAT);
+        assert_eq!(disc(ids.ty_single), TY_SINGLE);
+        assert_eq!(disc(ids.ty_character), TY_CHARACTER);
+        assert_eq!(disc(ids.ty_text), TY_TEXT);
+        assert_eq!(disc(ids.ty_keys), TY_KEYS);
+        assert_eq!(disc(ids.ty_enum), TY_ENUM);
+        assert_eq!(disc(ids.ty_reference), TY_REFERENCE);
+        assert_eq!(disc(ids.ty_ref_var), TY_REF_VAR);
+        assert_eq!(disc(ids.ty_vector), TY_VECTOR);
+        assert_eq!(disc(ids.ty_routine), TY_ROUTINE);
+        assert_eq!(disc(ids.ty_iterator), TY_ITERATOR);
+        assert_eq!(disc(ids.ty_sorted), TY_SORTED);
+        assert_eq!(disc(ids.ty_index), TY_INDEX);
+        assert_eq!(disc(ids.ty_spacial), TY_SPACIAL);
+        assert_eq!(disc(ids.ty_hash), TY_HASH);
+        assert_eq!(disc(ids.ty_function), TY_FUNCTION);
+        assert_eq!(disc(ids.ty_rewritten), TY_REWRITTEN);
+        assert_eq!(disc(ids.ty_tuple), TY_TUPLE);
+
         // Field offsets — every baked offset against its computed position.
         let pos = |tp: u16, f: &str| u32::from(stores.position(tp, f));
         assert_eq!(pos(ids.nd_line, "n"), NDLINE_N);
@@ -685,6 +1130,164 @@ mod tests {
         assert_eq!(pf_base + pos(ids.par_for_body, "worker"), PARFOR_WORKER);
         assert_eq!(pf_base + pos(ids.par_for_body, "threads"), PARFOR_THREADS);
         assert_eq!(pf_base + pos(ids.par_for_body, "body"), PARFOR_BODY);
+
+        // `vector<Key>` element layout (the generic RecVector stride + fields).
+        assert_eq!(pos(ids.nd_keys, "keys"), NDKEYS_KEYS);
+        assert_eq!(u32::from(stores.size(ids.key)), KEY_STRIDE);
+        assert_eq!(pos(ids.key, "type_nr"), KEY_TYPE_NR);
+        assert_eq!(pos(ids.key, "position"), KEY_POSITION);
+
+        // NdFnRef (carries vector<TypeT>).
+        assert_eq!(pos(ids.nd_fn_ref, "def_nr"), NDFNREF_DEF_NR);
+        assert_eq!(pos(ids.nd_fn_ref, "var"), NDFNREF_VAR);
+        assert_eq!(pos(ids.nd_fn_ref, "t"), NDFNREF_T);
+
+        // TypeT field offsets.
+        assert_eq!(pos(ids.ty_unknown, "n"), TYUNKNOWN_N);
+        let ispec = pos(ids.ty_integer, "spec"); // inlined IntegerSpec base
+        assert_eq!(ispec + pos(ids.integer_spec, "min"), TYINTEGER_MIN);
+        assert_eq!(ispec + pos(ids.integer_spec, "max"), TYINTEGER_MAX);
+        assert_eq!(
+            ispec + pos(ids.integer_spec, "forced_size"),
+            TYINTEGER_FORCED
+        );
+        assert_eq!(
+            ispec + pos(ids.integer_spec, "not_null"),
+            TYINTEGER_NOT_NULL
+        );
+        assert_eq!(pos(ids.ty_text, "dep"), TYTEXT_DEP);
+        assert_eq!(pos(ids.ty_enum, "n"), TYENUM_N);
+        assert_eq!(pos(ids.ty_enum, "is_ref"), TYENUM_IS_REF);
+        assert_eq!(pos(ids.ty_enum, "dep"), TYENUM_DEP);
+        assert_eq!(pos(ids.ty_reference, "n"), TYREF_N);
+        assert_eq!(pos(ids.ty_reference, "dep"), TYREF_DEP);
+        assert_eq!(pos(ids.ty_ref_var, "inner"), TYREFVAR_INNER);
+        assert_eq!(pos(ids.ty_vector, "inner"), TYVECTOR_INNER);
+        assert_eq!(pos(ids.ty_vector, "dep"), TYVECTOR_DEP);
+        assert_eq!(pos(ids.ty_routine, "n"), TYROUTINE_N);
+        assert_eq!(pos(ids.ty_iterator, "step"), TYITER_STEP);
+        assert_eq!(pos(ids.ty_iterator, "inner"), TYITER_INNER);
+        assert_eq!(pos(ids.ty_sorted, "n"), TYSORTED_N);
+        assert_eq!(pos(ids.ty_sorted, "keys"), TYSORTED_KEYS);
+        assert_eq!(pos(ids.ty_sorted, "dep"), TYSORTED_DEP);
+        assert_eq!(pos(ids.ty_index, "n"), TYINDEX_N);
+        assert_eq!(pos(ids.ty_index, "keys"), TYINDEX_KEYS);
+        assert_eq!(pos(ids.ty_index, "dep"), TYINDEX_DEP);
+        assert_eq!(pos(ids.ty_spacial, "n"), TYSPACIAL_N);
+        assert_eq!(pos(ids.ty_spacial, "names"), TYSPACIAL_NAMES);
+        assert_eq!(pos(ids.ty_spacial, "dep"), TYSPACIAL_DEP);
+        assert_eq!(pos(ids.ty_hash, "n"), TYHASH_N);
+        assert_eq!(pos(ids.ty_hash, "names"), TYHASH_NAMES);
+        assert_eq!(pos(ids.ty_hash, "dep"), TYHASH_DEP);
+        assert_eq!(pos(ids.ty_function, "args"), TYFUNC_ARGS);
+        assert_eq!(pos(ids.ty_function, "result"), TYFUNC_RESULT);
+        assert_eq!(pos(ids.ty_function, "dep"), TYFUNC_DEP);
+        assert_eq!(pos(ids.ty_rewritten, "inner"), TYREWRITTEN_INNER);
+        assert_eq!(pos(ids.ty_tuple, "elems"), TYTUPLE_ELEMS);
+
+        // Non-Node element strides + sub-struct fields.
+        assert_eq!(u32::from(stores.size(ids.type_t)), TYPET_STRIDE);
+        assert_eq!(u32::from(stores.size(ids.sort_key)), SORTKEY_STRIDE);
+        assert_eq!(u32::from(stores.size(ids.name_ref)), NAMEREF_STRIDE);
+        assert_eq!(pos(ids.sort_key, "name"), SORTKEY_NAME);
+        assert_eq!(pos(ids.sort_key, "asc"), SORTKEY_ASC);
+        assert_eq!(pos(ids.name_ref, "name"), NAMEREF_NAME);
+
+        // Block tail (relative to the Block base, like name/operators).
+        assert_eq!(pos(ids.block, "result"), BLOCK_RESULT);
+        assert_eq!(pos(ids.block, "scope"), BLOCK_SCOPE);
+        assert_eq!(pos(ids.block, "var_size"), BLOCK_VAR_SIZE);
+
+        // Attribute record.
+        assert_eq!(u32::from(stores.size(ids.attribute)), ATTRIBUTE_STRIDE);
+        assert_eq!(pos(ids.attribute, "name"), ATTR_NAME);
+        assert_eq!(pos(ids.attribute, "typedef"), ATTR_TYPEDEF);
+        assert_eq!(pos(ids.attribute, "value"), ATTR_VALUE);
+        assert_eq!(pos(ids.attribute, "check"), ATTR_CHECK);
+        assert_eq!(pos(ids.attribute, "check_message"), ATTR_CHECK_MESSAGE);
+        assert_eq!(pos(ids.attribute, "mutable"), ATTR_MUTABLE);
+        assert_eq!(pos(ids.attribute, "constant"), ATTR_CONSTANT);
+        assert_eq!(pos(ids.attribute, "init"), ATTR_INIT);
+        assert_eq!(pos(ids.attribute, "nullable"), ATTR_NULLABLE);
+        assert_eq!(pos(ids.attribute, "primary"), ATTR_PRIMARY);
+        assert_eq!(pos(ids.attribute, "hidden"), ATTR_HIDDEN);
+        assert_eq!(pos(ids.attribute, "alias_d_nr"), ATTR_ALIAS_D_NR);
+        assert_eq!(
+            pos(ids.attribute, "assigned_lambda_d_nr"),
+            ATTR_ASSIGNED_LAMBDA_D_NR
+        );
+
+        // LinkedFieldGroup record.
+        assert_eq!(u32::from(stores.size(ids.linked_field_group)), LFG_STRIDE);
+        assert_eq!(pos(ids.linked_field_group, "kind"), LFG_KIND);
+        assert_eq!(pos(ids.linked_field_group, "instance"), LFG_INSTANCE);
+        assert_eq!(
+            pos(ids.linked_field_group, "field_indices"),
+            LFG_FIELD_INDICES
+        );
+        assert_eq!(pos(ids.linked_field_group, "alignment"), LFG_ALIGNMENT);
+        assert_eq!(pos(ids.linked_field_group, "size"), LFG_SIZE);
+
+        // Position field offsets (relative; used as a base + relative elsewhere).
+        assert_eq!(pos(ids.position, "line"), POS_LINE);
+        assert_eq!(pos(ids.position, "pos"), POS_POS);
+        assert_eq!(pos(ids.position, "file"), POS_FILE);
+
+        // Variable record.
+        assert_eq!(u32::from(stores.size(ids.variable)), VARIABLE_STRIDE);
+        assert_eq!(pos(ids.variable, "name"), VAR_NAME);
+        assert_eq!(pos(ids.variable, "type_def"), VAR_TYPE_DEF);
+        assert_eq!(pos(ids.variable, "stack_pos"), VAR_STACK_POS);
+        assert_eq!(pos(ids.variable, "uses"), VAR_USES);
+        assert_eq!(pos(ids.variable, "argument"), VAR_ARGUMENT);
+        assert_eq!(pos(ids.variable, "stack_allocated"), VAR_STACK_ALLOCATED);
+        assert_eq!(pos(ids.variable, "skip_free"), VAR_SKIP_FREE);
+        assert_eq!(pos(ids.variable, "captured"), VAR_CAPTURED);
+        assert_eq!(
+            pos(ids.variable, "caller_hidden_buf"),
+            VAR_CALLER_HIDDEN_BUF
+        );
+
+        // Function record.
+        assert_eq!(pos(ids.function, "name"), FN_NAME);
+        assert_eq!(pos(ids.function, "file"), FN_FILE);
+        assert_eq!(pos(ids.function, "variables"), FN_VARIABLES);
+
+        // Definition record (inlines Position + Function).
+        assert_eq!(u32::from(stores.size(ids.definition)), DEFINITION_STRIDE);
+        assert_eq!(pos(ids.definition, "source"), DEF_SOURCE);
+        assert_eq!(pos(ids.definition, "def_type"), DEF_DEF_TYPE);
+        assert_eq!(pos(ids.definition, "parent"), DEF_PARENT);
+        assert_eq!(pos(ids.definition, "position"), DEF_POSITION);
+        assert_eq!(pos(ids.definition, "op_code"), DEF_OP_CODE);
+        assert_eq!(pos(ids.definition, "known_type"), DEF_KNOWN_TYPE);
+        assert_eq!(pos(ids.definition, "closure_record"), DEF_CLOSURE_RECORD);
+        assert_eq!(pos(ids.definition, "forced_size"), DEF_FORCED_SIZE);
+        assert_eq!(pos(ids.definition, "purity"), DEF_PURITY);
+        assert_eq!(pos(ids.definition, "name"), DEF_NAME);
+        assert_eq!(pos(ids.definition, "attributes"), DEF_ATTRIBUTES);
+        assert_eq!(pos(ids.definition, "code"), DEF_CODE);
+        assert_eq!(pos(ids.definition, "returned"), DEF_RETURNED);
+        assert_eq!(pos(ids.definition, "rust"), DEF_RUST);
+        assert_eq!(pos(ids.definition, "native"), DEF_NATIVE);
+        assert_eq!(pos(ids.definition, "variables"), DEF_VARIABLES);
+        assert_eq!(
+            pos(ids.definition, "mutated_captures"),
+            DEF_MUTATED_CAPTURES
+        );
+        assert_eq!(pos(ids.definition, "scalars_to_box"), DEF_SCALARS_TO_BOX);
+        assert_eq!(pos(ids.definition, "bounds"), DEF_BOUNDS);
+        assert_eq!(pos(ids.definition, "field_groups"), DEF_FIELD_GROUPS);
+        assert_eq!(pos(ids.definition, "synthetic"), DEF_SYNTHETIC);
+        assert_eq!(
+            pos(ids.definition, "returned_not_null"),
+            DEF_RETURNED_NOT_NULL
+        );
+        assert_eq!(pos(ids.definition, "pub_visible"), DEF_PUB_VISIBLE);
+
+        // Data record (root).
+        assert_eq!(pos(ids.data, "source"), DATA_SOURCE);
+        assert_eq!(pos(ids.data, "definitions"), DATA_DEFINITIONS);
 
         assert_eq!(u32::from(stores.size(ids.node)), NODE_STRIDE);
     }

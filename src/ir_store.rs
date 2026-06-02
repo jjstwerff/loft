@@ -18,15 +18,27 @@
 //! (finding 2's box-of-one); a `Vec<Value>` maps to the same field with N
 //! elements — both materialize identically.
 
-use crate::data::{Block, Value};
-use crate::data_store::{self as ds, Value as Node, ValuesVector};
+use crate::data::{
+    Attribute, Block, Data, DefType, Definition, ImpureCategory, LinkedFieldGroup, LinkedFieldKind,
+    Purity, Type, Value,
+};
+use crate::data_store::{self as ds, RecVector, Record, Value as Node, ValuesVector};
 use crate::database::Stores;
+use crate::keys::DbRef;
+use crate::variables::{Function, VarSnapshot};
 
 /// Materialize one native `Value` into a freshly-appended slot of `dst`
 /// (a `vector<Node>`), recursing into any child vectors.
 pub fn materialize_node(stores: &mut Stores, dst: ValuesVector, v: &Value) {
     let slot = dst.push(stores);
     write_into(stores, &slot, v);
+}
+
+/// Materialize one native `Type` into a freshly-appended slot of `dst`
+/// (a `vector<TypeT>`), recursing into any child type vectors.
+pub fn materialize_type(stores: &mut Stores, dst: RecVector, ty: &Type) {
+    let slot = dst.push(stores);
+    write_type(stores, &slot, ty);
 }
 
 /// Materialize every element of `items` into the `vector<Node>` `dst`.
@@ -36,9 +48,153 @@ fn push_all(stores: &mut Stores, dst: ValuesVector, items: &[Value]) {
     }
 }
 
+/// Write a `Box<Type>` single child as a one-element `vector<TypeT>` at `off`
+/// (box-of-one).
+fn type_child(stores: &mut Stores, slot: &Record, off: u32, ty: &Type) {
+    materialize_type(stores, slot.field_recvec(off, ds::TYPET_STRIDE), ty);
+}
+
+/// Write a `Vec<Type>` as N elements of the `vector<TypeT>` at `off`.
+fn type_list(stores: &mut Stores, slot: &Record, off: u32, tys: &[Type]) {
+    let v = slot.field_recvec(off, ds::TYPET_STRIDE);
+    for t in tys {
+        materialize_type(stores, v, t);
+    }
+}
+
+/// Write a `Vec<u16>` dep list as a `vector<integer>` at `off`.
+fn dep_list(stores: &mut Stores, slot: &Record, off: u32, dep: &[u16]) {
+    let v = slot.field_recvec(off, ds::INT_STRIDE);
+    for d in dep {
+        v.push(stores).set_field_int(stores, 0, i64::from(*d));
+    }
+}
+
+/// Write a `Vec<(String, bool)>` key list as a `vector<SortKey>` at `off`.
+fn sort_key_list(stores: &mut Stores, slot: &Record, off: u32, keys: &[(String, bool)]) {
+    let v = slot.field_recvec(off, ds::SORTKEY_STRIDE);
+    for (name, asc) in keys {
+        let e = v.push(stores);
+        e.set_field_str(stores, ds::SORTKEY_NAME, name);
+        e.set_field_bool(stores, ds::SORTKEY_ASC, *asc);
+    }
+}
+
+/// Write a `Vec<String>` name list as a `vector<NameRef>` at `off`.
+fn name_list(stores: &mut Stores, slot: &Record, off: u32, names: &[String]) {
+    let v = slot.field_recvec(off, ds::NAMEREF_STRIDE);
+    for name in names {
+        v.push(stores).set_field_str(stores, ds::NAMEREF_NAME, name);
+    }
+}
+
+/// Write `ty` into the already-allocated `TypeT` record `slot` (zeroed).
+fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
+    match ty {
+        Type::Unknown(n) => {
+            slot.set_discriminant(stores, ds::TY_UNKNOWN);
+            slot.set_field_int(stores, ds::TYUNKNOWN_N, i64::from(*n));
+        }
+        Type::Null => slot.set_discriminant(stores, ds::TY_NULL),
+        Type::Void => slot.set_discriminant(stores, ds::TY_VOID),
+        Type::Never => slot.set_discriminant(stores, ds::TY_NEVER),
+        Type::Integer(spec) => {
+            slot.set_discriminant(stores, ds::TY_INTEGER);
+            slot.set_field_int(stores, ds::TYINTEGER_MIN, i64::from(spec.min));
+            slot.set_field_int(stores, ds::TYINTEGER_MAX, i64::from(spec.max));
+            slot.set_field_bool(stores, ds::TYINTEGER_NOT_NULL, spec.not_null);
+            // Option<NonZeroU8> -> sentinel 0 = None.
+            let fs = spec.forced_size.map_or(0, |n| i64::from(n.get()));
+            slot.set_field_int(stores, ds::TYINTEGER_FORCED, fs);
+        }
+        Type::Boolean => slot.set_discriminant(stores, ds::TY_BOOLEAN),
+        Type::Float => slot.set_discriminant(stores, ds::TY_FLOAT),
+        Type::Single => slot.set_discriminant(stores, ds::TY_SINGLE),
+        Type::Character => slot.set_discriminant(stores, ds::TY_CHARACTER),
+        Type::Text(dep) => {
+            slot.set_discriminant(stores, ds::TY_TEXT);
+            dep_list(stores, slot, ds::TYTEXT_DEP, dep);
+        }
+        Type::Keys => slot.set_discriminant(stores, ds::TY_KEYS),
+        Type::Enum(n, is_ref, dep) => {
+            slot.set_discriminant(stores, ds::TY_ENUM);
+            slot.set_field_int(stores, ds::TYENUM_N, i64::from(*n));
+            slot.set_field_bool(stores, ds::TYENUM_IS_REF, *is_ref);
+            dep_list(stores, slot, ds::TYENUM_DEP, dep);
+        }
+        Type::Reference(n, dep) => {
+            slot.set_discriminant(stores, ds::TY_REFERENCE);
+            slot.set_field_int(stores, ds::TYREF_N, i64::from(*n));
+            dep_list(stores, slot, ds::TYREF_DEP, dep);
+        }
+        Type::RefVar(inner) => {
+            slot.set_discriminant(stores, ds::TY_REF_VAR);
+            type_child(stores, slot, ds::TYREFVAR_INNER, inner);
+        }
+        Type::Vector(inner, dep) => {
+            slot.set_discriminant(stores, ds::TY_VECTOR);
+            type_child(stores, slot, ds::TYVECTOR_INNER, inner);
+            dep_list(stores, slot, ds::TYVECTOR_DEP, dep);
+        }
+        Type::Routine(n) => {
+            slot.set_discriminant(stores, ds::TY_ROUTINE);
+            slot.set_field_int(stores, ds::TYROUTINE_N, i64::from(*n));
+        }
+        Type::Iterator(step, inner) => {
+            slot.set_discriminant(stores, ds::TY_ITERATOR);
+            type_child(stores, slot, ds::TYITER_STEP, step);
+            type_child(stores, slot, ds::TYITER_INNER, inner);
+        }
+        Type::Sorted(n, keys, dep) => {
+            slot.set_discriminant(stores, ds::TY_SORTED);
+            slot.set_field_int(stores, ds::TYSORTED_N, i64::from(*n));
+            sort_key_list(stores, slot, ds::TYSORTED_KEYS, keys);
+            dep_list(stores, slot, ds::TYSORTED_DEP, dep);
+        }
+        Type::Index(n, keys, dep) => {
+            slot.set_discriminant(stores, ds::TY_INDEX);
+            slot.set_field_int(stores, ds::TYINDEX_N, i64::from(*n));
+            sort_key_list(stores, slot, ds::TYINDEX_KEYS, keys);
+            dep_list(stores, slot, ds::TYINDEX_DEP, dep);
+        }
+        Type::Spacial(n, names, dep) => {
+            slot.set_discriminant(stores, ds::TY_SPACIAL);
+            slot.set_field_int(stores, ds::TYSPACIAL_N, i64::from(*n));
+            name_list(stores, slot, ds::TYSPACIAL_NAMES, names);
+            dep_list(stores, slot, ds::TYSPACIAL_DEP, dep);
+        }
+        Type::Hash(n, names, dep) => {
+            slot.set_discriminant(stores, ds::TY_HASH);
+            slot.set_field_int(stores, ds::TYHASH_N, i64::from(*n));
+            name_list(stores, slot, ds::TYHASH_NAMES, names);
+            dep_list(stores, slot, ds::TYHASH_DEP, dep);
+        }
+        Type::Function(args, result, dep) => {
+            slot.set_discriminant(stores, ds::TY_FUNCTION);
+            type_list(stores, slot, ds::TYFUNC_ARGS, args);
+            type_child(stores, slot, ds::TYFUNC_RESULT, result);
+            dep_list(stores, slot, ds::TYFUNC_DEP, dep);
+        }
+        Type::Rewritten(inner) => {
+            slot.set_discriminant(stores, ds::TY_REWRITTEN);
+            type_child(stores, slot, ds::TYREWRITTEN_INNER, inner);
+        }
+        Type::Tuple(elems) => {
+            slot.set_discriminant(stores, ds::TY_TUPLE);
+            type_list(stores, slot, ds::TYTUPLE_ELEMS, elems);
+        }
+    }
+}
+
+/// Write a `Box<Value>`/`Value` single child as a one-element `vector<Node>` at
+/// `off` of a non-`Node` `slot` (box-of-one).
+fn node_child(stores: &mut Stores, slot: &Record, off: u32, v: &Value) {
+    materialize_node(stores, slot.field_vec(off), v);
+}
+
 /// Write a native `Block` into `slot` under discriminant `disc` (`NdBlock` or
-/// `NdLoop` — identical inlined-`Block` layout).  `Block.result`
-/// (`vector<TypeT>`) is deferred to the `TypeT` increment.
+/// `NdLoop` — identical inlined-`Block` layout).  Fields are at the `Block`
+/// base (`NDBLOCK_BLOCK`) plus their relative offsets.
 fn write_block(stores: &mut Stores, slot: &Node, disc: u8, b: &Block) {
     if disc == ds::DISC_LOOP {
         slot.write_loop(stores, b.name);
@@ -47,6 +203,216 @@ fn write_block(stores: &mut Stores, slot: &Node, disc: u8, b: &Block) {
     }
     let ops = slot.block_operators();
     push_all(stores, ops, &b.operators);
+    slot.set_field_int(
+        stores,
+        ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE,
+        i64::from(b.scope),
+    );
+    slot.set_field_int(
+        stores,
+        ds::NDBLOCK_BLOCK + ds::BLOCK_VAR_SIZE,
+        i64::from(b.var_size),
+    );
+    // result: single Type -> one-element vector<TypeT> (box-of-one).
+    materialize_type(
+        stores,
+        slot.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE),
+        &b.result,
+    );
+}
+
+/// Write one native `Attribute` into the already-allocated record `r`.
+fn write_attribute(stores: &mut Stores, r: &Record, a: &Attribute) {
+    r.set_field_str(stores, ds::ATTR_NAME, &a.name);
+    type_child(stores, r, ds::ATTR_TYPEDEF, &a.typedef);
+    r.set_field_bool(stores, ds::ATTR_MUTABLE, a.mutable);
+    r.set_field_bool(stores, ds::ATTR_CONSTANT, a.constant);
+    r.set_field_bool(stores, ds::ATTR_INIT, a.init);
+    r.set_field_bool(stores, ds::ATTR_NULLABLE, a.nullable);
+    r.set_field_bool(stores, ds::ATTR_PRIMARY, a.primary);
+    r.set_field_bool(stores, ds::ATTR_HIDDEN, a.hidden);
+    node_child(stores, r, ds::ATTR_VALUE, &a.value);
+    node_child(stores, r, ds::ATTR_CHECK, &a.check);
+    node_child(stores, r, ds::ATTR_CHECK_MESSAGE, &a.check_message);
+    r.set_field_int(stores, ds::ATTR_ALIAS_D_NR, i64::from(a.alias_d_nr));
+    r.set_field_int(
+        stores,
+        ds::ATTR_ASSIGNED_LAMBDA_D_NR,
+        i64::from(a.assigned_lambda_d_nr),
+    );
+}
+
+/// Materialize a `Vec<Attribute>` into the `vector<Attribute>` field at `off`
+/// of the (non-`Node`) record `parent`.
+pub fn materialize_attributes(stores: &mut Stores, parent: &Record, off: u32, attrs: &[Attribute]) {
+    let v = parent.field_recvec(off, ds::ATTRIBUTE_STRIDE);
+    for a in attrs {
+        let r = v.push(stores);
+        write_attribute(stores, &r, a);
+    }
+}
+
+/// Write one native `LinkedFieldGroup` into the already-allocated record `r`.
+/// `kind` stores the native `LinkedFieldKind` discriminant (`Tuple` 0/`Index` 1).
+fn write_field_group(stores: &mut Stores, r: &Record, g: &LinkedFieldGroup) {
+    let kind = match g.kind {
+        LinkedFieldKind::Tuple => 0,
+        LinkedFieldKind::Index => 1,
+    };
+    r.set_field_int(stores, ds::LFG_KIND, kind);
+    r.set_field_int(stores, ds::LFG_INSTANCE, i64::from(g.instance));
+    dep_list(stores, r, ds::LFG_FIELD_INDICES, &g.field_indices);
+    r.set_field_int(stores, ds::LFG_ALIGNMENT, i64::from(g.alignment));
+    r.set_field_int(stores, ds::LFG_SIZE, i64::from(g.size));
+}
+
+/// Materialize a `Vec<LinkedFieldGroup>` into the `vector<LinkedFieldGroup>`
+/// field at `off` of the (non-`Node`) record `parent`.
+pub fn materialize_field_groups(
+    stores: &mut Stores,
+    parent: &Record,
+    off: u32,
+    groups: &[LinkedFieldGroup],
+) {
+    let v = parent.field_recvec(off, ds::LFG_STRIDE);
+    for g in groups {
+        let r = v.push(stores);
+        write_field_group(stores, &r, g);
+    }
+}
+
+/// Write a `Vec<u32>` int list as a `vector<integer>` at `off`.
+fn int_list_u32(stores: &mut Stores, slot: &Record, off: u32, vals: &[u32]) {
+    let v = slot.field_recvec(off, ds::INT_STRIDE);
+    for n in vals {
+        v.push(stores).set_field_int(stores, 0, i64::from(*n));
+    }
+}
+
+/// `DefType` → its stored integer code (the native discriminant order).
+fn def_type_code(t: &DefType) -> i64 {
+    match t {
+        DefType::Unknown => 0,
+        DefType::Function => 1,
+        DefType::Dynamic => 2,
+        DefType::Enum => 3,
+        DefType::EnumValue => 4,
+        DefType::Struct => 5,
+        DefType::Vector => 6,
+        DefType::Type => 7,
+        DefType::Constant => 8,
+        DefType::Generic => 9,
+        DefType::Interface => 10,
+    }
+}
+
+/// `Purity` → a lossless integer code: `Unknown` 0, `Pure` 1, `Impure(cat)`
+/// `2 + cat` where `cat` is the `ImpureCategory` discriminant.
+fn purity_code(p: Purity) -> i64 {
+    match p {
+        Purity::Unknown => 0,
+        Purity::Pure => 1,
+        Purity::Impure(c) => {
+            2 + match c {
+                ImpureCategory::HostIo => 0,
+                ImpureCategory::Prng => 1,
+                ImpureCategory::Io => 2,
+                ImpureCategory::ParentWrite => 3,
+                ImpureCategory::ParCall => 4,
+            }
+        }
+    }
+}
+
+/// Write the nine codegen-read fields of one `Variable` (a `VarSnapshot`) into
+/// the already-allocated record `r`.
+fn write_var_snapshot(stores: &mut Stores, r: &Record, v: &VarSnapshot) {
+    r.set_field_str(stores, ds::VAR_NAME, v.name);
+    type_child(stores, r, ds::VAR_TYPE_DEF, v.type_def);
+    r.set_field_int(stores, ds::VAR_STACK_POS, i64::from(v.stack_pos));
+    r.set_field_int(stores, ds::VAR_USES, i64::from(v.uses));
+    r.set_field_bool(stores, ds::VAR_ARGUMENT, v.argument);
+    r.set_field_bool(stores, ds::VAR_STACK_ALLOCATED, v.stack_allocated);
+    r.set_field_bool(stores, ds::VAR_SKIP_FREE, v.skip_free);
+    r.set_field_bool(stores, ds::VAR_CAPTURED, v.captured);
+    r.set_field_bool(stores, ds::VAR_CALLER_HIDDEN_BUF, v.caller_hidden_buf);
+}
+
+/// Write a native `Function` inline into `parent` at `base` (name/file plus the
+/// `vector<Variable>` debug-symbol table from the snapshot seam).  `names` /
+/// `inline_refs` are intentionally not in the store schema (rebuildable from
+/// the variable list on load).
+fn write_function(stores: &mut Stores, parent: &Record, base: u32, f: &Function) {
+    parent.set_field_str(stores, base + ds::FN_NAME, &f.name);
+    parent.set_field_str(stores, base + ds::FN_FILE, &f.file);
+    let vars = parent.field_recvec(base + ds::FN_VARIABLES, ds::VARIABLE_STRIDE);
+    for i in 0..f.snapshot_len() {
+        let v = f.snapshot_var(i);
+        let r = vars.push(stores);
+        write_var_snapshot(stores, &r, &v);
+    }
+}
+
+/// Write one native `Definition` into the already-allocated record `r` (the
+/// 23-field store subset — the same set the @PLAN28 codec serialises).
+fn write_definition(stores: &mut Stores, r: &Record, d: &Definition) {
+    r.set_field_str(stores, ds::DEF_NAME, &d.name);
+    r.set_field_int(stores, ds::DEF_SOURCE, i64::from(d.source));
+    r.set_field_int(stores, ds::DEF_DEF_TYPE, def_type_code(&d.def_type));
+    r.set_field_int(stores, ds::DEF_PARENT, i64::from(d.parent));
+    // position (inlined): line / pos / file at DEF_POSITION + relative.
+    r.set_field_int(
+        stores,
+        ds::DEF_POSITION + ds::POS_LINE,
+        i64::from(d.position.line),
+    );
+    r.set_field_int(
+        stores,
+        ds::DEF_POSITION + ds::POS_POS,
+        i64::from(d.position.pos),
+    );
+    r.set_field_str(stores, ds::DEF_POSITION + ds::POS_FILE, &d.position.file);
+    materialize_attributes(stores, r, ds::DEF_ATTRIBUTES, &d.attributes);
+    node_child(stores, r, ds::DEF_CODE, &d.code);
+    type_child(stores, r, ds::DEF_RETURNED, &d.returned);
+    r.set_field_bool(stores, ds::DEF_RETURNED_NOT_NULL, d.returned_not_null);
+    r.set_field_str(stores, ds::DEF_RUST, &d.rust);
+    r.set_field_str(stores, ds::DEF_NATIVE, &d.native);
+    r.set_field_int(stores, ds::DEF_OP_CODE, i64::from(d.op_code));
+    r.set_field_int(stores, ds::DEF_KNOWN_TYPE, i64::from(d.known_type));
+    write_function(stores, r, ds::DEF_VARIABLES, &d.variables);
+    r.set_field_bool(stores, ds::DEF_PUB_VISIBLE, d.pub_visible);
+    r.set_field_int(stores, ds::DEF_CLOSURE_RECORD, i64::from(d.closure_record));
+    name_list(stores, r, ds::DEF_MUTATED_CAPTURES, &d.mutated_captures);
+    name_list(stores, r, ds::DEF_SCALARS_TO_BOX, &d.scalars_to_box);
+    int_list_u32(stores, r, ds::DEF_BOUNDS, &d.bounds);
+    // forced_size: Option<u8> -> 0 = None.
+    r.set_field_int(
+        stores,
+        ds::DEF_FORCED_SIZE,
+        i64::from(d.forced_size.unwrap_or(0)),
+    );
+    r.set_field_int(stores, ds::DEF_PURITY, purity_code(d.purity));
+    materialize_field_groups(stores, r, ds::DEF_FIELD_GROUPS, &d.field_groups);
+    // synthetic: Option<&str> -> "" = None.
+    r.set_field_str(stores, ds::DEF_SYNTHETIC, d.synthetic.unwrap_or(""));
+}
+
+/// Materialize a whole native `Data` into a fresh `Data` store record and
+/// return its `DbRef` (the root).  Arc B's capstone entry point.
+pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
+    let root = stores.database(16);
+    // Clear the root's Data fields (database() does not zero) so the
+    // `definitions` vector header starts empty.
+    stores.store_mut(&root).zero_range(root.rec, root.pos, 16);
+    let r = Record::new(root);
+    r.set_field_int(stores, ds::DATA_SOURCE, i64::from(data.source));
+    let defs = r.field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
+    for d in &data.definitions {
+        let dr = defs.push(stores);
+        write_definition(stores, &dr, d);
+    }
+    root
 }
 
 /// Write `v` into the already-allocated `slot` (its bytes are zeroed).
@@ -194,12 +560,27 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
             materialize_node(stores, slot.field_vec(ds::PARFOR_THREADS), &b.threads);
             materialize_node(stores, slot.field_vec(ds::PARFOR_BODY), &b.body);
         }
-        // ── deferred: reach into Key (vector<Key>) / the TypeT half ────────────
-        Value::Keys(_) | Value::FnRef(..) => {
-            unimplemented!(
-                "@PLAN54 arc B: materialize_node does not yet cover {v:?} \
-                 (Keys needs vector<Key>; FnRef needs the TypeT half — next increment)"
-            )
+        // ── vector of a non-Node struct ───────────────────────────────────────
+        Value::Keys(keys) => {
+            slot.set_discriminant(stores, ds::DISC_KEYS);
+            let kv = slot.field_recvec(ds::NDKEYS_KEYS, ds::KEY_STRIDE);
+            for k in keys {
+                let e = kv.push(stores);
+                e.set_field_int(stores, ds::KEY_TYPE_NR, i64::from(k.type_nr));
+                e.set_field_int(stores, ds::KEY_POSITION, i64::from(k.position));
+            }
+        }
+        // ── carries a vector<TypeT> ────────────────────────────────────────────
+        Value::FnRef(def_nr, var, t) => {
+            slot.set_discriminant(stores, ds::DISC_FN_REF);
+            slot.set_field_int(stores, ds::NDFNREF_DEF_NR, i64::from(*def_nr));
+            slot.set_field_int(stores, ds::NDFNREF_VAR, i64::from(*var));
+            // t is Box<Type> → one-element vector<TypeT> (box-of-one).
+            materialize_type(
+                stores,
+                slot.field_recvec(ds::NDFNREF_T, ds::TYPET_STRIDE),
+                t,
+            );
         }
     }
 }
@@ -207,10 +588,14 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{Block, ParForBody, Type};
-    use crate::data_store::{self as ds, ValueType};
+    use crate::data::{
+        Attribute, Block, IntegerSpec, LinkedFieldGroup, LinkedFieldKind, ParForBody, Type,
+    };
+    use crate::data_store::{self as ds, RecVector, Record, TypeKind, ValueType};
     use crate::ir_schema_gen::register_ir_schema;
+    use crate::keys::Key;
     use crate::lexer::Position;
+    use std::num::NonZeroU8;
 
     /// A standalone host record whose offset-0 field is the root
     /// `vector<Node>` the materializer writes into.
@@ -245,9 +630,9 @@ mod tests {
         let native = Value::Block(Box::new(Block {
             name: "loop_body",
             operators: vec![Value::Call(5, vec![Value::Int(1)]), Value::Null],
-            result: Type::Void,
-            scope: 0,
-            var_size: 0,
+            result: Type::Boolean,
+            scope: 3,
+            var_size: 16,
         }));
 
         let root = root_vector(&mut stores);
@@ -266,6 +651,22 @@ mod tests {
         assert_eq!(call.call_parameters().get(0, &stores).int_value(&stores), 1);
 
         assert_eq!(ops.get(1, &stores).value_type(&stores), ValueType::Null);
+
+        // Block tail: scope, var_size, and result (box-of-one vector<TypeT>).
+        assert_eq!(
+            got.field_int(&stores, ds::NDBLOCK_BLOCK + ds::BLOCK_SCOPE),
+            3
+        );
+        assert_eq!(
+            got.field_int(&stores, ds::NDBLOCK_BLOCK + ds::BLOCK_VAR_SIZE),
+            16
+        );
+        let result = got.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE);
+        assert_eq!(result.len(&stores), 1);
+        assert_eq!(
+            ds::type_kind(result.get(0, &stores).discriminant(&stores)),
+            TypeKind::Boolean
+        );
     }
 
     #[test]
@@ -511,5 +912,334 @@ mod tests {
         assert_eq!(child(ds::PARFOR_WORKER), 4);
         assert_eq!(child(ds::PARFOR_THREADS), 5);
         assert_eq!(child(ds::PARFOR_BODY), 6);
+    }
+
+    #[test]
+    fn materialize_keys_round_trip() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        // vector<Key> — the generic RecVector path (negative i8 included).
+        let native = Value::Keys(vec![
+            Key {
+                type_nr: 3,
+                position: 7,
+            },
+            Key {
+                type_nr: -1,
+                position: 42,
+            },
+        ]);
+
+        let root = root_vector(&mut stores);
+        materialize_node(&mut stores, root, &native);
+
+        let k = root.get(0, &stores);
+        assert_eq!(k.value_type(&stores), ValueType::Keys);
+        let kv = k.field_recvec(ds::NDKEYS_KEYS, ds::KEY_STRIDE);
+        assert_eq!(kv.len(&stores), 2);
+
+        let e0 = kv.get(0, &stores);
+        assert_eq!(e0.field_int(&stores, ds::KEY_TYPE_NR), 3);
+        assert_eq!(e0.field_int(&stores, ds::KEY_POSITION), 7);
+        let e1 = kv.get(1, &stores);
+        assert_eq!(e1.field_int(&stores, ds::KEY_TYPE_NR), -1);
+        assert_eq!(e1.field_int(&stores, ds::KEY_POSITION), 42);
+    }
+
+    /// A standalone host record whose offset-0 field is the root
+    /// `vector<TypeT>` the type materializer writes into.
+    fn root_type_vector(stores: &mut Stores) -> RecVector {
+        RecVector::new(stores.database(16), ds::TYPET_STRIDE)
+    }
+
+    #[test]
+    fn materialize_type_round_trips() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        // fn(integer{-5..100, !null, size 4}, text[1,2]) -> vector<boolean>[3]
+        // with dep [7] — exercises scalars, IntegerSpec, dep lists, box-of-one
+        // (result), Vec<Type> (args), and recursion (Vector inner).
+        let ty = Type::Function(
+            vec![
+                Type::Integer(IntegerSpec {
+                    min: -5,
+                    max: 100,
+                    not_null: true,
+                    forced_size: NonZeroU8::new(4),
+                }),
+                Type::Text(vec![1, 2]),
+            ],
+            Box::new(Type::Vector(Box::new(Type::Boolean), vec![3])),
+            vec![7],
+        );
+
+        let root = root_type_vector(&mut stores);
+        materialize_type(&mut stores, root, &ty);
+
+        let f = root.get(0, &stores);
+        assert_eq!(ds::type_kind(f.discriminant(&stores)), TypeKind::Function);
+
+        let args = f.field_recvec(ds::TYFUNC_ARGS, ds::TYPET_STRIDE);
+        assert_eq!(args.len(&stores), 2);
+
+        let int = args.get(0, &stores);
+        assert_eq!(ds::type_kind(int.discriminant(&stores)), TypeKind::Integer);
+        assert_eq!(int.field_int(&stores, ds::TYINTEGER_MIN), -5);
+        assert_eq!(int.field_int(&stores, ds::TYINTEGER_MAX), 100);
+        assert!(int.field_bool(&stores, ds::TYINTEGER_NOT_NULL));
+        assert_eq!(int.field_int(&stores, ds::TYINTEGER_FORCED), 4);
+
+        let text = args.get(1, &stores);
+        assert_eq!(ds::type_kind(text.discriminant(&stores)), TypeKind::Text);
+        let tdep = text.field_recvec(ds::TYTEXT_DEP, ds::INT_STRIDE);
+        assert_eq!(tdep.len(&stores), 2);
+        assert_eq!(tdep.get(0, &stores).field_int(&stores, 0), 1);
+        assert_eq!(tdep.get(1, &stores).field_int(&stores, 0), 2);
+
+        // result: box-of-one vector<TypeT> holding the Vector type.
+        let result = f.field_recvec(ds::TYFUNC_RESULT, ds::TYPET_STRIDE);
+        assert_eq!(result.len(&stores), 1);
+        let vec_ty = result.get(0, &stores);
+        assert_eq!(
+            ds::type_kind(vec_ty.discriminant(&stores)),
+            TypeKind::Vector
+        );
+        let inner = vec_ty.field_recvec(ds::TYVECTOR_INNER, ds::TYPET_STRIDE);
+        assert_eq!(
+            ds::type_kind(inner.get(0, &stores).discriminant(&stores)),
+            TypeKind::Boolean
+        );
+        let vdep = vec_ty.field_recvec(ds::TYVECTOR_DEP, ds::INT_STRIDE);
+        assert_eq!(vdep.get(0, &stores).field_int(&stores, 0), 3);
+
+        let fdep = f.field_recvec(ds::TYFUNC_DEP, ds::INT_STRIDE);
+        assert_eq!(fdep.len(&stores), 1);
+        assert_eq!(fdep.get(0, &stores).field_int(&stores, 0), 7);
+    }
+
+    #[test]
+    fn materialize_type_sorted_keys_round_trips() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        // Sorted + Spacial exercise vector<SortKey> and vector<NameRef>.
+        let ty = Type::Sorted(
+            9,
+            vec![("name".into(), true), ("age".into(), false)],
+            vec![2],
+        );
+        let root = root_type_vector(&mut stores);
+        materialize_type(&mut stores, root, &ty);
+        let s = root.get(0, &stores);
+        assert_eq!(ds::type_kind(s.discriminant(&stores)), TypeKind::Sorted);
+        assert_eq!(s.field_int(&stores, ds::TYSORTED_N), 9);
+        let keys = s.field_recvec(ds::TYSORTED_KEYS, ds::SORTKEY_STRIDE);
+        assert_eq!(keys.len(&stores), 2);
+        let k0 = keys.get(0, &stores);
+        assert_eq!(k0.field_str(&stores, ds::SORTKEY_NAME), "name");
+        assert!(k0.field_bool(&stores, ds::SORTKEY_ASC));
+        let k1 = keys.get(1, &stores);
+        assert_eq!(k1.field_str(&stores, ds::SORTKEY_NAME), "age");
+        assert!(!k1.field_bool(&stores, ds::SORTKEY_ASC));
+
+        let sp = Type::Spacial(4, vec!["x".into(), "y".into()], vec![]);
+        let root2 = root_type_vector(&mut stores);
+        materialize_type(&mut stores, root2, &sp);
+        let spr = root2.get(0, &stores);
+        assert_eq!(ds::type_kind(spr.discriminant(&stores)), TypeKind::Spacial);
+        let names = spr.field_recvec(ds::TYSPACIAL_NAMES, ds::NAMEREF_STRIDE);
+        assert_eq!(names.len(&stores), 2);
+        assert_eq!(
+            names.get(0, &stores).field_str(&stores, ds::NAMEREF_NAME),
+            "x"
+        );
+        assert_eq!(
+            names.get(1, &stores).field_str(&stores, ds::NAMEREF_NAME),
+            "y"
+        );
+    }
+
+    #[test]
+    fn materialize_fn_ref_round_trips() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        let native = Value::FnRef(42, 3, Box::new(Type::Boolean));
+        let root = root_vector(&mut stores);
+        materialize_node(&mut stores, root, &native);
+
+        let fr = root.get(0, &stores);
+        assert_eq!(fr.value_type(&stores), ValueType::FnRef);
+        assert_eq!(fr.field_int(&stores, ds::NDFNREF_DEF_NR), 42);
+        assert_eq!(fr.field_int(&stores, ds::NDFNREF_VAR), 3);
+        let t = fr.field_recvec(ds::NDFNREF_T, ds::TYPET_STRIDE);
+        assert_eq!(t.len(&stores), 1);
+        assert_eq!(
+            ds::type_kind(t.get(0, &stores).discriminant(&stores)),
+            TypeKind::Boolean
+        );
+    }
+
+    #[test]
+    fn materialize_attributes_round_trip() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        let attrs = vec![Attribute {
+            name: "count".into(),
+            typedef: Type::Integer(IntegerSpec {
+                min: 0,
+                max: 10,
+                not_null: true,
+                forced_size: None,
+            }),
+            mutable: true,
+            constant: false,
+            init: false,
+            nullable: true,
+            primary: false,
+            hidden: false,
+            value: Value::Int(7),
+            check: Value::Null,
+            check_message: Value::Text("bad".into()),
+            alias_d_nr: 3,
+            assigned_lambda_d_nr: 99,
+        }];
+
+        // Host record whose field 0 is the root vector<Attribute>.
+        let host = Record::new(stores.database(16));
+        materialize_attributes(&mut stores, &host, 0, &attrs);
+
+        let v = host.field_recvec(0, ds::ATTRIBUTE_STRIDE);
+        assert_eq!(v.len(&stores), 1);
+        let a = v.get(0, &stores);
+        assert_eq!(a.field_str(&stores, ds::ATTR_NAME), "count");
+        assert!(a.field_bool(&stores, ds::ATTR_MUTABLE));
+        assert!(!a.field_bool(&stores, ds::ATTR_CONSTANT));
+        assert!(a.field_bool(&stores, ds::ATTR_NULLABLE));
+        assert_eq!(a.field_int(&stores, ds::ATTR_ALIAS_D_NR), 3);
+        assert_eq!(a.field_int(&stores, ds::ATTR_ASSIGNED_LAMBDA_D_NR), 99);
+
+        let td = a.field_recvec(ds::ATTR_TYPEDEF, ds::TYPET_STRIDE);
+        assert_eq!(
+            ds::type_kind(td.get(0, &stores).discriminant(&stores)),
+            TypeKind::Integer
+        );
+        assert_eq!(
+            a.field_vec(ds::ATTR_VALUE)
+                .get(0, &stores)
+                .int_value(&stores),
+            7
+        );
+        assert_eq!(
+            a.field_vec(ds::ATTR_CHECK)
+                .get(0, &stores)
+                .value_type(&stores),
+            ValueType::Null
+        );
+        assert_eq!(
+            a.field_vec(ds::ATTR_CHECK_MESSAGE)
+                .get(0, &stores)
+                .field_str(&stores, ds::NDTEXT_S),
+            "bad"
+        );
+    }
+
+    #[test]
+    fn materialize_field_groups_round_trip() {
+        let mut stores = Stores::new();
+        let _ids = register_ir_schema(&mut stores);
+
+        let groups = vec![
+            LinkedFieldGroup {
+                kind: LinkedFieldKind::Index,
+                instance: 2,
+                field_indices: vec![5, 6, 7],
+                alignment: 4,
+                size: 9,
+            },
+            LinkedFieldGroup {
+                kind: LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: vec![1],
+                alignment: 8,
+                size: 16,
+            },
+        ];
+
+        let host = Record::new(stores.database(16));
+        materialize_field_groups(&mut stores, &host, 0, &groups);
+
+        let v = host.field_recvec(0, ds::LFG_STRIDE);
+        assert_eq!(v.len(&stores), 2);
+
+        let g0 = v.get(0, &stores);
+        assert_eq!(g0.field_int(&stores, ds::LFG_KIND), 1); // Index
+        assert_eq!(g0.field_int(&stores, ds::LFG_INSTANCE), 2);
+        assert_eq!(g0.field_int(&stores, ds::LFG_ALIGNMENT), 4);
+        assert_eq!(g0.field_int(&stores, ds::LFG_SIZE), 9);
+        let fi = g0.field_recvec(ds::LFG_FIELD_INDICES, ds::INT_STRIDE);
+        assert_eq!(fi.len(&stores), 3);
+        assert_eq!(fi.get(2, &stores).field_int(&stores, 0), 7);
+
+        let g1 = v.get(1, &stores);
+        assert_eq!(g1.field_int(&stores, ds::LFG_KIND), 0); // Tuple
+        assert_eq!(g1.field_int(&stores, ds::LFG_SIZE), 16);
+    }
+
+    /// Capstone: materialize the whole real `default/` stdlib `Data` into a
+    /// store and verify the structure survives — every definition's name, its
+    /// attribute count, and its `Function` variable count round-trip.  This
+    /// exercises every Node/TypeT variant and every struct on real IR (the
+    /// strongest arc B write-path validation short of a store→native reader).
+    #[test]
+    fn materialize_whole_stdlib_smoke() {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let data = p.data;
+        assert!(
+            data.definitions.len() > 100,
+            "stdlib should have many definitions, got {}",
+            data.definitions.len()
+        );
+
+        let mut ir = Stores::new();
+        let _ids = register_ir_schema(&mut ir);
+        let root = materialize_data(&mut ir, &data);
+
+        let r = Record::new(root);
+        assert_eq!(r.field_int(&ir, ds::DATA_SOURCE), i64::from(data.source));
+        let defs = r.field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
+        assert_eq!(defs.len(&ir) as usize, data.definitions.len());
+
+        let mut saw_attrs = false;
+        let mut saw_vars = false;
+        for (i, d) in data.definitions.iter().enumerate() {
+            let dr = defs.get(i as u32, &ir);
+            assert_eq!(dr.field_str(&ir, ds::DEF_NAME), d.name, "def {i} name");
+
+            let attrs = dr.field_recvec(ds::DEF_ATTRIBUTES, ds::ATTRIBUTE_STRIDE);
+            assert_eq!(
+                attrs.len(&ir) as usize,
+                d.attributes.len(),
+                "def {i} ({}) attribute count",
+                d.name
+            );
+            saw_attrs |= !d.attributes.is_empty();
+
+            let vars = dr.field_recvec(ds::DEF_VARIABLES + ds::FN_VARIABLES, ds::VARIABLE_STRIDE);
+            assert_eq!(
+                vars.len(&ir) as usize,
+                d.variables.snapshot_len(),
+                "def {i} ({}) variable count",
+                d.name
+            );
+            saw_vars |= d.variables.snapshot_len() > 0;
+        }
+        assert!(saw_attrs, "some stdlib def should have attributes");
+        assert!(saw_vars, "some stdlib def should have variables");
     }
 }
