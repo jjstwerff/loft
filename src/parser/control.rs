@@ -4389,16 +4389,21 @@ impl Parser {
     /// Each semicolon-separated expression in the block becomes one concurrent arm.
     pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
         self.lexer.token("{");
-        // Every enclosing-scope var has nr < `base`; an arm-declared local gets
-        // nr >= `base`.  Used by the capture check to tell an enclosing capture
-        // from a purely arm-local var.
+        // INVARIANT (load-bearing — the capture check below depends on it).
         // Snapshot which vars are already DEFINED at the block's opening brace.
         // The two-pass parser pre-populates the whole function's var table in
-        // pass 1, so var-nr ordering can't tell an enclosing var from an
-        // arm-local one — but in this (non-first) pass `is_defined` is set in
-        // source order, so a var defined *before* the block is enclosing and one
-        // first defined *inside* an arm is arm-local.  Params read as defined
-        // (set by `become_argument`), so they count as enclosing too.
+        // pass 1, so var-nr ordering CANNOT separate an enclosing var from an
+        // arm-local one.  The signal that does is: **in this (non-first) pass,
+        // `is_defined` is set in source order**, so a var defined *before* the
+        // block reads defined here (enclosing) and one first defined *inside* an
+        // arm reads undefined (arm-local).  Params read defined (`become_argument`)
+        // ⇒ enclosing.  Two known exceptions read defined-at-entry despite being
+        // arm-local — for-loop vars (handled by the `was_loop_var` exclusion) and
+        // compiler temps (the `_`/`#` name exclusion); both live in `is_user_var`.
+        // If a future change sets `is_defined` out of this source order, the
+        // monotonicity `debug_assert!` in `note_mutation`/`note_param` and the
+        // `tests/scripts/171-parallel-armlocal-ok.loft` arm-local-compiles guard
+        // are the alarms.
         let enclosing: Vec<bool> = (0..self.vars.count())
             .map(|v| self.vars.is_defined(v))
             .collect();
@@ -4554,6 +4559,7 @@ impl Parser {
     /// user captures.
     fn note_mutation(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
         if Self::is_enclosing(v, encl) && self.is_user_var(v) {
+            self.assert_enclosing_invariant(v);
             out.push((v, ParViolation::Mutation));
         }
     }
@@ -4561,8 +4567,27 @@ impl Parser {
     /// Flag a capture of an enclosing **parameter** (read or write both fault).
     fn note_param(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
         if Self::is_enclosing(v, encl) && self.is_user_var(v) && self.vars.is_argument(v) {
+            self.assert_enclosing_invariant(v);
             out.push((v, ParViolation::Param));
         }
+    }
+
+    /// Guard the `parse_parallel` enclosing-snapshot invariant.  A var the
+    /// block-entry snapshot marked enclosing (`is_defined` was true at entry) must
+    /// still read defined now — `is_defined` is monotonic across the block parse.
+    /// If it does not, the snapshot has desynced from the var table and the
+    /// enclosing/arm-local split is unsound.  (This catches `is_defined` being
+    /// *cleared* mid-parse; it cannot catch it being *set* out of source order —
+    /// that failure is undetectable from `is_defined` alone, which is what the
+    /// `171-parallel-armlocal-ok.loft` compile guard exists for.)
+    fn assert_enclosing_invariant(&self, v: u16) {
+        debug_assert!(
+            self.vars.is_defined(v),
+            "parallel-capture invariant broken: enclosing var '{}' lost is_defined \
+             mid-parse — the block-entry snapshot no longer matches the var table \
+             (see parse_parallel)",
+            self.vars.name(v)
+        );
     }
 
     /// Whether `v` is a user variable that an arm could genuinely capture —
