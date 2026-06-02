@@ -145,6 +145,25 @@ re-deriving from a degraded copy.  Don't ship a known-broken or oracle-fooling
 state to `main`; the diff is the durable, re-appliable record, and the working
 code can stay uncommitted in-tree to continue from.
 
+### Grade the signal before you trust the result
+
+Hastiness is not impatience — it is **mis-calibrated trust**: grading a
+measurement's *result* without grading the *signal*.  A signal lies in three
+distinct ways, each needing its own check: it measures the **wrong thing** (a
+proxy, not the property), it is **confounded** (buffering or mixed streams reorder
+it), or it is **stale** (read off a state that has since changed).  Before any
+conclusion or action: *is this signal reliable, and is it current?*
+
+Two corollaries:
+
+- **A fooleable oracle is a liability, not a safety net.**  For any test or guard,
+  ask "can this pass while the thing it is meant to catch is broken?"  If yes, it
+  is not an oracle — it manufactures false confidence.
+- **The loop is the work; the fix is its byproduct.**  A session that preserves and
+  reliably measures attempts, rules wrong explanations out, and *locates* the
+  constraint has succeeded even before code lands — the ruled-out ledger is the
+  durable asset, and the fix falls out of it.
+
 ### When a problem should escalate to an investigation plan
 
 Just *fixing* the bug (focused fix + regression + commit, after the edge-probe

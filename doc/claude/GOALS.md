@@ -208,6 +208,19 @@ silent no-op/crash into a visible compile error) all earn their place: **they ar
 veil-lifters** — they convert masking into signal so the model becomes checkable.
 Lift them in dependency order; the lowest veil is the one hiding the most.
 
+### The wall is usually an old conservatism — narrow it, don't out-clever it
+
+When you hit the same wall repeatedly, the constraint is usually not your current
+attempt but a **conservative mechanism that was correct before you had today's
+information** and has outlived the gap that justified it.  The store refcount (kept
+because the lifetime was unknown) and the body-0 work-ref hoist (function-scoped
+because the confined scope was unknown) are the same shape: machinery that
+over-reaches to stay safe *without* lifetime information.  The move is not to
+iterate harder at the current level or pile cleverness on top — it is to find the
+old assumption and **narrow it with the information you now have.**  That is just
+Goal E again: free at the real scope once you know it.  Old conservatisms are not
+mistakes to blame; they are the surface where new information turns into progress.
+
 ---
 
 ## The two floors — why dogfood is paused, and when it resumes
