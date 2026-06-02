@@ -320,3 +320,23 @@ resolves to exactly **two root causes**:
 gap; (Phase B) closure-cell ownership so capture works without rc — the real blocker;
 (Phase C) delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc` and verify both backends.
 Phase B is its own design (how a closure value owns its cells).
+
+#### Refined by the probe corpus (2026-06) — the residual is TWO mechanisms
+
+The probe corpus ([`probes/rc-removal/`](probes/rc-removal/)) sharpened both root causes and
+collapsed them with a surfaced stray:
+
+- **Mechanism 1 — an unbound heap-returning-call temporary has no statement-end free.**  The
+  `03-text` gap minimizes to `len("a,b".split(','))`: a native builtin's `vector<text>` temp,
+  unbound, leaks on the interpreter under `RC_OFF` (a *user* fn's result goes through an sret
+  `__ref_N` buffer that IS freed; the native builtin's does not).  **The same shape** is the
+  stray `10_closure_passed_as_arg` leak (`apply(make())` — closure temp leaks with rc *on*).
+  **One fix** (statement-end free for the unbound temp) covers Phase A AND that stray.
+- **Mechanism 2 — the captured cell is freed at the DEFINING frame's exit.**  rc is needed
+  ONLY for **≥2 coexisting** closures (store-trace verified: cell freed at frame exit, slot
+  reused, coexisting closures alias it).  Single / sequential / read-only / in-frame / text /
+  nested closures all survive `RC_OFF`.  Fix = closure-cell ownership.
+
+The closure ↔ collection crashes the probing surfaced (capture a collection / store a
+capturing closure) are a **separate, non-rc** closure-record-layout limitation (`P257`
+family) — split to [`probes/closure-collection/`](probes/closure-collection/), off this path.
