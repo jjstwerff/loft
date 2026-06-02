@@ -36,16 +36,21 @@ NOT rc-related, a separate closure-record-layout limitation.)
 
 **Mechanism 1 — an UNBOUND heap-returning-call temporary has no statement-end free.**
 A call returns a heap value used inline (not bound to a local); no work-ref buffer + no
-`OpFreeRef` is emitted, so cleanup leans on rc.  Two instances, one root:
-- **`t9`** — `len("a,b".split(','))`: the native `split()` vector temp leaks on the
-  **interpreter** under `RC_OFF` (rc covers it normally; native is clean — it uses an sret
-  buffer).  IR-confirmed: no `OpFreeRef` for the split result, vs a *user* fn whose result
-  goes through an sret `__ref_N` buffer that IS freed.
-- **`10`** — `apply(make())`: the closure temp (`__cell_*` + `__closure_*`) leaks **with rc
-  on, always** — rc doesn't even cover closure temps here.
-- Both are leak-free when **bound to a local first** (the local's scope-free handles it).
-- **One fix:** give an unbound heap-returning-call temporary a statement-end free (an
-  sret-style buffer / `OpFreeRef`).  Covers `t9` (Phase A) **and** stray `10`.
+`OpFreeRef` is emitted for the temp.  Both instances are leak-free when **bound to a local
+first** (the local's scope-free handles it).  But they manifest DIFFERENTLY (store-trace
+verified, 2026-06) — so "one fix covers both" is a HYPOTHESIS to confirm in Phase A, not a
+fact:
+- **`t9`** — `len("a,b".split(','))`: the native `split()` vector temp.  rc-on is genuinely
+  clean (freed at teardown); **only `RC_OFF` leaks it**.  IR-confirmed: no `OpFreeRef` for
+  the split result (a *user* fn's result goes through an sret `__ref_N` buffer that IS
+  freed).  → a **missing free that rc/teardown covers**.
+- **`10`** — `apply(make())`: `make()`'s fn-ref result is the unbound temp.  `make`'s IR
+  does `OpIncRc(n)` (record captures the cell) and `return FnRef(d_nr, ___clos_1)`; the
+  temp gets **no `OpFreeRef`**, so after apply's inc-on-pass / dec-on-return the record sits
+  at **rc 1 → leaks WITH rc on, always**.  → a missing free the rc bookkeeping leaves stuck.
+- **Hypothesised fix:** an sret-style statement-end free for the unbound temp.  It plausibly
+  clears both (free `t9`'s vec; drop `10`'s record rc 1→0), but the rc-on/`RC_OFF`
+  asymmetry above means **Phase A must verify it fixes BOTH**, not assume it.
 
 **Mechanism B — a captured cell is freed at the DEFINING frame's exit, not the closure's.**
 rc is needed ONLY for **≥2 coexisting closures** that own captured cells (02 / 12 / 09);
