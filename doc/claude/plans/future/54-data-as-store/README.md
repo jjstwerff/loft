@@ -425,7 +425,7 @@ seam).  The two compose; neither alone is the deliverable.
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one.  Reuses `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (JSON sink → `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  **Write path COMPLETE:** `src/ir_store.rs` materializes the **entire** native `Data` — all 34 Node + 24 TypeT variants, every struct (`Attribute`/`Variable`/`Function`/`Definition`/`Block`/`LinkedFieldGroup`/`Data`), via the generic `Record`/`RecVector` layer — through `materialize_data(&Data) -> DbRef`, exercised on the real stdlib (`materialize_whole_stdlib_smoke`).  All offsets/strides guard-pinned; `Store::zero_range` clears reused element memory.  **Remaining (→ arc C):** a store→native read path for bit-for-bit `compare_data` validation (smoke test currently validates structure: names + per-def attribute/variable counts). | Write path done — whole `Data` materializes on real stdlib; `compare_data` equivalence needs the arc C read path |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` handle layer) + the full **store→native reader** (`src/ir_read.rs` — `read_value`/`read_type`/`read_data` over all 34 Node + 24 TypeT variants + every struct) landed, and the schema grew to hold `Function.names`/`inline_refs` so the whole real stdlib round-trips **fully bit-for-bit** (`compare_data` green).  Bulk read-site migration started: **slice 1** = `state/`'s `Definition` field-accessor seam (~120 sites, store-backed fields only; `Value`/`Type` matches deferred).  Remainder: `state/codegen.rs` `Value`/`Type` walk, then `generation/` / `parser/`, then per-subsystem representation swap. | In-progress — lossless reader done; bulk migration started (`state/` Definition seam, slice 1) |
-| **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Probe done — the mmap → `read_data` rebuild loop works end-to-end on the real stdlib, **~12× faster than `parse_dir`** (`mmap_file_round_trip_stdlib` + `bench_stdlib_load_mmap_vs_parse`).  Remaining: startup-path wiring (bundle cache key / drift Q4, mutability Q1, `caller_index` Q3). |
+| **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | Probe done — the mmap → `read_data` rebuild loop works end-to-end on the real stdlib, **~12× faster than `parse_dir`** (`mmap_file_round_trip_stdlib` + `bench_stdlib_load_mmap_vs_parse`); **D1** (`Data::save`/`Data::open`) landed.  **D2 blocked on schema rebuild** (the @PLAN28 wall — see § Migration step plan ⚠): a loaded `Data`'s baked `known_type`s defeat `fill_all`; needs a load-aware rebuild or a cached schema (D2a).  Then startup wiring (D2b) + drift Q4 / mutability Q1 / `caller_index` Q3. |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | Open |
 
 ## Phase ordering
@@ -640,7 +640,8 @@ needed; this is mostly startup wiring and delivers the big user-visible win.
 | Step | Deliverable | Validation | Effort |
 |---|---|---|---|
 | **D1** ✅ | `Data::save(path)` / `Data::open(path)` (thin wrappers over `ir_store::save_data` / `ir_read::open_data`).  Save materializes into a fresh file-backed store with the root at the well-known first record (`IR_ROOT_REC`=1, pos 8) so load needs no sidecar; open mmaps + `read_data`, returning `NotFound` on a missing file (clean cache-miss).  `scopes::check`-skip is deferred to **D2** (only matters once the loaded `Data` is compiled). | `data_save_open_round_trip_stdlib`: save→open→`compare_data` bit-for-bit + `NotFound` check | S — done |
-| **D2** | Startup wiring: after parsing the stdlib bundle, write `stdlib.store`; next run `Data::open` it instead of parsing when the cache key matches. | cold-start timing; existing suite unchanged | M |
+| **D2a** | **Schema rebuild from a loaded `Data`** (the @PLAN28 wall — see ⚠ below).  Reconstruct the database type schema (`Stores.types`) for a cache-loaded `Data` whose `known_type`s are already baked.  Prereq ✅: `from_snapshot` now sets `done=true` so a load-path `scopes::check` skips loaded functions (no double-free). | a warm-load-vs-cold-parse `compare_data` + schema-count equality test (drafted, currently red — blocked on the rebuild) | M–L |
+| **D2b** | Startup wiring (after D2a): compute the stdlib cache key (`cache::stdlib_cache_key`, already built), write `stdlib.store` on a cold run, `Data::open` + schema-rebuild on a warm run when the key matches; feed into the existing `scopes::check` → `byte_code` → execute path.  Opt-in env flag first (default off) so normal runs are unaffected. | cold/warm output parity on real programs; cold-start timing | M |
 | **E1** | Bundle cache key = stdlib key + sorted lib-set + content hashes; drift ⇒ reparse (Q4). | drift unit tests | M |
 | **E2** | Mutability split (Q1): locked mmap bundle store + writable store for user-program defs; `caller_index` rebuilt on load (Q3). | full suite under cache-on | M |
 
@@ -668,6 +669,30 @@ it first (or in parallel) — it is independently valuable and de-risks G2 by
 exercising the store on the real startup path.  G2's M0 harness is the
 prerequisite for every swap; M3/M4 (the `Value`/`Type` walk, ~451+ matches) is
 the dominant cost and is deliberately the most finely sliced.
+
+> ⚠ **D2 blocker (confirmed 2026-06-02 — the @PLAN28 wall) — schema rebuild
+> from a loaded `Data`.**  `Data::open` rebuilds the native `Data` (proven, 12×),
+> but a program needs the **database type schema** (`Stores.types`, the record
+> layouts indexed by `known_type`) too.  That schema is built **during parse**
+> by `typedef::fill_all` → `fill_database`, which *assigns* each `known_type`
+> incrementally (`s_type = database.structure(name); def.known_type = s_type`) —
+> in lockstep with declaration order growing the table.  A cache-loaded `Data`
+> already has **absolute** `known_type`s baked in, so re-running `fill_all` on it
+> forward-references a type not yet registered in the fresh database and panics
+> (`database/types.rs:96`, "index out of bounds: len 24 index 24").  Two
+> resolution paths, to design in **D2a**:
+> 1. **Load-aware schema rebuild** — register every type *shell* first (so all
+>    `known_type` slots exist), then fill fields; or register each type *at* its
+>    baked index.  Smallest if `fill_database` can be split shell/field.
+> 2. **Cache the schema too** — persist `Stores.types` (native
+>    `Vec<database::Type>`) alongside the IR and reload it, so no rebuild and the
+>    baked `known_type`s stay valid.  Cleaner long-term (matches "everything is
+>    store records"), but a separate serialization effort (the schema `Type`/
+>    `Parts` graph, like the IR).
+>
+> Landed toward D2 meanwhile: the `done=true` prerequisite (`from_snapshot`), so
+> a load-path `scopes::check` correctly skips loaded functions.  The warm-path
+> proof test is drafted but red until D2a lands.
 
 ## Open design questions
 

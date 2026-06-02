@@ -367,6 +367,11 @@ impl Function {
             .collect();
         f.names = names.into_iter().collect();
         f.inline_ref_vars = inline_refs.into_iter().collect();
+        // A snapshot is taken AFTER `scopes::check` ran (the stored `code`
+        // already carries its free-ops); mark the reconstructed function
+        // `done` so a load-path `scopes::check` skips it and does not
+        // double-insert those frees (@PLAN54 arc D / @PLAN28 C4 insight).
+        f.done = true;
         f
     }
 
