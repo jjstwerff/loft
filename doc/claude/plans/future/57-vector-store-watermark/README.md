@@ -157,6 +157,44 @@ is aliased by a still-live binding must not be freed early). This is a deliberat
 language-design call, not a mechanical fix — left for the user. Cluster II is independent of
 this question (an init redundancy) and is worth fixing regardless.
 
+## Deferred follow-ups (sequenced)
+
+Items this plan's work justifies but defers — recorded here, picked up **in
+order**, each gated so it lands clean (the same "come back to it" model as the
+rc-removal tail-end).  None is folded into the cluster I/III store-lifetime fix;
+the `parallel {}` items in particular are a **sibling discovery**, not part of
+this plan's thesis
+([plans/README.md § Sibling bugs are discoveries](../../README.md#sibling-bugs-are-discoveries-to-record-not-cases-to-fix-in-place)).
+
+1. **Disable store ref-counting** — Goal E continuation.  *Gate:* after the
+   cluster I/III scoping fix lands and `LOFT_STORE_GUARD` is silent corpus-wide.
+   Rationale (transparency-first — rc glosses over the lifetime, the same
+   distrust as the statistical gloss) + the experiment design in
+   [`fix-design-store-lifetime.md` § Tail-end](fix-design-store-lifetime.md#tail-end-experiment--disable-store-ref-counting-once-scoping-is-correct).
+
+2. **Fix the `parallel {}` capture cases** — Goal A + Goal D; **its own scoped
+   case**, not this plan's store-lifetime work.  The probe battery
+   ([`probes/bugs/`](probes/bugs/)) mapped it fully: **native silently no-ops arm
+   bodies** (the `pg1` no-capture probe never prints `ARM-RAN`); interpret has ~5
+   *deterministic* modes — read-into-arm-local garbage, scalar/text write
+   silent-loss, **heap-mutation crash** on the read-only worker clone
+   (`clone_locked_for_worker`), cross-scope-depth SIGSEGV — plus a probable **3rd
+   sibling** (`OpConstLongText`-obsolete panic on the param-write path).  Earns its
+   own plan (native codegen + interpret runtime + the sibling); a `cross_mode!`
+   parallel-capture matrix is its regression net.
+
+3. **Nightly differential backend-parity sweep** — the **Goal D standing
+   detector** (A has the sanitizer, E has `LOFT_STORE_GUARD`, D has none).  *Gate:*
+   after #2, so it is **born green**, not red on the known divergences.  Oracle-free:
+   run a curated *deterministic* corpus on `--interpret` and `--native`, compare
+   observable output (stdout + crash signature), flag any disagreement — the
+   backends are each other's oracle, which catches the self-satisfying-assert blind
+   spot (test-80/81 "pass" on native *because* it no-ops the arms).  Nightly because
+   `--native` shells to `rustc` per file; complements the curated-deep `cross_mode!`
+   matrices.  Hard part = output normalization (ordering / RNG / addresses) → start
+   small + curated, expand as the normalizer matures.  Design rationale in
+   [TESTING.md § Backend divergence](../../../TESTING.md#testing-race-prone-and-backend-divergent-mechanics).
+
 ## Relationship to the store-lifetime/aliasing class
 
 Kindred to (all closed/finished) [PLAN51 hidden-buffer-aliasing](../../finished/51-hidden-buffer-aliasing/),
