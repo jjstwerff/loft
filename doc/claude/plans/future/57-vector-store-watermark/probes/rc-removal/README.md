@@ -51,14 +51,21 @@ compare `RC_OFF=1` vs default, `--interpret` vs native.
    - **08** storing closures in a vector crashes (both backends).
    - **10** a closure passed as a fn argument leaks on `--interpret` (ok native).
 
-3. **Text/vector scope-frees do NOT need rc** — every t-probe survives.  The one
+3. **Text/vector scope-frees do NOT need rc** — every t1–t8 probe survives.  The one
    `RC_OFF` text leak in the suite (`03-text.loft`, `kt=29 main_vector<text>×1`,
-   store #16) reproduces only in the *full* file, not in any isolated section — a
-   full-file store-reuse interaction to minimise during the fix phase.
+   store #16) is **MINIMIZED** (`t9_split_temp_leak`): `split()` (a native stdlib
+   builtin) returns a `vector<text>` used as an **unbound temporary** (consumed by
+   `len(...)` / `.join(...)`) → the temporary leaks **on the interpreter only** under
+   `RC_OFF` (native clean).  Binding to a local first is clean; a *user* fn returning a
+   vector temp is clean — so it is `split`-specific (the native builtin's temporary-
+   result cleanup leans on rc), a narrow interpreter scoping gap, NOT a general
+   fn-returned-temp gap.  Phase-A fix: statement-end free of a native-vector builtin's
+   temporary on the interpreter without rc.
 
 ## Phase plan (from the map)
 
-- **Phase A** — the `03-text` full-file text leak (minimise from store #16).
+- **Phase A** — MINIMIZED (`t9_split_temp_leak`): free a native-`split` builtin's
+  unbound `vector<text>` temporary at statement-end on the interpreter without rc.
 - **Phase B** — closure-cell ownership: the real blocker (the coexistence cases above).
 - **Phase C** — delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc`; verify both backends.
 

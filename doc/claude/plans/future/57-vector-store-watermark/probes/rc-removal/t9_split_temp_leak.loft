@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// MINIMIZED from 03-text.loft's RC_OFF leak (store #16, kt=29 main_vector<text>).
+// The one text shape in the whole suite that needs rc — a SCOPING GAP rc was hiding.
+//
+// Trigger (precisely bisected):
+//   * `split()` (a native stdlib builtin) returns a vector<text> used as an UNBOUND
+//     TEMPORARY (consumed inline by `len(...)` here, or `.join(...)` in 03-text).
+//   * The temporary's store leaks under RC_OFF on the **interpreter only** (native is
+//     clean), regardless of the consumer.
+//   * BINDING the result to a local first is clean (`p = "...".split(...); len(p)`) —
+//     the local's scope-free handles it.
+//   * A USER fn returning a vector temp is clean — so it is `split`-specific (the
+//     native builtin's temporary-result cleanup leans on rc), not a general
+//     fn-returned-heap-temp gap.
+//
+// Phase-A fix target: free a native-vector-returning builtin's temporary result at
+// statement-end on the interpreter without rc.
+
+fn test_t9_split_temp() {
+  // unbound split() temporary, interpreter, RC_OFF -> leaks store #16 today
+  assert(len("x-y-z".split('-')) == 3, "split temp len");
+  assert("x-y-z".split('-').join("-") == "x-y-z", "split/join roundtrip (03-text shape)");
+}
