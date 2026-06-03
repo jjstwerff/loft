@@ -316,7 +316,13 @@ pub(crate) const DATA_DEFINITIONS: u32 = 8; // vector<Definition>
 /// deterministically yields record `1`, data at byte offset `8` — so a
 /// persisted IR store always has its root here, and `open` needs no sidecar
 /// to find it (the save path asserts the root landed at `IR_ROOT_REC`).
+///
+/// Gated on `mmap` — the only consumers are `ir_store::save_data` /
+/// `ir_read::open_data`, both `#[cfg(feature = "mmap")]`; without it (e.g. the
+/// `--no-default-features` wasm build) these would be dead code.
+#[cfg(feature = "mmap")]
 pub(crate) const IR_ROOT_REC: u32 = 1;
+#[cfg(feature = "mmap")]
 pub(crate) const IR_ROOT_POS: u32 = 8;
 
 // ─── Database type schema (D2a) — `Stores.types` cached alongside the IR ──────
