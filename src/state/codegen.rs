@@ -511,8 +511,7 @@ impl State {
             ValueType::TuplePut => {
                 let var_nr = node.tupleput_var();
                 let elem_idx = node.tupleput_idx();
-                // scalars store-ready; the value child keeps a native bridge (M5).
-                let value = node.tupleput_inner().as_native();
+                let value = node.tupleput_inner();
                 let tuple_tp = stack.function.tp(var_nr).clone();
                 // T1.5: RefVar(Tuple) — write element through the DbRef using
                 // the SAME OpSetInt / OpSetFloat / OpSet… opcodes that
@@ -531,7 +530,7 @@ impl State {
                     let var_pos = stack.var_pos(var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
-                    self.generate(value, stack, false);
+                    self.generate_node(value, stack, false);
                     match &elem_tp {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
@@ -552,7 +551,7 @@ impl State {
                 let offsets = crate::data::element_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // Generate the value to write.
-                self.generate(value, stack, false);
+                self.generate_node(value, stack, false);
                 // Compute distance from stack top to the element's position.
                 let tuple_var_base = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_base + elem_offset;
