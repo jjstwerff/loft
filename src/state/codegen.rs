@@ -305,7 +305,7 @@ impl State {
             // dispatch + child access run through the handle; the children are
             // bridged to the still-`&Value` helpers via `as_native()` until M5.
             ValueType::Set => {
-                self.generate_set(stack, node.set_var(), node.set_inner().as_native());
+                self.generate_set(stack, node.set_var(), node.set_inner());
                 Type::Void
             }
             ValueType::Return => self.gen_return(node.return_inner(), stack),
@@ -1359,7 +1359,17 @@ impl State {
     /// Case 1: pre-assigned above TOS → move down. Case 2: large type below TOS →
     /// override only if no child-scope overlap (A13 guard).
     #[allow(clippy::too_many_lines)]
-    pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
+    pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: IrNode) {
+        // @PLAN54 G2/M3.15 — materialise-at-boundary.  generate_set's body is an
+        // intricate store-ownership tracker (its comments flag use-after-free /
+        // S1-substitution-corruption hazards); rather than thread the handle
+        // through that hazardous logic and its gen_set_first_* / set_var family,
+        // materialise the assigned sub-value to a native `Value` once here (a
+        // compile-time clone for native; a `read_value` for store) and run the
+        // existing logic unchanged.  This makes the Set path store-capable; a
+        // zero-copy body rewrite is a later refinement.
+        let value_owned = value.to_owned_value();
+        let value = &value_owned;
         self.vars.insert(self.code_pos, v);
         // Zero-sized variables (null-typed) have no stack storage.
         if size(stack.function.tp(v), &Context::Variable) == 0 {

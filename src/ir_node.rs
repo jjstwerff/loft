@@ -137,6 +137,19 @@ impl<'a> IrNode<'a> {
             .expect("IrNode::as_native: codegen recursion is native-backed until G2/M5")
     }
 
+    /// Materialise this node as an owned native [`Value`] — the native backing
+    /// clones; the store backing reconstructs via [`crate::ir_read::read_value`].
+    /// For codegen sites that build a synthetic native construct from a stored
+    /// sub-value (e.g. `generate_set`'s protect/copy `Value::Call`s), where a
+    /// borrow won't do.  Unlike [`Self::as_native`], works on **both** backings.
+    #[must_use]
+    pub fn to_owned_value(&self) -> Value {
+        match *self {
+            IrNode::Native(v) => v.clone(),
+            IrNode::Store(s, n) => crate::ir_read::read_value(s, n),
+        }
+    }
+
     // ── scalar accessors (representative spread — categories proven; the rest
     //    land just-in-time with their M3.1 consumer) ──────────────────────────
 
