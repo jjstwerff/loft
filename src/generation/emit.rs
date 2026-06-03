@@ -12,20 +12,28 @@ use super::text::count_format_ops;
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
-    /// Central recursive dispatch from a `Value` node to its Rust representation.
-    /// All emit functions ultimately call this; complex variants are delegated to
-    /// dedicated helpers to keep each match arm concise.
-    #[allow(clippy::too_many_lines)]
+    /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
+    /// [`Self::output_code_node`].  @PLAN54 G2/M4 (cf. interpreter `generate`):
+    /// every existing caller keeps this signature; M5's store-backed entry calls
+    /// `output_code_node(IrNode::Store(…))`.
     pub(super) fn output_code_inner(
         &mut self,
         w: &mut dyn Write,
         code: &Value,
     ) -> std::io::Result<()> {
-        // @PLAN54 G2/M4.1 — native-backend leaf group lowered through the
-        // node-walk handle (mirrors the interpreter's generate_inner M3.1).
-        // Each arm dispatches on node.kind() and reads its payload via an
-        // accessor; the rest stay on the `match code` below until later groups.
-        let node = IrNode::Native(code);
+        self.output_code_node(w, IrNode::Native(code))
+    }
+
+    /// Central recursive dispatch from an IR node to its Rust representation
+    /// (@PLAN54 G2/M4).  Dispatches on `node.kind()` and reads payloads through
+    /// the `IrNode` handle; arms not yet converted fall to the `match
+    /// node.as_native()` below (native-backed bridge, lifted as they convert).
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn output_code_node(
+        &mut self,
+        w: &mut dyn Write,
+        node: IrNode,
+    ) -> std::io::Result<()> {
         match node.kind() {
             // Phase 09 step 0.7 — synthetic raw-expression passthrough (fn-ref
             // dispatch); emit the string verbatim.
@@ -85,6 +93,9 @@ impl Output<'_> {
             }
             _ => {}
         }
+        // Native-backed bridge for the not-yet-converted arms (lifted as they
+        // move up to the `kind()` match).
+        let code = node.as_native();
         match code {
             Value::BreakWith(n, val) => {
                 if *n == 0 || self.loop_stack.is_empty() {
