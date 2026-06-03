@@ -157,6 +157,18 @@ Three things follow, the way PEP does them:
   *not* renumber dormant catalog items: a backlog proposal keeps its lightweight
   `PLANNING.md` ID; **on activation it earns an `@PLAN<NN>` number + a directory.**
   Promotion stops being a rename — it's just "the same item grew a home."
+- **Identity on the board — the `@P###` trick, reused.**  Putting a proposal on the
+  board does **not** renumber it or rewrite a single reference.  Exactly as the bug
+  migration did with `@P###`, the gh Issue's **title embeds `@PLAN<NN>`**
+  (`[loft] @PLAN48 integer-width discipline`), so `gh search issues "@PLAN48"`
+  resolves to the Issue while the `@PLAN` index keeps resolving doc references to
+  the **dir**.  The gh number `#N` is plumbing (`Fixes #N`, closing) — **`@PLAN<NN>`
+  stays primary**, the same way `@P###` stays primary for a migrated bug.  Because
+  the `@PLAN` token is flatten-proof (the index re-resolves wherever the dir sits),
+  the directory **need not move** and no `plans/*` path or `@PLAN` ref is touched;
+  the `future/`/`deferred/` subdir becomes a vestigial hint with the **board
+  authoritative for state**, and any `plans/*` *path* links flatten lazily, on
+  touch, or never.
 - **Status carries the terminal outcome**, because loft files each outcome
   *differently*: **shipped** (closure-record in the dir) · **declined** →
   `DESIGN_DECISIONS.md` (loft's closed-by-decision register *is* a rejected-proposal

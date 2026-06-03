@@ -100,8 +100,11 @@ plans/<NN>-<slug>/        # FLAT — no future/deferred/finished subdir; state l
 ## Creating the plan — the three steps
 
 1. **Copy the skeleton**, fill the header facets — these seed the Project item.
-2. **Create the gh Project item** (`gh project item-add`), set its fields from the
-   header, and paste the board-item URL back into the README's *Live status* line.
+2. **File the gh Issue titled `@PLAN<NN> <title>`** (the `@P###` trick — the embedded
+   token lets `gh search issues "@PLAN<NN>"` find it and keeps every doc reference
+   pointing at `@PLAN<NN>`, unrewritten).  Add it to the Project, set its fields from
+   the header, and paste the Issue URL into the README's *Live status* line.  The gh
+   number `#N` is plumbing; `@PLAN<NN>` stays the reference identity.
 3. From then on: **lifecycle changes happen on the board** (set Status, Milestone,
    order); **design + phase changes happen here**.  The two never duplicate.
 
