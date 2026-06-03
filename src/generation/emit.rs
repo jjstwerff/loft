@@ -4,6 +4,8 @@
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
 use crate::data::{Block, Context, IntegerSpec, Type, Value};
+use crate::data_store::ValueType;
+use crate::ir_node::IrNode;
 use std::io::Write;
 
 use super::text::count_format_ops;
@@ -19,45 +21,48 @@ impl Output<'_> {
         w: &mut dyn Write,
         code: &Value,
     ) -> std::io::Result<()> {
-        match code {
-            // Phase 09 phase 00 step 0.7 — synthetic raw-expression
-            // passthrough used by fn-ref dispatch to thread pre-evaluated
-            // `let _farg_N` bindings through `output_call_user_fn`.  Emit
-            // the string verbatim with no transformation.
-            Value::RawExpr(s) => write!(w, "{s}")?,
-            Value::Text(txt) => {
-                // Use debug format to produce a properly escaped Rust string literal.
-                write!(w, "{txt:?}")?;
+        // @PLAN54 G2/M4.1 — native-backend leaf group lowered through the
+        // node-walk handle (mirrors the interpreter's generate_inner M3.1).
+        // Each arm dispatches on node.kind() and reads its payload via an
+        // accessor; the rest stay on the `match code` below until later groups.
+        let node = IrNode::Native(code);
+        match node.kind() {
+            // Phase 09 step 0.7 — synthetic raw-expression passthrough (fn-ref
+            // dispatch); emit the string verbatim.
+            ValueType::RawExpr => return write!(w, "{}", node.text()),
+            ValueType::Text => {
+                // Debug format → a properly escaped Rust string literal.
+                write!(w, "{:?}", node.text())?;
                 if self.tuple_text_to_string {
-                    // Inside a `(String, String, …)` variable assignment:
-                    // wrap the `&str` literal so it fits a `String`-typed
-                    // tuple slot.  Argument-context tuples (function calls
-                    // taking `(&str, &str)`) clear this flag, so they keep
-                    // the borrowed-string form.
+                    // Inside a `(String, String, …)` slot: wrap the `&str`
+                    // literal so it fits a `String`-typed tuple element.
                     write!(w, ".to_string()")?;
                 }
+                return Ok(());
             }
-            Value::Long(v) => write!(w, "{v}_i64")?,
-            Value::Int(v) => {
+            ValueType::Long => return write!(w, "{}_i64", node.int_value()),
+            ValueType::Int => {
                 if self.fn_ref_context {
                     // in fn-ref context (if-else branch), emit tuple.
-                    write!(
+                    return write!(
                         w,
-                        "({v}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
+                        "({}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})",
+                        node.int_value()
+                    );
                 } else if self.i32_literal_context {
-                    // tp-number / field-index / flag-enum slot: runtime
-                    // still expects i32.
-                    write!(w, "{v}_i32")?;
-                } else {
-                    write!(w, "{v}_i64")?;
+                    // tp-number / field-index / flag-enum slot: runtime wants i32.
+                    return write!(w, "{}_i32", node.int_value());
                 }
+                return write!(w, "{}_i64", node.int_value());
             }
-            Value::Enum(v, _) => write!(w, "{v}_u8")?,
-            Value::Boolean(v) => write!(w, "{v}")?,
-            Value::Float(v) => write!(w, "{v}_f64")?,
-            Value::Single(v) => write!(w, "{v}_f32")?,
-            Value::Null => write!(w, "()")?,
+            ValueType::Enum => return write!(w, "{}_u8", node.enum_pair().0),
+            ValueType::Boolean => return write!(w, "{}", node.bool_value()),
+            ValueType::Float => return write!(w, "{}_f64", node.float_value()),
+            ValueType::Single => return write!(w, "{}_f32", node.single_value()),
+            ValueType::Null => return write!(w, "()"),
+            _ => {}
+        }
+        match code {
             // P198 / DX-source-map: emit a `// loft:<file>:<line>`
             // comment so rustc errors on generated Rust code can be
             // traced back to the originating loft source line.  The
@@ -488,6 +493,17 @@ impl Output<'_> {
                     "/* par_for(...) — native codegen lands in spine step 3b */"
                 )?;
             }
+            // @PLAN54 G2/M4.1 — the leaf kinds are handled by the
+            // `match node.kind()` above, which `return`s before reaching here.
+            Value::RawExpr(_)
+            | Value::Text(_)
+            | Value::Long(_)
+            | Value::Int(_)
+            | Value::Enum(_, _)
+            | Value::Boolean(_)
+            | Value::Float(_)
+            | Value::Single(_)
+            | Value::Null => unreachable!("M4.1-converted leaf reached legacy match: {code:?}"),
         }
         Ok(())
     }
