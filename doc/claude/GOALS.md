@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# GOALS.md — what "loft stable" means, made concrete
+# GOALS.md — what loft is for, and the goals that serve it
 
 The deepest layer is the **Purpose** (below): loft is the **foundation** for the
 library / infrastructure that is the actual end.  Its technical north star is
@@ -44,7 +44,30 @@ So loft's six goals below are **foundation goals** — loft must be sound (A), s
 + legible (B), capable (C), portable (D), predictable (E), and friction-free (F),
 because a crack in the foundation becomes a crack in everything built on it
 (crawler's "survival guide" is exactly that).  Trustworthy plumbing at the bottom is
-what lets "pick it up and have fun" be true at the top.
+what lets "pick it up and have fun" be true at the top.  And the bar is the **same
+all the way up** — these goals hold for the **libraries** too, not just loft.  loft
+is merely the layer nearest done; the libraries are the **end**, where
+*fun-on-pickup* is actually proven, and they **do not meet the bar yet**.  The shift
+now underway is loft finishing its job and the work moving up to bring the libraries
+to it.
+
+---
+
+## The six goals at a glance
+
+| | Goal | In one line |
+|---|---|---|
+| **A** | Soundness | no silent corruption — now, and across toolchain bumps |
+| **B** | Release & legibility | it ships, and the value is legible on contact |
+| **C** | Capability | real consumers keep building and running |
+| **D** | Parity | identical on every OS × backend |
+| **E** | Predictable memory | the source is the truth — *surpass Rust here* |
+| **F** | Friction-free | the language serves the programmer, never the compiler |
+
+**Stack-wide:** the bar for loft (the foundation, nearly there) *and* for the
+libraries on top (the end — where fun-on-pickup is proven, and which fall short
+today).  Each goal below carries a **Check** — a thing to run or observe, so
+progress is *evaluated*, not asserted.
 
 ---
 
@@ -198,7 +221,9 @@ Met-and-healthy when the guard is silent corpus-wide *and* the assertion holds
 *and keeps holding*.  A guard that starts firing is the alarm that the model and
 the runtime have drifted apart.
 
-### The method mirrors the goal
+---
+
+## The method mirrors the goals — Goal E's law, turned on our own work
 
 Goal E's law — *the stated model must match reality; a divergence is a bug, fixed
 by **removing** hidden machinery, not by adding cleverness* — is also how loft is
