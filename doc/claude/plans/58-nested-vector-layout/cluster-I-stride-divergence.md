@@ -60,3 +60,24 @@ handle.  Three resolvers disagree on its size:
 The fix choice (A vs B) depends on whether the read-side `8` and the
 `element_store_size` path break any real shape, or are always cancelled.  The
 Stage-A matrix answers that; until then a fix would be guessing at scope.
+
+## Resolution + accepted residual (closure)
+
+The *active* stride faults all got fixed at their sources — the boolean
+sub-4-handle overlap (parse-time `known` + read clamp), the narrow-int literal
+coercion (III-a), and the comprehension `known` over-wrap (IV).  What remains is
+the **benign over-reservation**: for a `≥4`-byte inner scalar the outer vector
+still strides handles by the inner-scalar size (e.g. 8 for `integer`) and the
+prealloc still reserves the wide stride (16).  This is a capacity/over-reserve
+hint with **no correctness or leak cost** — the handles never overlap because the
+slot is ≥ the 4-byte handle.  **Accepted as-is** (user decision, 2026-06): not a
+bug, not worth a per-site clamp that risks the narrow-path desync we saw in the
+reverted attempts.
+
+**Future direction — a stride guard (sanitizer engine).**  Every plan-58 bug was
+one shape of *"the construct stride and the read stride for a vector-handle
+element disagree"*.  A mechanical guard that asserts those two agree at
+element-append/read time (and reports over-reservation) would surface this whole
+class automatically — the matrix + stride traces here were a *manual* version of
+exactly that guard.  This belongs to the sanitizer half of the dogfood+sanitizer
+two-engine model (see GOALS.md); recorded here so the next pass has the hook.
