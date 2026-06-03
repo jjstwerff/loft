@@ -9,11 +9,18 @@ row (`split()` temp leak).  Rigorous re-probing showed `t9` is **not**
 split-specific, **not** method-vs-function, and **not** rc-related — it is one
 clean mechanism with one discriminator.
 
-**It is a current suite-blocker, not a future-cleanup item.**  `03-text.loft`
-leaks `kt main_vector<text>` at exit; `SCRIPTS_LEAK_ALLOW` is empty, so `wrap
-text` + `wrap loft_suite` are **red on the interpreter** today.  (The rc-removal
+> **STATUS: FIXED** in `efdf8a1c` (a `Type::Vector` lift arm in
+> `inline_struct_return`, guarded on `dep.is_empty()`).  Every probe below is now
+> **clean on both backends**; the `interp = LEAK` column records the **pre-fix**
+> behaviour each probe permanently guards against regressing.  The fix is the
+> sibling of bug 10's `Type::Function` arm — together they are rc-removal **Phase A
+> / Mechanism 1, COMPLETE**.  Regression: `tests/scripts/174-inline-temp-free.loft`.
+
+It WAS a current suite-blocker, not a future-cleanup item: `03-text.loft` leaked
+`kt main_vector<text>` at exit and `SCRIPTS_LEAK_ALLOW` is empty, so `wrap text`
++ `wrap loft_suite` were **red on the interpreter** until the fix.  (The rc-removal
 README's "t9: rc-on clean, RC_OFF-only" line was recorded against a stale binary
-and is **wrong** — corrected here.)
+and was **wrong** — corrected here.)
 
 Run each probe on both backends and compare `LOFT_STORES=summary` output:
 `./target/release/loft --interpret <f>` vs `./target/release/loft <f>`.

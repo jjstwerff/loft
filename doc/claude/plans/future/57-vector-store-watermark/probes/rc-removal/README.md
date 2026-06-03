@@ -26,7 +26,7 @@ compare `RC_OFF=1` vs default, `--interpret` vs native.
 | **12 two_closures_coexist** | two closures coexist, calls *not* interleaved | ok | **CRASH** | **Mechanism B** |
 | **09 factory_loop_churn** | many coexisting factory closures in a loop | ok | **CRASH** | **Mechanism B** |
 | **10 closure_passed_as_arg** | closure as an UNBOUND arg temporary | ~~LEAK~~ **FIXED** | ~~LEAK~~ | **Mechanism 1** (unbound temp) — `Type::Function` lift arm |
-| **t9 split_temp_leak** | `split()` vector temp, unbound | **LEAK** (interp) | **LEAK** (interp) | **Mechanism 1** → moved to [`../nrvo-inline-leak/`](../nrvo-inline-leak/) |
+| **t9 split_temp_leak** | `split()` vector temp, unbound | ~~LEAK~~ **FIXED** | ~~LEAK~~ | **Mechanism 1** `Type::Vector` arm → [`../nrvo-inline-leak/`](../nrvo-inline-leak/) |
 | t1–t8 | vector<text> build/reassign/append/return/concat/slice/nested/struct | ok | ok | scope covers |
 
 (06 / 08 — closure ↔ collection — moved to [`../closure-collection/`](../closure-collection/):
@@ -70,9 +70,10 @@ non-coexisting closure shapes survive `RC_OFF`.
 ## Phase plan (from the map)
 
 - **Phase A** — Mechanism 1: statement-end free for an unbound heap-returning-call
-  temporary, via `inline_struct_return` lift arms.  `10` (closure-temp) **DONE**
-  (`Type::Function` arm).  `t9` (de-NRVO'd vector return) **remaining** — the sibling
-  `Type::Vector` arm; full map in [`../nrvo-inline-leak/`](../nrvo-inline-leak/).
+  temporary, via `inline_struct_return` lift arms.  **COMPLETE** (`efdf8a1c`): `10`
+  closure-temp (`Type::Function` arm) + `t9` de-NRVO'd vector return (`Type::Vector`
+  arm, `dep.is_empty()` guard, reaches `t_` methods).  Full map + regression in
+  [`../nrvo-inline-leak/`](../nrvo-inline-leak/) + `tests/scripts/174`.
 - **Phase B** — Mechanism 2: closure-cell ownership — the real rc blocker (coexistence).
 - **Phase C** — delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc`; verify both backends.
 
