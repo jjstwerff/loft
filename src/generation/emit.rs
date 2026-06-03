@@ -178,6 +178,87 @@ impl Output<'_> {
                     "/* par_for(...) — native codegen lands in spine step 3b */"
                 );
             }
+            // @PLAN54 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
+            // keeps a native bridge as it is a &Value-only predicate).
+            ValueType::Var => {
+                let var = node.var_nr();
+                let variables = &self.data.def(self.def_nr).variables;
+                let var_name = sanitize(variables.name(var));
+                if self.coroutine_persistent_vars.contains(&var) {
+                    // P224: read from the coroutine struct field.
+                    if matches!(variables.tp(var), Type::Text(_)) {
+                        return write!(w, "&self.var_{var_name}");
+                    }
+                    return write!(w, "self.var_{var_name}");
+                } else if variables.is_argument(var) {
+                    if let Type::RefVar(inner) = variables.tp(var) {
+                        // By-ref argument: holds &mut T — dereference to read.
+                        if matches!(**inner, Type::Text(_)) {
+                            return write!(w, "&*var_{var_name}");
+                        }
+                        return write!(w, "*var_{var_name}");
+                    }
+                    return write!(w, "var_{var_name}");
+                } else if matches!(variables.tp(var), Type::Text(_)) && !self.tuple_text_to_string {
+                    // Text locals are `String` — `&` coerces to `&str`.  Inside a
+                    // (String, …) tuple-return literal (@P330) emit the bare name.
+                    return write!(w, "&var_{var_name}");
+                }
+                return write!(w, "var_{var_name}");
+            }
+            ValueType::Tuple => {
+                write!(w, "(")?;
+                let elems = node.tuple_items();
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    let elem_is_text =
+                        matches!(self.infer_type(e.as_native()), Some(Type::Text(_)));
+                    self.output_code_node(w, e)?;
+                    // Wrap a text-returning element with `.to_string()` so it
+                    // fits a `String`-typed tuple slot (skip a Text literal — its
+                    // own arm appends `.to_string()` via the same flag).
+                    if elem_is_text && self.tuple_text_to_string && e.kind() != ValueType::Text {
+                        write!(w, ".to_string()")?;
+                    }
+                }
+                write!(w, ")")?;
+                return Ok(());
+            }
+            ValueType::TupleGet => {
+                // N8a.2: use the variable's declared name (not its number).
+                let var = node.tupleget_var();
+                let idx = node.tupleget_idx();
+                let variables = &self.data.def(self.def_nr).variables;
+                let name = sanitize(variables.name(var));
+                let elem_is_text = match variables.tp(var) {
+                    Type::Tuple(elems) => elems
+                        .get(idx as usize)
+                        .is_some_and(|e| matches!(e, Type::Text(_))),
+                    _ => false,
+                };
+                let is_arg = variables.is_argument(var);
+                // P247 — a work-ref (`__ref_…`) tuple-text read must `.clone()`
+                // (returns owned String) instead of borrowing, else the borrow
+                // escapes the enclosing block (E0597).
+                let is_work_ref = variables.name(var).starts_with("__ref_");
+                if elem_is_text && !is_arg {
+                    if is_work_ref {
+                        return write!(w, "var_{name}.{idx}.clone()");
+                    }
+                    return write!(w, "&var_{name}.{idx}");
+                }
+                return write!(w, "var_{name}.{idx}");
+            }
+            ValueType::TuplePut => {
+                // N8a.2: emit the element assignment (TuplePut is a void stmt).
+                let var = node.tupleput_var();
+                let idx = node.tupleput_idx();
+                let name = sanitize(self.data.def(self.def_nr).variables.name(var));
+                write!(w, "var_{name}.{idx} = ")?;
+                return self.output_code_node(w, node.tupleput_inner());
+            }
             _ => {}
         }
         // Native-backed bridge for the not-yet-converted arms (lifted as they
@@ -200,52 +281,6 @@ impl Output<'_> {
                 self.loop_stack.pop();
             }
             Value::Set(var, to) => self.output_set(w, *var, to)?,
-            Value::Var(var) => {
-                let variables = &self.data.def(self.def_nr).variables;
-                let var_name = sanitize(variables.name(*var));
-                if self.coroutine_persistent_vars.contains(var) {
-                    // P224: read from the coroutine struct field.
-                    if matches!(variables.tp(*var), Type::Text(_)) {
-                        write!(w, "&self.var_{var_name}")?;
-                    } else {
-                        write!(w, "self.var_{var_name}")?;
-                    }
-                } else if variables.is_argument(*var) {
-                    if let Type::RefVar(inner) = variables.tp(*var) {
-                        // By-ref argument: variable holds &mut T — dereference to read value.
-                        if matches!(**inner, Type::Text(_)) {
-                            // Text RefVar: deref &mut String to &str via &*
-                            write!(w, "&*var_{var_name}")?;
-                        } else {
-                            write!(w, "*var_{var_name}")?;
-                        }
-                    } else if matches!(variables.tp(*var), Type::Text(_)) {
-                        // Text params are `&str` — already a reference, no prefix needed.
-                        write!(w, "var_{var_name}")?;
-                    } else {
-                        write!(w, "var_{var_name}")?;
-                    }
-                } else if matches!(variables.tp(*var), Type::Text(_)) {
-                    if self.tuple_text_to_string {
-                        // @P330 — inside a `(String, …)` tuple-return literal,
-                        // emitting `&var_x` followed by the surrounding tuple
-                        // wrap's `.to_string()` yields `&var_x.to_string()`
-                        // which Rust parses as `&(var_x.to_string())` =
-                        // `&String`, breaking the declared `String` slot
-                        // (E0308).  Emit the bare local name and let the
-                        // wrap turn into `var_x.to_string()` — `String`'s
-                        // `to_string()` clones, producing the owned `String`
-                        // the tuple slot expects.  Same family as the
-                        // `text_local_clone` shape in dispatch.rs:412.
-                        write!(w, "var_{var_name}")?;
-                    } else {
-                        // Text locals are `String` — add `&` to coerce to `&str`.
-                        write!(w, "&var_{var_name}")?;
-                    }
-                } else {
-                    write!(w, "var_{var_name}")?;
-                }
-            }
             Value::If(test, true_v, false_v) => self.output_if(w, test, true_v, false_v)?,
             Value::Call(def_nr, vals) => {
                 self.output_call(w, *def_nr, vals)?;
@@ -434,82 +469,13 @@ impl Output<'_> {
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            Value::Tuple(elems) => {
-                write!(w, "(")?;
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        write!(w, ", ")?;
-                    }
-                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
-                    self.output_code_inner(w, e)?;
-                    // Wrap text-returning element with `.to_string()` so it
-                    // fits a `String`-typed tuple slot.  The outer
-                    // `tuple_text_to_string` flag is set by `set_var` when
-                    // the destination tuple has at least one Text element.
-                    // Argument-context tuples (function calls taking
-                    // `(&str, …)`) clear this flag, so they keep the
-                    // borrowed-string form.  Skip when the value is
-                    // already a `Value::Text` literal — its own emit
-                    // arm appends `.to_string()` directly via the same
-                    // flag, and we'd otherwise double-wrap.
-                    if elem_is_text && self.tuple_text_to_string && !matches!(e, Value::Text(_)) {
-                        write!(w, ".to_string()")?;
-                    }
-                }
-                write!(w, ")")?;
-            }
-            Value::TupleGet(var, idx) => {
-                // N8a.2: use the variable's declared name (like all other emitters),
-                // not its internal number.  Before this fix `var_0.0` was emitted even
-                // when the parameter was declared as `var_pair`.
-                let variables = &self.data.def(self.def_nr).variables;
-                let name = sanitize(variables.name(*var));
-                // For text-typed tuple elements of a Variable-context
-                // tuple, the field is `String`; consumers expecting
-                // `&str` need a borrow prefix.  Mirrors the plain text
-                // local case at line ~132 (`&var_name`).  Skip for
-                // arguments — the variable's tuple element types in
-                // Argument context emit as `&str` already.
-                let elem_is_text = match variables.tp(*var) {
-                    Type::Tuple(elems) => elems
-                        .get(*idx as usize)
-                        .is_some_and(|e| matches!(e, Type::Text(_))),
-                    _ => false,
-                };
-                let is_arg = variables.is_argument(*var);
-                // P247 — when `var` is a work-ref (`__ref_…`) declared
-                // inside a Block expression, a borrow `&var___ref_N.idx`
-                // escapes the block via the Block's tail expression
-                // and rustc rejects with E0597 (`var___ref_N.idx does
-                // not live long enough`).  For work-refs specifically
-                // emit `var___ref_N.idx.clone()` (returns an owned
-                // String — temporary lifetime extension keeps it
-                // alive across the enclosing statement) instead of the
-                // borrow.  Non-work-ref locals keep the borrow form
-                // since their declaration outlives the read.
-                let is_work_ref = variables.name(*var).starts_with("__ref_");
-                if elem_is_text && !is_arg {
-                    if is_work_ref {
-                        write!(w, "var_{name}.{idx}.clone()")?;
-                    } else {
-                        write!(w, "&var_{name}.{idx}")?;
-                    }
-                } else {
-                    write!(w, "var_{name}.{idx}")?;
-                }
-            }
-            Value::TuplePut(var, idx, val) => {
-                // N8a.2: emit the actual element assignment instead of the `= ...` stub.
-                // TuplePut is a void statement (assignment); is_void_value returns true for it
-                // so the block emitter adds `;` and does not treat it as the return value.
-                let variables = &self.data.def(self.def_nr).variables;
-                let name = sanitize(variables.name(*var));
-                write!(w, "var_{name}.{idx} = ")?;
-                self.output_code_inner(w, val)?;
-            }
-            // @PLAN54 G2/M4.1–M4.2 — these kinds are handled by the
+            // @PLAN54 G2/M4.1–M4.6 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here.
-            Value::RawExpr(_)
+            Value::Var(_)
+            | Value::Tuple(_)
+            | Value::TupleGet(_, _)
+            | Value::TuplePut(_, _, _)
+            | Value::RawExpr(_)
             | Value::Text(_)
             | Value::Long(_)
             | Value::Int(_)
