@@ -67,7 +67,7 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
         state.def_code(d_nr, data, program_store.as_ref());
     }
     if start_d_nr == 0 {
-        build_const_vectors(state, data);
+        build_const_vectors(state, data, program_store.as_ref());
         state.database.allocations[crate::database::CONST_STORE as usize]
             .lock_with_origin("compile.rs::compile (CONST_STORE init)");
     }
@@ -82,7 +82,11 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
 /// Extract literal values from vector constant Block IR and build
 /// the vectors in CONST_STORE. Populates `state.const_refs` and
 /// `data.definitions[d_nr].const_ref`.
-fn build_const_vectors(state: &mut State, data: &mut Data) {
+fn build_const_vectors(
+    state: &mut State,
+    data: &mut Data,
+    program_store: Option<&(crate::database::Stores, DbRef)>,
+) {
     // Ensure const_refs is large enough for all definitions.
     let null_ref = DbRef {
         store_nr: u16::MAX,
@@ -108,7 +112,15 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             continue;
         };
         let elem_tp = (**elem_tp).clone();
-        let values = extract_literal_values(IrNode::Native(&data.def(d_nr).code), data);
+        // @PLAN54 G2/M6 — read the const body from the persistent store when
+        // present (store-backed), else the native graph.
+        let body = match program_store {
+            Some((stores, root)) => {
+                IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, d_nr))
+            }
+            None => IrNode::Native(&data.def(d_nr).code),
+        };
+        let values = extract_literal_values(body, data);
         if values.is_empty() {
             continue;
         }
