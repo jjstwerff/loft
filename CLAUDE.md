@@ -325,12 +325,18 @@ now.**  Two cases:
   its canonical home (see [DEVELOPMENT.md § Inserting Discovered
   Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)).
 
-When you DO file: minimal reproducer (path, expected vs observed on each backend),
-severity tier, workaround; mirror user-visible rows in
-[USER_FACING.md](doc/claude/USER_FACING.md); save the repro to `/tmp/p_followups/`
-or add a `tests/scripts/` regression if it deserves CI lock-in.  But do **not**
-file a row for a bug you just *fixed* — the fix + its regression test ARE the
-record.
+When you DO file: **open a GitHub Issue** (`gh issue create`, the `bug_report`
+template) — NOT a PROBLEMS.md row (PROBLEMS.md is now the closed/historical
+archive; see [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md)).  Include a minimal
+reproducer (expected vs observed on each backend), a `sev:` + `area:` label, and a
+**`wa:*` workaround label whose claim you VERIFIED** (run it, both backends — a
+wrong workaround is worse than `wa:none`; see
+[ISSUE_TRACKING.md § Workarounds](doc/claude/ISSUE_TRACKING.md#workarounds--the-agents-can-you-keep-moving-signal)).
+Label meanings: [`.github/LABELS.md`](.github/LABELS.md).  Save the repro to
+`/tmp/p_followups/` or add a `tests/scripts/` regression if it deserves CI lock-in.
+When the bug is FIXED, reference the issue in the commit (`Fixes #NNN`) so GitHub
+closes it — but do **not** file at all for a bug you fix in the same change: the
+fix + its regression test ARE the record.
 
 **Inside an investigation plan, don't file at all** — the plan's probes + cluster
 docs already document every shape (see
@@ -413,7 +419,9 @@ The rule: **always commit before any operation that changes the working tree.**
 | [CODE.md](doc/claude/CODE.md) | Code quality rules (naming, functions, doc comments, clippy, dependency policy) |
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
-| [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
+| [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) | **Where bugs live: open bugs → GitHub Issues; investigations → files; closed → PROBLEMS.md archive.**  The convention (labels, `@GH###` refs, cross-repo), the workaround-as-signal rule, and the migration plan |
+| [.github/LABELS.md](.github/LABELS.md) | Issue-label glossary — what `sev:`/`wa:`/`area:` mean (e.g. `area:codegen`) WITHOUT reading the source |
+| [PROBLEMS.md](doc/claude/PROBLEMS.md) | **Closed/historical bug archive** (FIXED rows = regression record; the big `###` entries are design references).  OPEN bugs are now [GitHub Issues](https://github.com/jjstwerff/loft/issues) |
 | [QUALITY.md](doc/claude/QUALITY.md) | Reference + open work — open programmer-biting issues, active sprint (P54 JsonValue enum), active designs (Q1-Q4 JSON ecosystem, P54-U unified parser, Dep-inference for native fn returns), compiler blockers (B2-B7 struct-enum bugs), enhancement tiers, recommended landing order.  C54 (integer→i64) historical record kept as the canonical "LANDED via …" closure pattern.  See [§ Open work — actionable summary](doc/claude/QUALITY.md#open-work--actionable-summary) for the at-a-glance status table. |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
@@ -453,7 +461,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Debug a runtime crash | [PROBLEMS.md](doc/claude/PROBLEMS.md) (check open issues) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
+| Debug a runtime crash | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) (closed archive) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) standard library function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
 | Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmarks, root-cause analysis, optimisation designs |
@@ -463,7 +471,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Find test coverage gaps | [TESTING.md](doc/claude/TESTING.md) § Test Coverage Gaps |
-| Fix a known bug | [PROBLEMS.md](doc/claude/PROBLEMS.md) (fix path) → [TESTING.md](doc/claude/TESTING.md) |
+| Fix a known bug | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list --label "wa:none"` for blockers) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
 | Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) — each entry has a reproducer and test reference |
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |

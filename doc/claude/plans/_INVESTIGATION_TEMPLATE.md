@@ -411,8 +411,10 @@ investigation plans** — both must happen BEFORE the dir moves to
    - A **deferred / benign residual** of the thesis → QUALITY.md
      `## Open work` (a known tradeoff, not a bug) — note any inert
      foundation already in the tree as a head-start.
-   - A **sibling bug** not yet fixed → PROBLEMS.md (mirror
-     user-visible rows to USER_FACING.md).
+   - A **sibling bug** not yet fixed → a **GitHub Issue**
+     (`gh issue create`, the `bug_report` template; `sev:` + `area:` +
+     a VERIFIED `wa:*` label) — see
+     [ISSUE_TRACKING.md](../ISSUE_TRACKING.md).
    - Each cites the now-`finished/` cluster / probe doc as the repro
      landmark.  A finding whose FIX shipped needs no row — the fix +
      its test are the record.

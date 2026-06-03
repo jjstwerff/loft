@@ -92,6 +92,34 @@ on both backends, printed `10`/`7`.)
 urgent than raw `sev:`, because severity is "how bad when hit" and `wa:` is "can
 you avoid being hit."
 
+## Resolving an issue (the close half)
+
+Filing is half the loop; closing is the other half.
+
+- **Reference the issue in the fixing commit** — `Fixes #NNN` / `Closes #NNN` in
+  the commit (or PR body); GitHub auto-closes it when that lands on the default
+  branch.  On a working branch with no PR, close manually after pushing
+  (`gh issue close NNN --comment "fixed in <hash>"`).
+- **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
+  locks it in.  A closed issue with no regression is a re-opening waiting to
+  happen.
+- **Re-verify the workaround on close** if the issue had one — a fix can make a
+  `wa:partial`/`wa:none` moot; keep the closed record accurate.
+- **Don't file a bug you fix in the same change** — the fix + its test ARE the
+  record (CLAUDE.md § Bug-filing policy).
+
+## Features & enhancements
+
+Bugs are the focus above.  FEATURE requests use the `feature_request` template +
+the `enhancement` label, and connect to the roadmap: a planned feature lives in
+ROADMAP.md / PLANNING.md (or a `plans/` slot if multi-phase); a `gh` Project board
+tracks "which release bundles which consumer-driven work" across the org repos.
+The Issue is the lightweight capture; the plan/roadmap is the design + sequencing.
+
+> **Transition note.** "PROBLEMS.md" / "P-issue row" references elsewhere in the
+> docs (plans/README, DEVELOPMENT.md, …) are repointed to GitHub Issues as they're
+> touched.  PROBLEMS.md is frozen to OPEN bugs — it's the closed/historical archive.
+
 ## Migration plan
 
 | Step | Action | Status |
