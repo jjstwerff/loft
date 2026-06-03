@@ -247,6 +247,36 @@ The draft collapses ROADMAP's eight bands (**S/R/G/F/U/C/Q/N**) to four:
 still answers *must-fix / unlock / nicety / refactor*; the finer eight remains
 available.  **Decision point — keep four or the eight.**
 
+### Access model — transparent by default, mutation gated by role
+
+**Read is open; write is role-gated.**  The default is **public** for everything
+with public value; a repo, board, or item goes private *only* when there is little
+in it for the public (early scratch, a throwaway prototype, an idea not yet worth
+showing) — a **usefulness** gate, not a secrecy one.  Building the games in the
+open *is* the adoption story (the consumer→language dogfood loop, visible — Goal B),
+so a game in development stays public.
+
+| Who | Read | Write |
+|---|---|---|
+| **Public** (no role) | all public repos · Issues · the board | **only** open an Issue + comment — no label / field / Status / Milestone edits, cannot change a plan |
+| **Triage** role | + | + label / set fields / close / reopen, *without* code write — the lever for a trusted non-code helper |
+| **Write / admin** | + | everything |
+
+GitHub has **no per-field public-write** — access is all-or-nothing by role, and the
+public has none.  So "not all fields publicly changeable" is the *default*: every
+structured field (`sev:` / `area:` / `wa:`, Status, Milestone, all Project fields)
+is maintainer-only without configuring anything.
+
+- **Plans are doubly read-only to the public.**  A plan is a *maintainer-authored*
+  Issue (titled `@PLAN<NN>`) + a directory: the public can **comment** on the Issue
+  and **view** the dir; changing the dir is a **PR you merge**.  Viewed + commented,
+  never changed.
+- **One public board** for the public-value ecosystem (loft / libs / games /
+  demos) — public **views** the roadmap; editing fields or order needs project
+  write.  The rare low-public-value item stays **off** it (a private note/repo)
+  until it earns a place — and mind that a public board's draft cards are
+  world-visible, so don't park a not-ready-to-show idea there.
+
 > **Transition note.** "PROBLEMS.md" / "P-issue row" references elsewhere in the
 > docs (plans/README, DEVELOPMENT.md, …) are repointed to GitHub Issues as they're
 > touched.  PROBLEMS.md is frozen to OPEN bugs — it's the closed/historical archive.
