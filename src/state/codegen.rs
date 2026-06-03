@@ -16,7 +16,7 @@ use super::State;
 use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
-use crate::ir_node::IrNode;
+use crate::ir_node::{IrNode, IrNodeList};
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
@@ -340,7 +340,7 @@ impl State {
                 self.generate_call(stack, node.call_to(), node.call_args().as_native())
             }
             ValueType::CallRef => {
-                self.generate_call_ref(stack, node.callref_var(), node.callref_args().as_native())
+                self.generate_call_ref(stack, node.callref_var(), node.callref_args())
             }
             ValueType::Tuple => {
                 // T1.4: generate each element onto contiguous stack slots.
@@ -351,7 +351,7 @@ impl State {
                 Type::Tuple(types)
             }
             ValueType::Parallel => {
-                self.gen_parallel(node.parallel_arms().as_native(), stack);
+                self.gen_parallel(node.parallel_arms(), stack);
                 Type::Void
             }
             ValueType::FnRefDnr => {
@@ -862,7 +862,7 @@ impl State {
     ///   [arm0 code] `OpReturn`
     ///   [arm1 code] `OpReturn`
     ///   [continue]
-    pub(super) fn gen_parallel(&mut self, arms: &[Value], stack: &mut Stack) {
+    pub(super) fn gen_parallel(&mut self, arms: IrNodeList, stack: &mut Stack) {
         let n = arms.len();
         stack.add_op("OpParallelBegin", self);
         self.code_add(n as u8);
@@ -886,7 +886,7 @@ impl State {
             let arm_start = self.code_pos;
             let offset = (arm_start - join_pos) as u16;
             self.code_put(arm_offset_positions[i], offset);
-            self.gen_drop(IrNode::Native(arm), stack);
+            self.gen_drop(arm, stack);
             // OpReturn — arm is a void "function"
             stack.add_op("OpReturn", self);
             self.code_add(0u16); // arguments = 0
@@ -2686,7 +2686,7 @@ impl State {
         &mut self,
         stack: &mut Stack,
         v_nr: u16,
-        args: &[Value],
+        args: IrNodeList,
     ) -> Type {
         let Type::Function(param_types, ret_type, _) = stack.function.tp(v_nr).clone() else {
             panic!("generate_call_ref: variable is not Type::Function");
@@ -2695,8 +2695,8 @@ impl State {
 
         // Generate all args: visible params, then work-buffer blocks (12B DbRefs each),
         // then closure arg (12B DbRef).  Blocks produce the correct type/size automatically.
-        for arg in args {
-            self.generate(arg, stack, false);
+        for arg in args.iter() {
+            self.generate_node(arg, stack, false);
         }
 
         // fn-ref variable is below all pushed arguments.

@@ -507,8 +507,9 @@ impl<'a> IrNode<'a> {
 impl<'a> IrNodeList<'a> {
     /// The recursion bridge for M3.x: the underlying native `&[Value]` slice,
     /// for arms that still hand a slice to a `&[Value]`-taking helper
-    /// (`generate_call`, `gen_parallel`, …).  Removed at M5 when those helpers
-    /// iterate `IrNodeList` directly.
+    /// (`generate_call`, which threads it through `gather_key` /
+    /// `try_text_dest_pass`).  Removed at M5 when that cluster iterates
+    /// `IrNodeList` directly.
     ///
     /// # Panics
     /// If called on a store-backed list (a codegen bug before M5).
