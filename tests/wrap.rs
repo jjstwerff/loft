@@ -388,6 +388,12 @@ pub fn lib_test_skipped(entry: &std::path::Path) -> bool {
 pub fn collect_library_tests() -> std::io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for pkg in std::fs::read_dir("lib")?.filter_map(|e| e.ok()) {
+        // Skip dot-dirs — `run_lib_test_in_temp_cwd` creates `.loft_test_tmp_*`
+        // sibling dirs inside lib/ for artifact isolation; they must never be
+        // discovered as packages.
+        if pkg.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let tests_dir = pkg.path().join("tests");
         if !tests_dir.is_dir() {
             continue;
@@ -403,6 +409,56 @@ pub fn collect_library_tests() -> std::io::Result<Vec<PathBuf>> {
     }
     files.sort();
     Ok(files)
+}
+
+/// Run `loft [extra_args] test <stem>` for a lib package in a UNIQUE temp CWD so
+/// the interpreter `library_suite` and the native `native_library_suite` (separate
+/// test binaries, run concurrently by nextest) don't race on cwd-relative test
+/// artifacts (e.g. `moros_render_test.glb`, which several tests write+`delete` in
+/// the package dir).  The temp dir is a `.loft_test_tmp_*` SIBLING inside `lib/`
+/// so the package's relative deps (`../<name>`) still resolve to the real
+/// packages; the package's contents are symlinked in, and cwd-relative artifacts
+/// land in the unique dir, which is removed afterwards.  Non-unix falls back to
+/// the package dir (Windows is gated; symlinks need privileges there).
+pub fn run_lib_test_in_temp_cwd(
+    loft_bin: &str,
+    pkg_dir: &Path,
+    stem: &str,
+    extra_args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let mut args: Vec<&str> = extra_args.to_vec();
+    args.push("test");
+    args.push(stem);
+    #[cfg(unix)]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let lib_root = pkg_dir.parent().unwrap_or(pkg_dir);
+        let tmp = lib_root.join(format!(
+            ".loft_test_tmp_{}_{}",
+            std::process::id(),
+            CTR.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir(&tmp)?;
+        for entry in std::fs::read_dir(pkg_dir)?.filter_map(|e| e.ok()) {
+            let target = entry.path().canonicalize().unwrap_or_else(|_| entry.path());
+            let _ = std::os::unix::fs::symlink(&target, tmp.join(entry.file_name()));
+        }
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(&tmp)
+            .args(&args)
+            .output();
+        let _ = std::fs::remove_dir_all(&tmp);
+        out
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new(loft_bin)
+            .current_dir(pkg_dir)
+            .args(&args)
+            .output()
+    }
 }
 
 /// Gate every `lib/<pkg>/tests/*.loft` through the INTERPRETER.  Before this the
@@ -435,10 +491,7 @@ fn library_suite() -> std::io::Result<()> {
             .to_string_lossy()
             .to_string();
         println!("lib test {entry:?}");
-        let out = std::process::Command::new(loft_bin)
-            .current_dir(pkg_dir)
-            .args(["test", &stem])
-            .output()?;
+        let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, &stem, &[])?;
         ran += 1;
         let combined = format!(
             "{}{}",

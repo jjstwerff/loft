@@ -41,19 +41,25 @@ here — aliasing, pass-by-value, callee-created, multi-write, loop-churn — al
 pass on BOTH backends).  Phase C's file-close change (close on every File-store
 free, was gated on `ref_count <= 1`) does not break file writing.
 
-## Root cause + fix options (a separate test-infra bug — for decision)
+## Root cause + fix — FIXED (harness isolation)
 
 The root is **two concurrent processes + a fixed cwd-relative filename + no
 per-process uniqueness**.  loft has no `random`/`pid`/`tempfile` primitive, so a
-test can't make the name unique itself today.  Affected: `moros_render/geometry.loft`
-(3 names), `moros_sim/persistence.loft`.  Options:
+test can't make the name unique itself.  Affected: `moros_render/geometry.loft`
+(3 names), `moros_sim/persistence.loft`.
 
-1. **Harness isolation** — run each lib test in a unique temp CWD (copy or symlink
-   the package), so cwd-relative artifacts never collide.  Most robust; one place.
-2. **Serialize the two lib suites** — a nextest `test-group` so `library_suite`
-   and `native_library_suite` never run concurrently.  Cheapest; loses parallelism.
-3. **A uniqueness primitive** — add `process_id()` / `temp_path()` to loft so tests
-   write `moros_render_test_{pid}.glb`.  Fixes the language gap, but every fragile
-   test must be updated.
+**Fix (option 1 — harness isolation, `run_lib_test_in_temp_cwd` in `tests/wrap.rs`
++ `tests/native.rs`):** each lib test now runs in a UNIQUE `.loft_test_tmp_<pid>_<n>`
+SIBLING dir inside `lib/`, with the package's contents symlinked in.  Being a
+sibling inside `lib/`, the package's relative deps (`../<name>`) still resolve to
+the real packages; cwd-relative artifacts land in the unique dir (removed after).
+Discovery (`collect_library_tests` + the native loop) skips dot-dirs so the temp
+dirs are never picked up as packages.  Verified: geometry passes 105/105 isolated;
+concurrent isolated runs no longer race; interp `library_suite` + native
+`native_library_suite` both green through the new path; no leftover temp dirs.
 
-This is **off the rc-removal path** — re-home to a test-infra issue if pursued.
+(Considered + rejected: nextest-serialize the two suites — loses parallelism; add
+a loft uniqueness primitive — touches the language + every fragile test.)
+
+This was **off the rc-removal path** — a pre-existing test-infra bug surfaced by
+the Phase C run, fixed in the same branch.
