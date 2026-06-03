@@ -77,3 +77,6 @@ __pycache__/
 # at ~/.loft/trust-root/, never in the repo.
 registry-signing-key.pub
 registry-signing-key.bin
+
+# Transient lib-test artifact-isolation dirs (tests/wrap.rs run_lib_test_in_temp_cwd)
+lib/.loft_test_tmp_*

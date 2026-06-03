@@ -228,6 +228,11 @@ fn forbidden_library_symbols() -> Vec<(String, String)> {
         if !path.is_dir() {
             continue;
         }
+        // Skip `.loft_test_tmp_*` artifact-isolation dirs (run_lib_test_in_temp_cwd)
+        // — transient symlinked package mirrors, not real packages.
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let manifest_path = path.join("loft.toml");
         let Ok(content) = fs::read_to_string(&manifest_path) else {
             continue;
@@ -653,6 +658,10 @@ fn native_libraries_follow_clean_binding_pattern() {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // Skip `.loft_test_tmp_*` artifact-isolation dirs (run_lib_test_in_temp_cwd).
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let native_src = path.join("native").join("src");
         if !native_src.is_dir() {
             continue;
