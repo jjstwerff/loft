@@ -71,12 +71,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        // @PLAN58 vec4 lever: force a nested-vector element handle to 4 on the
-        // `.push` / `.remove` (vector_operations) stride path.
-        let e_size = crate::vec4::clamp_vec(
-            i32::from(self.database.size(self.data.def(enr).known_type)),
-            &t,
-        );
+        let e_size = i32::from(self.database.size(self.data.def(enr).known_type));
         if let Type::RefVar(tp) = t {
             t = *tp;
         }

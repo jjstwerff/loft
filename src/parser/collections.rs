@@ -3507,15 +3507,7 @@ use #count instead"
     }
 
     /// Compute the in-store byte size of a vector element type.
-    ///
-    /// @PLAN58 vec4 lever: thin clamping shim over the real computation so the
-    /// nested-vector element handle is forced to its true 4-byte stride at
-    /// every return path (comprehension / map / iter element sizing).
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
-        crate::vec4::clamp_vec(self.element_store_size_raw(elm), elm)
-    }
-
-    fn element_store_size_raw(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
         // Post-2c: honor size(N) on integer aliases.  Must run before the
         // generic `known_type → database.size(...)` path below, because
