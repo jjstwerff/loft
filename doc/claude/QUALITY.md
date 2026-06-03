@@ -86,7 +86,7 @@ Items below are "what to BUILD" derived from the design content in this document
 
 | Item | Section | Status |
 |---|---|---|
-| **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57 (finished)](../plans/finished/57-vector-store-watermark/cluster-III-reassignment-pin.md) | **Benign watermark residual** of the now-closed plan-57 (exit-safe, below the `LOFT_STORES=warn` floor — not a correctness/leak bug).  A shared `z` reassigned across `else` blocks / `x` across `match` arms keeps the overwritten store pinned to scope exit → watermark O(reassignments).  The gated foundation (`confine_reassign_safe`, `multi_store` recovery) is **inert in `src/scopes.rs`** as a head-start.  M effort; "do nothing, it's benign" is explicitly on the table. |
+| **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57](plans/future/57-vector-store-watermark/cluster-III-reassignment-pin.md) | **Benign watermark residual** of the now-closed plan-57 (exit-safe, below the `LOFT_STORES=warn` floor — not a correctness/leak bug).  A shared `z` reassigned across `else` blocks / `x` across `match` arms keeps the overwritten store pinned to scope exit → watermark O(reassignments).  The gated foundation (`confine_reassign_safe`, `multi_store` recovery) is **inert in `src/scopes.rs`** as a head-start.  M effort; "do nothing, it's benign" is explicitly on the table. |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
