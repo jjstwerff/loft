@@ -301,9 +301,9 @@ impl State {
                 }
                 Type::Void
             }
-            // @PLAN54 G2/M3.2 — single-child / compound delegating arms.  The
-            // dispatch + child access run through the handle; the children are
-            // bridged to the still-`&Value` helpers via `as_native()` until M5.
+            // @PLAN54 G2 — single-child / compound delegating arms: dispatch +
+            // children flow through the handle to IrNode-taking helpers
+            // (generate_set materialises at its boundary).
             ValueType::Set => {
                 self.generate_set(stack, node.set_var(), node.set_inner());
                 Type::Void
@@ -327,18 +327,16 @@ impl State {
                 stack.position -= stack.step(value_size);
                 Type::Void
             }
-            // @PLAN54 G2/M3.3 — list-child + scalar arms.  Insert/Tuple iterate
-            // the handle directly (store-ready); Call/CallRef/Parallel still
-            // bridge their lists to the `&[Value]` helpers via `as_native()`.
+            // @PLAN54 G2 — list-child + scalar arms.  Insert/Tuple iterate the
+            // handle directly; Call/CallRef/Parallel pass an IrNodeList to their
+            // helpers (generate_call materialises its param list at the boundary).
             ValueType::Insert => {
                 for op in node.insert_items().iter() {
                     self.generate_node(op, stack, false);
                 }
                 Type::Void
             }
-            ValueType::Call => {
-                self.generate_call(stack, node.call_to(), node.call_args().as_native())
-            }
+            ValueType::Call => self.generate_call(stack, node.call_to(), node.call_args()),
             ValueType::CallRef => {
                 self.generate_call_ref(stack, node.callref_var(), node.callref_args())
             }
@@ -394,9 +392,10 @@ impl State {
                 }
                 node.fnref_type()
             }
-            // @PLAN54 G2/M3.6+M3.11 — Block/Loop lower through the IrBlock handle;
-            // TupleGet/TuplePut keep their stack-offset bodies, re-bound from
-            // `as_native()` (the last native-only bridges in generate_inner).
+            // @PLAN54 G2 — Block/Loop lower through the IrBlock handle; TupleGet/
+            // TuplePut read their fields via scalar/child accessors.  Every arm
+            // of generate_inner now reads only through the handle — it is fully
+            // store-capable (M5 just constructs IrNode::Store at the entry).
             ValueType::Loop => self.gen_loop(node.as_block(), stack),
             ValueType::Block => self.generate_block(stack, node.as_block(), top),
             ValueType::TupleGet => {
@@ -2235,8 +2234,16 @@ impl State {
         &mut self,
         stack: &mut Stack,
         op: u32,
-        parameters: &[Value],
+        parameters: IrNodeList,
     ) -> Type {
+        // @PLAN54 G2/M3.15 — materialise-at-boundary (see generate_set).
+        // generate_call threads `parameters` through gather_key /
+        // try_text_dest_pass and inspects `parameters[0]` as a `Var`; rather
+        // than convert that whole &[Value] cluster, materialise the param list
+        // to native once (compile-time clones / store read_value) and run the
+        // existing body unchanged.  Makes the Call path store-capable.
+        let params_owned: Vec<Value> = parameters.iter().map(|p| p.to_owned_value()).collect();
+        let parameters = &params_owned[..];
         let mut tps = Vec::new();
         let mut last = 0;
         let mut was_stack = u16::MAX;
