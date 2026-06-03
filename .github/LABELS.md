@@ -57,6 +57,21 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 | `needs-design` | the fix needs a design decision, not a mechanical change — don't just patch it |
 | `bug` / `enhancement` / `documentation` / … | the GitHub defaults; keep `bug` on every bug |
 
+## Triage-state (where an investigation got stuck)
+
+These describe the **state of the hunt**, not the nature of the bug — they tell
+the next agent (or the maintainer) *why this one is still open* and what unblocks
+it.  Apply at most one; remove it once the blocker clears.
+
+| Label | When to apply | What unblocks it |
+|---|---|---|
+| `attention` | The bug has been **tried 2+ times with no clear path to a fix** — repeated attempts stalled, the mechanism is still not understood, or every fix tried regressed something else. A flag for "stop grinding solo; this needs a fresh approach or more eyes." | A new diagnostic angle, a different contributor, or escalation — not another identical attempt. |
+| `design` | The bug **cannot be solved at all without a user-validated design decision** — the fix hinges on a language/semantics choice only the maintainer can make. Stronger than `needs-design`: `needs-design` means *a* design call is needed (a contributor may propose one); `design` means it is **blocked on the user** signing off. | The maintainer validates a direction; then it usually downgrades to a normal mechanical fix. |
+
+> Rule of thumb: reach for `attention` when you *don't know how* to fix it after
+> genuine attempts; reach for `design` when you *can't decide what correct even
+> means* without the user.  A bug can carry both (stuck **and** needs a design call).
+
 > **Multi-repo:** `sev:`/`wa:`/cross-cutting are shared across the loft-family
 > repos (loft / dryopea / lavition / `loft-lang/*`).  `area:` is loft-specific;
 > each game/engine repo defines its own `area:` set in its own `LABELS.md`.

@@ -4387,7 +4387,10 @@ fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr
         .copied()
         .filter(|&st| has_free_before_alloc(&bl.operators, st, db_nr, fr_nr))
         .collect();
-    let owning: Vec<u16> = owning.into_iter().filter(|st| !problematic.contains(st)).collect();
+    let owning: Vec<u16> = owning
+        .into_iter()
+        .filter(|st| !problematic.contains(st))
+        .collect();
     if owning.is_empty() {
         return 0;
     }
