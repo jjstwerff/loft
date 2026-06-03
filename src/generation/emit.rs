@@ -261,9 +261,20 @@ impl Output<'_> {
             }
             _ => {}
         }
-        // Native-backed bridge for the not-yet-converted arms (lifted as they
-        // move up to the `kind()` match).
-        let code = node.as_native();
+        // @PLAN54 G2/M4 — materialise-at-boundary for the residual arms
+        // (Block/Loop/Set/If/Call/Return/Keys/CallRef), which delegate to large
+        // `&Value`/`&Block` helpers (output_block/output_if/output_set/…).
+        // Native backing is zero-cost (`code = v`); a store-backed node
+        // materialises once here so output_code_node is fully store-capable
+        // without threading the handle through that whole helper cluster.
+        let owned_code;
+        let code = match node {
+            IrNode::Native(v) => v,
+            IrNode::Store(..) => {
+                owned_code = node.to_owned_value();
+                &owned_code
+            }
+        };
         match code {
             Value::Block(bl) => self.output_block(w, bl, false)?,
             Value::Loop(lp) => {
