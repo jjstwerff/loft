@@ -314,12 +314,7 @@ impl State {
                 self.generate_node(node.breakwith_inner(), stack, false);
                 self.gen_break(node.breakwith_nr(), stack)
             }
-            ValueType::If => self.gen_if(
-                node.if_cond().as_native(),
-                node.if_then().as_native(),
-                node.if_else().as_native(),
-                stack,
-            ),
+            ValueType::If => self.gen_if(node.if_cond(), node.if_then(), node.if_else(), stack),
             ValueType::Yield => {
                 // CO1.3c: emit the yielded expression, then OpCoroutineYield.
                 let t = self.generate_node(node.yield_inner(), stack, false);
@@ -678,18 +673,18 @@ impl State {
 
     pub(super) fn gen_if(
         &mut self,
-        test: &Value,
-        t_val: &Value,
-        f_val: &Value,
+        test: IrNode,
+        t_val: IrNode,
+        f_val: IrNode,
         stack: &mut Stack,
     ) -> Type {
-        self.generate(test, stack, false);
+        self.generate_node(test, stack, false);
         stack.add_op("OpGotoFalseWord", self);
         let code_step = self.code_pos;
         self.code_add(0i16); // temp step
         let true_pos = self.code_pos;
         let stack_pos = stack.position;
-        let tp = self.generate(t_val, stack, false);
+        let tp = self.generate_node(t_val, stack, false);
         let true_stack = stack.position;
         // @P356: an EXPRESSION if whose true branch produces a value but whose
         // else is a bare `Value::Null` (e.g. the `expr ?? null` ncc lowering
@@ -700,10 +695,10 @@ impl State {
         // temp's `OpFreeText`) is wrong → frees an uninitialised slot → SIGSEGV.
         // The statement-style fast-path below (no value, or divergent true arm)
         // keeps the original skip-to-join behaviour.
-        let null_else_value = *f_val == Value::Null
-            && !is_divergent(t_val)
+        let null_else_value = matches!(f_val.kind(), ValueType::Null)
+            && !is_divergent(t_val.as_native())
             && !matches!(tp, Type::Void | Type::Never);
-        if *f_val == Value::Null && !null_else_value {
+        if matches!(f_val.kind(), ValueType::Null) && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
@@ -711,7 +706,7 @@ impl State {
             // the pre-if `stack_pos`, not `true_stack`. Without this reset, every
             // subsequent Var/Put encodes a wrong offset and writes corrupt the
             // return-address slot, eventually overflowing the stack store.
-            if is_divergent(t_val) {
+            if is_divergent(t_val.as_native()) {
                 stack.position = stack_pos;
             }
         } else if null_else_value {
@@ -734,7 +729,7 @@ impl State {
             let false_pos = self.code_pos;
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             stack.position = stack_pos;
-            let fp = self.generate(f_val, stack, false);
+            let fp = self.generate_node(f_val, stack, false);
             let false_stack = stack.position;
             // B5: when both arms are non-divergent but exit at different stack
             // levels (e.g. match arms with different local allocations), the
@@ -743,7 +738,10 @@ impl State {
             // result under garbage), emit the join point at the SHORTER arm's
             // level and make the longer arm discard its extra bytes before
             // reaching the join point (its result is already on top of stack).
-            if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
+            if !is_divergent(t_val.as_native())
+                && !is_divergent(f_val.as_native())
+                && true_stack != false_stack
+            {
                 let target = true_stack.min(false_stack);
                 if false_stack > target {
                     // Shrink the false arm's stack to match the true arm.
@@ -762,9 +760,9 @@ impl State {
                 // when one branch diverges (return/break/continue), use the
                 // other branch's stack position. The divergent branch exits the
                 // scope so its stack delta is irrelevant at the join point.
-                if is_divergent(t_val) {
+                if is_divergent(t_val.as_native()) {
                     stack.position = false_stack;
-                } else if is_divergent(f_val) {
+                } else if is_divergent(f_val.as_native()) {
                     stack.position = true_stack;
                 }
             }
