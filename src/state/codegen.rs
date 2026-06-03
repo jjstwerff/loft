@@ -400,10 +400,9 @@ impl State {
             ValueType::Loop => self.gen_loop(node.as_block(), stack),
             ValueType::Block => self.generate_block(stack, node.as_block(), top),
             ValueType::TupleGet => {
-                let Value::TupleGet(var_nr, elem_idx) = node.as_native() else {
-                    unreachable!("TupleGet")
-                };
-                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let var_nr = node.tupleget_var();
+                let elem_idx = node.tupleget_idx();
+                let tuple_tp = stack.function.tp(var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef
                 // using the SAME OpGetInt / OpGetFloat / OpGet… opcodes
                 // that ordinary struct-field access uses.  The field
@@ -417,7 +416,7 @@ impl State {
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
-                    let idx = *elem_idx as usize;
+                    let idx = elem_idx as usize;
                     let elem_tp = elems[idx].clone();
                     // Look up the synthetic struct's field position via
                     // the LinkedFieldGroup, falling back to the legacy
@@ -426,7 +425,7 @@ impl State {
                     // tuple_def is normally called eagerly during parse).
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.var_pos(*var_nr);
+                    let var_pos = stack.var_pos(var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -446,13 +445,13 @@ impl State {
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TupleGet on non-tuple variable");
                 };
-                let idx = *elem_idx as usize;
+                let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
                 let offsets = crate::data::element_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // The element is at tuple_var_stack_pos + elem_offset.
                 // Compute distance from current stack top to that position.
-                let tuple_var_pos = stack.function.stack(*var_nr);
+                let tuple_var_pos = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_pos + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
@@ -510,10 +509,11 @@ impl State {
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
             ValueType::TuplePut => {
-                let Value::TuplePut(var_nr, elem_idx, value) = node.as_native() else {
-                    unreachable!("TuplePut")
-                };
-                let tuple_tp = stack.function.tp(*var_nr).clone();
+                let var_nr = node.tupleput_var();
+                let elem_idx = node.tupleput_idx();
+                // scalars store-ready; the value child keeps a native bridge (M5).
+                let value = node.tupleput_inner().as_native();
+                let tuple_tp = stack.function.tp(var_nr).clone();
                 // T1.5: RefVar(Tuple) — write element through the DbRef using
                 // the SAME OpSetInt / OpSetFloat / OpSet… opcodes that
                 // ordinary struct-field assignment uses.  Field offset comes
@@ -524,11 +524,11 @@ impl State {
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
-                    let idx = *elem_idx as usize;
+                    let idx = elem_idx as usize;
                     let elem_tp = elems[idx].clone();
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.var_pos(*var_nr);
+                    let var_pos = stack.var_pos(var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
@@ -547,14 +547,14 @@ impl State {
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TuplePut on non-tuple variable");
                 };
-                let idx = *elem_idx as usize;
+                let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
                 let offsets = crate::data::element_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // Generate the value to write.
                 self.generate(value, stack, false);
                 // Compute distance from stack top to the element's position.
-                let tuple_var_base = stack.function.stack(*var_nr);
+                let tuple_var_base = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 // P248 — when the destination element is itself a tuple

@@ -326,6 +326,56 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `TupleGet` source tuple-variable slot.
+    #[must_use]
+    pub fn tupleget_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::TupleGet(v, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDTUPLEGET_VAR) as u16,
+            IrNode::Native(_) => kind_panic("tupleget_var", self),
+        }
+    }
+
+    /// `TupleGet` element index.
+    #[must_use]
+    pub fn tupleget_idx(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::TupleGet(_, i)) => *i,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDTUPLEGET_IDX) as u16,
+            IrNode::Native(_) => kind_panic("tupleget_idx", self),
+        }
+    }
+
+    /// `TuplePut` destination tuple-variable slot.
+    #[must_use]
+    pub fn tupleput_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::TuplePut(v, _, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDTUPLEPUT_VAR) as u16,
+            IrNode::Native(_) => kind_panic("tupleput_var", self),
+        }
+    }
+
+    /// `TuplePut` element index.
+    #[must_use]
+    pub fn tupleput_idx(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::TuplePut(_, i, _)) => *i,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDTUPLEPUT_IDX) as u16,
+            IrNode::Native(_) => kind_panic("tupleput_idx", self),
+        }
+    }
+
+    /// `TuplePut` value expression.
+    #[must_use]
+    pub fn tupleput_inner(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::TuplePut(_, _, b)) => IrNode::Native(b),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDTUPLEPUT_INNER),
+            IrNode::Native(_) => kind_panic("tupleput_inner", self),
+        }
+    }
+
     // ── single boxed children ───────────────────────────────────────────────
 
     /// `Return` inner expression.
@@ -783,6 +833,8 @@ mod tests {
             Value::FnRef(7, u16::MAX, Box::new(Type::Boolean)),
             Value::Block(Box::new(blk())),
             Value::Loop(Box::new(blk())),
+            Value::TupleGet(2, 1),
+            Value::TuplePut(3, 0, Box::new(Value::Int(9))),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
@@ -850,6 +902,18 @@ mod tests {
                     let (nb, sb) = (nat.as_block(), sto.as_block());
                     assert_eq!(nb.operators().len(), sb.operators().len());
                     assert_eq!(nb.result(), sb.result());
+                }
+                ValueType::TupleGet => {
+                    assert_eq!(nat.tupleget_var(), sto.tupleget_var());
+                    assert_eq!(nat.tupleget_idx(), sto.tupleget_idx());
+                }
+                ValueType::TuplePut => {
+                    assert_eq!(nat.tupleput_var(), sto.tupleput_var());
+                    assert_eq!(nat.tupleput_idx(), sto.tupleput_idx());
+                    assert_eq!(
+                        nat.tupleput_inner().int_value(),
+                        sto.tupleput_inner().int_value()
+                    );
                 }
                 ValueType::FnRef => {
                     assert_eq!(nat.fnref_dnr(), sto.fnref_dnr());
