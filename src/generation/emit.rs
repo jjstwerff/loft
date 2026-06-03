@@ -119,6 +119,65 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
+            // @PLAN54 G2/M4.5 — self-contained arms (no &Value-helper delegation).
+            ValueType::Yield => {
+                if self.yield_collect {
+                    // Inside a ForLoopBody factory: push to the collector.
+                    write!(w, "__values.push((")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                    if self.yield_collect_text {
+                        write!(w, ").to_string())")?;
+                    } else {
+                        write!(w, ") as i64)")?;
+                    }
+                } else {
+                    write!(w, "yield ")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                }
+                return Ok(());
+            }
+            // C39/C47: FnRef emits a (u32, DbRef) tuple — closure var's DbRef, or
+            // a null sentinel when non-capturing.
+            ValueType::FnRef => {
+                let clos_var = node.fnref_clos_var();
+                let clos_name = if clos_var == u16::MAX {
+                    None
+                } else {
+                    let variables = &self.data.def(self.def_nr).variables;
+                    Some(sanitize(variables.name(clos_var)))
+                };
+                let d_nr = node.fnref_dnr();
+                if let Some(name) = clos_name {
+                    return write!(w, "({d_nr}_u32, var_{name})");
+                }
+                return write!(
+                    w,
+                    "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                );
+            }
+            ValueType::Parallel => {
+                return write!(w, "/* parallel {{}} — not supported in native codegen */");
+            }
+            ValueType::FnRefDnr => {
+                // P215: project the d_nr from a fn-ref var's (u32, DbRef) tuple.
+                let var_name = sanitize(
+                    self.data
+                        .def(self.def_nr)
+                        .variables
+                        .name(node.fnref_dnr_var()),
+                );
+                return write!(w, "(var_{var_name}.0 as i64)");
+            }
+            // Plan-07 — Span is transparent in native emit.
+            ValueType::Span => return self.output_code_node(w, node.span_inner()),
+            ValueType::Iter => return write!(w, "{:?}", node.as_native()),
+            // Plan-06 spine step 3 — ParFor native codegen lands in step 3b.
+            ValueType::ParFor => {
+                return write!(
+                    w,
+                    "/* par_for(...) — native codegen lands in spine step 3b */"
+                );
+            }
             _ => {}
         }
         // Native-backed bridge for the not-yet-converted arms (lifted as they
@@ -375,7 +434,6 @@ impl Output<'_> {
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            Value::Iter(..) => write!(w, "{code:?}")?,
             Value::Tuple(elems) => {
                 write!(w, "(")?;
                 for (i, e) in elems.iter().enumerate() {
@@ -449,63 +507,6 @@ impl Output<'_> {
                 write!(w, "var_{name}.{idx} = ")?;
                 self.output_code_inner(w, val)?;
             }
-            Value::Yield(inner) => {
-                if self.yield_collect {
-                    // Inside a ForLoopBody factory: push to the collector instead.
-                    write!(w, "__values.push((")?;
-                    self.output_code_inner(w, inner)?;
-                    if self.yield_collect_text {
-                        write!(w, ").to_string())")?;
-                    } else {
-                        write!(w, ") as i64)")?;
-                    }
-                } else {
-                    write!(w, "yield ")?;
-                    self.output_code_inner(w, inner)?;
-                }
-            }
-            // C39/C47: FnRef emits a (u32, DbRef) tuple.
-            // If closure_var (w) is a real variable, pass its DbRef; otherwise null sentinel.
-            Value::FnRef(d_nr, closure_var, _) => {
-                let clos_name = if *closure_var == u16::MAX {
-                    None
-                } else {
-                    let variables = &self.data.def(self.def_nr).variables;
-                    Some(sanitize(variables.name(*closure_var)))
-                };
-                if let Some(name) = clos_name {
-                    write!(w, "({d_nr}_u32, var_{name})")?;
-                } else {
-                    write!(
-                        w,
-                        "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
-                }
-            }
-            Value::Parallel(_) => {
-                // Native codegen for parallel {} is not yet supported.
-                write!(w, "/* parallel {{}} — not supported in native codegen */")?;
-            }
-            Value::FnRefDnr(v_nr) => {
-                // P215: project the d_nr from a fn-ref var.  `var_<name>`
-                // is the (u32, DbRef) tuple in native rust_type;
-                // `.0 as i64` widens to match the integer ABI expected
-                // by `OpSetInt4`'s template.
-                let var_name = sanitize(self.data.def(self.def_nr).variables.name(*v_nr));
-                write!(w, "(var_{var_name}.0 as i64)")?;
-            }
-            // Plan-07 phase 1 — Span is transparent in native emit.
-            Value::Span(b) => self.output_code_inner(w, &b.1)?,
-            // Plan-06 spine step 3 — ParFor native codegen lands in
-            // step 3b.  Until then, emit a placeholder comment so the
-            // file at least compiles when it accidentally appears in
-            // a reachable definition.
-            Value::ParFor(_) => {
-                write!(
-                    w,
-                    "/* par_for(...) — native codegen lands in spine step 3b */"
-                )?;
-            }
             // @PLAN54 G2/M4.1–M4.2 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here.
             Value::RawExpr(_)
@@ -522,8 +523,15 @@ impl Output<'_> {
             | Value::Continue(_)
             | Value::Drop(_)
             | Value::BreakWith(_, _)
-            | Value::Insert(_) => {
-                unreachable!("M4.1–M4.4-converted kind reached legacy match: {code:?}")
+            | Value::Insert(_)
+            | Value::Yield(_)
+            | Value::FnRef(_, _, _)
+            | Value::Parallel(_)
+            | Value::FnRefDnr(_)
+            | Value::Span(_)
+            | Value::Iter(_, _, _, _)
+            | Value::ParFor(_) => {
+                unreachable!("M4.1–M4.5-converted kind reached legacy match: {code:?}")
             }
         }
         Ok(())
