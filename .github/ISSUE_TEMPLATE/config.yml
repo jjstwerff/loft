@@ -6,3 +6,6 @@ contact_links:
   - name: Documentation
     url: https://jjstwerff.github.io/loft/
     about: Language reference, standard library, and how-to guides.
+  - name: What the labels mean
+    url: https://github.com/jjstwerff/loft/blob/main/.github/LABELS.md
+    about: Glossary of sev:/wa:/area: labels — what area:codegen etc. cover, without reading the source.

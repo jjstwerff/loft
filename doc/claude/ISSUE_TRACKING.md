@@ -48,8 +48,13 @@ files would.  The win is the *uniform* convention, not GitHub itself.
   bolt-on `make index-gh` (`gh issue list --json number,state`), not a
   prerequisite.  Cross-repo: bare `@GH###` = this repo; a qualified spelling for
   other repos (`@GH:<repo>:<n>`) is TBD and the less-common case.
-- **Labels to create** (beyond GitHub's defaults `bug`/`enhancement`/…):
+- **Labels** — meanings live in [`.github/LABELS.md`](../../.github/LABELS.md)
+  (the glossary so other agents don't dig into the loft source to learn what
+  `area:codegen` covers) + each label's GitHub `description` (the inline gloss).
+  Beyond GitHub's defaults `bug`/`enhancement`/…:
   - severity: `sev:high` / `sev:medium` / `sev:low`
+  - **workaround** (created): `wa:clean` / `wa:partial` / `wa:none` — see
+    [§ Workarounds](#workarounds--the-agents-can-you-keep-moving-signal)
   - area: `area:codegen` / `area:closures` / `area:store-lifetime` /
     `area:parser` / `area:native` / `area:wasm` / `area:stdlib` /
     `area:packages` / …
@@ -59,6 +64,33 @@ files would.  The win is the *uniform* convention, not GitHub itself.
   dogfood loop (moros / dryopea drive loft) lives on these links.
 - **Roadmap** — a `gh` Project board across the orgs for "which release bundles
   which consumer-driven work"; ROADMAP.md can't span orgs.
+
+## Workarounds — the agent's "can you keep moving?" signal
+
+A bug's workaround is the **primary thing the loft agent communicates to others**
+(moros / dryopea / library authors / users): *can you route around this, or are
+you blocked?*  Every bug carries both halves:
+
+- a **`### Workaround` section** in the body — what to do today, OR what you tried
+  that did NOT work;
+- a **`wa:*` label** (the queryable metadata):
+  - `wa:clean` — a simple idiomatic alternative, **verified working**;
+  - `wa:partial` — a workaround exists but is awkward / loses the intended
+    behaviour, **verified working**;
+  - `wa:none` — nothing works; this **blocks** whoever hits it.
+
+**THE RULE: a workaround is VERIFIED or it is not claimed.**  Run it on current
+HEAD, both backends, and put the command + result in the section.  An **unverified
+or WRONG workaround is worse than `wa:none`** — a downstream developer who follows
+a confident-but-broken workaround loses time *and* stops trusting the signal,
+which is the signal's entire value.  Same rigor as the probe-first fix rule: a
+claim is a thing to *verify*, not assert.  (Pilots: #246 `wa:none` — the rebind
+was tested, yields `[]`; #247 `wa:partial` — the non-capturing alternative was run
+on both backends, printed `10`/`7`.)
+
+**Triage:** `gh issue list --label "wa:none"` is the blocked-set — often more
+urgent than raw `sev:`, because severity is "how bad when hit" and `wa:` is "can
+you avoid being hit."
 
 ## Migration plan
 

@@ -328,6 +328,15 @@ believing it (a "concurrency, not my change" verdict is only
 trustworthy AFTER the mechanism probes + a standalone-vs-trigger
 repro prove it).
 
+**Don't claim a workaround you didn't run, either.**  "Bind it to a
+local / use the non-X form" is a claim — VERIFY it on current HEAD,
+both backends, before stating it (the workaround IS the agent's
+primary "can you keep moving?" signal to other consumers).  A WRONG
+workaround is worse than "none": it misleads whoever follows it and
+burns the trust that is the signal's whole value.  Record the
+verified workaround + a `wa:*` label — see
+[ISSUE_TRACKING.md § Workarounds](../ISSUE_TRACKING.md#workarounds--the-agents-can-you-keep-moving-signal).
+
 **The ONLY exception** to the agent step: the probe corpus already
 pins a SINGLE fix site AND the change is XS — state both in the
 commit.  **Probe-first is never skipped; never skip both.**
