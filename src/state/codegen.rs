@@ -170,7 +170,21 @@ impl State {
             }
         }
         self.source = stack.data.def(def_nr).source();
-        self.generate(stack.data.def(def_nr).code(), &mut stack, true);
+        // @PLAN54 G2/M5 — optional store-backed lowering proof.  With
+        // `LOFT_CODEGEN_STORE` set, materialise this function's body into a
+        // store and lower it through `IrNode::Store`; `generate_inner` reads the
+        // body via the handle (store) and the Definition table via `stack.data`
+        // (native), so the emitted bytecode must be identical to the native
+        // path.  Default off → the native lowering below runs unchanged.
+        if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+            let mut stores = crate::database::Stores::new();
+            let root = crate::data_store::ValuesVector::new(stores.database(16));
+            crate::ir_store::materialize_node(&mut stores, root, stack.data.def(def_nr).code());
+            let body = IrNode::Store(&stores, root.get(0, &stores));
+            self.generate_node(body, &mut stack, true);
+        } else {
+            self.generate(stack.data.def(def_nr).code(), &mut stack, true);
+        }
         let mut stack_pos = Vec::new();
         let mut skip_free_vars = Vec::new();
         for v_nr in 0..stack.function.next_var() {
