@@ -121,6 +121,21 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// The recursion bridge for M3.x: the underlying native node, asserting the
+    /// backing is native.  A converted codegen arm that still calls a helper
+    /// taking `&Value` (`gen_if`, `gen_return`, `self.generate`, …) passes its
+    /// child as `node.child().as_native()`.  Every M3.x codegen entry constructs
+    /// `IrNode::Native`, so this never fails today; M5 removes these call sites
+    /// when the helpers themselves take `IrNode`.
+    ///
+    /// # Panics
+    /// If called on a store-backed handle (a codegen bug before M5).
+    #[must_use]
+    pub fn as_native(&self) -> &'a Value {
+        self.native()
+            .expect("IrNode::as_native: codegen recursion is native-backed until G2/M5")
+    }
+
     // ── scalar accessors (representative spread — categories proven; the rest
     //    land just-in-time with their M3.1 consumer) ──────────────────────────
 
@@ -269,6 +284,58 @@ impl<'a> IrNode<'a> {
             IrNode::Native(Value::Drop(b)) => IrNode::Native(b),
             IrNode::Store(s, n) => store_child(s, n, ds::NDDROP_INNER),
             IrNode::Native(_) => kind_panic("drop_inner", self),
+        }
+    }
+
+    /// `Yield` inner expression.
+    #[must_use]
+    pub fn yield_inner(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::Yield(b)) => IrNode::Native(b),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDYIELD_INNER),
+            IrNode::Native(_) => kind_panic("yield_inner", self),
+        }
+    }
+
+    // ── scalar + one boxed child ─────────────────────────────────────────────
+
+    /// `Set` target variable slot.
+    #[must_use]
+    pub fn set_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::Set(v, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDSET_VAR) as u16,
+            IrNode::Native(_) => kind_panic("set_var", self),
+        }
+    }
+
+    /// `Set` assigned expression.
+    #[must_use]
+    pub fn set_inner(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::Set(_, b)) => IrNode::Native(b),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDSET_INNER),
+            IrNode::Native(_) => kind_panic("set_inner", self),
+        }
+    }
+
+    /// `BreakWith` loop number.
+    #[must_use]
+    pub fn breakwith_nr(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::BreakWith(v, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDBREAKWITH_N) as u16,
+            IrNode::Native(_) => kind_panic("breakwith_nr", self),
+        }
+    }
+
+    /// `BreakWith` value expression.
+    #[must_use]
+    pub fn breakwith_inner(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::BreakWith(_, b)) => IrNode::Native(b),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDBREAKWITH_INNER),
+            IrNode::Native(_) => kind_panic("breakwith_inner", self),
         }
     }
 
@@ -537,6 +604,9 @@ mod tests {
             Value::Call(17, vec![Value::Int(1), Value::Var(2), Value::Int(3)]),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
+            Value::Set(3, Box::new(Value::Int(8))),
+            Value::BreakWith(1, Box::new(Value::Var(2))),
+            Value::Yield(Box::new(Value::Int(5))),
             Value::If(
                 Box::new(Value::Boolean(true)),
                 Box::new(Value::Int(1)),
@@ -588,6 +658,20 @@ mod tests {
                 }
                 ValueType::Drop => {
                     assert_eq!(nat.drop_inner().var_nr(), sto.drop_inner().var_nr());
+                }
+                ValueType::Set => {
+                    assert_eq!(nat.set_var(), sto.set_var());
+                    assert_eq!(nat.set_inner().int_value(), sto.set_inner().int_value());
+                }
+                ValueType::BreakWith => {
+                    assert_eq!(nat.breakwith_nr(), sto.breakwith_nr());
+                    assert_eq!(
+                        nat.breakwith_inner().var_nr(),
+                        sto.breakwith_inner().var_nr()
+                    );
+                }
+                ValueType::Yield => {
+                    assert_eq!(nat.yield_inner().int_value(), sto.yield_inner().int_value());
                 }
                 ValueType::If => {
                     assert_eq!(nat.if_cond().kind(), sto.if_cond().kind());

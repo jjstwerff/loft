@@ -295,13 +295,42 @@ impl State {
                 }
                 return Type::Void;
             }
+            // @PLAN54 G2/M3.2 — single-child / compound delegating arms.  The
+            // dispatch + child access run through the handle; the children are
+            // bridged to the still-`&Value` helpers via `as_native()` until M5.
+            ValueType::Set => {
+                self.generate_set(stack, node.set_var(), node.set_inner().as_native());
+                return Type::Void;
+            }
+            ValueType::Return => return self.gen_return(node.return_inner().as_native(), stack),
+            ValueType::Drop => return self.gen_drop(node.drop_inner().as_native(), stack),
+            ValueType::BreakWith => {
+                self.generate(node.breakwith_inner().as_native(), stack, false);
+                return self.gen_break(node.breakwith_nr(), stack);
+            }
+            ValueType::If => {
+                return self.gen_if(
+                    node.if_cond().as_native(),
+                    node.if_then().as_native(),
+                    node.if_else().as_native(),
+                    stack,
+                );
+            }
+            ValueType::Yield => {
+                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
+                let t = self.generate(node.yield_inner().as_native(), stack, false);
+                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
+                stack.add_op("OpCoroutineYield", self);
+                self.code_add(value_size);
+                // CO1.3d: the yield suspends and transfers the value to the
+                // caller; the eval stack is empty again on resume, so undo the
+                // push.  @PLAN53 S4: the yielded value occupied a stepped span.
+                stack.position -= stack.step(value_size);
+                return Type::Void;
+            }
             _ => {}
         }
         match val {
-            Value::Set(v, value) => {
-                self.generate_set(stack, *v, value);
-                Type::Void
-            }
             Value::Loop(lp) => self.gen_loop(lp, stack),
             Value::Insert(ops) => {
                 for op in ops {
@@ -309,16 +338,9 @@ impl State {
                 }
                 Type::Void
             }
-            Value::BreakWith(loop_nr, val) => {
-                self.generate(val, stack, false);
-                self.gen_break(*loop_nr, stack)
-            }
-            Value::If(test, t_val, f_val) => self.gen_if(test, t_val, f_val, stack),
-            Value::Return(v) => self.gen_return(v, stack),
             Value::Block(bl) => self.generate_block(stack, bl, top),
             Value::Call(op, parameters) => self.generate_call(stack, *op, parameters),
             Value::CallRef(v_nr, args) => self.generate_call_ref(stack, *v_nr, args),
-            Value::Drop(val) => self.gen_drop(val, stack),
             Value::Iter(_, _, _, _) => {
                 panic!("Should have rewritten {val:?}");
             }
@@ -460,18 +482,6 @@ impl State {
                 self.code_add(var_pos);
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
-            Value::Yield(inner) => {
-                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
-                let t = self.generate(inner, stack, false);
-                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
-                stack.add_op("OpCoroutineYield", self);
-                self.code_add(value_size);
-                // CO1.3d: OpCoroutineYield suspends and transfers the value to the caller.
-                // The evaluation stack is empty again on resume, so undo the push.
-                // @PLAN53 S4: the yielded value occupied a stepped span.
-                stack.position -= stack.step(value_size);
-                Type::Void
-            }
             Value::TuplePut(var_nr, elem_idx, value) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — write element through the DbRef using
@@ -602,10 +612,10 @@ impl State {
                     "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
                 )
             }
-            // @PLAN54 G2/M3.1 — the scalar/leaf kinds (Int, Long, Single, Float,
-            // Boolean, Enum, Text, Var, Break, Continue, Null, Keys, Line) are
-            // handled by the `match node.kind()` above, which `return`s before
-            // reaching here; they can never arrive.
+            // @PLAN54 G2/M3.1–M3.2 — these kinds are handled by the
+            // `match node.kind()` above, which `return`s before reaching here;
+            // they can never arrive.  The list shrinks toward empty as later
+            // groups move their arms up to the `kind()` dispatch.
             Value::Int(_)
             | Value::Long(_)
             | Value::Single(_)
@@ -618,8 +628,14 @@ impl State {
             | Value::Continue(_)
             | Value::Null
             | Value::Keys(_)
-            | Value::Line(_) => {
-                unreachable!("M3.1-converted leaf kind reached legacy match: {val:?}")
+            | Value::Line(_)
+            | Value::Set(_, _)
+            | Value::Return(_)
+            | Value::Drop(_)
+            | Value::BreakWith(_, _)
+            | Value::If(_, _, _)
+            | Value::Yield(_) => {
+                unreachable!("M3.1/M3.2-converted kind reached legacy match: {val:?}")
             }
         }
     }
