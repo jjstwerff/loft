@@ -83,7 +83,6 @@ Features that "appear to work" but don't, or that lose data without indication. 
 | (cross) | Binary file I/O matrix — value type × format × access pattern; absorbs @P289 canonical serialization | M | ✓ | plans/future/43-binary-io-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
 | (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/48-integer-width-discipline/README.md |
-| (cross) | Nested-vector layout — `vector<vector<…>>` element-stride reconciliation (construction 16 / read 8 / runtime 4 / true 4) + single-NaN-sentinel SIGSEGV; depth × element × context matrix.  Absorbs #262, seeds #246/#250/#263 | MH | 🟡 | plans/58-nested-vector-layout/README.md |
 
 ---
 

@@ -9,6 +9,45 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Nested-vector layout — four corruption/crash clusters fixed (plan-58) (2026-06-03)
+
+Closed the `vector<vector<…>>` stability class across depth × element-type ×
+context (plan-58, now `finished/`).  `vector<vector<…>>` is load-bearing (map
+tiles, matrices, adjacency lists, comprehension results); a stride/type-id
+investigation found four independent defects beyond the one filed crash:
+
+- **Single sentinel (#262, `tests/scripts/183`).**  A freshly-created
+  vector-of-vectors element is a 4-byte rec-id HANDLE, but `OpNewRecord` default-
+  inits it with the inner scalar's null sentinel.  For `single` the NaN
+  (`0x7FC00000`) is a non-zero garbage rec-id → SIGSEGV.  Generalized the `@P380`
+  `OpSetInt4`-zero from the copy path to every construction path.
+- **Narrow-int literal (`184`).**  `vector<vector<i32>> = [[1,2]]` typed the
+  inner literal wide (`integer`, stride 8) while the read used `i32` (stride 4) →
+  silent corruption.  `parse_item` now propagates the declared element type into
+  the inner literal.  Width-general (i32/i16/u8).
+- **Boolean handle stride (`185`).**  The outer vector strided handles by the
+  inner scalar size — fine for ≥4-byte scalars, but a 1-byte `boolean` made the
+  4-byte handles overlap (corrupt→crash).  Parse-time fix: pass the outer vector
+  type as `OpNewRecord`'s type when the inner content is <4 bytes (so
+  `record_new` strides by the handle), plus a read-stride clamp to ≥4 — no type
+  classification change.
+- **Nested comprehension (`186`).**  `[for i { [..] }]` wrote a 12-byte handle
+  via the scalar `OpSetInt4` path → eval-stack skew → CONST_STORE write panic;
+  and its `known` over-wrapped one level vs `+=` (off-by-one).  Deep-copy
+  (`OpCopyRecord`) + element-type `known` (`vector_of`).  Distinct from #248.
+
+Adjacent fix: **`vector<character>` element reads** (`v[0]` / `for c in v`)
+errored "Field access not supported on type character" — `get_val` had no
+`Type::Character` arm (only the write side did).  Added the symmetric
+`OpGetCharacter` read (`tests/scripts/187`).
+
+All fixes verified on `--interpret` and `--native`.  The temporary `--vec4`
+investigation lever was added then retired (−109 lines).  Remaining
+nested-vector matrix red cell is `#263` (call-returned fn-ref into any
+collection — a general closures bug, out of scope).  Benign residual:
+≥4-byte inner scalars still over-reserve the outer slot stride (no
+corruption/leak) — accepted; a future stride guard (sanitizer) is noted.
+
 ### `loft-libs-core` first all-green chunk under strict CI (2026-05-30)
 
 Landed `loft-lang/loft-libs-core` PR #2 (omnibus): canonical
