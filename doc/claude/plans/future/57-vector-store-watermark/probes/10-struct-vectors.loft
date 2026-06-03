@@ -1,0 +1,19 @@
+// 10 — 10 named vector<Item> (struct) locals.  Tests whether a struct vector
+// allocates MORE than 2 stores/local (per-element struct stores) or stays 2×.
+// Result: 22 allocs = 2/local → elements are stored INLINE in the vector store,
+// no per-element store; cluster II's 2× holds for struct vectors.  @P393.
+struct Item { name: text, value: integer }
+fn main() {
+  total = 0;
+  s0 = [Item {name: "a", value: 0}, Item {name: "b", value: 1}]; total += s0[0].value;
+  s1 = [Item {name: "a", value: 1}, Item {name: "b", value: 2}]; total += s1[0].value;
+  s2 = [Item {name: "a", value: 2}, Item {name: "b", value: 3}]; total += s2[0].value;
+  s3 = [Item {name: "a", value: 3}, Item {name: "b", value: 4}]; total += s3[0].value;
+  s4 = [Item {name: "a", value: 4}, Item {name: "b", value: 5}]; total += s4[0].value;
+  s5 = [Item {name: "a", value: 5}, Item {name: "b", value: 6}]; total += s5[0].value;
+  s6 = [Item {name: "a", value: 6}, Item {name: "b", value: 7}]; total += s6[0].value;
+  s7 = [Item {name: "a", value: 7}, Item {name: "b", value: 8}]; total += s7[0].value;
+  s8 = [Item {name: "a", value: 8}, Item {name: "b", value: 9}]; total += s8[0].value;
+  s9 = [Item {name: "a", value: 9}, Item {name: "b", value: 10}]; total += s9[0].value;
+  println("struct-vec total={total}");
+}

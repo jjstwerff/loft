@@ -85,8 +85,11 @@ collides with `2P259`, `P2590`, prose like "the P259 fix <!--noindex-->
 forward"): <!--noindex-->
 
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
-- **Plans + phases**: `@PLAN22`, `@PLAN35-01`,
-  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`).
+- **Plans (canonical)**: `@PLN3` = a [`loft-lang/plans`](https://github.com/loft-lang/plans)
+  issue (the cross-ecosystem plan id = its issue number).
+- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`) — point at the design dir
+  (`plans/<NN>/`), per-tree.
 
 Adoption is incremental — bare-name forms (`P259`, `plan-22 <!--noindex-->
 phase 03`) still work in prose; the indexer (`make index`)
@@ -299,54 +302,64 @@ states that are harder to debug than the original problem.
 
 ## Bug-filing policy — MANDATORY
 
-**File pre-existing bugs encountered during a bug hunt before moving on to any
-other bug or feature.**
+**When you surface a bug, the default is to FIX it — not to file it.**
 
-While diagnosing or fixing a bug you will often surface *other* bugs:
+While diagnosing or fixing a bug you will often surface *other* bugs — sibling
+shapes, latent issues flagged in code comments, symptoms unrelated to the active
+fix.  These are the **cheapest bugs you will ever fix**: the code paths are loaded
+into your head, the diagnostic infrastructure is warm, a reproducer is within
+reach.  That is an argument for *fixing* them on the spot (with a regression
+test) — **not** for filing them.  Filing only documents a bug *for later*, and
+"later" pays again to re-derive the scope, repro, and mechanism you have right
+now.  We are usually hunting and solving bugs with no deadline; solving is the
+work, and a backlog of filed-but-unfixed rows is not progress.
 
-- Sibling shapes ("the original P-issue was `out + s`; my variant probes show
-  `s = s + s` and `s = "lit" + s` are also broken differently").
-- Latent issues flagged in code comments that never made it to PROBLEMS.md
-  (for example, a `// loft text fields initialised to "" read back as null`
-  comment in a working example).
-- Symptoms surfaced during diagnosis but unrelated to the active fix
-  ("native E0502 in this unrelated borrow path").
+**Origin is never worth recording.**  Which commit introduced a bug, or its
+history, tells you nothing about making it correct.  Scope (what triggers it —
+the edges) and root cause (the mechanism in the *present* code) are what you fix
+from — never a `git bisect` / archaeology narrative.
 
-These findings are the **cheapest bugs you will ever file** — the relevant
-code paths are loaded into your head, the diagnostic infrastructure is warmed
-up, and a working reproducer is within reach.  Moving on without filing
-means re-discovering each one from scratch in a future session.
+**Filing documents a bug for the future, so file only when you are NOT fixing it
+now.**  Two cases:
 
-**Required action before picking up the next bug or feature:**
+- **It blocks the task you're on.**  File a bookmark + use a workaround so you
+  can keep moving, then come back.  This is the clearest reason to file.
+- **It's genuinely too big to fix now** (M+ effort / needs design).  Route it to
+  its canonical home (see [DEVELOPMENT.md § Inserting Discovered
+  Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)).
 
-1. Add a P-issue row to [PROBLEMS.md](doc/claude/PROBLEMS.md) with a minimal
-   reproducer (path, expected output, observed output on each backend),
-   severity tier, and the workaround if any.
-2. If user-visible, mirror the row in
-   [USER_FACING.md](doc/claude/USER_FACING.md).
-3. If the bug is small enough to test cheaply, save the reproducer to
-   `/tmp/p_followups/` (so re-validation later is one command) or, when the
-   shape deserves CI lock-in, add a regression test to `tests/scripts/`.
+When you DO file: **open a GitHub Issue** (`gh issue create`, the `bug_report`
+template) — NOT a PROBLEMS.md row (PROBLEMS.md is now the closed/historical
+archive; see [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md)).  Include a minimal
+reproducer (expected vs observed on each backend), a `sev:` + `area:` label, and a
+**`wa:*` workaround label whose claim you VERIFIED** (run it, both backends — a
+wrong workaround is worse than `wa:none`; see
+[ISSUE_TRACKING.md § Workarounds](doc/claude/ISSUE_TRACKING.md#workarounds--the-agents-can-you-keep-moving-signal)).
+Label meanings: [`.github/LABELS.md`](.github/LABELS.md).  Save the repro to
+`/tmp/p_followups/` or add a `tests/scripts/` regression if it deserves CI lock-in.
+When the bug is FIXED, reference the issue in the commit (`Fixes #NNN`) so GitHub
+closes it — but do **not** file at all for a bug you fix in the same change: the
+fix + its regression test ARE the record.
 
-The rule applies even when the bug looks obvious, narrow, or "clearly
-unrelated."  One row in PROBLEMS.md costs ~30 seconds.  The cost of
-re-discovering the bug six months later — relearning the surrounding
-code, rebuilding a reproducer, re-running the diagnostic — is two orders
-of magnitude higher.
+**Inside an investigation plan, don't file at all** — the plan's probes + cluster
+docs already document every shape (see
+[`plans/_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md)).
+A separate P-issue would double-document the same shape.
 
-This rule is **not** a license to scope-creep the active fix.  Continue to
-ship the original-report fix as a focused change.  File the follow-ups as
-*new* P-issue rows; do not bundle them into the same patch unless they share
-a single fix site.
+This is **not** a license to scope-creep the active fix.  When you're focused on
+shipping fix X, an unrelated bug Y you can't fix without derailing X is exactly
+the "not fixing it now" case — file Y (or pick it up as its own focused change
+next); don't bundle it into X's patch unless they share a single fix site.
 
 ### Inserting fixes vs filing — see DEVELOPMENT.md
 
-The rule above covers **filing**.  When the discovered gap is XS or S
-(under half a day) AND the consumer code that uses the workaround is
-fresh in working memory, prefer **inserting a step into the active plan
-that fixes the gap directly**, then resuming the feature work — the
-language / stdlib gets sturdier and the workaround never enters
-shipped code.
+The rule above already defaults to **fixing**.  This section is the
+related *consumer-gap* case — a missing language/stdlib feature a real
+consumer needs.  When the gap is XS or S (under half a day) AND the
+consumer code that uses the workaround is fresh in working memory,
+prefer **inserting a step into the active plan that fixes the gap
+directly**, then resuming the feature work — the language / stdlib gets
+sturdier and the workaround never enters shipped code.
 
 Routing the discovered item to its canonical home (P-issue / `## Open
 work` row in STDLIB.md / NATIVE.md / COMPILER.md / new lib_plans slot)
@@ -409,13 +422,15 @@ The rule: **always commit before any operation that changes the working tree.**
 | [CODE.md](doc/claude/CODE.md) | Code quality rules (naming, functions, doc comments, clippy, dependency policy) |
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
-| [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
+| [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) | **Where bugs live: open bugs → GitHub Issues; investigations → files; closed → PROBLEMS.md archive.**  The convention (labels, `@GH###` refs, cross-repo), the workaround-as-signal rule, and the migration plan |
+| [.github/LABELS.md](.github/LABELS.md) | Issue-label glossary — what `sev:`/`wa:`/`area:` mean (e.g. `area:codegen`) WITHOUT reading the source |
+| [PROBLEMS.md](doc/claude/PROBLEMS.md) | **Closed/historical bug archive** (FIXED rows = regression record; the big `###` entries are design references).  OPEN bugs are now [GitHub Issues](https://github.com/jjstwerff/loft/issues) |
 | [QUALITY.md](doc/claude/QUALITY.md) | Reference + open work — open programmer-biting issues, active sprint (P54 JsonValue enum), active designs (Q1-Q4 JSON ecosystem, P54-U unified parser, Dep-inference for native fn returns), compiler blockers (B2-B7 struct-enum bugs), enhancement tiers, recommended landing order.  C54 (integer→i64) historical record kept as the canonical "LANDED via …" closure pattern.  See [§ Open work — actionable summary](doc/claude/QUALITY.md#open-work--actionable-summary) for the at-a-glance status table. |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) in `## Open work` section. |
-| [GOALS.md](doc/claude/GOALS.md) | What "loft stable" means, made concrete — the 4 goals (A soundness / B stack-layout decision / C cross-platform parity / D dogfood capability), each with a measurable done-criterion + honest status; the two-engine (dogfood + sanitizer) model |
+| [GOALS.md](doc/claude/GOALS.md) | **What loft is *for*, and the goals that serve it.**  Leads with the **Purpose**: loft is the *foundation*, the end is the library/infrastructure on top (lavition); *do the hard plumbing so it's fun to pick up* — **fun-on-pickup** is the acceptance test; built for its own sake, adoption a *consequence not a goal*.  Six **stack-wide** goals (A soundness / B release & legibility / C capability via dogfood / D parity / **E predictable memory** — source is the truth, *surpass Rust on safe-AND-predictable* / **F friction-free** — serve the programmer not the compiler), each with a runnable **Check**; the goals hold for the libraries too — they **don't meet them yet** (the coming shift).  Plus the two-engine (dogfood + sanitizer) model + the method-mirrors-the-goals section |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
@@ -449,7 +464,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Debug a runtime crash | [PROBLEMS.md](doc/claude/PROBLEMS.md) (check open issues) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
+| Debug a runtime crash | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) (closed archive) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) standard library function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
 | Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmarks, root-cause analysis, optimisation designs |
@@ -459,7 +474,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Find test coverage gaps | [TESTING.md](doc/claude/TESTING.md) § Test Coverage Gaps |
-| Fix a known bug | [PROBLEMS.md](doc/claude/PROBLEMS.md) (fix path) → [TESTING.md](doc/claude/TESTING.md) |
+| Fix a known bug | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list --label "wa:none"` for blockers) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
 | Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) — each entry has a reproducer and test reference |
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |

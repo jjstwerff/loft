@@ -1,0 +1,11 @@
+// 02 — a FRESH local vector<integer> built each loop iteration.  If freed per
+// iteration the watermark stays flat (~baseline); if it accumulates the
+// watermark grows ~ iteration count (a real per-scope delayed-free).  @P393.
+fn main() {
+  total = 0;
+  for i in 0..20 {
+    v: vector<integer> = [i, i + 1, i + 2];
+    for x in v { total += x; }
+  }
+  println("loop-int total={total}");
+}

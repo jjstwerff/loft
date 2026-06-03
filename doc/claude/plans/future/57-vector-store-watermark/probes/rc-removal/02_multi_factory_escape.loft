@@ -1,0 +1,6 @@
+// TWO closures from TWO factories, interleaved.  The KNOWN RC_OFF break (UAF).
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_02() {
+  f1 = make(); f2 = make();
+  assert(f1() == 1 && f2() == 1 && f1() == 2 && f2() == 2, "multi factory");
+}

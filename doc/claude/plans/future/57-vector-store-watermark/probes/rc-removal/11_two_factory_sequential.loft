@@ -1,0 +1,8 @@
+// Two factory closures used SEQUENTIALLY (f1 fully done before f2 made).  Isolates
+// whether the rc dependency is COEXISTENCE of live closures or just count.
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_11() {
+  f1 = make(); a = f1() + f1();
+  f2 = make(); b = f2() + f2();
+  assert(a == 3 && b == 3, "two factory sequential");
+}

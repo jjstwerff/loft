@@ -1,0 +1,12 @@
+fn many_blocks(n: integer) -> integer {
+  total = 0;
+  if n > 0 { a: vector<integer> = [1, 2, 3]; total += a[0]; }
+  if n > 1 { b: vector<integer> = [4, 5, 6]; total += b[0]; }
+  if n > 2 { c: vector<integer> = [7, 8, 9]; total += c[0]; }
+  if n > 3 { d: vector<integer> = [10, 11]; total += d[0]; }
+  if n > 4 { e: vector<integer> = [12, 13]; total += e[0]; }
+  total
+}
+fn main() {
+  assert(many_blocks(10) == 1 + 4 + 7 + 10 + 12, "blocks sum");
+}

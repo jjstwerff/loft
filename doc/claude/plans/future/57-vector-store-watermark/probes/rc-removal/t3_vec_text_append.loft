@@ -1,0 +1,2 @@
+// vector<text> grown with += (each text element a heap store).
+fn test_t3() { v: vector<text> = []; for i in 0..5 { v += ["item{i}"]; } assert(len(v) == 5, "vec text append"); }

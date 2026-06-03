@@ -74,6 +74,29 @@ body:
       required: true
 
   - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: A way to avoid the bug today — or what you tried that did NOT work.  Drives triage urgency.
+      render: rust
+      placeholder: |
+        Bind the concat to a local first:  w = v + [9]; w.len()
+        — or: "none clean — rebinding via a temp also fails (...)"
+
+  - type: dropdown
+    id: workaround_quality
+    attributes:
+      label: Is there a clean workaround?
+      description: Sets the `wa:*` label.  A bug with no clean workaround is often more urgent than its raw severity implies.
+      options:
+        - "clean — a simple, idiomatic alternative exists"
+        - "partial — a workaround exists but it's awkward / loses the intended behaviour"
+        - "none — nothing works; this blocks whoever hits it"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
     id: extra
     attributes:
       label: Additional context

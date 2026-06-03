@@ -1046,33 +1046,42 @@ debug than the original problem.
 
 A bug hunt routinely surfaces *other* bugs that aren't the original report —
 sibling shapes, latent issues flagged in comments, symptoms unrelated to the
-active fix.  **File those before picking up the next bug or feature.**
+active fix.  **The default is to FIX them, not file them.**
 
-Why: bugs found during a hunt are the cheapest bugs in the project's lifetime —
-the relevant code paths are loaded, the diagnostic infrastructure is warmed up,
-a working reproducer is within reach.  Moving on without filing means
-re-discovering each finding from scratch later, paying the surrounding-code
-relearning cost again.
+Why: bugs found during a hunt are the cheapest in the project's lifetime — the
+code paths are loaded, the diagnostic infrastructure is warm, a reproducer is
+within reach.  That is exactly why they should be *solved* on the spot (focused
+fix + regression test), not turned into backlog.  Filing only documents a bug
+*for later*, and "later" re-pays to re-derive the scope and repro you already
+have.  (Origin — which commit, what history — is never worth recording; scope +
+root cause in the *present* code are what you fix from.)
 
-Required action when a non-target bug surfaces:
+**File a P-issue only when you are NOT fixing it now** — its purpose is to
+document the bug so it isn't re-discovered.  Two cases:
+
+- The finding **blocks** the fix you're on → file a bookmark + use a workaround,
+  keep moving, come back to it.
+- It's **M+ / needs design** → route it to its canonical home
+  (§ Inserting Discovered Enhancements above).
+
+Inside an investigation plan, don't file — the plan's probes + cluster docs
+already document every shape.  When you DO file a row (you're not fixing it now):
 
 1. **Save the reproducer** to `/tmp/p_followups/p<N>_<slug>.loft` (one
    `.loft` file per finding).  Captures the smallest input that reproduces.
 2. **Add a P-issue row** to [PROBLEMS.md](PROBLEMS.md) with: minimal
    reproducer text or `/tmp` path, observed behaviour on each backend (interp
-   and `--native`), severity tier (S0/S1/S2), workaround if any, and how it
-   was surfaced (commit / probe / fix variant).
+   and `--native`), severity tier (S0/S1/S2), and the workaround.
 3. **If user-visible**, mirror the row in
    [USER_FACING.md](USER_FACING.md).
 4. **If the bug deserves CI lock-in** (most do not until they're being fixed),
-   add a regression to `tests/scripts/` or `tests/issues.rs`.  Don't gate the
-   filing on writing a test — the row in PROBLEMS.md is the load-bearing
-   artefact.
+   add a regression to `tests/scripts/` or `tests/issues.rs`.
 
-Filing is **not** a license to scope-creep the active fix.  Continue to ship
-the original-report fix as a focused change; file follow-ups as separate
-P-issue rows.  Bundle into the same patch only when the follow-ups share a
-single fix site (and the commit message lists every P-id closed).
+Do **not** file a row for a bug you just *fixed* — the fix + its regression test
+ARE the record.  And filing is **not** a license to scope-creep the active fix:
+an unrelated bug Y you can't fix without derailing fix X is the "not fixing it
+now" case — file Y (or pick it up next as its own focused change); bundle into
+X's patch only when they share a single fix site.
 
 The rule applies even when the bug looks obvious, narrow, or "clearly
 unrelated."  Survey method that worked in past sessions:

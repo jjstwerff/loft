@@ -1,0 +1,18 @@
+// 13 — 10 slice-init locals (t = base[a..b], non-aliased).  Result: ~1/local (NOT
+// 2×) → the slice materialises directly into the local (the @P390 non-aliased fast
+// path).  Reference for "init done right" — contrast cluster II.  @P393.
+fn main() {
+  base = [1, 2, 3, 4, 5];
+  total = 0;
+  t0 = base[0..2]; total += t0[0];
+  t1 = base[0..2]; total += t1[0];
+  t2 = base[0..2]; total += t2[0];
+  t3 = base[0..2]; total += t3[0];
+  t4 = base[0..2]; total += t4[0];
+  t5 = base[0..2]; total += t5[0];
+  t6 = base[0..2]; total += t6[0];
+  t7 = base[0..2]; total += t7[0];
+  t8 = base[0..2]; total += t8[0];
+  t9 = base[0..2]; total += t9[0];
+  println("slice total={total}");
+}

@@ -1,0 +1,6 @@
+fn f(n: integer) -> vector<integer> {
+  if n > 0 { a: vector<integer> = [1, 2, 3]; return a; }
+  z: vector<integer> = [9];
+  z
+}
+fn test_30() { v = f(5); assert(v.len() == 3 && v[0] == 1, "returned vec survives"); }

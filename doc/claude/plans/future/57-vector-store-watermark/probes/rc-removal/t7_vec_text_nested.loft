@@ -1,0 +1,2 @@
+// vector<vector<text>> — nested heap stores.
+fn test_t7() { vv: vector<vector<text>> = [["a", "b"], ["c"]]; assert(len(vv) == 2 && vv[0][1] == "b", "nested vec text"); }

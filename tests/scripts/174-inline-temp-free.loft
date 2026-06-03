@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (@P393): an UNBOUND heap-returning call temporary used INLINE (as a
+// call argument or method receiver) had no statement-end free → it leaked on the
+// interpreter (native codegen already freed it).  Two siblings, both fixed by
+// `inline_struct_return` lift arms (src/scopes.rs):
+//   * t9    — a de-NRVO'd (empty-dep) vector return: a fn/method whose body builds
+//             the result with >=2 element-temps (`z=[]; z+=[a]; z+=[b]; z`, or a
+//             loop + trailing append as in stdlib `split`) is NOT NRVO-promoted, so
+//             it returns by value with no caller buffer.  `Type::Vector` lift arm.
+//   * bug10 — a capturing closure returned then passed as an unbound arg
+//             (`apply(make())`) left its `__closure_*` record at rc 1.
+//             `Type::Function` lift arm.
+// Negative controls (NRVO'd 1-append, borrowed `-> text[self]`, bound locals) must
+// stay clean — the lift's `dep.is_empty()` guard must NOT over-free them.  The wrap
+// leak gate verifies zero leaked stores on BOTH backends.
+
+// --- t9: de-NRVO'd vector returns (leaked inline before the Vector lift arm) ---
+fn two_append() -> vector<integer> { z = []; z += [1]; z += [2]; z }
+fn reassign() -> vector<integer> { z: vector<integer> = [9]; z = [1, 2]; z }
+fn loop_trailing(s: text) -> vector<text> {        // the stdlib `split` shape
+  r = [];
+  p = 0;
+  for c in s { if c == '-' { r += [s[p..c#index]]; p = c#next; } }
+  if s.len() > 0 { r += [s[p..s.len()]]; }
+  r
+}
+
+// --- t9 negative control: NRVO'd (1 append) must stay clean ---
+fn one_append() -> vector<integer> { z = []; z += [7]; z }
+
+// --- bug 10: capturing closure returned + passed as an unbound arg ---
+fn apply(f: fn() -> integer) -> integer { f() + f() }
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+
+fn main() {
+  // t9 — inline-unbound de-NRVO'd vector returns (these leaked before the fix)
+  assert(len(two_append()) == 2, "two_append len");
+  assert(len(reassign()) == 2, "reassign len");
+  assert(len(loop_trailing("a-b-c")) == 3, "loop_trailing len");
+  assert("x-y-z".split('-').join("-") == "x-y-z", "stdlib split/join roundtrip");
+  assert(len("p-q-r".split('-')) == 3, "stdlib split len");
+
+  // t9 negative controls — already clean; the dep guard must not over-free them
+  assert(len(one_append()) == 1, "one_append (NRVO'd) len");
+  assert(len("  hi".trim_start()) == 2, "borrowed trim_start len");
+
+  // bug 10 — capturing closure as an unbound arg (leaked before the Function arm)
+  assert(apply(make()) == 3, "closure passed as arg");
+
+  println("inline-temp-free ok");
+}

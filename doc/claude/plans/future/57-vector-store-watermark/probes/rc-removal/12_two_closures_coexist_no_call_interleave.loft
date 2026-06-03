@@ -1,0 +1,8 @@
+// Two closures coexist (both alive) but calls are NOT interleaved.
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_12() {
+  f1 = make(); f2 = make();
+  a = f1() + f1();   // f1 twice
+  b = f2() + f2();   // then f2 twice
+  assert(a == 3 && b == 3, "coexist no-interleave");
+}

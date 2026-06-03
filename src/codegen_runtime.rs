@@ -267,26 +267,6 @@ pub fn OpFinishRecord(
     stores.record_finish(&data, &record, parent_tp as u16, fld as u16);
 }
 
-/// P259: increment a store's reference count.  Native equivalent of
-/// the `OpIncRc` bytecode opcode (declared in `default/01_code.loft`).
-/// Used after each `SetDbRef` that captures a heap-owned cell
-/// (`Reference(__cell_*, _)`) into a closure record's auto-Reference
-/// attribute.  Without this inc, the parent fn's scope-exit `OpFreeRef`
-/// drops the cell's rc to 0 and frees the store while the closure
-/// record still holds the DbRef (P259 multi-factory crash).  Pairs
-/// with the cascade-free in `Stores::free_named` (P259 commit 4).
-#[allow(non_snake_case)]
-pub fn OpIncRc(cell: &std::cell::UnsafeCell<Stores>, db: DbRef) {
-    let stores: &mut Stores = unsafe { &mut *cell.get() };
-    if db.store_nr == u16::MAX {
-        return;
-    }
-    if (db.store_nr as usize) >= stores.allocations.len() {
-        return;
-    }
-    stores.inc_rc(db.store_nr);
-}
-
 /// Free a database reference.  Closes any associated file handle first.
 /// Bytecode equivalent: `OpFreeRef` in `src/state/io.rs:262`.
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in
@@ -299,10 +279,10 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
     if (db.store_nr as usize) >= stores.allocations.len() {
         return;
     }
-    // Reference counting: only close file handles when this is the last ref.
+    // Plan-57 Phase C: single-ownership (ref-count removed) — close the file
+    // handle whenever its File store is freed.
     #[cfg(not(feature = "wasm"))]
     if !stores.allocations[db.store_nr as usize].free
-        && stores.allocations[db.store_nr as usize].ref_count <= 1
         && db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
     {
@@ -315,6 +295,46 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
         }
     }
     stores.free_named(&db, name);
+}
+
+/// Plan-57 store-identity gate (`OpStoreTag`) — native runtime parity with the
+/// interpreter's `State::store_tag` (`src/state/io.rs`).  Stamps the allocation-site
+/// `tag` on the store `db` points to, so a later `OpFreeRefTag` can verify the free
+/// corresponds.  Emitted only under the `LOFT_STORE_TAG` gate (a testing build);
+/// absent from normal native code.
+pub fn OpStoreTag(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, tag: i64) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if db.store_nr != u16::MAX && (db.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[db.store_nr as usize].tag = tag as u32;
+    }
+}
+
+/// Plan-57 store-identity gate (`OpFreeRefTag`) — native runtime parity with the
+/// interpreter's `State::free_ref_tag`.  Verifies the store's stamped tag against
+/// the free site, then frees (via [`OpFreeRef`]).  Emitted only under the
+/// `LOFT_STORE_TAG` gate.
+///
+/// # Panics
+/// Panics on a store-tag mismatch — a wrong-store / cross-owner free — exactly as
+/// the interpreter does, so the native and interpreter gates report the same bug.
+pub fn OpFreeRefTag(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, tag: i64) {
+    {
+        let stores: &Stores = unsafe { &*cell.get() };
+        if db.store_nr != u16::MAX && (db.store_nr as usize) < stores.allocations.len() {
+            let st = &stores.allocations[db.store_nr as usize];
+            // `tag == 0` covers a slot reused by a NON-OpDatabase allocator after a
+            // tagged store freed it (`free_named` resets the tag to 0).  Mirrors the
+            // interpreter's `State::free_ref_tag` exactly.
+            assert!(
+                st.free || st.tag == 0 || st.tag == tag as u32,
+                "store-tag mismatch on free: store #{} has tag {} but OpFreeRefTag expected {}",
+                db.store_nr,
+                st.tag,
+                tag as u32,
+            );
+        }
+    }
+    OpFreeRef(cell, db, "");
 }
 
 /// conditionally free `placeholder` — only when its `store_nr`

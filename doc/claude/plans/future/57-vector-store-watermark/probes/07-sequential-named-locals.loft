@@ -1,0 +1,43 @@
+// 07 — 35 distinct named vector locals in one function scope.  Expect the
+// active-store watermark to climb to ~35 (one live store per local until
+// scope exit) and trip the LOFT_STORES=warn threshold.  Benign-baseline for
+// 'function holds many legit locals'.  @P393.
+fn main() {
+  total = 0;
+  a0: vector<integer> = [0, 1]; total += a0[0];
+  a1: vector<integer> = [1, 2]; total += a1[0];
+  a2: vector<integer> = [2, 3]; total += a2[0];
+  a3: vector<integer> = [3, 4]; total += a3[0];
+  a4: vector<integer> = [4, 5]; total += a4[0];
+  a5: vector<integer> = [5, 6]; total += a5[0];
+  a6: vector<integer> = [6, 7]; total += a6[0];
+  a7: vector<integer> = [7, 8]; total += a7[0];
+  a8: vector<integer> = [8, 9]; total += a8[0];
+  a9: vector<integer> = [9, 10]; total += a9[0];
+  a10: vector<integer> = [10, 11]; total += a10[0];
+  a11: vector<integer> = [11, 12]; total += a11[0];
+  a12: vector<integer> = [12, 13]; total += a12[0];
+  a13: vector<integer> = [13, 14]; total += a13[0];
+  a14: vector<integer> = [14, 15]; total += a14[0];
+  a15: vector<integer> = [15, 16]; total += a15[0];
+  a16: vector<integer> = [16, 17]; total += a16[0];
+  a17: vector<integer> = [17, 18]; total += a17[0];
+  a18: vector<integer> = [18, 19]; total += a18[0];
+  a19: vector<integer> = [19, 20]; total += a19[0];
+  a20: vector<integer> = [20, 21]; total += a20[0];
+  a21: vector<integer> = [21, 22]; total += a21[0];
+  a22: vector<integer> = [22, 23]; total += a22[0];
+  a23: vector<integer> = [23, 24]; total += a23[0];
+  a24: vector<integer> = [24, 25]; total += a24[0];
+  a25: vector<integer> = [25, 26]; total += a25[0];
+  a26: vector<integer> = [26, 27]; total += a26[0];
+  a27: vector<integer> = [27, 28]; total += a27[0];
+  a28: vector<integer> = [28, 29]; total += a28[0];
+  a29: vector<integer> = [29, 30]; total += a29[0];
+  a30: vector<integer> = [30, 31]; total += a30[0];
+  a31: vector<integer> = [31, 32]; total += a31[0];
+  a32: vector<integer> = [32, 33]; total += a32[0];
+  a33: vector<integer> = [33, 34]; total += a33[0];
+  a34: vector<integer> = [34, 35]; total += a34[0];
+  println("seq-locals total={total}");
+}

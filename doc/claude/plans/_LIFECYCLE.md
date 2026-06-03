@@ -75,6 +75,15 @@ canonical shape.
 
 ## Steps 4-6 — Common to close + defer
 
+> **Investigation plans — two extra obligations BEFORE the move** (the
+> `plans/*/` shape with `probes/` + a cluster catalogue).  See
+> [`_INVESTIGATION_TEMPLATE.md` § Closing an investigation plan](_INVESTIGATION_TEMPLATE.md#closing-an-investigation-plan-required):
+> (1) **file the still-open findings** — the active-phase no-file rule inverts at
+> closure, so a deferred/benign residual → QUALITY.md `## Open work` and an
+> unfixed sibling bug → PROBLEMS.md, each citing the `finished/` cluster doc;
+> (2) **promote permanent-guarantee probes → CI tests** (doc-probes aren't
+> CI-run).  A FIXED finding needs no row — the fix + its test are the record.
+
 ### Step 4 — Reclassify ROADMAP rows
 
 For each ROADMAP row touched by the plan:

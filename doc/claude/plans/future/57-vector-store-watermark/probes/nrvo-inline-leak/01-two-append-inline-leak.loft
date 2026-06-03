@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// CORE of the t9 mechanism (@P393, supersedes the rc-removal corpus' single t9 row).
+//
+// A fn/method whose returned local is BUILT with >=2 distinct element-temps
+// (here: two `+=` appends) is NOT NRVO-promoted — `01a3f24f` deliberately
+// de-promotes it (counting distinct `Set(_elm_k, OpNewRecord(z,…))` temps;
+// >=2 ⇒ leave it a normal local) to fix the `z=[a]; z=[b]; z` returned-[a] bug.
+// The de-NRVO'd return is BY VALUE (empty dep, no `__vdb`/`__ref` hidden buffer:
+// signature is `n_f()`, not `n_f(__vdb_1:…)`).  Used INLINE-UNBOUND (here as a
+// `len(...)` argument) the caller-side temp gets NO `OpFreeRef` on the
+// INTERPRETER → its store leaks.  Native codegen frees it (clean there).
+//
+// Expected:  interp = LEAK (1 store, kt main_vector<integer>)   native = clean
+// Workaround: bind to a local first (see 06-bound-baseline-clean.loft).
+
+fn f() -> vector<integer> {
+  z = [];
+  z += [1];
+  z += [2];
+  z
+}
+
+fn main() {
+  x = len(f());          // inline-unbound non-NRVO vector return → leaks (interp)
+  println("len={x}");
+}

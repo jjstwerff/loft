@@ -1,0 +1,6 @@
+// Several escaping closures stored in a vector then called.
+fn make(k: integer) -> fn() -> integer { fn() -> integer { k * 2 } }
+fn test_08() {
+  fs: vector<fn() -> integer> = [make(1), make(2), make(3)];
+  assert(fs[0]() == 2 && fs[1]() == 4 && fs[2]() == 6, "closures in vector");
+}

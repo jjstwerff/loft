@@ -1,0 +1,2 @@
+fn f(n: integer) -> integer { s = 0; if n > 0 { x = 3; parallel { s = x + 1; } } s }
+fn test_par5() { assert(f(5) == 4, "parallel no-vec"); }

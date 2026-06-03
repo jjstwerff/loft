@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The EXACT shape of stdlib `split` (@P393) — a loop append PLUS a trailing
+// append.  Two SYNTACTICALLY distinct `+=` sites ⇒ 2 distinct element-temps ⇒
+// >= the `01a3f24f` de-NRVO threshold ⇒ by-value (empty-dep) return ⇒ leaks
+// inline-unbound on the interpreter.
+//
+// Compare 04-pure-loop-nrvo-clean.loft: a loop append with NO trailing append is
+// ONE distinct temp (the loop body reuses it) → stays NRVO'd → clean.  So the
+// trailing `result += [...]` line in `split` (02_files.loft:146) is what tips it
+// over the threshold.  This is why `03-text.loft` (which calls `split` inline)
+// went red while a pure-loop builder would not.
+//
+// Expected:  interp = LEAK   native = clean
+
+fn split_like(s: text) -> vector<text> {
+  result = [];
+  p = 0;
+  for c in s {
+    if c == 0x2D {                       // '-'
+      result += [s[p..c#index]];         // append #1 (loop body, 1 temp)
+      p = c#next;
+    }
+  }
+  if s.len() > 0 {
+    result += [s[p..s.len()]];           // append #2 (trailing) → de-NRVO
+  }
+  result
+}
+
+fn main() {
+  x = len(split_like("a-b-c"));          // inline-unbound → leaks (interp)
+  println("segments={x}");
+}

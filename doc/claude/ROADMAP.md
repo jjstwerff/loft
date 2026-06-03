@@ -241,6 +241,7 @@ Performance, refactor, internal cleanup with clear payoff.
 | O5 | Native: omit `stores` from pure functions | M | ✓ | PERFORMANCE.md § Open work (N2) |
 | A12 | Lazy work-variable initialization | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
 | O2 | Stack raw pointer cache | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
+| @P393 | Vector store-lifetime watermark — function-local vectors free at scope-end not last-use; literal-init double-allocates.  Stage A: verified **no leak** (exit gate passes); benign watermark + noisy `LOFT_STORES=warn` floor.  Quickest win = raise heuristic threshold (XS) | S-M (XS heuristic / S cluster II / M cluster I) | Stage A ✓; Stage B/C pending (design call) | plans/future/57-vector-store-watermark/README.md |
 
 ### Constant store deferred-tail
 
@@ -390,6 +391,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/future/41-doc-hygiene-autofix/`](plans/future/41-doc-hygiene-autofix/) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
 | [`plans/future/54-stdlib-fast-start/`](plans/future/54-stdlib-fast-start/) | M-MH | cooperates with **plans/future/38-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced during @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
+| [`plans/future/57-vector-store-watermark/`](plans/future/57-vector-store-watermark/) | S-M | kindred to finished PLAN51/52 store-lifetime class; soundness-floor A ([GOALS.md](GOALS.md)) | @P393 investigation — function-local vectors free at scope-end not last-use (cluster I) + literal-init double-alloc (cluster II).  Stage A ✓ both backends: **verified no leak**, benign watermark.  Stage B (source root-cause) + Stage C (design call: do-nothing-heuristic vs last-use-free) pending |
 
 ### N — Niche / opportunistic
 

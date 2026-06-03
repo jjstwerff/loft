@@ -1,0 +1,4 @@
+fn f(n: integer) -> integer {
+  match n { 0 => 0, _ => { a: vector<integer> = [1,2,3]; a[0] + a[2] } }
+}
+fn test_p17() { assert(f(5) == 4, "match arm"); }

@@ -1,0 +1,3 @@
+// struct holding a vector<text> field, reassigned.
+struct Bag { items: vector<text> }
+fn test_t8() { b: Bag = Bag { items: ["x"] }; b = Bag { items: ["y", "z"] }; assert(len(b.items) == 2, "struct vec text"); }

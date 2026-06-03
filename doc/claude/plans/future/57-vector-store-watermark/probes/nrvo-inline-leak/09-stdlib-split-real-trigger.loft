@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The REAL suite trigger (@P393) — the two `03-text.loft` shapes that turn the
+// `wrap text` + `wrap loft_suite` leak gate red.  `split` (02_files.loft:133) is
+// a loop+trailing builder (probe 03's shape) → de-NRVO'd → its inline-unbound
+// result leaks on the interpreter.  `SCRIPTS_LEAK_ALLOW` is empty, so the gate
+// fails the file.
+//
+// This is the minimized stand-in for 03-text; it is what the fix must turn green.
+//
+// Expected (today):  interp = LEAK   native = clean
+// Expected (post-fix): clean on both backends.
+
+fn main() {
+  n = len("x-y-z".split('-'));            // split result as a call argument
+  r = "x-y-z".split('-').join("-");       // split result as a method receiver
+  println("n={n} r={r}");
+}

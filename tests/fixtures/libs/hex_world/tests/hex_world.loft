@@ -101,7 +101,7 @@ fn main() {
   sv_w.set_cell(100, 0,  hex_world::Cell { c_color: 9, c_height: 4,  c_age: 42  });
   sv_w.set_cell(-1, 0,   hex_world::Cell { c_color: 7, c_height: 3,  c_age: 200 });
 
-  sv_path = "/tmp/loft_world_test.bin";
+  sv_path = "loft_hex_world_test.bin";  // @P387: cwd-relative (Windows has no /tmp/)
   sv_w.world_save(sv_path);
 
   // Load into a fresh world and round-trip every value.
@@ -118,10 +118,11 @@ fn main() {
   assert(ld_c.c_color == 9 && ld_c.c_height == 4 && ld_c.c_age == 42, "round-trip (100,0)");
   ld_d = ld_w.get_cell(-1, 0);
   assert(ld_d.c_color == 7 && ld_d.c_height == 3 && ld_d.c_age == 200, "negative-chunk round-trip");
+  delete(sv_path);  // @P387: don't leave the save artifact in the package dir
 
   // Missing file → 0 cells, no panic.
   miss_w = hex_world::world_empty();
-  miss_n = miss_w.world_load("/tmp/loft_world_does_not_exist.bin");
+  miss_n = miss_w.world_load("loft_hex_world_does_not_exist.bin");
   assert(miss_n == 0, "missing file loads 0 cells");
   assert(miss_w.tick == 0, "missing file leaves tick unchanged");
 

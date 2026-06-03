@@ -1,0 +1,7 @@
+// Closure used in the SAME frame that owns the cell (does NOT escape).  Scoping
+// alone should suffice — should NOT need rc.
+fn test_04() {
+  n = 0;
+  f = fn() -> integer { n = n + 1; n };
+  assert(f() == 1 && f() == 2, "no-escape in-frame");
+}

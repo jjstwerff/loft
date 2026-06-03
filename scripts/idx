@@ -6,6 +6,8 @@
 #
 # Forms:
 #   idx tag:@P259                 — exact tag match
+#   idx tag:@GH247                — GitHub Issue/PR ref (prints its URL too)
+#   idx gh:247                    — same, from a bare number
 #   idx tag:legacy:P259           — bare-name (legacy) lookup
 #   idx prefix:@PLAN22            — all tags starting with prefix
 #   idx file:doc/.../PROBLEMS.md  — all tags referenced in a file
@@ -158,7 +160,19 @@ add_excerpts() {
 
 case "$QUERY" in
   tag:*)
-    jq --arg t "${QUERY#tag:}" '.[$t] // []' "$IDX" | add_excerpts
+    t="${QUERY#tag:}"
+    # @GH<n> → a deterministic GitHub URL (issues + PRs share one number
+    # space; /issues/<n> redirects to /pull/<n> when n is a PR).  No gh call.
+    if [[ "$t" =~ ^@GH([0-9]+)$ ]]; then
+      echo "→ https://github.com/jjstwerff/loft/issues/${BASH_REMATCH[1]}  (issue or PR — GitHub redirects)"
+    fi
+    jq --arg t "$t" '.[$t] // []' "$IDX" | add_excerpts
+    ;;
+  gh:*)
+    # idx gh:247 → the issue/PR URL + every @GH247 reference (offline).
+    n="${QUERY#gh:}"
+    echo "→ https://github.com/jjstwerff/loft/issues/${n}  (issue or PR — GitHub redirects)"
+    jq --arg t "@GH${n}" '.[$t] // []' "$IDX" | add_excerpts
     ;;
   prefix:*)
     # prefix returns an OBJECT; flatten refs across all matching

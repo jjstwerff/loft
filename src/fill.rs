@@ -179,6 +179,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     null_ref_sentinel,
     init_ref_sentinel,
     free_ref,
+    store_tag,
+    free_ref_tag,
     free_ref_if_distinct,
     sizeof_ref,
     var_ref,
@@ -260,7 +262,6 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     parallel_arm,
     parallel_join,
     pre_alloc_vector,
-    inc_rc,
     get_file,
     get_dir,
     get_file_text,
@@ -1271,6 +1272,14 @@ fn free_ref(s: &mut State) {
     s.free_ref();
 }
 
+fn store_tag(s: &mut State) {
+    s.store_tag();
+}
+
+fn free_ref_tag(s: &mut State) {
+    s.free_ref_tag();
+}
+
 fn free_ref_if_distinct(s: &mut State) {
     let v_witness = *s.get_stack::<DbRef>();
     let v_placeholder = *s.get_stack::<DbRef>();
@@ -1962,13 +1971,6 @@ fn pre_alloc_vector(s: &mut State) {
         u32::from(v_elem_size),
         &mut s.database.allocations,
     );
-}
-
-fn inc_rc(s: &mut State) {
-    let v_v1 = *s.get_stack::<DbRef>();
-    if v_v1.store_nr != u16::MAX && (v_v1.store_nr as usize) < s.database.allocations.len() {
-        s.database.inc_rc(v_v1.store_nr);
-    }
 }
 
 fn get_file(s: &mut State) {

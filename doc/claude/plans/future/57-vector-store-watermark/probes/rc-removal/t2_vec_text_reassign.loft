@@ -1,0 +1,2 @@
+// vector<text> reassigned (cluster-III family + text elements).
+fn test_t2() { v: vector<text> = ["x"]; v = ["aa", "bb"]; assert(len(v[0]) + len(v[1]) == 4, "vec text reassign"); }

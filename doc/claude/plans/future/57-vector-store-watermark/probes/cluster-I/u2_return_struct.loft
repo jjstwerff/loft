@@ -1,0 +1,7 @@
+struct Bag { items: vector<integer> }
+fn g(n: integer) -> Bag {
+  b: Bag = Bag { items: [0] };
+  if n > 0 { a: vector<integer> = [1, 2, 3]; b = Bag { items: a }; }
+  b
+}
+fn test_u2() { r = g(5); assert(r.items[0] == 1 && r.items.len() == 3, "returned struct keeps vec"); }

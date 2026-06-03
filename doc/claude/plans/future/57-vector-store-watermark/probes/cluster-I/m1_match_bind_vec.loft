@@ -1,0 +1,7 @@
+enum Box { Empty, Full { v: vector<integer> } }
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { b: Box = Full { v: [1, 2, 3] }; match b { Full { v } => t += v[0] + v[2], Empty => t += 0 }; }
+  t
+}
+fn test_m1() { assert(f(5) == 4, "match-bind vec"); }

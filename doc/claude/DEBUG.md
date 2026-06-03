@@ -279,9 +279,12 @@ running the program.
 | `--show-rust` | Generated Rust (`--native-emit` shape) | Native-codegen bugs, rustc errors |
 | `--show-slots` | Stack-slot table per fn (name, type, scope, slot, live interval) | Slot conflicts, lifetime bugs |
 | `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
+| `--bc-roundtrip` | Re-assemble each fn's bytecode from its own dump and compare (`ok`/`DIFFERS`) | Verify the dump is a faithful, editable bytecode representation — see [Bytecode round-trip](#bytecode-round-trip---bc-roundtrip) |
 
-Combine flags freely; they emit in fixed order.  No flags = all
-four sections.  `--all-fns` includes the default/* stdlib.  `--fn
+Combine the four dump flags freely; they emit in fixed order, and
+no flags = all four.  `--bc-roundtrip` is **opt-in only** (a
+verification check, not a dump — it never runs in the no-flags
+default).  `--all-fns` includes the default/* stdlib.  `--fn
 <name>` filters to one function.
 
 ### `--show-types` for dep-tracking bugs
@@ -352,6 +355,77 @@ loft --introspect --show-bytecode --diff before.bc myprog.loft
 Per-section `--*-out` redirects still write to their files;
 `--diff` only covers stdout-bound sections.
 
+### Labelled jump targets in the bytecode dump
+
+`--show-bytecode` anchors every jumped-to offset with a `:POS<rel>`
+label and rewrites each goto to reference it, so the dump reads as
+editable labelled assembly instead of raw byte offsets:
+
+```
+ 28[48]: GotoFalseWord(jump=:POS46, if_false: boolean)
+ 43[40]: GotoWord(jump=:POS58)
+:POS46
+ 46[40]: ConstInt(val=2) -> integer var=r[16]:integer
+...
+127[40]: GotoWord(jump=:POS62)   ← backward loop edge, binds to the label
+:POS130
+```
+
+Jumps bind to a label *identity*, not a byte offset, so inserting or
+removing ops shifts no jumps.  The label `<rel>` is the target's
+relative offset within the function (`collect_jump_targets` /
+`instruction_len` in `src/compile.rs` — `instruction_len` decodes
+each op's real length, so variable-length `ConstText`/`Iterate`
+operands advance correctly).
+
+### Bytecode round-trip (`--bc-roundtrip`)
+
+`loft --introspect --bc-roundtrip <file>` dumps each function's
+bytecode, re-assembles it from that text via
+`compile::reassemble_function` (the inverse of the disassembler),
+and compares to the original byte stream — reporting `ok` /
+`DIFFERS` / `error` per function plus a tally.
+
+```bash
+loft --introspect --bc-roundtrip --all-fns myprog.loft
+#   ok      n_classify  (139 bytes)
+#   ok      n_main      (95 bytes)
+#   ── 201 identical, 0 differing/error ──
+```
+
+A clean run proves the labelled dump is a **faithful, editable
+representation of the bytecode** — every byte is recoverable from
+the text.  Constants encode inline (`ConstText` carries its escaped
+string); jumps resolve from `:POS` labels; call targets dump as the
+function *name* (`fn=n_classify`, relocation-safe) and static calls
+as the native name, both resolved back to offsets on re-assembly.
+
+**Why it's a tool, not just a test** — it's the front half of an
+"edit bytecode *outside the parser*" loop: dump a function, change
+an op / a constant / a jump / drop in a free, re-assemble, and the
+round-trip confirms it's well-formed.  For any **stack-neutral**
+tweak that is a real way to ask "what does *this exact* bytecode
+do?" without going through the parser.
+
+**Limits** (honest boundaries of the edit workflow):
+- *Stack-neutral edits* (swap an op, change a constant, redirect a
+  jump, add a free) re-assemble correctly — slot positions and the
+  `Return` discard are unchanged.
+- *Stack-depth or local-set changes* do **not** round-trip a hand
+  edit: var slots are stack-relative (`pos = stack − slot`) and
+  `Return(…, discard=N)` is the frame size, both of which shift.
+  Re-deriving them needs the slot/layout pass (`scopes.rs`), not a
+  text edit.
+- The last 20% — **splice-and-run** (append the re-assembled
+  function to the code array, repoint `code_position` + caller `to`,
+  execute) — is **not built**.  Relative gotos make a single
+  function relocatable, so it's a small, self-contained add when the
+  need is real.
+
+Implementation: `compile::reassemble_function` + `escape_text` /
+`unescape_text` (`src/compile.rs`); the `Roundtrip` section in
+`src/introspect.rs`.
+
 ### Native-codegen source map
 
 The `--show-rust` (and any `--native` compilation) emits
@@ -413,23 +487,24 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 
 | Lever | What it does | Use when |
 |---|---|---|
+| `LOFT_STORE_GUARD=1` | Reports each block-confined vector store that is scoped (and freed) later than the block it is confined to — the lifetime model under-freeing (Goal E).  Read-only, off by default.  Confinement is the least-common-ancestor of every reference's scope-path, with escape exclusions (return/yield/break, block-result, tuple-element, dep-aliasing) and loop-internal reuse excluded — adversarially hardened by `plans/future/57-vector-store-watermark/probes/cluster-I/`. | "Does a program hold more heap than the source implies?"  Drive the store-lifetime fix until it is silent corpus-wide, then promote to a `debug_assertions` assert.  See [GOALS.md Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth). |
 | `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) | Zeroes every freshly-claimed record's payload, so a read-before-write / stale read returns a deterministic `0` instead of arena garbage. | A result is **non-deterministic** run-to-run.  If `zero_claim` makes it deterministic-and-correct → a read-before-write (fix: zero that record at its claim site).  If it stays non-deterministic → NOT a claimed-slack read (rule it out; suspect a deep-copy logic bug or addresses-as-data). |
 | `LOFT_LOG=poison_free` | Overwrites a store's buffer with `0xDEADBEEF` on free. | Suspected use-after-free of a *whole store*.  No effect ⇒ not a freed-store UAF. |
-| `LOFT_STORES=log` | Per-alloc/free/`dec_rc` trace (`+ alloc #N`, `- free #N`, `dec_rc #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
+| `LOFT_STORES=log` | Per-alloc/free trace (`+ alloc #N`, `- free #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
 | `LOFT_STORES=warn` | Warns when >30 stores are active. | Catch a runaway leak early. |
 | `LOFT_TRACE_DB=1` | Every `OpDatabase` call with var, type, current DbRef. | Pin cross-iter slot dangling (a slot's stale DbRef gets `clear+claim`'d, clobbering another var's record).  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_CR=1` | Every interp `OpCopyRecord` with src+dst + Canvas field reads BEFORE and AFTER copy. | Pin same-store copy corruption (`remove_claims` frees nested vec records before `copy_block` reads them) or wrong-source mid-copy.  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_COPY=1` | Native-side OpCopyRecord trace (src, dst, size, free_src). | Companion to `LOFT_TRACE_CR` for native; pin schema-mismatch copies (compile-side layout vs runtime-side layout disagree). |
 | `LOFT_TRACE_FINISH=1` | Every `finish_type` entry/exit for tuple types (size, align, field_groups count). | Pin tuple-schema propagation gaps (compiler side has groups, runtime side doesn't → wrong size).  Added during PLAN51 V-a diagnosis. |
 | `LOFT_KEEP_NATIVE_RS=1` | Preserves the generated Rust at `/tmp/loft_native_*.rs` instead of cleaning it. | Read the generated Rust at a specific line a runtime panic cites.  Added during PLAN51 V-c diagnosis. |
-| `check_store_leaks` (interp, automatic at clean exit) / `LOFT_NATIVE_LEAK_CHECK=1` (native) | At-exit summary of unfreed stores, **aggregated by type** (`kt=68 ChunkKey×6026`). | Pin *which type* leaks.  Run the **same** repro on both backends — a leak on one and not the other means a backend-specific free/`inc_rc` emission bug (the @P317 symptom-2 shape). |
-| `--native-emit out.rs` | Writes the generated Rust and exits. | A native-only bug.  Read the generated function: look for a `null_named(...)` placeholder that is overwritten without a free, or a missing/extra `OpFreeRef`/`dec_rc`. |
-| `"Allocating a used store #N (rc=…, known_type=…, requested by=…)"` panic (`allocation.rs:104`) | The store-pool tripwire (free-bitmap vs `store.free` disagree), now with slot + rc + type + requester. | Fires at the *next* allocation after the real over-free/leak — a tripwire, not the bug site.  `rc=1` + the pool near `u16::MAX` ⇒ a leak exhausted the pool and `max` wrapped to 0; otherwise a double-free / rc under-count. |
+| `check_store_leaks` (interp, automatic at clean exit) / `LOFT_NATIVE_LEAK_CHECK=1` (native) | At-exit summary of unfreed stores, **aggregated by type** (`kt=68 ChunkKey×6026`). | Pin *which type* leaks.  Run the **same** repro on both backends — a leak on one and not the other means a backend-specific free emission bug (the @P317 symptom-2 shape). |
+| `--native-emit out.rs` | Writes the generated Rust and exits. | A native-only bug.  Read the generated function: look for a `null_named(...)` placeholder that is overwritten without a free, or a missing/extra `OpFreeRef`. |
+| `"Allocating a used store #N (known_type=…, requested by=…)"` panic (`allocation.rs:104`) | The store-pool tripwire (free-bitmap vs `store.free` disagree), now with slot + type + requester. | Fires at the *next* allocation after the real over-free/leak — a tripwire, not the bug site.  The pool near `u16::MAX` ⇒ a leak exhausted the pool and `max` wrapped to 0; otherwise a double-free. |
 
 Workflow: reproduce minimally, run on **both** backends (divergence localises
 the backend), use `zero_claim` to classify the non-determinism, then `--native-emit`
 + `LOFT_STORES=log` to pin the site.  Mirror the @P311/@P313 fix shape (a
-missing/spurious `0x8000` free-source bit, `inc_rc`, or a `null_named`-vs-sentinel
+missing/spurious `0x8000` free-source bit or a `null_named`-vs-sentinel
 choice in `src/generation/dispatch.rs::emit_null_dbref`).
 
 ---

@@ -43,7 +43,7 @@ tried (33/35/lib-11) and shown to be over-engineering.
 
 | Flow | Where the TODO lives | When to use |
 |---|---|---|
-| **Bug fix** | [`../PROBLEMS.md`](../PROBLEMS.md) row + regression test + focused commit | Single root cause, fits in one commit, no design choices, no multi-phase sequencing. |
+| **Bug fix** | A focused fix + regression test + commit.  A [**GitHub Issue**](../ISSUE_TRACKING.md) only if you're **not** fixing it now (it blocks you, or it's M+ — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory)) | Single root cause, fits in one commit, no design choices, no multi-phase sequencing.  **The default** — most bugs are neither a plan nor even an Issue; they're just fixed. |
 | **Light — `## Open work` section** | A `## Open work` section in the relevant `doc/claude/<NAME>.md` reference doc | The normal flow.  TODO is co-located with the architecture it touches; one row per item; closure is "remove the row + update the reference content."  Used by NATIVE.md, PERFORMANCE.md, PACKAGES.md, QUALITY.md today. |
 | **Plan — `plans/<NN>-<slug>/`** | Full directory with README + per-phase files | Multi-session initiative with explicit phasing, design-before-implementation discipline, cross-arc dependencies, or a long arc that needs its own document space.  Capped at 2-3 active per `plans/` (see `feedback_max_three_active_plans`). |
 | **Investigation plan — `plans/<NN>-<slug>/` + `probes/` + per-cluster docs** | Investigation plan (probes + cluster docs + verified-vs-hypothesized accountability) — see the investigation-plan template when it lands.  Canonical example: PLAN51 (62 probes, 5 clusters, 12-commit fix arc). | Failure CLASS with multiple sub-mechanisms; needs probe-driven mechanism investigation BEFORE the fix design is clear.  See § When a problem should escalate to an investigation plan below. |
@@ -53,12 +53,132 @@ the work is genuinely multi-phase and benefits from its own
 directory — most TODOs don't, even ones that take several
 sessions.
 
+### Edge-probe BEFORE fixing — the lightweight default for loft's complex-variant bugs
+
+Distinct from (and lighter than) a full investigation **plan**: before fixing any
+non-trivial bug — *especially* one touching a **subsystem intersection** — spend a
+few minutes **edge-probing to find the bug's real shape**.  Most loft bugs are
+*complex-variant*: they live at the crossings of subsystems (tuple × vector,
+parallel × parent-var capture, store-lifetime × block-scope), and those crossings
+are **combinatorial** — a bug is a *region* of condition-combinations, not a point.
+A single repro is one point in that region.  Fixing from it alone tends to either
+(a) close the symptom and miss sibling points, or (b) be **unsound** for points the
+repro never exercised (e.g. plan-57's U3: "block-confined ⇒ freeable" held for
+every case checked and failed for the one block-result case left unprobed — a
+shippable corruption).
+
+So a batch of throwaway `.loft` probes (`--interpret`, vary one condition each)
+costs minutes and tells you the real boundary (the tuple-return bug = the *return*
+path only; local tuples fine; the `parallel {}` bug = a *write*-to-parent-local
+corruption, **not** reads — which P245 already fixed and `tests/scripts/81` guards)
+and which edges a naive fix would corrupt.  **Keep the probes** — they become
+permanent regression landmarks
+(`plans/future/57-vector-store-watermark/probes/`).  The *fix* still happens (don't
+file — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory));
+you just characterise the region first.  This lowers the bar to probe-first vs
+fix-from-one-repro.
+
+*Why clear them at all, not just the reported one:* a left bug is a **veil** — it
+blinds you downstream and can make broken things look fine (a `--native`
+`parallel{}` no-op once made test-80/81 *pass*).  Clearing bugs is the
+precondition for verifying the model holds anywhere — see
+[GOALS.md § Bugs are veils](../GOALS.md#bugs-are-veils--clearing-them-is-a-precondition-for-goal-e-not-a-sibling).
+
+**Inside an investigation plan this stops being the lightweight default and
+becomes a hard RULE — and it adds a code-only investigation-agent step** (the
+bugs there are hard by definition: multi-subsystem, non-obvious fix surface).
+The sequence is **probe → code-only investigation agent → fix → verify against
+the probe corpus**, never an ad-hoc fix from a first read.  Full rule:
+[`_INVESTIGATION_TEMPLATE.md § Fixing a finding`](_INVESTIGATION_TEMPLATE.md#fixing-a-finding--probe--agent-before-code-required).
+
+### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
+
+Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —
+that's a *good* sign (the probing is working), and it will happen in every
+investigation.  plan-57's store-lifetime probing surfaced both the tuple-return
+crash *and* the `parallel {}` capture bug.  The trap is to then fix the sibling
+**on the spot, inside the current investigation**, because it looks simple.  Don't.
+
+**Why it's a problem** (steerable — not a disaster, just a thing to catch early):
+
+1. **The sibling gets a fix-grade decision on discovery-grade evidence.**  It
+   skips the very probe-first rigor the investigation exists to enforce.  Concrete:
+   the `parallel {}` bug was handed a confident verdict ("reject *any*
+   enclosing-scope reference, zero blast radius") off a coarse 4-row table — and a
+   test *already in the repo* (`tests/scripts/81`, the P245 guard) disproved it
+   (parent-var **reads** are legal and tested; only **writes** corrupt).  A fix
+   built on that verdict would have broken a passing test.  That is the exact
+   "fix-from-one-repro under-fixes a complex-variant bug" trap the section above
+   warns about — re-entered, ironically, *during* a disciplined investigation.
+2. **It contaminates the investigation's record and its landmark set.**  An
+   investigation is a clean account of *one* thesis (plan-57 = store lifetime /
+   [Goal E](../GOALS.md)).  Bolt an unrelated bug's fix into it and the probes stop
+   telling you which landmarks are thoroughly mapped and which are half-probed
+   imports — the ledger lies about its own reliability.
+
+**The steer:** when a sibling bug surfaces, **record the discovery** (one note:
+shape + minimal repro + "investigated separately") and give it its **own** scoped
+edge-probe before any fix — same rigor, separate ledger.  This is just the
+[DEVELOPMENT.md route-to-canonical-home rule](../DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
+applied to investigations: a discovered bug that is not part of the active thesis
+goes to its own home unless it **shares a fix site** with the bug you're on.  The
+discovery note stays in the investigation's log (faithful record of what the
+probing found); the *case* and the *fix* live in their own scope.
+
+This whole discipline is not a separate process rule — it is
+[Goal E](../GOALS.md#the-method-mirrors-the-goal) applied to our own reasoning:
+the stated model (the investigation's thesis, a bug's verdict) must match the
+verified reality, and a divergence is fixed by removing the gloss, not asserting
+past it.  We hold our own claims to the exceptionless-transparency standard loft
+holds its memory model to — because a team that tolerates hidden machinery in its
+reasoning cannot credibly ship a language whose promise is no-hidden-machinery.
+
+### Preserve a failed/partial attempt as a diff + hash — don't revert it to a summary
+
+When an attempt **works partially or fails informatively**, the instinct to
+`git`-revert it is a trap: it discards the one artifact that teaches — the actual
+code, whose behaviour under the tracer you can re-examine — and leaves only a
+degraded prose summary.  This plan's own history is the proof: two cluster-I/III
+reverts came back as *misdiagnoses* (rc, then "timing") precisely because the work
+was thrown away and re-derived from a summary.  **We learn from failures; we do
+not hide them.**
+
+So instead of reverting, **preserve the attempt as a diff pinned to the exact
+build hash, inside the plan** (`experiments/<name>.diff` + a `.md` with
+`git checkout <hash> && git apply <diff>`, what it does, and the *real* lessons —
+see [`57-vector-store-watermark/experiments/`](future/57-vector-store-watermark/experiments/)).
+A future session re-applies it verbatim and studies the live behaviour rather than
+re-deriving from a degraded copy.  Don't ship a known-broken or oracle-fooling
+state to `main`; the diff is the durable, re-appliable record, and the working
+code can stay uncommitted in-tree to continue from.
+
+### Grade the signal before you trust the result
+
+Hastiness is not impatience — it is **mis-calibrated trust**: grading a
+measurement's *result* without grading the *signal*.  A signal lies in three
+distinct ways, each needing its own check: it measures the **wrong thing** (a
+proxy, not the property), it is **confounded** (buffering or mixed streams reorder
+it), or it is **stale** (read off a state that has since changed).  Before any
+conclusion or action: *is this signal reliable, and is it current?*
+
+Two corollaries:
+
+- **A fooleable oracle is a liability, not a safety net.**  For any test or guard,
+  ask "can this pass while the thing it is meant to catch is broken?"  If yes, it
+  is not an oracle — it manufactures false confidence.
+- **The loop is the work; the fix is its byproduct.**  A session that preserves and
+  reliably measures attempts, rules wrong explanations out, and *locates* the
+  constraint has succeeded even before code lands — the ruled-out ledger is the
+  durable asset, and the fix falls out of it.
+
 ### When a problem should escalate to an investigation plan
 
-The bug-fix workflow (PROBLEMS.md row + regression + commit) handles
-the overwhelming majority of bug reports.  Escalate to an
-investigation plan ONLY when one of these signals fires.  Each
-signal carries an action.
+Just *fixing* the bug (focused fix + regression + commit, after the edge-probe
+above) handles the overwhelming majority of bug reports — a plan is only for when
+the **scope is genuinely hard to pin down** (you can't yet write the fix because
+you don't know what you're dealing with).  Once scope + root cause are pinned,
+there's nothing to investigate: fix it.  Escalate to an investigation plan ONLY
+when one of these signals fires.  Each signal carries an action.
 
 The escalation triggers below all serve one underlying goal: making
 loft **stable** as a class, not just closing the reported shape.

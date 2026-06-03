@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The WORKAROUND + baseline (@P393).  The SAME de-NRVO'd 2-append return as
+// 01-two-append-inline-leak.loft, but BOUND to a local before use.  The local
+// (`p`) gets a normal scope-free, so the store is released — clean on both
+// backends.  This is the user-visible escape hatch today: never use such a
+// result inline; assign it first.
+//
+// It also bounds the eventual fix: whatever frees the inline-unbound temp must
+// produce EXACTLY this behaviour (one free, no double-free) — the bound case is
+// already correct and must stay correct.
+//
+// Expected:  interp = clean   native = clean
+
+fn f() -> vector<integer> {
+  z = [];
+  z += [1];
+  z += [2];
+  z
+}
+
+fn main() {
+  p = f();            // BOUND → p's scope-free releases the store
+  x = len(p);
+  println("len={x}");
+}

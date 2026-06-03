@@ -854,7 +854,6 @@ fn revive_record_chain(
         store.unlock();
         if store.free {
             store.free = false;
-            store.ref_count = 1;
         }
     }
     let wi = store_nr as usize / 64;

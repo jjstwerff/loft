@@ -1,0 +1,4 @@
+// ONE closure escaping its factory, mutating the captured cell.  Cell must outlive
+// make()'s frame.  Does a single escaping closure need rc?
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_01() { f = make(); assert(f() == 1 && f() == 2 && f() == 3, "single factory"); }

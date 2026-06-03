@@ -127,6 +127,15 @@ fn read_valid_pids() -> vector<text> {
                     out += [pid];
                 }
             }
+            // Issue-migration: the freeze banner maps migrated @P to GitHub
+            // Issues as `> @P<digits>→[#NNN]...`.  Those @P resolve to a gh
+            // Issue (not a broken ref) → mark them VALID, fully offline.
+            else if ll > 4 && line[0] == '>' && line[1] == ' '
+                && line[2] == '@' && line[3] == 'P' && is_digit_leaf(line[4]) {
+                j = 4;
+                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+                out += [line[4..j]];
+            }
             line_start = i + 1;
         }
         i = i + 1;
@@ -382,6 +391,8 @@ fn is_noindex_line(line: text) -> boolean {
 // scan.sh used to express.
 const BYTE_AT       = 64;   // '@'
 const BYTE_P_UPPER  = 80;   // 'P'
+const BYTE_G_UPPER  = 71;   // 'G'
+const BYTE_H_UPPER  = 72;   // 'H'
 const BYTE_P_LOWER  = 112;  // 'p'
 const BYTE_L        = 76;   // 'L'
 const BYTE_A        = 65;   // 'A'
@@ -480,6 +491,25 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             }
             // Failed: skip past the `@P` and resume scanning.
             i = i + 2;
+            continue;
+        }
+        // @GH<digits> — a GitHub Issue/PR reference (issues + PRs share ONE
+        // number space; the `/issues/<n>` URL redirects to the PR when n is a
+        // PR).  No optional trailing letter (unlike @P).  Same boundary rules.
+        if i + 4 <= n && line.byte_at(i + 1) == BYTE_G_UPPER
+            && line.byte_at(i + 2) == BYTE_H_UPPER
+            && is_digit_b(line.byte_at(i + 3)) {
+            j = i + 3;
+            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+            if j == n || !is_word_char_b(line.byte_at(j)) {
+                tag = line[i..j];
+                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
+                i = j;
+                continue;
+            }
+            // Trailing boundary failed; skip past `@GH` and resume.
+            i = i + 3;
             continue;
         }
         }  // end if b == BYTE_AT

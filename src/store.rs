@@ -153,6 +153,12 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
+    /// Plan-57 store-identity gate (verification builds only): the allocation-site
+    /// id written by `OpStoreTag` and verified by `OpFreeRefTag`.  `0` = untagged
+    /// (no verification emitted for this store).  Catches wrong-store / cross-owner
+    /// frees that `free_named` otherwise silently no-ops.  Set/checked only when the
+    /// gated IR post-pass emits the tagged ops; inert in normal builds.
+    pub tag: u32,
     /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
     /// Bytecode position that allocated this store (via OpDatabase).
@@ -161,9 +167,10 @@ pub struct Store {
     /// Bytecode position of the last significant operation on this store
     /// (OpCopyRecord, OpFreeRef skip, ref_count change, etc.).
     pub last_op_at: u32,
-    /// Reference count: number of live DbRefs pointing into this store.
-    /// Starts at 1 on allocation; `dec_rc` only frees when it drops to 0.
-    pub ref_count: u32,
+    /// Plan-57 Phase C: const/global stores are PINNED — `free_named` never
+    /// frees them (they live for the whole program).  Replaced the Stores
+    /// ref-count (deleted) as the only per-store free gate.
+    pub pinned: bool,
     /// Plan-22 02d-vii follow-up — identifier of the call site that
     /// most recently locked this store.  Empty when the store is
     /// unlocked or was locked without an origin (legacy callers).
@@ -295,7 +302,8 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
-            ref_count: 0,
+            tag: 0,
+            pinned: false,
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
@@ -357,10 +365,11 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            tag: 0,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
-            ref_count: 0,
+            pinned: false,
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
@@ -848,10 +857,11 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
-            ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "clone_locked".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
@@ -878,10 +888,11 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: false,
             created_at: 0,
             last_op_at: 0,
-            ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "clone_locked_for_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
@@ -909,10 +920,11 @@ impl Store {
             free_root: self.free_root,
             needs_coalesce: false,
             generation: self.generation,
+            tag: self.tag,
             borrowed: true,
             created_at: 0,
             last_op_at: 0,
-            ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "borrow_locked_for_light_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,

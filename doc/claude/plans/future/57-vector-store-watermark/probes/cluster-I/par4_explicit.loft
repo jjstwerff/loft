@@ -1,0 +1,9 @@
+fn f(n: integer) -> integer {
+  s = 0;
+  if n > 0 {
+    a: vector<integer> = [1, 2, 3, 4];
+    parallel { s = a[0] + a[3]; }
+  }
+  s
+}
+fn test_par4() { assert(f(5) == 5, "explicit parallel over confined"); }

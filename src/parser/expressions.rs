@@ -199,6 +199,63 @@ fn build_nested_tuple_assign(orig_code: &Value, lhs: &NestedTupleLhs, rhs: Value
 /// of `to`.  Used by the `field += elem` keyed-collection branch to
 /// retarget a struct-literal's field-init steps from the LHS field
 /// expression onto a freshly-allocated element variable.
+/// @P390 — does `val` reference `Value::Var(target)` anywhere (a READ of the
+/// variable)?  Mirrors `replace_var_in_ir`'s traversal so it covers every `Value`
+/// variant soundly.  Used to detect a self-aliasing slice-assign (`v = v[a..b]`),
+/// where the materialise-into-iterator would read the same variable it is about
+/// to `OpClearVector`.  `Set`/`TuplePut` slots are NOT counted (they are writes,
+/// matching the walker) — only `Var(target)` reads.
+fn ir_mentions_var(val: &Value, target: u16) -> bool {
+    match val {
+        Value::Var(v) => *v == target,
+        Value::Int(_)
+        | Value::Long(_)
+        | Value::Float(_)
+        | Value::Single(_)
+        | Value::Boolean(_)
+        | Value::Text(_)
+        | Value::Enum(_, _)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _)
+        | Value::FnRefDnr(_)
+        | Value::RawExpr(_)
+        | Value::Null => false,
+        Value::Call(_, args)
+        | Value::CallRef(_, args)
+        | Value::Insert(args)
+        | Value::Tuple(args)
+        | Value::Parallel(args) => args.iter().any(|a| ir_mentions_var(a, target)),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|op| ir_mentions_var(op, target))
+        }
+        Value::Set(_, body)
+        | Value::Return(body)
+        | Value::BreakWith(_, body)
+        | Value::Drop(body)
+        | Value::TuplePut(_, _, body)
+        | Value::Yield(body) => ir_mentions_var(body, target),
+        Value::If(cond, t, f) => {
+            ir_mentions_var(cond, target)
+                || ir_mentions_var(t, target)
+                || ir_mentions_var(f, target)
+        }
+        Value::Iter(_, a, b, c) => {
+            ir_mentions_var(a, target) || ir_mentions_var(b, target) || ir_mentions_var(c, target)
+        }
+        Value::Span(b) => ir_mentions_var(&b.1, target),
+        Value::ParFor(b) => {
+            ir_mentions_var(&b.input, target)
+                || ir_mentions_var(&b.worker, target)
+                || ir_mentions_var(&b.threads, target)
+                || ir_mentions_var(&b.body, target)
+        }
+    }
+}
+
 pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
     if into == from {
         *into = to.clone();
@@ -904,6 +961,40 @@ use a separate collection or add after the loop"
         } else {
             None
         };
+        // @P390 — `v = v[a..b]` self-slice-assign.  The plain materialise emits
+        // `OpClearVector(var)` BEFORE the loop reads `v[i]` from the SAME record,
+        // so every element reads back null (length preserved, values lost).  When
+        // the slice source IS this variable, route through a temp local first (the
+        // proven @P287 struct-field pattern), then `OpClearVector + OpAppendVector`
+        // on the destination — the temp breaks the alias.  Scoped to TRUE aliasing
+        // (`ir_mentions_var`) so the non-aliased `t = v[a..b]` keeps the direct
+        // fast path; `+=` never clears, so it stays on the direct path below too.
+        if materialisable_iter_shape
+            && let Some(elm_tp) = iter_elm_tp.clone()
+            && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+            && var_nr != u16::MAX
+            && op == "="
+            && !self.first_pass
+            && ir_mentions_var(code, var_nr)
+        {
+            let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let tmp = self.create_unique("__p390_tmp", &vec_tp);
+            self.vars.defined(tmp);
+            // (1) materialise the slice iterator into the fresh temp (reads the
+            //     source — still intact — and appends to tmp; tmp != source).
+            self.materialize_iterator(code, &iter_tp, &Value::Var(tmp), &lhs_parent_tp, tmp, "=");
+            // (2) clear the destination and append the temp's contents.
+            let dn = self.data.type_def_nr(&elm_tp);
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
+            let append = self.cl(
+                "OpAppendVector",
+                &[Value::Var(var_nr), Value::Var(tmp), rec_tp],
+            );
+            *code = Value::Insert(vec![code.clone(), clear, append]);
+            return Type::Void;
+        }
         if materialisable_iter_shape
             && let Some(elm_tp) = iter_elm_tp.clone()
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
@@ -1223,30 +1314,29 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
         }
-        // @P292 — `local_v = other_var_v` where both sides are vector-typed
-        // LOCALS and the RHS is a Var read (not a fresh-storage Block / Call).
-        // Without this branch, the standard path emitted Set(v, Var(rhs))
-        // which made v alias rhs's storage; when rhs went out of scope its
-        // storage was freed → v dangled → next-iteration `len(v)` returned
-        // 0 or SEGV'd.  Mirror the field-replace path that already handled
-        // `s.v = fresh_vec`: clear v's existing storage, then append all
-        // elements from the RHS.  v's own storage stays alive across the
-        // assignment so subsequent reads are safe.
-        //
-        // RESTRICTED to Var-RHS — `scaled = map(...)` (Block RHS that creates
-        // fresh storage) goes through the standard Set path where scaled takes
-        // ownership of the freshly-created storage and there is no aliasing
-        // concern.  Var-RHS is the precise shape that aliases.  Also
-        // requires `uses(v) > 0` — at least one earlier read so v's storage
-        // has been initialised before this clear+append.
-        if !self.first_pass
-            && op == "="
+        // @P292 / @P394 — `local_v = other_var_v` where the RHS is a bare vector
+        // Var read (not a fresh-storage Block / Call / slice).  The standard Set
+        // path would emit `Set(v, Var(rhs))`, which makes v ALIAS rhs's storage:
+        //  - @P292: when rhs later goes out of scope its storage is freed → v
+        //    dangles → next `len(v)` returns 0 or SEGVs.
+        //  - @P394: when this is v's FIRST assignment (its own store not yet
+        //    allocated) the alias path never gives v a stack slot → v lands on
+        //    u16::MAX → `generate_var` asserts (codegen.rs:2669), or with a
+        //    trailing `+=` v silently stays empty and rhs corrupts.
+        // Fix (mirrors the slice-materialise branch above): give v its OWN store
+        // — `insert_new` when v doesn't own one yet (first assignment), else
+        // clear v's existing store (reassignment) — then `OpAppendVector` deep-
+        // copies rhs's elements in.  Vectors are copy-semantics, so v is fully
+        // independent of rhs afterwards.  Fires on BOTH passes (change_var sets
+        // v's type each pass — preserving an existing dep; the alloc/append emit
+        // on the second), so the __vdb_N dep is created consistently, exactly as
+        // the materialise path at lines ~995 does.  Element type is read from the
+        // RHS (s_type) so an untyped `b = a` (f_type Unknown) is covered too.
+        if op == "="
             && var_nr != u16::MAX
-            && self.vars.uses(var_nr) > 0
-            && matches!(f_type, Type::Vector(_, _))
-            && matches!(s_type, Type::Vector(_, _))
             && matches!(code, Value::Var(_))
-            && let Type::Vector(elm_tp, _) = f_type
+            && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+            && let Type::Vector(elm_tp, _) = &s_type
         {
             // `v = v` self-assign — emit nothing rather than clear+reappend
             // off the same storage.
@@ -1255,11 +1345,38 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            // @P314 — narrow-aware element type (see `append_elem_tp`).
-            let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
-            let clear = self.cl("OpClearVector", std::slice::from_ref(to));
-            let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
-            *code = Value::Insert(vec![clear, append]);
+            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+            self.change_var(to, &vec_tp);
+            if !self.first_pass {
+                // Break the alias.  The standard type-inference copied the RHS
+                // var's store dep onto v (making v *borrow* rhs's storage — the
+                // dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
+                // crash on first assignment).  Strip rhs's deps from v so v gets
+                // its OWN store.  This is a no-op when v already owns an
+                // independent store (`v = [9]; v = a` reassignment), so that case
+                // still takes the clear+refill path below.  (Mirrors the @P295
+                // Var-to-var deep-copy dep-strip.)
+                if let Value::Var(rhs_var) = code.unspan() {
+                    self.vars.make_independent(var_nr, *rhs_var);
+                    for d in self.vars.tp(*rhs_var).depend() {
+                        self.vars.make_independent(var_nr, d);
+                    }
+                }
+                // @P314 — narrow-aware element type (see `append_elem_tp`).
+                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
+                let mut stmts = Vec::new();
+                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
+                    // First assignment: v owns no store yet — allocate one.
+                    let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
+                    let db = self.insert_new(var_nr, elm_var, &elm_tp_clone, &mut stmts);
+                    self.vars.depend(var_nr, db);
+                } else {
+                    // Reassignment: v already owns a store — clear, then refill.
+                    stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
+                }
+                stmts.push(self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]));
+                *code = Value::Insert(stmts);
+            }
             return Type::Void;
         }
         // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection

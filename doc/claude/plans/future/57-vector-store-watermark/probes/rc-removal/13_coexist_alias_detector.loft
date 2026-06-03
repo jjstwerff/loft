@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// DETERMINISTIC detector for Mechanism B (@P393, Phase B).  The RC_OFF crashes of
+// probes 02/09/12 are a UAF — flaky (slot-reuse dependent: e.g. "3 closures" once
+// crashed native but not interpreter).  This shape turns the UAF into a
+// deterministic WRONG-OUTPUT assert: after f1's factory frame exits, f2's cell
+// must NOT alias f1's freed slot.  Under the bug (`RC_OFF=1`, interpreter) `a2`
+// reads f2's cell (== 1) instead of f1's (== 2) and the assert fires 10/10.
+//
+// Run:  RC_OFF=1 ./target/release/loft --interpret 13_*.loft   (with main wrapper)
+// Pre-fix:  assert "a2" fails.   Post-fix: PROBE_OK.
+// Locked into CI by tests/closure_cell_ownership.rs (both backends, RC_OFF).
+
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+
+fn test_13() {
+  f1 = make();
+  a1 = f1();            // 1
+  f2 = make();          // under RC_OFF (pre-fix) reuses f1's freed cell slot
+  z = f2();             // sets the (aliased) cell to 1
+  a2 = f1();            // expect 2; ALIAS BUG yields 1
+  assert(a1 == 1, "a1");
+  assert(a2 == 2, "a2 ALIAS BUG (f1/f2 share a cell)");
+}

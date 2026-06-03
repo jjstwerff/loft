@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// plan-57 clusters I/III — the store-lifetime SOUNDNESS BOUNDARY, locked into CI
+// on BOTH backends.  These edges decide whether the (upcoming) "free a vector
+// store at its confined block exit" fix is safe:
+//   * a CONFINED store (read only inside its block) must free early AND stay correct;
+//   * an ESCAPING store (read/aliased AFTER its block) must NOT be freed early —
+//     a wrong early free reads freed memory → garbage/crash → the assert fails.
+// tests/leak.rs catches UNDER-freeing (leaks); THIS file catches OVER-freeing,
+// which is the fix's risk direction.  Promoted from probes/cluster-I/ (CI does
+// not run the probes dir).  Must stay green before AND after the fix.
+
+// ---- CONFINED: read only inside the block → fix frees at block exit, stays correct ----
+
+fn test_conf_dead_at_block_exit() {
+  total = 0;
+  if true { a: vector<integer> = [1, 2, 3]; total += a[0] + a[2]; }
+  if true { b: vector<integer> = [4, 5, 6]; total += b[1]; }
+  assert(total == (1 + 3) + 5, "dead-at-block-exit sums");
+}
+
+fn test_conf_grow_in_block() {
+  t = 0;
+  if 5 > 0 { a: vector<integer> = [1, 2]; a += [3, 4]; t += a[3]; }
+  assert(t == 4, "confined += grow in block");
+}
+
+fn test_conf_loop_reuse() {
+  total = 0;
+  for i in 0..5 { v: vector<integer> = [i, i + 1]; total += v[0] + v[1]; }
+  assert(total == 25, "loop-body per-iter reuse correct");
+}
+
+// ---- ESCAPE: read/aliased AFTER the block → fix must NOT free early ----
+
+fn esc_after(n: integer) -> integer {
+  v: vector<integer> = [0];
+  if n > 0 { v = [1, 2, 3]; }
+  t = 0;
+  for x in v { t += x; }
+  t
+}
+fn test_esc_after_block() {
+  assert(esc_after(5) == 6, "escape: v=[1,2,3] read after block");
+  assert(esc_after(-1) == 0, "escape: branch skipped, v stays [0]");
+}
+
+fn esc_both(n: integer) -> integer {
+  v: vector<integer> = [0];
+  if n > 0 { v = [1, 2, 3]; } else { v = [7, 8]; }
+  t = 0;
+  for x in v { t += x; }
+  t
+}
+fn test_esc_both_branch() {
+  assert(esc_both(5) == 6 && esc_both(-1) == 15, "both-branch escape");
+}
+
+fn esc_outer(n: integer) -> integer {
+  out: vector<integer> = [0];
+  if n > 0 { a: vector<integer> = [1, 2, 3]; out = a; }
+  out[0] + out.len()
+}
+fn test_esc_outer_assign() { assert(esc_outer(5) == 4, "escape via outer assign"); }
+
+fn esc_block_result(n: integer) -> integer {
+  x: vector<integer> = if n > 0 { a: vector<integer> = [1, 2, 3]; a } else { [9] };
+  x[0] + x.len()
+}
+fn test_esc_block_result() { assert(esc_block_result(5) == 4, "U3 block-result vec escapes to x"); }
+
+fn esc_block_result_alias(n: integer) -> integer {
+  out: vector<integer> = [0];
+  if n > 0 { x: vector<integer> = { a: vector<integer> = [1, 2, 3]; a }; out = x; }
+  out[0] + out.len()
+}
+fn test_esc_block_result_alias() { assert(esc_block_result_alias(5) == 4, "block-result aliased to outer"); }
+
+struct Bag { items: vector<integer> }
+fn esc_struct_field(n: integer) -> integer {
+  b: Bag = Bag { items: [0] };
+  if n > 0 { a: vector<integer> = [1, 2, 3]; b = Bag { items: a }; }
+  b.items[0] + b.items.len()
+}
+fn test_esc_struct_field() { assert(esc_struct_field(5) == 4, "vec escapes into struct field"); }

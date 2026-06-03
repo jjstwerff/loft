@@ -40,6 +40,57 @@ fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
     }
 }
 
+/// Why an enclosing-scope capture inside a `parallel {}` arm is rejected.
+/// See `parse_parallel` — each arm runs in an isolated worker (read-only heap
+/// clone + private stack), so only *reading* an enclosing local is sound.
+#[derive(Clone, Copy, PartialEq)]
+enum ParViolation {
+    /// Capturing a function parameter (read or write) — SIGSEGVs at teardown.
+    Param,
+    /// Writing or mutating an enclosing local — write is silently dropped
+    /// (scalar/text) or crashes on the read-only store clone (heap).
+    Mutation,
+}
+
+/// True for the IR ops that MUTATE their host — the var reachable from the
+/// op's `args[0]` spine.  `Set(v, _)` is handled separately (the target var is
+/// the node's first field); these are the in-place / element / field forms that
+/// hide the host inside a read-projection chain.  (See the plan-57 capture
+/// investigation for the exhaustive shape list.)
+fn is_mutating_op(name: &str) -> bool {
+    matches!(
+        name,
+        "OpSetInt"
+            | "OpSetByte"
+            | "OpSetShort"
+            | "OpSetInt4"
+            | "OpSetFloat"
+            | "OpSetSingle"
+            | "OpSetEnum"
+            | "OpSetCharacter"
+            | "OpSetText"
+            | "OpSetKeyed"
+            | "OpReplaceKeyed"
+            | "OpClearKeyed"
+            | "OpAppendVector"
+            | "OpClearVector"
+            | "OpNewRecord"
+            | "OpFinishRecord"
+            | "OpCopyRecord"
+    )
+}
+
+/// Descend a mutating op's host expression (`args[0]`) through any nesting of
+/// read projections (`OpGetVector`/`OpVectorRef`/`OpGetRecord`/`OpGetField`/
+/// `OpGetInt`/…) to the base `Var(nr)` it ultimately mutates.
+fn base_host_var(node: &Value) -> Option<u16> {
+    match node.unspan() {
+        Value::Var(v) => Some(*v),
+        Value::Call(_, args) if !args.is_empty() => base_host_var(&args[0]),
+        _ => None,
+    }
+}
+
 /// A7.1: walk a body-tail expression and report whether it ends in
 /// a literal `Value::Tuple(...)` at any reachable tail position.  Used
 /// by `block_result` to decide whether the synthetic-struct rewrite
@@ -654,7 +705,7 @@ impl Parser {
             if let Type::Text(ls) = t {
                 self.text_return(ls);
             } else if let Type::Vector(_, ls) = t {
-                self.ref_return(ls);
+                self.ref_return(ls, l);
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the
                 // inner call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, ls);
@@ -667,12 +718,12 @@ impl Parser {
                     let last = &l[l.len() - 1];
                     let extra = Self::collect_hidden_ref_args(last, &self.data);
                     if !extra.is_empty() {
-                        self.ref_return(&extra);
+                        self.ref_return(&extra, l);
                         // @P377 / S1: see above.
                         self.nrvo_collapse_tail_set(l, &extra);
                     }
                 } else {
-                    self.ref_return(ls);
+                    self.ref_return(ls, l);
                     // @P377 / S1: see above.
                     self.nrvo_collapse_tail_set(l, ls);
                 }
@@ -3241,7 +3292,68 @@ impl Parser {
         }
     }
 
-    pub(crate) fn ref_return(&mut self, ls: &[u16]) {
+    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &[Value]) {
+        // Plan-57: a returned local that gets a fresh vector literal more than once
+        // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
+        // the buffer (`OpNewRecord(z, …)`), so the second literal appends rather than
+        // replaces, leaving the FIRST value (`z=[a]; z=[b]; z` returned [a]).  Each
+        // literal uses a DISTINCT element-temp (`Set(_elm_k, OpNewRecord(z, …))`), so
+        // the count of distinct element-temps building into `z` is the number of
+        // literal assignments; ≥2 ⇒ reassigned ⇒ leave it a normal local (the `__vdb`
+        // + return-copy path explicit return uses, which handles reassignment).  This
+        // is visible on the FIRST pass (where the promotion happens), unlike the
+        // later `OpPreAllocVector` form.
+        let newrecord_nr = self.data.def_nr("OpNewRecord");
+        fn reassign_count(body: &[Value], v: u16, nr: u32) -> usize {
+            fn collect(node: &Value, v: u16, nr: u32, temps: &mut std::collections::HashSet<u16>) {
+                if let Value::Set(w, val) = node
+                    && let Value::Call(op, args) = val.unspan()
+                    && *op == nr
+                    && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == v)
+                {
+                    temps.insert(*w);
+                }
+                match node {
+                    Value::Set(_, val) => collect(val, v, nr, temps),
+                    Value::Call(_, args)
+                    | Value::Insert(args)
+                    | Value::Tuple(args)
+                    | Value::Parallel(args) => {
+                        for a in args {
+                            collect(a, v, nr, temps);
+                        }
+                    }
+                    Value::Block(bl) | Value::Loop(bl) => {
+                        for o in &bl.operators {
+                            collect(o, v, nr, temps);
+                        }
+                    }
+                    Value::If(c, t, e) => {
+                        collect(c, v, nr, temps);
+                        collect(t, v, nr, temps);
+                        collect(e, v, nr, temps);
+                    }
+                    Value::Iter(_, c, n, e) => {
+                        collect(c, v, nr, temps);
+                        collect(n, v, nr, temps);
+                        collect(e, v, nr, temps);
+                    }
+                    Value::Return(x)
+                    | Value::Drop(x)
+                    | Value::Yield(x)
+                    | Value::BreakWith(_, x) => {
+                        collect(x, v, nr, temps);
+                    }
+                    Value::Span(b) => collect(&b.1, v, nr, temps),
+                    _ => {}
+                }
+            }
+            let mut temps = std::collections::HashSet::new();
+            for o in body {
+                collect(o, v, nr, &mut temps);
+            }
+            temps.len()
+        }
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
@@ -3256,6 +3368,10 @@ impl Parser {
         if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
             let mut dep = cur.clone();
             for v in ls {
+                // A reassigned returned local must NOT be NRVO-promoted (see above).
+                if reassign_count(body, *v, newrecord_nr) >= 2 {
+                    continue;
+                }
                 let n = self.vars.name(*v);
                 // skip related variables that are already attributes
                 if let Some(a) = self.data.def(self.context).attr_names.get(n) {
@@ -3385,17 +3501,21 @@ impl Parser {
             // reference globals/locals which ref_return would promote to hidden
             // ref args, breaking callers (see 01b for full analysis).
             if self.data.def_type(self.context) != DefType::Generic {
+                // Explicit `return <expr>;`: the body (with any reassignments) is not
+                // available here, so pass an empty body — the reassignment guard does
+                // not apply (explicit return already copies the value at the return,
+                // and the Vector arm is skipped above anyway).
                 if let Type::Reference(_, ls) = &t {
                     if ls.is_empty() {
                         let extra = Self::collect_hidden_ref_args(&v, &self.data);
                         if !extra.is_empty() {
-                            self.ref_return(&extra);
+                            self.ref_return(&extra, &[]);
                         }
                     } else {
-                        self.ref_return(ls);
+                        self.ref_return(ls, &[]);
                     }
                 } else if let Type::Enum(_, true, ls) = &t {
-                    self.ref_return(ls);
+                    self.ref_return(ls, &[]);
                 }
             }
             if let Type::Text(ls) = &t {
@@ -4338,6 +4458,24 @@ impl Parser {
     /// Each semicolon-separated expression in the block becomes one concurrent arm.
     pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
         self.lexer.token("{");
+        // INVARIANT (load-bearing — the capture check below depends on it).
+        // Snapshot which vars are already DEFINED at the block's opening brace.
+        // The two-pass parser pre-populates the whole function's var table in
+        // pass 1, so var-nr ordering CANNOT separate an enclosing var from an
+        // arm-local one.  The signal that does is: **in this (non-first) pass,
+        // `is_defined` is set in source order**, so a var defined *before* the
+        // block reads defined here (enclosing) and one first defined *inside* an
+        // arm reads undefined (arm-local).  Params read defined (`become_argument`)
+        // ⇒ enclosing.  Two known exceptions read defined-at-entry despite being
+        // arm-local — for-loop vars (handled by the `was_loop_var` exclusion) and
+        // compiler temps (the `_`/`#` name exclusion); both live in `is_user_var`.
+        // If a future change sets `is_defined` out of this source order, the
+        // monotonicity `debug_assert!` in `note_mutation`/`note_param` and the
+        // `tests/scripts/171-parallel-armlocal-ok.loft` arm-local-compiles guard
+        // are the alarms.
+        let enclosing: Vec<bool> = (0..self.vars.count())
+            .map(|v| self.vars.is_defined(v))
+            .collect();
         let mut arms = Vec::new();
         while !self.lexer.peek_token("}") {
             let mut arm = Value::Null;
@@ -4348,9 +4486,191 @@ impl Parser {
             self.lexer.has_token(";");
         }
         self.lexer.token("}");
-        if arms.is_empty() && !self.first_pass {
-            diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+        if !self.first_pass {
+            if arms.is_empty() {
+                diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+            }
+            self.reject_unsound_parallel_captures(&arms, &enclosing);
         }
         *code = Value::Parallel(arms);
+    }
+
+    /// Soundness floor for `parallel {}` (plan-57 Bug 2).  An arm runs in an
+    /// isolated worker — a read-only clone of the heap plus a private stack — so
+    /// only *reading* an enclosing local is sound (the value is copied in).
+    /// Everything else is the unbuilt/broken surface and must be a clean compile
+    /// error, not a silent no-op or a crash:
+    /// - **writing or mutating** an enclosing local — the write is dropped
+    ///   (scalar/text) or crashes on the read-only store clone (heap);
+    /// - **capturing a parameter** (read or write) — SIGSEGVs at teardown.
+    ///
+    /// Reads of enclosing locals (any position/type) stay legal — that is the
+    /// proven-sound P245 surface that test-81 guards.  Known residual: passing a
+    /// captured heap value to a function that mutates it is transitive and is not
+    /// caught here (it still faults at runtime); catching it needs callee
+    /// analysis.  The full capture model is deferred to its driving consumer (the
+    /// server/client library) — see the plan-57 deferred-follow-ups.
+    fn reject_unsound_parallel_captures(&mut self, arms: &[Value], enclosing: &[bool]) {
+        let mut viol: Vec<(u16, ParViolation)> = Vec::new();
+        for arm in arms {
+            self.collect_parallel_violations(arm, enclosing, &mut viol);
+        }
+        let mut reported: Vec<u16> = Vec::new();
+        for (v, _) in &viol {
+            if reported.contains(v) {
+                continue;
+            }
+            reported.push(*v);
+            // A var flagged as both Param and Mutation reads clearest as Param.
+            let is_param = viol
+                .iter()
+                .any(|(v2, k)| v2 == v && *k == ParViolation::Param);
+            let name = self.vars.name(*v).to_string();
+            if is_param {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot capture function parameter '{name}' inside a parallel arm — \
+                     a parallel arm runs in an isolated worker with no safe access to the \
+                     parent frame; copy '{name}' into a local before the block, or pass it \
+                     to a function-call arm"
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot write or mutate enclosing-scope variable '{name}' inside a \
+                     parallel arm — an arm runs in an isolated worker, so the write does not \
+                     propagate (and heap mutation crashes); a parallel arm may only READ \
+                     enclosing state, not write it"
+                );
+            }
+        }
+    }
+
+    /// Recursive walk collecting capture violations in one arm (see
+    /// `reject_unsound_parallel_captures`).  Reads of enclosing non-parameter
+    /// locals are sound and are never flagged.
+    fn collect_parallel_violations(
+        &self,
+        node: &Value,
+        encl: &[bool],
+        out: &mut Vec<(u16, ParViolation)>,
+    ) {
+        match node.unspan() {
+            // Direct assignment target (scalar `=`/`+=`, vector concat-reassign).
+            Value::Set(v, rhs) => {
+                self.note_mutation(*v, encl, out);
+                self.collect_parallel_violations(rhs, encl, out);
+            }
+            Value::TuplePut(v, _, rhs) => {
+                self.note_mutation(*v, encl, out);
+                self.collect_parallel_violations(rhs, encl, out);
+            }
+            // In-place / element / field mutation hides the host in args[0].
+            Value::Call(d, args) => {
+                if is_mutating_op(&self.data.def(*d).name)
+                    && let Some(host) = args.first().and_then(base_host_var)
+                {
+                    self.note_mutation(host, encl, out);
+                }
+                for a in args {
+                    self.collect_parallel_violations(a, encl, out);
+                }
+            }
+            // CallRef's first field is the var holding the fn-ref — a capture if
+            // it is an enclosing parameter.
+            Value::CallRef(v, args) => {
+                self.note_param(*v, encl, out);
+                for a in args {
+                    self.collect_parallel_violations(a, encl, out);
+                }
+            }
+            // Any reference to a var: flagged only if it is a captured parameter.
+            Value::Var(v) | Value::TupleGet(v, _) | Value::FnRefDnr(v) => {
+                self.note_param(*v, encl, out);
+            }
+            Value::FnRef(_, v, _) => self.note_param(*v, encl, out),
+            // Container recursion.
+            Value::Insert(ls) | Value::Tuple(ls) | Value::Parallel(ls) => {
+                for x in ls {
+                    self.collect_parallel_violations(x, encl, out);
+                }
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                for x in &b.operators {
+                    self.collect_parallel_violations(x, encl, out);
+                }
+            }
+            Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+                self.collect_parallel_violations(b, encl, out);
+            }
+            Value::If(c, t, e) => {
+                self.collect_parallel_violations(c, encl, out);
+                self.collect_parallel_violations(t, encl, out);
+                self.collect_parallel_violations(e, encl, out);
+            }
+            Value::Iter(_, a, b, c) => {
+                self.collect_parallel_violations(a, encl, out);
+                self.collect_parallel_violations(b, encl, out);
+                self.collect_parallel_violations(c, encl, out);
+            }
+            _ => {}
+        }
+    }
+
+    /// True if `v` was already defined when the parallel block opened — i.e. it
+    /// is an enclosing-scope variable, not one declared inside an arm.
+    fn is_enclosing(v: u16, encl: &[bool]) -> bool {
+        (v as usize) < encl.len() && encl[v as usize]
+    }
+
+    /// Flag a write/mutation of an enclosing **user** local.  Compiler temps
+    /// (`__work`/`__vdb`) carry the codegen for reads/format-strings and are not
+    /// user captures.
+    fn note_mutation(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
+        if Self::is_enclosing(v, encl) && self.is_user_var(v) {
+            self.assert_enclosing_invariant(v);
+            out.push((v, ParViolation::Mutation));
+        }
+    }
+
+    /// Flag a capture of an enclosing **parameter** (read or write both fault).
+    fn note_param(&self, v: u16, encl: &[bool], out: &mut Vec<(u16, ParViolation)>) {
+        if Self::is_enclosing(v, encl) && self.is_user_var(v) && self.vars.is_argument(v) {
+            self.assert_enclosing_invariant(v);
+            out.push((v, ParViolation::Param));
+        }
+    }
+
+    /// Guard the `parse_parallel` enclosing-snapshot invariant.  A var the
+    /// block-entry snapshot marked enclosing (`is_defined` was true at entry) must
+    /// still read defined now — `is_defined` is monotonic across the block parse.
+    /// If it does not, the snapshot has desynced from the var table and the
+    /// enclosing/arm-local split is unsound.  (This catches `is_defined` being
+    /// *cleared* mid-parse; it cannot catch it being *set* out of source order —
+    /// that failure is undetectable from `is_defined` alone, which is what the
+    /// `171-parallel-armlocal-ok.loft` compile guard exists for.)
+    fn assert_enclosing_invariant(&self, v: u16) {
+        debug_assert!(
+            self.vars.is_defined(v),
+            "parallel-capture invariant broken: enclosing var '{}' lost is_defined \
+             mid-parse — the block-entry snapshot no longer matches the var table \
+             (see parse_parallel)",
+            self.vars.name(v)
+        );
+    }
+
+    /// Whether `v` is a user variable that an arm could genuinely capture —
+    /// excludes the codegen artefacts that `is_defined` would otherwise misread
+    /// as enclosing:
+    ///   * compiler temps, named with a leading `_` (`__work`, `__vdb`,
+    ///     `_match_subj`, `_elm`, `_vector`) or a `#` (`i#index`, `i#next`);
+    ///   * for-loop iteration variables (`was_loop_var`) — the loop desugar
+    ///     marks them defined in pass 1, but the loop's own advance of its var
+    ///     must not read as an enclosing write.
+    fn is_user_var(&self, v: u16) -> bool {
+        let n = self.vars.name(v);
+        !n.starts_with('_') && !n.contains('#') && !self.vars.was_loop_var(v)
     }
 }

@@ -529,6 +529,22 @@ helpful than a generic "unknown type" would be).  **Tests:**
 `spacial_not_implemented_in_local` (new regression guard for the
 local-variable path).
 
+### P344 — a reused loop-variable name must keep a consistent type
+`for i in [1,2,3] {…}` then `for i in ["a","b"] {…}` in the SAME function
+fails to parse: `loop variable 'i' has type text but was previously used as
+integer`.  Same-type reuse is fine (`[1,2,3]` then `[4,5,6]`) and the same name
+works across DIFFERENT functions — the constraint is per-name TYPE consistency,
+not name uniqueness.  Root cause: loft's per-function flat variable table holds
+one slot + type per name (`src/variables/mod.rs:83` — *"Variables might exist in
+multiple scopes but not with different types"*); the guard in
+`parse_for_iter_setup` (`src/parser/collections.rs:1258`) is deliberate, not a
+bug.  **Decision:** accepted as intended (was @P344).  True per-loop scoping (a
+fresh slot per loop body that shadows the prior binding) is a core-resolver +
+slot-liveness model change, deferred — distinct names are a zero-cost workaround
+(`for n in …` / `for s in …`).  Regression guard:
+`tests/parse_errors.rs::shadow_different_type` +
+`tests/scripts/36-parse-errors.loft:185`.
+
 ---
 
 ## Verification log
@@ -545,6 +561,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | P54    | 0.9.0     | First-class `JsonValue` enum + `json_parse`; old text-based JSON surface withdrawn |
+| P344   | —         | Accepted — one slot+type per name in the flat per-function table; distinct names for different-typed loops.  Regression: `tests/parse_errors.rs::shadow_different_type` |
 | ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
 | ~~P137~~ | — | **Done** — `Instant::now()` / `n_ticks` gated on `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature.  Regression: 4 guards in `tests/html_wasm.rs` behind a serial mutex |
 

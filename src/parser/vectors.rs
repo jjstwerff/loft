@@ -57,6 +57,40 @@ impl Parser {
         {
             // RefVar(Vector): append directly without an identity Set(v, Var(v)).
             // find_written_vars detects the write via the OpAppendVector in the parts loop.
+            // The first operand `code` must BE the accumulator (`out = out + x`,
+            // in-place grow); a DIFFERENT first operand (`out = a + x`) is a
+            // REPLACEMENT, which the `&`-ref mechanism cannot express — the ref
+            // shares the caller's store in place (OpCreateStack/OpGetStackRef);
+            // there is no op that repoints it at a different store.  The old code
+            // silently dropped `code`/`a` and appended only the trailing parts (a
+            // half-wrong `out += x`).  Reject it instead — mirrors the existing
+            // `out = a` "& but is never modified" rejection.
+            if !self.first_pass && !matches!(code.unspan(), Value::Var(x) if *x == orig_var) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot replace a `&` vector parameter; a `&` ref grows the \
+                     caller's vector in place — append with `{} += …`, it cannot be reassigned",
+                    self.vars.name(orig_var)
+                );
+            }
+            orig_var
+        } else if matches!(code.unspan(), Value::Var(x) if *x != orig_var) {
+            // The concat's first operand is a NAMED LOCAL other than the
+            // accumulator (`v = a + b`, `u = v + [9]`).  Emitting `Set(v, Var(a))`
+            // would repoint v's runtime slot at a's store — aliasing v to a,
+            // mutating a when the parts append, AND orphaning the fresh
+            // vector_db store create_vector allocated for v.  Deep-COPY a's
+            // elements into v's own store instead (OpAppendVector deep-copies),
+            // so a stays intact and v is independent.  The self-reference case
+            // (`code == Var(orig_var)`, excluded by `x != orig_var`) keeps the
+            // `Set(v, Var(v))` below so create_vector's self_ref / in-place path
+            // still fires; a fresh-storage temp (Call/Block, not a Var) also
+            // keeps `Set` so v adopts the temp's store with no extra copy.
+            ls.push(self.cl(
+                "OpAppendVector",
+                &[Value::Var(orig_var), code.clone(), Value::Int(rec_tp)],
+            ));
             orig_var
         } else {
             ls.push(v_set(orig_var, code.clone()));
@@ -264,6 +298,35 @@ impl Parser {
                 Type::Tuple(types)
             } else {
                 self.lexer.token(")");
+                // @P395 — a parenthesised vector concat consumed by a trailing
+                // `.method()` reused the OUTER assignment LHS as its accumulator
+                // (the inner concat inherited `orig_var` from the live `val`),
+                // lowering to a void `Value::Insert` that leaves no stack value;
+                // the method then reads a misaligned slot → garbage value / the
+                // `codegen.rs:2669` +8 drift.  This is the same shape the P103
+                // guard in `parse_append_vector` already rejects for
+                // `f([1,2] + [3])` (tests/scripts/102-expected-errors.loft):
+                // inline vector concat consumed by a call/sub-expression must be
+                // assigned to a variable first.  Fire the same clean error here
+                // instead of silently corrupting.  Direct assignment `v = (a+c)`
+                // (no trailing `.`) keeps its reuse path; `(a+c)[i]` indexing
+                // already lowers correctly and is not guarded.
+                if !self.first_pass && matches!(val, Value::Insert(_)) && self.lexer.peek_token(".")
+                {
+                    let tv = if let Type::Rewritten(inner) = &t {
+                        (**inner).clone()
+                    } else {
+                        t.clone()
+                    };
+                    if matches!(tv, Type::Vector(_, _)) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "vector concatenation in an expression creates a temporary; \
+                             assign to a variable first for correct results in compound expressions"
+                        );
+                    }
+                }
                 t
             }
         } else if self.lexer.peek_token("{") {
@@ -837,24 +900,16 @@ impl Parser {
                         Value::Var(w),
                         Value::Var(v_nr),
                     ));
-                    // P259: when the captured variable is a heap-owned cell
-                    // (Reference(__cell_*, _)), the closure record now holds
-                    // a DbRef into that cell's store via the auto-Reference
-                    // attribute.  Bump the cell's ref_count so the parent
-                    // fn's scope-exit OpFreeRef on the cell decrements
-                    // (rc 2→1) instead of actually freeing while the
-                    // closure record still references it.  Cascade-free
-                    // in `Stores::free_named` (commit 4) decrements when
-                    // the closure record itself is freed.
-                    let inc_rc_needed = matches!(
-                        self.vars.tp(v_nr),
-                        Type::Reference(cell_d, _)
-                        if self.data.def(*cell_d).name.starts_with("__cell_")
-                    );
-                    if inc_rc_needed {
-                        let inc_call = self.cl("OpIncRc", &[Value::Var(v_nr)]);
-                        alloc_steps.push(inc_call);
-                    }
+                    // P259 / Plan-57 Phase B (Mechanism B): the closure record now
+                    // holds a DbRef into the captured heap cell (`Reference(__cell_*,
+                    // _)`) via the auto-Reference attribute, and the record OWNS that
+                    // cell — `Stores::free_named`'s cascade (allocation.rs:301) frees
+                    // it when the closure value dies.  No `OpIncRc` is emitted: the
+                    // defining-frame `OpFreeRef` on the cell is suppressed in
+                    // `get_free_vars` (scopes.rs) instead, so a captured cell survives
+                    // a factory return without an rc bump.  This was the last
+                    // load-bearing `OpIncRc`; dropping it unblocks removing the
+                    // ref-count entirely (Phase C).
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;

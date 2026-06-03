@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  v: vector<integer> = [0];
+  if n > 0 { v = [1,2,3]; } else { v = [7,8]; }
+  t = 0; for x in v { t += x; } t
+}
+fn test_p18() { assert(f(5) == 6 && f(-1) == 15, "both-branch escape"); }

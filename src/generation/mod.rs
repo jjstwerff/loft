@@ -1281,9 +1281,10 @@ extern crate loft;"
                 writeln!(w, "        }}")?;
             }
             writeln!(w, "        db.allocations[cv.store_nr as usize].lock();")?;
+            // Plan-57 Phase C: pin the const store (never freed) — see compile.rs.
             writeln!(
                 w,
-                "        db.allocations[cv.store_nr as usize].ref_count = u32::MAX / 2;"
+                "        db.allocations[cv.store_nr as usize].pinned = true;"
             )?;
             writeln!(w, "        db.const_refs[{d_nr}] = cvr;")?;
             writeln!(w, "    }}")?;

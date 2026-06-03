@@ -1,0 +1,7 @@
+// Many factories churned in a loop (the multi-factory shape at scale — store reuse).
+fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn test_09() {
+  total = 0;
+  for i in 0..50 { f1 = make(); f2 = make(); total = total + f1() + f2() + f1() + f2(); }
+  assert(total == 50 * 6, "factory loop churn total={total}");
+}

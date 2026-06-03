@@ -953,6 +953,54 @@ fn native_lib_test_skipped(entry: &Path) -> bool {
 }
 
 /// Native counterpart of `wrap.rs::library_suite`: compile + run every
+/// Run `loft [extra_args] test <stem>` for a lib package in a UNIQUE temp CWD —
+/// a `.loft_test_tmp_*` SIBLING inside `lib/` (so the package's relative deps
+/// `../<name>` still resolve to the real packages), with the package's contents
+/// symlinked in.  Isolates cwd-relative test artifacts so the native and
+/// interpreter lib suites (separate, concurrently-run test binaries) don't race
+/// on a shared file (e.g. `moros_render_test.glb`).  Duplicated from `wrap.rs`
+/// (integration-test binaries can't share fns).  Non-unix falls back to `pkg_dir`.
+fn run_lib_test_in_temp_cwd(
+    loft_bin: &str,
+    pkg_dir: &Path,
+    stem: &str,
+    extra_args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let mut args: Vec<&str> = extra_args.to_vec();
+    args.push("test");
+    args.push(stem);
+    #[cfg(unix)]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let lib_root = pkg_dir.parent().unwrap_or(pkg_dir);
+        let tmp = lib_root.join(format!(
+            ".loft_test_tmp_{}_{}",
+            std::process::id(),
+            CTR.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir(&tmp)?;
+        for entry in std::fs::read_dir(pkg_dir)?.filter_map(|e| e.ok()) {
+            let target = entry.path().canonicalize().unwrap_or_else(|_| entry.path());
+            let _ = std::os::unix::fs::symlink(&target, tmp.join(entry.file_name()));
+        }
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(&tmp)
+            .args(&args)
+            .output();
+        let _ = std::fs::remove_dir_all(&tmp);
+        out
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new(loft_bin)
+            .current_dir(pkg_dir)
+            .args(&args)
+            .output()
+    }
+}
+
 /// `lib/<pkg>/tests/*.loft` under `--native`, skipping packages/files with known
 /// native-codegen gaps (`LIB_*_NATIVE_SKIP`, @P321).  Shells out
 /// `cd lib/<pkg> && loft --native test <stem>` so it reuses the CLI's package
@@ -973,6 +1021,11 @@ fn native_library_suite() -> std::io::Result<()> {
     let loft_bin = env!("CARGO_BIN_EXE_loft");
     let mut files: Vec<PathBuf> = Vec::new();
     for pkg in std::fs::read_dir("lib")?.filter_map(|e| e.ok()) {
+        // Skip the `.loft_test_tmp_*` artifact-isolation dirs (see
+        // run_lib_test_in_temp_cwd) so they're never discovered as packages.
+        if pkg.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let tests_dir = pkg.path().join("tests");
         if !tests_dir.is_dir() {
             continue;
@@ -1002,10 +1055,7 @@ fn native_library_suite() -> std::io::Result<()> {
             .to_string_lossy()
             .to_string();
         println!("native lib test {entry:?}");
-        let out = std::process::Command::new(loft_bin)
-            .current_dir(pkg_dir)
-            .args(["--native", "test", &stem])
-            .output()?;
+        let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, &stem, &["--native"])?;
         ran += 1;
         let combined = format!(
             "{}{}",

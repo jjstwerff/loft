@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  out: vector<integer> = [0];
+  if n > 0 { a: vector<integer> = [1, 2, 3]; out = a; a[0] = 99; }
+  out[0]
+}
+fn test() { assert(f(5) == 1, "out is an independent copy of a (not 99)"); }

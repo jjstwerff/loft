@@ -314,6 +314,60 @@ For the per-plan matrix definitions and bug-discovery records, see:
 
 ---
 
+## Testing race-prone and backend-divergent mechanics
+
+Two methodology rules govern the hard cases — concurrency and
+interpret-vs-native divergence.  Both say the same thing: **the answer lives at
+small scale; large scale only verifies that the small-scale answer was sound.**
+
+### Race conditions: reason small, scale only verifies
+
+**Real race-condition testing starts small.**  A race is a property of the
+*mechanic* — which memory is shared, accessed how, synchronised how — and that is
+established by **reasoning about the mechanic at n=1, deterministically and
+readably**.  A large-scale stress run does **not *find*** the race; it **verifies
+that the small-scale soundness claim held**.  Relying on stress to *discover*
+races is epistemically weak in both directions: a clean 10 000-iteration run
+proves nothing about absence (the window may be narrow), and a dirty one is only a
+louder hint you should have reasoned it out.  Stress is a backstop against your
+reasoning being *incomplete* — never the source of the answer.  (It is the same
+"trust the statistics" gloss the project distrusts elsewhere — cf. the store
+refcount in [GOALS.md § Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth):
+opaque machinery papering over a deterministic truth you could reason to.)
+
+So the ladder is: **reason the mechanic small → state the soundness claim →
+*only then*, if the claim is "race-free *because* lock X holds under contention",
+reach for stress (or the [plan-53 sanitizer](plans/finished/53-sanitizer-ci-lever/README.md)
+engine) to confirm lock X actually holds.**  A mechanic whose small-scale reasoning
+concludes "no shared mutable state" has *nothing left for stress to verify*.
+
+*Worked example* (plan-57 `probes/bugs/`): the `parallel {}` capture probing
+settled entirely at n=1.  Reasoning about the worker model — each arm gets a
+**read-only heap clone** (`clone_locked_for_worker`) + a **private stack** —
+shows it is *deterministic isolation*: no shared mutable state, so no data race is
+*possible*.  Every failure is correspondingly deterministic (heap mutation →
+crash on the read-only clone; scalar write → silent loss to the private stack;
+native → arm bodies don't run at all).  Run a million times, identical every time.
+Stress would have added zero; the small-scale probes were the whole answer.
+
+### Backend divergence: the differential check is the instrument
+
+Interpret-vs-native disagreement is also an n=1, deterministic property — and the
+`cross_mode!` validation matrix above **is** the instrument for it: every cell
+runs on both backends and the disagreement (if any) shows up in a single
+deterministic run.  The catch the `parallel {}` probing exposed: a per-backend
+assertion that *passes on both backends* does **not** prove parity.  test-80 /
+test-81 both "pass" on native precisely **because** native silently no-ops the
+arms — `assert(true)` and asserts that hold *when the arms do nothing*.  A real
+parity check asserts **identical observable output across backends**, not "each
+backend satisfied its own assertion".  Parity (GOALS.md Goal D) has no standing
+detector the way Goal A has the sanitizer and Goal E has `LOFT_STORE_GUARD`;
+`cross_mode!` is the closest we have — point it at a mechanic and it catches
+divergence the day it lands, provided the cell's oracle is the *cross-backend*
+output, not a self-satisfying assert.
+
+---
+
 ## Generated Test Files (`tests/generated/`)
 
 Generated files are written only in **debug builds** (`#[cfg(debug_assertions)]`). They are produced inside `Test::generate_code`, called from `Drop::drop`.

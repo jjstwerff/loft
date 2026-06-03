@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// CONTRAST to 03 (@P393).  A pure loop append — `for i in … { z += [i]; }` with
+// NO trailing append — reuses ONE element-temp across iterations, so the
+// distinct-temp count is 1 (< the `01a3f24f` threshold of 2).  The return stays
+// NRVO-promoted (`n_f(z:…) -> vector<…>["??"]`) and is clean inline-unbound even
+// on the interpreter, no matter how many iterations run.
+//
+// Together 03 + 04 isolate the trigger to the *count of distinct `+=` SITES*,
+// not the number of elements appended at runtime.
+//
+// Expected:  interp = clean   native = clean
+
+fn build(n: integer) -> vector<integer> {
+  z = [];
+  for i in [1, 2, 3, 4, 5] {     // single `+=` site, reused each iteration → 1 temp
+    z += [i * n];
+  }
+  z
+}
+
+fn main() {
+  x = len(build(2));             // inline-unbound but NRVO'd → clean
+  println("len={x}");
+}

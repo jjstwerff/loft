@@ -139,15 +139,98 @@ impl Parser {
                 );
             }
             if op == "=" {
-                for (s_nr, s) in self.vector_db(tp, var_nr).iter().enumerate() {
-                    ls.insert(s_nr, s.clone());
-                }
-                if ls.is_empty()
-                    && !self.first_pass
-                    && var_nr != u16::MAX
-                    && matches!(f_type, Type::Vector(_, _))
-                {
-                    ls.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                // Self-concat reassign `v = v + [...]` (sibling of @P390's
+                // self-slice `v = v[a..b]`): `parse_append_vector` emitted a
+                // leading identity `Set(v, Var(v))` because the concat's
+                // accumulator IS the reassignment target.  The `vector_db` splice
+                // below allocates a FRESH store for v and repoints v to it (empty)
+                // BEFORE that Set / the append read v's OLD contents → v's original
+                // elements are lost (only the appended tail survives; `v=[1,2];
+                // v=v+[9]` gave `[9]`).  When the body is self-referential, skip
+                // the new-store allocation and drop the now-useless identity-set
+                // so the parts append IN PLACE to v's existing store — exactly what
+                // `v += [...]` does.  The discriminator is the IR shape
+                // `Set(var_nr, Var(var_nr))` (absent for `u = v + [9]` →
+                // `Set(u, Var(v))` and `v = a + b` → `Set(v, Var(a))`), identical
+                // on both parser passes — pass-stable, no @P384 alloc divergence.
+                let self_ref = ls.first().is_some_and(|first| {
+                    matches!(first.unspan(), Value::Set(s, rhs)
+                        if *s == var_nr
+                            && matches!(rhs.unspan(), Value::Var(r) if *r == var_nr))
+                });
+                if self_ref {
+                    ls.remove(0);
+                } else {
+                    // Trailing self-reference `v = a + v` (the accumulator `v`
+                    // appears as a NON-first operand): the parts loop emitted
+                    // `OpAppendVector(v, <operand mentioning v>)` which would read
+                    // v AFTER the `vector_db` clear below empties it → v's OLD
+                    // contents are lost (the trailing read sees the freshly-copied
+                    // prefix instead).  Sibling of @P390's self-slice.  Materialise
+                    // each such operand's OLD value into a fresh temp BEFORE the
+                    // clear (deep copy while v still holds its contents), then
+                    // rewrite the operand to read the temp.  The first-operand
+                    // deep-copy (`OpAppendVector(v, Var(a))`, a != v) never matches;
+                    // the self-concat first-operand case is the `self_ref` branch
+                    // above.  Pass-2 work (vector_db / create_unique are pass-2),
+                    // matching the @P390 / @P287 temp precedent.
+                    let mut prefix: Vec<Value> = Vec::new();
+                    if !self.first_pass {
+                        let append_nr = self.data.def_nr("OpAppendVector");
+                        for stmt in ls.iter_mut() {
+                            if let Value::Call(d, args) = stmt
+                                && *d == append_nr
+                                && args.len() == 3
+                                && matches!(args[0].unspan(), Value::Var(t) if *t == var_nr)
+                                && code_references_var(&args[1], var_nr)
+                            {
+                                let rec = args[2].clone();
+                                let tmp = self.create_unique("__trail_tmp", f_type);
+                                self.vars.defined(tmp);
+                                let mut mat = self.vector_db(tp, tmp);
+                                mat.push(self.cl(
+                                    "OpAppendVector",
+                                    &[Value::Var(tmp), Value::Var(var_nr), rec],
+                                ));
+                                prefix.extend(mat);
+                                args[1] = Value::Var(tmp);
+                            }
+                        }
+                    }
+                    // plan-57 cluster II — a literal / comprehension / struct-vector
+                    // init already allocated v's store in the RHS body (the literal's
+                    // own `vector_db` emitted a head `Set(v, OpGetField(__vdb))`).  The
+                    // `=` `vector_db` below would allocate a SECOND, immediately-
+                    // orphaned store for v (the 2× store high-watermark).  Skip it when
+                    // the body already allocated.  Concat (`OpAppendVector` / `Set(v,
+                    // <temp>)`) and reassignment (`a=[1,2,3]; a=[4,5]` — no head alloc)
+                    // have no such repoint, so they KEEP the `vector_db`: concat needs
+                    // it for v's store, reassignment relies on the fresh store as its
+                    // clear (cluster III — unchanged by this fix).  Pure watermark
+                    // optimisation; results + lifetimes are identical.
+                    let get_field_nr = self.data.def_nr("OpGetField");
+                    let body_allocates = ls.iter().any(|stmt| {
+                        matches!(stmt.unspan(),
+                            Value::Set(s, rhs) if *s == var_nr
+                                && matches!(rhs.unspan(), Value::Call(d, _) if *d == get_field_nr))
+                    });
+                    // The materialise prefix reads v while it is still intact, so
+                    // it MUST precede the `vector_db` clear: insert prefix ++
+                    // vector_db ops together, ahead of the body (prefix first).
+                    let mut front = prefix;
+                    if !body_allocates {
+                        front.extend(self.vector_db(tp, var_nr));
+                    }
+                    for (i, p) in front.into_iter().enumerate() {
+                        ls.insert(i, p);
+                    }
+                    if ls.is_empty()
+                        && !self.first_pass
+                        && var_nr != u16::MAX
+                        && matches!(f_type, Type::Vector(_, _))
+                    {
+                        ls.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                    }
                 }
             }
             true

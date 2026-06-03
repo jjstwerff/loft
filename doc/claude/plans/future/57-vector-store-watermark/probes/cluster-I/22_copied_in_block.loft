@@ -1,0 +1,6 @@
+fn f(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1,2,3]; w = a; t += w[0] + a[2]; }
+  t
+}
+fn test_p22() { assert(f(5) == 4, "copied in block"); }

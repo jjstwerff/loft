@@ -1,0 +1,5 @@
+fn g(n: integer) -> (vector<integer>, integer) {
+  if n > 0 { a: vector<integer> = [1, 2, 3]; return (a, n); }
+  ([9], 0)
+}
+fn test_t2() { (v, k) = g(5); assert(v.len() == 3 && v[0] == 1, "tuple from block"); }

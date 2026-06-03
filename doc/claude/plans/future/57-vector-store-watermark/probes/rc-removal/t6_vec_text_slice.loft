@@ -1,0 +1,2 @@
+// Slice of a vector<text> into a new local (the slice-materialise path).
+fn test_t6() { base: vector<text> = ["a", "b", "c", "d"]; mid = base[1..3]; assert(len(mid) == 2 && mid[0] == "b", "vec text slice"); }

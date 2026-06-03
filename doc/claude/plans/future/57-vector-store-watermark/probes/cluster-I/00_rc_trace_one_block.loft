@@ -1,0 +1,6 @@
+fn one_block(n: integer) -> integer {
+  t = 0;
+  if n > 0 { a: vector<integer> = [1, 2, 3]; t += a[0] + a[2]; }
+  t
+}
+fn main() { assert(one_block(5) == 4, "one"); }

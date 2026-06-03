@@ -764,6 +764,13 @@ fn OpNullRefSentinel() -> reference;
 // to a pre-reserved slot.
 fn OpInitRefSentinel(pos: const u16);
 fn OpFreeRef(v1: reference);
+// Plan-57 store-identity gate (verification builds only — emitted by the gated
+// `LOFT_STORE_TAG` IR post-pass, never in normal builds, so the bytecode stays
+// byte-identical).  OpStoreTag stamps the store with an allocation-site id;
+// OpFreeRefTag verifies it on free, catching wrong-store / cross-owner frees that
+// `free_named` would otherwise silently no-op.  Interpreter-only.
+fn OpStoreTag(v1: reference, tag: const u16);
+fn OpFreeRefTag(v1: reference, tag: const u16);
 // Free `placeholder` only when its store differs from `witness`.
 // Emitted for `__ref_N` work-refs that were passed to a user-fn call
 // whose Reference result is still live at the scope where the placeholder
@@ -1331,18 +1338,6 @@ fn OpParallelJoin();
 // O8.1a: Pre-allocate vector capacity so subsequent OpNewRecord calls never resize.
 fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
 #rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
-// P259: increment a store's reference count.  Used by
-// emit_lambda_code after each SetDbRef capturing a heap-owned
-// cell (Reference(__cell_*, _)) into the closure record's
-// auto-Reference attribute.  Without this inc, the parent fn's
-// scope-exit OpFreeRef on the cell drops the rc to 0 and frees
-// the store while the closure record still holds the DbRef
-// (P259 multi-factory crash).  Pairs with the cascade-free in
-// `Stores::free_named` that walks closure records' auto-
-// Reference attributes at free time and dec_rcs each captured
-// cell.
-fn OpIncRc(v1: reference);
-#rust"if @v1.store_nr != u16::MAX && (@v1.store_nr as usize) < s.database.allocations.len() {{ s.database.inc_rc(@v1.store_nr); }}"
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
 fn __add_int(a: integer, b: integer) -> integer { a + b }

@@ -1,0 +1,3 @@
+// Closure RETURNING a closure — double capture across two frames.
+fn outer(a: integer) -> fn(integer) -> integer { fn(b: integer) -> integer { a + b } }
+fn test_07() { add5 = outer(5); assert(add5(3) == 8 && add5(10) == 15, "nested closure"); }

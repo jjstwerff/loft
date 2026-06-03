@@ -1,0 +1,5 @@
+fn g(n: integer) -> (vector<integer>, integer) {
+  a: vector<integer> = [1, 2, 3];
+  (a, n)
+}
+fn test_t1() { (v, k) = g(5); assert(v.len() == 3 && v[0] == 1 && k == 5, "tuple-returned vec"); }

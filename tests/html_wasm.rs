@@ -507,6 +507,12 @@ fn collect_lib_wasm_tests() -> Vec<PathBuf> {
         return files;
     };
     for pkg in pkgs.filter_map(|e| e.ok()) {
+        // Skip the `.loft_test_tmp_*` artifact-isolation dirs that the interp /
+        // native lib suites create as siblings inside lib/ (run_lib_test_in_temp_cwd)
+        // — they exist only transiently and must not be discovered as packages.
+        if pkg.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         let tests_dir = pkg.path().join("tests");
         let Ok(entries) = std::fs::read_dir(&tests_dir) else {
             continue;

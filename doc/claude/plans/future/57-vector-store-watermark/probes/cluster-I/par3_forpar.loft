@@ -1,0 +1,7 @@
+fn dbl(x: integer) -> integer { x * 2 }
+fn f(n: integer) -> integer {
+  s = 0;
+  if n > 0 { a: vector<integer> = [1, 2, 3, 4]; for p in a par(r = dbl(p), 4) { s += r; } }
+  s
+}
+fn test_par3() { assert(f(5) == 20, "par over confined vector"); }

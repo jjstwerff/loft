@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The `01a3f24f` residual, made VISIBLE (@P393).  `01a3f24f` documented that the
+// CONDITIONAL reassign-then-return shape "leaks the conditionally-allocated
+// returned store … no test exercises it."  The probing shows the residual is
+// BROADER than the conditional sub-case: ANY de-NRVO'd vector return leaks
+// inline-unbound — straight-line reassign, conditional reassign, and append-build
+// alike (they all trip the same >=2-distinct-temp count).
+//
+// Both functions below return by value (empty dep) and leak when used inline.
+// BOUND to a local both are clean (the local's scope-free covers it) — which is
+// why `01a3f24f`'s own regression test (tests/scripts/173, all BOUND) stayed green.
+//
+// Expected:  interp = LEAK (2 stores, one per call)   native = clean
+
+fn straight() -> vector<integer> {
+  z = [9];
+  z = [1, 2];          // 2nd literal assignment → de-NRVO (the 173 bug shape)
+  z
+}
+
+fn conditional(c: boolean) -> vector<integer> {
+  z = [9];
+  if c { z = [1, 2]; } // conditional reassign → the documented residual
+  z
+}
+
+fn main() {
+  a = len(straight());          // inline-unbound → leaks
+  b = len(conditional(true));   // inline-unbound → leaks
+  println("a={a} b={b}");
+}

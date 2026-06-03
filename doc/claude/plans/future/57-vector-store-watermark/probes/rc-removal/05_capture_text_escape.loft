@@ -1,0 +1,3 @@
+// Capture a TEXT cell in an escaping closure.
+fn make(s: text) -> fn() -> text { fn() -> text { "{s}!" } }
+fn test_05() { f = make("hi"); assert(f() == "hi!", "text capture"); }

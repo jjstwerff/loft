@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// PROVES the axes that DON'T matter (@P393), so the fix isn't over-scoped to one
+// of them.  Once a return is de-NRVO'd (>=2 element-temps), the leak is
+// invariant under:
+//   * element type        — vec<integer>, vec<text>, vec<struct>, vec<float> all leak
+//   * use-site             — call argument, method receiver, nested call all leak
+//   * consumer             — native builtin (len) and user fn (id/borrow) both leak
+// The ONLY consumer that stays clean is a `for` loop that iterates the result
+// directly (it consumes + frees as it goes) — but that is not a call-argument
+// site, so the call-arg fix neither needs nor touches it.
+//
+// Each line below is an independent inline-unbound use of a de-NRVO'd return.
+//
+// Expected:  interp = LEAK (one store per leaking line)   native = clean
+
+struct P { a: integer }
+
+fn vi() -> vector<integer> { z = []; z += [1]; z += [2]; z }
+fn vt() -> vector<text>    { z = []; z += ["a"]; z += ["b"]; z }
+fn vp() -> vector<P>       { z: vector<P> = []; z += [P{a: 1}]; z += [P{a: 2}]; z }
+fn id(v: vector<integer>) -> integer { len(v) }
+
+fn main() {
+  a = len(vi());            // element=int,    use-site=arg,      consumer=builtin
+  b = len(vt());            // element=text
+  c = len(vp());            // element=struct
+  d = id(vi());             // consumer=user fn
+  e = vt().join("-").len(); // use-site=method receiver
+  println("a={a} b={b} c={c} d={d} e={e}");
+}
