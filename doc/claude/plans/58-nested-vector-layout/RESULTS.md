@@ -168,11 +168,20 @@ unchanged).  Regression `tests/scripts/185-nested-boolean-vector.loft`.  Full
 interpreter suite green (1928 passed); the 2 native failures are pre-existing
 ring/rustls rlib link errors.
 
-**IV residual** (nested comprehension) — the panic root is the `OpSetInt4`
-stack-skew (agent-pinned); the deep-copy fix's off-by-one was the same handle
-stride, now understood.  Still open — the comprehension uses its own `known`
-(`vectors.rs:1374`), separate from `new_record`; applying the same handle-stride
-discipline there is the remaining work.
+### Cluster IV — CLOSED (nested comprehension)
+
+Two coupled defects: (1) the per-element write used the scalar `set_field` path →
+`OpSetInt4` wrote 4 of a 12-byte handle → eval-stack skew → garbage rec-id into
+the locked CONST_STORE (agent-pinned root); (2) the comprehension's `known`
+(`vectors.rs:1374`) over-wrapped one level (`vector(def(ed_nr).known_type)`) vs
+the proven `vv += [inner]` path — so `record_new` strided the outer slot by the
+4-byte handle while the read strided by 8 → off-by-one (empty/lagged rows).
+Fix: deep-copy the inner record (`OpCopyRecord`) for a vector element instead of
+the scalar `set_field`, and compute `known` via `vector_of(in_t)` (the same
+element-type resolution `new_record` uses, with the sub-4 boolean handling).
+Flips 46/47/91/105/106 to PASS on both backends; zero regressions.  Regression
+`tests/scripts/186-nested-comprehension.loft`.  Distinct from #248 (a store-nr
+aliasing in the cross-package struct-return ABI — separate fix).
 
 ### Cluster III-a — CLOSED (nested-literal narrow coercion)
 

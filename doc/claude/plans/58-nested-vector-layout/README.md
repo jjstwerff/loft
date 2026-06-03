@@ -80,7 +80,7 @@ Full evidence + the 34-cell matrix: [RESULTS.md](RESULTS.md).
 | III-a | ~~Narrow-int nested literal (`i32`/`i16`/`u8`)~~ **✅ CLOSED** — `parse_item` now propagates the declared element type into the inner literal (`vectors.rs:1797`); regression `tests/scripts/184` | was silent corruption | both | n/a | (see RESULTS.md) |
 | III-b | char nested — **out of scope** (flat `vector<character>` indexing is broken generally, not nesting); boolean — **read-side** handle stride (own cluster) | — | — | — | (see RESULTS.md) |
 | boolean | ~~Outer vector-of-vectors **handle stride** = inner scalar size (1) not 4 → handles overlap~~ **✅ CLOSED** — parse-time `known` fix (`new_record`) + read-stride clamp (`fields.rs`); regression `tests/scripts/185` | was corruption→crash | both | n/a | (see RESULTS.md attempt 4) |
-| IV | Nested comprehension → CONST_STORE write | **panic** (`store.rs:1386`); root = `OpSetInt4` stack-skew (agent-pinned). Deep-copy fix removes panic but residual off-by-one = same **cluster-I** stride root | both | fix PENDING | (see RESULTS.md; distinct from #248) |
+| IV | ~~Nested comprehension → CONST_STORE write~~ **✅ CLOSED** — deep-copy (`OpCopyRecord`) + element-type `known` (`vectors.rs`); 46/47/91/105/106 PASS; regression `tests/scripts/186` | was panic | both | n/a | (see RESULTS.md; distinct from #248) |
 | V | Call-returned fn-ref into collection | **panic** (#263) | both | **out of scope** — general (flat too), not nesting | (see #263) |
 
 Headline reframe from the matrix: the size-alignment thesis (Cluster I) is real

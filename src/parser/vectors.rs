@@ -1371,13 +1371,22 @@ impl Parser {
     ) -> Type {
         // Per-iteration: OpNewRecord / set_field / OpFinishRecord pattern.
         let ed_nr = self.data.type_def_nr(in_t);
-        let known = Value::Int(i32::from(
-            if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
-                0
-            } else {
-                self.database.vector(self.data.def(ed_nr).known_type)
-            },
-        ));
+        // @PLAN58 cluster IV: use the SAME element-type `known` as the proven
+        // `vv += [inner]` path (`new_record`), not `vector(def(ed_nr).known_type)`
+        // which over-wraps one level for a nested element — making `record_new`
+        // stride the outer slot by the 4-byte handle while the read strides by 8
+        // (off-by-one).  `vector_of(in_t)` gives the element type; for a sub-4
+        // inner (boolean) pass the outer vector type so the handle strides by 4.
+        let elem_known = self.vector_of(in_t);
+        let known = Value::Int(i32::from(if elem_known == u16::MAX {
+            0
+        } else if matches!(in_t, Type::Vector(_, _))
+            && self.database.size(self.database.content(elem_known)) < 4
+        {
+            self.database.vector(elem_known)
+        } else {
+            elem_known
+        }));
         let fld = Value::Int(i32::from(u16::MAX));
         let comp_var = self.create_unique("comp", in_t);
         // @P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
@@ -1427,7 +1436,25 @@ impl Parser {
                 &[vec_expr.clone(), known.clone(), fld.clone()],
             ),
         ));
-        lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
+        // @PLAN58 cluster IV: a NESTED comprehension's body is a vector (a 12-byte
+        // DbRef handle).  The scalar `set_field(usize::MAX)` path emits `OpSetInt4`
+        // (4 of 12 bytes) → eval-stack skew → garbage rec-id into the locked
+        // CONST_STORE.  Deep-copy the inner record instead.  Scalar elements keep
+        // `set_field`.
+        if let Type::Vector(elem_tp, _) = in_t {
+            lp.push(self.cl(
+                "OpSetInt4",
+                &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+            ));
+            let elem_known = self.database.db_type(elem_tp, &self.data);
+            let type_nr = Value::Int(i32::from(self.database.vector(elem_known)));
+            lp.push(self.cl(
+                "OpCopyRecord",
+                &[Value::Var(comp_var), Value::Var(elm), type_nr],
+            ));
+        } else {
+            lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
+        }
         lp.push(self.cl(
             "OpFinishRecord",
             &[vec_expr.clone(), Value::Var(elm), known, fld],
