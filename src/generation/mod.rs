@@ -1687,6 +1687,16 @@ extern crate loft;"
         till: u32,
         reachable: Option<&HashSet<u32>>,
     ) -> std::io::Result<()> {
+        // @PLAN54 G2/M2 — persistent program store (mirrors the interpreter's
+        // byte_code_from): materialise the whole Data once and read each body
+        // node from it; default off → IrBlock::Native.
+        let program_store = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+            let mut stores = Stores::new();
+            let root = crate::ir_store::materialize_data(&mut stores, self.data);
+            Some((stores, root))
+        } else {
+            None
+        };
         for dnr in from..till {
             if !matches!(self.data.def(dnr).def_type, DefType::Function) {
                 continue;
@@ -1696,7 +1706,7 @@ extern crate loft;"
             {
                 continue;
             }
-            self.output_function(w, dnr)?;
+            self.output_function(w, dnr, program_store.as_ref())?;
         }
         Ok(())
     }
@@ -2037,7 +2047,12 @@ extern crate loft;"
 
     /// Use this to emit one loft function as a Rust function.
     /// Every loft function receives `stores: &mut Stores` as its first implicit argument.
-    fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
+    fn output_function(
+        &mut self,
+        w: &mut dyn Write,
+        def_nr: u32,
+        program_store: Option<&(Stores, crate::keys::DbRef)>,
+    ) -> std::io::Result<()> {
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
         // Skip Op functions with no callable body.
@@ -2100,18 +2115,13 @@ extern crate loft;"
             // but the function signature may still declare a non-void return type.
             // Rust requires an explicit return value in that case, so emit a null default.
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
-            // @PLAN54 G2/M5 — optional store-backed body emission.  With
-            // LOFT_CODEGEN_STORE set, materialise this body into a store and
-            // emit it through IrBlock::Store; output_block reads the body from
-            // the store (materialising at its boundary) — the generated Rust
-            // must be identical to the native path.  Default off → IrBlock::Native.
-            let store_holder;
-            let body: IrBlock = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
-                let mut stores = Stores::new();
-                let root = crate::data_store::ValuesVector::new(stores.database(16));
-                crate::ir_store::materialize_node(&mut stores, root, &def.code);
-                store_holder = stores;
-                IrBlock::Store(&store_holder, root.get(0, &store_holder))
+            // @PLAN54 G2/M2/M5 — store-backed body emission.  When
+            // output_functions supplied a persistent program store, read this
+            // body's node from it (def_body_node) and emit through IrBlock::Store
+            // (output_block materialises at its boundary); the generated Rust is
+            // identical to native.  No store → IrBlock::Native.
+            let body: IrBlock = if let Some((stores, root)) = program_store {
+                IrBlock::Store(stores, crate::ir_read::def_body_node(stores, *root, def_nr))
             } else {
                 IrBlock::Native(bl)
             };
