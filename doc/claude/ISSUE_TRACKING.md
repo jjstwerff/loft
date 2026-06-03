@@ -126,11 +126,11 @@ The Issue is the lightweight capture; the plan/roadmap is the design + sequencin
 |---|---|---|
 | 1 | **Pilot** — file @P396/@P397 as Issues (#247/#246), drop from PROBLEMS.md | ✅ done |
 | 2 | Create the `sev:*` / `area:*` / `wa:*` / cross-cutting labels | ✅ done (17: sev:/area:/wa:/regression/flaky/blocked-by/hit-by:) |
-| 2.5 | **`@GH###` indexed tracker** — add `@GH` as a recognized prefix in `scan.loft` (reference-finding + backlinks + deterministic issue URL, all offline); broaden `idx broken` to not false-flag migrated `@P###`; optional `make index-gh` validation bolt-on. | ☐ **REMAINING** (the one code task; until then `idx broken` may flag the 7 migrated `@P###`) |
+| 2.5 | **`@GH###` indexed tracker** (the one remaining CODE task — `tools/indexer/src/scan.loft`): (a) add `@GH<n>` to the tag tokeniser + a deterministic issue URL in `scripts/idx`; (b) in `tag_is_valid`, ALSO accept a `@P<n>` that appears in PROBLEMS.md's **freeze-banner `@P→#` map** (so the 7 migrated tags resolve instead of reading as broken — fully offline, the banner IS the map); (c) optional `make index-gh` validation bolt-on (`gh issue list --json number,state`). | ☐ **REMAINING** — until done, `idx broken` flags the 7 migrated `@P###` (scoped; deserves a focused pass + `make index` test) |
 | 3 | Migrate the OPEN PROBLEMS.md rows → Issues | ✅ done — @P391→#248, @P389→#249, @P384→#250, @P351→#251, @P340→#252 (+ pilots #246/#247) |
 | 4 | Freeze PROBLEMS.md — closed/historical record; FIXED rows + `###` design entries stay | ✅ done — freeze header + `@P→#` map; 0 open rows left |
 | 5 | Flip the meta-doc filing rule "→ PROBLEMS.md" → "→ GitHub Issue" | ✅ done — CLAUDE.md (bug-filing + doc index + reading-by-goal), `_INVESTIGATION_TEMPLATE § Closing`, `plans/README § workflows` |
-| 6 | Retire / repoint USER_FACING.md (Issues are user-facing; the mirror is redundant) | ☐ remaining |
+| 6 | USER_FACING.md — **KEEP** (revised: it's a curated *release-note-worthy deferred-work* tracker — features + user-visible bugs/perf + a showcase track — NOT a bug mirror, so not redundant).  Mark downstream-visible gh Issues with the `user-facing` label; USER_FACING.md cross-links them. | ✅ `user-facing` label created; cross-link as items arise |
 | 7 | Apply the template + labels in dryopea / lavition / `loft-libs-*` as each needs bug-filing | ☐ ongoing |
 
 ## Agent note
