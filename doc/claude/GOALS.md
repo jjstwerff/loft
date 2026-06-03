@@ -234,6 +234,28 @@ optimization, a deferred feature — it does **not** hand the programmer a form 
 fill in.  Warnings are the one allowed channel: they describe consequences of the
 programmer's *own* coding choices and are **freely ignorable**.
 
+**Grounding — the drive beneath the principle.**  Goal F is the language-layer
+face of a single motivation that runs the whole stack: *do the hard plumbing
+yourself, deeply, so someone else can just pick it up and have fun.*  It is the
+same sentence at every layer — **loft** (memory, types, the store done → write the
+logic, no ceremony) · the **hex-world library** (terrain, walls, collision,
+rendering done → make a world game, no world-infra) · the **editor** (authoring
+done → shape worlds) · the **server** (networking done → a gathering game just
+works).  Not four projects — **one drive, recursively**; and it is precisely
+**lavition's identity**: not "the hex-world engine" but *the engine where the hard
+parts are already done.*  It hands the project its own acceptance test, sharper
+than any feature list: **a thing is done when picking it up is *fun*** —
+fun-on-pickup, not feature-complete.  A library can ship every feature and still
+be a fight to hold; that library is not done.  This is why friction is **fatal,
+not cosmetic** — a Goal-F violation means the plumbing isn't finished, so whoever
+picked it up gets a fight instead of fun, and leaves.  The **crawler** dogfood
+made it literal: its "survival guide" of store-lifetime workarounds
+(C1/C3/C4/C18 → [loft#248](https://github.com/jjstwerff/loft/issues/248)) *is* the
+plumbing not yet done — each workaround a spot where loft handed the programmer a
+fight.  Clearing that family is not hygiene; it is **fidelity to the whole point**,
+and *"can they pick it up and have fun"* is the test that tells on-mission work
+from work that only looks like it.
+
 **Why — the Rust grievance, stated plainly.**  Rust bought safety by pushing its
 analysis onto the syntax: `'a` lifetimes, `move`, turbofish, `Pin` — ceremony
 that serves the borrow checker, not the author.  Once that syntax ships it cannot
