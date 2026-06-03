@@ -1,0 +1,7 @@
+// @PLAN58 cluster-III context probe — i32 element write vv[i][j]=x.
+fn main() {
+  vv: vector<vector<i32>> = [[111111, 222222], [333333]];
+  vv[0][1] = 999999;
+  assert(vv[0][1]==999999 && vv[0][0]==111111, "write {vv[0]}");
+  println("PASSED 83-2d-i32-write");
+}

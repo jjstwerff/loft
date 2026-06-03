@@ -2758,6 +2758,11 @@ impl Parser {
             }
             Type::Float => self.cl("OpGetFloat", &[code, p]),
             Type::Single => self.cl("OpGetSingle", &[code, p]),
+            // A `vector<character>` element read had no `get_val` arm (only the
+            // write side — OpSetCharacter — existed), so `v[0]` / `for c in v`
+            // fell through to "Field access not supported on type character".
+            // Mirror the OpSetCharacter write with the OpGetCharacter read.
+            Type::Character => self.cl("OpGetCharacter", &[code, p]),
             Type::Text(_) => self.cl("OpGetText", &[code, p]),
             Type::Hash(_, _, _)
             | Type::Sorted(_, _, _)

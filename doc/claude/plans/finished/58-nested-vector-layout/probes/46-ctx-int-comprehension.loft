@@ -1,0 +1,6 @@
+// @PLAN58 — nested vector built by comprehension.  context=comprehension.
+fn main() {
+  vv: vector<vector<integer>> = [for i in 0..3 { [i, i * 2] }];
+  assert(vv[0][0] == 0 && vv[2][1] == 4, "comp {vv[2]}");
+  println("PASSED 46-ctx-int-comprehension");
+}

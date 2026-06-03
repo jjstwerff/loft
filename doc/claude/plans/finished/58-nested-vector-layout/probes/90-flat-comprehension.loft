@@ -1,0 +1,6 @@
+// @PLAN58 cluster-IV isolation — FLAT vector comprehension (no nesting).
+fn main() {
+  v: vector<integer> = [for i in 0..4 { i * 10 }];
+  assert(v[0]==0 && v[3]==30, "flat comp {v}");
+  println("PASSED 90-flat-comprehension");
+}

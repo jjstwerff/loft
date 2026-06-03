@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (plan-57 @PLN2 follow-up / Fix A): an early `return` ABOVE several
+// reclaim-eligible body-scoped vector locals emitted a scope-exit free of those
+// stores inside the return block; `lastuse_reclaim` then relocated each store's
+// null-init DECLARATION down past that free, stranding it out of scope in the
+// generated Rust — `error[E0425]: cannot find value var___vdb_NN in this scope`
+// (92× on the brick-buster --html build; reproduced with --native-emit too).
+// Fix: a store with a free BEFORE its alloc (`has_free_before_alloc`) is excluded
+// from the reclaim pass, keeping its body-0 declaration.  Both backends + the
+// --native compile must succeed; the wrap leak gate confirms zero leaked stores.
+
+fn run(early: boolean) -> integer {
+  if early { return 0; }     // early-return free of a/b/c's body-scoped __vdb
+  a = [1, 2, 3];             // reclaim-eligible; its let-decl must stay at body-0
+  b = [4, 5, 6];
+  c = [7, 8, 9];
+  a[0] + b[1] + c[2]
+}
+
+fn main() {
+  assert(run(false) == 1 + 5 + 9, "vectors after the early-return guard intact");
+  assert(run(true) == 0, "early-return path returns 0");
+  print("ok\n");
+}

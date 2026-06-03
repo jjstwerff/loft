@@ -1,0 +1,11 @@
+// @PLAN58 STRONG probe — boolean (1-byte): alternating pattern + lengths so an
+// empty/truncated inner vector is caught (boolean read empty in the baseline).
+fn main() {
+  vv: vector<vector<boolean>> = [[true, false, true], [false], [false, true]];
+  assert(len(vv) == 3, "outer len {len(vv)}");
+  assert(len(vv[0]) == 3 && len(vv[1]) == 1 && len(vv[2]) == 2, "lens {len(vv[0])},{len(vv[1])},{len(vv[2])}");
+  assert(vv[0][0] == true && vv[0][1] == false && vv[0][2] == true, "row0 {vv[0]}");
+  assert(vv[1][0] == false, "row1");
+  assert(vv[2][0] == false && vv[2][1] == true, "row2");
+  println("PASSED 76-strong-bool");
+}

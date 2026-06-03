@@ -659,7 +659,7 @@ impl Parser {
         // Shorts stay wide until Phase 4 aligns the `Parts::Short`
         // encoding with raw-byte copies.  Falls back to the
         // bounds-heuristic via `database.size(known_type)` otherwise.
-        let elm_size = if let Type::Integer(spec) = etp
+        let elm_size_raw = if let Type::Integer(spec) = etp
             && let Some(n) = spec.vector_narrow_width()
         {
             i32::from(n)
@@ -675,6 +675,17 @@ impl Parser {
             i32::from(self.database.size(narrow))
         } else {
             i32::from(self.database.size(known))
+        };
+        // @PLAN58 cluster-I (boolean outer-handle stride): a vector-typed element
+        // is a 4-byte rec-id HANDLE.  The bounds-heuristic above yields the inner
+        // scalar size — fine when ≥4, but a 1-byte `boolean` inner makes adjacent
+        // handles overlap on read.  Clamp to ≥4, matching the construction-side
+        // `known` fix in `new_record`.  A no-op for ≥4 strides; no classification
+        // change (`known` / is_base / is_linked / deref type are untouched).
+        let elm_size = if matches!(elm_type, Type::Vector(_, _)) {
+            elm_size_raw.max(4)
+        } else {
+            elm_size_raw
         };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {

@@ -1377,6 +1377,15 @@ impl Stores {
                 }
             }
             crate::data::Type::Enum(_, false, _) => self.name("byte"),
+            // #250: a nested-vector element type must resolve recursively — the
+            // `_` fallback below (`def(type_def_nr(tp)).known_type`) mis-resolves
+            // `vector<T>` to an unrelated default-library id (e.g. FieldValue),
+            // so a 3+-deep `vector<vector<vector<X>>>` copy got a bogus type-id
+            // and `copy_claims` dispatched as the wrong type → OOB panic.
+            crate::data::Type::Vector(elem, _) => {
+                let e = self.db_type(elem, data);
+                self.vector(e)
+            }
             _ => data.def(data.type_def_nr(tp)).known_type,
         }
     }

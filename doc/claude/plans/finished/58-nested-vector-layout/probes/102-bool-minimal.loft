@@ -1,0 +1,6 @@
+// @PLAN58 boolean pinpoint — minimal single-element single-row.
+fn main() {
+  vv: vector<vector<boolean>> = [[true]];
+  assert(vv[0][0]==true, "minimal {vv[0][0]}");
+  println("PASSED 102-bool-minimal");
+}

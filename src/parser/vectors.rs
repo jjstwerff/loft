@@ -258,6 +258,33 @@ impl Parser {
     ) -> Type {
         if self.lexer.has_token("!") {
             let t = self.parse_part(var_tp, val, parent_tp);
+            // #253: `!x` on a non-boolean reads as "is x null?" — the null
+            // sentinel is in-band (LOFT.md "!value asymmetry").  On a `not null`
+            // operand the value can never BE the sentinel, so `!x` is *always
+            // false* — a silent no-op (`f = 0; if !f` never runs, because 0 is a
+            // real value, not null).  Warn, don't error: a nullable operand
+            // (`!both` in stdlib min/max) is a legitimate null test, and boolean
+            // `!` is ordinary negation (`false` is a valid value there).
+            let eff = if let Type::RefVar(inner) = &t {
+                (**inner).clone()
+            } else {
+                t.clone()
+            };
+            let operand_not_null =
+                self.expr_not_null || matches!(&eff, Type::Integer(spec) if spec.not_null);
+            if !self.first_pass
+                && operand_not_null
+                && !matches!(eff, Type::Boolean | Type::Null | Type::Unknown(_))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "'!' on a 'not null' {} is always false — '!x' tests whether x \
+                     is null, and a 'not null' value is never null; compare \
+                     explicitly (e.g. 'x == 0') if you meant a value check",
+                    t.name(&self.data)
+                );
+            }
             let arg = val.clone();
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {
@@ -1344,13 +1371,22 @@ impl Parser {
     ) -> Type {
         // Per-iteration: OpNewRecord / set_field / OpFinishRecord pattern.
         let ed_nr = self.data.type_def_nr(in_t);
-        let known = Value::Int(i32::from(
-            if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
-                0
-            } else {
-                self.database.vector(self.data.def(ed_nr).known_type)
-            },
-        ));
+        // @PLAN58 cluster IV: use the SAME element-type `known` as the proven
+        // `vv += [inner]` path (`new_record`), not `vector(def(ed_nr).known_type)`
+        // which over-wraps one level for a nested element — making `record_new`
+        // stride the outer slot by the 4-byte handle while the read strides by 8
+        // (off-by-one).  `vector_of(in_t)` gives the element type; for a sub-4
+        // inner (boolean) pass the outer vector type so the handle strides by 4.
+        let elem_known = self.vector_of(in_t);
+        let known = Value::Int(i32::from(if elem_known == u16::MAX {
+            0
+        } else if matches!(in_t, Type::Vector(_, _))
+            && self.database.size(self.database.content(elem_known)) < 4
+        {
+            self.database.vector(elem_known)
+        } else {
+            elem_known
+        }));
         let fld = Value::Int(i32::from(u16::MAX));
         let comp_var = self.create_unique("comp", in_t);
         // @P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
@@ -1400,7 +1436,25 @@ impl Parser {
                 &[vec_expr.clone(), known.clone(), fld.clone()],
             ),
         ));
-        lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
+        // @PLAN58 cluster IV: a NESTED comprehension's body is a vector (a 12-byte
+        // DbRef handle).  The scalar `set_field(usize::MAX)` path emits `OpSetInt4`
+        // (4 of 12 bytes) → eval-stack skew → garbage rec-id into the locked
+        // CONST_STORE.  Deep-copy the inner record instead.  Scalar elements keep
+        // `set_field`.
+        if let Type::Vector(elem_tp, _) = in_t {
+            lp.push(self.cl(
+                "OpSetInt4",
+                &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+            ));
+            let elem_known = self.database.db_type(elem_tp, &self.data);
+            let type_nr = Value::Int(i32::from(self.database.vector(elem_known)));
+            lp.push(self.cl(
+                "OpCopyRecord",
+                &[Value::Var(comp_var), Value::Var(elm), type_nr],
+            ));
+        } else {
+            lp.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(comp_var)));
+        }
         lp.push(self.cl(
             "OpFinishRecord",
             &[vec_expr.clone(), Value::Var(elm), known, fld],
@@ -1749,6 +1803,11 @@ impl Parser {
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         let mut p = Value::Var(elm);
+        // #247: isolate THIS element's capturing-lambda signal.  A capturing
+        // lambda makes `emit_lambda_code` set `last_closure_work_var` (and emit
+        // a Block, not a bare FnRef); a non-capturing lambda / non-lambda leaves
+        // it MAX.  Reset first so a prior element's value can't leak in.
+        self.last_closure_work_var = u16::MAX;
         let mut t = if self.lexer.has_token("for") {
             //self.iter_for(&mut p)
             diagnostic!(
@@ -1759,8 +1818,15 @@ impl Parser {
             return Some(Type::Unknown(0));
         } else {
             let mut parent_tp = Type::Null;
-            self.parse_operators(&Type::Unknown(0), &mut p, &mut parent_tp, 0)
+            // @PLAN58 III-a: propagate the declared element type `in_t` into the
+            // element parse so a NESTED literal's inner elements adopt the
+            // declared narrow width (`vector<vector<i32>>` → inner `[1,2]` types
+            // its elements `i32`, not wide `integer`).  When `in_t` is Unknown
+            // (untyped inferred literal) this is identical to the prior
+            // `Type::Unknown(0)` behaviour.
+            self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0)
         };
+        let elem_capturing_lambda = self.last_closure_work_var != u16::MAX;
         if let Type::Rewritten(tp) = in_t {
             *in_t = *tp.clone();
         }
@@ -1822,6 +1888,41 @@ impl Parser {
             self.parse_enum_field(&mut ls, Value::Var(elm), td_nr, 0, *enum_nr);
             ls.push(p.clone());
             p = Value::Insert(ls);
+        }
+        // #247: a CAPTURING closure stored into a collection is not supported
+        // yet (the co-located 16B closure-record layout is deferred —
+        // @P213/@P214) and currently CRASHES at runtime ("Write to read-only
+        // store"). Cleanly reject the statically-detectable shapes — a direct
+        // capturing lambda, or a local that holds one — instead of crashing.
+        // (A capturing closure RETURNED from a call, e.g. `[make(1)]`, has type
+        // `fn()->T` indistinguishable from a non-capturing fn-ref and still
+        // reaches the runtime path — that needs the deferred layout work.)
+        if !self.first_pass && matches!(in_t, Type::Function(_, _, _)) {
+            let capturing = elem_capturing_lambda
+                || match p.unspan() {
+                    Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
+                    Value::Var(v) => self.closure_vars.contains_key(v),
+                    // A function that RETURNS a capturing closure carries the
+                    // closure work-var in its `returned` Function dep list
+                    // (emit_lambda_code, this file ~line 957) — so `[make(1)]`,
+                    // a Call whose return type is `fn()->T` indistinguishable by
+                    // signature, IS detectable via that non-empty dep list.
+                    Value::Call(d_nr, _) => matches!(
+                        &self.data.def(*d_nr).returned,
+                        Type::Function(_, _, deps) if !deps.is_empty()
+                    ),
+                    _ => false,
+                };
+            if capturing {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a capturing closure cannot be stored in a collection yet — the \
+                     co-located closure-record layout is deferred (@P213/@P214); hold the \
+                     captured state separately (e.g. a struct field) and store a \
+                     non-capturing fn that reads it"
+                );
+            }
         }
         res.push(p.clone());
         None
@@ -1948,6 +2049,25 @@ impl Parser {
         } else {
             None
         };
+        // #246: `vv[i] += [...]` — `is_field` is true (the LHS is an indexed
+        // access) but the parent is a VECTOR, not a struct, so there is no
+        // struct/field to locate.  `parse_part`'s `[` branch now records the
+        // indexed container's type as `parent_tp`, so a `Type::Vector` parent is
+        // the signal — covering both `vv[0]` and `h.vv[0]` (a vector element
+        // reached through a struct field, where `parent_tp` would otherwise be
+        // the stale struct from the preceding `.field`).  Append directly to the
+        // inner vector that `val`'s read yields (`ps[0]`), with `fld = u16::MAX`,
+        // mirroring the plain-local path — instead of routing through
+        // `new_record_field_op` (struct-only, which mis-locates a field).
+        let vector_elem_target: Option<Value> = if is_field
+            && matches!(parent_tp, Type::Vector(_, _))
+            && let Value::Call(_, ps) = val.unspan()
+            && !ps.is_empty()
+        {
+            Some(ps[0].clone())
+        } else {
+            None
+        };
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -1955,7 +2075,24 @@ impl Parser {
             // this the literal-append path would register
             // `vector<integer>` (8-byte stride) into a narrow-registered
             // local, and reads would mis-align with writes.
-            let known = Value::Int(i32::from(lhs_known.unwrap_or_else(|| self.vector_of(in_t))));
+            // @PLAN58 cluster-I (boolean outer-handle stride): for a nested
+            // element (`in_t` is a vector), the OUTER vector stores 4-byte rec-id
+            // HANDLES.  `vector_of(in_t)` yields the ELEMENT type whose content is
+            // the inner scalar — so `record_new` strides the outer slot by the
+            // inner scalar size.  ≥4 is fine, but a 1-byte `boolean` inner makes
+            // adjacent handles OVERLAP.  When the inner content is <4 bytes, pass
+            // the OUTER vector type (`vector(elem)`) so `record_new` strides by the
+            // handle size (4).  Integer/single (≥4) and the inner scalar append
+            // (`in_t` not a vector) are untouched.
+            let elem_known = lhs_known.unwrap_or_else(|| self.vector_of(in_t));
+            let known_tp = if matches!(in_t, Type::Vector(_, _))
+                && self.database.size(self.database.content(elem_known)) < 4
+            {
+                self.database.vector(elem_known)
+            } else {
+                elem_known
+            };
+            let known = Value::Int(i32::from(known_tp));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()
@@ -1966,7 +2103,10 @@ impl Parser {
                 continue;
             }
             let fld = Value::Int(i32::from(u16::MAX));
-            let app_v = if is_field {
+            let app_v = if let Some(target) = &vector_elem_target {
+                // #246: append directly to the inner vector (the indexed read).
+                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
+            } else if is_field {
                 self.new_record_field_op(val, parent_tp, "OpNewRecord")
             } else {
                 self.cl(
@@ -1975,6 +2115,22 @@ impl Parser {
                 )
             };
             ls.push(v_set(elm, app_v));
+            // @P380 (generalized, plan-58 cluster II): a freshly-created
+            // vector-of-vectors element is a VECTOR HANDLE (rec-id at offset 0),
+            // but `OpNewRecord` default-inits it with the mis-resolved inner
+            // scalar's null sentinel.  For an 8-byte inner (`integer`/`float`)
+            // the sentinel's low-32 bits are 0 (a harmless empty handle), but a
+            // 4-byte `single` NaN (0x7FC00000) is a non-zero garbage rec-id →
+            // wild `get_u32_raw` → SIGSEGV when later read as a rec-id.  Zero the
+            // handle on EVERY construction path — the literal/`Insert` path lacked
+            // it (only the copy branch below had it), so nested `single` literals
+            // crashed.  No-op for the already-zero 8-byte cases.
+            if !self.first_pass && matches!(in_t, Type::Vector(_, _)) {
+                ls.push(self.cl(
+                    "OpSetInt4",
+                    &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+                ));
+            }
             if matches!(
                 in_t,
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
@@ -2023,25 +2179,9 @@ impl Parser {
                     } else {
                         Value::Int(i32::from(self.data.def(inner_nr).known_type) | free_source_bit)
                     };
-                    // @P380 — a freshly-appended vector-of-vectors element is a
-                    // VECTOR HANDLE (rec-id at offset 0), but `OpNewRecord`
-                    // default-inits it as the mis-resolved inner SCALAR (the
-                    // shallow element type), writing that scalar's null
-                    // sentinel into the handle slot.  `OpCopyRecord`'s leading
-                    // `remove_claims` then reads that sentinel AS a rec-id: for
-                    // an 8-byte inner element (`integer`/`float`) the sentinel's
-                    // low-32 bits are 0 (reads as the empty handle, harmless),
-                    // but for a 4-byte `single` the NaN sentinel (0x7FC00000) is
-                    // a non-zero garbage rec-id → wild `get_u32_raw` → SIGSEGV.
-                    // Zero the handle slot before the copy so `remove_claims`
-                    // no-ops on the fresh element (a no-op for the already-zero
-                    // 8-byte cases).  Vector elements only — the confirmed shape.
-                    if !self.first_pass && matches!(in_t, Type::Vector(_, _)) {
-                        ls.push(self.cl(
-                            "OpSetInt4",
-                            &[Value::Var(elm), Value::Int(0), Value::Int(0)],
-                        ));
-                    }
+                    // @P380 handle-zero is now hoisted above (after the element
+                    // is created), covering this copy path AND the literal/`Insert`
+                    // path; `remove_claims` here sees the already-zeroed handle.
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
             } else if let Value::Tuple(values) = p {
@@ -2106,7 +2246,13 @@ impl Parser {
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
-            let finish = if is_field {
+            let finish = if let Some(target) = &vector_elem_target {
+                // #246: finish the direct append into the inner vector.
+                self.cl(
+                    "OpFinishRecord",
+                    &[target.clone(), Value::Var(elm), known, fld],
+                )
+            } else if is_field {
                 let mut finish_v = self.new_record_field_op(val, parent_tp, "OpFinishRecord");
                 // Replace placeholder Var(0) with the actual elm variable.
                 if let Value::Call(_, ref mut args) = finish_v

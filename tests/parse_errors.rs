@@ -1387,3 +1387,75 @@ fn p315_float_literal_into_single_vector() {
              p315_float_literal_into_single_vector:1:43",
         );
 }
+
+/// GitHub #256 — `??` on a boolean is rejected at compile time: boolean has no
+/// null representation, so a stored `false` is indistinguishable from "missing"
+/// and `false ?? x` would silently fall through to `x`.
+#[test]
+fn gh256_bool_null_coalesce_rejected() {
+    code!("fn test() { b = false; c = b ?? true; }")
+        .error(
+            "Cannot use null coalescing '??' on boolean — boolean has no null \
+             representation (a stored 'false' is indistinguishable from missing); \
+             use an integer flag, or test the boolean directly at \
+             gh256_bool_null_coalesce_rejected:1:37",
+        )
+        .warning("Variable c is never read at gh256_bool_null_coalesce_rejected:1:27");
+}
+
+/// GitHub #253 — `!` on a `not null` non-boolean is always false (`!x` tests
+/// "is x null", and a `not null` value is never null).  Warn rather than error:
+/// nullable operands are a legitimate null test and boolean `!` is ordinary
+/// negation.
+#[test]
+fn gh253_bang_on_not_null_warns() {
+    code!("fn test() { h: integer not null = 3; if !h { h = 4; } }").warning(
+        "'!' on a 'not null' integer is always false — '!x' tests whether x \
+             is null, and a 'not null' value is never null; compare explicitly \
+             (e.g. 'x == 0') if you meant a value check at \
+             gh253_bang_on_not_null_warns:1:45",
+    );
+}
+
+/// GitHub #253 companion — `!` on a *nullable* operand is the sanctioned null
+/// test (stdlib `min`/`max` use `!both`), so it must NOT warn.
+#[test]
+fn gh253_bang_on_nullable_is_quiet() {
+    code!("fn test() { n: integer = 3; if !n { n = 4; } assert(n == 3, \"ok\"); }");
+}
+
+/// GitHub #247 — storing a CAPTURING closure into a collection is cleanly
+/// rejected (compile error) instead of crashing.  Covers all three detectable
+/// shapes: a direct capturing lambda, a local holding one, and a call to a
+/// function that RETURNS a capturing closure (`[make(1)]`).
+#[test]
+fn gh247_capturing_closure_in_vector_rejected_direct() {
+    code!("fn test() { k = 3; fs: vector<fn() -> integer> = [fn() -> integer { k * 2 }]; }").error(
+        "a capturing closure cannot be stored in a collection yet — the co-located \
+             closure-record layout is deferred (@P213/@P214); hold the captured state \
+             separately (e.g. a struct field) and store a non-capturing fn that reads it \
+             at gh247_capturing_closure_in_vector_rejected_direct:1:77",
+    );
+}
+
+#[test]
+fn gh247_capturing_closure_in_vector_rejected_call() {
+    code!(
+        "fn make(k: integer) -> fn() -> integer { fn() -> integer { k * 2 } }
+fn test() { fs: vector<fn() -> integer> = [make(1)]; }"
+    )
+    .error(
+        "a capturing closure cannot be stored in a collection yet — the co-located \
+         closure-record layout is deferred (@P213/@P214); hold the captured state \
+         separately (e.g. a struct field) and store a non-capturing fn that reads it \
+         at gh247_capturing_closure_in_vector_rejected_call:2:52",
+    );
+}
+
+/// Non-capturing closures and named fn-refs in a vector still work (not rejected).
+#[test]
+fn gh247_noncapturing_closure_in_vector_ok() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }\nfn test() { fs: vector<fn(integer) -> integer> = [dbl, fn(y: integer) -> integer { 7 }]; }"
+    );
+}

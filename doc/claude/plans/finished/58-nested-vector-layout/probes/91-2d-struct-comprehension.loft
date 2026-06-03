@@ -1,0 +1,7 @@
+// @PLAN58 cluster-IV — nested comprehension with struct element (vs int/single).
+struct Pt { x: integer }
+fn main() {
+  vv: vector<vector<Pt>> = [for i in 0..3 { [Pt{x:i}] }];
+  assert(vv[2][0].x==2, "struct comp {vv[2][0].x}");
+  println("PASSED 91-2d-struct-comprehension");
+}

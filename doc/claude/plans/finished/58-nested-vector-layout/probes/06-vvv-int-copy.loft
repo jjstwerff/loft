@@ -1,0 +1,9 @@
+// @PLAN58 probe 06 — CONTROL for probe 05: vector<vector<vector<integer>>> 3-deep
+// += copy.  integer null = i64::MIN (low-32 = 0, harmless) → works post-#250.
+fn main() {
+  vvv: vector<vector<vector<integer>>> = [];
+  a: vector<vector<integer>> = [[7]];
+  vvv += [a];
+  assert(vvv[0][0][0] == 7, "elem: {vvv[0][0][0]}");
+  println("probe 06 PASSED");
+}

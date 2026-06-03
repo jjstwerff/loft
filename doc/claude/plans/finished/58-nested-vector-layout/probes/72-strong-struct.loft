@@ -1,0 +1,12 @@
+// @PLAN58 STRONG probe — struct elements (4-byte handles): distinct fields per
+// index so a wrong handle stride reads a different struct.
+struct Pt { x: integer, y: integer }
+fn main() {
+  vv: vector<vector<Pt>> = [[Pt{x:11,y:101}, Pt{x:12,y:102}, Pt{x:13,y:103}], [Pt{x:21,y:201}]];
+  assert(len(vv[0]) == 3 && len(vv[1]) == 1, "lens");
+  assert(vv[0][0].x == 11 && vv[0][0].y == 101, "00");
+  assert(vv[0][1].x == 12 && vv[0][1].y == 102, "01 {vv[0][1].x},{vv[0][1].y}");
+  assert(vv[0][2].x == 13 && vv[0][2].y == 103, "02");
+  assert(vv[1][0].x == 21 && vv[1][0].y == 201, "10");
+  println("PASSED 72-strong-struct");
+}

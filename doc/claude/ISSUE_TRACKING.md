@@ -59,6 +59,11 @@ files would.  The win is the *uniform* convention, not GitHub itself.
     `area:parser` / `area:native` / `area:wasm` / `area:stdlib` /
     `area:packages` / …
   - cross-cutting: `both-backends`, `needs-design`
+  - triage-state: `attention` (stuck after 2+ tries), `design` (blocked on a
+    user decision), `by-design` (closed — intended, cites a `DESIGN_DECISIONS`
+    `C##`)
+  - lifecycle: `fixed-pending-merge` (fixed on the working branch, awaiting the
+    merge to `main` — see [§ Issue lifecycle](#issue-lifecycle--what-each-state-means-read-this-before-picking-work))
 - **Cross-repo** — a bug in repo A that blocks repo B → an Issue in A, referenced
   from a `blocked-by`-labelled tracking Issue in B (`jjstwerff/loft#247`).  The
   dogfood loop (moros / dryopea drive loft) lives on these links.
@@ -92,19 +97,47 @@ on both backends, printed `10`/`7`.)
 urgent than raw `sev:`, because severity is "how bad when hit" and `wa:` is "can
 you avoid being hit."
 
+## Issue lifecycle — what each state means (read this before picking work)
+
+**`open` means there is work to be done.**  The tracker's open set is the agent's
+worklist; nothing closed or in the pending state is a pick-up candidate.
+
+| State | Meaning | Is it a pick-up? |
+|---|---|---|
+| **open**, no blocking label | a real defect with work remaining | **yes** — investigate + fix |
+| **open** + `design` / `needs-design` | open, but **blocked on a decision** — the next move is a design call (often the user's) | no — surface options, don't grind a fix |
+| **open** + `fixed-pending-merge` | **done** on the working branch; the only step left is the merge to `main` (not the agent's action) | **no** — it's finished, just in transit |
+| **closed** | terminally resolved: `by-design` / `duplicate` / `wontfix` (a non-fix outcome, no merge pending), **or** the fix reached `main` (auto-closed by `Fixes #NNN`) | no |
+
+So the agent's actionable worklist = **open AND NOT `fixed-pending-merge` AND NOT
+`design`/`needs-design`** (the last two need a decision first).
+
+**Why `fixed-pending-merge` instead of closing on the working branch.**  `main` is
+the release branch; a fix that lives only on a long-lived working branch is **not
+in `main`**.  Manually closing it would make the tracker say "fixed" while the
+released code still has the bug — and the eventual merge's `Fixes #NNN` would then
+close-an-already-closed issue, the **close ↔ reopen ping-pong** we explicitly
+avoid.  The pending label keeps the issue **honestly open** (work is *not* awaiting
+the agent) until the merge auto-closes it in one clean transition.
+
 ## Resolving an issue (the close half)
 
 Filing is half the loop; closing is the other half.
 
 - **Reference the issue in the fixing commit** — `Fixes #NNN` / `Closes #NNN` in
   the commit (or PR body); GitHub auto-closes it when that lands on the default
-  branch.  On a working branch with no PR, close manually after pushing
-  (`gh issue close NNN --comment "fixed in <hash>"`).
+  branch.
+- **On a working branch with no PR, do NOT close manually.**  After pushing, add
+  the **`fixed-pending-merge`** label (and a comment naming the fixing commit +
+  the regression test).  The `Fixes #NNN` line closes it when the branch merges to
+  `main` — one transition, no ping-pong.  Manual `gh issue close` is reserved for
+  **terminal non-fix outcomes** (`by-design` → cite a `DESIGN_DECISIONS.md` `C##`;
+  `duplicate` → cite the canonical issue; `wontfix`).
 - **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
-  locks it in.  A closed issue with no regression is a re-opening waiting to
-  happen.
-- **Re-verify the workaround on close** if the issue had one — a fix can make a
-  `wa:partial`/`wa:none` moot; keep the closed record accurate.
+  locks it in.  A `fixed-pending-merge` issue with no regression is a re-opening
+  waiting to happen.
+- **Re-verify the workaround on resolve** if the issue had one — a fix can make a
+  `wa:partial`/`wa:none` moot; keep the record accurate.
 - **Don't file a bug you fix in the same change** — the fix + its test ARE the
   record (CLAUDE.md § Bug-filing policy).
 

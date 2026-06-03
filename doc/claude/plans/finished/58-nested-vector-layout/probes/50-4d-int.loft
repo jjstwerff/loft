@@ -1,0 +1,8 @@
+// @PLAN58 — 4-deep integer += copy.  depth=4.
+fn main() {
+  q: vector<vector<vector<vector<integer>>>> = [];
+  a: vector<vector<vector<integer>>> = [[[5]]];
+  q += [a];
+  assert(q[0][0][0][0] == 5, "elem");
+  println("PASSED 50-4d-int");
+}

@@ -1,0 +1,8 @@
+// @PLAN58 — nested vector as a struct field, append + read.  context=struct-field.
+struct H { box: vector<vector<integer>> }
+fn main() {
+  h = H { box: [] };
+  h.box += [[5, 6]];
+  assert(h.box[0][0] == 5 && h.box[0][1] == 6, "field {h.box[0]}");
+  println("PASSED 42-ctx-int-structfield");
+}

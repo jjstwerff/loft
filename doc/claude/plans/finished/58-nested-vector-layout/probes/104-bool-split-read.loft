@@ -1,0 +1,7 @@
+// @PLAN58 boolean pinpoint — split the double-index to isolate outer vs inner read.
+fn main() {
+  vv: vector<vector<boolean>> = [[true, false]];
+  r: vector<boolean> = vv[0];
+  assert(r[0]==true && r[1]==false, "split inner {r}");
+  println("PASSED 104-bool-split-read");
+}

@@ -1,0 +1,9 @@
+// @PLAN58 probe 04 — vector<vector<single>> 2-deep (single suffix `f`).
+// Cluster: single-sentinel.  Per #262, the 2-deep single case WORKS (the @P380
+// OpSetInt4-zero fix covers it).  Reference for the 3-deep crash (probe 05).
+fn main() {
+  vv: vector<vector<single>> = [[1.5f, 2.5f], [3.5f]];
+  assert(vv[0][0] == 1.5f && vv[0][1] == 2.5f, "row0: {vv[0]}");
+  assert(vv[1][0] == 3.5f, "row1: {vv[1]}");
+  println("probe 04 PASSED");
+}

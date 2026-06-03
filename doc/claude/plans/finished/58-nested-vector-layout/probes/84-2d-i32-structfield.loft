@@ -1,0 +1,8 @@
+// @PLAN58 cluster-III context probe — i32 nested vector as struct field.
+struct H { box: vector<vector<i32>> }
+fn main() {
+  h = H { box: [] };
+  h.box += [[555555, 666666]];
+  assert(h.box[0][0]==555555 && h.box[0][1]==666666, "field {h.box[0]}");
+  println("PASSED 84-2d-i32-structfield");
+}

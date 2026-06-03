@@ -1,0 +1,6 @@
+// @PLAN58 IV pinpoint — inner built via a named var in the body (not an inline literal).
+fn main() {
+  vv: vector<vector<integer>> = [for i in 0..3 { x: vector<integer> = [i, i * 2]; x }];
+  assert(vv[2][1]==4, "var-body {vv[2]}");
+  println("PASSED 106-comp-var-body");
+}

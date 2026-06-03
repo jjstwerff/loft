@@ -1,0 +1,7 @@
+// @PLAN58 cluster-III depth probe — 3-deep i32 LITERAL (vs 3-deep copy which passes).
+fn main() {
+  vvv: vector<vector<vector<i32>>> = [[[111111, 222222]], [[333333]]];
+  assert(vvv[0][0][0]==111111 && vvv[0][0][1]==222222, "00 {vvv[0][0]}");
+  assert(vvv[1][0][0]==333333, "10");
+  println("PASSED 85-3d-i32-litread");
+}

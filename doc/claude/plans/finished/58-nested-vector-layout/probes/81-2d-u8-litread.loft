@@ -1,0 +1,8 @@
+// @PLAN58 cluster-III width probe — u8 (1-byte). Like boolean (also 1-byte)?
+fn main() {
+  vv: vector<vector<u8>> = [[11, 22, 33], [44]];
+  assert(len(vv[0])==3 && len(vv[1])==1, "lens");
+  assert(vv[0][0]==11 && vv[0][1]==22 && vv[0][2]==33, "row0 {vv[0]}");
+  assert(vv[1][0]==44, "row1");
+  println("PASSED 81-2d-u8-litread");
+}

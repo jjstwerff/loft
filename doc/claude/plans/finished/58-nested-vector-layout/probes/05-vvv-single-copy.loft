@@ -1,0 +1,10 @@
+// @PLAN58 probe 05 — vector<vector<vector<single>>> 3-deep += copy (#262/@P380).
+// Cluster: single-sentinel.  single null = f32 NaN (0x7FC00000, non-zero) read
+// as a wild rec-id one level deeper than the @P380 fix covers → SIGSEGV.
+fn main() {
+  vvv: vector<vector<vector<single>>> = [];
+  a: vector<vector<single>> = [[1.5f]];
+  vvv += [a];
+  assert(vvv[0][0][0] == 1.5f, "elem: {vvv[0][0][0]}");
+  println("probe 05 PASSED");
+}

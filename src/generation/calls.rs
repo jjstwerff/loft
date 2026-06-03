@@ -108,10 +108,17 @@ impl Output<'_> {
                 )
             {
                 // forwarding a & parameter to another & parameter.
-                // The variable is already &mut DbRef — pass it directly
-                // instead of dereferencing with *var_name.
-                let name = sanitize(self.data.def(self.def_nr).variables.name(*nr));
-                write!(w, "var_{name}")?;
+                let caller_vars = &self.data.def(self.def_nr).variables;
+                let name = sanitize(caller_vars.name(*nr));
+                if caller_vars.is_argument(*nr) {
+                    // An argument RefVar is already &mut DbRef — pass it
+                    // directly instead of dereferencing with *var_name.
+                    write!(w, "var_{name}")?;
+                } else {
+                    // A local RefVar alias (#257) is a plain `DbRef` — borrow
+                    // it so the callee gets the &mut DbRef it expects.
+                    write!(w, "&mut var_{name}")?;
+                }
             } else {
                 // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
                 let param_is_fnref = idx < def_fn.attributes.len()

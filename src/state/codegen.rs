@@ -1788,6 +1788,24 @@ impl State {
             stack.add_op("OpPutFnRef", self);
             self.code_add(var_pos);
             stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+        } else if matches!(stack.function.tp(v), Type::RefVar(_))
+            && let Value::Var(src) = value
+            && matches!(stack.function.tp(*src), Type::RefVar(_))
+        {
+            // #257: aliasing a `&ref` param into a fresh local (`snap = s`).
+            // Both sides are RefVars — a RefVar slot is double-indirect (it
+            // holds a stack-cell DbRef that itself points at the record).  Copy
+            // the RAW cell: emit OpVarRef WITHOUT generate_var's trailing
+            // OpGetStackRef deref.  Going through `generate` would store the
+            // already-dereferenced record ref, so every later `snap.field`
+            // access (which derefs once more) would read one level too far →
+            // garbage / null write.
+            let src_pos = stack.var_pos(*src);
+            stack.add_op("OpVarRef", self);
+            self.code_add(src_pos);
+            let var_pos = stack.var_pos(v);
+            stack.add_op("OpPutRef", self);
+            self.code_add(var_pos);
         } else {
             // Plan-04 Phase B.3 atomic bundle: push then OpPut* at v's
             // slot.  Mirrors `set_var`'s non-RefVar dispatch at

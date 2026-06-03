@@ -407,6 +407,14 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     // use the same narrow-detection logic as struct fields.
                     let c_tp = if let Some(narrow) = data.narrow_vector_content(&c_type, database) {
                         narrow
+                    } else if matches!(*c_type, Type::Vector(_, _)) {
+                        // @PLAN58: a nested-vector element is itself a vector — the
+                        // level-collapsed type_elm→known_type path mis-resolves it.
+                        // Resolve recursively via db_type (the #250-proven resolver)
+                        // so nesting + the distinct single/struct element type-id
+                        // stay correct.  (Narrow-int element width is lost upstream
+                        // in literal type-inference, fixed separately — see plan-58.)
+                        database.db_type(&c_type, data)
                     } else {
                         let mut c_tp = data.def(c_nr).known_type;
                         if c_tp == u16::MAX {

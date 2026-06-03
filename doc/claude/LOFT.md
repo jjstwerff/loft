@@ -144,6 +144,10 @@ if !count { /* skipped */ } // catches only null; zero passes through
 
 The idiomatic "zero or null" check on an integer is `count == 0 or !count`,
 or simply `count == 0` if the sentinel and zero should be treated the same.
+This asymmetry is a deliberate, settled choice — see
+[DESIGN_DECISIONS.md § C69](DESIGN_DECISIONS.md#c69--x-on-a-non-boolean-is-a-null-test-not-logical-not).
+The compiler warns when `!` is applied to a statically `not null` operand
+(`!x` there is always false, since the value can never be the null sentinel).
 
 Integer ranges can be constrained with `limit`:
 ```

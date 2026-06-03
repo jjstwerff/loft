@@ -1,0 +1,9 @@
+// @PLAN58 — 3-deep vector<vector<vector<Pt>>> += copy.  element=struct.
+struct Pt { x: integer }
+fn main() {
+  vvv: vector<vector<vector<Pt>>> = [];
+  a: vector<vector<Pt>> = [[Pt{x:5}]];
+  vvv += [a];
+  assert(vvv[0][0][0].x == 5, "elem");
+  println("PASSED 30-3d-struct-copy");
+}

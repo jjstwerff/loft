@@ -1,0 +1,7 @@
+// @PLAN58 — nested vector returned from a fn.  context=fn-return.
+fn mk() -> vector<vector<integer>> { return [[1], [2, 3]]; }
+fn main() {
+  v = mk();
+  assert(v[0][0] == 1 && v[1][0] == 2 && v[1][1] == 3, "ret {v}");
+  println("PASSED 44-ctx-int-fnreturn");
+}

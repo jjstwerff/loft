@@ -1,0 +1,7 @@
+// @PLAN58 — 2-deep single, write vv[i][j] = x.  context=write, element=single.
+fn main() {
+  vv: vector<vector<single>> = [[1.5f, 2.5f], [3.5f]];
+  vv[0][1] = 9.5f;
+  assert(vv[0][1] == 9.5f, "after write {vv[0]}");
+  println("PASSED 41-ctx-single-write");
+}
