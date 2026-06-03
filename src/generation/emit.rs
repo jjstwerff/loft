@@ -91,35 +91,40 @@ impl Output<'_> {
                 let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
                 return write!(w, "continue 'l{}", self.loop_stack[idx]);
             }
+            // @PLAN54 G2/M4.4 — single/list-child arms recurse via output_code_node.
+            ValueType::Drop => return self.output_code_node(w, node.drop_inner()),
+            ValueType::BreakWith => {
+                let n = node.breakwith_nr();
+                if n == 0 || self.loop_stack.is_empty() {
+                    write!(w, "break ")?;
+                } else {
+                    let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
+                    write!(w, "break 'l{} ", self.loop_stack[idx])?;
+                }
+                return self.output_code_node(w, node.breakwith_inner());
+            }
+            ValueType::Insert => {
+                let ops = node.insert_items();
+                let n = ops.len();
+                for (vnr, v) in ops.iter().enumerate() {
+                    self.indent(w)?;
+                    self.indent += 1;
+                    self.output_code_node(w, v)?;
+                    self.indent -= 1;
+                    if vnr < n - 1 {
+                        writeln!(w, ";")?;
+                    } else {
+                        writeln!(w)?;
+                    }
+                }
+                return Ok(());
+            }
             _ => {}
         }
         // Native-backed bridge for the not-yet-converted arms (lifted as they
         // move up to the `kind()` match).
         let code = node.as_native();
         match code {
-            Value::BreakWith(n, val) => {
-                if *n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "break ")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
-                    write!(w, "break 'l{} ", self.loop_stack[idx])?;
-                }
-                self.output_code_inner(w, val)?;
-            }
-            Value::Drop(v) => self.output_code_inner(w, v)?,
-            Value::Insert(ops) => {
-                for (vnr, v) in ops.iter().enumerate() {
-                    self.indent(w)?;
-                    self.indent += 1;
-                    self.output_code_inner(w, v)?;
-                    self.indent -= 1;
-                    if vnr < ops.len() - 1 {
-                        writeln!(w, ";")?;
-                    } else {
-                        writeln!(w)?;
-                    }
-                }
-            }
             Value::Block(bl) => self.output_block(w, bl, false)?,
             Value::Loop(lp) => {
                 self.loop_stack.push(lp.scope);
@@ -514,8 +519,11 @@ impl Output<'_> {
             | Value::Null
             | Value::Line(_)
             | Value::Break(_)
-            | Value::Continue(_) => {
-                unreachable!("M4.1/M4.2-converted leaf reached legacy match: {code:?}")
+            | Value::Continue(_)
+            | Value::Drop(_)
+            | Value::BreakWith(_, _)
+            | Value::Insert(_) => {
+                unreachable!("M4.1–M4.4-converted kind reached legacy match: {code:?}")
             }
         }
         Ok(())
