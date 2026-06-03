@@ -5,11 +5,48 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # GOALS.md — what "loft stable" means, made concrete
 
-The north star for loft is **stability**.  This document splits that one word
-into four goals.  Each goal carries a **Check** — a command to run or a fact to
-observe — so progress is something you *evaluate*, not something you assert.  The
-Check is timeless; its result is not recorded here (run it to find out where you
-stand today).
+The deepest layer is the **Purpose** (below): loft is the **foundation** for the
+library / infrastructure that is the actual end.  Its technical north star is
+**stability**; this document splits the work into **six goals** (A–F), each carrying
+a **Check** — a command to run or a fact to observe — so progress is something you
+*evaluate*, not something you assert.  The Check is timeless; its result is not
+recorded here (run it to find out where you stand today).
+
+## Purpose — what loft is for
+
+**loft was never the goal.**  The language is the **foundation** — the deepest
+layer of plumbing — and the actual end is the **library / infrastructure built on
+top of it**: lavition (the engine), the hex-world library, the editor, the games.
+loft exists so *that* can be built, picked up, and enjoyed.
+
+The drive beneath it all is one act, repeated at every layer: **do the hard
+plumbing yourself, deeply, so someone else can just pick it up and have fun** —
+**loft** (memory, types, the store done → write the logic, no ceremony) · the
+**hex-world library** (terrain, walls, collision, rendering done → make a world
+game, no world-infra) · the **editor** (authoring done → shape worlds) · the
+**server** (networking done → a gathering game just works).  Not separate projects
+— **one drive, recursively** — building toward **lavition's identity**: not "the
+hex-world engine" but *the engine where the hard parts are already done.*  **That**
+— the infrastructure people pick up — is the singular idea, built for its own sake;
+loft is what it stands on.
+
+The acceptance test is the same at every layer, sharpest at the top: **a thing is
+done when picking it up is *fun*** — fun-on-pickup, not feature-complete.  A library
+can ship every feature and still be a fight to hold; that library is not done.  And
+the *fun* is **intrinsic, not instrumental** — held because it is what *finished*
+means, not to draw a crowd: a singular idea built for its own sake, on whatever
+horizon it takes; whether one person picks it up or none, the bar does not move.
+Adoption is a **consequence, not a steering input** — the value is real and will, in
+its own time, draw the people who share the idea (*trusted, not chased*).  Every
+call is decided by **fidelity to the one idea** and **depth**, nothing else.
+
+So loft's six goals below are **foundation goals** — loft must be sound (A), shipped
++ legible (B), capable (C), portable (D), predictable (E), and friction-free (F),
+because a crack in the foundation becomes a crack in everything built on it
+(crawler's "survival guide" is exactly that).  Trustworthy plumbing at the bottom is
+what lets "pick it up and have fun" be true at the top.
+
+---
 
 ## North star
 
@@ -34,7 +71,7 @@ surfaces as silent corruption after a compiler bump or on a stricter platform.
   to.
 
 The two engines feed four goals: **A** (soundness) is the sanitizer engine;
-**C** (capability) and **B** (release & adoption) are the dogfood engine; **D**
+**C** (capability) and **B** (release & legibility) are the dogfood engine; **D**
 (parity) is verified by sanitizer-style differential testing but serves both.
 
 ---
@@ -57,11 +94,15 @@ Met-and-healthy when all three hold *and keep holding* as new code lands.
 
 ---
 
-## Goal B — Release & adoption
+## Goal B — Release & legibility
 
-**Definition.** loft actually ships on a cadence and is usable by people who did
-not write it.  A language that never reaches a stable release, or that only its
-authors can run, is not stable in any sense that matters.
+**Definition.** loft actually **ships** on a cadence, and its value is **legible on
+contact** — installable, with a clean on-ramp — so the people who share the
+sensibility *can* recognise it.  This is the **resonance surface**, not an adoption
+funnel: a language that never reaches a stable release, or that only its authors can
+run, denies the people who *would* resonate the chance to.  Adoption itself is a
+**consequence, not a goal** (see the Purpose); this goal is met by the *surface
+existing*, never by a headcount.
 
 **Check.**
 - A release tag exists within the project's release cadence (`git tag` →
@@ -69,9 +110,12 @@ authors can run, is not stable in any sense that matters.
 - `loft install <name>` resolves and fetches a published library end-to-end
   against the registry.
 - A clean-machine on-ramp — install → first program → `use` a library —
-  completes from the docs alone.
-- *Adoption proxy* (no clean counter exists): at least one library has been
-  published by someone outside the project.
+  completes from the docs alone (the value legible without a guide).
+
+**Thermometer, not a target.**  Whether anyone outside the project publishes a
+library is *observed, not chased* — a reading that the value is landing, never a
+number to optimise.  Removing it as a steering input is what keeps the build pure
+(fidelity + depth, per the Purpose).
 
 ---
 
@@ -234,32 +278,15 @@ optimization, a deferred feature — it does **not** hand the programmer a form 
 fill in.  Warnings are the one allowed channel: they describe consequences of the
 programmer's *own* coding choices and are **freely ignorable**.
 
-**Grounding — the drive beneath the principle.**  Goal F is the language-layer
-face of a single motivation that runs the whole stack: *do the hard plumbing
-yourself, deeply, so someone else can just pick it up and have fun.*  It is the
-same sentence at every layer — **loft** (memory, types, the store done → write the
-logic, no ceremony) · the **hex-world library** (terrain, walls, collision,
-rendering done → make a world game, no world-infra) · the **editor** (authoring
-done → shape worlds) · the **server** (networking done → a gathering game just
-works).  Not four projects — **one drive, recursively**; and it is precisely
-**lavition's identity**: not "the hex-world engine" but *the engine where the hard
-parts are already done.*  It hands the project its own acceptance test, sharper
-than any feature list: **a thing is done when picking it up is *fun*** —
-fun-on-pickup, not feature-complete.  A library can ship every feature and still
-be a fight to hold; that library is not done.  And the *fun* here is **intrinsic,
-not instrumental** — held because it is what *finished* means, not to draw a crowd:
-this is a **singular idea built for its own sake**, on whatever horizon it takes,
-and whether one person picks it up or none, the bar does not move.  Removing
-adoption and speed from the judgement is exactly what keeps it pure — every call
-decided by *fidelity to the one idea* and *depth*, nothing else.  This is why
-friction is **fatal, not cosmetic** — a Goal-F violation means the plumbing isn't finished, so whoever
-picked it up gets a fight instead of fun, and leaves.  The **crawler** dogfood
-made it literal: its "survival guide" of store-lifetime workarounds
+**Grounding.**  F's deeper *why* is the project's [Purpose](#purpose--what-loft-is-for)
+— *do the hard plumbing so it is fun to pick up* — and it is what makes friction
+**fatal, not cosmetic**: a Goal-F violation means the plumbing isn't finished, so
+whoever picked it up gets a *fight* instead of fun, and leaves.  The **crawler**
+dogfood made it literal — its "survival guide" of store-lifetime workarounds
 (C1/C3/C4/C18 → [loft#248](https://github.com/jjstwerff/loft/issues/248)) *is* the
-plumbing not yet done — each workaround a spot where loft handed the programmer a
-fight.  Clearing that family is not hygiene; it is **fidelity to the whole point**,
-and *"can they pick it up and have fun"* is the test that tells on-mission work
-from work that only looks like it.
+plumbing not yet done; clearing that family is **fidelity to the point**, not
+hygiene, and *"can they pick it up and have fun"* is the test that tells on-mission
+work from work that only looks like it.
 
 **Why — the Rust grievance, stated plainly.**  Rust bought safety by pushing its
 analysis onto the syntax: `'a` lifetimes, `move`, turbofish, `Pin` — ceremony
