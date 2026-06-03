@@ -123,6 +123,41 @@ generalises to **every** work item, with one addition: **Subject** (the
 consumer/deliverable) as the primary axis — the multi-project answer a per-repo
 `ROADMAP.md` structurally can't give.
 
+### Why a clean view at all — the resonance test
+
+The plans view is **not a management board.**  Its job is to be a *resonance
+surface*: when someone who **shares the sensibility** sees the list, they grasp
+**what kind of project this is — at a glance.**  It is the builder's counterpart to
+a game playable in the browser — legible-on-contact for the right people, never a
+funnel.  (The project is built for its own sake on a long horizon — see
+[GOALS.md § Goal F "Grounding"](GOALS.md); adoption is a *consequence*, not a goal.
+This view exists so the people who *would* resonate **can**, not to convert anyone
+who wouldn't.)
+
+**So the success test is character-legibility, not work-organization:** the board
+succeeds when a kindred mind reads it and feels *"that's my kind of project"* — not
+when "everything is tracked."  Every field and view decision is measured against
+that, and read back through this lens the choices below already serve it.
+
+The list must transmit three things at a glance, and **only** these:
+- **coherence** — one idea, many expressions, visibly serving a single vision →
+  this is why **Subject is the primary axis**;
+- **depth / ambition** — serious, long-horizon, the hard plumbing genuinely being
+  done → the **Value / Effort / Driven-by** framing carries it;
+- **taste** — what is valued, and that it is valued for real → the **"why"** on each
+  item, and the narrative.
+
+Three things kill it — each already the reason for a design choice:
+- a **ticket-dump** buries the soul under mechanics → keep it clean; *per-phase
+  status + numeric priority stay off the board*;
+- a **grab-bag** hides the single idea → *Subject-first + the dependency DAG keep
+  the coherence visible*;
+- **mechanics-without-why** shows no sensibility → *Value / Driven-by / the "why"
+  are first-class, not optional*.
+
+So **"clean" is not aesthetics — it is the medium.**  Clutter isn't just noise; it
+is the project's character made *illegible*.
+
 ### The split, generalised
 
 | Item type | Design home (files) | State home (gh Project) |
