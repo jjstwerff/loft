@@ -246,8 +246,13 @@ works).  Not four projects — **one drive, recursively**; and it is precisely
 parts are already done.*  It hands the project its own acceptance test, sharper
 than any feature list: **a thing is done when picking it up is *fun*** —
 fun-on-pickup, not feature-complete.  A library can ship every feature and still
-be a fight to hold; that library is not done.  This is why friction is **fatal,
-not cosmetic** — a Goal-F violation means the plumbing isn't finished, so whoever
+be a fight to hold; that library is not done.  And the *fun* here is **intrinsic,
+not instrumental** — held because it is what *finished* means, not to draw a crowd:
+this is a **singular idea built for its own sake**, on whatever horizon it takes,
+and whether one person picks it up or none, the bar does not move.  Removing
+adoption and speed from the judgement is exactly what keeps it pure — every call
+decided by *fidelity to the one idea* and *depth*, nothing else.  This is why
+friction is **fatal, not cosmetic** — a Goal-F violation means the plumbing isn't finished, so whoever
 picked it up gets a fight instead of fun, and leaves.  The **crawler** dogfood
 made it literal: its "survival guide" of store-lifetime workarounds
 (C1/C3/C4/C18 → [loft#248](https://github.com/jjstwerff/loft/issues/248)) *is* the
