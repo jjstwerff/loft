@@ -388,6 +388,19 @@ pub fn read_data(stores: &Stores, root: DbRef) -> Data {
     data
 }
 
+/// @PLAN54 G2 / M2 — navigate a **persistent program store** (a whole `Data`
+/// materialised once via [`crate::ir_store::materialize_data`]) to the body node
+/// of definition `d_nr`: root → `definitions` vector → `def[d_nr]` → `code`
+/// box-of-one.  Lets store-backed codegen read each function body directly from
+/// the persistent store instead of re-materialising it per function (the M5
+/// proof's harness) — the foundation for dropping the native graph (M6).
+#[must_use]
+pub fn def_body_node(stores: &Stores, root: DbRef, d_nr: u32) -> Node {
+    let defs = Record::new(root).field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
+    let def_rec = defs.get(d_nr, stores);
+    def_rec.field_vec(ds::DEF_CODE).get(0, stores)
+}
+
 /// @PLAN54 G2 / M0 — the read-site migration's equivalence harness.
 ///
 /// Materialise `data` into a fresh in-memory store, read it straight back, and

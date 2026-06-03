@@ -59,7 +59,12 @@ impl State {
     # Panics
     when code cannot be output.
     */
-    pub fn def_code(&mut self, def_nr: u32, data: &mut Data) {
+    pub fn def_code(
+        &mut self,
+        def_nr: u32,
+        data: &mut Data,
+        program_store: Option<&(Stores, crate::keys::DbRef)>,
+    ) {
         let logging = !data.def(def_nr).position().file.starts_with("default/");
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
@@ -170,17 +175,14 @@ impl State {
             }
         }
         self.source = stack.data.def(def_nr).source();
-        // @PLAN54 G2/M5 — optional store-backed lowering proof.  With
-        // `LOFT_CODEGEN_STORE` set, materialise this function's body into a
-        // store and lower it through `IrNode::Store`; `generate_inner` reads the
-        // body via the handle (store) and the Definition table via `stack.data`
-        // (native), so the emitted bytecode must be identical to the native
-        // path.  Default off → the native lowering below runs unchanged.
-        if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
-            let mut stores = crate::database::Stores::new();
-            let root = crate::data_store::ValuesVector::new(stores.database(16));
-            crate::ir_store::materialize_node(&mut stores, root, stack.data.def(def_nr).code());
-            let body = IrNode::Store(&stores, root.get(0, &stores));
+        // @PLAN54 G2/M2/M5 — store-backed lowering.  When `byte_code_from`
+        // supplied a persistent program store, read this function's body node
+        // directly from it (`def_body_node`) and lower it through
+        // `IrNode::Store`; `generate_inner` reads the body via the handle and the
+        // Definition table via `stack.data` (native), so the emitted bytecode is
+        // identical to the native path.  No store → the native lowering runs.
+        if let Some((stores, root)) = program_store {
+            let body = IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, def_nr));
             self.generate_node(body, &mut stack, true);
         } else {
             self.generate(stack.data.def(def_nr).code(), &mut stack, true);

@@ -47,11 +47,22 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
     }
     let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
     let t_codegen = std::time::Instant::now();
+    // @PLAN54 G2/M2 — when LOFT_CODEGEN_STORE is set, materialise the whole
+    // `Data` into a persistent program store ONCE; `def_code` reads each body
+    // from it (store-backed lowering) instead of re-materialising per function.
+    // Default off → the native lowering path is unchanged.
+    let program_store = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+        let mut stores = crate::database::Stores::new();
+        let root = crate::ir_store::materialize_data(&mut stores, data);
+        Some((stores, root))
+    } else {
+        None
+    };
     for d_nr in start_d_nr..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
-        state.def_code(d_nr, data);
+        state.def_code(d_nr, data, program_store.as_ref());
     }
     if start_d_nr == 0 {
         build_const_vectors(state, data);
