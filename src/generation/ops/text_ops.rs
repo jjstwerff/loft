@@ -59,6 +59,7 @@ impl OpEmitter for TextDispatchEmitter {
             }
             "OpClearStackText" | "OpClearText" => ctx.output.clear_stack_text(&mut *ctx.w, args),
             "OpClearVector" => ctx.output.clear_vector(&mut *ctx.w, args),
+            "OpAppendVector" => ctx.output.append_vector(&mut *ctx.w, args),
             "OpFreeText" | "OpCreateStack" => Ok(()),
             "OpFormatDatabase" | "OpFormatStackDatabase" => {
                 // OpFormatDatabase takes a &mut String as the output buffer.

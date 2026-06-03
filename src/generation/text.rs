@@ -54,6 +54,35 @@ impl Output<'_> {
         panic!("Could not parse {vals:?}");
     }
 
+    /// `OpAppendVector(target, source, tp)` → `stores.vector_add(&t, &s, tp)`.
+    ///
+    /// #261: the default `#rust"s.database.vector_add(&@r, &@other, @tp)"`
+    /// template inlines the target/source expressions into the `vector_add`
+    /// call.  When the target is a vector ELEMENT (`c[i] += …`), that
+    /// expression is an inline `stores.vec_get_or_raise_runtime(…)` read which
+    /// borrows `*stores` mutably — colliding with `vector_add`'s own `&mut
+    /// stores` borrow (E0499).  Hoist both operands into `let` temps first
+    /// (each read borrows-then-releases), then call `vector_add` once.  Mirrors
+    /// `clear_vector`'s non-Var path; harmless for the plain-local case.
+    pub(super) fn append_vector(
+        &mut self,
+        w: &mut dyn Write,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        if let [target, source, tp] = vals {
+            let target_expr = self.generate_expr_buf(target)?;
+            let source_expr = self.generate_expr_buf(source)?;
+            let known_expr = self.generate_expr_buf(tp)?;
+            write!(
+                w,
+                "{{ let _av_t = {target_expr}; let _av_s = {source_expr}; \
+                 stores.vector_add(&_av_t, &_av_s, ({known_expr}) as u16); }}"
+            )?;
+            return Ok(());
+        }
+        panic!("OpAppendVector expects [target, source, tp], got {vals:?}");
+    }
+
     /// Use this to emit a single key value as a typed `Content::…` constructor.
     /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
     /// absolute value indicates the data type:

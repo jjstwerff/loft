@@ -231,6 +231,7 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "OpClearText",
         "OpClearStackText",
         "OpClearVector",
+        "OpAppendVector",
         "OpFreeText",
         "OpCreateStack",
         "OpFormatDatabase",
