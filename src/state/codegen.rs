@@ -685,7 +685,7 @@ impl State {
         // The statement-style fast-path below (no value, or divergent true arm)
         // keeps the original skip-to-join behaviour.
         let null_else_value = matches!(f_val.kind(), ValueType::Null)
-            && !is_divergent(t_val.as_native())
+            && !is_divergent(t_val)
             && !matches!(tp, Type::Void | Type::Never);
         if matches!(f_val.kind(), ValueType::Null) && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
@@ -695,7 +695,7 @@ impl State {
             // the pre-if `stack_pos`, not `true_stack`. Without this reset, every
             // subsequent Var/Put encodes a wrong offset and writes corrupt the
             // return-address slot, eventually overflowing the stack store.
-            if is_divergent(t_val.as_native()) {
+            if is_divergent(t_val) {
                 stack.position = stack_pos;
             }
         } else if null_else_value {
@@ -727,10 +727,7 @@ impl State {
             // result under garbage), emit the join point at the SHORTER arm's
             // level and make the longer arm discard its extra bytes before
             // reaching the join point (its result is already on top of stack).
-            if !is_divergent(t_val.as_native())
-                && !is_divergent(f_val.as_native())
-                && true_stack != false_stack
-            {
+            if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
                 let target = true_stack.min(false_stack);
                 if false_stack > target {
                     // Shrink the false arm's stack to match the true arm.
@@ -749,9 +746,9 @@ impl State {
                 // when one branch diverges (return/break/continue), use the
                 // other branch's stack position. The divergent branch exits the
                 // scope so its stack delta is irrelevant at the join point.
-                if is_divergent(t_val.as_native()) {
+                if is_divergent(t_val) {
                     stack.position = false_stack;
-                } else if is_divergent(f_val.as_native()) {
+                } else if is_divergent(f_val) {
                     stack.position = true_stack;
                 }
             }
@@ -3263,14 +3260,20 @@ impl State {
 
 /// Check if a Value is a divergent expression (return/break/continue)
 /// that never produces a value at the join point.
-fn is_divergent(val: &Value) -> bool {
-    match val {
-        Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => true,
+fn is_divergent(node: IrNode) -> bool {
+    match node.kind() {
+        ValueType::Return | ValueType::Break | ValueType::BreakWith | ValueType::Continue => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.
-        Value::Insert(ops) => ops.last().is_some_and(is_divergent),
-        Value::Block(bl) => bl.operators.last().is_some_and(is_divergent),
+        ValueType::Insert => {
+            let ops = node.insert_items();
+            !ops.is_empty() && is_divergent(ops.get(ops.len() - 1))
+        }
+        ValueType::Block => {
+            let ops = node.as_block().operators();
+            !ops.is_empty() && is_divergent(ops.get(ops.len() - 1))
+        }
         _ => false,
     }
 }
