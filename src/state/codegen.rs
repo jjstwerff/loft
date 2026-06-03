@@ -244,22 +244,22 @@ impl State {
             ValueType::Int => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(node.int_value());
-                return I32.clone();
+                I32.clone()
             }
             ValueType::Long => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(node.int_value());
-                return crate::data::I64.clone();
+                crate::data::I64.clone()
             }
             ValueType::Single => {
                 stack.add_op("OpConstSingle", self);
                 self.code_add(node.single_value());
-                return Type::Single;
+                Type::Single
             }
             ValueType::Float => {
                 stack.add_op("OpConstFloat", self);
                 self.code_add(node.float_value());
-                return Type::Float;
+                Type::Float
             }
             ValueType::Boolean => {
                 stack.add_op(
@@ -270,52 +270,50 @@ impl State {
                     },
                     self,
                 );
-                return Type::Boolean;
+                Type::Boolean
             }
             ValueType::Enum => {
                 let (ord, tp) = node.enum_pair();
                 self.types.insert(self.code_pos, tp);
                 stack.add_op("OpConstEnum", self);
                 self.code_add(ord);
-                return Type::Enum(0, false, Vec::new());
+                Type::Enum(0, false, Vec::new())
             }
-            ValueType::Text => return self.gen_text(node.text(), stack),
-            ValueType::Var => return self.generate_var(stack, node.var_nr()),
-            ValueType::Break => return self.gen_break(node.break_nr(), stack),
-            ValueType::Continue => return self.gen_continue(node.continue_nr(), stack),
+            ValueType::Text => self.gen_text(node.text(), stack),
+            ValueType::Var => self.generate_var(stack, node.var_nr()),
+            ValueType::Break => self.gen_break(node.break_nr(), stack),
+            ValueType::Continue => self.gen_continue(node.continue_nr(), stack),
             // Keys: already part of the search request — nothing to emit.
-            ValueType::Keys => return Type::Null,
+            ValueType::Keys => Type::Null,
             // Null: e.g. an `else` clause without code.
-            ValueType::Null => return Type::Void,
+            ValueType::Null => Type::Void,
             ValueType::Line => {
                 self.line_numbers.insert(self.code_pos, node.line_nr());
                 if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
                     stack.add_op("OpStaticCall", self);
                     self.code_add(lib_nr);
                 }
-                return Type::Void;
+                Type::Void
             }
             // @PLAN54 G2/M3.2 — single-child / compound delegating arms.  The
             // dispatch + child access run through the handle; the children are
             // bridged to the still-`&Value` helpers via `as_native()` until M5.
             ValueType::Set => {
                 self.generate_set(stack, node.set_var(), node.set_inner().as_native());
-                return Type::Void;
+                Type::Void
             }
-            ValueType::Return => return self.gen_return(node.return_inner().as_native(), stack),
-            ValueType::Drop => return self.gen_drop(node.drop_inner().as_native(), stack),
+            ValueType::Return => self.gen_return(node.return_inner().as_native(), stack),
+            ValueType::Drop => self.gen_drop(node.drop_inner().as_native(), stack),
             ValueType::BreakWith => {
                 self.generate(node.breakwith_inner().as_native(), stack, false);
-                return self.gen_break(node.breakwith_nr(), stack);
+                self.gen_break(node.breakwith_nr(), stack)
             }
-            ValueType::If => {
-                return self.gen_if(
-                    node.if_cond().as_native(),
-                    node.if_then().as_native(),
-                    node.if_else().as_native(),
-                    stack,
-                );
-            }
+            ValueType::If => self.gen_if(
+                node.if_cond().as_native(),
+                node.if_then().as_native(),
+                node.if_else().as_native(),
+                stack,
+            ),
             ValueType::Yield => {
                 // CO1.3c: emit the yielded expression, then OpCoroutineYield.
                 let t = self.generate(node.yield_inner().as_native(), stack, false);
@@ -326,7 +324,7 @@ impl State {
                 // caller; the eval stack is empty again on resume, so undo the
                 // push.  @PLAN53 S4: the yielded value occupied a stepped span.
                 stack.position -= stack.step(value_size);
-                return Type::Void;
+                Type::Void
             }
             // @PLAN54 G2/M3.3 — list-child + scalar arms.  Child lists bridge to
             // the `&[Value]` helpers via `as_native()` until M5.
@@ -334,17 +332,13 @@ impl State {
                 for op in node.insert_items().as_native() {
                     self.generate(op, stack, false);
                 }
-                return Type::Void;
+                Type::Void
             }
             ValueType::Call => {
-                return self.generate_call(stack, node.call_to(), node.call_args().as_native());
+                self.generate_call(stack, node.call_to(), node.call_args().as_native())
             }
             ValueType::CallRef => {
-                return self.generate_call_ref(
-                    stack,
-                    node.callref_var(),
-                    node.callref_args().as_native(),
-                );
+                self.generate_call_ref(stack, node.callref_var(), node.callref_args().as_native())
             }
             ValueType::Tuple => {
                 // T1.4: generate each element onto contiguous stack slots.
@@ -352,11 +346,11 @@ impl State {
                 for e in node.tuple_items().as_native() {
                     types.push(self.generate(e, stack, false));
                 }
-                return Type::Tuple(types);
+                Type::Tuple(types)
             }
             ValueType::Parallel => {
                 self.gen_parallel(node.parallel_arms().as_native(), stack);
-                return Type::Void;
+                Type::Void
             }
             ValueType::FnRefDnr => {
                 // P215: project the d_nr (first 8B of the fn-ref slot) via
@@ -364,7 +358,7 @@ impl State {
                 let v_pos = stack.var_pos(node.fnref_dnr_var());
                 stack.add_op("OpVarInt", self);
                 self.code_add(v_pos);
-                return crate::data::I64.clone();
+                crate::data::I64.clone()
             }
             // @PLAN54 G2/M3.4 — Span passthrough + the two never-reachable
             // rewrite placeholders.
@@ -373,7 +367,7 @@ impl State {
                 // position so phase 3's runtime-error printer can surface
                 // `at file:line:col`, then lower the wrapped inner node.
                 self.source_spans.insert(self.code_pos, node.span_pos());
-                return self.generate_inner(node.span_inner().as_native(), stack, top);
+                self.generate_inner(node.span_inner().as_native(), stack, top)
             }
             ValueType::Iter => panic!("Should have rewritten {val:?}"),
             ValueType::ParFor => panic!(
@@ -394,14 +388,28 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(clos_pos);
                 }
-                return node.fnref_type();
+                node.fnref_type()
             }
-            _ => {}
-        }
-        match val {
-            Value::Loop(lp) => self.gen_loop(lp, stack),
-            Value::Block(bl) => self.generate_block(stack, bl, top),
-            Value::TupleGet(var_nr, elem_idx) => {
+            // @PLAN54 G2/M3.6 — the last arms; `generate_inner` now dispatches
+            // entirely on `node.kind()`.  Block/Loop bridge to the `&Block`-taking
+            // helpers via `as_native()` (a Block handle lands at M5); TupleGet/
+            // TuplePut keep their stack-offset bodies, re-bound from `as_native()`.
+            ValueType::Loop => {
+                let Value::Loop(lp) = node.as_native() else {
+                    unreachable!("Loop")
+                };
+                self.gen_loop(lp, stack)
+            }
+            ValueType::Block => {
+                let Value::Block(bl) = node.as_native() else {
+                    unreachable!("Block")
+                };
+                self.generate_block(stack, bl, top)
+            }
+            ValueType::TupleGet => {
+                let Value::TupleGet(var_nr, elem_idx) = node.as_native() else {
+                    unreachable!("TupleGet")
+                };
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef
                 // using the SAME OpGetInt / OpGetFloat / OpGet… opcodes
@@ -508,7 +516,10 @@ impl State {
                 self.code_add(var_pos);
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
-            Value::TuplePut(var_nr, elem_idx, value) => {
+            ValueType::TuplePut => {
+                let Value::TuplePut(var_nr, elem_idx, value) = node.as_native() else {
+                    unreachable!("TuplePut")
+                };
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — write element through the DbRef using
                 // the SAME OpSetInt / OpSetFloat / OpSet… opcodes that
@@ -594,50 +605,16 @@ impl State {
                 self.code_add(var_pos);
                 Type::Void
             }
-            // Phase 09 phase 00 step 0.7 — RawExpr is created only by
-            // native codegen (`src/generation/emit.rs` fn-ref dispatch);
-            // bytecode codegen never produces it.
-            Value::RawExpr(_) => {
-                panic!(
-                    "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
-                )
-            }
-            // @PLAN54 G2/M3.1–M3.4 — these kinds are handled by the
-            // `match node.kind()` above, which `return`s (or panics) before
-            // reaching here; they can never arrive.  The list shrinks toward
-            // empty as later groups move their arms up to the `kind()` dispatch
-            // (remaining in `match val`: Block, Loop, TupleGet, TuplePut).
-            Value::Int(_)
-            | Value::Long(_)
-            | Value::Single(_)
-            | Value::Float(_)
-            | Value::Boolean(_)
-            | Value::Enum(_, _)
-            | Value::Text(_)
-            | Value::Var(_)
-            | Value::Break(_)
-            | Value::Continue(_)
-            | Value::Null
-            | Value::Keys(_)
-            | Value::Line(_)
-            | Value::Set(_, _)
-            | Value::Return(_)
-            | Value::Drop(_)
-            | Value::BreakWith(_, _)
-            | Value::If(_, _, _)
-            | Value::Yield(_)
-            | Value::Insert(_)
-            | Value::Call(_, _)
-            | Value::CallRef(_, _)
-            | Value::Tuple(_)
-            | Value::Parallel(_)
-            | Value::FnRefDnr(_)
-            | Value::Span(_)
-            | Value::Iter(_, _, _, _)
-            | Value::ParFor(_)
-            | Value::FnRef(_, _, _) => {
-                unreachable!("M3.1–M3.5-converted kind reached legacy match: {val:?}")
-            }
+            // Phase 09 phase 00 step 0.7 — RawExpr is created only by native
+            // codegen (`src/generation/emit.rs` fn-ref dispatch); bytecode
+            // codegen never produces it.
+            ValueType::RawExpr => panic!(
+                "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
+            ),
+            // The store-record discriminant is always one of the 34 known Node
+            // variants (the materializer writes only those); `Other` marks a
+            // corrupt/foreign record.
+            ValueType::Other(d) => unreachable!("unknown IR node discriminant {d}"),
         }
     }
 
