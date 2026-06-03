@@ -328,34 +328,51 @@ impl State {
                 stack.position -= stack.step(value_size);
                 return Type::Void;
             }
+            // @PLAN54 G2/M3.3 — list-child + scalar arms.  Child lists bridge to
+            // the `&[Value]` helpers via `as_native()` until M5.
+            ValueType::Insert => {
+                for op in node.insert_items().as_native() {
+                    self.generate(op, stack, false);
+                }
+                return Type::Void;
+            }
+            ValueType::Call => {
+                return self.generate_call(stack, node.call_to(), node.call_args().as_native());
+            }
+            ValueType::CallRef => {
+                return self.generate_call_ref(
+                    stack,
+                    node.callref_var(),
+                    node.callref_args().as_native(),
+                );
+            }
+            ValueType::Tuple => {
+                // T1.4: generate each element onto contiguous stack slots.
+                let mut types = Vec::new();
+                for e in node.tuple_items().as_native() {
+                    types.push(self.generate(e, stack, false));
+                }
+                return Type::Tuple(types);
+            }
+            ValueType::Parallel => {
+                self.gen_parallel(node.parallel_arms().as_native(), stack);
+                return Type::Void;
+            }
+            ValueType::FnRefDnr => {
+                // P215: project the d_nr (first 8B of the fn-ref slot) via
+                // OpVarInt — its dispatcher reads 8B regardless of declared type.
+                let v_pos = stack.var_pos(node.fnref_dnr_var());
+                stack.add_op("OpVarInt", self);
+                self.code_add(v_pos);
+                return crate::data::I64.clone();
+            }
             _ => {}
         }
         match val {
             Value::Loop(lp) => self.gen_loop(lp, stack),
-            Value::Insert(ops) => {
-                for op in ops {
-                    self.generate(op, stack, false);
-                }
-                Type::Void
-            }
             Value::Block(bl) => self.generate_block(stack, bl, top),
-            Value::Call(op, parameters) => self.generate_call(stack, *op, parameters),
-            Value::CallRef(v_nr, args) => self.generate_call_ref(stack, *v_nr, args),
             Value::Iter(_, _, _, _) => {
                 panic!("Should have rewritten {val:?}");
-            }
-            Value::Tuple(elems) => {
-                // T1.4: generate each element onto contiguous stack slots.
-                let mut types = Vec::new();
-                for e in elems {
-                    let t = self.generate(e, stack, false);
-                    types.push(t);
-                }
-                Type::Tuple(types)
-            }
-            Value::Parallel(arms) => {
-                self.gen_parallel(arms, stack);
-                Type::Void
             }
             // Plan-07 phase 1 step 1.20 — record the entry pc → source
             // position before generating the wrapped inner.  Phase 3's
@@ -591,19 +608,6 @@ impl State {
                 }
                 *fn_type.clone()
             }
-            Value::FnRefDnr(v_nr) => {
-                // P215: project the d_nr (i64, first 8 bytes of the var
-                // slot) from a fn-ref Var.  `OpVarInt`'s dispatcher
-                // (`fill.rs::var_int`) reads 8B from the slot regardless
-                // of declared type — the fn-ref slot's first 8B is the
-                // i64 d_nr, so this works without a new opcode.  The
-                // closure DbRef component (next 12B) stays untouched in
-                // the slot.
-                let v_pos = stack.var_pos(*v_nr);
-                stack.add_op("OpVarInt", self);
-                self.code_add(v_pos);
-                crate::data::I64.clone()
-            }
             // Phase 09 phase 00 step 0.7 — RawExpr is created only by
             // native codegen (`src/generation/emit.rs` fn-ref dispatch);
             // bytecode codegen never produces it.
@@ -612,7 +616,7 @@ impl State {
                     "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
                 )
             }
-            // @PLAN54 G2/M3.1–M3.2 — these kinds are handled by the
+            // @PLAN54 G2/M3.1–M3.3 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here;
             // they can never arrive.  The list shrinks toward empty as later
             // groups move their arms up to the `kind()` dispatch.
@@ -634,8 +638,14 @@ impl State {
             | Value::Drop(_)
             | Value::BreakWith(_, _)
             | Value::If(_, _, _)
-            | Value::Yield(_) => {
-                unreachable!("M3.1/M3.2-converted kind reached legacy match: {val:?}")
+            | Value::Yield(_)
+            | Value::Insert(_)
+            | Value::Call(_, _)
+            | Value::CallRef(_, _)
+            | Value::Tuple(_)
+            | Value::Parallel(_)
+            | Value::FnRefDnr(_) => {
+                unreachable!("M3.1–M3.3-converted kind reached legacy match: {val:?}")
             }
         }
     }

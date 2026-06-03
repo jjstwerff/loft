@@ -265,6 +265,66 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `CallRef` target variable slot.
+    #[must_use]
+    pub fn callref_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::CallRef(v, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDCALLREF_VAR) as u16,
+            IrNode::Native(_) => kind_panic("callref_var", self),
+        }
+    }
+
+    /// `CallRef` argument list.
+    #[must_use]
+    pub fn callref_args(&self) -> IrNodeList<'a> {
+        match *self {
+            IrNode::Native(Value::CallRef(_, args)) => IrNodeList::Native(args),
+            IrNode::Store(s, n) => IrNodeList::Store(s, n.field_vec(ds::NDCALLREF_ARGS)),
+            IrNode::Native(_) => kind_panic("callref_args", self),
+        }
+    }
+
+    /// `Insert` item list (un-scoped inline block).
+    #[must_use]
+    pub fn insert_items(&self) -> IrNodeList<'a> {
+        match *self {
+            IrNode::Native(Value::Insert(items)) => IrNodeList::Native(items),
+            IrNode::Store(s, n) => IrNodeList::Store(s, n.field_vec(ds::NDINSERT_ITEMS)),
+            IrNode::Native(_) => kind_panic("insert_items", self),
+        }
+    }
+
+    /// `Tuple` element list.
+    #[must_use]
+    pub fn tuple_items(&self) -> IrNodeList<'a> {
+        match *self {
+            IrNode::Native(Value::Tuple(items)) => IrNodeList::Native(items),
+            IrNode::Store(s, n) => IrNodeList::Store(s, n.field_vec(ds::NDTUPLE_ITEMS)),
+            IrNode::Native(_) => kind_panic("tuple_items", self),
+        }
+    }
+
+    /// `Parallel` arm list (each arm runs concurrently).
+    #[must_use]
+    pub fn parallel_arms(&self) -> IrNodeList<'a> {
+        match *self {
+            IrNode::Native(Value::Parallel(arms)) => IrNodeList::Native(arms),
+            IrNode::Store(s, n) => IrNodeList::Store(s, n.field_vec(ds::NDPARALLEL_ARMS)),
+            IrNode::Native(_) => kind_panic("parallel_arms", self),
+        }
+    }
+
+    /// `FnRefDnr` source variable slot.
+    #[must_use]
+    pub fn fnref_dnr_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::FnRefDnr(v)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDFNREFDNR_N) as u16,
+            IrNode::Native(_) => kind_panic("fnref_dnr_var", self),
+        }
+    }
+
     // ── single boxed children ───────────────────────────────────────────────
 
     /// `Return` inner expression.
@@ -395,6 +455,23 @@ impl<'a> IrNode<'a> {
 }
 
 impl<'a> IrNodeList<'a> {
+    /// The recursion bridge for M3.x: the underlying native `&[Value]` slice,
+    /// for arms that still hand a slice to a `&[Value]`-taking helper
+    /// (`generate_call`, `gen_parallel`, …).  Removed at M5 when those helpers
+    /// iterate `IrNodeList` directly.
+    ///
+    /// # Panics
+    /// If called on a store-backed list (a codegen bug before M5).
+    #[must_use]
+    pub fn as_native(&self) -> &'a [Value] {
+        match *self {
+            IrNodeList::Native(s) => s,
+            IrNodeList::Store(..) => {
+                panic!("IrNodeList::as_native: codegen lists are native-backed until G2/M5")
+            }
+        }
+    }
+
     /// Number of child nodes.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -602,6 +679,11 @@ mod tests {
             Value::Keys(Vec::new()),
             Value::Text("hello".into()),
             Value::Call(17, vec![Value::Int(1), Value::Var(2), Value::Int(3)]),
+            Value::CallRef(2, vec![Value::Int(1)]),
+            Value::Insert(vec![Value::Int(1), Value::Var(2)]),
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+            Value::Parallel(vec![Value::Var(1), Value::Var(2)]),
+            Value::FnRefDnr(5),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
@@ -645,10 +727,26 @@ mod tests {
                     assert_eq!(nat.call_to(), sto.call_to());
                     let (na, sa) = (nat.call_args(), sto.call_args());
                     assert_eq!(na.len(), sa.len());
+                    // native slice bridge length must match the handle length.
+                    assert_eq!(na.as_native().len(), na.len());
                     for i in 0..na.len() {
                         assert_eq!(na.get(i).kind(), sa.get(i).kind(), "arg {i} kind");
                     }
                 }
+                ValueType::CallRef => {
+                    assert_eq!(nat.callref_var(), sto.callref_var());
+                    assert_eq!(nat.callref_args().len(), sto.callref_args().len());
+                }
+                ValueType::Insert => {
+                    assert_eq!(nat.insert_items().len(), sto.insert_items().len());
+                }
+                ValueType::Tuple => {
+                    assert_eq!(nat.tuple_items().len(), sto.tuple_items().len());
+                }
+                ValueType::Parallel => {
+                    assert_eq!(nat.parallel_arms().len(), sto.parallel_arms().len());
+                }
+                ValueType::FnRefDnr => assert_eq!(nat.fnref_dnr_var(), sto.fnref_dnr_var()),
                 ValueType::Return => {
                     assert_eq!(nat.return_inner().kind(), sto.return_inner().kind());
                     assert_eq!(
