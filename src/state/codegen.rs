@@ -308,10 +308,10 @@ impl State {
                 self.generate_set(stack, node.set_var(), node.set_inner().as_native());
                 Type::Void
             }
-            ValueType::Return => self.gen_return(node.return_inner().as_native(), stack),
-            ValueType::Drop => self.gen_drop(node.drop_inner().as_native(), stack),
+            ValueType::Return => self.gen_return(node.return_inner(), stack),
+            ValueType::Drop => self.gen_drop(node.drop_inner(), stack),
             ValueType::BreakWith => {
-                self.generate(node.breakwith_inner().as_native(), stack, false);
+                self.generate_node(node.breakwith_inner(), stack, false);
                 self.gen_break(node.breakwith_nr(), stack)
             }
             ValueType::If => self.gen_if(
@@ -806,8 +806,8 @@ impl State {
         }
     }
 
-    pub(super) fn gen_return(&mut self, v: &Value, stack: &mut Stack) -> Type {
-        self.generate(v, stack, false);
+    pub(super) fn gen_return(&mut self, v: IrNode, stack: &mut Stack) -> Type {
+        self.generate_node(v, stack, false);
         let return_type = stack.data.def(stack.def_nr).returned();
         // CO1.3c: generator functions use OpCoroutineReturn instead of OpReturn.
         if matches!(return_type, Type::Iterator(_, _)) {
@@ -833,12 +833,13 @@ impl State {
         Type::Void
     }
 
-    pub(super) fn gen_drop(&mut self, val: &Value, stack: &mut Stack) -> Type {
-        self.generate(val, stack, false);
+    pub(super) fn gen_drop(&mut self, node: IrNode, stack: &mut Stack) -> Type {
+        self.generate_node(node, stack, false);
         // get all variables of the current scope.
         // @PLAN53 cluster 2 / S4: the value occupies a stepped eval span;
         // the OpFreeStack discard + the position pop must both be stepped.
-        let size = stack.step(stack.size_code(val));
+        // (`size_code` still needs the native node — a bridge M5 lifts.)
+        let size = stack.step(stack.size_code(node.as_native()));
         if size > 0 {
             stack.add_op("OpFreeStack", self);
             self.code_add(0u8);
@@ -887,7 +888,7 @@ impl State {
             let arm_start = self.code_pos;
             let offset = (arm_start - join_pos) as u16;
             self.code_put(arm_offset_positions[i], offset);
-            self.gen_drop(arm, stack);
+            self.gen_drop(IrNode::Native(arm), stack);
             // OpReturn — arm is a void "function"
             stack.add_op("OpReturn", self);
             self.code_add(0u16); // arguments = 0
