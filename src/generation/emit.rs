@@ -1033,8 +1033,8 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         let mut t_vars: Vec<u16> = Vec::new();
         let mut f_vars: Vec<u16> = Vec::new();
-        Self::collect_set_vars(true_v, &mut t_vars);
-        Self::collect_set_vars(false_v, &mut f_vars);
+        Self::collect_set_vars(IrNode::Native(true_v), &mut t_vars);
+        Self::collect_set_vars(IrNode::Native(false_v), &mut f_vars);
         let variables = &self.data.def(self.def_nr).variables;
         for &v in &t_vars {
             if f_vars.contains(&v) && !self.declared.contains(&v) {
@@ -1049,37 +1049,42 @@ impl Output<'_> {
         Ok(())
     }
 
-    fn collect_set_vars(val: &Value, result: &mut Vec<u16>) {
-        match val {
-            Value::Set(v, inner) => {
-                if !result.contains(v) {
-                    result.push(*v);
+    fn collect_set_vars(node: IrNode, result: &mut Vec<u16>) {
+        match node.kind() {
+            ValueType::Set => {
+                let v = node.set_var();
+                if !result.contains(&v) {
+                    result.push(v);
                 }
-                Self::collect_set_vars(inner, result);
+                Self::collect_set_vars(node.set_inner(), result);
             }
-            Value::Block(bl) => {
-                for op in &bl.operators {
+            ValueType::Block => {
+                for op in node.as_block().operators().iter() {
                     Self::collect_set_vars(op, result);
                 }
             }
-            Value::If(c, t, f) => {
-                Self::collect_set_vars(c, result);
-                Self::collect_set_vars(t, result);
-                Self::collect_set_vars(f, result);
+            ValueType::If => {
+                Self::collect_set_vars(node.if_cond(), result);
+                Self::collect_set_vars(node.if_then(), result);
+                Self::collect_set_vars(node.if_else(), result);
             }
-            Value::Insert(ops) => {
-                for op in ops {
+            ValueType::Insert => {
+                for op in node.insert_items().iter() {
                     Self::collect_set_vars(op, result);
                 }
             }
-            Value::Call(_, args) | Value::CallRef(_, args) => {
-                for a in args {
+            ValueType::Call => {
+                for a in node.call_args().iter() {
                     Self::collect_set_vars(a, result);
                 }
             }
-            Value::Drop(inner) | Value::Return(inner) => {
-                Self::collect_set_vars(inner, result);
+            ValueType::CallRef => {
+                for a in node.callref_args().iter() {
+                    Self::collect_set_vars(a, result);
+                }
             }
+            ValueType::Drop => Self::collect_set_vars(node.drop_inner(), result),
+            ValueType::Return => Self::collect_set_vars(node.return_inner(), result),
             _ => {}
         }
     }
