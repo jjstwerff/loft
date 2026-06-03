@@ -1776,6 +1776,11 @@ impl Parser {
         res: &mut Vec<Value>,
     ) -> Option<Type> {
         let mut p = Value::Var(elm);
+        // #247: isolate THIS element's capturing-lambda signal.  A capturing
+        // lambda makes `emit_lambda_code` set `last_closure_work_var` (and emit
+        // a Block, not a bare FnRef); a non-capturing lambda / non-lambda leaves
+        // it MAX.  Reset first so a prior element's value can't leak in.
+        self.last_closure_work_var = u16::MAX;
         let mut t = if self.lexer.has_token("for") {
             //self.iter_for(&mut p)
             diagnostic!(
@@ -1788,6 +1793,7 @@ impl Parser {
             let mut parent_tp = Type::Null;
             self.parse_operators(&Type::Unknown(0), &mut p, &mut parent_tp, 0)
         };
+        let elem_capturing_lambda = self.last_closure_work_var != u16::MAX;
         if let Type::Rewritten(tp) = in_t {
             *in_t = *tp.clone();
         }
@@ -1849,6 +1855,41 @@ impl Parser {
             self.parse_enum_field(&mut ls, Value::Var(elm), td_nr, 0, *enum_nr);
             ls.push(p.clone());
             p = Value::Insert(ls);
+        }
+        // #247: a CAPTURING closure stored into a collection is not supported
+        // yet (the co-located 16B closure-record layout is deferred —
+        // @P213/@P214) and currently CRASHES at runtime ("Write to read-only
+        // store"). Cleanly reject the statically-detectable shapes — a direct
+        // capturing lambda, or a local that holds one — instead of crashing.
+        // (A capturing closure RETURNED from a call, e.g. `[make(1)]`, has type
+        // `fn()->T` indistinguishable from a non-capturing fn-ref and still
+        // reaches the runtime path — that needs the deferred layout work.)
+        if !self.first_pass && matches!(in_t, Type::Function(_, _, _)) {
+            let capturing = elem_capturing_lambda
+                || match p.unspan() {
+                    Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
+                    Value::Var(v) => self.closure_vars.contains_key(v),
+                    // A function that RETURNS a capturing closure carries the
+                    // closure work-var in its `returned` Function dep list
+                    // (emit_lambda_code, this file ~line 957) — so `[make(1)]`,
+                    // a Call whose return type is `fn()->T` indistinguishable by
+                    // signature, IS detectable via that non-empty dep list.
+                    Value::Call(d_nr, _) => matches!(
+                        &self.data.def(*d_nr).returned,
+                        Type::Function(_, _, deps) if !deps.is_empty()
+                    ),
+                    _ => false,
+                };
+            if capturing {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a capturing closure cannot be stored in a collection yet — the \
+                     co-located closure-record layout is deferred (@P213/@P214); hold the \
+                     captured state separately (e.g. a struct field) and store a \
+                     non-capturing fn that reads it"
+                );
+            }
         }
         res.push(p.clone());
         None

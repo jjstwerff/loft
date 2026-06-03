@@ -1423,3 +1423,39 @@ fn gh253_bang_on_not_null_warns() {
 fn gh253_bang_on_nullable_is_quiet() {
     code!("fn test() { n: integer = 3; if !n { n = 4; } assert(n == 3, \"ok\"); }");
 }
+
+/// GitHub #247 — storing a CAPTURING closure into a collection is cleanly
+/// rejected (compile error) instead of crashing.  Covers all three detectable
+/// shapes: a direct capturing lambda, a local holding one, and a call to a
+/// function that RETURNS a capturing closure (`[make(1)]`).
+#[test]
+fn gh247_capturing_closure_in_vector_rejected_direct() {
+    code!("fn test() { k = 3; fs: vector<fn() -> integer> = [fn() -> integer { k * 2 }]; }").error(
+        "a capturing closure cannot be stored in a collection yet — the co-located \
+             closure-record layout is deferred (@P213/@P214); hold the captured state \
+             separately (e.g. a struct field) and store a non-capturing fn that reads it \
+             at gh247_capturing_closure_in_vector_rejected_direct:1:77",
+    );
+}
+
+#[test]
+fn gh247_capturing_closure_in_vector_rejected_call() {
+    code!(
+        "fn make(k: integer) -> fn() -> integer { fn() -> integer { k * 2 } }
+fn test() { fs: vector<fn() -> integer> = [make(1)]; }"
+    )
+    .error(
+        "a capturing closure cannot be stored in a collection yet — the co-located \
+         closure-record layout is deferred (@P213/@P214); hold the captured state \
+         separately (e.g. a struct field) and store a non-capturing fn that reads it \
+         at gh247_capturing_closure_in_vector_rejected_call:2:52",
+    );
+}
+
+/// Non-capturing closures and named fn-refs in a vector still work (not rejected).
+#[test]
+fn gh247_noncapturing_closure_in_vector_ok() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }\nfn test() { fs: vector<fn(integer) -> integer> = [dbl, fn(y: integer) -> integer { 7 }]; }"
+    );
+}
