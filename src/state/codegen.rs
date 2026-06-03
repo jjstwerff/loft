@@ -14,7 +14,9 @@
 
 use super::State;
 use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data_store::ValueType;
 use crate::database::Stores;
+use crate::ir_node::IrNode;
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
@@ -229,50 +231,73 @@ impl State {
 
     #[allow(clippy::too_many_lines)]
     fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
-        match val {
-            Value::Int(value) => {
+        // @PLAN54 G2/M3.1 — scalar/leaf group lowered through the node-walk
+        // handle (`IrNode`).  Each arm dispatches on `kind()` and reads its
+        // payload via an accessor instead of destructuring the native enum, so
+        // the SAME codegen runs once the backing flips to store-read (M5).
+        // Behaviour is identical (native backing).  The recursive / compound
+        // variants stay on the `match val` below until later M3.x groups
+        // convert them; a converted kind can never reach that match (the arms
+        // here `return`), so its `_` arm is `unreachable!`.
+        let node = IrNode::Native(val);
+        match node.kind() {
+            ValueType::Int => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i64::from(*value));
-                I32.clone()
+                self.code_add(node.int_value());
+                return I32.clone();
             }
-            Value::Enum(value, tp) => {
-                self.types.insert(self.code_pos, *tp);
-                stack.add_op("OpConstEnum", self);
-                self.code_add(*value);
-                Type::Enum(0, false, Vec::new())
-            }
-            Value::Long(value) => {
+            ValueType::Long => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(*value);
-                crate::data::I64.clone()
+                self.code_add(node.int_value());
+                return crate::data::I64.clone();
             }
-            Value::Single(value) => {
+            ValueType::Single => {
                 stack.add_op("OpConstSingle", self);
-                self.code_add(*value);
-                Type::Single
+                self.code_add(node.single_value());
+                return Type::Single;
             }
-            Value::Float(value) => {
+            ValueType::Float => {
                 stack.add_op("OpConstFloat", self);
-                self.code_add(*value);
-                Type::Float
+                self.code_add(node.float_value());
+                return Type::Float;
             }
-            Value::Keys(_) => {
-                // Should be already part of the search request
-                Type::Null
-            }
-            Value::Boolean(value) => {
+            ValueType::Boolean => {
                 stack.add_op(
-                    if *value {
+                    if node.bool_value() {
                         "OpConstTrue"
                     } else {
                         "OpConstFalse"
                     },
                     self,
                 );
-                Type::Boolean
+                return Type::Boolean;
             }
-            Value::Text(value) => self.gen_text(value, stack),
-            Value::Var(v) => self.generate_var(stack, *v),
+            ValueType::Enum => {
+                let (ord, tp) = node.enum_pair();
+                self.types.insert(self.code_pos, tp);
+                stack.add_op("OpConstEnum", self);
+                self.code_add(ord);
+                return Type::Enum(0, false, Vec::new());
+            }
+            ValueType::Text => return self.gen_text(node.text(), stack),
+            ValueType::Var => return self.generate_var(stack, node.var_nr()),
+            ValueType::Break => return self.gen_break(node.break_nr(), stack),
+            ValueType::Continue => return self.gen_continue(node.continue_nr(), stack),
+            // Keys: already part of the search request — nothing to emit.
+            ValueType::Keys => return Type::Null,
+            // Null: e.g. an `else` clause without code.
+            ValueType::Null => return Type::Void,
+            ValueType::Line => {
+                self.line_numbers.insert(self.code_pos, node.line_nr());
+                if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
+                    stack.add_op("OpStaticCall", self);
+                    self.code_add(lib_nr);
+                }
+                return Type::Void;
+            }
+            _ => {}
+        }
+        match val {
             Value::Set(v, value) => {
                 self.generate_set(stack, *v, value);
                 Type::Void
@@ -284,32 +309,18 @@ impl State {
                 }
                 Type::Void
             }
-            Value::Break(loop_nr) => self.gen_break(*loop_nr, stack),
             Value::BreakWith(loop_nr, val) => {
                 self.generate(val, stack, false);
                 self.gen_break(*loop_nr, stack)
             }
-            Value::Continue(loop_nr) => self.gen_continue(*loop_nr, stack),
             Value::If(test, t_val, f_val) => self.gen_if(test, t_val, f_val, stack),
             Value::Return(v) => self.gen_return(v, stack),
             Value::Block(bl) => self.generate_block(stack, bl, top),
             Value::Call(op, parameters) => self.generate_call(stack, *op, parameters),
             Value::CallRef(v_nr, args) => self.generate_call_ref(stack, *v_nr, args),
-            Value::Null => {
-                // Ignore, in use as the code on an else clause without code.
-                Type::Void
-            }
             Value::Drop(val) => self.gen_drop(val, stack),
             Value::Iter(_, _, _, _) => {
                 panic!("Should have rewritten {val:?}");
-            }
-            Value::Line(line) => {
-                self.line_numbers.insert(self.code_pos, *line);
-                if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
-                    stack.add_op("OpStaticCall", self);
-                    self.code_add(lib_nr);
-                }
-                Type::Void
             }
             Value::Tuple(elems) => {
                 // T1.4: generate each element onto contiguous stack slots.
@@ -590,6 +601,25 @@ impl State {
                 panic!(
                     "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
                 )
+            }
+            // @PLAN54 G2/M3.1 — the scalar/leaf kinds (Int, Long, Single, Float,
+            // Boolean, Enum, Text, Var, Break, Continue, Null, Keys, Line) are
+            // handled by the `match node.kind()` above, which `return`s before
+            // reaching here; they can never arrive.
+            Value::Int(_)
+            | Value::Long(_)
+            | Value::Single(_)
+            | Value::Float(_)
+            | Value::Boolean(_)
+            | Value::Enum(_, _)
+            | Value::Text(_)
+            | Value::Var(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Null
+            | Value::Keys(_)
+            | Value::Line(_) => {
+                unreachable!("M3.1-converted leaf kind reached legacy match: {val:?}")
             }
         }
     }

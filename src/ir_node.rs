@@ -158,6 +158,66 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `Single` (f32) payload.
+    #[must_use]
+    pub fn single_value(&self) -> f32 {
+        match *self {
+            IrNode::Native(Value::Single(v)) => *v,
+            IrNode::Store(s, n) => n.field_single(s, ds::NDSINGLE_F),
+            IrNode::Native(_) => kind_panic("single_value", self),
+        }
+    }
+
+    /// `Float` (f64) payload.
+    #[must_use]
+    pub fn float_value(&self) -> f64 {
+        match *self {
+            IrNode::Native(Value::Float(v)) => *v,
+            IrNode::Store(s, n) => n.field_float(s, ds::NDFLOAT_F),
+            IrNode::Native(_) => kind_panic("float_value", self),
+        }
+    }
+
+    /// `Boolean` payload.
+    #[must_use]
+    pub fn bool_value(&self) -> bool {
+        match *self {
+            IrNode::Native(Value::Boolean(v)) => *v,
+            IrNode::Store(s, n) => n.field_bool(s, ds::NDBOOLEAN_B),
+            IrNode::Native(_) => kind_panic("bool_value", self),
+        }
+    }
+
+    /// `Break` loop number.
+    #[must_use]
+    pub fn break_nr(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::Break(v)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDBREAK_N) as u16,
+            IrNode::Native(_) => kind_panic("break_nr", self),
+        }
+    }
+
+    /// `Continue` loop number.
+    #[must_use]
+    pub fn continue_nr(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::Continue(v)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDCONTINUE_N) as u16,
+            IrNode::Native(_) => kind_panic("continue_nr", self),
+        }
+    }
+
+    /// `Line` source-line number.
+    #[must_use]
+    pub fn line_nr(&self) -> u32 {
+        match *self {
+            IrNode::Native(Value::Line(v)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDLINE_N) as u32,
+            IrNode::Native(_) => kind_panic("line_nr", self),
+        }
+    }
+
     /// `Text` / `RawExpr` string payload (no allocation — borrows for `'a`).
     #[must_use]
     pub fn text(&self) -> &'a str {
@@ -461,10 +521,18 @@ mod tests {
     #[test]
     fn cross_backing_accessors_agree() {
         let samples = vec![
+            Value::Null,
             Value::Int(-7),
             Value::Long(1234),
+            Value::Single(2.5),
+            Value::Float(3.5),
+            Value::Boolean(true),
             Value::Var(9),
             Value::Enum(3, 42),
+            Value::Break(1),
+            Value::Continue(2),
+            Value::Line(7),
+            Value::Keys(Vec::new()),
             Value::Text("hello".into()),
             Value::Call(17, vec![Value::Int(1), Value::Var(2), Value::Int(3)]),
             Value::Return(Box::new(Value::Int(99))),
@@ -483,11 +551,25 @@ mod tests {
             assert_eq!(nat.kind(), sto.kind(), "kind disagrees for {v:?}");
 
             match nat.kind() {
+                // payload-free leaves — `kind()` agreement (asserted above) is
+                // the whole contract.
+                ValueType::Null | ValueType::Keys => {}
                 ValueType::Int | ValueType::Long => {
                     assert_eq!(nat.int_value(), sto.int_value());
                 }
+                // bit-exact: a materialise→read round-trip must not perturb a float.
+                ValueType::Single => {
+                    assert_eq!(nat.single_value().to_bits(), sto.single_value().to_bits());
+                }
+                ValueType::Float => {
+                    assert_eq!(nat.float_value().to_bits(), sto.float_value().to_bits());
+                }
+                ValueType::Boolean => assert_eq!(nat.bool_value(), sto.bool_value()),
                 ValueType::Var => assert_eq!(nat.var_nr(), sto.var_nr()),
                 ValueType::Enum => assert_eq!(nat.enum_pair(), sto.enum_pair()),
+                ValueType::Break => assert_eq!(nat.break_nr(), sto.break_nr()),
+                ValueType::Continue => assert_eq!(nat.continue_nr(), sto.continue_nr()),
+                ValueType::Line => assert_eq!(nat.line_nr(), sto.line_nr()),
                 ValueType::Text => assert_eq!(nat.text(), sto.text()),
                 ValueType::Call => {
                     assert_eq!(nat.call_to(), sto.call_to());
