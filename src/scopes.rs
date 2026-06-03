@@ -1527,7 +1527,27 @@ impl Scopes {
                                 | Type::Index(_, _, _)
                                 | Type::Spacial(_, _, _)
                         ));
-                let emit = (owns || is_work_ref) && !in_ret && !function.is_skip_free(v);
+                // Plan-57 Phase B (Mechanism B): a captured mutable closure cell
+                // (`Reference(__cell_*, _)` marked `captured`) is OWNED by the
+                // closure record, not the defining frame.  The record's cascade
+                // free (`Stores::free_named`, allocation.rs:301) releases the cell
+                // when the closure value dies, so the defining-frame `OpFreeRef`
+                // here is redundant — and actively harmful once rc is gone: for an
+                // ESCAPED closure (factory return) it frees a slot the live closure
+                // still references, the next factory call reuses it, and coexisting
+                // closures alias one store → UAF (probes 02/09/12).  Suppress it;
+                // the cascade is the sole owner for escaping AND in-frame captures
+                // (in-frame: the fn-ref's own scope-exit free triggers the cascade).
+                // This replaces the `OpIncRc`-keeps-it-alive mechanism (the inc emit
+                // in parser/vectors.rs is dropped in the same change).
+                let captured_cell = function.is_captured(v)
+                    && matches!(
+                        function.tp(v),
+                        Type::Reference(cell_d, _)
+                            if data.def(*cell_d).name.starts_with("__cell_")
+                    );
+                let emit =
+                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_cell;
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \

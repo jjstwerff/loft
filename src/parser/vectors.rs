@@ -900,24 +900,16 @@ impl Parser {
                         Value::Var(w),
                         Value::Var(v_nr),
                     ));
-                    // P259: when the captured variable is a heap-owned cell
-                    // (Reference(__cell_*, _)), the closure record now holds
-                    // a DbRef into that cell's store via the auto-Reference
-                    // attribute.  Bump the cell's ref_count so the parent
-                    // fn's scope-exit OpFreeRef on the cell decrements
-                    // (rc 2→1) instead of actually freeing while the
-                    // closure record still references it.  Cascade-free
-                    // in `Stores::free_named` (commit 4) decrements when
-                    // the closure record itself is freed.
-                    let inc_rc_needed = matches!(
-                        self.vars.tp(v_nr),
-                        Type::Reference(cell_d, _)
-                        if self.data.def(*cell_d).name.starts_with("__cell_")
-                    );
-                    if inc_rc_needed {
-                        let inc_call = self.cl("OpIncRc", &[Value::Var(v_nr)]);
-                        alloc_steps.push(inc_call);
-                    }
+                    // P259 / Plan-57 Phase B (Mechanism B): the closure record now
+                    // holds a DbRef into the captured heap cell (`Reference(__cell_*,
+                    // _)`) via the auto-Reference attribute, and the record OWNS that
+                    // cell — `Stores::free_named`'s cascade (allocation.rs:301) frees
+                    // it when the closure value dies.  No `OpIncRc` is emitted: the
+                    // defining-frame `OpFreeRef` on the cell is suppressed in
+                    // `get_free_vars` (scopes.rs) instead, so a captured cell survives
+                    // a factory return without an rc bump.  This was the last
+                    // load-bearing `OpIncRc`; dropping it unblocks removing the
+                    // ref-count entirely (Phase C).
                 }
             }
             self.last_closure_captured_vars = captured_var_nrs;
