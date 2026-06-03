@@ -2051,7 +2051,24 @@ impl Parser {
             // this the literal-append path would register
             // `vector<integer>` (8-byte stride) into a narrow-registered
             // local, and reads would mis-align with writes.
-            let known = Value::Int(i32::from(lhs_known.unwrap_or_else(|| self.vector_of(in_t))));
+            // @PLAN58 cluster-I (boolean outer-handle stride): for a nested
+            // element (`in_t` is a vector), the OUTER vector stores 4-byte rec-id
+            // HANDLES.  `vector_of(in_t)` yields the ELEMENT type whose content is
+            // the inner scalar — so `record_new` strides the outer slot by the
+            // inner scalar size.  ≥4 is fine, but a 1-byte `boolean` inner makes
+            // adjacent handles OVERLAP.  When the inner content is <4 bytes, pass
+            // the OUTER vector type (`vector(elem)`) so `record_new` strides by the
+            // handle size (4).  Integer/single (≥4) and the inner scalar append
+            // (`in_t` not a vector) are untouched.
+            let elem_known = lhs_known.unwrap_or_else(|| self.vector_of(in_t));
+            let known_tp = if matches!(in_t, Type::Vector(_, _))
+                && self.database.size(self.database.content(elem_known)) < 4
+            {
+                self.database.vector(elem_known)
+            } else {
+                elem_known
+            };
+            let known = Value::Int(i32::from(known_tp));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()

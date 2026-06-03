@@ -143,13 +143,36 @@ differently than the read.
 | 2 | IV comprehension: `OpSetInt4`-scalar → `@P380`-zero + `OpCopyRecord` | **panic fixed, value bug exposed** — `vv[1]=[]`, `vv[2]` reads `vv[1]` (off-by-one).  The deep-copy construct strides differently than the read (same cluster-I root). |
 | 3 | `max(stride,4)` clamp at BOTH `record_new` (storage) + `fields.rs` read | **boolean fixed (`107`,`20-bool`→PASS), `i16`/`u8` regressed** — the clamp desyncs the narrow-int inner path (storage clamp didn't fire on the narrow outer-append route, so read@4 vs store@2 → garbage inner reads). |
 
-**Conclusion:** the fix must align FOUR sites coherently — storage stride, read
-stride, read classification (keep the `OpGetField` deref, NOT `OpVectorRef`), and
-the narrow-int (`i16`/`u8`) append path — likely at the type-registration level
-(make a `vector<vector<T>>` element a proper 4-byte handle type whose storage and
-read both derive from the handle, leaving the inner scalar path untouched).  A
-local clamp cannot do this without desyncing one of the four.  Next-session work;
-the three attempts above bound the solution space.
+**Attempt 4 (boolean CLOSED) — bisection → targeted parse-time fix.** The
+bisection that unlocked it: applying the read clamp ALONE regressed nothing
+(it's a mathematical no-op for ≥4 strides), proving the storage clamp was the
+sole culprit.  The storage clamp regressed `i16`/`u8`/1-row-bool because
+`record_new`'s `Parts::Vector` branch is used for BOTH the outer handle-append
+(`OpNewRecord(vv, 64)`, should stride 4) AND the inner scalar-append
+(`OpNewRecord(_elm_1, 64)`, correctly strides 1) — same `parent_tp`, so a runtime
+clamp cannot tell them apart.  The fix is at PARSE time, where `in_t` is a vector
+(outer) vs a scalar (inner):
+
+- **Construct** (`new_record`, `vectors.rs`): when `in_t` is a vector AND its
+  inner content is <4 bytes, pass the OUTER vector type (`database.vector(elem)`)
+  as `known` so `record_new` strides the slot by the 4-byte handle.  Integer (8)
+  / single (4) are ≥4 → untouched; the inner scalar append (`in_t` not a vector)
+  is untouched.
+- **Read** (`fields.rs`): clamp the index stride to ≥4 for vector-typed elements
+  (no-op for ≥4; no classification change — `known`/`is_base`/`OpGetField` deref
+  unchanged).
+
+Flips all 8 boolean cells (`20-bool`, `76-strong-bool` [was SIGSEGV], `107`, …)
+to PASS on both backends; zero regressions (i16/u8/int/struct/single/text/float
+unchanged).  Regression `tests/scripts/185-nested-boolean-vector.loft`.  Full
+interpreter suite green (1928 passed); the 2 native failures are pre-existing
+ring/rustls rlib link errors.
+
+**IV residual** (nested comprehension) — the panic root is the `OpSetInt4`
+stack-skew (agent-pinned); the deep-copy fix's off-by-one was the same handle
+stride, now understood.  Still open — the comprehension uses its own `known`
+(`vectors.rs:1374`), separate from `new_record`; applying the same handle-stride
+discipline there is the remaining work.
 
 ### Cluster III-a — CLOSED (nested-literal narrow coercion)
 

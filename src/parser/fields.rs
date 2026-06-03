@@ -73,8 +73,10 @@ impl Parser {
         }
         // @PLAN58 vec4 lever: force a nested-vector element handle to 4 on the
         // `.push` / `.remove` (vector_operations) stride path.
-        let e_size =
-            crate::vec4::clamp_vec(i32::from(self.database.size(self.data.def(enr).known_type)), &t);
+        let e_size = crate::vec4::clamp_vec(
+            i32::from(self.database.size(self.data.def(enr).known_type)),
+            &t,
+        );
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
@@ -679,9 +681,17 @@ impl Parser {
         } else {
             i32::from(self.database.size(known))
         };
-        // @PLAN58 vec4 lever: force a nested-vector element handle to its true
-        // 4-byte stride on the read-side index path (`vv[i]`).
-        let elm_size = crate::vec4::clamp_vec(elm_size_raw, etp);
+        // @PLAN58 cluster-I (boolean outer-handle stride): a vector-typed element
+        // is a 4-byte rec-id HANDLE.  The bounds-heuristic above yields the inner
+        // scalar size — fine when ≥4, but a 1-byte `boolean` inner makes adjacent
+        // handles overlap on read.  Clamp to ≥4, matching the construction-side
+        // `known` fix in `new_record`.  A no-op for ≥4 strides; no classification
+        // change (`known` / is_base / is_linked / deref type are untouched).
+        let elm_size = if matches!(elm_type, Type::Vector(_, _)) {
+            elm_size_raw.max(4)
+        } else {
+            elm_size_raw
+        };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 // Plan-07 phase 4 step 4.6 — this is the for-loop
