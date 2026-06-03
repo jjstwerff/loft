@@ -5,7 +5,7 @@
 
 use crate::data::{Block, Context, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
-use crate::ir_node::IrNode;
+use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
 
 use super::text::count_format_ops;
@@ -276,7 +276,7 @@ impl Output<'_> {
             }
         };
         match code {
-            Value::Block(bl) => self.output_block(w, bl, false)?,
+            Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false)?,
             Value::Loop(lp) => {
                 self.loop_stack.push(lp.scope);
                 writeln!(w, "'l{}: loop {{ //{}_{}", lp.scope, lp.name, lp.scope)?;
@@ -1120,9 +1120,21 @@ impl Output<'_> {
     pub(super) fn output_block(
         &mut self,
         w: &mut dyn Write,
-        bl: &Block,
+        block: IrBlock,
         wrap_text: bool,
     ) -> std::io::Result<()> {
+        // @PLAN54 G2/M4 — materialise-at-boundary: native is zero-cost; a
+        // store-backed block materialises once, then the intricate `&Block` body
+        // (which threads `bl` through patch_hoisted_returns /
+        // detect_ref_tail_capture / is_void_value) runs unchanged.
+        let owned_block;
+        let bl: &Block = match block {
+            IrBlock::Native(b) => b,
+            IrBlock::Store(..) => {
+                owned_block = block.to_owned_block();
+                &owned_block
+            }
+        };
         // Plan-06 phase 4d: fn-ref field read emits the (u32, DbRef)
         // native tuple form directly.  The block carries two ops —
         // `OpGetInt4(ref, fld)` (returns i64) and `OpNullRefSentinel()`

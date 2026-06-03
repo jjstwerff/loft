@@ -659,6 +659,20 @@ impl<'a> IrBlock<'a> {
             }
         }
     }
+
+    /// Materialise as an owned native [`Block`] — native clones; store reads the
+    /// whole `Block` via [`crate::ir_read::read_value`].  For codegen helpers
+    /// (`output_block`) whose intricate `&Block` body is left untouched.
+    #[must_use]
+    pub fn to_owned_block(&self) -> Block {
+        match *self {
+            IrBlock::Native(b) => b.clone(),
+            IrBlock::Store(s, n) => match crate::ir_read::read_value(s, n) {
+                Value::Block(b) | Value::Loop(b) => *b,
+                _ => unreachable!("IrBlock::Store node is not a Block/Loop"),
+            },
+        }
+    }
 }
 
 /// A backing-agnostic handle to one IR static [`Type`].  Codegen matches `Type`

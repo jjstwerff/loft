@@ -3,6 +3,7 @@
 
 use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
 use crate::database::Stores;
+use crate::ir_node::IrBlock;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 mod calls;
@@ -2110,7 +2111,7 @@ extern crate loft;"
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));
-                self.output_block(w, bl, returns_text)?;
+                self.output_block(w, IrBlock::Native(bl), returns_text)?;
                 self.call_stack_prefix = None;
             } else {
                 // Non-instrumented user-fn (e.g. `t_…` methods) — still
@@ -2118,7 +2119,7 @@ extern crate loft;"
                 // parameter for templates / inner calls.
                 self.call_stack_prefix =
                     Some("  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string());
-                self.output_block(w, bl, returns_text)?;
+                self.output_block(w, IrBlock::Native(bl), returns_text)?;
                 self.call_stack_prefix = None;
             }
         } else if def.code == Value::Null {
