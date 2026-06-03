@@ -85,8 +85,11 @@ collides with `2P259`, `P2590`, prose like "the P259 fix <!--noindex-->
 forward"): <!--noindex-->
 
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
-- **Plans + phases**: `@PLAN22`, `@PLAN35-01`,
-  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`).
+- **Plans (canonical)**: `@PLN3` = a [`loft-lang/plans`](https://github.com/loft-lang/plans)
+  issue (the cross-ecosystem plan id = its issue number).
+- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`) — point at the design dir
+  (`plans/<NN>/`), per-tree.
 
 Adoption is incremental — bare-name forms (`P259`, `plan-22 <!--noindex-->
 phase 03`) still work in prose; the indexer (`make index`)

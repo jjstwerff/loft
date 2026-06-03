@@ -49,8 +49,8 @@ live on the board.
 > **Type:** plan <· investigation — if probe-driven>   ·   **Area:** <codegen | closures | store-lifetime | parser | native | wasm | stdlib | packages | …>
 > **Effort:** <XS|S|M|MH|H>   ·   **Value:** <Correctness | Enabling | Polish | Quality>
 > **Driven-by:** <the consumer that demanded this — the dogfood link; "—" if foundational>
-> **Depends-on:** <@PLANxx / @GHxx, or "—">
-> **Live status · milestone · order:** [gh Project ▸ @PLAN<NN>](<board-item-url>)  ← single source of truth for lifecycle
+> **Depends-on:** <@PLNxx / @GHxx, or "—">
+> **Live status · milestone · order:** [loft-lang/plans ▸ @PLN<N>](https://github.com/loft-lang/plans/issues/<N>)  ← single source of truth for lifecycle
 
 ## Thesis
 
@@ -99,12 +99,12 @@ plans/<NN>-<slug>/        # FLAT — no future/deferred/finished subdir; state l
 
 ## Creating the plan — the three steps
 
-1. **Copy the skeleton**, fill the header facets — these seed the Project item.
-2. **File the gh Issue titled `@PLAN<NN> <title>`** (the `@P###` trick — the embedded
-   token lets `gh search issues "@PLAN<NN>"` find it and keeps every doc reference
-   pointing at `@PLAN<NN>`, unrewritten).  Add it to the Project, set its fields from
-   the header, and paste the Issue URL into the README's *Live status* line.  The gh
-   number `#N` is plumbing; `@PLAN<NN>` stays the reference identity.
+1. **Copy the skeleton**, fill the header facets — these seed the tracking issue.
+2. **File the issue in [`loft-lang/plans`](https://github.com/loft-lang/plans)** —
+   the central overview.  Its issue number `N` *is* the plan's canonical id
+   **`@PLN<N>`**; title it `@PLN<N> — <title>`, add `subject:*` + `status:*` labels,
+   put the **design-dir path** (and the legacy `@PLAN<NN>` dir-token, for old-ref
+   search) in the body, and paste the issue URL into the README's *Live status* line.
 3. From then on: **lifecycle changes happen on the board** (set Status, Milestone,
    order); **design + phase changes happen here**.  The two never duplicate.
 

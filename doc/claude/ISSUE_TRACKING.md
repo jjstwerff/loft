@@ -123,6 +123,27 @@ generalises to **every** work item, with one addition: **Subject** (the
 consumer/deliverable) as the primary axis — the multi-project answer a per-repo
 `ROADMAP.md` structurally can't give.
 
+### As built (2026-06) — where the plans actually live
+
+The rest of this section is the *design rationale*; here is the **current reality**
+(it supersedes the draft where they differ):
+
+- **Plans live as Issues in [`loft-lang/plans`](https://github.com/loft-lang/plans)** —
+  the central, public, cross-ecosystem overview (the generic *org* home, not
+  `jjstwerff/loft`).  Distributing plans across individual product repos would lose
+  the overview; centralising the tracking keeps it built-in.  The labelled issue
+  list **is** the overview today.
+- **`@PLN<N>` is the canonical plan identity** = that repo's issue number
+  (`@PLN3` → `loft-lang/plans/issues/3`).  Simple, globally unique, scales to every
+  subject — the tag *is* the number.
+- **`@PLAN<NN>` is now only a legacy *dir-pointer*** ("design lives in
+  `plans/<NN>/`"), carried in the issue body; per-tree and harmless because the
+  `@PLN` number is the real key.
+- **Dimensions ride on labels** for now — `subject:*` (the primary cut) +
+  `status:*` (lifecycle).  A gh **Project board** (the richer field schema below)
+  is a later browser add-on; the labelled list already gives the overview.
+- **Design stays in each code repo's `plans/` dir**; the loft-lang issue links to it.
+
 ### Why a clean view at all — the resonance test
 
 The plans view is **not a management board.**  Its job is to be a *resonance
