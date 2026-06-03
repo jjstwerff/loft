@@ -4,6 +4,7 @@
 //! Variable assignment and function call dispatch code generation.
 
 use crate::data::{Context, Type, Value};
+use crate::ir_node::IrNode;
 use std::io::Write;
 
 use super::calls::contains_op_database;
@@ -233,12 +234,14 @@ impl Output<'_> {
         // Hoist call arguments that mutate stores into temporaries to prevent
         // double-mutable-borrow of `stores` in the call expression.
         if let Value::Call(call_dnr, args) = to.unspan()
-            && args.iter().any(|a| contains_op_database(a, self.data))
+            && args
+                .iter()
+                .any(|a| contains_op_database(IrNode::Native(a), self.data))
         {
             let def_fn = self.data.def(*call_dnr);
             let mut hoisted: Vec<Option<String>> = vec![None; args.len()];
             for (idx, arg) in args.iter().enumerate() {
-                if contains_op_database(arg, self.data) {
+                if contains_op_database(IrNode::Native(arg), self.data) {
                     let param_tp = if idx < def_fn.attributes.len() {
                         rust_type(&def_fn.attributes[idx].typedef, &Context::Argument)
                     } else {
