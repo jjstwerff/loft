@@ -118,6 +118,26 @@ impl Field {
     pub(crate) fn other_indexes(&self) -> &[u16] {
         &self.other_indexes
     }
+
+    /// @PLAN54 D2a — reconstruct a `Field` from cached store fields (the
+    /// `pub(self)` `other_indexes` makes a direct literal impossible outside
+    /// this module).
+    #[must_use]
+    pub(crate) fn from_stored(
+        name: String,
+        content: u16,
+        position: u16,
+        default: Content,
+        other_indexes: Vec<u16>,
+    ) -> Field {
+        Field {
+            name,
+            content,
+            position,
+            default,
+            other_indexes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1795,6 +1795,41 @@ impl Type {
         self.align
     }
 
+    /// @PLAN54 D2a — reconstruct a `Type` from cached store fields.  `parents`
+    /// (a derived back-reference index, read only by parse-time layout
+    /// validation + debug display, never by codegen/execution) is restored
+    /// empty; the load path skips the layout validation that consumes it.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_stored(
+        name: String,
+        parts: Parts,
+        keys: Vec<crate::keys::Key>,
+        complex: bool,
+        linked: bool,
+        size: u16,
+        align: u8,
+        field_groups: Vec<crate::data::LinkedFieldGroup>,
+    ) -> Type {
+        Type {
+            name,
+            parts,
+            keys,
+            parents: std::collections::BTreeSet::new(),
+            complex,
+            linked,
+            size,
+            align,
+            field_groups,
+        }
+    }
+
+    /// @PLAN54 D2a — drop the derived `parents` index (for comparing a
+    /// store-reloaded schema against a fresh parse, which carries `parents`).
+    pub(crate) fn clear_parents(&mut self) {
+        self.parents.clear();
+    }
+
     pub(super) fn new(name: &str, parts: Parts, size: u16) -> Type {
         Type {
             name: name.to_string(),

@@ -32,8 +32,8 @@ use crate::data::{
 use crate::data_store::{
     self as ds, Record, TypeKind, Value as Node, ValueType, ValuesVector, type_kind,
 };
-use crate::database::Stores;
-use crate::keys::{DbRef, Key};
+use crate::database::{Field as SchemaField, Parts, Stores, Type as SchemaType};
+use crate::keys::{Content, DbRef, Key, Str};
 use crate::lexer::Position;
 use crate::variables::{Function, RestoredVar};
 use std::num::NonZeroU8;
@@ -619,6 +619,186 @@ fn purity_from_code(c: i64) -> Purity {
     }
 }
 
+// ─── Database type schema reader (D2a) ───────────────────────────────────────
+
+/// Rebuild the database type schema (`Vec<database::Type>`) from the
+/// `vector<DbType>` field at `off` of `parent` — the inverse of
+/// [`crate::ir_store::materialize_schema`].  Each `Type.parents` (a derived
+/// back-reference index, read only by parse-time layout validation + debug
+/// display) is restored empty; the load path skips the validation that uses it.
+#[must_use]
+pub fn read_schema(stores: &Stores, parent: Record, off: u32) -> Vec<SchemaType> {
+    let v = parent.field_recvec(off, ds::DBTYPE_STRIDE);
+    (0..v.len(stores))
+        .map(|i| read_db_type(stores, v.get(i, stores)))
+        .collect()
+}
+
+/// Read one `DbType` record into a native `database::Type`.
+fn read_db_type(stores: &Stores, r: Record) -> SchemaType {
+    let parts = read_db_parts(
+        stores,
+        r.field_recvec(ds::DBTYPE_PARTS, ds::DBPARTS_STRIDE)
+            .get(0, stores),
+    );
+    let keysv = r.field_recvec(ds::DBTYPE_KEYS, ds::KEY_STRIDE);
+    let keys: Vec<Key> = (0..keysv.len(stores))
+        .map(|i| {
+            let e = keysv.get(i, stores);
+            Key {
+                type_nr: e.field_int(stores, ds::KEY_TYPE_NR) as i8,
+                position: e.field_int(stores, ds::KEY_POSITION) as u16,
+            }
+        })
+        .collect();
+    let field_groups = read_field_groups_at(stores, r, ds::DBTYPE_FIELD_GROUPS);
+    SchemaType::from_stored(
+        r.field_str(stores, ds::DBTYPE_NAME).to_string(),
+        parts,
+        keys,
+        r.field_bool(stores, ds::DBTYPE_COMPLEX),
+        r.field_bool(stores, ds::DBTYPE_LINKED),
+        r.field_int(stores, ds::DBTYPE_SIZE) as u16,
+        r.field_int(stores, ds::DBTYPE_ALIGN) as u8,
+        field_groups,
+    )
+}
+
+/// Read one `DbParts` record into a native `database::Parts`.
+fn read_db_parts(stores: &Stores, r: Record) -> Parts {
+    let content = || r.field_int(stores, ds::PTCONTENT) as u16;
+    match r.discriminant(stores) {
+        ds::PT_BASE => Parts::Base,
+        ds::PT_STRUCT => Parts::Struct(read_db_fields(stores, r, ds::PTSTRUCT_FIELDS)),
+        ds::PT_ENUM => Parts::Enum(read_enum_pairs(stores, r, ds::PTENUM_VALUES)),
+        ds::PT_ENUM_VALUE => Parts::EnumValue(
+            r.field_int(stores, ds::PTENUMVALUE_VALUE) as u8,
+            read_db_fields(stores, r, ds::PTENUMVALUE_FIELDS),
+        ),
+        ds::PT_BYTE => Parts::Byte(
+            r.field_int(stores, ds::PTNUM_START) as i32,
+            r.field_bool(stores, ds::PTNUM_NULLABLE),
+        ),
+        ds::PT_SHORT => Parts::Short(
+            r.field_int(stores, ds::PTNUM_START) as i32,
+            r.field_bool(stores, ds::PTNUM_NULLABLE),
+        ),
+        ds::PT_INT => Parts::Int(
+            r.field_int(stores, ds::PTNUM_START) as i32,
+            r.field_bool(stores, ds::PTNUM_NULLABLE),
+        ),
+        ds::PT_SHORT_RAW => Parts::ShortRaw(
+            r.field_int(stores, ds::PTNUM_START) as i32,
+            r.field_bool(stores, ds::PTNUM_NULLABLE),
+        ),
+        ds::PT_VECTOR => Parts::Vector(content()),
+        ds::PT_ARRAY => Parts::Array(content()),
+        ds::PT_SORTED => Parts::Sorted(content(), read_key_fields(stores, r, ds::PTKEYS)),
+        ds::PT_ORDERED => Parts::Ordered(content(), read_key_fields(stores, r, ds::PTKEYS)),
+        ds::PT_HASH => Parts::Hash(content(), read_dep_list(stores, r, ds::PTFIELDS)),
+        ds::PT_INDEX => Parts::Index(
+            content(),
+            read_key_fields(stores, r, ds::PTKEYS),
+            r.field_int(stores, ds::PTINDEX_LEFT) as u16,
+        ),
+        ds::PT_SPACIAL => Parts::Spacial(content(), read_dep_list(stores, r, ds::PTFIELDS)),
+        ds::PT_DB_REF => Parts::DbRef,
+        ds::PT_CHILD_REC => Parts::ChildRec(content()),
+        other => panic!("ir_read: unknown DbParts discriminant {other}"),
+    }
+}
+
+/// Read a `vector<DbField>` (field `off` of `parent`) into a `Vec<Field>`.
+fn read_db_fields(stores: &Stores, parent: Record, off: u32) -> Vec<SchemaField> {
+    let v = parent.field_recvec(off, ds::DBFIELD_STRIDE);
+    (0..v.len(stores))
+        .map(|i| {
+            let r = v.get(i, stores);
+            let default = read_db_content(
+                stores,
+                r.field_recvec(ds::DBFIELD_DEFAULT, ds::DBCONTENT_STRIDE)
+                    .get(0, stores),
+            );
+            SchemaField::from_stored(
+                r.field_str(stores, ds::DBFIELD_NAME).to_string(),
+                r.field_int(stores, ds::DBFIELD_CONTENT) as u16,
+                r.field_int(stores, ds::DBFIELD_POSITION) as u16,
+                default,
+                read_dep_list(stores, r, ds::DBFIELD_OTHER_INDEXES),
+            )
+        })
+        .collect()
+}
+
+/// Read one `DbContent` record into a native `keys::Content`.  A `Str` default
+/// is reconstructed via a bounded `Box::leak` (mirrors `database::snapshot`).
+fn read_db_content(stores: &Stores, r: Record) -> Content {
+    match r.discriminant(stores) {
+        ds::DC_LONG => Content::Long(r.field_int(stores, ds::DCLONG_V)),
+        ds::DC_FLOAT => Content::Float(r.field_float(stores, ds::DCFLOAT_V)),
+        ds::DC_SINGLE => Content::Single(r.field_single(stores, ds::DCSINGLE_V)),
+        ds::DC_STR => {
+            let s = r.field_str(stores, ds::DCSTR_V);
+            if s.is_empty() {
+                Content::Str(Str::new(""))
+            } else {
+                Content::Str(Str::new(Box::leak(s.to_owned().into_boxed_str())))
+            }
+        }
+        other => panic!("ir_read: unknown DbContent discriminant {other}"),
+    }
+}
+
+/// Read a `vector<EnumPair>` (field `off`) into a `Vec<(u16, String)>`.
+fn read_enum_pairs(stores: &Stores, parent: Record, off: u32) -> Vec<(u16, String)> {
+    let v = parent.field_recvec(off, ds::ENUMPAIR_STRIDE);
+    (0..v.len(stores))
+        .map(|i| {
+            let e = v.get(i, stores);
+            (
+                e.field_int(stores, ds::ENUMPAIR_NR) as u16,
+                e.field_str(stores, ds::ENUMPAIR_NAME).to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Read a `vector<KeyField>` (field `off`) into a `Vec<(u16, bool)>`.
+fn read_key_fields(stores: &Stores, parent: Record, off: u32) -> Vec<(u16, bool)> {
+    let v = parent.field_recvec(off, ds::KEYFIELD_STRIDE);
+    (0..v.len(stores))
+        .map(|i| {
+            let e = v.get(i, stores);
+            (
+                e.field_int(stores, ds::KEYFIELD_NR) as u16,
+                e.field_bool(stores, ds::KEYFIELD_ASC),
+            )
+        })
+        .collect()
+}
+
+/// Read a `vector<LinkedFieldGroup>` at an explicit `off` (the `Definition`
+/// reader's `read_field_groups` is hard-wired to `DEF_FIELD_GROUPS`).
+fn read_field_groups_at(stores: &Stores, parent: Record, off: u32) -> Vec<LinkedFieldGroup> {
+    let v = parent.field_recvec(off, ds::LFG_STRIDE);
+    (0..v.len(stores))
+        .map(|i| {
+            let r = v.get(i, stores);
+            LinkedFieldGroup {
+                kind: if r.field_int(stores, ds::LFG_KIND) == 0 {
+                    LinkedFieldKind::Tuple
+                } else {
+                    LinkedFieldKind::Index
+                },
+                instance: r.field_int(stores, ds::LFG_INSTANCE) as u16,
+                field_indices: read_dep_list(stores, r, ds::LFG_FIELD_INDICES),
+                alignment: r.field_int(stores, ds::LFG_ALIGNMENT) as u8,
+                size: r.field_int(stores, ds::LFG_SIZE) as u16,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,5 +1240,31 @@ mod tests {
             p_med as f64 / l_med as f64,
             p_min as f64 / l_min as f64
         );
+    }
+
+    /// @PLAN54 D2a step 3 — `read_schema` is the inverse of `materialize_schema`:
+    /// materialize the real stdlib's database type schema into a store, read it
+    /// back, and assert the reconstructed `Vec<database::Type>` equals the
+    /// original (with the derived `parents` index cleared on both — it is not
+    /// stored and the load path doesn't need it).
+    #[test]
+    fn read_stdlib_schema_round_trips() {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        let mut cold = p.database.types.clone();
+        assert!(cold.len() > 50, "stdlib schema small? got {}", cold.len());
+
+        let mut ir = Stores::new();
+        let _ids = register_ir_schema(&mut ir);
+        let host = Record::new(ir.database(16));
+        crate::ir_store::materialize_schema(&mut ir, &host, 0, &p.database.types);
+
+        let loaded = read_schema(&ir, host, 0);
+        assert_eq!(loaded.len(), cold.len(), "type count");
+        for t in &mut cold {
+            t.clear_parents();
+        }
+        assert_eq!(loaded, cold, "database type schema round-trip mismatch");
     }
 }
