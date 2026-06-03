@@ -1220,6 +1220,22 @@ impl Parser {
         }
 
         let lhs_type = ctp.clone();
+        // #256: boolean has no null representation, so the `convert(_, Boolean)`
+        // null-check below would just test the value's own truthiness — making
+        // `false ?? x` fall through to `x` (a stored `false` is then
+        // indistinguishable from "missing").  Reject `??` on a boolean rather
+        // than silently miscompile it (mirrors the `null`-on-boolean error in
+        // `mod.rs`'s `null()`).  The RHS is still parsed below to keep the
+        // parser in a valid state — compilation aborts on the error.
+        if matches!(lhs_type, Type::Boolean) && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot use null coalescing '??' on boolean — boolean has no \
+                 null representation (a stored 'false' is indistinguishable from \
+                 missing); use an integer flag, or test the boolean directly"
+            );
+        }
         if self.lexer.has_token("return") {
             self.build_null_coalesce_return(code, ctp, &lhs_type);
         } else {
@@ -1448,9 +1464,15 @@ impl Parser {
                 for d in ctp.depend() {
                     rt = rt.depending(d);
                 }
-                return Some(rt);
+                // #254: set the current type and fall through to `None` rather
+                // than returning — `as` sits at the top precedence level, so
+                // letting the Pratt loop continue lets a chained cast
+                // (`x as integer as float`) parse left-associatively instead of
+                // stranding the second `as` against an expected `;`.
+                *ctp = rt;
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Expect type after as");
             }
-            diagnostic!(self.lexer, Level::Error, "Expect type after as");
         } else if operator == "or" || operator == "||" {
             self.expr_not_null = false;
             self.boolean_operator(code, ctp, precedence, true);

@@ -59,6 +59,28 @@ impl Output<'_> {
             }
             return Ok(());
         }
+        // #257: aliasing a `&ref` param into a fresh local (`snap = s`), both
+        // RefVars.  A local RefVar alias is non-owning and never written back
+        // through, so storing the record `DbRef` by value (a pointer triple,
+        // `Copy`) is enough — and avoids a `&mut DbRef` reborrow that would
+        // freeze the source for as long as the alias lives (so `s` could not be
+        // read after `snap = s`).  `output_code_inner` yields the record DbRef:
+        // `*var_s` for a `&mut DbRef` arg, `var_src` for a local DbRef alias.
+        if !variables.is_argument(var)
+            && matches!(variables.tp(var), Type::RefVar(_))
+            && let Value::Var(src) = to.unspan()
+            && matches!(variables.tp(*src), Type::RefVar(_))
+        {
+            let name = sanitize(variables.name(var));
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = ")?;
+            } else {
+                self.declared.insert(var);
+                write!(w, "let mut var_{name}: DbRef = ")?;
+            }
+            self.output_code_inner(w, to)?;
+            return Ok(());
+        }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
         // P198 — most operators are wrapped in Value::Span by the parser.

@@ -258,6 +258,33 @@ impl Parser {
     ) -> Type {
         if self.lexer.has_token("!") {
             let t = self.parse_part(var_tp, val, parent_tp);
+            // #253: `!x` on a non-boolean reads as "is x null?" — the null
+            // sentinel is in-band (LOFT.md "!value asymmetry").  On a `not null`
+            // operand the value can never BE the sentinel, so `!x` is *always
+            // false* — a silent no-op (`f = 0; if !f` never runs, because 0 is a
+            // real value, not null).  Warn, don't error: a nullable operand
+            // (`!both` in stdlib min/max) is a legitimate null test, and boolean
+            // `!` is ordinary negation (`false` is a valid value there).
+            let eff = if let Type::RefVar(inner) = &t {
+                (**inner).clone()
+            } else {
+                t.clone()
+            };
+            let operand_not_null =
+                self.expr_not_null || matches!(&eff, Type::Integer(spec) if spec.not_null);
+            if !self.first_pass
+                && operand_not_null
+                && !matches!(eff, Type::Boolean | Type::Null | Type::Unknown(_))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "'!' on a 'not null' {} is always false — '!x' tests whether x \
+                     is null, and a 'not null' value is never null; compare \
+                     explicitly (e.g. 'x == 0') if you meant a value check",
+                    t.name(&self.data)
+                );
+            }
             let arg = val.clone();
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {

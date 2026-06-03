@@ -784,14 +784,21 @@ impl Output<'_> {
                         )
                     {
                         // Forwarding a & parameter to another & parameter.
-                        // The variable is already &mut DbRef — pass it
-                        // directly instead of dereferencing with *var_name.
                         // Mirrors the check in
                         // `calls.rs::output_call_user_fn`; the pre-eval
                         // path re-emits calls structurally and needs the
                         // same handling.
-                        let name = sanitize(self.data.def(self.def_nr).variables.name(*nr));
-                        write!(w, "var_{name}")?;
+                        let caller_vars = &self.data.def(self.def_nr).variables;
+                        let name = sanitize(caller_vars.name(*nr));
+                        if caller_vars.is_argument(*nr) {
+                            // An argument RefVar is already &mut DbRef — pass
+                            // it directly instead of dereferencing.
+                            write!(w, "var_{name}")?;
+                        } else {
+                            // A local RefVar alias (#257) is a plain `DbRef` —
+                            // borrow it to the &mut DbRef the callee expects.
+                            write!(w, "&mut var_{name}")?;
+                        }
                     } else {
                         let matched = self.try_subst_pre_eval(w, val, pre_evals)?;
                         if !matched {

@@ -1387,3 +1387,39 @@ fn p315_float_literal_into_single_vector() {
              p315_float_literal_into_single_vector:1:43",
         );
 }
+
+/// GitHub #256 — `??` on a boolean is rejected at compile time: boolean has no
+/// null representation, so a stored `false` is indistinguishable from "missing"
+/// and `false ?? x` would silently fall through to `x`.
+#[test]
+fn gh256_bool_null_coalesce_rejected() {
+    code!("fn test() { b = false; c = b ?? true; }")
+        .error(
+            "Cannot use null coalescing '??' on boolean — boolean has no null \
+             representation (a stored 'false' is indistinguishable from missing); \
+             use an integer flag, or test the boolean directly at \
+             gh256_bool_null_coalesce_rejected:1:37",
+        )
+        .warning("Variable c is never read at gh256_bool_null_coalesce_rejected:1:27");
+}
+
+/// GitHub #253 — `!` on a `not null` non-boolean is always false (`!x` tests
+/// "is x null", and a `not null` value is never null).  Warn rather than error:
+/// nullable operands are a legitimate null test and boolean `!` is ordinary
+/// negation.
+#[test]
+fn gh253_bang_on_not_null_warns() {
+    code!("fn test() { h: integer not null = 3; if !h { h = 4; } }").warning(
+        "'!' on a 'not null' integer is always false — '!x' tests whether x \
+             is null, and a 'not null' value is never null; compare explicitly \
+             (e.g. 'x == 0') if you meant a value check at \
+             gh253_bang_on_not_null_warns:1:45",
+    );
+}
+
+/// GitHub #253 companion — `!` on a *nullable* operand is the sanctioned null
+/// test (stdlib `min`/`max` use `!both`), so it must NOT warn.
+#[test]
+fn gh253_bang_on_nullable_is_quiet() {
+    code!("fn test() { n: integer = 3; if !n { n = 4; } assert(n == 3, \"ok\"); }");
+}
