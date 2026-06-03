@@ -166,11 +166,19 @@ the `parallel {}` items in particular are a **sibling discovery**, not part of
 this plan's thesis
 ([plans/README.md § Sibling bugs are discoveries](../../README.md#sibling-bugs-are-discoveries-to-record-not-cases-to-fix-in-place)).
 
-1. **Disable store ref-counting** — Goal E continuation.  *Gate:* after the
-   cluster I/III scoping fix lands and `LOFT_STORE_GUARD` is silent corpus-wide.
-   Rationale (transparency-first — rc glosses over the lifetime, the same
-   distrust as the statistical gloss) + the experiment design in
-   [`fix-design-store-lifetime.md` § Tail-end](fix-design-store-lifetime.md#tail-end-experiment--disable-store-ref-counting-once-scoping-is-correct).
+1. **Disable store ref-counting** — Goal E continuation.  ✅ **DONE (2026-06)** —
+   the Stores ref-count is FULLY REMOVED.  Driven through the `RC_OFF` experiment +
+   a rigorous probe corpus ([`probes/rc-removal/`](probes/rc-removal/)) in three
+   phases: **A** Mechanism 1 — free unbound heap-returning-call temps
+   (`efdf8a1c`; closure-temp + de-NRVO'd vector, [`probes/nrvo-inline-leak/`](probes/nrvo-inline-leak/));
+   **B** Mechanism 2 — closure-cell ownership = the closure-record cascade
+   (`328fc80d`); **C** delete `ref_count`/`inc_rc`/`dec_rc`/`OpIncRc`
+   (`5745a2c2` + `80208ab1`), the const/global pin retargeted to a `Store.pinned`
+   flag, `free_named` now unconditional.  The memory model is now single-ownership
+   free + cascade-owned closure cells + `pinned` const stores — no hidden counter.
+   (A pre-existing lib-test fixed-filename concurrency bug surfaced during the
+   Phase C run and was fixed alongside: [`probes/lib-test-file-concurrency/`](probes/lib-test-file-concurrency/),
+   `8041d743` + `db3c588a`.)
 
 2. **`parallel {}` capture — soundness floor LANDED; feature deferred.**  Goal A +
    Goal D; **its own scoped case**, not this plan's store-lifetime work.  A
