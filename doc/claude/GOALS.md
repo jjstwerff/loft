@@ -221,6 +221,15 @@ Met-and-healthy when the guard is silent corpus-wide *and* the assertion holds
 *and keeps holding*.  A guard that starts firing is the alarm that the model and
 the runtime have drifted apart.
 
+**Progress — rc removed (plan-57 [`@PLN2`](https://github.com/loft-lang/plans/issues/2), closed 2026-06).**
+The store reference count is gone (`ref_count` / `inc_rc` / `dec_rc` / `OpIncRc`
+deleted; `Store.pinned` for const/global) — replaced by single-ownership free at
+scope end + a closure-record cascade.  This *advances* Goal E directly: **no hidden
+counter decides when a value dies** — the scope does, which is the obvious reading
+of the source.  rc was the canonical "sound-looking machinery that glosses the
+lifetime"; removing it makes the lifetime *visible*, the predictable-memory bet
+made literal.
+
 ---
 
 ## The method mirrors the goals — Goal E's law, turned on our own work

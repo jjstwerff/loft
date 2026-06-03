@@ -1,5 +1,17 @@
 # 57 — Vector store-lifetime watermark (@P393)
 
+> ✅ **CLOSED 2026-06** ([`@PLN2`](https://github.com/loft-lang/plans/issues/2)).
+> Thesis delivered: @P393's watermark warnings gone (cluster II), the I/III
+> straight-line watermark fixed (last-use freeing is the default), and the
+> rc-removal tail-end complete (Phases A/B/C — `ref_count`/`inc_rc`/`dec_rc`/
+> `OpIncRc` deleted; `Store.pinned` for const/global).  Tracked elsewhere:
+> Cluster III Route 2 → [QUALITY.md § Open work](../../QUALITY.md); sibling crash
+> → [#258](https://github.com/jjstwerff/loft/issues/258) (capturing closure into a
+> collection); `vv[0]+=[x]` codegen → [#246](https://github.com/jjstwerff/loft/issues/246);
+> parallel-capture feature → `lib_plans` 08/10; nightly parity sweep → TESTING.md.
+> B.1 (tuple+vector return) was already fixed (regression `tests/scripts/169`).
+> Per the new tracking model the dir stays put; state lives on the board.
+
 ## Status (REQUIRED)
 
 | Stage | Status |
