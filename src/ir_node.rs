@@ -338,6 +338,40 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `FnRef` definition number (the d_nr pushed as the fn-ref's first 4 B).
+    #[must_use]
+    pub fn fnref_dnr(&self) -> i32 {
+        match *self {
+            IrNode::Native(Value::FnRef(d, _, _)) => *d,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDFNREF_DEF_NR) as i32,
+            IrNode::Native(_) => kind_panic("fnref_dnr", self),
+        }
+    }
+
+    /// `FnRef` closure-variable slot (`u16::MAX` for a non-capturing fn-ref).
+    #[must_use]
+    pub fn fnref_clos_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::FnRef(_, c, _)) => *c,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDFNREF_VAR) as u16,
+            IrNode::Native(_) => kind_panic("fnref_clos_var", self),
+        }
+    }
+
+    /// `FnRef` function type (owned — clones the native `Type` / reads the
+    /// stored `TypeT` record).
+    #[must_use]
+    pub fn fnref_type(&self) -> Type {
+        match *self {
+            IrNode::Native(Value::FnRef(_, _, t)) => (**t).clone(),
+            IrNode::Store(s, n) => {
+                let rv = n.field_recvec(ds::NDFNREF_T, ds::TYPET_STRIDE);
+                crate::ir_read::read_type(s, rv.get(0, s))
+            }
+            IrNode::Native(_) => kind_panic("fnref_type", self),
+        }
+    }
+
     /// `Drop` inner expression.
     #[must_use]
     pub fn drop_inner(&self) -> IrNode<'a> {
@@ -700,6 +734,7 @@ mod tests {
             Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
             Value::Parallel(vec![Value::Var(1), Value::Var(2)]),
             Value::FnRefDnr(5),
+            Value::FnRef(7, u16::MAX, Box::new(Type::Boolean)),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
@@ -763,6 +798,11 @@ mod tests {
                     assert_eq!(nat.parallel_arms().len(), sto.parallel_arms().len());
                 }
                 ValueType::FnRefDnr => assert_eq!(nat.fnref_dnr_var(), sto.fnref_dnr_var()),
+                ValueType::FnRef => {
+                    assert_eq!(nat.fnref_dnr(), sto.fnref_dnr());
+                    assert_eq!(nat.fnref_clos_var(), sto.fnref_clos_var());
+                    assert_eq!(nat.fnref_type(), sto.fnref_type());
+                }
                 ValueType::Return => {
                     assert_eq!(nat.return_inner().kind(), sto.return_inner().kind());
                     assert_eq!(

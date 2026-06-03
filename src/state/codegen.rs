@@ -379,6 +379,23 @@ impl State {
             ValueType::ParFor => panic!(
                 "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
             ),
+            // @PLAN54 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
+            // closure DbRef 12B).  add_op already advances stack.position.
+            ValueType::FnRef => {
+                stack.add_op("OpConstInt", self);
+                self.code_add(i64::from(node.fnref_dnr()));
+                let clos_var = node.fnref_clos_var();
+                // @P328 — a non-capturing closure has no closure variable; push
+                // a null DbRef sentinel instead (else `stack(u16::MAX)` panics).
+                if clos_var == u16::MAX {
+                    stack.add_op("OpNullRefSentinel", self);
+                } else {
+                    let clos_pos = stack.var_pos(clos_var);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(clos_pos);
+                }
+                return node.fnref_type();
+            }
             _ => {}
         }
         match val {
@@ -577,29 +594,6 @@ impl State {
                 self.code_add(var_pos);
                 Type::Void
             }
-            Value::FnRef(d_nr, clos_var, fn_type) => {
-                // Construct 16-byte fn-ref on stack: push d_nr (4B) then closure DbRef (12B).
-                // Uses existing OpConstInt + OpVarRef — no new opcode needed.
-                // add_op → operator() already advances stack.position; no manual +4/+12 needed.
-                stack.add_op("OpConstInt", self);
-                self.code_add(i64::from(*d_nr));
-                // @P328 — non-capturing closure has no closure variable;
-                // push a null DbRef sentinel instead.  Without this branch,
-                // `stack(u16::MAX)` panics with "index out of bounds".
-                // Triggered by the yield-rewrite at
-                // `parser/expressions.rs::yield` that wraps a bare
-                // `Value::Int(d_nr)` into `Value::FnRef(d_nr, u16::MAX, _)`
-                // so the yielded value is a full 20-byte fn-ref.
-                if *clos_var == u16::MAX {
-                    stack.add_op("OpNullRefSentinel", self);
-                } else {
-                    // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                    let clos_pos = stack.var_pos(*clos_var);
-                    stack.add_op("OpVarRef", self);
-                    self.code_add(clos_pos);
-                }
-                *fn_type.clone()
-            }
             // Phase 09 phase 00 step 0.7 — RawExpr is created only by
             // native codegen (`src/generation/emit.rs` fn-ref dispatch);
             // bytecode codegen never produces it.
@@ -612,7 +606,7 @@ impl State {
             // `match node.kind()` above, which `return`s (or panics) before
             // reaching here; they can never arrive.  The list shrinks toward
             // empty as later groups move their arms up to the `kind()` dispatch
-            // (remaining in `match val`: Block, Loop, TupleGet, TuplePut, FnRef).
+            // (remaining in `match val`: Block, Loop, TupleGet, TuplePut).
             Value::Int(_)
             | Value::Long(_)
             | Value::Single(_)
@@ -640,8 +634,9 @@ impl State {
             | Value::FnRefDnr(_)
             | Value::Span(_)
             | Value::Iter(_, _, _, _)
-            | Value::ParFor(_) => {
-                unreachable!("M3.1–M3.4-converted kind reached legacy match: {val:?}")
+            | Value::ParFor(_)
+            | Value::FnRef(_, _, _) => {
+                unreachable!("M3.1–M3.5-converted kind reached legacy match: {val:?}")
             }
         }
     }
