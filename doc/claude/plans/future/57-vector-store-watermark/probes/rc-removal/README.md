@@ -25,8 +25,8 @@ compare `RC_OFF=1` vs default, `--interpret` vs native.
 | **02 multi_factory_escape** | two factories, calls interleaved | ok | **CRASH** | **Mechanism B** (cell ownership) |
 | **12 two_closures_coexist** | two closures coexist, calls *not* interleaved | ok | **CRASH** | **Mechanism B** |
 | **09 factory_loop_churn** | many coexisting factory closures in a loop | ok | **CRASH** | **Mechanism B** |
-| **10 closure_passed_as_arg** | closure as an UNBOUND arg temporary | **LEAK** | LEAK | **Mechanism 1** (unbound temp) |
-| **t9 split_temp_leak** | `split()` vector temp, unbound | ok | **LEAK** (interp) | **Mechanism 1** |
+| **10 closure_passed_as_arg** | closure as an UNBOUND arg temporary | ~~LEAK~~ **FIXED** | ~~LEAK~~ | **Mechanism 1** (unbound temp) — `Type::Function` lift arm |
+| **t9 split_temp_leak** | `split()` vector temp, unbound | **LEAK** (interp) | **LEAK** (interp) | **Mechanism 1** → moved to [`../nrvo-inline-leak/`](../nrvo-inline-leak/) |
 | t1–t8 | vector<text> build/reassign/append/return/concat/slice/nested/struct | ok | ok | scope covers |
 
 (06 / 08 — closure ↔ collection — moved to [`../closure-collection/`](../closure-collection/):
@@ -37,20 +37,20 @@ NOT rc-related, a separate closure-record-layout limitation.)
 **Mechanism 1 — an UNBOUND heap-returning-call temporary has no statement-end free.**
 A call returns a heap value used inline (not bound to a local); no work-ref buffer + no
 `OpFreeRef` is emitted for the temp.  Both instances are leak-free when **bound to a local
-first** (the local's scope-free handles it).  But they manifest DIFFERENTLY (store-trace
-verified, 2026-06) — so "one fix covers both" is a HYPOTHESIS to confirm in Phase A, not a
-fact:
-- **`t9`** — `len("a,b".split(','))`: the native `split()` vector temp.  rc-on is genuinely
-  clean (freed at teardown); **only `RC_OFF` leaks it**.  IR-confirmed: no `OpFreeRef` for
-  the split result (a *user* fn's result goes through an sret `__ref_N` buffer that IS
-  freed).  → a **missing free that rc/teardown covers**.
-- **`10`** — `apply(make())`: `make()`'s fn-ref result is the unbound temp.  `make`'s IR
-  does `OpIncRc(n)` (record captures the cell) and `return FnRef(d_nr, ___clos_1)`; the
-  temp gets **no `OpFreeRef`**, so after apply's inc-on-pass / dec-on-return the record sits
-  at **rc 1 → leaks WITH rc on, always**.  → a missing free the rc bookkeeping leaves stuck.
-- **Hypothesised fix:** an sret-style statement-end free for the unbound temp.  It plausibly
-  clears both (free `t9`'s vec; drop `10`'s record rc 1→0), but the rc-on/`RC_OFF`
-  asymmetry above means **Phase A must verify it fixes BOTH**, not assume it.
+first** (the local's scope-free handles it).  They are **SEPARATE fix sites** (confirmed by
+a code-only investigation agent, 2026-06) — same mechanism, different lift arm:
+- **`10`** — `apply(make())`: FIXED.  `make()`'s fn-ref result is the unbound temp; it got
+  **no `OpFreeRef`**, so after apply's inc-on-pass / dec-on-return the closure record sat at
+  **rc 1 → leaked WITH rc on**.  Fix: a `Type::Function` arm in `inline_struct_return`
+  (`src/scopes.rs`) lifts it → `get_free_vars` emits the `OpFreeRef`, codegen frees the
+  closure DbRef, `free_named` cascades to the `__cell_*`.  Leak-free both backends.
+- **`t9`** — NOT YET FIXED, and **worse than this corpus first recorded.**  The earlier
+  "rc-on clean, RC_OFF-only" line was measured against a stale binary and is **wrong**: it
+  leaks **rc-on, on the interpreter**, today — a live suite-blocker (`03-text.loft` → `wrap
+  text`/`loft_suite` red).  Re-probing (see [`../nrvo-inline-leak/`](../nrvo-inline-leak/))
+  showed it is NOT split-specific: any **de-NRVO'd (empty-dep) vector return** used
+  inline-unbound leaks.  Its fix is the sibling `Type::Vector` lift arm (guarded on
+  `dep.is_empty()`), reaching `t_` methods.  Full map + fix direction in that corpus.
 
 **Mechanism B — a captured cell is freed at the DEFINING frame's exit, not the closure's.**
 rc is needed ONLY for **≥2 coexisting closures** that own captured cells (02 / 12 / 09);
@@ -70,7 +70,9 @@ non-coexisting closure shapes survive `RC_OFF`.
 ## Phase plan (from the map)
 
 - **Phase A** — Mechanism 1: statement-end free for an unbound heap-returning-call
-  temporary.  Fixes `t9` (the rc text gap) **and** stray `10` (closure-temp leak) at once.
+  temporary, via `inline_struct_return` lift arms.  `10` (closure-temp) **DONE**
+  (`Type::Function` arm).  `t9` (de-NRVO'd vector return) **remaining** — the sibling
+  `Type::Vector` arm; full map in [`../nrvo-inline-leak/`](../nrvo-inline-leak/).
 - **Phase B** — Mechanism 2: closure-cell ownership — the real rc blocker (coexistence).
 - **Phase C** — delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc`; verify both backends.
 

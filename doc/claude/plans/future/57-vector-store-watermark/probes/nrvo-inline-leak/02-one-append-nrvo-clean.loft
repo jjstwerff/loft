@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The NRVO BOUNDARY (@P393).  ONE append = ONE distinct element-temp < the
+// `01a3f24f` threshold of 2 ⇒ the return IS NRVO-promoted: signature becomes
+// `n_f(z:vector<integer>) -> vector<integer>["??"]` — a hidden buffer param +
+// non-empty `["??"]` dep.  The caller allocates the buffer (`__ref_N`) and frees
+// it, so the inline-unbound result is clean even on the interpreter.
+//
+// This is the CONTRAST that proves the leak is about NRVO de-promotion, not
+// "method vs function" and not "heap return" — a literal (0 temps) and a single
+// append (1 temp) both stay clean.
+//
+// Expected:  interp = clean   native = clean
+
+fn f() -> vector<integer> {
+  z = [];
+  z += [1];          // 1 distinct element-temp → still NRVO-promoted
+  z
+}
+
+fn main() {
+  x = len(f());      // inline-unbound, but NRVO'd → caller frees the __ref buffer
+  println("len={x}");
+}

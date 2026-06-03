@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The SAFETY EDGE the fix must not break (@P393).  `trim_start`/`trim_end` are
+// declared `-> text[self]` — a BORROWED view of `self`, not a fresh owned store.
+// Its return dep is NON-empty (`[self]`), so it must NEVER be freed at the call
+// site: freeing it would release a slice of the caller's still-live `self` →
+// use-after-free / double-free.
+//
+// Today these are clean inline-unbound (no free is emitted, correctly).  The fix
+// for the de-NRVO'd OWNED case (01/03/05) keys on `dep.is_empty()` — owned
+// returns have empty dep and get a free; borrowed `[self]` / NRVO'd `["??"]`
+// returns have non-empty dep and are correctly skipped.  This probe is the
+// regression guard that the guard stays correct.
+//
+// Expected:  interp = clean   native = clean   (and must remain clean post-fix)
+
+fn main() {
+  a = len("   hi".trim_start());   // borrowed text view, inline-unbound → no free
+  b = len("hi   ".trim_end());     // borrowed text view, inline-unbound → no free
+  println("a={a} b={b}");
+}

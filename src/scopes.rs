@@ -1838,6 +1838,47 @@ impl Scopes {
                 {
                     return Some(Type::Enum(*d_nr, true, Vec::new()));
                 }
+                // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
+                // whose fn-ref carries a fresh closure record) leaks its result temp
+                // when used directly as a call argument — `apply(make())` left the
+                // `__closure_*` record at rc 1 and the cell uncollected.  Lift it like
+                // the Reference / struct-enum cases so `get_free_vars`' fn-ref arm
+                // emits the `OpFreeRef`; codegen frees the closure DbRef at offset+8
+                // and `free_named` cascades to the captured `__cell_*`.  NOT guarded on
+                // `dep.is_empty()` — a capturing closure's dep IS the cell (e.g.
+                // `function([], integer, [1])`), so guarding would skip the very case.
+                // A non-capturing return carries the null closure sentinel → the free
+                // is a safe no-op; a borrowed fn-ref copy is marked `skip_free`
+                // elsewhere, so only a freshly produced closure is lifted here.
+                if let Type::Function(params, ret, _) = &def.returned {
+                    return Some(Type::Function(params.clone(), ret.clone(), Vec::new()));
+                }
+            }
+        }
+        // @P393 (t9) — a loft-source fn OR `t_` method returning an OWNED vector
+        // BY VALUE (empty dep) is de-NRVO'd when its body builds the result with
+        // >=2 distinct element-temps (`01a3f24f` in `ref_return`): the signature
+        // is `n_f() -> vector<T>` / `t_..split() -> vector<text>`, with no hidden
+        // `__vdb`/`__ref` buffer param.  Used inline-unbound (`len(split(x))`,
+        // `split(x).join(y)`) the by-value temp gets no scope-exit free on the
+        // interpreter → its store leaks (native codegen already frees it).  Lift
+        // it like the Reference / struct-Enum / Function cases above so
+        // `get_free_vars` emits the `OpFreeRef`.  A SEPARATE block from the
+        // `n_`-gated one above because `split` is a `t_` method — broadening that
+        // block's guard would also change the Reference/Enum/Function arms' scope.
+        // Gated on `dep.is_empty()`: the NRVO'd hidden-param return carries dep
+        // `["??"]` (caller already frees `__ref`) and a borrowed view carries
+        // `[self]`, so both are excluded — no double-free, no UAF.  `val.unspan()`
+        // because `parse_call`/`parse_method` Span-wrap the call (arg AND
+        // receiver = arg0).
+        if let Value::Call(fn_nr, _) = val.unspan() {
+            let def = data.def(*fn_nr);
+            if (def.name.starts_with("n_") || def.name.starts_with("t_"))
+                && def.code != Value::Null
+                && let Type::Vector(elem, dep) = &def.returned
+                && dep.is_empty()
+            {
+                return Some(Type::Vector(elem.clone(), Vec::new()));
             }
         }
         // The native-constructor branches below are intentionally matched on the
