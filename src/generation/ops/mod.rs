@@ -34,7 +34,6 @@ pub mod key_ops;
 pub mod misc_ops;
 pub mod parallel;
 pub mod ref_ops;
-pub mod refcount;
 pub mod text_ops;
 
 use super::Output;
@@ -184,15 +183,13 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     r.insert("OpGetRecord", Box::new(key_ops::OpGetRecordEmitter));
     r.insert("OpIterate", Box::new(key_ops::OpIterateEmitter));
 
-    // Keyed-WRITE family + store-refcount op — migrated out of
-    // dispatch.rs::output_call_inner to keep that match under the
-    // `dispatch_op_arm_budget` ratchet (these were added as arms during the
-    // @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed, OpReplaceKeyed,
-    // P259 OpIncRc).  Pure pass-throughs to their runtime helpers.
+    // Keyed-WRITE family — migrated out of dispatch.rs::output_call_inner to
+    // keep that match under the `dispatch_op_arm_budget` ratchet (added as arms
+    // during the @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed,
+    // OpReplaceKeyed).  Pure pass-throughs to their runtime helpers.
     r.insert("OpReplaceKeyed", Box::new(key_ops::OpReplaceKeyedEmitter));
     r.insert("OpSetKeyed", Box::new(key_ops::OpSetKeyedEmitter));
     r.insert("OpClearKeyed", Box::new(key_ops::OpClearKeyedEmitter));
-    r.insert("OpIncRc", Box::new(refcount::OpIncRcEmitter));
 
     // Reference-lifetime family — the irreducible cases.  OpFreeRef /
     // OpFreeRefIfDistinct read per-function variable metadata (conditional

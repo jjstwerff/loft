@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Phase C file-close correctness (@P393).  Phase C dropped the `ref_count <= 1`
+// conjunct from the file-handle close gate (io.rs / codegen_runtime.rs), so the
+// OS handle now closes whenever its File store is freed — the concern was that a
+// File store with MULTIPLE DbRefs would close prematurely (freeing one while
+// another is live).  These shapes exercise aliasing, pass-by-value (the callee's
+// copy is freed at return), and a callee-created file; all must persist the full
+// written content.  ALL pass on both backends → the close change is correct and
+// the GLB suite failure is concurrency, not this.
+//
+// Run: ./target/release/loft --interpret 01-*.loft  (and --native).  Expect:
+//   alias=5 by_value=8 callee=exists,3
+
+fn helper(x: File) { x.write("data"); }     // 4 bytes via a by-value copy
+fn mk(p: text) { q = file(p); q.write("xyz"); }   // callee creates + writes
+
+fn main() {
+  // alias: two locals referencing the same File store; write via one
+  a = file("/tmp/loft_fc_a.txt");
+  b = a;
+  a.write("hello");
+  assert(file("/tmp/loft_fc_a.txt").size == 5, "alias write");
+
+  // pass-by-value: helper's copy is freed at its return — must NOT close the
+  // handle out from under the caller's subsequent write
+  c = file("/tmp/loft_fc_b.txt");
+  helper(c);
+  c.write("more");
+  assert(file("/tmp/loft_fc_b.txt").size == 8, "by-value write");
+
+  // callee-created file persists after the callee frees its File local
+  mk("/tmp/loft_fc_c.txt");
+  assert(file("/tmp/loft_fc_c.txt").exists(), "callee-created exists");
+  assert(file("/tmp/loft_fc_c.txt").size == 3, "callee-created size");
+
+  delete("/tmp/loft_fc_a.txt");
+  delete("/tmp/loft_fc_b.txt");
+  delete("/tmp/loft_fc_c.txt");
+  println("file-close-correct ok");
+}

@@ -553,7 +553,6 @@ impl WorkerStores {
         // the worker's first claim).  Mark non-free so debug invariants
         // don't think this is a freed slot.
         store.free = false;
-        store.ref_count = 1;
         self.stores.allocations.push(store);
         if store_nr >= self.stores.max {
             self.stores.max = store_nr + 1;

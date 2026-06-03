@@ -262,7 +262,6 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     parallel_arm,
     parallel_join,
     pre_alloc_vector,
-    inc_rc,
     get_file,
     get_dir,
     get_file_text,
@@ -1972,13 +1971,6 @@ fn pre_alloc_vector(s: &mut State) {
         u32::from(v_elem_size),
         &mut s.database.allocations,
     );
-}
-
-fn inc_rc(s: &mut State) {
-    let v_v1 = *s.get_stack::<DbRef>();
-    if v_v1.store_nr != u16::MAX && (v_v1.store_nr as usize) < s.database.allocations.len() {
-        s.database.inc_rc(v_v1.store_nr);
-    }
 }
 
 fn get_file(s: &mut State) {

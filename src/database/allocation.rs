@@ -115,13 +115,11 @@ impl Stores {
         // bare message did during the @P311/@P313/@P317 store-ownership hunts.
         assert!(
             store.free,
-            "Allocating a used store #{slot} (rc={}, known_type={}, requested by={})",
-            store.ref_count,
+            "Allocating a used store #{slot} (known_type={}, requested by={})",
             store.known_type,
             if name.is_empty() { "<anon>" } else { name },
         );
         store.free = false;
-        store.ref_count = 1;
         store.pinned = false;
         store.created_at = 0;
         store.last_op_at = 0;
@@ -251,7 +249,6 @@ impl Stores {
         }
         // S36: clear the lock before marking free.
         let store = &mut self.allocations[al as usize];
-        store.ref_count = 0;
         store.unlock();
         // LOFT_LOG=poison_free: overwrite the freed buffer with a
         // recognisable pattern so subsequent stale-DbRef reads hit
@@ -297,34 +294,6 @@ impl Stores {
                 self.free_named(&target, "<cascade>");
             }
         }
-    }
-
-    /// Increment the reference count of the store at `store_nr`.
-    /// No-op for the null sentinel (u16::MAX) and store 0 (stack store).
-    pub fn inc_rc(&mut self, store_nr: u16) {
-        if store_nr == u16::MAX || store_nr as usize >= self.allocations.len() {
-            return;
-        }
-        self.allocations[store_nr as usize].ref_count += 1;
-    }
-
-    /// Decrement the reference count of the store at `store_nr`.
-    /// Returns true if the store was actually freed (rc dropped to 0).
-    /// No-op for the null sentinel (u16::MAX).
-    pub fn dec_rc(&mut self, store_nr: u16) -> bool {
-        if store_nr == u16::MAX || store_nr as usize >= self.allocations.len() {
-            return false;
-        }
-        let store = &mut self.allocations[store_nr as usize];
-        if store.free {
-            return false;
-        }
-        if store.ref_count <= 1 {
-            // Last reference — actually free the store.
-            return true;
-        }
-        store.ref_count -= 1;
-        false
     }
 
     /// S29: Find the lowest free slot index below `max` using the `free_bits` bitmap.
@@ -1602,14 +1571,7 @@ impl Stores {
         // Preserve the slot's bookkeeping across the swap.
         let preserved = {
             let s = &self.allocations[slot_idx];
-            (
-                s.ref_count,
-                s.known_type,
-                s.free,
-                s.created_at,
-                s.last_op_at,
-                s.pinned,
-            )
+            (s.known_type, s.free, s.created_at, s.last_op_at, s.pinned)
         };
 
         if !exists {
@@ -1644,14 +1606,13 @@ impl Stores {
             Err(_) => return false,
         };
 
-        // Re-apply preserved metadata onto the new Store.  Slot bitmap +
-        // rc walk see continuity; the on-disk bytes carry the user data.
-        new_store.ref_count = preserved.0;
-        new_store.known_type = preserved.1;
-        new_store.free = preserved.2;
-        new_store.created_at = preserved.3;
-        new_store.last_op_at = preserved.4;
-        new_store.pinned = preserved.5;
+        // Re-apply preserved metadata onto the new Store.  Slot bitmap sees
+        // continuity; the on-disk bytes carry the user data.
+        new_store.known_type = preserved.0;
+        new_store.free = preserved.1;
+        new_store.created_at = preserved.2;
+        new_store.last_op_at = preserved.3;
+        new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
         true
