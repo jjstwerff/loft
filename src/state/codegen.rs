@@ -68,7 +68,23 @@ impl State {
         let logging = !data.def(def_nr).position().file.starts_with("default/");
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
-        if *stack.data.def(def_nr).code() == Value::Null {
+        // @PLAN54 G2/M6 — read the body's SHAPE (null / empty-block) from the
+        // persistent store when present, so these last native body reads are
+        // also store-backed; else from the native graph.
+        let (body_is_null, body_is_empty_block) = if let Some((stores, root)) = program_store {
+            let b = IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, def_nr));
+            (
+                b.kind() == ValueType::Null,
+                b.kind() == ValueType::Block && b.as_block().operators().is_empty(),
+            )
+        } else {
+            let code = stack.data.def(def_nr).code();
+            (
+                *code == Value::Null,
+                matches!(code, Value::Block(bl) if bl.operators.is_empty()),
+            )
+        };
+        if body_is_null {
             // B7 (2026-04-13): set up the same frame layout the regular
             // path uses, so `add_return` emits a correct OpReturn.  For
             // native fns declared as `pub fn name(...) -> T;` (no body),
@@ -99,8 +115,7 @@ impl State {
             data.definitions[def_nr as usize].code_length = self.code_pos - start;
             return;
         }
-        let is_empty_stub =
-            matches!(stack.data.def(def_nr).code(), Value::Block(bl) if bl.operators.is_empty());
+        let is_empty_stub = body_is_empty_block;
         // use arguments() instead of names map lookup — the names map may
         // redirect promoted text parameters to shadow locals.
         let args = stack.function.arguments();
