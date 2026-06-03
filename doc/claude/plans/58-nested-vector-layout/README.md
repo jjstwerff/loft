@@ -119,7 +119,7 @@ Real-library extraction landmark: `tests/scripts/182-deep-nested-vector-copy.lof
 
 | Tool | Status | Used for |
 |---|---|---|
-| `--vec4` / `LOFT_VEC4=1` (`src/vec4.rs`) | **New (this plan)** — TEMPORARY | Force every parser-computed nested-vector element stride to its true 4-byte handle size so the sweep measures "does aligning strides close the class?" against one toggle.  Scoped to `Type::Vector` elements; no-op when already 4.  Wired at the 4 parser stride sites (`vectors.rs:1640`, `fields.rs:74`, `fields.rs:677`, `collections.rs::element_store_size`).  **Remove when the resolver fix lands.** |
+| `--vec4` / `LOFT_VEC4=1` (`src/vec4.rs`) | **RETIRED** (commit `0156ecfc`) | Temporary force-to-4 measurement instrument: it proved (via the matrix sweep) that the vector-handle stride was safe to unify and was NOT the active fault, which redirected the fix from "align strides" to the real roots (single sentinel, narrow-literal coercion, outer-handle stride, comprehension `known`).  Superseded once all four clusters were fixed at their sources; removed (−109 lines). |
 | `LOFT_LOG=static` | Verified-suitable | Confirm the `16→4` operand flip in the IR dump. |
 | `timeout 20` watchdog | Verified-essential | SIGSEGV probes self-terminate with `rc=139`. |
 
