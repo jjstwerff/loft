@@ -13,10 +13,10 @@
 //! (control flow).
 
 use super::State;
-use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, I32, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
-use crate::ir_node::{IrNode, IrNodeList};
+use crate::ir_node::{IrBlock, IrNode, IrNodeList};
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
@@ -394,22 +394,11 @@ impl State {
                 }
                 node.fnref_type()
             }
-            // @PLAN54 G2/M3.6 — the last arms; `generate_inner` now dispatches
-            // entirely on `node.kind()`.  Block/Loop bridge to the `&Block`-taking
-            // helpers via `as_native()` (a Block handle lands at M5); TupleGet/
-            // TuplePut keep their stack-offset bodies, re-bound from `as_native()`.
-            ValueType::Loop => {
-                let Value::Loop(lp) = node.as_native() else {
-                    unreachable!("Loop")
-                };
-                self.gen_loop(lp, stack)
-            }
-            ValueType::Block => {
-                let Value::Block(bl) = node.as_native() else {
-                    unreachable!("Block")
-                };
-                self.generate_block(stack, bl, top)
-            }
+            // @PLAN54 G2/M3.6+M3.11 — Block/Loop lower through the IrBlock handle;
+            // TupleGet/TuplePut keep their stack-offset bodies, re-bound from
+            // `as_native()` (the last native-only bridges in generate_inner).
+            ValueType::Loop => self.gen_loop(node.as_block(), stack),
+            ValueType::Block => self.generate_block(stack, node.as_block(), top),
             ValueType::TupleGet => {
                 let Value::TupleGet(var_nr, elem_idx) = node.as_native() else {
                     unreachable!("TupleGet")
@@ -639,11 +628,11 @@ impl State {
         Type::Text(Vec::new())
     }
 
-    pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
+    pub(super) fn gen_loop(&mut self, lp: IrBlock, stack: &mut Stack) -> Type {
         stack.add_loop(self.code_pos);
         let pos = self.code_pos;
-        for v in &lp.operators {
-            self.generate(v, stack, false);
+        for v in lp.operators().iter() {
+            self.generate_node(v, stack, false);
         }
         self.clear_stack(stack, 0);
         stack.add_op("OpGotoWord", self);
@@ -2879,8 +2868,9 @@ impl State {
         self.insert_types(stack.function.tp(variable).clone(), code, stack)
     }
 
-    pub(super) fn generate_block(&mut self, stack: &mut Stack, block: &Block, top: bool) -> Type {
-        if block.operators.is_empty() {
+    pub(super) fn generate_block(&mut self, stack: &mut Stack, block: IrBlock, top: bool) -> Type {
+        let ops = block.operators();
+        if ops.is_empty() {
             return Type::Void;
         }
         let to = stack.position;
@@ -2895,13 +2885,13 @@ impl State {
         let mut tp = Type::Void;
         let mut return_expr = 0;
         let mut has_return = false;
-        for v in &block.operators {
+        for v in ops.iter() {
             let s_pos = self.stack_pos;
-            if let Value::Return(expr) = v {
+            if v.kind() == ValueType::Return {
                 has_return = true;
                 if return_expr == 0 {
                     return_expr = s_pos;
-                    self.generate(expr, stack, false);
+                    self.generate_node(v.return_inner(), stack, false);
                 }
                 self.add_return(stack, return_expr);
                 return_expr = 0;
@@ -2910,16 +2900,17 @@ impl State {
                 // Preserve return_expr across cleanup ops (FreeRef/FreeText)
                 // that don't produce a return value. These are inserted by
                 // scope analysis between the tail expression and Return(Null).
-                let is_cleanup = matches!(v, Value::Call(d, _)
-                    if stack.data.def(*d).name() == "OpFreeRef"
-                    || stack.data.def(*d).name() == "OpFreeText");
+                let is_cleanup = v.kind() == ValueType::Call && {
+                    let name = stack.data.def(v.call_to()).name();
+                    name == "OpFreeRef" || name == "OpFreeText"
+                };
                 if !is_cleanup {
                     has_return = false;
                     return_expr = 0;
                 }
-                tp = self.generate(v, stack, false);
+                tp = self.generate_node(v, stack, false);
             }
-            if self.stack_pos > s_pos && !matches!(v, Value::Set(_, _)) {
+            if self.stack_pos > s_pos && v.kind() != ValueType::Set {
                 // Normal expressions do not claim stack space (because of Value::Drop).
                 // So, if there is data left, it should be a return expression.
                 return_expr = s_pos;
@@ -2937,8 +2928,9 @@ impl State {
                 );
             }
         } else {
+            let result = block.result();
             // @PLAN53 S4: the block result occupies a stepped span.
-            let size = stack.step(size(&block.result, &Context::Argument));
+            let size = stack.step(size(&result, &Context::Argument));
             let after = to + size;
             // Plan-04 Phase B.3: under the per-block `OpReserveFrame`
             // that this atomic bundle deletes, a `drop <var>` tail
@@ -2948,17 +2940,20 @@ impl State {
             // `drop` leaves no explicit result on the eval stack.
             // Re-read the inner `Var` to produce the missing push
             // (safe: `Var` reads are idempotent).
-            if stack.position < after
-                && let Some(Value::Drop(inner)) = block.operators.last()
-                && matches!(**inner, Value::Var(_))
-            {
-                self.generate(inner, stack, false);
+            if stack.position < after && !ops.is_empty() {
+                let last = ops.get(ops.len() - 1);
+                if last.kind() == ValueType::Drop {
+                    let inner = last.drop_inner();
+                    if inner.kind() == ValueType::Var {
+                        self.generate_node(inner, stack, false);
+                    }
+                }
             }
             if stack.position > after {
                 stack.add_op("OpFreeStack", self);
                 self.code_add(size as u8);
                 self.code_add(stack.position - to);
-            } else if matches!(&block.result, Type::Function(_, _, _)) && stack.position < after {
+            } else if matches!(&result, Type::Function(_, _, _)) && stack.position < after {
                 // a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
                 // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
                 // a null-ref sentinel so both branches of an if-else reach the join point

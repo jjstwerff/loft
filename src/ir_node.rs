@@ -73,7 +73,7 @@
 //! non-generic; the backing branch is a single predictable match inside each
 //! accessor (and collapses to one arm once M5 makes the backing uniform).
 
-use crate::data::{Type, Value};
+use crate::data::{Block, Type, Value};
 use crate::data_store::{
     self as ds, Record, TypeKind, Value as Node, ValueType, ValuesVector, type_kind,
 };
@@ -489,6 +489,16 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// The [`IrBlock`] body of a `Block` or `Loop` node.
+    #[must_use]
+    pub fn as_block(&self) -> IrBlock<'a> {
+        match *self {
+            IrNode::Native(Value::Block(b) | Value::Loop(b)) => IrBlock::Native(b),
+            IrNode::Store(s, n) => IrBlock::Store(s, n),
+            IrNode::Native(_) => kind_panic("as_block", self),
+        }
+    }
+
     /// The source [`Position`] of a `Span` node (owned — clones the file name).
     #[must_use]
     pub fn span_pos(&self) -> Position {
@@ -550,6 +560,41 @@ impl<'a> IrNodeList<'a> {
     /// Iterate the children left-to-right.
     pub fn iter(&self) -> impl Iterator<Item = IrNode<'a>> + '_ {
         (0..self.len()).map(move |i| self.get(i))
+    }
+}
+
+/// A backing-agnostic handle to a [`Block`] (the body of a `Block` or `Loop`
+/// node).  Both node kinds embed their `Block` at the same store offset
+/// (`read_block` handles both), so one handle serves both.
+#[derive(Clone, Copy)]
+pub enum IrBlock<'a> {
+    /// Borrows the native `Block`.
+    Native(&'a Block),
+    /// Reads the `Block` embedded in a store `Block`/`Loop` node record.
+    Store(&'a Stores, Node),
+}
+
+impl<'a> IrBlock<'a> {
+    /// The block's statement list.
+    #[must_use]
+    pub fn operators(&self) -> IrNodeList<'a> {
+        match *self {
+            IrBlock::Native(b) => IrNodeList::Native(&b.operators),
+            IrBlock::Store(s, n) => IrNodeList::Store(s, n.block_operators()),
+        }
+    }
+
+    /// The block's result type (owned — clones the native `Type` / reads the
+    /// stored `TypeT`).
+    #[must_use]
+    pub fn result(&self) -> Type {
+        match *self {
+            IrBlock::Native(b) => b.result.clone(),
+            IrBlock::Store(s, n) => {
+                let rv = n.field_recvec(ds::NDBLOCK_BLOCK + ds::BLOCK_RESULT, ds::TYPET_STRIDE);
+                crate::ir_read::read_type(s, rv.get(0, s))
+            }
+        }
     }
 }
 
@@ -736,6 +781,8 @@ mod tests {
             Value::Parallel(vec![Value::Var(1), Value::Var(2)]),
             Value::FnRefDnr(5),
             Value::FnRef(7, u16::MAX, Box::new(Type::Boolean)),
+            Value::Block(Box::new(blk())),
+            Value::Loop(Box::new(blk())),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
@@ -799,6 +846,11 @@ mod tests {
                     assert_eq!(nat.parallel_arms().len(), sto.parallel_arms().len());
                 }
                 ValueType::FnRefDnr => assert_eq!(nat.fnref_dnr_var(), sto.fnref_dnr_var()),
+                ValueType::Block | ValueType::Loop => {
+                    let (nb, sb) = (nat.as_block(), sto.as_block());
+                    assert_eq!(nb.operators().len(), sb.operators().len());
+                    assert_eq!(nb.result(), sb.result());
+                }
                 ValueType::FnRef => {
                     assert_eq!(nat.fnref_dnr(), sto.fnref_dnr());
                     assert_eq!(nat.fnref_clos_var(), sto.fnref_clos_var());
