@@ -217,29 +217,35 @@ impl State {
     # Panics
     On not implemented Value constructions
     */
+    /// The `&Value` recursion entry — wraps the native node in an [`IrNode`]
+    /// and delegates to [`Self::generate_node`].  Every existing caller keeps
+    /// this signature; @PLAN54 G2/M5's store-backed entry will call
+    /// `generate_node(IrNode::Store(…), …)` directly instead.
     pub(super) fn generate(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
+        self.generate_node(IrNode::Native(val), stack, top)
+    }
+
+    /// Handle-based recursion entry (@PLAN54 G2): depth-guard + dispatch on the
+    /// backing-agnostic [`IrNode`].
+    pub(super) fn generate_node(&mut self, node: IrNode, stack: &mut Stack, top: bool) -> Type {
         self.generate_depth += 1;
         assert!(
             self.generate_depth <= 1000,
             "expression nesting limit exceeded at depth {}",
             self.generate_depth
         );
-        let result = self.generate_inner(val, stack, top);
+        let result = self.generate_inner(node, stack, top);
         self.generate_depth -= 1;
         result
     }
 
+    /// @PLAN54 G2 — lower one IR node.  Dispatches entirely on `node.kind()`
+    /// and reads payloads through `IrNode` accessors, so the SAME codegen runs
+    /// once the backing flips from native to store-read (M5).  The remaining
+    /// `as_native()` calls (Block/Loop/TupleGet/TuplePut children and the
+    /// `&Value`-taking `gen_*` helpers) are the native-backed bridges M5 lifts.
     #[allow(clippy::too_many_lines)]
-    fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
-        // @PLAN54 G2/M3.1 — scalar/leaf group lowered through the node-walk
-        // handle (`IrNode`).  Each arm dispatches on `kind()` and reads its
-        // payload via an accessor instead of destructuring the native enum, so
-        // the SAME codegen runs once the backing flips to store-read (M5).
-        // Behaviour is identical (native backing).  The recursive / compound
-        // variants stay on the `match val` below until later M3.x groups
-        // convert them; a converted kind can never reach that match (the arms
-        // here `return`), so its `_` arm is `unreachable!`.
-        let node = IrNode::Native(val);
+    fn generate_inner(&mut self, node: IrNode, stack: &mut Stack, top: bool) -> Type {
         match node.kind() {
             ValueType::Int => {
                 stack.add_op("OpConstInt", self);
@@ -316,7 +322,7 @@ impl State {
             ),
             ValueType::Yield => {
                 // CO1.3c: emit the yielded expression, then OpCoroutineYield.
-                let t = self.generate(node.yield_inner().as_native(), stack, false);
+                let t = self.generate_node(node.yield_inner(), stack, false);
                 let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
                 stack.add_op("OpCoroutineYield", self);
                 self.code_add(value_size);
@@ -326,11 +332,12 @@ impl State {
                 stack.position -= stack.step(value_size);
                 Type::Void
             }
-            // @PLAN54 G2/M3.3 — list-child + scalar arms.  Child lists bridge to
-            // the `&[Value]` helpers via `as_native()` until M5.
+            // @PLAN54 G2/M3.3 — list-child + scalar arms.  Insert/Tuple iterate
+            // the handle directly (store-ready); Call/CallRef/Parallel still
+            // bridge their lists to the `&[Value]` helpers via `as_native()`.
             ValueType::Insert => {
-                for op in node.insert_items().as_native() {
-                    self.generate(op, stack, false);
+                for op in node.insert_items().iter() {
+                    self.generate_node(op, stack, false);
                 }
                 Type::Void
             }
@@ -343,8 +350,8 @@ impl State {
             ValueType::Tuple => {
                 // T1.4: generate each element onto contiguous stack slots.
                 let mut types = Vec::new();
-                for e in node.tuple_items().as_native() {
-                    types.push(self.generate(e, stack, false));
+                for e in node.tuple_items().iter() {
+                    types.push(self.generate_node(e, stack, false));
                 }
                 Type::Tuple(types)
             }
@@ -367,9 +374,11 @@ impl State {
                 // position so phase 3's runtime-error printer can surface
                 // `at file:line:col`, then lower the wrapped inner node.
                 self.source_spans.insert(self.code_pos, node.span_pos());
-                self.generate_inner(node.span_inner().as_native(), stack, top)
+                self.generate_inner(node.span_inner(), stack, top)
             }
-            ValueType::Iter => panic!("Should have rewritten {val:?}"),
+            ValueType::Iter => {
+                panic!("Iter node should have been rewritten before codegen")
+            }
             ValueType::ParFor => panic!(
                 "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
             ),
