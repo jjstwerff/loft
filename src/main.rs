@@ -4201,6 +4201,23 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
+    // the store-materialised IR is bit-for-bit identical to the native `Data`
+    // before any subsystem is rewired to read from the store.  Opt-in (default
+    // off): validates the store-mirror invariant on the *actual* program being
+    // run — user code + lazily-loaded libs — not just the stdlib round-trip tests.
+    if std::env::var_os("LOFT_IR_CHECK").is_some_and(|v| !v.is_empty()) {
+        if let Err(diff) = loft::ir_read::ir_roundtrip_check(&p.data) {
+            eprintln!("LOFT_IR_CHECK: store-backed IR diverges from native Data: {diff:?}");
+            std::process::exit(1);
+        }
+        if std::env::var_os("LOFT_TIMING").is_some() {
+            eprintln!(
+                "LOFT_IR_CHECK: store round-trip == native ({} defs)",
+                p.data.definitions()
+            );
+        }
+    }
     // @PLAN54 arc E — on a cold run with the program cache enabled, write the
     // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
     // functions carry `done=true` and the baked free-ops).

@@ -388,6 +388,31 @@ pub fn read_data(stores: &Stores, root: DbRef) -> Data {
     data
 }
 
+/// @PLAN54 G2 / M0 — the read-site migration's equivalence harness.
+///
+/// Materialise `data` into a fresh in-memory store, read it straight back, and
+/// assert the round-trip is bit-for-bit identical with the IR's own
+/// `compare_data` oracle.  This is the bedrock guarantee the whole G2 migration
+/// stands on: *before* any subsystem (codegen, the interpreter, …) is rewired
+/// to read its IR from the store instead of the native graph, this proves the
+/// store representation is a faithful mirror of the native `Data`.  Wired into
+/// the run path behind `LOFT_IR_CHECK`, it validates that invariant on **any
+/// real program** — user code, lazily-loaded libs and all — not just the
+/// stdlib-only round-trip tests.
+///
+/// Needs no schema registration: like [`open_data`], it walks the store through
+/// baked offsets.
+///
+/// # Errors
+/// Returns the [`crate::ir_schema::DataDiff`] locating the first field where the
+/// store-read `Data` diverges from `data`.
+pub fn ir_roundtrip_check(data: &Data) -> Result<(), crate::ir_schema::DataDiff> {
+    let mut stores = Stores::new();
+    let root = crate::ir_store::materialize_data(&mut stores, data);
+    let loaded = read_data(&stores, root);
+    crate::ir_schema::compare_data(data, &loaded)
+}
+
 /// Load a native [`Data`] from a file-backed IR store written by
 /// [`crate::ir_store::save_data`] (@PLAN54 arc D): mmap the file
 /// (`Store::open`) and rebuild the native `Data` from the well-known root
@@ -1089,6 +1114,22 @@ mod tests {
         if let Err(diff) = compare_data(&fresh, &loaded) {
             panic!("store round-trip diverged from fresh parse: {diff:?}");
         }
+    }
+
+    /// @PLAN54 G2 / M0 — the equivalence harness wrapper (`ir_roundtrip_check`)
+    /// the run path invokes under `LOFT_IR_CHECK`.  It materialises + reads back
+    /// without registering the IR schema (baked offsets) and returns `Ok` when
+    /// the whole stdlib round-trips bit-for-bit.
+    #[test]
+    fn ir_roundtrip_check_stdlib_ok() {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+        assert!(p.data.definitions() > 100);
+        assert!(
+            ir_roundtrip_check(&p.data).is_ok(),
+            "stdlib store round-trip must equal native Data"
+        );
     }
 
     /// Spot-check that a function-body definition's variable table — the part

@@ -652,7 +652,7 @@ behind the accessor seam, validated by a **dual-backing equivalence harness**
 
 | Step | Deliverable | Validation | Effort |
 |---|---|---|---|
-| **M0** | Dual-backed `Data` (holds native + materialized store) + `LOFT_IR_CHECK` debug harness asserting store-read == native-read per accessor. Additive; nothing switches yet. | harness self-test on stdlib | M |
+| **M0** ✅ | Equivalence harness landed — `ir_read::ir_roundtrip_check(&Data)` materialises into a store, reads back, and asserts bit-for-bit equality (`compare_data`); wired into the run path behind `LOFT_IR_CHECK` so it validates the store-mirror invariant on **any real program** (user code + lazily-loaded libs), not just the stdlib round-trip tests.  Additive; nothing switches yet.  *(Scope note: this is the whole-`Data` oracle — the strongest mirror check.  Per-accessor `DefView` dual-backing is folded into M2/M5, where a subsystem actually reads from the store and the swap is verified store-vs-native.)* | `ir_roundtrip_check_stdlib_ok` (lib) + `ir_check_passes_on_real_program` (integration, struct+fn+for) | M — **done** |
 | **M1a** ✅ | `state/` `Definition` field-accessor seam (done). | suite green | — |
 | **M1b** | `generation/` `Definition` field-read seam. | suite green | S |
 | **M1c** | `parser/` + `compile.rs` `Definition` read-site seam (read sites only). | suite green | S–M |
