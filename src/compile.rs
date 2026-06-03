@@ -4,6 +4,8 @@
 #![allow(dead_code)]
 //! Fast interpreter for binary code.
 use crate::data::{Data, DefType, Type, Value};
+use crate::data_store::ValueType;
+use crate::ir_node::IrNode;
 use crate::keys::DbRef;
 use crate::log_config::LogConfig;
 use crate::native;
@@ -106,7 +108,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             continue;
         };
         let elem_tp = (**elem_tp).clone();
-        let values = extract_literal_values(&data.def(d_nr).code, data);
+        let values = extract_literal_values(IrNode::Native(&data.def(d_nr).code), data);
         if values.is_empty() {
             continue;
         }
@@ -186,38 +188,42 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
 /// Returns an empty Vec if the IR contains non-literal expressions.
 /// Public wrapper for reuse by native codegen's init-emission.
 pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<Value> {
-    extract_literal_values(code, data)
+    extract_literal_values(IrNode::Native(code), data)
 }
 
-fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
-    let Value::Block(block) = code else {
+fn extract_literal_values(code: IrNode, data: &Data) -> Vec<Value> {
+    if code.kind() != ValueType::Block {
         return vec![];
-    };
+    }
+    let block = code.as_block();
     let mut values = Vec::new();
     // Look for patterns: Call(OpSetInt/Float/Single/Text, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
     let set_text_nr = data.def_nr("OpSetText");
-    for op in &block.operators {
-        let Value::Call(fn_nr, args) = op else {
+    for op in block.operators().iter() {
+        if op.kind() != ValueType::Call {
             continue;
-        };
+        }
+        let fn_nr = op.call_to();
+        let args = op.call_args();
         if args.len() < 3 {
             continue;
         }
-        if *fn_nr == set_int_nr
-            || *fn_nr == set_float_nr
-            || *fn_nr == set_single_nr
-            || *fn_nr == set_text_nr
+        if fn_nr == set_int_nr
+            || fn_nr == set_float_nr
+            || fn_nr == set_single_nr
+            || fn_nr == set_text_nr
         {
-            match &args[2] {
-                v @ (Value::Int(_)
-                | Value::Float(_)
-                | Value::Single(_)
-                | Value::Long(_)
-                | Value::Text(_)) => {
-                    values.push(v.clone());
+            let v = args.get(2);
+            match v.kind() {
+                ValueType::Int
+                | ValueType::Float
+                | ValueType::Single
+                | ValueType::Long
+                | ValueType::Text => {
+                    values.push(v.to_owned_value());
                 }
                 _ => return vec![], // non-literal value — can't pre-build
             }
