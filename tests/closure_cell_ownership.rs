@@ -6,18 +6,18 @@
 //! record's cascade (`Stores::free_named`), NOT by the defining frame.
 //!
 //! Before the fix, `get_free_vars` emitted a defining-frame `OpFreeRef` on the
-//! cell and `parser/vectors.rs` bumped its ref-count (`OpIncRc`) so that, with
-//! rc ON, the frame free only decremented.  With the ref-count disabled
-//! (`RC_OFF=1`) the frame free ran for real at a factory's return, the next
-//! factory call reused the freed slot, and two coexisting closures aliased one
-//! store → use-after-free / wrong output (probes 02 / 09 / 12).
+//! cell and `parser/vectors.rs` bumped its ref-count (`OpIncRc`) so the frame
+//! free only decremented.  The ref-count has since been REMOVED entirely
+//! (plan-57 Phase C): `free_named` now frees unconditionally, so a captured cell
+//! whose frame-free was not suppressed would be freed for real at a factory's
+//! return, the next factory call would reuse the freed slot, and two coexisting
+//! closures would alias one store → use-after-free / wrong output (probes
+//! 02 / 09 / 12).
 //!
-//! The fix suppresses the captured-cell frame free and drops the `OpIncRc`, so
-//! the cascade is the sole owner.  These shapes are correct with rc ON
-//! regardless, so the regression runs them under **`RC_OFF=1`** — the rc-removal
-//! diagnostic mode Phase C will make the default — on BOTH backends and asserts
-//! correct output.  This is the deterministic guard for a Mechanism-B regression
-//! until Phase C deletes the ref-count and the normal suite covers it by default.
+//! The fix suppresses the captured-cell frame free, so the closure record's
+//! cascade is the sole owner.  With the ref-count gone, unconditional free is the
+//! DEFAULT — so these shapes run in default mode on BOTH backends and assert
+//! correct output: the deterministic guard for a Mechanism-B regression.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -46,7 +46,7 @@ fn main() {
 }
 "#,
     ),
-    // Probe 02: two factories, calls interleaved (crashed native under RC_OFF).
+    // Probe 02: two factories, calls interleaved (crashed native pre-fix).
     (
         "two_factory_interleaved",
         r#"
@@ -95,7 +95,6 @@ fn run(mode: &str, src: &std::path::Path) -> (bool, String) {
     let out = Command::new(loft_bin())
         .arg(mode)
         .arg(src)
-        .env("RC_OFF", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawn loft {mode}: {e}"));
     let combined = format!(
@@ -107,7 +106,7 @@ fn run(mode: &str, src: &std::path::Path) -> (bool, String) {
 }
 
 #[test]
-fn mechanism_b_coexisting_closures_rc_off() {
+fn mechanism_b_coexisting_closures() {
     let dir = std::env::temp_dir();
     for (label, prog) in CASES {
         let tmp = dir.join(format!("loft_closure_cell_{label}.loft"));
@@ -116,7 +115,7 @@ fn mechanism_b_coexisting_closures_rc_off() {
             let (ok, output) = run(mode, &tmp);
             assert!(
                 ok,
-                "Mechanism-B regression: case `{label}` failed under RC_OFF {mode}\n{output}"
+                "Mechanism-B regression: case `{label}` failed on {mode}\n{output}"
             );
         }
     }
