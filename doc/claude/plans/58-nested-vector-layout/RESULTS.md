@@ -122,6 +122,35 @@ Fix loop (apply at a resolution site → re-run matrix → measure):
 | 3 | `typedef.rs` inner-narrow | none — collapse is upstream (see below) |
 | 4 | `vectors.rs::new_record`: **hoist the @P380 handle-zero** to right after the element is created, covering EVERY construction path (literal/`Insert` + write + fn-return + copy), not just the copy branch | **+7, CLUSTER II CLOSED**: `04,05,20-single,30-single,41,45,51` SIGSEGV→PASS on **both** backends; no regressions.  Regression: `tests/scripts/183-nested-single-vector.loft` |
 
+### Cluster-I outer-handle stride (boolean + IV residual) — ROOT CONFIRMED, fix PENDING
+
+The remaining two failures share one root: a `vector<vector<T>>` element is a
+4-byte rec-id HANDLE, but both the **storage** stride (`record_new`,
+`structures.rs:41` → `vector_append(size(c))`) and the **read** stride
+(`fields.rs:680` → `database.size(type_elm)`) use the **inner scalar size**.
+Verified side-by-side (`OpNewRecord(vv, 64)`/`OpGetVector(vv, 1, …)` for boolean
+vs type `20`/stride `8` for integer): the two agree, so ≥4-byte inner scalars
+survive (handles don't overlap), but a 1-byte `boolean` strides handles 1 byte
+apart and the 4-byte handles **overlap** → empty/garbage/crash.  The IV
+comprehension residual is the same family: the construct path (deep-copy) strides
+differently than the read.
+
+**Three fix attempts, all reverted (each regressed working code) — the journal:**
+
+| attempt | change | result → why reverted |
+|---|---|---|
+| 1 | `vector_of` + read `known` via `db_type` (Parts::Vector) | **total regression** — flipped the read classification `is_base`→`is_linked`→`OpVectorRef` for ALL nested reads (int/float/struct/tuple/i32 → SIGSEGV).  The need is a STRIDE change, not a TYPE/classification change. |
+| 2 | IV comprehension: `OpSetInt4`-scalar → `@P380`-zero + `OpCopyRecord` | **panic fixed, value bug exposed** — `vv[1]=[]`, `vv[2]` reads `vv[1]` (off-by-one).  The deep-copy construct strides differently than the read (same cluster-I root). |
+| 3 | `max(stride,4)` clamp at BOTH `record_new` (storage) + `fields.rs` read | **boolean fixed (`107`,`20-bool`→PASS), `i16`/`u8` regressed** — the clamp desyncs the narrow-int inner path (storage clamp didn't fire on the narrow outer-append route, so read@4 vs store@2 → garbage inner reads). |
+
+**Conclusion:** the fix must align FOUR sites coherently — storage stride, read
+stride, read classification (keep the `OpGetField` deref, NOT `OpVectorRef`), and
+the narrow-int (`i16`/`u8`) append path — likely at the type-registration level
+(make a `vector<vector<T>>` element a proper 4-byte handle type whose storage and
+read both derive from the handle, leaving the inner scalar path untouched).  A
+local clamp cannot do this without desyncing one of the four.  Next-session work;
+the three attempts above bound the solution space.
+
 ### Cluster III-a — CLOSED (nested-literal narrow coercion)
 
 `parse_item` (`src/parser/vectors.rs:1797`) parsed each vector-literal element with
