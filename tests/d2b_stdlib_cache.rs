@@ -85,3 +85,43 @@ fn stdlib_cache_off_cold_warm_match() {
     let _ = std::fs::remove_file(&script);
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+/// @PLAN54 arc E — a corrupt / non-store bundle at the cache path must be a
+/// clean cache miss (graceful reparse), never a crash.
+#[test]
+fn corrupt_bundle_falls_back_to_parse() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_d2b_corrupt_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "fn main() {\n  x = 1 + 1;\n  print(\"ok={x}\\n\");\n}\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_d2b_corrupt_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    // Cold run writes a valid bundle.
+    let (ok, out) = run(&script, Some(&cache_dir));
+    assert!(ok, "cold run failed: {out}");
+    let store = std::fs::read_dir(cache_dir.join("loft"))
+        .expect("cache dir")
+        .flatten()
+        .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("store"))
+        .expect("bundle written")
+        .path();
+
+    // Overwrite the bundle with garbage (a partial / foreign file).
+    std::fs::write(&store, b"definitely not a valid loft store image").expect("corrupt");
+
+    // The next cache-on run must recover by reparsing — exit 0, correct output.
+    let (ok2, out2) = run(&script, Some(&cache_dir));
+    assert!(
+        ok2,
+        "corrupt-bundle run should recover by reparsing; got: {out2}"
+    );
+    assert!(out2.contains("ok=2"), "unexpected output: {out2}");
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}

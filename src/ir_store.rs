@@ -663,35 +663,43 @@ pub fn materialize_bundle(stores: &mut Stores, root: DbRef, data: &Data, schema:
 /// via [`crate::ir_read::open_bundle`].  Same fresh-store / well-known-root
 /// discipline as [`save_data`].
 ///
+/// Written **atomically** (@PLAN54 arc E): materialized into a `<path>.<pid>.tmp`
+/// file-backed store, then `rename`d onto `path`, so a process killed mid-write
+/// can never leave a half-written bundle at `path` for the next run to load.
+///
 /// # Errors
-/// Propagates a file-remove error other than "not found".
+/// Propagates a file-remove or `rename` error.
 ///
 /// # Panics
 /// If the materialized root does not land at [`ds::IR_ROOT_REC`].
 #[cfg(feature = "mmap")]
 pub fn save_bundle(data: &Data, schema: &[SchemaType], path: &str) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
+    let tmp = format!("{path}.{}.tmp", std::process::id());
+    match std::fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    let fstore = crate::store::Store::open(path);
-    let mut stores = Stores::new();
-    let nr = stores.adopt_store(fstore);
-    let rec = stores.allocations[nr as usize].claim(16);
-    assert_eq!(
-        rec,
-        ds::IR_ROOT_REC,
-        "bundle root must be the first record of a fresh store"
-    );
-    let root = DbRef {
-        store_nr: nr,
-        rec,
-        pos: ds::IR_ROOT_POS,
-    };
-    materialize_bundle(&mut stores, root, data, schema);
-    drop(stores);
-    Ok(())
+    {
+        let fstore = crate::store::Store::open(&tmp);
+        let mut stores = Stores::new();
+        let nr = stores.adopt_store(fstore);
+        let rec = stores.allocations[nr as usize].claim(16);
+        assert_eq!(
+            rec,
+            ds::IR_ROOT_REC,
+            "bundle root must be the first record of a fresh store"
+        );
+        let root = DbRef {
+            store_nr: nr,
+            rec,
+            pos: ds::IR_ROOT_POS,
+        };
+        materialize_bundle(&mut stores, root, data, schema);
+        // Drop `stores` → the file-backed Store unmaps + flushes `tmp` fully
+        // before the atomic rename publishes it at `path`.
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Write `v` into the already-allocated `slot` (its bytes are zeroed).

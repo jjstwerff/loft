@@ -426,10 +426,13 @@ pub fn open_data(path: &str) -> std::io::Result<Data> {
 /// Returns `NotFound` if `path` does not exist (a cache miss).
 #[cfg(feature = "mmap")]
 pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
-    if !std::path::Path::new(path).exists() {
+    // @PLAN54 arc E — reject a missing / non-store / truncated / corrupt bundle
+    // up front so a bad file is a clean cache miss (cold parse), not a panic
+    // inside `Store::open`'s signature assertion.
+    if !crate::store::Store::is_store_file(path) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("IR bundle not found: {path}"),
+            format!("IR bundle missing or not a valid store: {path}"),
         ));
     }
     let fstore = crate::store::Store::open(path);
