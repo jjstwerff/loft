@@ -35,9 +35,19 @@ files would.  The win is the *uniform* convention, not GitHub itself.
 - **Templates** — copy `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.yml`
   into each repo (dryopea, lavition, `loft-libs-*`).
 - **Title** — `[<area>] <one-line>`.  For any issue migrated from PROBLEMS.md,
-  keep the legacy `@P###` token in the title so the ~100 existing doc references
-  still resolve (`grep @P396` / `gh search issues "@P396"` finds it).  New issues:
-  no `@P` token — the gh number is the ref.
+  keep the legacy `@P###` token in the title so OLD doc references still grep
+  (`gh search issues "@P396"`).  The canonical way docs *reference* an issue is the
+  indexed `@GH###` token (below), not the bare gh number.
+- **Reference token: `@GH###`** (the indexed tracker) — docs reference a gh issue
+  as `@GH<number>` (e.g. `@GH247`), NOT bare `#247` / `loft#247`.  The `@`-prefix
+  makes it an INDEXED token exactly like `@P###` / `@PLAN###`: `scan.loft` finds
+  every reference + backlink **fully offline**, and `@GH247` maps to a
+  deterministic URL (`github.com/<repo>/issues/247`) with no `gh` call.  Token
+  families: `@P###` = legacy/closed (PROBLEMS.md archive), `@PLAN###` = plans,
+  `@GH###` = live issues.  Optional validation (does it exist / is it closed) is a
+  bolt-on `make index-gh` (`gh issue list --json number,state`), not a
+  prerequisite.  Cross-repo: bare `@GH###` = this repo; a qualified spelling for
+  other repos (`@GH:<repo>:<n>`) is TBD and the less-common case.
 - **Labels to create** (beyond GitHub's defaults `bug`/`enhancement`/…):
   - severity: `sev:high` / `sev:medium` / `sev:low`
   - area: `area:codegen` / `area:closures` / `area:store-lifetime` /
@@ -56,7 +66,8 @@ files would.  The win is the *uniform* convention, not GitHub itself.
 |---|---|---|
 | 1 | **Pilot** — file @P396/@P397 as Issues (#247/#246), drop from PROBLEMS.md | ✅ done |
 | 2 | Create the `sev:*` / `area:*` labels (loft repo) | ☐ on approval |
-| 3 | Migrate the remaining ~8 OPEN PROBLEMS.md rows → Issues (keep `@P` in title; link repro / probe / test) | ☐ |
+| 2.5 | **`@GH###` indexed tracker** — add `@GH` as a recognized prefix in `scan.loft` (reference-finding + backlinks + deterministic issue URL, all offline); broaden `idx broken` to not false-flag migrated `@P###`; optional `make index-gh` validation bolt-on.  **Before step 3** so references resolve as rows move. | ☐ |
+| 3 | Migrate the remaining ~8 OPEN PROBLEMS.md rows → Issues; reference them in docs as `@GH###` (keep `@P` in the issue title for old-ref grep; link repro / probe / test) | ☐ |
 | 4 | Freeze PROBLEMS.md — header it "closed/historical record"; FIXED rows stay; the `###` design entries graduate to docs or stay as reference | ☐ |
 | 5 | Flip the meta-doc rule: `_INVESTIGATION_TEMPLATE § Closing` + `plans/README § Edge-probe`/`§ Sibling bugs` — "file → PROBLEMS.md" → "file → GitHub Issue" | ☐ |
 | 6 | Retire / repoint USER_FACING.md (Issues are user-facing; the mirror is redundant) | ☐ |
