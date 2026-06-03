@@ -9,11 +9,11 @@ you start a plan.  **loft and libs plans are the reference implementation**:
 every other subject (moros, dryopea, the demos, lavition) builds its own plans to
 *match this shape* in its own repo, so one convention spans every org repo.
 
-A **plan** is a *proposal* (the unit of intentional change) that has grown a
-directory — its **active form**.  The same item is a lightweight `PLANNING.md`
-section while it's a backlog sketch; it earns an `@PLAN<NN>` number + this
-directory when it activates.  Type is `bug` vs `proposal`, never "plan vs
-enhancement" — see [`ISSUE_TRACKING.md` § Two kinds of item](../ISSUE_TRACKING.md).
+A **plan** is the unit of intentional change (what PEP calls a *proposal*) — at any
+maturity.  It is a lightweight `PLANNING.md` section while it's a backlog sketch; it
+earns an `@PLAN<NN>` number + this directory when it activates.  Type is `bug` vs
+`plan`, never "plan vs enhancement" — see
+[`ISSUE_TRACKING.md` § Two kinds of item](../ISSUE_TRACKING.md).
 
 Live exemplars to read alongside this:
 - loft — `48-integer-width-discipline` (active feature) · `57-vector-store-watermark` (investigation)
@@ -46,7 +46,7 @@ live on the board.
 # @PLAN<NN> — <one-line title>
 
 > **Subject:** <loft | libs | moros | dryopea | bumper-plane | audience | …>
-> **Type:** proposal <· investigation — if probe-driven>   ·   **Area:** <codegen | closures | store-lifetime | parser | native | wasm | stdlib | packages | …>
+> **Type:** plan <· investigation — if probe-driven>   ·   **Area:** <codegen | closures | store-lifetime | parser | native | wasm | stdlib | packages | …>
 > **Effort:** <XS|S|M|MH|H>   ·   **Value:** <Correctness | Enabling | Polish | Quality>
 > **Driven-by:** <the consumer that demanded this — the dogfood link; "—" if foundational>
 > **Depends-on:** <@PLANxx / @GHxx, or "—">

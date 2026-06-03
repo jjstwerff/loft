@@ -128,7 +128,7 @@ consumer/deliverable) as the primary axis — the multi-project answer a per-rep
 | Item type | Design home (files) | State home (gh Project) |
 |---|---|---|
 | **bug** | repro + probes + the regression test | the Issue + its fields |
-| **proposal** | grows with maturity: a `PLANNING.md` section (backlog) → a `plans/<NN>/` (loft) or `lib_plans/<NN>/` (libs) directory with phases (active) — see [`_PLAN_TEMPLATE`](plans/_PLAN_TEMPLATE.md) | a Project item |
+| **plan** | grows with maturity: a `PLANNING.md` section (backlog) → a `plans/<NN>/` (loft) or `lib_plans/<NN>/` (libs) directory with phases (active) — see [`_PLAN_TEMPLATE`](plans/_PLAN_TEMPLATE.md) | a Project item |
 
 Design in files; **state + sequencing + dependencies in one cross-org gh
 Project**.  loft + libs plans are the **blueprint exemplars**; other subjects
@@ -138,26 +138,28 @@ subject is the same drift in a new costume.
 
 #### Two kinds of item, not four — the PEP lesson
 
-PEP (Python's enhancement-proposal process) already settled this: a proposal is
-**the unit of intentional change**, and a one-paragraph proposal and a multi-phase
-one are the *same kind* — size only changes length.  loft's "plan" vs "enhancement"
-was never a real type split; it was **size + maturity wearing two hats** (ROADMAP's
-own "features needing *plan promotion*" is a maturity transition *within* one kind,
-not a conversion between kinds).  So the Type axis is just **`bug` vs `proposal`**:
+PEP (Python's enhancement-proposal process) already settled this: what PEP calls a
+*proposal* is **the unit of intentional change**, and a one-paragraph one and a
+multi-phase one are the *same kind* — size only changes length.  loft's "plan" vs
+"enhancement" was never a real type split; it was **size + maturity wearing two
+hats** (ROADMAP's own "features needing *plan promotion*" is a maturity transition
+*within* one kind, not a conversion between kinds).  loft's word for it is **plan**
+(matching `@PLAN` / `plans/` / `_PLAN_TEMPLATE`), so the Type axis is just **`bug`
+vs `plan`**:
 
 - a **bug** is a *fault report* (reactive — reality diverged from the spec);
-- a **proposal** is *intentional change* (proactive), whose **design home grows with
+- a **plan** is *intentional change* (proactive), whose **design home grows with
   maturity** — a `PLANNING.md` section while it's a backlog sketch, a `plans/<NN>/`
-  directory with phases once active.  "**plan**" is just the everyday word for a
-  proposal that has grown a directory.
+  directory with phases once active.  A "plan" is thus any maturity; Status tells
+  you which.
 
 Three things follow, the way PEP does them:
 
-- **One number space (lazily).**  A proposal carries one identity for life.  We do
-  *not* renumber dormant catalog items: a backlog proposal keeps its lightweight
+- **One number space (lazily).**  A plan carries one identity for life.  We do
+  *not* renumber dormant catalog items: a backlog plan keeps its lightweight
   `PLANNING.md` ID; **on activation it earns an `@PLAN<NN>` number + a directory.**
   Promotion stops being a rename — it's just "the same item grew a home."
-- **Identity on the board — the `@P###` trick, reused.**  Putting a proposal on the
+- **Identity on the board — the `@P###` trick, reused.**  Putting a plan on the
   board does **not** renumber it or rewrite a single reference.  Exactly as the bug
   migration did with `@P###`, the gh Issue's **title embeds `@PLAN<NN>`**
   (`[loft] @PLAN48 integer-width discipline`), so `gh search issues "@PLAN48"`
@@ -171,7 +173,7 @@ Three things follow, the way PEP does them:
   touch, or never.
 - **Status carries the terminal outcome**, because loft files each outcome
   *differently*: **shipped** (closure-record in the dir) · **declined** →
-  `DESIGN_DECISIONS.md` (loft's closed-by-decision register *is* a rejected-proposal
+  `DESIGN_DECISIONS.md` (loft's closed-by-decision register *is* a declined-plan
   archive) · **superseded** (link to the replacement) · **deferred / withdrawn**.  A
   flat "done" would erase the distinction the routing depends on.
 - **No Standards/Process/Informational "Kind" axis.**  PEP needs it; loft doesn't —
@@ -184,9 +186,9 @@ exists for a multi-stakeholder council; solo+agent needs only `backlog → activ
 shipped/declined`).
 
 **Investigation is not a board type.**  An investigation is a *file-level flavour*
-of a proposal — it additionally follows
+of a plan — it additionally follows
 [`_INVESTIGATION_TEMPLATE`](plans/_INVESTIGATION_TEMPLATE.md) for its clusters /
-probes.  gh sees `Type: proposal`; the "(investigation)" parenthetical lives in the
+probes.  gh sees `Type: plan`; the "(investigation)" parenthetical lives in the
 title + the README header.  Its specialness — it *produces* bugs — surfaces as
 **outgoing links** to the Issues it spawned, which is data, not a type.  (Same for
 "validation" / "feature" sub-kinds: title parenthetical + the Area field slice
@@ -202,15 +204,15 @@ the file already holds stay in the file.
 
 | Field | Shape | Applies to | Why it earns a slot |
 |---|---|---|---|
-| **Type** | select · bug / proposal | all | picks the lifecycle + the design home (a proposal's home grows `PLANNING.md` → directory with maturity) |
+| **Type** | select · bug / plan | all | picks the lifecycle + the design home (a plan's home grows `PLANNING.md` → directory with maturity) |
 | **Subject** | select · loft / libs / moros / dryopea / bumper-plane / audience / lavition / … | all | the **primary axis** — which consumer/deliverable |
 | **Status** | select · backlog / next / active / deferred / shipped / declined / superseded | all | the lifecycle **+ terminal outcome** (shipped · declined→`DESIGN_DECISIONS` · superseded) — the **single authority** replacing dir-location + the README tables |
 | **Area** | select · codegen / closures / store-lifetime / parser / native / wasm / stdlib / packages / … | all | subsystem; **unifies with the bug `area:*` labels** — one taxonomy for "all closure work" |
 | **Milestone** | select · 0.9.0 / 1.0.0 / 1.1+ / ‹game› | all | release bundling — the cross-repo "which release ships this" that drove the move |
 | **Depends-on** | linked items / @refs | all | the dependency **DAG** — ROADMAP's hand-drawn chains made real; powers a *derived* "blocked" view |
-| **Effort** | select · XS / S / M / MH / H | proposal | sizing, for sequencing |
-| **Value** | select · Correctness / Enabling / Polish / Quality | proposal | *why it matters / what kind*; doubles as coarse priority (board **order** refines) |
-| **Driven-by** | select · ‹subject› | proposal | the **dogfood link** — which consumer demanded this language/lib work |
+| **Effort** | select · XS / S / M / MH / H | plan | sizing, for sequencing |
+| **Value** | select · Correctness / Enabling / Polish / Quality | plan | *why it matters / what kind*; doubles as coarse priority (board **order** refines) |
+| **Driven-by** | select · ‹subject› | plan | the **dogfood link** — which consumer demanded this language/lib work |
 | **Trigger** | text | deferred items | what un-blocks / revives it (the concrete defer-trigger) |
 | **Severity** | select · high / medium / low | bug | how bad when hit (the existing `sev:`) |
 | **Workaround** | select · clean / partial / none | bug | the "can you keep moving?" signal (the existing `wa:`) |
