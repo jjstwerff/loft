@@ -6,6 +6,7 @@
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
 use crate::data::{Block, Type, Value};
+use crate::data_store::ValueType;
 use crate::ir_node::IrNode;
 use std::collections::HashSet;
 use std::io::Write;
@@ -19,30 +20,41 @@ use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
 /// it is mutably borrowed trips rustc E0503.  Mirrors `contains_op_database`'s
 /// traversal but also descends `Span`/`Drop`/`Return`/`Iter` and tests `Var` /
 /// `CallRef` leaves.
-fn value_refs_any(val: &Value, vars: &HashSet<u16>) -> bool {
-    match val {
-        Value::Var(nr) => vars.contains(nr),
-        Value::CallRef(nr, args) => {
-            vars.contains(nr) || args.iter().any(|arg| value_refs_any(arg, vars))
+fn value_refs_any(node: IrNode, vars: &HashSet<u16>) -> bool {
+    match node.kind() {
+        ValueType::Var => vars.contains(&node.var_nr()),
+        ValueType::CallRef => {
+            vars.contains(&node.callref_var())
+                || node
+                    .callref_args()
+                    .iter()
+                    .any(|arg| value_refs_any(arg, vars))
         }
-        Value::Call(_, args) | Value::Insert(args) => {
-            args.iter().any(|arg| value_refs_any(arg, vars))
+        ValueType::Call => node.call_args().iter().any(|arg| value_refs_any(arg, vars)),
+        ValueType::Insert => node
+            .insert_items()
+            .iter()
+            .any(|arg| value_refs_any(arg, vars)),
+        ValueType::Block => node
+            .as_block()
+            .operators()
+            .iter()
+            .any(|op| value_refs_any(op, vars)),
+        ValueType::Set => vars.contains(&node.set_var()) || value_refs_any(node.set_inner(), vars),
+        ValueType::If => {
+            value_refs_any(node.if_cond(), vars)
+                || value_refs_any(node.if_then(), vars)
+                || value_refs_any(node.if_else(), vars)
         }
-        Value::Block(bl) => bl.operators.iter().any(|op| value_refs_any(op, vars)),
-        Value::Set(nr, to) => vars.contains(nr) || value_refs_any(to, vars),
-        Value::If(test, then_v, else_v) => {
-            value_refs_any(test, vars)
-                || value_refs_any(then_v, vars)
-                || value_refs_any(else_v, vars)
+        ValueType::Drop => value_refs_any(node.drop_inner(), vars),
+        ValueType::Return => value_refs_any(node.return_inner(), vars),
+        ValueType::Iter => {
+            vars.contains(&node.iter_var())
+                || value_refs_any(node.iter_create(), vars)
+                || value_refs_any(node.iter_next(), vars)
+                || value_refs_any(node.iter_init(), vars)
         }
-        Value::Drop(inner) | Value::Return(inner) => value_refs_any(inner, vars),
-        Value::Iter(nr, start, end, body) => {
-            vars.contains(nr)
-                || value_refs_any(start, vars)
-                || value_refs_any(end, vars)
-                || value_refs_any(body, vars)
-        }
-        Value::Span(span) => value_refs_any(&span.1, vars),
+        ValueType::Span => value_refs_any(node.span_inner(), vars),
         _ => false,
     }
 }
@@ -479,7 +491,8 @@ impl Output<'_> {
                 let needs_pre = self.create_stack_var(arg).is_none()
                     && (matches!(arg, Value::Block(_) | Value::Insert(_))
                         || self.needs_pre_eval(arg)
-                        || (!borrowed.is_empty() && value_refs_any(arg, &borrowed)));
+                        || (!borrowed.is_empty()
+                            && value_refs_any(IrNode::Native(arg), &borrowed)));
                 if needs_pre {
                     let name = format!("_pre_{}", self.counter);
                     self.counter += 1;
@@ -504,7 +517,8 @@ impl Output<'_> {
                     let needs_pre = self.create_stack_var(arg).is_none()
                         && (matches!(arg, Value::Block(_) | Value::Insert(_))
                             || self.needs_pre_eval(arg)
-                            || (!borrowed.is_empty() && value_refs_any(arg, &borrowed)));
+                            || (!borrowed.is_empty()
+                                && value_refs_any(IrNode::Native(arg), &borrowed)));
                     if needs_pre {
                         let name = format!("_pre_{}", self.counter);
                         self.counter += 1;

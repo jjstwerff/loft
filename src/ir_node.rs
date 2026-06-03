@@ -445,6 +445,46 @@ impl<'a> IrNode<'a> {
         }
     }
 
+    /// `Iter` loop variable.
+    #[must_use]
+    pub fn iter_var(&self) -> u16 {
+        match *self {
+            IrNode::Native(Value::Iter(v, _, _, _)) => *v,
+            IrNode::Store(s, n) => n.field_int(s, ds::NDITER_VAR) as u16,
+            IrNode::Native(_) => kind_panic("iter_var", self),
+        }
+    }
+
+    /// `Iter` create expression.
+    #[must_use]
+    pub fn iter_create(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::Iter(_, c, _, _)) => IrNode::Native(c),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDITER_CREATE),
+            IrNode::Native(_) => kind_panic("iter_create", self),
+        }
+    }
+
+    /// `Iter` next expression.
+    #[must_use]
+    pub fn iter_next(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::Iter(_, _, n_, _)) => IrNode::Native(n_),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDITER_NEXT),
+            IrNode::Native(_) => kind_panic("iter_next", self),
+        }
+    }
+
+    /// `Iter` extra-init expression.
+    #[must_use]
+    pub fn iter_init(&self) -> IrNode<'a> {
+        match *self {
+            IrNode::Native(Value::Iter(_, _, _, i)) => IrNode::Native(i),
+            IrNode::Store(s, n) => store_child(s, n, ds::NDITER_INIT),
+            IrNode::Native(_) => kind_panic("iter_init", self),
+        }
+    }
+
     /// `Yield` inner expression.
     #[must_use]
     pub fn yield_inner(&self) -> IrNode<'a> {
@@ -862,6 +902,12 @@ mod tests {
             Value::Loop(Box::new(blk())),
             Value::TupleGet(2, 1),
             Value::TuplePut(3, 0, Box::new(Value::Int(9))),
+            Value::Iter(
+                4,
+                Box::new(Value::Int(1)),
+                Box::new(Value::Var(5)),
+                Box::new(Value::Null),
+            ),
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
@@ -925,6 +971,12 @@ mod tests {
                     assert_eq!(nat.parallel_arms().len(), sto.parallel_arms().len());
                 }
                 ValueType::FnRefDnr => assert_eq!(nat.fnref_dnr_var(), sto.fnref_dnr_var()),
+                ValueType::Iter => {
+                    assert_eq!(nat.iter_var(), sto.iter_var());
+                    assert_eq!(nat.iter_create().int_value(), sto.iter_create().int_value());
+                    assert_eq!(nat.iter_next().var_nr(), sto.iter_next().var_nr());
+                    assert_eq!(nat.iter_init().kind(), sto.iter_init().kind());
+                }
                 ValueType::Block | ValueType::Loop => {
                     let (nb, sb) = (nat.as_block(), sto.as_block());
                     assert_eq!(nb.operators().len(), sb.operators().len());

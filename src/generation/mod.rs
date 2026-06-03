@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
+use crate::data_store::ValueType;
 use crate::database::Stores;
-use crate::ir_node::IrBlock;
+use crate::ir_node::{IrBlock, IrNode};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 mod calls;
@@ -98,10 +99,12 @@ fn is_t_param_stub(name: &str) -> bool {
         .is_some_and(|c| c.is_ascii_uppercase())
 }
 
-fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
-    match val {
-        Value::Call(d, args) => {
-            calls.insert(*d);
+fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
+    match node.kind() {
+        ValueType::Call => {
+            let d = node.call_to();
+            let args = node.call_args();
+            calls.insert(d);
             // n_parallel_for / n_parallel_queue pass a worker function as
             // args[4]: an integer literal that the codegen emitter
             // (src/generation/ops/parallel.rs) resolves into a closure body
@@ -110,7 +113,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
             // closure refers to a fn that never gets emitted and rustc
             // fails with "cannot find function" (E0425).
             if matches!(
-                data.def(*d).name.as_str(),
+                data.def(d).name.as_str(),
                 "n_parallel_for"
                     | "n_parallel_for_light"
                     | "n_parallel_queue"
@@ -119,84 +122,91 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
                     | "n_parallel_queue_narrow"
                     | "n_parallel_queue_fn"
             ) && args.len() >= 5
-                && let Value::Int(fn_d_nr) = &args[4]
-                && *fn_d_nr >= 0
+                && args.get(4).kind() == ValueType::Int
+                && args.get(4).int_value() >= 0
             {
-                calls.insert((*fn_d_nr).cast_unsigned());
+                calls.insert(args.get(4).int_value() as u32);
             }
             // ARC.md A5b — par_fold uses a different arg layout than
             // the for/queue family: the worker fn d_nr is at args[2]
             // (after input + init).  Same reason for the insert: the
             // ParallelFoldEmitter generates `worker_name(cell, acc, row)`
             // and the worker must be in the reachable set.
-            if data.def(*d).name.as_str() == "n_parallel_fold"
+            if data.def(d).name.as_str() == "n_parallel_fold"
                 && args.len() >= 4
-                && let Value::Int(fn_d_nr) = &args[2]
-                && *fn_d_nr >= 0
+                && args.get(2).kind() == ValueType::Int
+                && args.get(2).int_value() >= 0
             {
-                calls.insert((*fn_d_nr).cast_unsigned());
+                calls.insert(args.get(2).int_value() as u32);
             }
-            for a in args {
+            for a in args.iter() {
                 collect_calls(a, data, calls);
             }
         }
-        Value::Block(bl) | Value::Loop(bl) => {
-            for op in &bl.operators {
+        ValueType::Block | ValueType::Loop => {
+            for op in node.as_block().operators().iter() {
                 collect_calls(op, data, calls);
             }
         }
-        Value::If(test, t, f) => {
-            collect_calls(test, data, calls);
-            collect_calls(t, data, calls);
-            collect_calls(f, data, calls);
+        ValueType::If => {
+            collect_calls(node.if_cond(), data, calls);
+            collect_calls(node.if_then(), data, calls);
+            collect_calls(node.if_else(), data, calls);
         }
-        Value::Set(_, v) | Value::Return(v) | Value::Drop(v) => collect_calls(v, data, calls),
-        Value::Insert(ops) => {
-            for op in ops {
+        ValueType::Set => collect_calls(node.set_inner(), data, calls),
+        ValueType::Return => collect_calls(node.return_inner(), data, calls),
+        ValueType::Drop => collect_calls(node.drop_inner(), data, calls),
+        ValueType::Insert => {
+            for op in node.insert_items().iter() {
                 collect_calls(op, data, calls);
             }
         }
-        Value::Iter(_, create, next, extra) => {
-            collect_calls(create, data, calls);
-            collect_calls(next, data, calls);
-            collect_calls(extra, data, calls);
+        ValueType::Iter => {
+            collect_calls(node.iter_create(), data, calls);
+            collect_calls(node.iter_next(), data, calls);
+            collect_calls(node.iter_init(), data, calls);
         }
         // N8b.1: walk into yield expressions so helper functions are included in the
         // reachable set and emitted before the coroutine state-machine struct.
-        Value::Yield(inner) => collect_calls(inner, data, calls),
-        Value::Span(b) => collect_calls(&b.1, data, calls),
+        ValueType::Yield => collect_calls(node.yield_inner(), data, calls),
+        ValueType::Span => collect_calls(node.span_inner(), data, calls),
         _ => {}
     }
 }
 
 /// Recursively collect all `Int` literals from a value tree that may represent
 /// fn-ref constants (e.g. inside `if`/`block` branches of a function-typed `Set`).
-fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
-    match val {
-        Value::Int(n) if *n >= 0 => {
-            calls.insert((*n).cast_unsigned());
+fn collect_int_fn_refs(node: IrNode, calls: &mut HashSet<u32>) {
+    match node.kind() {
+        ValueType::Int => {
+            let n = node.int_value();
+            if n >= 0 {
+                calls.insert(n as u32);
+            }
         }
         // FnRef(d_nr, clos_var, _) is used for closure fn-refs.
-        Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
-            calls.insert((*d_nr).cast_unsigned());
+        ValueType::FnRef => {
+            let d = node.fnref_dnr();
+            if d >= 0 {
+                calls.insert(d.cast_unsigned());
+            }
         }
-        Value::If(test, t, f) => {
-            collect_int_fn_refs(test, calls);
-            collect_int_fn_refs(t, calls);
-            collect_int_fn_refs(f, calls);
+        ValueType::If => {
+            collect_int_fn_refs(node.if_cond(), calls);
+            collect_int_fn_refs(node.if_then(), calls);
+            collect_int_fn_refs(node.if_else(), calls);
         }
-        Value::Block(bl) | Value::Loop(bl) => {
-            for op in &bl.operators {
+        ValueType::Block | ValueType::Loop => {
+            for op in node.as_block().operators().iter() {
                 collect_int_fn_refs(op, calls);
             }
         }
-        Value::Return(v) | Value::Drop(v) => collect_int_fn_refs(v, calls),
+        ValueType::Return => collect_int_fn_refs(node.return_inner(), calls),
+        ValueType::Drop => collect_int_fn_refs(node.drop_inner(), calls),
         // Span wraps most operators for parser diagnostics — recurse
         // through it so `Span(Int(d_nr))` fn-ref literals at call
-        // sites get added to the reachable set (without this, the
-        // CallRef match-arm dispatch is missing candidates and panics
-        // at runtime with `invalid fn-ref: <n>`).
-        Value::Span(b) => collect_int_fn_refs(&b.1, calls),
+        // sites get added to the reachable set.
+        ValueType::Span => collect_int_fn_refs(node.span_inner(), calls),
         _ => {}
     }
 }
@@ -219,7 +229,7 @@ fn collect_fn_ref_literals(
                 variables.tp(*var),
                 Type::Function(_, _, _) | Type::Routine(_)
             ) {
-                collect_int_fn_refs(inner, calls);
+                collect_int_fn_refs(IrNode::Native(inner), calls);
             }
             collect_fn_ref_literals(inner, data, variables, calls);
         }
@@ -255,7 +265,7 @@ fn collect_fn_ref_literals(
                         Type::Function(_, _, _) | Type::Routine(_)
                     )
                 {
-                    collect_int_fn_refs(a, calls);
+                    collect_int_fn_refs(IrNode::Native(a), calls);
                 }
                 collect_fn_ref_literals(a, data, variables, calls);
             }
@@ -293,7 +303,7 @@ fn collect_fn_ref_literals(
         // panics at runtime with `invalid fn-ref: <d_nr>`.  Same shape
         // as the @P299 fix for `OpSetInt4(field, pos, Int(d_nr))`;
         // over-approximation is correctness-safe.
-        Value::Yield(inner) => collect_int_fn_refs(inner, calls),
+        Value::Yield(inner) => collect_int_fn_refs(IrNode::Native(inner), calls),
         // Span wraps most operators for parser diagnostics — recurse so
         // Set / Call args that arrive as Span(...) still trigger the
         // fn-ref-literal walk.
@@ -315,7 +325,7 @@ pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
         }
         let def = data.def(d);
         let mut calls = HashSet::new();
-        collect_calls(&def.code, data, &mut calls);
+        collect_calls(IrNode::Native(&def.code), data, &mut calls);
         collect_fn_ref_literals(&def.code, data, &def.variables, &mut calls);
         for c in calls {
             if !reachable.contains(&c) {
