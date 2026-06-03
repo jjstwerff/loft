@@ -366,32 +366,24 @@ impl State {
                 self.code_add(v_pos);
                 return crate::data::I64.clone();
             }
+            // @PLAN54 G2/M3.4 — Span passthrough + the two never-reachable
+            // rewrite placeholders.
+            ValueType::Span => {
+                // Plan-07 phase 1 step 1.20 — record the entry pc → source
+                // position so phase 3's runtime-error printer can surface
+                // `at file:line:col`, then lower the wrapped inner node.
+                self.source_spans.insert(self.code_pos, node.span_pos());
+                return self.generate_inner(node.span_inner().as_native(), stack, top);
+            }
+            ValueType::Iter => panic!("Should have rewritten {val:?}"),
+            ValueType::ParFor => panic!(
+                "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
+            ),
             _ => {}
         }
         match val {
             Value::Loop(lp) => self.gen_loop(lp, stack),
             Value::Block(bl) => self.generate_block(stack, bl, top),
-            Value::Iter(_, _, _, _) => {
-                panic!("Should have rewritten {val:?}");
-            }
-            // Plan-07 phase 1 step 1.20 — record the entry pc → source
-            // position before generating the wrapped inner.  Phase 3's
-            // runtime-error printer reads `state.source_spans` to surface
-            // `at file:line:col` for div-by-zero, OOB, null deref, panic.
-            Value::Span(b) => {
-                self.source_spans.insert(self.code_pos, b.0.clone());
-                self.generate_inner(&b.1, stack, top)
-            }
-            // Plan-06 spine step 3 — codegen for ParFor lands in step 3b.
-            // The variant lands here only as a structural placeholder so
-            // walker arms compile.  Until step 3b emits the OpStaticCall
-            // to `n_parallel_discard` (or equivalent for other Stitch
-            // policies), reaching this arm at runtime is a codegen bug.
-            Value::ParFor(_) => {
-                panic!(
-                    "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
-                );
-            }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef
@@ -616,10 +608,11 @@ impl State {
                     "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
                 )
             }
-            // @PLAN54 G2/M3.1–M3.3 — these kinds are handled by the
-            // `match node.kind()` above, which `return`s before reaching here;
-            // they can never arrive.  The list shrinks toward empty as later
-            // groups move their arms up to the `kind()` dispatch.
+            // @PLAN54 G2/M3.1–M3.4 — these kinds are handled by the
+            // `match node.kind()` above, which `return`s (or panics) before
+            // reaching here; they can never arrive.  The list shrinks toward
+            // empty as later groups move their arms up to the `kind()` dispatch
+            // (remaining in `match val`: Block, Loop, TupleGet, TuplePut, FnRef).
             Value::Int(_)
             | Value::Long(_)
             | Value::Single(_)
@@ -644,8 +637,11 @@ impl State {
             | Value::CallRef(_, _)
             | Value::Tuple(_)
             | Value::Parallel(_)
-            | Value::FnRefDnr(_) => {
-                unreachable!("M3.1–M3.3-converted kind reached legacy match: {val:?}")
+            | Value::FnRefDnr(_)
+            | Value::Span(_)
+            | Value::Iter(_, _, _, _)
+            | Value::ParFor(_) => {
+                unreachable!("M3.1–M3.4-converted kind reached legacy match: {val:?}")
             }
         }
     }

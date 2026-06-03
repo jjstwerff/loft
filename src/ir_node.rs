@@ -78,6 +78,7 @@ use crate::data_store::{
     self as ds, Record, TypeKind, Value as Node, ValueType, ValuesVector, type_kind,
 };
 use crate::database::Stores;
+use crate::lexer::Position;
 
 /// A backing-agnostic handle to one IR node — either a borrow of the native
 /// [`Value`] graph or a store [`Node`] record read through baked offsets.  See
@@ -445,11 +446,26 @@ impl<'a> IrNode<'a> {
     }
 
     /// The `Value` wrapped by a `Span` node (one level).
-    fn span_inner(&self) -> IrNode<'a> {
+    #[must_use]
+    pub fn span_inner(&self) -> IrNode<'a> {
         match *self {
             IrNode::Native(Value::Span(b)) => IrNode::Native(&b.1),
             IrNode::Store(s, n) => store_child(s, n, ds::NDSPAN_INNER),
             IrNode::Native(_) => kind_panic("span_inner", self),
+        }
+    }
+
+    /// The source [`Position`] of a `Span` node (owned — clones the file name).
+    #[must_use]
+    pub fn span_pos(&self) -> Position {
+        match *self {
+            IrNode::Native(Value::Span(b)) => b.0.clone(),
+            IrNode::Store(s, n) => Position {
+                file: n.field_str(s, ds::SPAN_POS_FILE).to_string(),
+                line: n.field_int(s, ds::SPAN_POS_LINE) as u32,
+                pos: n.field_int(s, ds::SPAN_POS_POS) as u32,
+            },
+            IrNode::Native(_) => kind_panic("span_pos", self),
         }
     }
 }
@@ -777,8 +793,10 @@ mod tests {
                     assert_eq!(nat.if_else().kind(), sto.if_else().kind());
                 }
                 ValueType::Span => {
-                    // The wrapper itself is the node — unspan must agree across
-                    // backings and reach the same inner leaf.
+                    // The wrapper itself is the node — position, one-level inner,
+                    // and unspan must all agree across backings.
+                    assert_eq!(nat.span_pos(), sto.span_pos());
+                    assert_eq!(nat.span_inner().kind(), sto.span_inner().kind());
                     assert_eq!(nat.unspan().kind(), sto.unspan().kind());
                     assert_eq!(nat.unspan().int_value(), sto.unspan().int_value());
                 }
