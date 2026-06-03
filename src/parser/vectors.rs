@@ -1975,6 +1975,25 @@ impl Parser {
         } else {
             None
         };
+        // #246: `vv[i] += [...]` — `is_field` is true (the LHS is an indexed
+        // access) but the parent is a VECTOR, not a struct, so there is no
+        // struct/field to locate.  `parse_part`'s `[` branch now records the
+        // indexed container's type as `parent_tp`, so a `Type::Vector` parent is
+        // the signal — covering both `vv[0]` and `h.vv[0]` (a vector element
+        // reached through a struct field, where `parent_tp` would otherwise be
+        // the stale struct from the preceding `.field`).  Append directly to the
+        // inner vector that `val`'s read yields (`ps[0]`), with `fld = u16::MAX`,
+        // mirroring the plain-local path — instead of routing through
+        // `new_record_field_op` (struct-only, which mis-locates a field).
+        let vector_elem_target: Option<Value> = if is_field
+            && matches!(parent_tp, Type::Vector(_, _))
+            && let Value::Call(_, ps) = val.unspan()
+            && !ps.is_empty()
+        {
+            Some(ps[0].clone())
+        } else {
+            None
+        };
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -1993,7 +2012,10 @@ impl Parser {
                 continue;
             }
             let fld = Value::Int(i32::from(u16::MAX));
-            let app_v = if is_field {
+            let app_v = if let Some(target) = &vector_elem_target {
+                // #246: append directly to the inner vector (the indexed read).
+                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
+            } else if is_field {
                 self.new_record_field_op(val, parent_tp, "OpNewRecord")
             } else {
                 self.cl(
@@ -2133,7 +2155,13 @@ impl Parser {
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
-            let finish = if is_field {
+            let finish = if let Some(target) = &vector_elem_target {
+                // #246: finish the direct append into the inner vector.
+                self.cl(
+                    "OpFinishRecord",
+                    &[target.clone(), Value::Var(elm), known, fld],
+                )
+            } else if is_field {
                 let mut finish_v = self.new_record_field_op(val, parent_tp, "OpFinishRecord");
                 // Replace placeholder Var(0) with the actual elm variable.
                 if let Value::Call(_, ref mut args) = finish_v

@@ -792,6 +792,13 @@ impl Parser {
                 }
             } else if self.lexer.has_token("[") {
                 wrap_chain = true;
+                // #246: record the indexed container's type as the parent,
+                // mirroring the `.` field branch above.  Without this, a
+                // trailing index (`vv[0]`, or `h.vv[0]` after a `.field`) leaves
+                // `parent_tp` either null or stale-from-the-`.`, so a compound
+                // append to a vector element can't tell it is appending to a
+                // VECTOR (not a struct field).
+                *parent_tp = t.clone();
                 t = self.parse_index(code, &t);
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
