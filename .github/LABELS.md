@@ -77,6 +77,12 @@ it.  Apply at most one; remove it once the blocker clears.
 > decision cited).  A bug can carry both `attention` **and** `design` (stuck
 > **and** needs a design call).
 
+## Lifecycle (where the fix is, not what kind of bug)
+
+| Label | Meaning | Apply / clear |
+|---|---|---|
+| `fixed-pending-merge` | The fix has landed on a **long-lived working branch** but is **not yet in `main`** (the release branch).  The issue stays **open** so the tracker doesn't claim "fixed" while released code still has the bug — but it is **not a pick-up**: no agent work remains, only the merge.  The fixing commit's `Fixes #NNN` line **auto-closes it on merge to `main`**, in one clean transition (no manual close → reopen → close ping-pong). | Apply after pushing the fix (with a comment naming the commit + regression test).  Never close such an issue by hand; let the merge close it.  See [ISSUE_TRACKING.md § Issue lifecycle](../doc/claude/ISSUE_TRACKING.md). |
+
 > **Multi-repo:** `sev:`/`wa:`/cross-cutting are shared across the loft-family
 > repos (loft / dryopea / lavition / `loft-lang/*`).  `area:` is loft-specific;
 > each game/engine repo defines its own `area:` set in its own `LABELS.md`.
