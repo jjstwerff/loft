@@ -213,8 +213,7 @@ impl Output<'_> {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
-                    let elem_is_text =
-                        matches!(self.infer_type(e.as_native()), Some(Type::Text(_)));
+                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
                     self.output_code_node(w, e)?;
                     // Wrap a text-returning element with `.to_string()` so it
                     // fits a `String`-typed tuple slot (skip a Text literal — its
@@ -804,33 +803,34 @@ impl Output<'_> {
     /// Use this to emit an `if/else` expression. Handles whether branches are bare
     /// blocks (no extra braces needed) or single expressions (braces required).
     /// Infer the result type of an expression for generating typed null defaults.
-    pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
-        match v {
-            // P243 fix (2026-05-11): unwrap `Value::Span` so callers
-            // querying the wrapped expression's type get the inner
-            // value's type instead of `None`.  Without this, a
-            // bound-method call wrapped in `Span(Call(...))` (e.g.
-            // the bound-generic `x.to_text()` site that
-            // `parser/operators.rs` Span-wraps for source-position
-            // tracking) returned `None` from infer_type — and the
-            // tuple-emit arm's `.to_string()` wrap (which keys off
-            // `Some(Type::Text(_))`) silently skipped, producing a
-            // `(Str, String)` tuple that rustc rejected with E0308.
-            Value::Span(b) => self.infer_type(&b.1),
-            Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
-            Value::Long(_) => Some(crate::data::I64.clone()),
-            Value::Float(_) => Some(Type::Float),
-            Value::Single(_) => Some(Type::Single),
-            Value::Boolean(_) => Some(Type::Boolean),
-            Value::Text(_) => Some(Type::Text(Vec::new())),
-            Value::Enum(_, tp) => Some(Type::Enum(u32::from(*tp), false, Vec::new())),
-            Value::Var(nr) => Some(self.data.def(self.def_nr).variables.tp(*nr).clone()),
-            Value::Call(d, _) => {
-                let ret = &self.data.def(*d).returned;
+    pub(super) fn infer_type(&self, node: IrNode) -> Option<Type> {
+        match node.kind() {
+            // P243 — see through `Span` so callers querying a wrapped
+            // expression's type get the inner value's type, not `None`.
+            ValueType::Span => self.infer_type(node.span_inner()),
+            ValueType::Int => Some(Type::Integer(IntegerSpec::signed32())),
+            ValueType::Long => Some(crate::data::I64.clone()),
+            ValueType::Float => Some(Type::Float),
+            ValueType::Single => Some(Type::Single),
+            ValueType::Boolean => Some(Type::Boolean),
+            ValueType::Text => Some(Type::Text(Vec::new())),
+            ValueType::Enum => Some(Type::Enum(u32::from(node.enum_pair().1), false, Vec::new())),
+            ValueType::Var => Some(
+                self.data
+                    .def(self.def_nr)
+                    .variables
+                    .tp(node.var_nr())
+                    .clone(),
+            ),
+            ValueType::Call => {
+                let ret = &self.data.def(node.call_to()).returned;
                 (*ret != Type::Void).then(|| ret.clone())
             }
-            Value::Block(bl) => (bl.result != Type::Void).then(|| bl.result.clone()),
-            Value::If(_, t, _) => self.infer_type(t),
+            ValueType::Block => {
+                let r = node.as_block().result();
+                (r != Type::Void).then_some(r)
+            }
+            ValueType::If => self.infer_type(node.if_then()),
             _ => None,
         }
     }
@@ -895,7 +895,7 @@ impl Output<'_> {
     /// 23 / 36 / 40 / 41 / 50.
     fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io::Result<()> {
         let heap_dbref = matches!(
-            self.infer_type(test),
+            self.infer_type(IrNode::Native(test)),
             Some(
                 Type::Reference(_, _)
                     | Type::Vector(_, _)
@@ -950,7 +950,7 @@ impl Output<'_> {
         let text_unify = !b_true
             && !b_false
             && !matches!(false_v, Value::Null)
-            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // @P386: a text-result if-expression where any branch is a Block
         // containing the `__ncc_*` skip_free pattern produces an OWNED
         // `String` for that branch (via the `_ret.to_string()` block-tail
@@ -966,7 +966,7 @@ impl Output<'_> {
         let text_string_unify = !text_unify
             && (matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
                 || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
-            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
         // braces for if-arms regardless of inner expression form, so even if
@@ -1008,7 +1008,7 @@ impl Output<'_> {
         // When the else branch is Null and the true branch returns a value,
         // emit a typed null sentinel instead of () to match the true branch type.
         if matches!(false_v, Value::Null)
-            && let Some(tp) = self.infer_type(true_v)
+            && let Some(tp) = self.infer_type(IrNode::Native(true_v))
         {
             Self::write_typed_null(w, &tp)?;
         } else {

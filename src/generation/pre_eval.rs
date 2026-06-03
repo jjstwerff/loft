@@ -6,6 +6,7 @@
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
 use crate::data::{Block, Type, Value};
+use crate::ir_node::IrNode;
 use std::collections::HashSet;
 use std::io::Write;
 
@@ -634,7 +635,7 @@ impl Output<'_> {
         // that wraps the expression with `as i64`; the match_code (used for substitution)
         // is left unchanged so string replacement in the outer code still works.
         let bind_code = if !substituted.is_empty() && substituted != "()" {
-            if let Some(tp) = self.infer_type(arg) {
+            if let Some(tp) = self.infer_type(IrNode::Native(arg)) {
                 if narrow_int_cast(&tp).is_some() {
                     format!("({substituted}) as i64")
                 } else if matches!(tp, Type::Text(_))
@@ -900,7 +901,7 @@ impl Output<'_> {
         let text_unify = !b_true
             && !b_false
             && !matches!(false_v, Value::Null)
-            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // Condition: apply substitution (this is exactly what the pre-evals are for).
         self.output_code_with_subst(w, test, pre_evals)?;
         if b_true {
@@ -934,7 +935,7 @@ impl Output<'_> {
         }
         self.indent += u32::from(!b_false);
         if matches!(false_v, Value::Null)
-            && let Some(tp) = self.infer_type(true_v)
+            && let Some(tp) = self.infer_type(IrNode::Native(true_v))
         {
             Self::write_typed_null(w, &tp)?;
         } else if b_false {
