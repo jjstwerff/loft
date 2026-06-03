@@ -87,13 +87,18 @@ non-coexisting closure shapes survive `RC_OFF`.
   **COMPLETE** (`efdf8a1c`+): suppress the captured-cell defining-frame free + drop
   `OpIncRc`; the closure-record cascade is sole owner.  02/09/12/13 pass `RC_OFF` both
   backends; regression `tests/closure_cell_ownership.rs`.
-- **Phase C** — delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc`; verify both backends.
-  Phase B removed the only **closure-capture** rc user (the load-bearing one), but other
-  `ref_count` readers remain and must be retargeted to non-rc flags first: the const/global
-  pin `ref_count = u32::MAX/2` (compile.rs / generation/mod.rs — replace with a `pinned`
-  flag), the file-handle close gate `ref_count <= 1` (io.rs / codegen_runtime.rs — retarget
-  to a single-owner check), and the parallel-worker / alloc-init `ref_count = 1` resets
-  (trivial once the field is gone).  `OpIncRc` now has **no emitter** (dead op + runtime).
+- **Phase C** — delete `ref_count` / `OpIncRc` / `inc_rc` / `dec_rc`.  **COMPLETE**
+  (`5745a2c2` part 1 + `80208ab1` part 2).  The Stores ref-count is GONE.
+  - **part 1** — retarget the only behavioral rc reader (the const/global PIN, which a
+    code-only agent proved load-bearing via a UAF) to a `Store.pinned` flag; make
+    `free_named` unconditional; drop the file-close `ref_count <= 1` conjunct.  Regression
+    `tests/scripts/175-const-pin-no-free.loft`.
+  - **part 2** — delete the `ref_count` field + `inc_rc`/`dec_rc` + the `OpIncRc` op
+    (loft decl + regenerated `fill.rs` + native emitter + runtime helper).  No on-disk /
+    ABI change (`ref_count` was in-memory only; one shared `Store` struct).
+  - Verified: full interpreter suite green; native 6/6 + cache 5/5 in isolation;
+    closure_matrix 24 + closure_cell_ownership + const-pin green both backends.
+  - The `RC_OFF` env experiment is retired (free is now always unconditional).
 
 Off the rc path: the closure ↔ collection limitation (06/08) in
 [`../closure-collection/`](../closure-collection/) — its own home, re-home to a closure /
