@@ -21,8 +21,15 @@ workstream; `make ci` green before the move.
 
 These are **sibling discoveries** (a different subsystem from the store-watermark
 thesis), so per the plan's own policy ([§ sibling bugs are discoveries](../../README.md))
-they are filed as P-issues — exactly as @P394/@P395 already were.  The cluster
-I/II/III findings are NOT filed (they stay in the cluster catalogue).
+they are filed as P-issues — exactly as @P394/@P395 already were.
+
+The no-file rule for *thesis* findings is scoped to the **active** phase; **on
+closure it inverts** — every cluster finding still OPEN gets a forward home now,
+because the cluster catalogue becomes a `finished/` record, not a live tracker.
+So **Cluster III Route 2 is also filed at close** (see B.4) — the only difference
+from a sibling bug is the home: it's a benign tradeoff, so QUALITY.md `## Open
+work` (not a PROBLEMS.md bug row).  The FIXED clusters (I-a, I-b, II) need no
+filing — their fixes + tests are the record.
 
 **B.0 — re-verify each crash still reproduces on current HEAD** (rc removal +
 reclaim-default may have incidentally fixed one).  Run the probe; only file what
@@ -33,6 +40,7 @@ still crashes.  If one is now fixed, record it as fixed in the corpus instead.
 | B.1 | **Returning a tuple that contains a vector crashes** | `probes/bugs/` Bug 1 | `store.rs:1374` | position-independent; literal AND built-mutably; both backends — check |
 | B.2 | **Storing a capturing closure into a collection crashes** (the un-handled inverse of `P257`) | `probes/closure-collection/02_closure_into_collection.loft` | `store.rs:1385` | non-capturing closures + named fn-refs in a vector work; workaround = bind the element |
 | B.3 | **`vv[0] += [2]` (nested-vec element-compound-assign) hits a codegen assertion** | parallel battery residual (`probes/bugs/` note) | `data.rs:3036` | fires OUTSIDE `parallel {}` too — a standalone codegen bug |
+| B.4 | **Cluster III Route 2** (thesis residual, benign) | `probes/cluster-I/` + `cluster-III-…md` | `scopes.rs` (inert `confine_reassign_safe`/`multi_store`) | filed at close to **QUALITY.md `## Open work`** (benign watermark tradeoff, not a PROBLEMS.md bug); the inert foundation is the head-start for a future fixer |
 
 For each still-reproducing bug: minimal reproducer + expected/observed per backend,
 severity tier, workaround, and a pointer to the probe as the repro landmark in
@@ -87,9 +95,10 @@ Net: coverage is essentially complete; the only required code change is **A.1**.
   section to the new model: **single-ownership free at scope end + closure-record
   cascade owns captured cells + `Store.pinned` for const/global; no ref-count.**
 - **C.7 `QUALITY.md`** — add a `## Open work` pointer for **Cluster III Route 2**
-  (the one benign residual + the inert `scopes.rs` foundation).  This is the
-  forward tracker INSTEAD of a PROBLEMS.md row (it's a thesis residual, not a
-  sibling bug — honours "no P-issues from investigation-plan findings").
+  (B.4).  QUALITY.md rather than a PROBLEMS.md bug row because it's a **benign
+  watermark tradeoff**, not a correctness defect — NOT because of any no-file rule
+  (that rule is active-phase only; on closure all open findings get filed — here
+  the right home is just QUALITY.md, not PROBLEMS.md).
 - **C.8 `GOALS.md` Goal E** — note that rc removal advanced Goal E (the
   programmer's model is the truth; no hidden counter decides lifetimes) and
   update its Check/status.
