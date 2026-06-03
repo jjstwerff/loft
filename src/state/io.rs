@@ -671,13 +671,12 @@ impl State {
             self.free_coroutine(db.rec as usize);
             return;
         }
-        // Reference counting: only close file handles and free when this is the
-        // last reference (rc will drop to 0 inside free_named).
+        // Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file
+        // handle whenever its File store is freed (free_named frees unconditionally).
         #[cfg(not(feature = "wasm"))]
         if db.store_nr != u16::MAX
             && (db.store_nr as usize) < self.database.allocations.len()
             && !self.database.allocations[db.store_nr as usize].free
-            && self.database.allocations[db.store_nr as usize].ref_count <= 1
             && db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")
         {

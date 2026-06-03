@@ -299,10 +299,10 @@ pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
     if (db.store_nr as usize) >= stores.allocations.len() {
         return;
     }
-    // Reference counting: only close file handles when this is the last ref.
+    // Plan-57 Phase C: single-ownership (ref-count removed) — close the file
+    // handle whenever its File store is freed.
     #[cfg(not(feature = "wasm"))]
     if !stores.allocations[db.store_nr as usize].free
-        && stores.allocations[db.store_nr as usize].ref_count <= 1
         && db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
     {

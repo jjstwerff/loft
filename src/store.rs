@@ -170,6 +170,10 @@ pub struct Store {
     /// Reference count: number of live DbRefs pointing into this store.
     /// Starts at 1 on allocation; `dec_rc` only frees when it drops to 0.
     pub ref_count: u32,
+    /// Plan-57 Phase C: const/global stores are PINNED — `free_named` never
+    /// frees them (they live for the whole program).  Replaces the
+    /// `ref_count = u32::MAX/2` sentinel as the ref-count is removed.
+    pub pinned: bool,
     /// Plan-22 02d-vii follow-up — identifier of the call site that
     /// most recently locked this store.  Empty when the store is
     /// unlocked or was locked without an origin (legacy callers).
@@ -303,6 +307,7 @@ impl Store {
             generation: 0,
             tag: 0,
             ref_count: 0,
+            pinned: false,
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
@@ -369,6 +374,7 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: 0,
+            pinned: false,
             lock_origin: String::new(),
             known_type: u16::MAX,
             durable_meta_path: None,
@@ -861,6 +867,7 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "clone_locked".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
@@ -892,6 +899,7 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "clone_locked_for_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
@@ -924,6 +932,7 @@ impl Store {
             created_at: 0,
             last_op_at: 0,
             ref_count: self.ref_count,
+            pinned: self.pinned,
             lock_origin: "borrow_locked_for_light_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,

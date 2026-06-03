@@ -122,6 +122,7 @@ impl Stores {
         );
         store.free = false;
         store.ref_count = 1;
+        store.pinned = false;
         store.created_at = 0;
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
@@ -181,23 +182,16 @@ impl Stores {
         if store.free {
             return; // Already freed — no-op (replaces Issue #120 tolerance hack).
         }
-        // Reference counting: decrement and only free when rc drops to 0.
-        // RC_OFF (plan-57 experiment): force the free path — treat every store as
-        // single-owner.  Tests whether rc gates the cluster-I block-exit free, and
-        // doubles as the rc-removal probe (what breaks reveals rc's real users,
-        // chiefly closure capture).
-        let rc_off = std::env::var("RC_OFF").is_ok();
-        if store.ref_count > 1 && !rc_off {
-            store.ref_count -= 1;
-            if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
-                let label = if name.is_empty() { "" } else { name };
-                eprintln!(
-                    "[store]   dec_rc #{al} {label:>12} | rc={}",
-                    store.ref_count
-                );
-            }
+        // Plan-57 Phase C: const/global stores are PINNED — never freed (they
+        // live for the whole program).  This replaces the `ref_count = u32::MAX/2`
+        // sentinel + the `ref_count > 1` guard below as the ref-count is removed.
+        if store.pinned {
             return;
         }
+        // Plan-57 Phase C: the Stores ref-count is removed.  Every non-pinned
+        // store is single-owner (closure-captured cells are owned by the closure
+        // record's cascade, not rc — see Phase B), so `free_named` always frees.
+        // (Pinned const/global stores returned above.)
         // P259 commit 4: cascade-free closure-record DbRef attributes.
         // When the store being freed holds a `__closure_*` record,
         // each Parts::DbRef field references a captured cell whose rc
@@ -433,8 +427,8 @@ impl Stores {
         // Clear any stale lock before reinitialising — OpDatabase may
         // reinitialise a store that was previously locked by a const
         // parameter in a prior function call within the same loop iteration.
-        // never unlock a constant store (ref_count >= u32::MAX / 2).
-        if store.ref_count < u32::MAX / 2 {
+        // never unlock a PINNED (const/global) store.
+        if !store.pinned {
             store.unlock();
         }
         store.init();
@@ -1614,6 +1608,7 @@ impl Stores {
                 s.free,
                 s.created_at,
                 s.last_op_at,
+                s.pinned,
             )
         };
 
@@ -1656,6 +1651,7 @@ impl Stores {
         new_store.free = preserved.2;
         new_store.created_at = preserved.3;
         new_store.last_op_at = preserved.4;
+        new_store.pinned = preserved.5;
 
         self.allocations[slot_idx] = new_store;
         true
