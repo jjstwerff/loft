@@ -60,27 +60,32 @@ impl Output<'_> {
             ValueType::Float => return write!(w, "{}_f64", node.float_value()),
             ValueType::Single => return write!(w, "{}_f32", node.single_value()),
             ValueType::Null => return write!(w, "()"),
+            // @PLAN54 G2/M4.2 — scalar arms (no Value child).
+            ValueType::Line => {
+                // P198 / DX-source-map: a `// loft:<file>:<line>` comment so
+                // rustc errors trace back to the loft source line.
+                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                return writeln!(w, "// loft:{file}:{}", node.line_nr());
+            }
+            ValueType::Break => {
+                let n = node.break_nr();
+                if n == 0 || self.loop_stack.is_empty() {
+                    return write!(w, "break");
+                }
+                let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
+                return write!(w, "break 'l{}", self.loop_stack[idx]);
+            }
+            ValueType::Continue => {
+                let n = node.continue_nr();
+                if n == 0 || self.loop_stack.is_empty() {
+                    return write!(w, "continue");
+                }
+                let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
+                return write!(w, "continue 'l{}", self.loop_stack[idx]);
+            }
             _ => {}
         }
         match code {
-            // P198 / DX-source-map: emit a `// loft:<file>:<line>`
-            // comment so rustc errors on generated Rust code can be
-            // traced back to the originating loft source line.  The
-            // comment is on its own line, ahead of the next emitted
-            // statement.  File is implicit (per-function) so the
-            // comment uses the current def's source path.
-            Value::Line(line) => {
-                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
-                writeln!(w, "// loft:{file}:{line}")?;
-            }
-            Value::Break(n) => {
-                if *n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "break")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
-                    write!(w, "break 'l{}", self.loop_stack[idx])?;
-                }
-            }
             Value::BreakWith(n, val) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break ")?;
@@ -89,14 +94,6 @@ impl Output<'_> {
                     write!(w, "break 'l{} ", self.loop_stack[idx])?;
                 }
                 self.output_code_inner(w, val)?;
-            }
-            Value::Continue(n) => {
-                if *n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "continue")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
-                    write!(w, "continue 'l{}", self.loop_stack[idx])?;
-                }
             }
             Value::Drop(v) => self.output_code_inner(w, v)?,
             Value::Insert(ops) => {
@@ -493,7 +490,7 @@ impl Output<'_> {
                     "/* par_for(...) — native codegen lands in spine step 3b */"
                 )?;
             }
-            // @PLAN54 G2/M4.1 — the leaf kinds are handled by the
+            // @PLAN54 G2/M4.1–M4.2 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here.
             Value::RawExpr(_)
             | Value::Text(_)
@@ -503,7 +500,12 @@ impl Output<'_> {
             | Value::Boolean(_)
             | Value::Float(_)
             | Value::Single(_)
-            | Value::Null => unreachable!("M4.1-converted leaf reached legacy match: {code:?}"),
+            | Value::Null
+            | Value::Line(_)
+            | Value::Break(_)
+            | Value::Continue(_) => {
+                unreachable!("M4.1/M4.2-converted leaf reached legacy match: {code:?}")
+            }
         }
         Ok(())
     }
