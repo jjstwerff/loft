@@ -2090,6 +2090,21 @@ extern crate loft;"
             // but the function signature may still declare a non-void return type.
             // Rust requires an explicit return value in that case, so emit a null default.
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
+            // @PLAN54 G2/M5 — optional store-backed body emission.  With
+            // LOFT_CODEGEN_STORE set, materialise this body into a store and
+            // emit it through IrBlock::Store; output_block reads the body from
+            // the store (materialising at its boundary) — the generated Rust
+            // must be identical to the native path.  Default off → IrBlock::Native.
+            let store_holder;
+            let body: IrBlock = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+                let mut stores = Stores::new();
+                let root = crate::data_store::ValuesVector::new(stores.database(16));
+                crate::ir_store::materialize_node(&mut stores, root, &def.code);
+                store_holder = stores;
+                IrBlock::Store(&store_holder, root.get(0, &store_holder))
+            } else {
+                IrBlock::Native(bl)
+            };
             if block_empty && def.returned != Type::Void {
                 writeln!(w, "{{")?;
                 writeln!(
@@ -2111,7 +2126,7 @@ extern crate loft;"
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));
-                self.output_block(w, IrBlock::Native(bl), returns_text)?;
+                self.output_block(w, body, returns_text)?;
                 self.call_stack_prefix = None;
             } else {
                 // Non-instrumented user-fn (e.g. `t_…` methods) — still
@@ -2119,7 +2134,7 @@ extern crate loft;"
                 // parameter for templates / inner calls.
                 self.call_stack_prefix =
                     Some("  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string());
-                self.output_block(w, IrBlock::Native(bl), returns_text)?;
+                self.output_block(w, body, returns_text)?;
                 self.call_stack_prefix = None;
             }
         } else if def.code == Value::Null {
