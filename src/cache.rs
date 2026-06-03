@@ -165,7 +165,8 @@ pub fn collect_stdlib_sources(default_dir: &str) -> Vec<(String, String)> {
     out
 }
 
-/// The on-disk path for the stdlib snapshot keyed by `key`.
+/// The on-disk path for the stdlib bundle keyed by `key` (@PLAN54 D2b — the
+/// store-format `.store` bundle written by `ir_store::save_bundle`).
 ///
 /// Uses `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`), falling back to
 /// the system temp dir if neither is set.  The filename embeds the full
@@ -183,7 +184,7 @@ pub fn stdlib_cache_path(key: &[u8; 32]) -> std::path::PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
         .unwrap_or_else(std::env::temp_dir)
         .join("loft");
-    base.join(format!("stdlib-{hex}.json"))
+    base.join(format!("stdlib-{hex}.store"))
 }
 
 #[cfg(test)]
@@ -313,9 +314,9 @@ mod tests {
         assert_eq!(p1, stdlib_cache_path(&k1), "same key → same path");
         assert_ne!(p1, stdlib_cache_path(&k2), "different key → different path");
         let name = p1.file_name().unwrap().to_string_lossy();
-        assert!(name.starts_with("stdlib-") && name.ends_with(".json"));
+        assert!(name.starts_with("stdlib-") && name.ends_with(".store"));
         assert!(
-            name.len() == "stdlib-".len() + 64 + ".json".len(),
+            name.len() == "stdlib-".len() + 64 + ".store".len(),
             "filename embeds 64-hex key"
         );
     }

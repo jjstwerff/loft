@@ -449,6 +449,20 @@ pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
     Ok((data, schema))
 }
 
+/// Load a bundle (see [`open_bundle`]) and install its database type schema
+/// into `database`, returning the native `Data`.  The `pub` entry point the
+/// startup cache (`main.rs`, @PLAN54 D2b) uses, since `Stores::install_schema`
+/// is `pub(crate)` and the binary crate cannot call it directly.
+///
+/// # Errors
+/// Returns `NotFound` if `path` does not exist (a cache miss).
+#[cfg(feature = "mmap")]
+pub fn open_bundle_into(path: &str, database: &mut Stores) -> std::io::Result<Data> {
+    let (data, types) = open_bundle(path)?;
+    database.install_schema(types);
+    Ok(data)
+}
+
 /// Rebuild one native [`Definition`] from a store `Definition` record.
 ///
 /// `attr_names` is re-derived from the restored attribute list (a derived

@@ -4086,18 +4086,28 @@ fn main() {
     // Step 0 (startup-cache plan): env-gated parse timing (LOFT_TIMING).
     let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
-    if let Err(e) = p.parse_dir(&default_dir.to_string_lossy(), true, false) {
-        eprintln!(
-            "loft: cannot load standard library from `{}`: {e}",
-            default_dir.display()
-        );
-        eprintln!(
-            "  the `default/` library directory was not found under the \
-             compiler path.\n  Pass `--path <dir>` pointing at the directory \
-             that contains `default/`,\n  or run `loft` from an installed \
-             location where the stdlib is bundled."
-        );
-        std::process::exit(1);
+    let default_str = default_dir.to_string_lossy().to_string();
+    // @PLAN54 D2b — opt-in stdlib startup cache (`LOFT_STDLIB_CACHE`; default
+    // off).  A warm run mmaps the precompiled stdlib bundle (Data + database
+    // type schema) instead of parsing `default/`; a cold run parses then saves
+    // it.  When the env var is unset both calls are no-ops and behaviour is
+    // unchanged.
+    let warm = loft::startup_cache::warm_load_stdlib(&mut p, &default_str);
+    if !warm {
+        if let Err(e) = p.parse_dir(&default_str, true, false) {
+            eprintln!(
+                "loft: cannot load standard library from `{}`: {e}",
+                default_dir.display()
+            );
+            eprintln!(
+                "  the `default/` library directory was not found under the \
+                 compiler path.\n  Pass `--path <dir>` pointing at the directory \
+                 that contains `default/`,\n  or run `loft` from an installed \
+                 location where the stdlib is bundled."
+            );
+            std::process::exit(1);
+        }
+        loft::startup_cache::save_stdlib_cache(&p, &default_str);
     }
     let start_def = p.data.definitions();
     if std::env::var("LOFT_TIMING").is_ok() {
