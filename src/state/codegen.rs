@@ -822,8 +822,7 @@ impl State {
         // get all variables of the current scope.
         // @PLAN53 cluster 2 / S4: the value occupies a stepped eval span;
         // the OpFreeStack discard + the position pop must both be stepped.
-        // (`size_code` still needs the native node — a bridge M5 lifts.)
-        let size = stack.step(stack.size_code(node.as_native()));
+        let size = stack.step(stack.size_code(node));
         if size > 0 {
             stack.add_op("OpFreeStack", self);
             self.code_add(0u8);
