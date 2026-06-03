@@ -402,7 +402,11 @@ pub(crate) const DBTYPE_KEYS: u32 = 24; // vector<Key>
 pub(crate) const DBTYPE_FIELD_GROUPS: u32 = 28; // vector<LinkedFieldGroup>
 pub(crate) const DBTYPE_COMPLEX: u32 = 32;
 pub(crate) const DBTYPE_LINKED: u32 = 33;
-// `Bundle { data, types }` store-root consts land with step 4 (save/open wiring).
+
+/// `Bundle { data: Data, types: vector<DbType> }` — the saved-bundle store root
+/// (D2a step 4): `Data` inlined at offset 0, the schema vector at `BUNDLE_TYPES`.
+pub(crate) const BUNDLE_DATA: u32 = 0;
+pub(crate) const BUNDLE_TYPES: u32 = 12;
 
 /// The bit mask loft uses for a stored `boolean` field (`generation` emits
 /// `get_boolean(rec, off, 1)`).
@@ -1511,5 +1515,10 @@ mod tests {
         assert_eq!(pos(ids.db_type, "field_groups"), DBTYPE_FIELD_GROUPS);
         assert_eq!(pos(ids.db_type, "complex"), DBTYPE_COMPLEX);
         assert_eq!(pos(ids.db_type, "linked"), DBTYPE_LINKED);
+
+        // Bundle root (Data inlined at 0 + the schema vector).
+        assert_eq!(u32::from(stores.size(ids.bundle)), 16);
+        assert_eq!(pos(ids.bundle, "data"), BUNDLE_DATA);
+        assert_eq!(pos(ids.bundle, "types"), BUNDLE_TYPES);
     }
 }

@@ -643,6 +643,57 @@ pub fn save_data(data: &Data, path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Materialize a whole **bundle** — the IR `data` plus its database type
+/// `schema` (`Stores.types`) — into a caller-provided `Bundle` root record
+/// (@PLAN54 D2a step 4).  `Data` is inlined at `BUNDLE_DATA` (offset 0, so the
+/// `Data` writer's offsets land correctly); the schema vector goes at
+/// `BUNDLE_TYPES`.  The 16-byte zero in `materialize_data_at` also clears the
+/// schema vector's header.
+pub fn materialize_bundle(stores: &mut Stores, root: DbRef, data: &Data, schema: &[SchemaType]) {
+    let data_root = DbRef {
+        pos: root.pos + ds::BUNDLE_DATA,
+        ..root
+    };
+    materialize_data_at(stores, data_root, data);
+    materialize_schema(stores, &Record::new(root), ds::BUNDLE_TYPES, schema);
+}
+
+/// Serialize a bundle (`data` + database type `schema`) to a file-backed store
+/// at `path` (@PLAN54 D2a step 4) — the cacheable artifact a warm startup loads
+/// via [`crate::ir_read::open_bundle`].  Same fresh-store / well-known-root
+/// discipline as [`save_data`].
+///
+/// # Errors
+/// Propagates a file-remove error other than "not found".
+///
+/// # Panics
+/// If the materialized root does not land at [`ds::IR_ROOT_REC`].
+#[cfg(feature = "mmap")]
+pub fn save_bundle(data: &Data, schema: &[SchemaType], path: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let fstore = crate::store::Store::open(path);
+    let mut stores = Stores::new();
+    let nr = stores.adopt_store(fstore);
+    let rec = stores.allocations[nr as usize].claim(16);
+    assert_eq!(
+        rec,
+        ds::IR_ROOT_REC,
+        "bundle root must be the first record of a fresh store"
+    );
+    let root = DbRef {
+        store_nr: nr,
+        rec,
+        pos: ds::IR_ROOT_POS,
+    };
+    materialize_bundle(&mut stores, root, data, schema);
+    drop(stores);
+    Ok(())
+}
+
 /// Write `v` into the already-allocated `slot` (its bytes are zeroed).
 fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
     match v {

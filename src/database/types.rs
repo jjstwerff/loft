@@ -34,6 +34,23 @@ fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
 }
 
 impl Stores {
+    /// @PLAN54 D2a — install a store-loaded type schema (`Vec<Type>` from
+    /// [`crate::ir_read::read_schema`]) into this `Stores`, replacing whatever
+    /// was there.  Rebuilds the `name → known_type` lookup from each type's
+    /// name (correct for a non-colliding schema such as the core stdlib; P379
+    /// library-qualified names would need the names map stored separately).
+    /// The derived `parents` back-references stay empty — only parse-time layout
+    /// validation + debug display read them, neither of which runs on the load
+    /// path.
+    pub(crate) fn install_schema(&mut self, types: Vec<Type>) {
+        self.names = types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.name.clone(), i as u16))
+            .collect();
+        self.types = types;
+    }
+
     /**
     To define the 7 base types of the language.
     */

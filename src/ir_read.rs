@@ -416,6 +416,39 @@ pub fn open_data(path: &str) -> std::io::Result<Data> {
     Ok(read_data(&stores, root))
 }
 
+/// Load a whole **bundle** written by [`crate::ir_store::save_bundle`] (@PLAN54
+/// D2a step 4): mmap the file and rebuild both the native [`Data`] and its
+/// database type `schema` (`Vec<database::Type>`) — so a warm startup gets a
+/// `Data` *and* a valid type schema with no re-parse.  Install the schema into
+/// a `Stores` via [`crate::database::Stores::install_schema`].
+///
+/// # Errors
+/// Returns `NotFound` if `path` does not exist (a cache miss).
+#[cfg(feature = "mmap")]
+pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
+    if !std::path::Path::new(path).exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("IR bundle not found: {path}"),
+        ));
+    }
+    let fstore = crate::store::Store::open(path);
+    let mut stores = Stores::new();
+    let nr = stores.adopt_store(fstore);
+    let root = DbRef {
+        store_nr: nr,
+        rec: ds::IR_ROOT_REC,
+        pos: ds::IR_ROOT_POS,
+    };
+    let data_root = DbRef {
+        pos: root.pos + ds::BUNDLE_DATA,
+        ..root
+    };
+    let data = read_data(&stores, data_root);
+    let schema = read_schema(&stores, Record::new(root), ds::BUNDLE_TYPES);
+    Ok((data, schema))
+}
+
 /// Rebuild one native [`Definition`] from a store `Definition` record.
 ///
 /// `attr_names` is re-derived from the restored attribute list (a derived
@@ -1266,5 +1299,54 @@ mod tests {
             t.clear_parents();
         }
         assert_eq!(loaded, cold, "database type schema round-trip mismatch");
+    }
+
+    /// @PLAN54 D2a step 5 (capstone) — the warm-load bundle round-trip: save the
+    /// real stdlib's `Data` **and** its database type schema to one file via
+    /// `save_bundle`, load both back via `open_bundle` (mmap, no re-parse), and
+    /// assert: (1) `compare_data` bit-for-bit on the `Data`, (2) the schema
+    /// equals the fresh parse's (parents cleared), and (3) installing the loaded
+    /// schema into a `Stores` repopulates `types` + `names`.  This is the load
+    /// half of the @PLAN28 schema-rebuild wall, resolved by caching the schema.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn bundle_save_open_round_trips_stdlib() {
+        use crate::ir_schema::compare_data;
+        use crate::ir_store::save_bundle;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false)
+            .expect("parse default/ stdlib");
+
+        let path = std::env::temp_dir().join(format!("loft_bundle_{}.store", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        save_bundle(&p.data, &p.database.types, path_str).expect("save_bundle");
+
+        let (loaded_data, loaded_types) = open_bundle(path_str).expect("open_bundle");
+        let _ = std::fs::remove_file(&path);
+
+        // (1) Data round-trips bit-for-bit.
+        if let Err(diff) = compare_data(&p.data, &loaded_data) {
+            panic!("bundle Data diverged from fresh parse: {diff:?}");
+        }
+        // (2) Schema round-trips (parents are derived, cleared on both sides).
+        assert_eq!(loaded_types.len(), p.database.types.len(), "type count");
+        let mut cold = p.database.types.clone();
+        for t in &mut cold {
+            t.clear_parents();
+        }
+        assert_eq!(
+            loaded_types, cold,
+            "bundle schema diverged from fresh parse"
+        );
+        // (3) The loaded schema installs into a fresh Stores.
+        let mut s = Stores::new();
+        s.install_schema(loaded_types);
+        assert_eq!(
+            s.types.len(),
+            p.database.types.len(),
+            "installed type count"
+        );
+        assert!(s.has_type("text"), "base type 'text' present after install");
     }
 }
