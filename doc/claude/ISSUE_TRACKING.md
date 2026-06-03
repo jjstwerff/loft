@@ -116,6 +116,123 @@ ROADMAP.md / PLANNING.md (or a `plans/` slot if multi-phase); a `gh` Project boa
 tracks "which release bundles which consumer-driven work" across the org repos.
 The Issue is the lightweight capture; the plan/roadmap is the design + sequencing.
 
+## Beyond bugs — the unified model (plans · lib-plans · enhancements)
+
+**Initial design (2026-06) — draft.**  Bugs were the pilot; the same split
+generalises to **every** work item, with one addition: **Subject** (the
+consumer/deliverable) as the primary axis — the multi-project answer a per-repo
+`ROADMAP.md` structurally can't give.
+
+### The split, generalised
+
+| Item type | Design home (files) | State home (gh Project) |
+|---|---|---|
+| **bug** | repro + probes + the regression test | the Issue + its fields |
+| **proposal** | grows with maturity: a `PLANNING.md` section (backlog) → a `plans/<NN>/` (loft) or `lib_plans/<NN>/` (libs) directory with phases (active) — see [`_PLAN_TEMPLATE`](plans/_PLAN_TEMPLATE.md) | a Project item |
+
+Design in files; **state + sequencing + dependencies in one cross-org gh
+Project**.  loft + libs plans are the **blueprint exemplars**; other subjects
+replicate the `_PLAN_TEMPLATE` shape in their own repos.  Thin subjects (moros,
+the demos) stay **unpadded** — a board that invents placeholder plans for an empty
+subject is the same drift in a new costume.
+
+#### Two kinds of item, not four — the PEP lesson
+
+PEP (Python's enhancement-proposal process) already settled this: a proposal is
+**the unit of intentional change**, and a one-paragraph proposal and a multi-phase
+one are the *same kind* — size only changes length.  loft's "plan" vs "enhancement"
+was never a real type split; it was **size + maturity wearing two hats** (ROADMAP's
+own "features needing *plan promotion*" is a maturity transition *within* one kind,
+not a conversion between kinds).  So the Type axis is just **`bug` vs `proposal`**:
+
+- a **bug** is a *fault report* (reactive — reality diverged from the spec);
+- a **proposal** is *intentional change* (proactive), whose **design home grows with
+  maturity** — a `PLANNING.md` section while it's a backlog sketch, a `plans/<NN>/`
+  directory with phases once active.  "**plan**" is just the everyday word for a
+  proposal that has grown a directory.
+
+Three things follow, the way PEP does them:
+
+- **One number space (lazily).**  A proposal carries one identity for life.  We do
+  *not* renumber dormant catalog items: a backlog proposal keeps its lightweight
+  `PLANNING.md` ID; **on activation it earns an `@PLAN<NN>` number + a directory.**
+  Promotion stops being a rename — it's just "the same item grew a home."
+- **Status carries the terminal outcome**, because loft files each outcome
+  *differently*: **shipped** (closure-record in the dir) · **declined** →
+  `DESIGN_DECISIONS.md` (loft's closed-by-decision register *is* a rejected-proposal
+  archive) · **superseded** (link to the replacement) · **deferred / withdrawn**.  A
+  flat "done" would erase the distinction the routing depends on.
+- **No Standards/Process/Informational "Kind" axis.**  PEP needs it; loft doesn't —
+  it already routes Process (DEVELOPMENT.md) and Informational (DESIGN_DECISIONS.md,
+  the reference docs) *out* of `plans/` by filing location.  Importing the axis
+  would be cosplay.
+
+What loft does **not** take from PEP: the Draft→Accepted acceptance ceremony (that
+exists for a multi-stakeholder council; solo+agent needs only `backlog → active →
+shipped/declined`).
+
+**Investigation is not a board type.**  An investigation is a *file-level flavour*
+of a proposal — it additionally follows
+[`_INVESTIGATION_TEMPLATE`](plans/_INVESTIGATION_TEMPLATE.md) for its clusters /
+probes.  gh sees `Type: proposal`; the "(investigation)" parenthetical lives in the
+title + the README header.  Its specialness — it *produces* bugs — surfaces as
+**outgoing links** to the Issues it spawned, which is data, not a type.  (Same for
+"validation" / "feature" sub-kinds: title parenthetical + the Area field slice
+them; none earns a structured board value.)
+
+### What's good to track — the field schema
+
+**Track a field iff** it is (1) **state** or a **relationship** (changes over
+time, or links items), (2) something you **triage / sequence / group** by, (3)
+**not derivable** from the file or another field, and (4) meaningful **across** the
+board.  Design content, write-once-never-filtered facts, and second copies of what
+the file already holds stay in the file.
+
+| Field | Shape | Applies to | Why it earns a slot |
+|---|---|---|---|
+| **Type** | select · bug / proposal | all | picks the lifecycle + the design home (a proposal's home grows `PLANNING.md` → directory with maturity) |
+| **Subject** | select · loft / libs / moros / dryopea / bumper-plane / audience / lavition / … | all | the **primary axis** — which consumer/deliverable |
+| **Status** | select · backlog / next / active / deferred / shipped / declined / superseded | all | the lifecycle **+ terminal outcome** (shipped · declined→`DESIGN_DECISIONS` · superseded) — the **single authority** replacing dir-location + the README tables |
+| **Area** | select · codegen / closures / store-lifetime / parser / native / wasm / stdlib / packages / … | all | subsystem; **unifies with the bug `area:*` labels** — one taxonomy for "all closure work" |
+| **Milestone** | select · 0.9.0 / 1.0.0 / 1.1+ / ‹game› | all | release bundling — the cross-repo "which release ships this" that drove the move |
+| **Depends-on** | linked items / @refs | all | the dependency **DAG** — ROADMAP's hand-drawn chains made real; powers a *derived* "blocked" view |
+| **Effort** | select · XS / S / M / MH / H | proposal | sizing, for sequencing |
+| **Value** | select · Correctness / Enabling / Polish / Quality | proposal | *why it matters / what kind*; doubles as coarse priority (board **order** refines) |
+| **Driven-by** | select · ‹subject› | proposal | the **dogfood link** — which consumer demanded this language/lib work |
+| **Trigger** | text | deferred items | what un-blocks / revives it (the concrete defer-trigger) |
+| **Severity** | select · high / medium / low | bug | how bad when hit (the existing `sev:`) |
+| **Workaround** | select · clean / partial / none | bug | the "can you keep moving?" signal (the existing `wa:`) |
+| **Repo** | select · loft / loft-libs-* / moros / dryopea / lavition | all (optional) | cross-org ownership + click-through (often implied by Subject) |
+| **Owner** | assignee | all (optional) | who's on it — low value solo, grows with contributors |
+
+**Deliberately NOT on the board** (lives in files, or derived):
+
+- **Per-phase status** → the plan README is the source of truth (ROADMAP already
+  says "read the plan README directly").  Mirroring phases is a guaranteed-drift trap.
+- **Numeric priority (P0–P3)** → use the board **order**; a number drifts against
+  the order it is meant to encode.
+- **"Blocked" boolean** → **derived** (Depends-on has an open item), not hand-set.
+- **Design / probes / repro / dates** → the dir + git (gh stamps created/updated
+  automatically — enough to power a "stale" view).
+
+#### Driven-by — the field the dogfood loop earns
+
+loft's whole development model is *build a consumer → harvest the language lesson →
+fix the language*.  **Driven-by** makes that loop **queryable**: "show every loft
+plan dryopea is waiting on", "if we cut bumper-plane, which language work loses its
+justification", "what lessons did moros harvest into 1.0".  It is distinct from
+Depends-on (a *blocking* edge) — Driven-by is a *motivation* edge: the consumer
+that would notice if this work vanished.  Without it, the consumer→language
+dependency the whole project runs on is invisible to the tracker.
+
+#### Open calibration — Value granularity
+
+The draft collapses ROADMAP's eight bands (**S/R/G/F/U/C/Q/N**) to four:
+**Correctness** (S + R), **Enabling** (G + F), **Polish** (U + C), **Quality**
+(Q); **N**iche becomes "low board order", not a band.  Four sorts cleanly and
+still answers *must-fix / unlock / nicety / refactor*; the finer eight remains
+available.  **Decision point — keep four or the eight.**
+
 > **Transition note.** "PROBLEMS.md" / "P-issue row" references elsewhere in the
 > docs (plans/README, DEVELOPMENT.md, …) are repointed to GitHub Issues as they're
 > touched.  PROBLEMS.md is frozen to OPEN bugs — it's the closed/historical archive.
