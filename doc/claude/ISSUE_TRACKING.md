@@ -125,12 +125,12 @@ The Issue is the lightweight capture; the plan/roadmap is the design + sequencin
 | Step | Action | Status |
 |---|---|---|
 | 1 | **Pilot** — file @P396/@P397 as Issues (#247/#246), drop from PROBLEMS.md | ✅ done |
-| 2 | Create the `sev:*` / `area:*` labels (loft repo) | ☐ on approval |
-| 2.5 | **`@GH###` indexed tracker** — add `@GH` as a recognized prefix in `scan.loft` (reference-finding + backlinks + deterministic issue URL, all offline); broaden `idx broken` to not false-flag migrated `@P###`; optional `make index-gh` validation bolt-on.  **Before step 3** so references resolve as rows move. | ☐ |
-| 3 | Migrate the remaining ~8 OPEN PROBLEMS.md rows → Issues; reference them in docs as `@GH###` (keep `@P` in the issue title for old-ref grep; link repro / probe / test) | ☐ |
-| 4 | Freeze PROBLEMS.md — header it "closed/historical record"; FIXED rows stay; the `###` design entries graduate to docs or stay as reference | ☐ |
-| 5 | Flip the meta-doc rule: `_INVESTIGATION_TEMPLATE § Closing` + `plans/README § Edge-probe`/`§ Sibling bugs` — "file → PROBLEMS.md" → "file → GitHub Issue" | ☐ |
-| 6 | Retire / repoint USER_FACING.md (Issues are user-facing; the mirror is redundant) | ☐ |
+| 2 | Create the `sev:*` / `area:*` / `wa:*` / cross-cutting labels | ✅ done (17: sev:/area:/wa:/regression/flaky/blocked-by/hit-by:) |
+| 2.5 | **`@GH###` indexed tracker** — add `@GH` as a recognized prefix in `scan.loft` (reference-finding + backlinks + deterministic issue URL, all offline); broaden `idx broken` to not false-flag migrated `@P###`; optional `make index-gh` validation bolt-on. | ☐ **REMAINING** (the one code task; until then `idx broken` may flag the 7 migrated `@P###`) |
+| 3 | Migrate the OPEN PROBLEMS.md rows → Issues | ✅ done — @P391→#248, @P389→#249, @P384→#250, @P351→#251, @P340→#252 (+ pilots #246/#247) |
+| 4 | Freeze PROBLEMS.md — closed/historical record; FIXED rows + `###` design entries stay | ✅ done — freeze header + `@P→#` map; 0 open rows left |
+| 5 | Flip the meta-doc filing rule "→ PROBLEMS.md" → "→ GitHub Issue" | ✅ done — CLAUDE.md (bug-filing + doc index + reading-by-goal), `_INVESTIGATION_TEMPLATE § Closing`, `plans/README § workflows` |
+| 6 | Retire / repoint USER_FACING.md (Issues are user-facing; the mirror is redundant) | ☐ remaining |
 | 7 | Apply the template + labels in dryopea / lavition / `loft-libs-*` as each needs bug-filing | ☐ ongoing |
 
 ## Agent note
