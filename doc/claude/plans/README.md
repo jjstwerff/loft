@@ -84,6 +84,13 @@ blinds you downstream and can make broken things look fine (a `--native`
 precondition for verifying the model holds anywhere — see
 [GOALS.md § Bugs are veils](../GOALS.md#bugs-are-veils--clearing-them-is-a-precondition-for-goal-e-not-a-sibling).
 
+**Inside an investigation plan this stops being the lightweight default and
+becomes a hard RULE — and it adds a code-only investigation-agent step** (the
+bugs there are hard by definition: multi-subsystem, non-obvious fix surface).
+The sequence is **probe → code-only investigation agent → fix → verify against
+the probe corpus**, never an ad-hoc fix from a first read.  Full rule:
+[`_INVESTIGATION_TEMPLATE.md § Fixing a finding`](_INVESTIGATION_TEMPLATE.md#fixing-a-finding--probe--agent-before-code-required).
+
 ### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
 
 Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —

@@ -125,6 +125,16 @@ Findings discovered during the investigation are **fixed in-plan**
 and recorded in the cluster catalogue — **not** filed as separate
 PROBLEMS.md P-issues (the plan's probes + cluster docs already
 document them; a P-issue would double-document the same shape).
+
+**This no-file rule is scoped to the ACTIVE phase.  On closure it
+INVERTS** — every finding still OPEN (a deferred / benign residual,
+or a sibling not yet fixed) IS filed then, because the cluster
+catalogue becomes a `finished/` closure RECORD, not a live tracker,
+so an open finding needs a forward home: **PROBLEMS.md** for a bug,
+**QUALITY.md `## Open work`** for a benign tradeoff — each citing the
+now-`finished/` cluster doc as the repro landmark.  See
+[§ Closing an investigation plan](#closing-an-investigation-plan-required).
+
 Spin off as a separate P-issue / mini-plan ONLY when one of:
 
 1. **Truly an edge case users won't hit** — e.g., parser refusal on
@@ -276,6 +286,52 @@ The closing check at the bottom: all sets (except explicitly-
 out-of-scope Z entries) PASS on every backend + project CI green
 + canary suite green.  Required when sequencing > 2 steps.
 
+## Fixing a finding — probe + agent BEFORE code (REQUIRED)
+
+An investigation plan exists **because its bugs are hard** —
+complex-variant, multi-subsystem, with a non-obvious fix surface.
+So a fix is **earned by a rigorous method, never written ad-hoc
+from a first read of the code.**  The willingness to "just fix" an
+encountered bug mid-investigation is the anti-pattern this rule
+exists to stop.  For every non-trivial finding the sequence is:
+
+1. **Probe the real shape first** (the edge-probe default —
+   [plans/README § Edge-probe](README.md#edge-probe-before-fixing--the-lightweight-default-for-lofts-complex-variant-bugs)).
+   Build/extend a probe corpus that maps the shape across its
+   combinatorial region, on BOTH backends — not a single repro.
+   Most loft bugs are complex-variant: a one-repro fix under-fixes
+   the class or hides an unsound edge.  The probes ARE the
+   verification harness AND the regression landmarks.  A first
+   hypothesis is a thing to **refute with probes**, not a conclusion
+   (e.g. "this bug = method-vs-function" turned out to be
+   "de-NRVO'd vector return" only after the probes killed the first
+   framing).
+
+2. **Run a CODE-ONLY investigation agent before editing.**  Dispatch
+   a code-only agent (read / grep / run only — it does NOT edit; you
+   apply the fix) to pin the exact fix site(s), trace the downstream
+   machinery the fix leans on, enumerate the hazards (double-free,
+   ABA, native parity, regression in an adjacent system), and
+   estimate scope.  This is where the hard fix surface gets mapped
+   before a line is written — it catches the wrong-site /
+   missed-hazard / under-scoped fix the cheapest way, and its
+   per-probe oracle prediction becomes the post-fix check.
+
+3. **Then fix + verify** against the FULL probe corpus on both
+   backends + the agent's predicted oracle: the targeted probes flip
+   to clean, the controls stay clean (no over-fix / double-free),
+   project CI green.
+
+**Don't dismiss without probing, either.**  "This is probably benign
+/ a flake / out of scope" is a hypothesis too — probe it before
+believing it (a "concurrency, not my change" verdict is only
+trustworthy AFTER the mechanism probes + a standalone-vs-trigger
+repro prove it).
+
+**The ONLY exception** to the agent step: the probe corpus already
+pins a SINGLE fix site AND the change is XS — state both in the
+commit.  **Probe-first is never skipped; never skip both.**
+
 ## Fix-application discipline (REQUIRED)
 
 Fixes land **one cluster per commit, pushed before the next
@@ -330,6 +386,42 @@ actually wrong, you've lost the ability to isolate it without
 re-deriving the whole plan.  PLAN51's Cluster III "FIXED on
 corruption" status while leaks under Cluster II persisted was a
 mild version of this failure mode — the lesson generalises.
+
+## Closing an investigation plan (REQUIRED)
+
+Run [`_LIFECYCLE.md`](_LIFECYCLE.md)'s general 6 steps (extract
+reference content → trim README → reclassify ROADMAP → move dir →
+rewrite links), **plus these two obligations that are specific to
+investigation plans** — both must happen BEFORE the dir moves to
+`finished/`:
+
+1. **File the still-open findings.**  The active-phase no-file rule
+   (§ In-plan vs spinoff) inverts at closure: the cluster catalogue
+   stops being a live tracker, so every finding that is still open
+   needs a forward home.
+   - A **deferred / benign residual** of the thesis → QUALITY.md
+     `## Open work` (a known tradeoff, not a bug) — note any inert
+     foundation already in the tree as a head-start.
+   - A **sibling bug** not yet fixed → PROBLEMS.md (mirror
+     user-visible rows to USER_FACING.md).
+   - Each cites the now-`finished/` cluster / probe doc as the repro
+     landmark.  A finding whose FIX shipped needs no row — the fix +
+     its test are the record.
+
+2. **Promote permanent-guarantee probes → CI tests.**  Doc-probes
+   under `probes/` are NOT run by CI.  Every probe that encodes a
+   correctness GUARANTEE (not characterization / diagnostics) must
+   have a CI test before close, so it can never silently regress
+   (`tests/scripts/<NN>-*.loft` for cross-backend behaviour,
+   `tests/*.rs` for in-process invariants).  Characterization probes
+   (watermark counts, bug repros, reference↔problem pairings) stay in
+   `probes/` as landmarks — they move to `finished/` with the plan.
+   A probe whose guarantee is already covered by an existing suite
+   needs no new test; just record the mapping.
+
+The closure record (the trimmed `finished/<NN>/` README) should list
+the P-issues filed + the probe→test mapping, so a later reader sees
+where each open thread went.
 
 ## See also (REQUIRED)
 
