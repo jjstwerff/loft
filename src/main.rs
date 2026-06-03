@@ -4087,27 +4087,39 @@ fn main() {
     let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
     let default_str = default_dir.to_string_lossy().to_string();
-    // @PLAN54 D2b — opt-in stdlib startup cache (`LOFT_STDLIB_CACHE`; default
-    // off).  A warm run mmaps the precompiled stdlib bundle (Data + database
-    // type schema) instead of parsing `default/`; a cold run parses then saves
-    // it.  When the env var is unset both calls are no-ops and behaviour is
-    // unchanged.
-    let warm = loft::startup_cache::warm_load_stdlib(&mut p, &default_str);
-    if !warm {
-        if let Err(e) = p.parse_dir(&default_str, true, false) {
-            eprintln!(
-                "loft: cannot load standard library from `{}`: {e}",
-                default_dir.display()
-            );
-            eprintln!(
-                "  the `default/` library directory was not found under the \
-                 compiler path.\n  Pass `--path <dir>` pointing at the directory \
-                 that contains `default/`,\n  or run `loft` from an installed \
-                 location where the stdlib is bundled."
-            );
-            std::process::exit(1);
+    // @PLAN54 arc E / D2b — opt-in startup caches (default off).  The
+    // whole-program cache (`LOFT_PROGRAM_CACHE`) mmaps the ENTIRE parsed program
+    // (stdlib + lazily-loaded libs + user file) on a repeated unchanged run,
+    // skipping all parsing; the narrower stdlib cache (`LOFT_STDLIB_CACHE`, D2b)
+    // caches `default/` only.  Unset → both are no-ops, behaviour unchanged.
+    let program_cache_on = std::env::var_os("LOFT_PROGRAM_CACHE").is_some_and(|v| !v.is_empty());
+    p.track_sources = program_cache_on;
+    let program_warm =
+        program_cache_on && loft::startup_cache::warm_load_program(&mut p, &abs_file);
+    if !program_warm {
+        // When building a program cache, parse `default/` fresh so every stdlib
+        // file lands in the program's drift manifest; otherwise use the D2b
+        // stdlib cache.
+        let stdlib_warm =
+            !program_cache_on && loft::startup_cache::warm_load_stdlib(&mut p, &default_str);
+        if !stdlib_warm {
+            if let Err(e) = p.parse_dir(&default_str, true, false) {
+                eprintln!(
+                    "loft: cannot load standard library from `{}`: {e}",
+                    default_dir.display()
+                );
+                eprintln!(
+                    "  the `default/` library directory was not found under the \
+                     compiler path.\n  Pass `--path <dir>` pointing at the directory \
+                     that contains `default/`,\n  or run `loft` from an installed \
+                     location where the stdlib is bundled."
+                );
+                std::process::exit(1);
+            }
+            if !program_cache_on {
+                loft::startup_cache::save_stdlib_cache(&p, &default_str);
+            }
         }
-        loft::startup_cache::save_stdlib_cache(&p, &default_str);
     }
     let start_def = p.data.definitions();
     if std::env::var("LOFT_TIMING").is_ok() {
@@ -4122,7 +4134,11 @@ fn main() {
     if introspect_mode && introspect_trace {
         p.trace_types = true;
     }
-    p.parse(&abs_file, false);
+    // @PLAN54 arc E — a whole-program warm load already holds every definition;
+    // skip parsing the user file (and its lib loads) entirely.
+    if !program_warm {
+        p.parse(&abs_file, false);
+    }
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's
@@ -4185,6 +4201,12 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLAN54 arc E — on a cold run with the program cache enabled, write the
+    // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
+    // functions carry `done=true` and the baked free-ops).
+    if program_cache_on && !program_warm {
+        loft::startup_cache::save_program(&p, &abs_file);
+    }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
     // write the parsed `Data` as the startup-cache JSON snapshot and exit.
     // This is the manual validation path for the quick-loading work: dump the

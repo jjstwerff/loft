@@ -174,17 +174,56 @@ pub fn collect_stdlib_sources(default_dir: &str) -> Vec<(String, String)> {
 /// collide.
 #[must_use]
 pub fn stdlib_cache_path(key: &[u8; 32]) -> std::path::PathBuf {
+    cache_base_dir().join(format!("stdlib-{}.store", hex32(key)))
+}
+
+/// The loft cache directory: `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`),
+/// falling back to the system temp dir.
+#[must_use]
+fn cache_base_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("loft")
+}
+
+/// Lower-case 64-hex of a 32-byte key.
+#[must_use]
+fn hex32(key: &[u8; 32]) -> String {
     let mut hex = String::with_capacity(64);
     for b in key {
         use std::fmt::Write as _;
         let _ = write!(hex, "{b:02x}");
     }
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("loft");
-    base.join(format!("stdlib-{hex}.store"))
+    hex
+}
+
+/// @PLAN54 arc E — SHA-256 of a file's bytes, or `None` if unreadable.  Used to
+/// hash every parsed source for the whole-program bundle's drift manifest.
+#[must_use]
+pub fn file_hash(path: &str) -> Option<[u8; 32]> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Some(h.finalize().into())
+}
+
+/// @PLAN54 arc E — the `(bundle, manifest)` paths for the whole-program cache of
+/// the script at `script_abspath`.  Keyed on the script's path so each script
+/// gets a stable slot; the manifest (every parsed source + its content hash)
+/// detects drift in any input — stdlib, lazily-loaded libs, or the script.
+#[must_use]
+pub fn program_cache_paths(script_abspath: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let mut h = Sha256::new();
+    h.update(script_abspath.as_bytes());
+    let key: [u8; 32] = h.finalize().into();
+    let base = cache_base_dir();
+    let stem = format!("program-{}", hex32(&key));
+    (
+        base.join(format!("{stem}.store")),
+        base.join(format!("{stem}.manifest")),
+    )
 }
 
 #[cfg(test)]

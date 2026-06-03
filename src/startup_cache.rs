@@ -75,3 +75,107 @@ pub fn save_stdlib_cache(p: &Parser, default_dir: &str) {
 /// Non-`mmap` builds: no bundle to write.
 #[cfg(not(feature = "mmap"))]
 pub fn save_stdlib_cache(_p: &Parser, _default_dir: &str) {}
+
+// ─── whole-program cache (arc E) ─────────────────────────────────────────────
+//
+// The stdlib cache above caches `default/` only; the whole-program cache caches
+// the ENTIRE post-parse program (stdlib + the script's lazily-loaded libs + the
+// user file) keyed on the script path, validated by a drift manifest of every
+// parsed source's content hash.  On a repeated run of an unchanged program it
+// skips ALL parsing.  The caller (`main.rs`) gates these on the cache env var;
+// they assume the gate has already passed.
+
+#[cfg(feature = "mmap")]
+fn hex32(key: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(64);
+    for b in key {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// True iff `manifest` exists and every listed source's current content hash
+/// still matches (no input drifted since the bundle was written).
+#[cfg(feature = "mmap")]
+fn manifest_matches(manifest: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    let mut any = false;
+    for line in text.lines() {
+        let Some((hexhash, path)) = line.split_once(' ') else {
+            return false;
+        };
+        match crate::cache::file_hash(path) {
+            Some(cur) if hex32(&cur) == hexhash => any = true,
+            _ => return false,
+        }
+    }
+    any // an empty manifest is not a valid hit
+}
+
+/// Whole-program warm load: if a valid bundle exists for `script_abspath` and
+/// every source it was built from is unchanged, load the entire `Data` + type
+/// schema into `p` and return `true` (the caller then skips **all** parsing).
+#[cfg(feature = "mmap")]
+#[must_use]
+pub fn warm_load_program(p: &mut Parser, script_abspath: &str) -> bool {
+    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
+    if !manifest_matches(&manifest) {
+        return false;
+    }
+    match crate::ir_read::open_bundle_into(&bundle.to_string_lossy(), &mut p.database) {
+        Ok(data) => {
+            p.data = data;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Cold path: after the full parse, write the whole-program bundle + its drift
+/// manifest for `script_abspath` (every deduped parsed source + its content
+/// hash).  The bundle is published first, then the manifest atomically — so a
+/// manifest is only ever present alongside a complete bundle.
+#[cfg(feature = "mmap")]
+pub fn save_program(p: &Parser, script_abspath: &str) {
+    use std::fmt::Write as _;
+    let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
+
+    let mut paths: Vec<&String> = p.parsed_sources.iter().collect();
+    paths.sort_unstable();
+    paths.dedup();
+    let mut lines = String::new();
+    for path in &paths {
+        let Some(h) = crate::cache::file_hash(path) else {
+            return; // an unreadable source → don't cache (would never validate)
+        };
+        let _ = writeln!(lines, "{} {path}", hex32(&h));
+    }
+    if lines.is_empty() {
+        return;
+    }
+
+    if let Some(parent) = bundle.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if crate::ir_store::save_bundle(&p.data, &p.database.types, &bundle.to_string_lossy()).is_err()
+    {
+        return;
+    }
+    // Manifest last + atomically — a stale/partial manifest would just be a miss.
+    let tmp = manifest.with_extension("manifest.tmp");
+    if std::fs::write(&tmp, lines.as_bytes()).is_ok() {
+        let _ = std::fs::rename(&tmp, &manifest);
+    }
+}
+
+/// Non-`mmap` builds: the whole-program cache is unavailable.
+#[cfg(not(feature = "mmap"))]
+#[must_use]
+pub fn warm_load_program(_p: &mut Parser, _script_abspath: &str) -> bool {
+    false
+}
+#[cfg(not(feature = "mmap"))]
+pub fn save_program(_p: &Parser, _script_abspath: &str) {}
