@@ -2068,6 +2068,22 @@ impl Parser {
                 )
             };
             ls.push(v_set(elm, app_v));
+            // @P380 (generalized, plan-58 cluster II): a freshly-created
+            // vector-of-vectors element is a VECTOR HANDLE (rec-id at offset 0),
+            // but `OpNewRecord` default-inits it with the mis-resolved inner
+            // scalar's null sentinel.  For an 8-byte inner (`integer`/`float`)
+            // the sentinel's low-32 bits are 0 (a harmless empty handle), but a
+            // 4-byte `single` NaN (0x7FC00000) is a non-zero garbage rec-id →
+            // wild `get_u32_raw` → SIGSEGV when later read as a rec-id.  Zero the
+            // handle on EVERY construction path — the literal/`Insert` path lacked
+            // it (only the copy branch below had it), so nested `single` literals
+            // crashed.  No-op for the already-zero 8-byte cases.
+            if !self.first_pass && matches!(in_t, Type::Vector(_, _)) {
+                ls.push(self.cl(
+                    "OpSetInt4",
+                    &[Value::Var(elm), Value::Int(0), Value::Int(0)],
+                ));
+            }
             if matches!(
                 in_t,
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
@@ -2116,25 +2132,9 @@ impl Parser {
                     } else {
                         Value::Int(i32::from(self.data.def(inner_nr).known_type) | free_source_bit)
                     };
-                    // @P380 — a freshly-appended vector-of-vectors element is a
-                    // VECTOR HANDLE (rec-id at offset 0), but `OpNewRecord`
-                    // default-inits it as the mis-resolved inner SCALAR (the
-                    // shallow element type), writing that scalar's null
-                    // sentinel into the handle slot.  `OpCopyRecord`'s leading
-                    // `remove_claims` then reads that sentinel AS a rec-id: for
-                    // an 8-byte inner element (`integer`/`float`) the sentinel's
-                    // low-32 bits are 0 (reads as the empty handle, harmless),
-                    // but for a 4-byte `single` the NaN sentinel (0x7FC00000) is
-                    // a non-zero garbage rec-id → wild `get_u32_raw` → SIGSEGV.
-                    // Zero the handle slot before the copy so `remove_claims`
-                    // no-ops on the fresh element (a no-op for the already-zero
-                    // 8-byte cases).  Vector elements only — the confirmed shape.
-                    if !self.first_pass && matches!(in_t, Type::Vector(_, _)) {
-                        ls.push(self.cl(
-                            "OpSetInt4",
-                            &[Value::Var(elm), Value::Int(0), Value::Int(0)],
-                        ));
-                    }
+                    // @P380 handle-zero is now hoisted above (after the element
+                    // is created), covering this copy path AND the literal/`Insert`
+                    // path; `remove_claims` here sees the already-zeroed handle.
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
             } else if let Value::Tuple(values) = p {

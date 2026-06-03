@@ -120,6 +120,18 @@ Fix loop (apply at a resolution site → re-run matrix → measure):
 | 1 | `typedef.rs::fill_database`: resolve a nested-vector element via the #250-proven `db_type` recursion (instead of the level-collapsed `type_elm`→`known_type`) | **+1**: `43-ctx-single-structfield` SIGSEGV→PASS (interp); **no regressions** |
 | 2 | `vector_of` inner-narrow | none — bypassed (see below) |
 | 3 | `typedef.rs` inner-narrow | none — collapse is upstream (see below) |
+| 4 | `vectors.rs::new_record`: **hoist the @P380 handle-zero** to right after the element is created, covering EVERY construction path (literal/`Insert` + write + fn-return + copy), not just the copy branch | **+7, CLUSTER II CLOSED**: `04,05,20-single,30-single,41,45,51` SIGSEGV→PASS on **both** backends; no regressions.  Regression: `tests/scripts/183-nested-single-vector.loft` |
+
+### Cluster II — CLOSED (@P380 generalized)
+
+The single-NaN-sentinel crash was structurally identical to the working integer
+case (same `OpNewRecord` shape) — the ONLY difference is the sentinel value:
+integer null low-32 = 0 (harmless empty handle) vs `single` NaN `0x7FC00000`
+(non-zero wild rec-id → SIGSEGV).  The existing @P380 `OpSetInt4`-zero lived only
+on the copy branch; hoisting it to fire for every freshly-created `Type::Vector`
+element closed all 7 single cells on both backends.  Verified: full interpreter
+suite green; the 4 native FAILs are pre-existing environmental `ring`/`rustls`
+rlib link errors (not nested-vector / codegen).
 
 Only iteration 1 landed (the others were reverted as dead).  Verified mechanism
 for why 2/3 were dead — the **i32 corruption is a nested-literal narrow-coercion
