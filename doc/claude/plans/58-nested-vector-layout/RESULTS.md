@@ -110,3 +110,41 @@ assertion fails on a silently-wrong read; re-classified here after isolation.)
   (cleanliness) by making `--vec4` permanent or fixing the resolvers.
 - The `--vec4` lever's job is done as a *measurement*: it proved the handle
   stride is safe to unify and is NOT the active fault.
+
+## Stage B — root-fix iterations + probe hardening
+
+Fix loop (apply at a resolution site → re-run matrix → measure):
+
+| # | change | matrix delta |
+|---|---|---|
+| 1 | `typedef.rs::fill_database`: resolve a nested-vector element via the #250-proven `db_type` recursion (instead of the level-collapsed `type_elm`→`known_type`) | **+1**: `43-ctx-single-structfield` SIGSEGV→PASS (interp); **no regressions** |
+| 2 | `vector_of` inner-narrow | none — bypassed (see below) |
+| 3 | `typedef.rs` inner-narrow | none — collapse is upstream (see below) |
+
+Only iteration 1 landed (the others were reverted as dead).  Verified mechanism
+for why 2/3 were dead — the **i32 corruption is a nested-literal narrow-coercion
+bug, not a resolver bug**: for `vv: vector<vector<i32>> = [[1,2]]`, `lhs_known`
+is `None` (plain vector) so `vector_of(in_t)` runs, but `in_t` is already
+`vector<integer>` — the integer literals `1,2` are inferred wide and **not
+coerced to the declared `i32`** through the nesting (flat `vector<i32>=[1,2]`
+*does* coerce, which is why flat works).  Construction strides by 8, the read
+(declared `i32`) by 4 → `vv[0][1]=0`.  ✅ Verified via `LOFT_LOG=static`
+(`OpNewRecord(vv,65)`, element var typed `vector<integer>`; read `OpGetInt4`@4).
+
+### Probe hardening (answering "can a value coincidentally hide a case?")
+
+Weak probes (small values `1,2,3`; index `[0]` is stride-independent; no length
+checks) can pass despite a stride bug.  Hardened probes `70-76` use distinctive
+byte-distinct values, assert **every** index + `len()` at each level, and
+cross-row independence:
+
+| strong probe | result | verdict |
+|---|---|---|
+| 70 int / 72 struct / 73 tuple / 74 text / 75 float | PASS both backends | **genuinely correct** — not value-coincidence false passes |
+| 71 i32 | fail / panic | confirmed broken (strong values) |
+| **76 bool** | **interp SIGSEGV** | **severity correction** — the weak `20-2d-bool` showed only an empty read; with 3 alternating rows it is a **crash** (memory corruption), not silent corruption |
+
+⇒ Two outcomes: the int/struct/tuple/text/float passes are real (so the +1/no-
+regression claim is trustworthy for them), and **boolean is upgraded to a crash**
+(was mis-filed as silent-corruption).  Probe lesson folded into the suite: every
+new probe asserts all indices + lengths with distinctive values.

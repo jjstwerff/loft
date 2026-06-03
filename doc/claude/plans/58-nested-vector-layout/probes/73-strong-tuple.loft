@@ -1,0 +1,10 @@
+// @PLAN58 STRONG probe — tuple elements: distinct per index, test [1]+.
+fn main() {
+  vv: vector<vector<(integer, integer)>> = [[(11,101),(12,102),(13,103)], [(21,201)]];
+  assert(len(vv[0]) == 3 && len(vv[1]) == 1, "lens");
+  assert(vv[0][0].0 == 11 && vv[0][0].1 == 101, "00");
+  assert(vv[0][1].0 == 12 && vv[0][1].1 == 102, "01 {vv[0][1].0},{vv[0][1].1}");
+  assert(vv[0][2].0 == 13 && vv[0][2].1 == 103, "02");
+  assert(vv[1][0].0 == 21 && vv[1][0].1 == 201, "10");
+  println("PASSED 73-strong-tuple");
+}
