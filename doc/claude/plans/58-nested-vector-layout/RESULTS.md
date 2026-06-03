@@ -122,6 +122,19 @@ Fix loop (apply at a resolution site → re-run matrix → measure):
 | 3 | `typedef.rs` inner-narrow | none — collapse is upstream (see below) |
 | 4 | `vectors.rs::new_record`: **hoist the @P380 handle-zero** to right after the element is created, covering EVERY construction path (literal/`Insert` + write + fn-return + copy), not just the copy branch | **+7, CLUSTER II CLOSED**: `04,05,20-single,30-single,41,45,51` SIGSEGV→PASS on **both** backends; no regressions.  Regression: `tests/scripts/183-nested-single-vector.loft` |
 
+### Cluster III-a — CLOSED (nested-literal narrow coercion)
+
+`parse_item` (`src/parser/vectors.rs:1797`) parsed each vector-literal element with
+`&Type::Unknown(0)` — discarding the declared element type `in_t`.  So a nested
+literal's inner elements (`[[1,2]]` in a `vector<vector<i32>>`) defaulted to wide
+`integer` (8-byte writes) while the read used the declared narrow width (4-byte) →
+`vv[0][1]` read 0.  Fix: pass `&in_t.clone()` so the inner literal adopts the
+declared narrow element type (identical to prior behaviour when `in_t` is Unknown).
+Flips `i32`/`i16`/`u8` literal + struct-field-append + fn-return + 3-deep to PASS on
+both backends; no regressions (copy/write/wide/struct/single/text/float unchanged).
+Regression `tests/scripts/184-nested-narrow-int-vector.loft`.  Char (out of scope:
+flat `vector<character>` indexing is broken generally) is NOT this fix.
+
 ### Cluster II — CLOSED (@P380 generalized)
 
 The single-NaN-sentinel crash was structurally identical to the working integer

@@ -1,0 +1,8 @@
+// @PLAN58 boolean pinpoint — copy a flat bool var (does copy work like i32 copy?).
+fn main() {
+  b: vector<boolean> = [true, false];
+  vv: vector<vector<boolean>> = [];
+  vv += [b];
+  assert(vv[0][0]==true && vv[0][1]==false, "copy {vv[0]}");
+  println("PASSED 103-bool-copy");
+}

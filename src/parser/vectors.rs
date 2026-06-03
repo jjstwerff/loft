@@ -1794,7 +1794,13 @@ impl Parser {
             return Some(Type::Unknown(0));
         } else {
             let mut parent_tp = Type::Null;
-            self.parse_operators(&Type::Unknown(0), &mut p, &mut parent_tp, 0)
+            // @PLAN58 III-a: propagate the declared element type `in_t` into the
+            // element parse so a NESTED literal's inner elements adopt the
+            // declared narrow width (`vector<vector<i32>>` → inner `[1,2]` types
+            // its elements `i32`, not wide `integer`).  When `in_t` is Unknown
+            // (untyped inferred literal) this is identical to the prior
+            // `Type::Unknown(0)` behaviour.
+            self.parse_operators(&in_t.clone(), &mut p, &mut parent_tp, 0)
         };
         let elem_capturing_lambda = self.last_closure_work_var != u16::MAX;
         if let Type::Rewritten(tp) = in_t {

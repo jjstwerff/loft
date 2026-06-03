@@ -1,0 +1,8 @@
+// @PLAN58 IV pinpoint — comprehension over a RUNTIME range (non-const).
+// If this avoids the const-store panic, the trigger is const-folding of a const range.
+fn main() {
+  n: integer = 3;
+  vv: vector<vector<integer>> = [for i in 0..n { [i, i * 2] }];
+  assert(vv[2][1]==4, "runtime-range {vv[2]}");
+  println("PASSED 105-comp-runtime-range");
+}

@@ -1,0 +1,8 @@
+// @PLAN58 cluster-III width probe — i16 (2-byte). Does it corrupt like i32?
+fn main() {
+  vv: vector<vector<i16>> = [[1001, 2002, 3003], [4004]];
+  assert(len(vv[0])==3 && len(vv[1])==1, "lens");
+  assert(vv[0][0]==1001 && vv[0][1]==2002 && vv[0][2]==3003, "row0 {vv[0]}");
+  assert(vv[1][0]==4004, "row1");
+  println("PASSED 80-2d-i16-litread");
+}

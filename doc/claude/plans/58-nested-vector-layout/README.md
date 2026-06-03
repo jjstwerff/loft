@@ -77,7 +77,8 @@ Full evidence + the 34-cell matrix: [RESULTS.md](RESULTS.md).
 |---|---|---|---|---|---|
 | I | Vector-handle stride divergence (16/8/4/4) | **latent** — no probe fails on it | both | flips operand, no behaviour change | `cluster-I-stride-divergence.md` |
 | II | ~~Single-NaN-sentinel read as wild rec-id~~ **✅ CLOSED** — @P380 handle-zero hoisted to all construction paths; 7 cells SIGSEGV→PASS both backends; regression `tests/scripts/183` | was SIGSEGV, all `single` contexts | both | n/a | `cluster-II-single-sentinel.md` |
-| III | Narrow-element nested literal (`i32` corrupts, `boolean` **SIGSEGVs** with ≥3 rows — RESULTS.md Stage B) | silent corruption → **crash** | interp (native FAIL/panic) | no effect (upstream literal coercion) | (see RESULTS.md) |
+| III-a | ~~Narrow-int nested literal (`i32`/`i16`/`u8`)~~ **✅ CLOSED** — `parse_item` now propagates the declared element type into the inner literal (`vectors.rs:1797`); regression `tests/scripts/184` | was silent corruption | both | n/a | (see RESULTS.md) |
+| III-b | char nested — **out of scope** (flat `vector<character>` indexing is broken generally, not nesting); boolean — **read-side** handle stride (own cluster) | — | — | — | (see RESULTS.md) |
 | IV | Nested comprehension → CONST_STORE write | **panic** (`store.rs:1386`); #248 family | both | no effect | (catalogued; see #248) |
 | V | Call-returned fn-ref into collection | **panic** (#263) | both | no effect | (catalogued; see #263) |
 

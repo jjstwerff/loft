@@ -1,0 +1,9 @@
+// @PLAN58 boolean pinpoint — 2 rows, SPLIT read (isolate "multi-row" from "double-index").
+fn main() {
+  vv: vector<vector<boolean>> = [[true, false], [true]];
+  r0: vector<boolean> = vv[0];
+  r1: vector<boolean> = vv[1];
+  assert(r0[0]==true && r0[1]==false, "r0 {r0}");
+  assert(r1[0]==true, "r1 {r1}");
+  println("PASSED 107-bool-2row-split");
+}

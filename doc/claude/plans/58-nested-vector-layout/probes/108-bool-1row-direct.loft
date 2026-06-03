@@ -1,0 +1,6 @@
+// @PLAN58 boolean pinpoint — 1 row, DIRECT double-index (isolate the double-index path).
+fn main() {
+  vv: vector<vector<boolean>> = [[true, false, true]];
+  assert(vv[0][0]==true && vv[0][1]==false && vv[0][2]==true, "1row-direct {vv[0]}");
+  println("PASSED 108-bool-1row-direct");
+}

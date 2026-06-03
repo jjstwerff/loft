@@ -1,0 +1,8 @@
+// @PLAN58 cluster-III — does char REJECT everywhere (compile) or only on index read?
+struct H { box: vector<vector<character>> }
+fn main() {
+  h = H { box: [] };
+  h.box += [['a', 'b']];
+  assert(h.box[0][0]=='a' && h.box[0][1]=='b', "field");
+  println("PASSED 86-2d-char-structfield");
+}

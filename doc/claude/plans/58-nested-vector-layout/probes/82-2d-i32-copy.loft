@@ -1,0 +1,9 @@
+// @PLAN58 cluster-III context probe — 2-deep i32 += COPY (not literal).
+// 3-deep copy passes; does 2-deep copy pass too, or corrupt like 2-deep literal?
+fn main() {
+  vv: vector<vector<i32>> = [];
+  a: vector<i32> = [111111, 222222];
+  vv += [a];
+  assert(vv[0][0]==111111 && vv[0][1]==222222, "copy {vv[0]}");
+  println("PASSED 82-2d-i32-copy");
+}
