@@ -91,6 +91,34 @@ The sequence is **probe → code-only investigation agent → fix → verify aga
 the probe corpus**, never an ad-hoc fix from a first read.  Full rule:
 [`_INVESTIGATION_TEMPLATE.md § Fixing a finding`](_INVESTIGATION_TEMPLATE.md#fixing-a-finding--probe--agent-before-code-required).
 
+### The matrix is how you *see* the root — and the proportionate fix is the invariant
+
+Edge-probing isn't only for *scoping* a fix; the completed probe matrix is what lets
+you **see the general picture** — the one mechanism behind a family of "different"
+bugs — that you would otherwise overlook.  The pattern is reliable: the unifying
+root becomes visible *after* the matrix exists and gets missed *before* it.  In
+plan-58 the `single` SIGSEGV, `boolean` overlap, `i32` corruption, and comprehension
+skew were **one** `vector<T>`↔`vector<vector<T>>` handle-stride conflation — obvious
+in the 34-cell matrix, invisible in any single repro, and "fixed" three different
+wrong ways while the matrix was still incomplete.  So treat **"I can't see the root
+yet" as "the matrix isn't finished," never as license to patch the one case in
+hand.**  (Some readers reach the pattern by intuition with no data; if you don't,
+the matrix is your eyes — build it first, then the root is as visible to you as it
+was to them.)
+
+And the fix must be **proportionate to the problem, not the symptom.**  A multi-line
+fix special-cased to one *type*, in a language whose types are near-identical, is a
+shape-mismatch — it signals you are patching downstream of the shared chokepoint
+every type flows through.  Find the **invariant** the whole class violates and
+enforce *exactly* that: no **narrower** (a per-type patch leaves siblings broken)
+and no **wider** (re-resolving the type drags blast radius — plan-58's `db_type`
+attempt was the right *unify* instinct aimed at the wrong dimension; it should have
+enforced the stride invariant, not re-derived the type).  An **un-generalized
+remainder** (plan-58's accepted ≥4 over-reservation) is the *same bug, unfinished* —
+"benign" is making peace with a fix proportionate to one type, not to the problem.
+The sanitizer **guard** worth building is just that invariant made executable
+(*every vector handle strides by 4*) — see [GOALS.md](../GOALS.md) two-engine model.
+
 ### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
 
 Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —

@@ -378,6 +378,21 @@ Reasons:
   § Branch policy rule 2 already requires this on long-lived
   working branches.
 
+**When a fix regresses, bisect by SITE — don't re-guess.**  A fix
+that touches several sites and breaks something is the
+complex-variant hazard turned inward: revert it wholesale and try a
+different multi-site guess, and you learn nothing each round.
+Instead apply the sites **one at a time** and re-run the matrix —
+the site that is a no-op proves it is safe; the site that moves the
+regression is the culprit, and *why* it is the culprit usually names
+the real fix.  (PLAN51 cluster II took 3 attempts; plan-58's
+outer-handle stride took 3 reverted multi-site attempts — then
+applying the read-clamp *alone* proved it was a no-op for ≥4 strides,
+isolating the storage clamp in one move and pointing straight at the
+real parse-time fix.  Wholesale-revert-and-re-guess is the slow path;
+one-site-at-a-time is the fast one — reach for it after the *first*
+regression, not the third.)
+
 **Exception.**  If an open PR on the branch is mid-review, hold
 the next cluster's push until review concludes — CLAUDE.md
 § Branch policy rule 2 prohibits disturbing a branch with an
