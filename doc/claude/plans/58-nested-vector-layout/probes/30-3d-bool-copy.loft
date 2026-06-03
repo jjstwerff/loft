@@ -1,0 +1,9 @@
+// @PLAN58 matrix probe — generated.  rc=139 => SIGSEGV.
+// 3-deep vector<vector<vector<boolean>>> += copy.  Cluster: element=bool.
+fn main() {
+  vvv: vector<vector<vector<boolean>>> = [];
+  a: vector<vector<boolean>> = [[true]];
+  vvv += [a];
+  assert(vvv[0][0][0] == true, "elem {vvv[0][0][0]}");
+  println("PASSED 30-3d-bool-copy");
+}

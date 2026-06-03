@@ -1,0 +1,8 @@
+// @PLAN58 — 2-deep vector<vector<Pt>> literal + read.  element=struct.
+struct Pt { x: integer }
+fn main() {
+  vv: vector<vector<Pt>> = [[Pt{x:1}, Pt{x:2}], [Pt{x:3}]];
+  assert(vv[0][0].x == 1 && vv[0][1].x == 2, "row0");
+  assert(vv[1][0].x == 3, "row1");
+  println("PASSED 20-2d-struct-litread");
+}

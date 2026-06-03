@@ -3310,6 +3310,12 @@ fn main() {
             });
             i += 1;
             loft::timeout::arm(secs, loft::timeout::env_grace_secs());
+        } else if a == "--vec4" {
+            // @PLAN58 TEMPORARY investigation lever: force every parser-computed
+            // nested-vector element stride to its true 4-byte handle size so a
+            // probe sweep can measure "does aligning the strides close the
+            // class?".  Env equivalent: LOFT_VEC4=1.  Remove with the module.
+            loft::vec4::set(true);
         } else if a == "--check" || a == "check" {
             check_only = true;
         } else if a == "--help" || a == "-h" || a == "-?" {

@@ -1,0 +1,7 @@
+// @PLAN58 — 2-deep integer, write vv[i][j] = x.  context=write.
+fn main() {
+  vv: vector<vector<integer>> = [[1, 2], [3]];
+  vv[0][1] = 9;
+  assert(vv[0][1] == 9 && vv[0][0] == 1, "after write {vv[0]}");
+  println("PASSED 40-ctx-int-write");
+}

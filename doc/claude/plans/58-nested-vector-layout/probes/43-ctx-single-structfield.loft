@@ -1,0 +1,8 @@
+// @PLAN58 — nested single-vector as a struct field.  context=struct-field, element=single.
+struct H { box: vector<vector<single>> }
+fn main() {
+  h = H { box: [] };
+  h.box += [[5.5f, 6.5f]];
+  assert(h.box[0][0] == 5.5f && h.box[0][1] == 6.5f, "field {h.box[0]}");
+  println("PASSED 43-ctx-single-structfield");
+}

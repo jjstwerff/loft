@@ -1,0 +1,8 @@
+// @PLAN58 matrix probe — generated.  rc=139 => SIGSEGV.
+// 2-deep vector<vector<single>> literal + read.  Cluster: element=single.
+fn main() {
+  vv: vector<vector<single>> = [[1.5f, 2.5f], [1.5f]];
+  assert(vv[0][0] == 1.5f && vv[0][1] == 2.5f, "row0 {vv[0]}");
+  assert(vv[1][0] == 1.5f, "row1 {vv[1]}");
+  println("PASSED 20-2d-single-litread");
+}

@@ -1,0 +1,8 @@
+// @PLAN58 — vector<fn-ref> from a CALL-returned fn-ref (#263).  candidate cluster III.
+fn dbl(x: integer) -> integer { x * 2 }
+fn getfn() -> fn(integer) -> integer { dbl }
+fn main() {
+  gs: vector<fn(integer) -> integer> = [getfn()];
+  assert(gs[0](5) == 10, "call-returned fnref");
+  println("PASSED 61-fnref-call-returned");
+}

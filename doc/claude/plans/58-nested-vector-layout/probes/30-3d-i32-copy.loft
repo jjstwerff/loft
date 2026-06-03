@@ -1,0 +1,9 @@
+// @PLAN58 matrix probe — generated.  rc=139 => SIGSEGV.
+// 3-deep vector<vector<vector<i32>>> += copy.  Cluster: element=i32.
+fn main() {
+  vvv: vector<vector<vector<i32>>> = [];
+  a: vector<vector<i32>> = [[1]];
+  vvv += [a];
+  assert(vvv[0][0][0] == 1, "elem {vvv[0][0][0]}");
+  println("PASSED 30-3d-i32-copy");
+}

@@ -53,6 +53,7 @@ mod lexer;
 pub mod native;
 pub mod scopes;
 mod variables;
+pub mod vec4;
 pub mod vector;
 
 pub mod trace;

@@ -1,0 +1,6 @@
+// @PLAN58 — 2-deep vector<vector<(integer,integer)>> literal + read.  element=tuple.
+fn main() {
+  vv: vector<vector<(integer, integer)>> = [[(1, 2)], [(3, 4)]];
+  assert(vv[0][0].0 == 1 && vv[1][0].1 == 4, "tuple {vv}");
+  println("PASSED 20-2d-tuple-litread");
+}

@@ -1,0 +1,7 @@
+// @PLAN58 — vector<fn-ref> direct named element (control for #263).  candidate cluster III.
+fn dbl(x: integer) -> integer { x * 2 }
+fn main() {
+  fs: vector<fn(integer) -> integer> = [dbl];
+  assert(fs[0](5) == 10, "direct fnref");
+  println("PASSED 60-fnref-direct");
+}

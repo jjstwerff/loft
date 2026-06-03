@@ -1,0 +1,9 @@
+// @PLAN58 probe 01 — CONTROL: flat vector<integer> (element stride 8).
+// Cluster: reference.  MUST pass identically with and without --vec4 (the
+// lever is a no-op here: a non-vector element is never clamped).
+fn main() {
+  v: vector<integer> = [10, 20, 30];
+  v += [40];
+  assert(v[0] == 10 && v[3] == 40, "flat read: {v}");
+  println("probe 01 PASSED");
+}

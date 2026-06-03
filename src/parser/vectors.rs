@@ -1637,14 +1637,17 @@ impl Parser {
             if ed_nr != u32::MAX {
                 let known = self.data.def(ed_nr).known_type;
                 if known != u16::MAX {
-                    let elem_size = self.database.size(known);
+                    // @PLAN58 vec4 lever: in_t is the element type; force a
+                    // nested-vector element handle to its true 4-byte stride.
+                    let elem_size =
+                        crate::vec4::clamp_elem(i32::from(self.database.size(known)), in_t);
                     if elem_size > 0 {
                         ls.push(self.cl(
                             "OpPreAllocVector",
                             &[
                                 Value::Var(vec),
                                 Value::Int(res.len() as i32),
-                                Value::Int(i32::from(elem_size)),
+                                Value::Int(elem_size),
                             ],
                         ));
                     }

@@ -1,0 +1,6 @@
+// @PLAN58 — nested single-vector built by comprehension.  context=comprehension, element=single.
+fn main() {
+  vv: vector<vector<single>> = [for i in 0..3 { [1.5f] }];
+  assert(vv[0][0] == 1.5f && vv[2][0] == 1.5f, "comp {vv[2]}");
+  println("PASSED 47-ctx-single-comprehension");
+}

@@ -71,7 +71,10 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let e_size = i32::from(self.database.size(self.data.def(enr).known_type));
+        // @PLAN58 vec4 lever: force a nested-vector element handle to 4 on the
+        // `.push` / `.remove` (vector_operations) stride path.
+        let e_size =
+            crate::vec4::clamp_vec(i32::from(self.database.size(self.data.def(enr).known_type)), &t);
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
@@ -659,7 +662,7 @@ impl Parser {
         // Shorts stay wide until Phase 4 aligns the `Parts::Short`
         // encoding with raw-byte copies.  Falls back to the
         // bounds-heuristic via `database.size(known_type)` otherwise.
-        let elm_size = if let Type::Integer(spec) = etp
+        let elm_size_raw = if let Type::Integer(spec) = etp
             && let Some(n) = spec.vector_narrow_width()
         {
             i32::from(n)
@@ -676,6 +679,9 @@ impl Parser {
         } else {
             i32::from(self.database.size(known))
         };
+        // @PLAN58 vec4 lever: force a nested-vector element handle to its true
+        // 4-byte stride on the read-side index path (`vv[i]`).
+        let elm_size = crate::vec4::clamp_vec(elm_size_raw, etp);
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 // Plan-07 phase 4 step 4.6 — this is the for-loop
