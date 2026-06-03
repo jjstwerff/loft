@@ -83,6 +83,42 @@ impl Output<'_> {
         panic!("OpAppendVector expects [target, source, tp], got {vals:?}");
     }
 
+    /// #250: a RUNTIME expression resolving a nested-vector type-id from stable
+    /// base ids via the idempotent, order-independent `stores.vector(_)`.
+    ///
+    /// Native codegen normally emits the parser's LITERAL vector type-id, but
+    /// the native runtime registers vector types in a different order than the
+    /// parser, so for 3+-deep `vector<vector<vector<X>>>` the literal id points
+    /// at the wrong type (`copy_claims` then dispatches as e.g. a 7-variant
+    /// enum → OOB / wrong value).  `stores.vector(elem)` returns the same id
+    /// regardless of registration order, so rebuilding the chain at runtime
+    /// (`stores.vector(stores.vector(<stable base id>))`) is divergence-proof.
+    ///
+    /// Returns `Some((depth, base_id))` where the type is `vector` applied
+    /// `depth` times to a stable `base_id` — or `None` when the chain bottoms
+    /// at a non-stable type (struct/enum/narrow-int, whose ids are NOT
+    /// parser↔runtime stable) so the caller keeps the literal.  The caller
+    /// emits a sequential `let _v0 = stores.vector(base); let _v1 =
+    /// stores.vector(_v0); …` chain (one borrow at a time — a nested
+    /// `stores.vector(stores.vector(..))` would double-borrow `*stores`).
+    pub(super) fn vector_runtime_id_chain(&self, known: u16) -> Option<(usize, u16)> {
+        let mut id = known;
+        let mut depth = 0usize;
+        loop {
+            match &self.stores.types.get(id as usize)?.parts {
+                crate::database::Parts::Vector(inner) => {
+                    depth += 1;
+                    id = *inner;
+                }
+                // Base types (integer/text/single/float/bool/char) occupy the
+                // fixed low ids the native init binds as `let tN: u16 = N` —
+                // parser id == runtime id, so they are the chain's stable floor.
+                crate::database::Parts::Base => return Some((depth, id)),
+                _ => return None,
+            }
+        }
+    }
+
     /// Use this to emit a single key value as a typed `Content::…` constructor.
     /// `type_nr` is from a `Key` struct; sign indicates sort direction (ignored here),
     /// absolute value indicates the data type:

@@ -215,6 +215,30 @@ pub struct OpCopyRecordEmitter;
 impl OpEmitter for OpCopyRecordEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
         if let [src, dst, tp_val] = args {
+            // #250: when the copy type is a nested vector, resolve its id at
+            // RUNTIME (order-independent) rather than trusting the parser's
+            // literal — the two diverge in native at 3+ nesting depth.  The
+            // type-id is encoded `tp = id | (0x8000 free-source bit)`.
+            if let Value::Int(n) = tp_val {
+                let free_bit = n & 0x8000;
+                let known = u16::try_from(n & 0x7FFF).unwrap_or(u16::MAX);
+                // Only the 2+-deep chains diverge; depth 0/1 keep the literal
+                // (the shallow `vector<base>` id is parser↔runtime stable).
+                if let Some((depth, base)) = ctx.output.vector_runtime_id_chain(known)
+                    && depth >= 2
+                {
+                    write!(ctx.w, "{{ let _v0 = stores.vector({base});")?;
+                    for i in 1..depth {
+                        write!(ctx.w, " let _v{i} = stores.vector(_v{});", i - 1)?;
+                    }
+                    write!(ctx.w, " OpCopyRecord(cell, ")?;
+                    ctx.emit(src)?;
+                    write!(ctx.w, ", ")?;
+                    ctx.emit(dst)?;
+                    write!(ctx.w, ", ((_v{} as i32) | {free_bit})) }}", depth - 1)?;
+                    return Ok(());
+                }
+            }
             write!(ctx.w, "OpCopyRecord(cell,")?;
             ctx.emit(src)?;
             write!(ctx.w, ", ")?;
