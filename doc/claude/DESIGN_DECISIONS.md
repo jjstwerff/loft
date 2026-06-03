@@ -764,6 +764,68 @@ C09/C10 document the append-no-dedup behaviour this decision blesses).
 
 ---
 
+## C69 — `!x` on a non-boolean is a null test, not logical-not
+
+### Question
+
+`!x` where `x` is a non-boolean (integer, single, reference, …) reads as
+*"is `x` null?"* rather than C-style logical-not.  Because the null sentinel
+is **in-band** (`i32::MIN` for integer, `false` for boolean, null `DbRef` for
+references), `!0` is `false` — `0` is a real value, not the sentinel.  A
+crawler report (GitHub #253) hit this as a footgun: `f = 0; if !f { … }` never
+runs, and a `gl_load_font` zero-handle check silently misses.  Should `!`
+either coerce non-booleans C-style (`!0 ⇒ true`) or reject them as a
+compile-time type error?
+
+### Evaluation
+
+Both proposed fixes break a load-bearing idiom:
+
+- **C-style coercion (`!0 ⇒ true`)** would invert the meaning of every
+  `!nullable` null test.  The stdlib `min` / `max` / `clamp` use `!both` to
+  mean *"both is null"* (`default/01_code.loft`); coercion would silently
+  change them to *"both is zero"*.
+- **Compile error on `!<non-bool>`** rejects that same stdlib idiom, and any
+  user code that writes `!handle` to mean "absent".
+
+The asymmetry is **documented** (`LOFT.md` → *"`!value` asymmetry — read
+carefully"*) and intrinsic to the in-band-sentinel memory model (the same
+model that makes `C66`'s "return a sentinel, keep running" possible).  `!x`
+as a null test is the *deliberate* shape: for a nullable `x` it is a real,
+useful check; the surprise only arises when a reader imports C's
+value-falsiness expectation.
+
+What IS cleanly fixable is the **always-false** subset: `!x` on a statically
+`not null` operand can never be the sentinel, so it is provably a no-op.  That
+gets a compile-time **warning** (zero false positives — nullable operands and
+boolean `!` stay quiet), mirroring the redundant-`??` warning.  Going further
+(deprecating `!` on non-booleans, migrating the stdlib to `x == null`) was
+weighed and declined: it removes a working idiom to chase a confusion that the
+documentation + the always-false warning already address, and it churns the
+stdlib's hottest helpers for cosmetic gain.
+
+### Decision
+
+**Closed — accepted design choice.**  Dated 2026-06-03.  `!x` on a
+non-boolean stays a null test (sentinel-in-band).  Added safety net: a
+`Level::Warning` at `!` of a statically `not null` non-boolean operand
+("always false — `!x` tests whether x is null …"), landed in
+`src/parser/vectors.rs::parse_single`.  Regression guards:
+`gh253_bang_on_not_null_warns` (warns) and `gh253_bang_on_nullable_is_quiet`
+(no false positive) in `tests/parse_errors.rs`.  GitHub #253 closed `by-design`
+pointing here.
+
+### Revisit when
+
+A concrete loft program demonstrates that the null-test idiom causes a
+recurring, hard-to-diagnose class of bugs that the always-false warning + the
+documented asymmetry don't catch — AND a replacement (e.g. reserving `!` for
+boolean with an explicit `x == null` null test) has been prototyped to show it
+doesn't churn the stdlib's hot paths or surprise the in-band-sentinel model.
+"I expected C semantics" is not sufficient evidence.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

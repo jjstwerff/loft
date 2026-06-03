@@ -67,10 +67,15 @@ it.  Apply at most one; remove it once the blocker clears.
 |---|---|---|
 | `attention` | The bug has been **tried 2+ times with no clear path to a fix** — repeated attempts stalled, the mechanism is still not understood, or every fix tried regressed something else. A flag for "stop grinding solo; this needs a fresh approach or more eyes." | A new diagnostic angle, a different contributor, or escalation — not another identical attempt. |
 | `design` | The bug **cannot be solved at all without a user-validated design decision** — the fix hinges on a language/semantics choice only the maintainer can make. Stronger than `needs-design`: `needs-design` means *a* design call is needed (a contributor may propose one); `design` means it is **blocked on the user** signing off. | The maintainer validates a direction; then it usually downgrades to a normal mechanical fix. |
+| `by-design` | The reported "bug" reproduces exactly as described but is **intended behavior, traceable to a decision we already made** — the resolution is to *point at the decision*, not to change code. A **closing** label: apply when closing, and cite the [`DESIGN_DECISIONS.md`](../doc/claude/DESIGN_DECISIONS.md) entry (a `C##`) it rests on (record one in the same close if the decision wasn't written down yet). | Nothing — it's terminal. Re-opens only on **new evidence** that invalidates the decision (per the register's "Revisit when"). |
 
 > Rule of thumb: reach for `attention` when you *don't know how* to fix it after
 > genuine attempts; reach for `design` when you *can't decide what correct even
-> means* without the user.  A bug can carry both (stuck **and** needs a design call).
+> means* without the user; reach for `by-design` when *correct is already
+> decided* and the report just rediscovered it.  The three form a lifecycle:
+> `needs-design`/`design` (open, decision pending) → `by-design` (closed,
+> decision cited).  A bug can carry both `attention` **and** `design` (stuck
+> **and** needs a design call).
 
 > **Multi-repo:** `sev:`/`wa:`/cross-cutting are shared across the loft-family
 > repos (loft / dryopea / lavition / `loft-lang/*`).  `area:` is loft-specific;
