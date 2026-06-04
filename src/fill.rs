@@ -2007,15 +2007,21 @@ fn size_file(s: &mut State) {
 }
 
 fn delete(s: &mut State) {
-    let v_path = s.string();
-    let new_value = codegen_runtime::fs_delete(v_path.str());
+    // #255 / @PLN9: re-home the relative path against the program anchor so
+    // delete matches exists()/file() (both go through resolve_path).
+    let raw = s.string().str().to_owned();
+    let resolved = s.database.resolve_path(&raw);
+    let new_value = codegen_runtime::fs_delete(&resolved);
     s.put_stack(new_value);
 }
 
 fn move_file(s: &mut State) {
-    let v_to = s.string();
-    let v_from = s.string();
-    let new_value = codegen_runtime::fs_move(v_from.str(), v_to.str());
+    // #255 / @PLN9: re-home both endpoints against the program anchor.
+    let to_raw = s.string().str().to_owned();
+    let from_raw = s.string().str().to_owned();
+    let to = s.database.resolve_path(&to_raw);
+    let from = s.database.resolve_path(&from_raw);
+    let new_value = codegen_runtime::fs_move(&from, &to);
     s.put_stack(new_value);
 }
 
@@ -2034,14 +2040,18 @@ fn call_ref(s: &mut State) {
 }
 
 fn mkdir(s: &mut State) {
-    let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir(v_path.str());
+    // #255 / @PLN9: re-home the relative path against the program anchor.
+    let raw = s.string().str().to_owned();
+    let resolved = s.database.resolve_path(&raw);
+    let new_value = codegen_runtime::fs_mkdir(&resolved);
     s.put_stack(new_value);
 }
 
 fn mkdir_all(s: &mut State) {
-    let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir_all(v_path.str());
+    // #255 / @PLN9: re-home the relative path against the program anchor.
+    let raw = s.string().str().to_owned();
+    let resolved = s.database.resolve_path(&raw);
+    let new_value = codegen_runtime::fs_mkdir_all(&resolved);
     s.put_stack(new_value);
 }
 

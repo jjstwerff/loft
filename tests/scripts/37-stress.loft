@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Stress tests for all four collection types: build large structures, verify
 // them, and remove elements in various ways — exercising store recycling paths.
+// @PLN9: cwd-relative paths — reads a wordlist fixture relative to the cwd.
+#cwd
 struct IntRec {
   id: integer,
   val: integer

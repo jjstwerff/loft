@@ -3987,6 +3987,28 @@ impl Parser {
     #[allow(clippy::too_many_lines)] // two-pass parser dispatch — splitting would lose context
     fn parse_file(&mut self) {
         let start_def = self.data.definitions();
+        // #255 / @PLN9: file-level `#cwd` directive — opt this program out of the
+        // program-relative default so a *relative* file path resolves against the
+        // process cwd (CLI-tool semantics) rather than the program's own
+        // directory.  Whole-program; must precede declarations.  At file top the
+        // lexer's first token can only be this directive (`#rust`/`#native`/etc.
+        // are declaration-scoped, consumed later by `parse_rust`).
+        if self.lexer.has_token("#") {
+            match self.lexer.has_identifier().as_deref() {
+                Some("cwd") => {
+                    self.database.program_relative = false;
+                    let _ = self.lexer.has_token(";");
+                }
+                other => {
+                    let name = other.unwrap_or("").to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown file directive '#{name}' (expected '#cwd')"
+                    );
+                }
+            }
+        }
         // Tier-0 lazy auto-`use`: the file the lexer is on right now, captured
         // before the use-loop may switch away.  Scanned for `lib::` references
         // after the use-region (see the load loop below).

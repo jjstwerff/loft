@@ -6,6 +6,8 @@
 
 // --- C54: file.lines() drops content without trailing newline ---
 
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
 fn test_c54_file_lines_no_trailing_newline() {
   {c54_f = file("test_c54.txt"); c54_f += "no trailing newline";}
   c54_lines = file("test_c54.txt").lines();

@@ -8,6 +8,8 @@
 // flush is success).  On Format.Directory and Format.NotExists the
 // call short-circuits to false.
 
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
 fn cleanup() { delete("test_loft_sync.txt"); delete("test_loft_sync.bin"); }
 
 fn main() {

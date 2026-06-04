@@ -11,6 +11,8 @@
 //   - text log: line-per-record, plain UTF-8
 //   - binary log: fixed-width i32 records
 
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
 fn cleanup() {
   delete("test_loft_text_log.txt");
   delete("test_loft_binary_log.bin");

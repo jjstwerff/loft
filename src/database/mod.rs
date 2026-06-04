@@ -952,9 +952,10 @@ impl Stores {
             runtime_error: None,
             format_fault_tag: None,
             source_dir: String::new(),
-            // #255 / @PLN9: default cwd-relative (current behaviour).  The flip
-            // to program-relative-by-default is the corpus-migration step.
-            program_relative: false,
+            // #255 / @PLN9: program-relative by default — a relative file path
+            // re-homes against the program's own directory, so "program + assets"
+            // is a portable bundle.  CLI tools opt back into cwd with `#cwd`.
+            program_relative: true,
             frame_yield: false,
             poison_free: false,
             disable_slot_reuse: false,
