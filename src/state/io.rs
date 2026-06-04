@@ -69,8 +69,11 @@ impl State {
         ))]
         {
             let store = self.database.store(&file);
-            let file_path = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
-            let path_string = file_path.to_owned();
+            let raw_path = store
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                .to_owned();
+            // #255 / @PLN9: re-home a relative path against the program anchor.
+            let path_string = self.database.resolve_path(&raw_path);
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
             if let Ok(mut f) = File::open(&path_string) {
                 match f.read_to_string(buf) {

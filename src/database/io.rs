@@ -442,9 +442,18 @@ impl Stores {
         if file.rec == 0 {
             return false;
         }
+        // #255 / @PLN9: re-home a relative path against the program anchor.
+        // Resolve read-only first (drops the borrow), then re-borrow mutably
+        // for fill_file.  The original path stays in the struct's `.path` field.
+        let raw = {
+            let store = self.store(file);
+            store
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                .to_owned()
+        };
+        let resolved = self.resolve_path(&raw);
         let store = self.store_mut(file);
-        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
-        let path = std::path::Path::new(filename);
+        let path = std::path::Path::new(&resolved);
         fill_file(path, store, file)
     }
 
