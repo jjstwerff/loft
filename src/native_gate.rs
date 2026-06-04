@@ -86,15 +86,17 @@ fn is_scalar_type(t: &Type) -> bool {
 ///
 /// **Parameters** may be any bridge type — scalars **plus** the `DbRef`-backed
 /// aggregates (`vector`/`reference`/data-`enum`/sorted/index/hash/spacial), passed
-/// as the raw stack `DbRef`.  **The return must be scalar or `void`** (for now):
-/// a non-scalar return triggers `--native`'s **hidden destination-parameter**
-/// convention — the function body gains a trailing `DbRef` work-vector that the
-/// *caller* pre-allocates (`stores.null_named` + `OpDatabase(<type_id>)`) and
-/// passes in.  That makes the compiled body's arity exceed the public signature,
-/// which the script-side `#native` forward-decl doesn't model — so non-scalar
-/// returns are a **separate sub-slice** (the bridge wrapper must allocate the
-/// destination itself).  `Text` params and plain (tag-only) `enum` are likewise
-/// deferred.
+/// as the raw stack `DbRef`.  **Returns** may be scalar, `void`, or a `vector`.  A
+/// `vector` return triggers `--native`'s **hidden destination-parameter** convention
+/// (`ref_return` appends a trailing `DbRef` work-vector marked `Attribute::hidden`
+/// that the caller pre-allocates with `stores.null_named` + `OpDatabase(<type_id>)`);
+/// the bridge wrapper allocates that destination itself, so the script-side
+/// `#native` forward-decl still models only the public params.
+///
+/// Not yet handled (a function is excluded if any holds): a `reference`/`enum`-data
+/// **return** (its destination needs the struct's type id, not `main_vector<…>`);
+/// a `Text` param/return; a `__`-prefixed synthetic param (closures, text work
+/// buffers).
 #[must_use]
 pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
     native_compilable(data)
@@ -102,16 +104,20 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
         .filter(|&d| {
             let def = data.def(d);
             let ret = def.returned();
-            // Scalar / void returns only — see the doc comment on hidden
-            // destination params for why non-scalar returns are deferred.
-            let ret_ok = matches!(ret, Type::Void | Type::Null) || is_scalar_type(ret);
+            let ret_ok = matches!(ret, Type::Void | Type::Null)
+                || is_scalar_type(ret)
+                || matches!(ret, Type::Vector(_, _));
             ret_ok
-                && def
-                    .attributes()
-                    .iter()
-                    // skip synthetic / hidden params (`__closure`, work buffers, …)
-                    .filter(|a| !a.name.starts_with("__"))
-                    .all(|a| is_bridge_type(&a.typedef))
+                && def.attributes().iter().all(|a| {
+                    if a.hidden {
+                        // The only hidden destination the bridge allocates is a vector.
+                        matches!(a.typedef, Type::Vector(_, _))
+                    } else if a.name.starts_with("__") {
+                        false // closures / text work buffers — not handled
+                    } else {
+                        is_bridge_type(&a.typedef)
+                    }
+                })
         })
         .collect()
 }

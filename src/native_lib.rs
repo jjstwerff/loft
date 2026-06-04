@@ -165,30 +165,43 @@ fn export_wrapper(data: &Data, d_nr: u32) -> String {
 /// The `#[no_mangle] pub extern "C"` **shared-store** bridge for
 /// shared-store-dispatchable function `d_nr`.  The export symbol is
 /// `loft_shared_<name>`.  It casts the caller's `*mut Stores` to
-/// `&UnsafeCell<Stores>` (no per-call cell — the caller's store is live), reads
-/// each arg from the [`LibArg`] slots by its known type, forwards to the inner
-/// `--native` fn, and writes the return into `ret`.
+/// `&UnsafeCell<Stores>` (no per-call cell — the caller's store is live), then,
+/// in the inner fn's attribute order:
+/// - a **visible** parameter is read from the next [`LibArg`] slot by its type;
+/// - a **hidden** destination parameter (`Attribute::hidden`, appended by
+///   `ref_return` for a non-scalar return) is **allocated here** in the shared
+///   store (`null_named` + `OpDatabase(<type_id>)`), exactly as a `--native`
+///   caller would — so the caller-side dispatcher only ever passes the public args.
+///
+/// Finally it forwards to the inner `--native` fn and writes the return.
 fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
+    use std::fmt::Write as _;
     let def = data.def(d_nr);
     let inner = def.name(); // e.g. "n_vec_sum"
-    let params: Vec<&Type> = def
-        .attributes()
-        .iter()
-        .filter(|a| !a.name.starts_with("__"))
-        .map(|a| &a.typedef)
-        .collect();
 
-    use std::fmt::Write as _;
     let mut body = String::new();
     let mut fwd = String::new();
-    for (i, t) in params.iter().enumerate() {
-        let ty = rust_type(t, &Context::Argument);
-        let read = bridge_read(t, &format!("a[{i}]"));
-        let _ = writeln!(body, "    let a{i}: {ty} = {read};");
-        let _ = write!(fwd, ", a{i}");
+    let mut slot = 0usize; // next public-arg LibArg slot
+    for (i, a) in def.attributes().iter().enumerate() {
+        let var = format!("p{i}");
+        if a.hidden {
+            // ref_return destination — allocate it in the SHARED store, mirroring
+            // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
+            let tid = hidden_dest_type_id(data, &a.typedef);
+            let _ = writeln!(
+                body,
+                "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+            );
+            let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+        } else {
+            let ty = rust_type(&a.typedef, &Context::Argument);
+            let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
+            let _ = writeln!(body, "    let {var}: {ty} = {read};");
+            slot += 1;
+        }
+        let _ = write!(fwd, ", {var}");
     }
 
-    let n = params.len();
     let call = format!("{inner}(cell{fwd})");
     let ret_stmt = bridge_write_ret(def.returned(), &call);
 
@@ -202,11 +215,26 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
          ) {{\n    \
          let cell = unsafe {{ &*(stores.cast::<std::cell::UnsafeCell<Stores>>()) }};\n    \
          let a = unsafe {{ std::slice::from_raw_parts(args, n) }};\n    \
-         let _ = ({n}, a);\n\
+         let _ = ({slot}, a);\n\
          {body}    \
          {ret_stmt}\n\
          }}\n",
     )
+}
+
+/// The schema type id for a hidden `ref_return` destination of loft type `t`,
+/// for the `OpDatabase(cell, ref, <id>)` allocation.  Vectors resolve via the
+/// `main_vector<elm>` schema name (the same key `--native`'s `output_alloc_heap`
+/// uses).  Other aggregates (struct `reference`, data-`enum`) need their own
+/// type id and are not yet handled (the gate excludes them).
+fn hidden_dest_type_id(data: &Data, t: &Type) -> u16 {
+    match t {
+        Type::Vector(elm, _) => {
+            let elm_name = elm.name(data);
+            data.name_type(&format!("main_vector<{elm_name}>"), 0)
+        }
+        _ => u16::MAX,
+    }
 }
 
 /// Rust expression reading an argument of loft type `t` out of `LibArg` slot

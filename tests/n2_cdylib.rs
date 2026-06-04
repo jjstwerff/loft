@@ -454,22 +454,17 @@ const RANGE_VEC_LIB: &str = "pub fn range_vec(n: integer) -> vector<integer> {\n
                              \x20   v\n\
                              }";
 
-/// N2 store-touching slice, milestone 3 (DEFERRED): a non-scalar *return* crosses
-/// the boundary.  `range_vec(4)` allocates `[0,1,2,3]` in the SHARED store inside
-/// the native body and returns its `DbRef`; the interpreter sums it to 6.
+/// N2 store-touching slice, milestone 3: a non-scalar *return* crosses the
+/// boundary.  `range_vec(4)` allocates `[0,1,2,3]` in the SHARED store inside the
+/// native body and returns its `DbRef`; the interpreter sums it to 6.
 ///
-/// Lock-in for the non-scalar-return sub-slice.  `--native` returns a vector via a
-/// **hidden trailing destination `DbRef`** that the caller pre-allocates
-/// (`stores.null_named` + `OpDatabase(<type_id>)`) — so the compiled body's arity
-/// (`n_range_vec(cell, n, v)`) exceeds the public signature (`range_vec(n)`), and
-/// `shared_store_dispatchable` currently gates non-scalar returns out (this test's
-/// `build_shared_lib_cdylib` therefore asserts-out today).  Un-ignore when the
-/// shared bridge wrapper allocates the destination itself and the gate admits
-/// non-scalar returns.
+/// `--native` returns a vector via a **hidden trailing destination `DbRef`**
+/// (`Attribute::hidden`, appended by `ref_return`) that the caller pre-allocates
+/// (`stores.null_named` + `OpDatabase(<type_id>)`).  The shared bridge wrapper
+/// allocates that destination itself, so the script-side `#native` forward-decl
+/// still models only the public param `n`.  Proves native-made store allocations
+/// are valid back in the interpreter.
 #[test]
-#[ignore = "@PLAN54 N2 — shared-store non-scalar returns; un-ignore when the bridge \
-            wrapper allocates the hidden destination DbRef (OpDatabase) and \
-            shared_store_dispatchable admits non-scalar returns"]
 fn dispatches_vector_return_from_shared_cdylib() {
     let _lock = TEST_LOCK
         .lock()
