@@ -183,16 +183,30 @@ cache; and the cross-mode byte-identical equivalence harness.
 | **N1 — per-library native artifact cache** 🔄 | **Idle-TTL eviction model done + applied to the program cache.**  `cache::cache_ttl()` (`LOFT_CACHE_TTL_HOURS`, default 24 h) + `cache::touch_now()` (touch-on-use mtime bump) + `prune_dir` now evicts **idle-TTL first** (drop bundles unused past the TTL) with the size-cap as a runaway backstop; a warm program-cache hit `touch_now`s its bundle, so actively-run programs persist and one-offs age out.  (The "compile each library once, fingerprint-validated" half *is* N0's `auto_build_native` + sidecar.)  **Remaining — the idle-TTL on a *native-artifact* cache:** the default local build compiles libraries **in-tree** (`lib/<pkg>/native/target/`), which is the dev build, **not an evictable cache** — so the native-artifact idle-TTL needs the registry build-cache (`~/.loft/build-cache/`, feature-gated) or a new shared local native cache.  Deferred until that surface exists rather than shipping untested registry-gated GC (Goal-A "verify, don't assert"). | `prune_dir_idle_ttl_evicts_unused` (unit) + `arc_e_program_cache` warm-hit touch path; suites green | 🔄 | M — **model + program-cache done; native-cache application deferred** |
 | **N2 — lean library interface load** | Load each native library's **interface only** — exported types → schema, function signatures, symbol→def map — without parsing the lib source or materialising bodies/var-tables, so the interpreted script type-checks calls + emits native dispatch against it.  Builds on the `Definition` seam + the D2a schema cache. | a script using a native lib loads its interface, not its bodies; output byte-identical to the all-interpreted run (Goal D) | ⬜ | M |
 | **N3 — native/interpret decision policy** | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag. | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | ⬜ | M |
-| **N4 — mixed-mode dispatch coverage** | Generalise interp→native dispatch beyond simple `#native`: generics, closures crossing the boundary, complex exported types (PACKAGES.md "What must be native" / C-ABI).  Un-native-able constructs **silently fall back to interpret** (Goal F — absorb the cost, never an error). | dogfood-consumer libraries (closures/generics) run native where possible, interpret where not, **with no user-visible error**; cross-mode output identical | ⬜ | L |
+| **N4 — compilability gate + silent interpret fallback** *(re-scoped 2026-06-04)* | **The interpret-fallback turns N4 from a research problem into a compile-time gate.**  Per library function ask "is this native-compilable?": yes → auto-compile + `OpStaticCall`; no (generics / boundary closures / unsupported) → emit a normal interpreted call (Goal F — silent, never an error).  The interpreter **already has the lib IR** and **already runs mixed** (the stdlib `#native`-vs-bytecode pattern), so "interpret the hard cases" is the interpreter doing its job, not new machinery.  The gate is **transitive** — native iff the function *and all its callees* are native-compilable — so you compile the **maximal native subgraph** and the boundary is **only ever interpret→native** (`OpStaticCall`, the supported direction); a native fn never needs the hard native→interpreter upcall.  Data crossing is free (shared store / `DbRef`).  **Making generics/closures themselves native is dropped off the critical path** — a later, *measured* optimization (do it only where profiling shows a fallback fn is hot).  Core risk: a *conservative, silent* compilability detector (when unsure → interpret). | a library runs native where compilable, interprets where not, **no user-visible error**; cross-mode output identical; the native-compiled subgraph matches all-interp | ⬜ | S–M (gate) · native-coverage-of-hard-cases = separate, optional L |
 | **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ⬜ | M (continuous) |
 
 **Sequencing.**  N0 first (correctness + unblocks; small, dev-facing) → N1 + N2 are
-the core mechanism (cache + interface) → N3 makes it invisible (F) → N4 is the
-capability unlock (C) and the largest piece.  **N5 is woven through each phase, not
-appended** — per C71's guardrail that the A/D detectors grow to the mixed boundary
-*as part of* the work, and per [GOALS.md](../../../GOALS.md) "two floors," this arc
-is **gated on the soundness floor it extends** (it adds a new interp↔native surface
-to that floor rather than clearing it).
+the core mechanism (cache + dispatch) → N3 makes it invisible (F).  **N5 is woven
+through each phase, not appended** — per C71's guardrail that the A/D detectors grow
+to the mixed boundary *as part of* the work, and per [GOALS.md](../../../GOALS.md)
+"two floors," this arc is **gated on the soundness floor it extends** (it adds a new
+interp↔native surface to that floor rather than clearing it).
+
+**Timeline (the interpret-fallback re-scope, 2026-06-04).**  Letting the
+un-native-able cases interpret (N4 above) drops the generics/closures **research off
+the critical path**, so the shippable mixed-mode is **N1-remainder + N2 (with the
+compilability gate) + N3 + N5 ≈ 2–2.5 months**, with the **headline at ~5–6 weeks**
+(an interpreted script calling a compiled user library over the shared store, for
+the native-compilable subgraph).  Native coverage of the hard cases is a *later,
+measured* optimization.  Effort is **front-loaded for value**: each of N1/N2/N3 and
+each new type pattern is independently shippable to `main`.  Skip an N4 "can we make
+generics native?" spike — the fallback makes that a non-blocker.  The two
+**non-negotiable, not-front-loaded** costs are N5 (mixed-boundary soundness, esp.
+macOS-ARM alignment) and the conservative-silent compilability detector in N2.
+*Caveat: a fallback function gets no native speedup — the win is bounded by how much
+of a library's hot path sits in the native subgraph, which is measurable per
+library, not guessed.*
 
 **Excluded — the library validation layer (deferred, customer-facing).**  The
 fingerprint's eventual owner: an artifact's validity = content · target · features ·
