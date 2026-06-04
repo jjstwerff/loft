@@ -119,6 +119,45 @@ remainder** (plan-58's accepted ≥4 over-reservation) is the *same bug, unfinis
 The sanitizer **guard** worth building is just that invariant made executable
 (*every vector handle strides by 4*) — see [GOALS.md](../GOALS.md) two-engine model.
 
+### The composition axes — the dimensions a matrix varies
+
+A matrix is only as good as the axes it crosses, and the axes are **not** invented
+per bug or per feature — they are loft's **fixed degrees of freedom**, the things any
+new value, type, or operation must compose with.  This is the one canonical list;
+the **debug** matrix ([CLAUDE.md § Debugging policy](../../../CLAUDE.md) step 2, to
+*bound a bug*) and the **feature-plan Stage A** ([`_TEMPLATE.md`](_TEMPLATE.md), to
+*bound a feature*) both vary against it.  Cross the axes your change actually
+touches; a weak matrix that exercises the easy axes and skips the load-bearing one
+(plan-58 ran wide elements and skipped narrow) hides exactly the cell that crashes.
+
+1. **Type-kind** of the element/operand — wide scalar (`i32`/`f32`/`bool`/`char`),
+   **narrow scalar** (`i8`/`i16`/`u8`/`u16` — distinct stride, where plan-58 split),
+   `text`, struct, enum, vector, tuple, closure / fn-ref.  Plus the **null** of each.
+2. **Construction path** — literal, comprehension, function return, append/push,
+   copy (assignment / element-copy), default / zero-init.  (plan-58's four clusters
+   were *one* bug spread across four of these.)
+3. **Storage context** — local slot, struct field, vector element, global,
+   const/static, argument, captured-by-closure.
+4. **Access** — read vs store, *every* index/position (not just `[0]`), length
+   afterwards — a probe that checks only `[0]` with no length passes *on* corruption.
+5. **Nesting depth** — 1 / 2 / 3+ (where the `vector<T>`↔`vector<vector<T>>` type-id
+   divergence surfaced).
+6. **Null / sentinel** — the null representation *per type* (`f32` NaN → wild rec-id
+   vs `i64::MIN` → harmless; the @P380 axis).
+7. **Backend** — `--interpret` vs `--native` (vs WASM where relevant); divergence
+   between the two is its own hazard, verified at the end (step 7).
+
+The **design** use is this same list run *forward in time*.  Before building a
+feature, its cells against these axes are its conformance spec: it is done not when
+the demo runs but when **every cell is green on both backends**, and those probes
+become its regression suite.  The bug class plan-58 shipped — one invariant
+(*a handle is 4 bytes*) re-derived in four code paths, validated only where the
+derivations happened to coincide — is *structurally* a set of matrix cells the
+feature never crossed.  The representation that makes the class **impossible** is
+[Goal E](../GOALS.md) (source is the truth) applied to construction: give each fact
+the feature introduces **one home** every path consults, and the off-diagonal cells
+have nothing to disagree about.
+
 ### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
 
 Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —

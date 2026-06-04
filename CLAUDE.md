@@ -310,10 +310,12 @@ needed); inside an investigation plan it becomes the formal
    conclusion — most of all an elegant one-line fix (real bugs are complex-variant;
    the clean story is usually the part of the picture you haven't looked at yet).
 2. **Build the boundary matrix** in throwaway `/tmp` probes — on `--interpret` only.
-   Take the repro and vary ONE dimension per probe (source / container / context /
-   store-vs-read / depth / element-type).  Distinctive collision-resistant values,
-   every index/position — a weak probe (small values, only index `[0]`, no length
-   check) hides cases.  SEE on the interpreter: strides and types are IR operands it
+   Vary ONE dimension per probe along the **composition axes**
+   ([plans/README § The composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies):
+   type-kind / construction-path / context / access / depth / null / backend — the
+   same list a feature's Stage A matrix uses).  Distinctive collision-resistant
+   values, every index/position — a weak probe (small values, only index `[0]`, no
+   length check) hides cases.  SEE on the interpreter: strides and types are IR operands it
    surfaces in seconds, whereas `--native` pays a rustc compile *per probe* — that
    cost belongs at the final verify (step 7), never in the seeing loop.
 3. **Map pass/fail; find the real boundary.**  Expect the filed/assumed scope to be

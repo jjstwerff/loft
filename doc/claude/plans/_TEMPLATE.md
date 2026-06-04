@@ -81,6 +81,26 @@ don't bounce out to ROADMAP for sizing.
 - **Design:** ✓ (detailed) / ~ (partial) / — (needs design)
 - **Last touched:** YYYY-MM-DD (auto via `git log -1`)
 
+## Composition matrix — Stage A (REQUIRED for plans that add or extend a value, type, or operation)
+
+*Before* the implementation phases, enumerate the feature's cells against the
+**composition axes** ([README § The composition axes](README.md#the-composition-axes--the-dimensions-a-matrix-varies))
+— the axes your change actually touches — and write them as `/tmp` probes first, on
+`--interpret`.  This matrix is the spec: the feature is done not when the demo runs
+but when **every cell is green on both backends**, and the probes graduate to
+`tests/scripts/` as its regression suite.
+
+The bug class this prevents is the one plan-58 shipped — an invariant re-derived in
+several code paths, validated only where the derivations happened to coincide.  So
+the design half of the same discipline: give each fact the feature introduces **one
+home** every path consults ([Goal E](../GOALS.md) — source is the truth — applied to
+the feature's *representation*, not just its memory).  With single-home invariants
+the off-diagonal cells cannot disagree; the matrix is how you *prove* it.
+
+Skip this section only for plans with no new composition surface (pure refactor,
+pointer-plan, docs) — and say so in one line when you do.  Silence reads as "matrix
+done", not "matrix N/A".
+
 ## Sub-arcs (REQUIRED if multi-phase; OPTIONAL otherwise)
 
 Status table.  One row per arc / phase / sub-feature.  Each
