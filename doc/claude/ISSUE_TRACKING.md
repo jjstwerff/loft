@@ -198,6 +198,29 @@ same failure as a fix asserted without the matrix.)
 - **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
   that data must be present to defer or reject *informedly*, never by default.
 
+### The done-gate — `fixed` / `implemented` is earned, not declared
+
+Ripeness guards the way *in*; the **done-gate guards the way out**.  Before a ticket
+earns `fixed` (bug) or `implemented` (enhancement), evaluate the *result* against two
+checks — their failure has a loud symptom: **the requester immediately files a slight
+variation** (the production-time form of *"the un-generalized remainder is the same
+bug, unfinished"* — found by the user instead of by us).
+
+1. **Class coverage** — did the fix enforce the **invariant / whole class**, not just
+   the filed repro?  A narrower fix leaves siblings and the requester files one.  (The
+   matrix protocol's "no narrower," checked at closure: the `i16` case, the nested one,
+   the other backend, the other context.)
+2. **Intent match** — does the result deliver **what the requester actually wanted**,
+   not just what they literally typed?  (#255: the literal complaint was *wrong*; a
+   perfect fix of the words would have missed the real want.)
+
+Operational test — **"would the requester read this result and file a slight
+variation?"**  *"…but what about &lt;sibling&gt;"* → class miss; *"…but that's not what
+I meant"* → intent miss.  Either → **not done**: widen the fix, or re-scope to the
+intent, before closing.  Any residual that legitimately can't be closed now (a real
+*separate* sibling, a verification you couldn't run) is **named on the ticket**, not
+left silent — that is the difference between a tracked follow-up and a slip.
+
 ## The work queue — what's workable, and the dual flow
 
 A goal that says *"work the queue"* acts only on items that are **workable now**, and
