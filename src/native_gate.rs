@@ -26,7 +26,7 @@
 //! hard native → interpreter upcall.  A `CallRef` (runtime fn-ref) is excluded:
 //! its dynamic callee can't be proven native.
 
-use crate::data::{Data, DefType, Value};
+use crate::data::{Data, DefType, Type, Value};
 use std::collections::HashSet;
 
 /// @PLAN54 Arc N / N2 — the set of function `def_nr`s that can be `--native`-
@@ -40,6 +40,42 @@ pub fn native_compilable(data: &Data) -> HashSet<u32> {
                 && fn_native_compilable(data, d, &mut HashSet::new())
         })
         .collect()
+}
+
+/// @PLAN54 Arc N / N2 — the **scalar-dispatchable** subset: native-compilable
+/// functions whose parameters and return type are all scalars
+/// (`integer`/`boolean`/`float`/`single`/`character`).  These are the **first
+/// dispatch slice**: no store reference crosses the interpreter↔native boundary,
+/// so the auto-generated `#native` export wrapper is trivial and the
+/// `&UnsafeCell<Stores>` ↔ `LoftStore` bridge is not needed (any internal store
+/// use is contained — a scalar-return function cannot leak a store ref out).  The
+/// store-touching functions (Text / Vector / Reference signatures) come in the
+/// next slice with the bridge.
+#[must_use]
+pub fn scalar_dispatchable(data: &Data) -> HashSet<u32> {
+    native_compilable(data)
+        .into_iter()
+        .filter(|&d| {
+            let def = data.def(d);
+            is_scalar_type(def.returned())
+                && def
+                    .attributes()
+                    .iter()
+                    // skip synthetic / hidden params (`__closure`, work buffers, …)
+                    .filter(|a| !a.name.starts_with("__"))
+                    .all(|a| is_scalar_type(&a.typedef))
+        })
+        .collect()
+}
+
+/// A type that passes the interpreter↔native boundary by value, with no store
+/// reference — the trivially-marshallable set.  (Plain enums, `Text`, vectors and
+/// references are deliberately excluded from this first slice.)
+fn is_scalar_type(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
+    )
 }
 
 /// Transitive native-compilability of function `d_nr`: its body uses no
@@ -179,6 +215,36 @@ mod tests {
             "most stdlib functions should be native-compilable ({}/{})",
             native.len(),
             total_fns
+        );
+    }
+
+    /// The scalar-dispatchable subset (the first dispatch slice) is a non-empty
+    /// subset of the native set — the stdlib has many scalar-signature functions.
+    #[test]
+    fn scalar_dispatchable_is_a_nonempty_subset() {
+        let mut p = crate::parser::Parser::new();
+        if p.parse_dir("default", true, false).is_err() {
+            eprintln!("skip: default/ stdlib not parseable here");
+            return;
+        }
+        let native = native_compilable(&p.data);
+        let scalar = scalar_dispatchable(&p.data);
+        eprintln!(
+            "native gate: {}/{} native functions are scalar-dispatchable (first slice)",
+            scalar.len(),
+            native.len()
+        );
+        assert!(
+            scalar.is_subset(&native),
+            "scalar-dispatchable must be a subset of native-compilable"
+        );
+        assert!(
+            !scalar.is_empty(),
+            "stdlib should have scalar-only functions"
+        );
+        assert!(
+            scalar.len() < native.len(),
+            "not every native function is scalar-only (text/vector/ref signatures exist)"
         );
     }
 }

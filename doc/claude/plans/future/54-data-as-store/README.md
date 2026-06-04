@@ -218,6 +218,41 @@ fires only for `parallel{}`/`par_for`/`yield` users.  This collapses N4 to "wire
 dispatch" and removes the last real uncertainty from the headline estimate.  The
 remaining headline work is purely N2's dispatch + cdylib packaging.
 
+### N2 dispatch — implementation design (2026-06-04, post-investigation)
+
+**The dispatch *decision* already exists.**  The interpreter emits `OpStaticCall`
+for any function whose symbol is in `State.library_names`, resolved at runtime via
+`extensions::wire_native_fns` → dlsym.  So N2 does not build a new dispatch path —
+it registers the auto-compiled subgraph's symbols and reuses the stdlib's.
+
+**Strategy: auto-generate a native *package* crate from the native subgraph.**  A
+native package (`lib/<pkg>/native/`) is already a cdylib of `#native` exports that
+`auto_build_native` (N0) builds and the interpreter dispatches to.  N2 = generate
+that crate's `lib.rs` from the library's native-compilable functions (`--native`
+`output_function` for the bodies + the `#native` export wrappers), then reuse N0's
+build + the existing load/dispatch.
+
+**THE CRUX — the store-ABI bridge (the real complexity, not "just plumbing").**
+`output_function` emits `fn n_<name>(_cell: &UnsafeCell<Stores>, args…) -> ret` —
+it touches the heap through a Rust `&UnsafeCell<Stores>`.  But the `#native` *export*
+ABI is either a typed `extern "C" fn(scalars) -> ret` (no store) **or**, for
+store-touching functions, a `LoftStore` **FFI handle** (the `loft_ffi::vec_wrapper!`
+path).  Bridging `&UnsafeCell<Stores>` ↔ the `LoftStore` FFI handle is the multi-day
+weight of N2.
+
+**Sequencing (scalar-first — the store bridge is deferred, not skipped):**
+1. **Scalar-only, store-free functions** — the export wrapper is trivial (the body
+   never touches `_cell`).  This is the tractable first slice + the end-to-end proof
+   (`double(21) → 42` over a real auto-built cdylib).  Needs a *store-free* gate
+   refinement (scalar signature **and** a transitive store-free body walk) on top of
+   `native_gate`, the crate generator, symbol registration, and an end-to-end test.
+2. **Store-touching functions** — the `&UnsafeCell<Stores>` ↔ `LoftStore` bridge.
+3. **N5 soundness** of the boundary, woven through both.
+
+The acceptance gate for each slice is **end-to-end** (an interpreted script calls an
+auto-compiled lib function and gets the right answer), not a per-step check — so it
+lands as one working unit, never a half-built cdylib in the tree.
+
 **Excluded — the library validation layer (deferred, customer-facing).**  The
 fingerprint's eventual owner: an artifact's validity = content · target · features ·
 loft-build-fingerprint · signature, plus registry distribution of per-target
