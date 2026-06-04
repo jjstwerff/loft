@@ -298,6 +298,39 @@ states that are harder to debug than the original problem.
 - If a regression appeared after a specific recent commit, use `git show <commit>` or
   `git diff <commit>^ <commit>` to read that change — do not re-run old code.
 
+### Before fixing a non-trivial bug: build the boundary matrix (matrix-first)
+
+The urge to apply a fix is the signal you have NOT earned it yet.  On any
+non-trivial bug — *especially* a crash or silent corruption — run this protocol
+before touching code.  It is the lightweight default (`/tmp` probes, no plan
+needed); inside an investigation plan it becomes the formal
+[`_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md) flow.
+
+1. **Don't fix on the first read.**  A coherent explanation is a *hypothesis*, not a
+   conclusion — most of all an elegant one-line fix (real bugs are complex-variant;
+   the clean story is usually the part of the picture you haven't looked at yet).
+2. **Build the boundary matrix** in throwaway `/tmp` probes.  Take the repro and vary
+   ONE dimension per probe (source / container / context / store-vs-read / depth /
+   element-type / *both backends*).  Distinctive collision-resistant values, every
+   index/position — a weak probe (small values, only index `[0]`, no length check)
+   hides cases.
+3. **Map pass/fail; find the real boundary.**  Expect the filed/assumed scope to be
+   wrong — it usually is (#263 "into a collection" was actually *any runtime fn-ref
+   value*; #262 "3-deep copy" was actually *every single context*; cluster III was
+   three different mechanisms, two of them not even nesting).
+4. **The matrix is how you SEE the root.**  The shared mechanism behind a family of
+   "different" symptoms is visible *in the matrix* and invisible in any one repro.
+   Treat "I can't see the root yet" as "the matrix isn't finished," NEVER as license
+   to patch the one case in hand.
+5. **Fix at the chokepoint, enforcing exactly the invariant** the whole failing
+   region violates — no narrower (a per-case/per-type patch leaves siblings broken),
+   no wider (re-resolving the type drags blast radius).  An un-generalized remainder
+   is the same bug, unfinished.
+6. **If a multi-site fix regresses, bisect by SITE** — apply one site at a time and
+   re-run the matrix — after the FIRST regression, not the third.
+7. **Verify against the full matrix on both backends**; graduate the guarantee probes
+   to `tests/scripts/`, keep the rest as landmarks.
+
 ---
 
 ## Bug-filing policy — MANDATORY
