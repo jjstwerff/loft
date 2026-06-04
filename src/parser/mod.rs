@@ -97,6 +97,13 @@ pub struct Parser {
     /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
+    /// @PLAN54 Arc N / N3 — package dirs of libraries that opted into
+    /// auto-compilation (`[library] compile = "native"`).  Recorded during `use`
+    /// processing; the driver (`main.rs`) marks each library's public
+    /// shared-store-dispatchable functions native (after `scopes::check`, before
+    /// `byte_code`) and builds + loads the cdylib (after `byte_code`).  A library's
+    /// functions are identified by `def.position().file.starts_with(pkg_dir)`.
+    pub pending_native_compile: Vec<String>,
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
@@ -401,6 +408,7 @@ impl Parser {
             line: 0,
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
+            pending_native_compile: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             auto_use_trigger_map: None,
@@ -5348,6 +5356,16 @@ impl Parser {
             } else if let Some(built) = crate::extensions::auto_build_native(pkg_dir, stem) {
                 self.pending_native_libs.push(built);
             }
+        }
+        // @PLAN54 Arc N / N3 — `[library] compile = "native"`: opt a normal loft
+        // library into auto-compilation.  Record the package dir; the driver marks
+        // + builds + loads after scope analysis (see `pending_native_compile`).
+        // `native` (hand-written cdylib) takes precedence — don't double-compile.
+        if m.native.is_none()
+            && m.compile.as_deref() == Some("native")
+            && !self.pending_native_compile.iter().any(|d| d == pkg_dir)
+        {
+            self.pending_native_compile.push(pkg_dir.to_string());
         }
         // PKG.4: register native function symbols and package crate info.
         if let Some(ref crate_name) = m.native_crate {

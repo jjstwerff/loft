@@ -115,6 +115,25 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
     exportable
 }
 
+/// @PLAN54 Arc N / N3 — mark a `use`d library's **public** functions native: the
+/// candidates are the `pub` functions defined in the package at `pkg_dir` (by
+/// `def.position().file` prefix — the same ownership guard the manifest path uses),
+/// of which [`mark_native_exports`] marks the shared-store-dispatchable subset.
+/// Only public functions are dispatch targets (the script can't call private
+/// helpers; those are compiled into the cdylib as reachable deps).  Returns the
+/// marked set (the cdylib export set).
+pub fn mark_library_native(data: &mut Data, pkg_dir: &str) -> HashSet<u32> {
+    let candidates: HashSet<u32> = (0..data.definitions())
+        .filter(|&d| {
+            let def = data.def(d);
+            matches!(def.def_type(), DefType::Function)
+                && def.pub_visible
+                && def.position().file.starts_with(pkg_dir)
+        })
+        .collect();
+    mark_native_exports(data, &candidates)
+}
+
 /// Add to `types` (transitively, in definition order) the struct/enum defs that
 /// loft type `t` references.
 fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
@@ -504,18 +523,29 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
 #[must_use]
 pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    // Search the exe dir and its `deps/` for `libloft.rlib` (unhashed) or the
-    // newest `libloft-<hash>.rlib` (hashed, as cargo emits for dependencies).
-    for dir in [exe_dir.clone(), exe_dir.join("deps")] {
+    // Dependency rlibs always live in `<target>/<profile>/deps/`.  In a real binary
+    // run `exe_dir` is `<target>/<profile>` (so `deps/` is its child); in an
+    // integration test `exe_dir` already *is* `.../deps`.  The link-search dir we
+    // return is that `deps/` either way, so feature-dep rlibs (random/png/…) resolve.
+    let deps = if exe_dir.file_name().is_some_and(|n| n == "deps") {
+        exe_dir.clone()
+    } else {
+        exe_dir.join("deps")
+    };
+    // Find `libloft.rlib` (unhashed, in `<profile>/`) or the newest hashed
+    // `libloft-<hash>.rlib` (in `deps/`); prefer the deps dir.
+    for dir in [&deps, &exe_dir] {
         if !dir.is_dir() {
             continue;
         }
         let exact = dir.join("libloft.rlib");
         if exact.exists() {
-            return Some((exact, dir));
+            return Some((exact, deps.clone()));
         }
-        let hashed = std::fs::read_dir(&dir)
-            .ok()?
+        let hashed = std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flatten()
             .flatten()
             .filter(|e| {
                 let n = e.file_name().to_string_lossy().into_owned();
@@ -524,7 +554,7 @@ pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
             .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
             .map(|e| e.path());
         if let Some(rlib) = hashed {
-            return Some((rlib, dir));
+            return Some((rlib, deps.clone()));
         }
     }
     None

@@ -1,0 +1,20 @@
+// @PLAN54 Arc N / N3 — a NORMAL loft library (no #native), opted into
+// auto-compilation via `[library] compile = "native"` in loft.toml.  `use
+// mathnative` compiles it to a shared-store cdylib and dispatches these calls
+// native while the consuming script interprets.
+
+pub fn double(x: integer) -> integer {
+    x * 2
+}
+
+pub fn add(a: integer, b: integer) -> integer {
+    a + b
+}
+
+pub fn factorial(n: integer) -> integer {
+    result = 1;
+    for i in 1..n + 1 {
+        result *= i;
+    }
+    result
+}

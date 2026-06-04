@@ -4208,6 +4208,21 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLAN54 Arc N / N3 — auto-compile `use`d libraries that opted in via
+    // `[library] compile = "native"`.  Mark each library's public
+    // shared-store-dispatchable functions native BEFORE `byte_code` (so calls
+    // route through `OpStaticCall`); the cdylib is built + loaded after.  A program
+    // using an auto-native library bypasses the program cache for now (the
+    // mark/build runs every cold run; artifact caching is N1/Phase D).
+    let auto_native_exports: Vec<(String, std::collections::HashSet<u32>)> =
+        std::mem::take(&mut p.pending_native_compile)
+            .into_iter()
+            .map(|pkg_dir| {
+                let export = loft::native_lib::mark_library_native(&mut p.data, &pkg_dir);
+                (pkg_dir, export)
+            })
+            .collect();
+    let has_auto_native = auto_native_exports.iter().any(|(_, e)| !e.is_empty());
     // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
     // before any subsystem is rewired to read from the store.  Opt-in (default
@@ -4228,7 +4243,10 @@ fn main() {
     // @PLAN54 arc E — on a cold run with the program cache enabled, write the
     // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
     // functions carry `done=true` and the baked free-ops).
-    if program_cache_on && !program_warm {
+    // Skip the program cache for auto-native programs: the warm-load path restores
+    // the parsed `Data` without re-running manifest detection, so it would have the
+    // `def.native` markings but no rebuilt cdylib to wire (Phase D persists this).
+    if program_cache_on && !program_warm && !has_auto_native {
         loft::startup_cache::save_program(&p, &abs_file);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
@@ -4266,6 +4284,36 @@ fn main() {
     state.database.user_args.clone_from(&user_args);
     // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
     compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
+    // @PLAN54 Arc N / N3 — build the auto-native libraries' cdylibs now (needs the
+    // post-`byte_code` type schema in `state.database`).  Each is built into the
+    // package's `native-auto/` dir and loaded alongside the hand-written natives.
+    let mut auto_native_libs: Vec<String> = Vec::new();
+    for (pkg_dir, export) in &auto_native_exports {
+        if export.is_empty() {
+            continue;
+        }
+        let stem = format!(
+            "loft_auto_{}",
+            std::path::Path::new(pkg_dir)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("lib")
+        );
+        let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
+        match loft::native_lib::build_shared_cdylib(
+            &p.data,
+            &state.database,
+            export,
+            &out_dir,
+            &stem,
+        ) {
+            Ok(so) => auto_native_libs.push(so.to_string_lossy().into_owned()),
+            Err(e) => {
+                eprintln!("loft: auto-native build for '{pkg_dir}' failed:\n{e}");
+                std::process::exit(1);
+            }
+        }
+    }
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
@@ -4274,9 +4322,14 @@ fn main() {
             all_native_libs.push(nlp.clone());
         }
     }
+    all_native_libs.extend(auto_native_libs);
     extensions::load_all(&mut state, all_native_libs.clone());
     // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
     extensions::wire_native_fns(&mut state, &p.data);
+    // @PLAN54 Arc N / N3 — wire the shared-store bridge dispatchers for the
+    // auto-native libraries (the `loft_shared_*` symbols), a disjoint set from the
+    // hand-written `#native` symbols `wire_native_fns` handles.
+    extensions::wire_shared_native_fns(&mut state, &p.data);
 
     // --check: parse + compile only, report errors and exit.
     // When combined with --native, fall through to the native pipeline
