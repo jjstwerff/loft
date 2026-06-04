@@ -143,6 +143,161 @@ Maximum broadening per unit effort:
 
 ---
 
+## Native-library execution model — the steady-state design
+
+_Decided 2026-06-04. Canonical decision record: [DESIGN_DECISIONS.md § C71](DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)._
+
+### The model
+
+**Native for stable/published libraries; interpreted for the user's active
+script.** Compiled-once libraries are cached as native artifacts and reused across
+runs; the user's own code stays interpreted for fast iteration — no `rustc` per
+save.
+
+This IS the lavition model: native engine + libraries, interpreted game scripts
+for rapid prototyping.  The decision applies to loft at every deployment scale
+from local scripting to the engine.
+
+### Why loft is unusually suited to this model
+
+The hard part of mixed-mode execution in other languages (Python/JNI/FFI) is data
+crossing the language boundary — typically via costly marshalling, copying, or
+type-negotiation.  Loft gets the crossing for free: **the store / `DbRef` heap is
+already a shared ABI between the interpreter and native code**.  Data crosses the
+boundary as `DbRef`s into the same `Stores` instance — no marshalling, no copying.
+This is a structural property of loft's memory model (DATABASE.md), not something
+to be engineered.
+
+### The dispatch primitive already exists
+
+`OpStaticCall` → `library_names` → `extensions::wire_native_fns` → `try_dlsym`
+(and `native_packages` / `register_native_manifest` in `src/extensions.rs`)
+implement exactly this model today: interpreted bytecode calls compiled Rust via
+the `#native` / `#rust` mechanism the stdlib uses.  The stdlib's native functions
+are already this model — interpreted user scripts calling compiled Rust.  Extending
+it to user libraries is the straight-line path.
+
+The native backend's cross-mode byte-identical equivalence (the @PLAN54 harness)
+guarantees a library behaves the same whether run interpreted (during development)
+or native (shipped).
+
+### The performance implication — supersedes E2 / full zero-copy as the perf endgame
+
+The `bench_read_data_breakdown` profiling (2026-06-04, documented in
+PERFORMANCE.md § Open work E2 row) measured that warm-load cost in the startup
+cache is allocation-bound: the dominant work is materialising library bodies +
+variable tables into native `String` / `Box<Type>`.  In the native-library model
+you never materialise those — libraries are native artifacts, loaded via `dlopen`;
+you load only the small library interface (type schema + function signatures +
+symbol map).  The allocation cost is **avoided**, not eliminated via a multi-week
+zero-copy rewrite.
+
+E2 (zero-copy `read_data`) therefore drops from "startup-perf endgame" to
+**low-priority / deferred-by-this-decision for performance purposes**.  The
+store-IR foundation, the `IrNode` handle, and the completed `Definition` read seam
+keep their architectural and self-hosting value — now serving the interface load
+and the shared ABI — not zero-copy interpretation of library bodies.  See
+[plans/future/54-data-as-store/README.md § Recommendation](plans/future/54-data-as-store/README.md).
+
+### The build fingerprint — correctness crux
+
+A native library artifact is generated Rust that `extern`-links `libloft.rlib`.
+It is valid only against the exact loft build whose rlib it links.  Change loft's
+codegen OR its runtime ABI OR rustc → an old artifact mis-links.  This is the
+root cause of the recurring "generated rust-code error" (the same class as tests
+needing `make rebuild-native-cdylibs`).
+
+Cache key requirements:
+
+- **MUST fold**: the loft rlib CONTENT hash (memoised once per process in
+  `native_utils::native_cache_key`, `src/native_utils.rs`; already done by BUILD2
+  for the test-binary cache) + rustc version + target + feature-set.
+- **Must NOT fold**: git-HEAD `BUILD_ID` (unchanged across uncommitted rebuilds)
+  or mtime (over-invalidates / fragile).
+
+Two enforcement points:
+
+1. **Nuke-on-recompile** (startup self-check): compare current loft build
+   fingerprint against a stored marker; on mismatch, clear the native artifact
+   cache.  Fast cleanup of rebuild orphans.
+2. **Fingerprint in every per-artifact cache key** (lazy backstop).  Together
+   these make `make rebuild-native-cdylibs` obsolete.
+
+Known gap to close: `@P341` native-package rlib path still folds **mtime** (per
+PERFORMANCE.md § BUILD2 notes) — that is the specific hole behind hitting the
+error too often.
+
+### Three-layer model
+
+| Layer | Mechanism | Goal |
+|---|---|---|
+| rlib-hash in each artifact key | cache key invalidation | correctness — never link a stale artifact |
+| nuke-on-recompile (startup marker check) | cache sweep on next startup | fast cleanup of rebuild orphans |
+| idle-TTL GC (24 h, touch-on-use) | background eviction | space — unused library sets age out |
+
+Idle-TTL (touch-on-use) is the primary eviction policy.  The current
+`cache::prune_program_cache` (oldest-first size-cap) stays as a runaway backstop.
+
+### Validation layer and developer-vs-customer / daily-builds framing
+
+The build fingerprint is eventually owned by a library **validation layer**: an
+artifact's validity = content-hash · target · features · loft-build-fingerprint ·
+(eventually) signature.  The cache then becomes dumb storage + the idle-TTL
+janitor; the nuke trigger is subsumed by validation (stale-fingerprint artifacts
+fail `is_valid` → never linked → swept).
+
+It is one fingerprint serving different audiences on different timelines:
+- **loft developers** need it now (rlib changes constantly, often uncommitted;
+  git-HEAD `BUILD_ID` is useless here).
+- **customers on releases** are covered today by `LOFT_VERSION`.
+- **customers on daily builds** will need the fingerprint (same/rolling version,
+  different codegen → `LOFT_VERSION` fails).
+
+Building it now for developers IS the customer/daily-build mechanism.  This
+dovetails with reproducible builds: BUILD2 confirmed the rlib is
+byte-deterministic (`src/native_utils.rs`), so the fingerprint is a meaningful
+stamp.
+
+Note on binary-vs-rlib: the loft binary hash is the human-meaningful "which loft
+build" identity and co-varies with the rlib, but the **rlib hash is the term that
+strictly guarantees link compatibility** (the artifact links the rlib, not the
+executable).
+
+### Cache scope (local, 2026-06-04)
+
+- Purely **local workspace** for now — no registry/per-target distribution, no
+  WASM concerns.  First-use compile latency is accepted.
+- Cache native artifacts **per library** (max reuse; native `init()`-sequencing
+  composes independently-compiled libs at load — this is why per-library native
+  artifacts work where per-library IR snapshots did not; see C70 in
+  DESIGN_DECISIONS.md).
+
+### Remaining risks and open points
+
+- **Dispatch coverage** is the real engineering risk: simple `#native` functions
+  work, but generics, closures crossing the boundary, and complex exported types
+  are hard (see PACKAGES.md "What must be native" / the C-ABI boundary).  Needs
+  a coverage audit before declaring the model generally applicable.
+- **Dev-interpret fallback**: a library under active edit should still interpret
+  (no `rustc` per save); "always native" = once the library is stable/published.
+- **WASM/browser is a different model** — no `rustc` at runtime, so `--html` stays
+  whole-program AOT-to-WASM; native-library caching does not apply there.
+
+### Sequencing
+
+_Tactical now (developer-facing, local)_: per-library native artifact cache with
+rlib-hash key + nuke trigger + idle-TTL; extract a single `loft_build_fingerprint()`
+reusing BUILD2's memoised rlib hash so it has a clean seam to move into the
+validation layer.
+
+First concrete step: audit every native-artifact cache key for mtime/git-HEAD
+usage (`@P341` is the known offender) + extract `loft_build_fingerprint()`.
+
+_Eventually (customer-facing)_: fold the fingerprint into the library validation
+layer; becomes load-bearing when daily builds ship.
+
+---
+
 ## Summary
 
 Loft is closer to broadly useful than the current game-centric

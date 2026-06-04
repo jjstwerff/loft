@@ -872,6 +872,143 @@ Pointer from the source:
 
 ---
 
+## C71 — Native libraries compile, scripts interpret — the steady-state execution model
+
+**Question.** As loft matures toward the lavition engine deployment model, what is
+the correct execution model for the combination of stable libraries and the user's
+own scripts?  Should everything compile to native artifacts, everything stay
+interpreted, or should the two coexist?
+
+**Evaluation.**
+
+The split model — native for stable/published libraries, interpreted for the
+user's active script — has a decisive set of advantages in loft's specific context:
+
+- **Best of both worlds.** Native gives speed for heavy, stable code (libraries,
+  engine); the interpreter gives fast iteration (no `rustc` per save) for the code
+  under active edit.  This IS the lavition model: native engine + libraries,
+  interpreted game scripts for rapid prototyping.
+- **The shared-ABI advantage is unique to loft.**  The store / `DbRef` heap is
+  already a shared ABI between the interpreter and native code — data crosses the
+  boundary as `DbRef`s into the same `Stores`, with no marshalling or copying.
+  This is the hard part in Python/JNI/FFI; loft gets it for free because
+  both modes address the same `Stores` instance.
+- **The mixed-mode dispatch primitive already exists.**  `OpStaticCall` →
+  `library_names` → `extensions::wire_native_fns` → `try_dlsym` (and
+  `native_packages` / `src/extensions.rs`) implements exactly this model today:
+  interpreted bytecode calls compiled Rust via the same `#native` / `#rust`
+  mechanism the stdlib uses.  This is not a new idea — it IS the current stdlib
+  design, extended to user libraries.
+- **The native backend's cross-mode byte-identical equivalence** (the @PLAN54
+  harness) guarantees a library behaves identically whether run interpreted
+  (during development) or native (shipped).
+
+**Performance implication — supersedes E2 / full zero-copy as the startup-perf
+endgame (measured 2026-06-04).** The `bench_read_data_breakdown` profiling
+(PERFORMANCE.md § Open work, E2 row) found warm-load cost is allocation-bound:
+it is the materialisation of library bodies + variable tables into native
+`String` / `Box<Type>`.  In the native-library model you NEVER materialise those
+(libraries are native); you load only the small library interface (type schema +
+function signatures + symbol map).  The allocation cost is AVOIDED, not
+eliminated via a multi-week zero-copy rewrite.  E2 / full zero-copy therefore
+drops to low priority / deferred-by-this-decision for perf purposes.  The store-IR
+foundation and the `IrNode` handle still have architectural and self-hosting value;
+the perf rationale for E2 is superseded.
+
+**Cache design (local scope — 2026-06-04 decision).**
+
+- **Purely local workspace for now** — no registry/per-target distribution, no
+  WASM concerns.  First-use compile latency is accepted.
+- Cache native artifacts **per library** (max reuse; native `init()`-sequencing
+  composes independently-compiled libs at load — this is why per-library native
+  artifacts work where per-library IR snapshots did NOT; see C70).
+- Eviction = **idle-TTL with touch-on-use**: update an entry's last-use timestamp
+  on every cache hit; a startup GC sweep deletes entries idle longer than
+  `LOFT_CACHE_TTL_HOURS` (default 24 h).  The current
+  `cache::prune_program_cache` (oldest-first size-cap) keeps its role as a
+  runaway-backstop; idle-TTL is the primary policy.
+
+**The build fingerprint — the correctness crux.**  A native artifact is generated
+Rust that `extern`-links `libloft.rlib`, so it is valid only against the exact
+loft build whose rlib it links.  The cache key MUST fold the **loft rlib CONTENT
+hash** (already memoised once per process in `native_utils::native_cache_key` per
+the BUILD2 design — `src/native_utils.rs`) + rustc version + target + feature-set.
+It must NOT key on git-HEAD `BUILD_ID` (does not change on an uncommitted loft
+rebuild) NOR on mtime (fragile / over-invalidates).
+
+The rlib hash is the load-bearing term: the artifact links the rlib, not the
+executable.  Treat them as one "loft build fingerprint"; the rlib hash is the
+correctness guarantee.
+
+Two enforcement points ("do both"):
+
+1. **Nuke-on-recompile** — a startup self-check compares the current loft build
+   fingerprint against a stored marker; on mismatch it clears the native artifact
+   cache (fast cleanup of rebuild orphans; the recompile happens via external
+   tools — cargo/make — so loft can only react at its next startup).
+2. **Fingerprint folded into every per-artifact cache key** (the lazy backstop).
+
+Together these make `make rebuild-native-cdylibs` obsolete.  Known offender to
+migrate: the `@P341` native-PACKAGE rlib path still folds **mtime** (per
+PERFORMANCE.md § BUILD2 notes) — that is the hole behind hitting the
+"generated rust-code error" too often.
+
+**Three-layer model.**
+
+| Layer | Mechanism | Goal |
+|---|---|---|
+| rlib-hash in each artifact key | cache key invalidation | correctness — never link a stale artifact |
+| nuke-on-recompile (startup marker check) | cache sweep | fast cleanup of rebuild orphans |
+| idle-TTL GC (24 h, touch-on-use) | background eviction | space — genuinely-unused sets age out |
+
+**Validation layer / developer-vs-customer framing.**  The build fingerprint is
+eventually owned by a library validation layer: an artifact's validity =
+content-hash · target · features · loft-build-fingerprint · (eventually)
+signature.  The cache then becomes dumb storage + the idle-TTL janitor.  This
+fingerprint serves different audiences on different timelines: loft DEVELOPERS
+need it now (rlib changes constantly, often uncommitted → git-HEAD useless);
+customers on RELEASES are covered today by `LOFT_VERSION`; customers on DAILY
+BUILDS will need the fingerprint (same/rolling version but different codegen →
+`LOFT_VERSION` fails).  Building it now for developers IS the
+customer/daily-build mechanism.  Dovetails with reproducible builds (BUILD2
+confirmed the rlib is byte-deterministic — `src/native_utils.rs`).
+
+**Remaining risks and open points.**
+
+- **Dispatch coverage** is the real engineering risk: simple `#native` functions
+  work, but generics, closures crossing the boundary, and complex exported types
+  are hard (see PACKAGES.md "What must be native" / the C-ABI boundary).  Needs a
+  coverage pass.
+- **Dev-interpret fallback**: a library under active edit should still interpret
+  (no `rustc` per save); "always native" = once the library is stable/published.
+- **WASM/browser is a different model** — no `rustc` at runtime, so `--html` stays
+  whole-program AOT-to-WASM; native libs don't apply there.
+
+**Sequencing.** Tactical now (developer-facing, local): per-library native artifact
+cache with rlib-hash key + nuke trigger + idle-TTL; extract a single
+`loft_build_fingerprint()` reusing BUILD2's memoised rlib hash
+(`native_utils::native_cache_key`, `src/native_utils.rs`) so it has a clean seam
+to move into the validation layer.  First concrete step: audit every
+native-artifact cache key for mtime/git-HEAD usage (`@P341` is the known offender)
++ extract `loft_build_fingerprint()`.  Eventually (customer-facing): fold the
+fingerprint into the library validation layer; becomes load-bearing when daily
+builds ship.
+
+**Decision.** **Native libraries compile once (cached per rlib-hash fingerprint),
+user scripts interpret.** This is the steady-state execution model loft optimises
+toward.  Dated 2026-06-04.
+
+Full narrative, risks, and sequencing: [BROADENING.md § Native-library execution
+model](BROADENING.md#native-library-execution-model--the-steady-state-design).
+
+**Revisit when.** The dispatch-coverage audit reveals that the C-ABI boundary
+cannot express a critical class of library API without marshalling cost that
+erases the native-speed advantage — and a concrete measurement shows this matters
+for a real consumer.  "WASM needs native libs" is not a trigger (WASM is a
+separate model, always AOT).
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

@@ -53,6 +53,18 @@ measurements reframed the cost/benefit and point to a clear priority order:
    *eventually* if startup latency is a headline goal, but as a **planned,
    fresh-context arc**, not a rushed branch extension.
 
+   **E2 deprioritised further (2026-06-04) — superseded-for-perf by the
+   native-library execution model** ([DESIGN_DECISIONS.md §
+   C71](../../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model),
+   [BROADENING.md § Native-library execution
+   model](../../../BROADENING.md#native-library-execution-model--the-steady-state-design)).
+   In the native-library model (stable/published libraries compile to native
+   artifacts; user scripts interpret) the library bodies + variable tables are
+   NEVER materialised at startup — the allocation cost E2 eliminates is simply
+   not incurred.  E2 therefore drops to low priority for performance.  Its
+   architectural value (self-hosting, store-backed IR, mmap) stands on its own;
+   the perf rationale no longer applies.
+
 3. ✅ **PROFILED (2026-06-04) — there is no cheap `read_function` win; the cost is
    allocation-bound, so E2 (zero-copy) is the only lever.**  `bench_read_data_breakdown`
    (`ir_read.rs`, `--ignored`) splits the warm `read_data` on the real stdlib bundle:
