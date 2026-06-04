@@ -211,6 +211,8 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
+                // #255 / @PLN9: re-home against the program anchor.
+                let path = self.database.resolve_path(&path);
                 std::fs::metadata(&path).map_or(0, |m| m.len() as i64)
             }
         } else {
@@ -247,6 +249,8 @@ impl State {
                         .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
+                // #255 / @PLN9: re-home against the program anchor.
+                let file_name = self.database.resolve_path(&file_name);
                 // Open for read+write without truncating so that earlier
                 // bytes are preserved.  Create the file if it does not
                 // exist yet.  Explicit truncation happens via
@@ -404,11 +408,17 @@ impl State {
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
+            // #255 / @PLN9: resolve against the program anchor before borrowing
+            // the store mutably (resolve_path needs a shared borrow).
+            let resolved_name = {
+                let s = self.database.store(&file);
+                let raw = s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned();
+                self.database.resolve_path(&raw)
+            };
             let store = self.database.store_mut(&file);
             let mut file_ref = store.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                let file_name = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
-                if let Ok(mut f) = File::open(file_name) {
+                if let Ok(mut f) = File::open(&resolved_name) {
                     // apply stored seek position on first open.
                     if next_pos != 0 {
                         let _ = f.seek(SeekFrom::Start(next_pos as u64));
@@ -514,6 +524,8 @@ impl State {
             let file_path = store
                 .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned();
+            // #255 / @PLN9: re-home against the program anchor.
+            let file_path = self.database.resolve_path(&file_path);
             let size = if let Ok(meta) = std::fs::metadata(&file_path) {
                 meta.len() as i64
             } else {
@@ -586,6 +598,8 @@ impl State {
                     .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
+            // #255 / @PLN9: re-home against the program anchor.
+            let path = self.database.resolve_path(&path);
             // Close any open handle: the handle may be in read or write mode with a stale
             // position, and after resize the position might be beyond the new end of file.
             let file_ref = self
