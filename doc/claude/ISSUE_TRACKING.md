@@ -141,13 +141,41 @@ Filing is half the loop; closing is the other half.
 - **Don't file a bug you fix in the same change** — the fix + its test ARE the
   record (CLAUDE.md § Bug-filing policy).
 
-## Features & enhancements
+## Item lifecycle — the `status:` axis (bugs + enhancements)
 
-Bugs are the focus above.  FEATURE requests use the `feature_request` template +
-the `enhancement` label, and connect to the roadmap: a planned feature lives in
-ROADMAP.md / PLANNING.md (or a `plans/` slot if multi-phase); a `gh` Project board
-tracks "which release bundles which consumer-driven work" across the org repos.
-The Issue is the lightweight capture; the plan/roadmap is the design + sequencing.
+Every item carries a `status:*` label = **what it is waiting on**, on one shared
+axis.  Bugs take the **short** path; enhancements take the **full** path — because a
+*want* must clear value-vs-cost before it is committed, where a *fault* is committed
+to by default.  (An enhancement is a small plan; the outcomes below are the plan
+outcomes at issue scale — see *Beyond bugs — the unified model* below.)
+
+**Intake gate (well-formedness).**  An item is not actionable until its body makes
+the gap explicit — a **bug**: *expected vs observed* (+ a reproducer); an
+**enhancement**: *what works now* vs *what you want from us*.  Until then it sits at
+**`status:unclear`** (blocked on **information**).
+
+**Intermediate (open):**
+
+| `status:` | waiting on | bug | enhancement |
+|---|---|---|---|
+| `unclear` | information | ✓ | ✓ |
+| `need-approval` | a decision — needs the **cost** beside the value: effort, systems changed, risks | — *(a fault is fixed by default; `needs-design` / `attention` cover the rare fix that needs a design call)* | ✓ |
+| `designed` | doing it (approved + design settled) | — *(a bug's design is the inline investigation)* | ✓ |
+
+**Resolution:**
+
+| outcome | bug | enhancement | closes? · register |
+|---|---|---|---|
+| implemented / fixed | fixed | implemented | yes, on merge · `fixed-pending-merge` interim |
+| **deferred** | — *(edge: a parked low-sev bug)* | ✓ — **stays open**, parked, un-defer trigger | no · `status:deferred` + DEFERRED.md |
+| declined | `wontfix` / `by-design` | `rejected` | yes · rejected → DESIGN_DECISIONS.md |
+
+A **bug has 2 terminals** (fixed / declined); an **enhancement 3** (implemented /
+deferred / rejected) — the extra `deferred` is the *want* that can wait.  An
+enhancement **links out to a `@PLN` / `plans/<NN>/` lazily** — only when the design
+grows phase-worthy (usually at `status:designed`); no renumber, the issue stays the
+lightweight capture.  Feature requests use the `feature_request` template; the plan /
+ROADMAP carries the design + sequencing.
 
 ## Beyond bugs — the unified model (plans · lib-plans · enhancements)
 

@@ -1,7 +1,7 @@
 name: Feature request
 description: Propose an addition or change to the language, standard library, or tooling.
 title: "[feature] "
-labels: ["enhancement"]
+labels: ["enhancement", "status:unclear"]
 body:
   - type: markdown
     attributes:
@@ -14,19 +14,24 @@ body:
         — the last one lists features that have been considered and
         explicitly declined, with reasoning.
 
+        An enhancement is well-formed once two things are clear: **what works
+        now** and **what you want from us**.  We then triage the *cost* (effort,
+        systems we'd change, risks) and decide — implement, defer, or reject.
+        (Lifecycle: `doc/claude/ISSUE_TRACKING.md` § Item lifecycle.)
+
   - type: textarea
     id: problem
     attributes:
-      label: What problem does this solve?
-      description: What were you trying to do when you wished loft had this feature?  Concrete is better than abstract.
+      label: What works now (and where it falls short)
+      description: What can you do today for this, and how does it fall short?  Include the current workaround, if any.  Concrete is better than abstract.
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
-      description: What would the feature look like in loft?  A code example helps a lot.
+      label: What you want from us
+      description: The capability you want — what becomes possible that isn't today.  A code example of how you'd use it helps a lot.
       render: rust
     validations:
       required: true
