@@ -7,8 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Shipped on `local_assets` (interp + native) — program-relative by default with the
-`#cwd` opt-in.** Tracked as [`@PLN9`](https://github.com/loft-lang/plans/issues/9)
+**SHIPPED — merged to `main` via [PR #269](https://github.com/jjstwerff/loft/pull/269)
+(2026-06-04); [#255](https://github.com/jjstwerff/loft/issues/255) closed.**
+Program-relative by default (interp + native) with the `#cwd` opt-in.  Residual tail:
+the wasip2 `--native-wasm` print path stays gated on
+[#268](https://github.com/jjstwerff/loft/issues/268) (`191-wasm` skipped) — the only
+reason this dir hasn't moved to `finished/` yet.  Tracked as
+[`@PLN9`](https://github.com/loft-lang/plans/issues/9)
 (loft-lang/plans); promoted from loft issue
 [#255](https://github.com/jjstwerff/loft/issues/255). A relative file path resolves
 against the program's own directory by default; CLI tools opt back into cwd with the
