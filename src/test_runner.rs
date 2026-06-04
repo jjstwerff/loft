@@ -924,6 +924,29 @@ pub(crate) fn run_tests(
                             if crate::platform::native_strip_symbols() {
                                 cmd.arg("-C").arg("strip=symbols");
                             }
+                            // @P389: each native package's rlib carries its own
+                            // copy of `loft_register_v1` (synthesized by the
+                            // `loft_ffi::loft_register!` macro for the cdylib's
+                            // dlopen registration path).  When a test file pulls
+                            // TWO OR MORE native packages into the SAME binary
+                            // (e.g. `use server; use web;` driving an HTTP
+                            // round-trip), `ld` errors with `duplicate symbol:
+                            // loft_register_v1`.  The binary never calls that
+                            // symbol — it inlines `loft_<crate>::n_…` directly —
+                            // so the duplicates are functionally harmless; tell
+                            // the linker to keep the first definition and skip
+                            // the rest.  This mirrors the identical mitigation on
+                            // the standalone `--native` path in `main.rs`; this
+                            // path (the `--tests --native` / `loft test` runner)
+                            // built its own rustc command and never got it, so
+                            // single-package smokes passed but any genuine
+                            // two-native-package test failed at the link step.
+                            // macOS ld64 rejects `--allow-multiple-definition`,
+                            // so skip it there (matching main.rs).
+                            #[cfg(not(target_os = "macos"))]
+                            if !native_data.native_packages.is_empty() {
+                                cmd.arg("-Clink-arg=-Wl,--allow-multiple-definition");
+                            }
                             if let Some(ref ld) = lib_dir {
                                 cmd.arg("--extern")
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));
