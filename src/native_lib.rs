@@ -115,23 +115,44 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
     exportable
 }
 
-/// @PLAN54 Arc N / N3 — mark a `use`d library's **public** functions native: the
-/// candidates are the `pub` functions defined in the package at `pkg_dir` (by
-/// `def.position().file` prefix — the same ownership guard the manifest path uses),
-/// of which [`mark_native_exports`] marks the shared-store-dispatchable subset.
-/// Only public functions are dispatch targets (the script can't call private
-/// helpers; those are compiled into the cdylib as reachable deps).  Returns the
-/// marked set (the cdylib export set).
+/// @PLAN54 Arc N / N3 — mark a `use`d library's **public API** functions native.
+///
+/// **Invariant:** a dispatch target is a function the consuming script can directly
+/// *name and `Call`* — a top-level, user-named, `pub` function owned by the package
+/// at `pkg_dir` (by `def.position().file` prefix — the same ownership guard the
+/// manifest path uses).  [`mark_native_exports`] then marks the
+/// shared-store-dispatchable subset.
+///
+/// The candidate filter must exclude **synthetic** functions, not just lambdas: a
+/// `pub fn`'s parse sprays `pub_visible` over every def it creates (`parser/mod.rs`),
+/// so a nested lambda (`__lambda_N`) is also `pub_visible` — but it is a *fn-ref*
+/// target the script cannot name, never a direct-`Call` dispatch target.  The
+/// `__`-prefix is the codebase's synthetic-name convention (same marker
+/// `native_gate` uses for synthetic params), so excluding it covers the whole class
+/// of compiler-generated functions, not the lambda instance.  (Private helpers are
+/// already excluded by `pub_visible`; they ride into the cdylib as reachable deps.)
 pub fn mark_library_native(data: &mut Data, pkg_dir: &str) -> HashSet<u32> {
     let candidates: HashSet<u32> = (0..data.definitions())
         .filter(|&d| {
             let def = data.def(d);
             matches!(def.def_type(), DefType::Function)
                 && def.pub_visible
+                && !is_synthetic_name(def.name())
                 && def.position().file.starts_with(pkg_dir)
         })
         .collect();
     mark_native_exports(data, &candidates)
+}
+
+/// Is `stored_name` (an `n_<name>` definition name) a compiler-generated
+/// (synthetic) function — i.e. its user-facing name starts with `__` (lambdas
+/// `__lambda_N`, and any future synthetic kind)?  Such functions are never a
+/// script-callable public API, so they are not auto-native dispatch targets.
+fn is_synthetic_name(stored_name: &str) -> bool {
+    stored_name
+        .strip_prefix("n_")
+        .unwrap_or(stored_name)
+        .starts_with("__")
 }
 
 /// Add to `types` (transitively, in definition order) the struct/enum defs that
@@ -660,4 +681,82 @@ pub fn build_shared_cdylib(
         ));
     }
     Ok(so)
+}
+
+/// @PLAN54 Arc N / N3 (B2) — return the auto-native cdylib for the library at
+/// `pkg_dir`, **building it only when stale**: a cached `native-auto/<stem>.so` is
+/// reused when it exists, the library's source hasn't changed since it was built,
+/// and the loft-build fingerprint still matches (N0 — so a `loft` rebuild that
+/// could change the generated Rust forces a fresh cdylib).  Otherwise it builds
+/// and stamps the fingerprint.  This is the "no `rustc` per run for an unchanged
+/// library / a stable dep links its cached artifact" half of N3's policy.
+///
+/// # Errors
+/// Propagates a build failure from [`build_shared_cdylib`].
+pub fn cached_or_build_shared_cdylib(
+    data: &Data,
+    stores: &Stores,
+    export_set: &HashSet<u32>,
+    pkg_dir: &str,
+) -> Result<std::path::PathBuf, String> {
+    let stem = format!(
+        "loft_auto_{}",
+        std::path::Path::new(pkg_dir)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("lib")
+    );
+    let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
+    let so = out_dir.join(platform_cdylib_name(&stem));
+    let fp = crate::cache::loft_build_fingerprint();
+
+    if so.exists()
+        && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
+        && !source_newer_than(pkg_dir, &so)
+    {
+        return Ok(so); // fresh cached artifact — no rebuild
+    }
+
+    let built = build_shared_cdylib(data, stores, export_set, &out_dir, &stem)?;
+    crate::cache::write_native_artifact_fingerprint(&out_dir, fp);
+    Ok(built)
+}
+
+/// Is any `.loft` / `loft.toml` source under `pkg_dir` newer than the artifact at
+/// `artifact`?  (Build/artifact dirs are skipped.)  A missing/unreadable artifact
+/// mtime counts as stale.
+fn source_newer_than(pkg_dir: &str, artifact: &std::path::Path) -> bool {
+    let Ok(art_mtime) = artifact.metadata().and_then(|m| m.modified()) else {
+        return true;
+    };
+    let mut newest: Option<std::time::SystemTime> = None;
+    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name == "native-auto" || name == "native" || name == "target" {
+                continue; // build/artifact dirs
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let is_src = p
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+                || name == "loft.toml";
+            if is_src
+                && let Ok(mt) = e.metadata().and_then(|m| m.modified())
+                && newest.is_none_or(|n| mt > n)
+            {
+                newest = Some(mt);
+            }
+        }
+    }
+    newest.is_some_and(|src| src > art_mtime)
 }

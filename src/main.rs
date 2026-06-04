@@ -4284,28 +4284,20 @@ fn main() {
     state.database.user_args.clone_from(&user_args);
     // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
     compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
-    // @PLAN54 Arc N / N3 — build the auto-native libraries' cdylibs now (needs the
-    // post-`byte_code` type schema in `state.database`).  Each is built into the
-    // package's `native-auto/` dir and loaded alongside the hand-written natives.
+    // @PLAN54 Arc N / N3 — build (or reuse a fresh cached) cdylib for each
+    // auto-native library now — needs the post-`byte_code` type schema in
+    // `state.database`.  `cached_or_build_shared_cdylib` skips the rebuild when the
+    // library is unchanged and the loft-build fingerprint matches (B2).
     let mut auto_native_libs: Vec<String> = Vec::new();
     for (pkg_dir, export) in &auto_native_exports {
         if export.is_empty() {
             continue;
         }
-        let stem = format!(
-            "loft_auto_{}",
-            std::path::Path::new(pkg_dir)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("lib")
-        );
-        let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
-        match loft::native_lib::build_shared_cdylib(
+        match loft::native_lib::cached_or_build_shared_cdylib(
             &p.data,
             &state.database,
             export,
-            &out_dir,
-            &stem,
+            pkg_dir,
         ) {
             Ok(so) => auto_native_libs.push(so.to_string_lossy().into_owned()),
             Err(e) => {
