@@ -17,6 +17,10 @@
 //
 // Project root = current working directory when the binary runs;
 // loft sandboxes file I/O via valid_path() so paths can't escape.
+//
+// @PLN9: the project root IS the cwd (above) — #cwd opts out of the
+// program-relative default so served file paths resolve against the launch dir.
+#cwd
 
 use server;
 use markdown;

@@ -1,5 +1,9 @@
 // Build a small demo map programmatically and export to GLB.
 // Usage: loft --interpret --path <repo>/ .../demo_village.loft <out.glb>
+//
+// @PLN9: CLI exporter — its <out.glb> path arg is cwd-relative; #cwd opts out
+// of the program-relative default (same class as moros_glb / isolated_stair).
+#cwd
 use moros_map;
 use moros_render;
 
