@@ -120,17 +120,38 @@ fn manifest_matches(manifest: &std::path::Path) -> bool {
 /// schema into `p` and return `true` (the caller then skips **all** parsing).
 #[cfg(feature = "mmap")]
 #[must_use]
-pub fn warm_load_program(p: &mut Parser, script_abspath: &str) -> bool {
+pub fn warm_load_program(
+    p: &mut Parser,
+    script_abspath: &str,
+    store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
+) -> bool {
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
     if !manifest_matches(&manifest) {
         return false;
     }
-    match crate::ir_read::open_bundle_into(&bundle.to_string_lossy(), &mut p.database) {
-        Ok(data) => {
-            p.data = data;
-            true
+    let bundle_s = bundle.to_string_lossy();
+    // @PLAN54 G2/M6 — with LOFT_CODEGEN_STORE, do a *skeleton* load: mmap the
+    // bundle, reconstruct only the def table (bodies stay in the store), and
+    // hand the store back so codegen reads bodies straight from it — skipping
+    // read_data's body rebuild.  Otherwise full read_data (the M2/M5 default).
+    if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+        match crate::ir_read::open_program_store(&bundle_s) {
+            Ok((stores, root, data, schema)) => {
+                p.database.install_schema(schema);
+                p.data = data;
+                *store_out = Some((stores, root));
+                true
+            }
+            Err(_) => false,
         }
-        Err(_) => false,
+    } else {
+        match crate::ir_read::open_bundle_into(&bundle_s, &mut p.database) {
+            Ok(data) => {
+                p.data = data;
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -174,7 +195,11 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
 /// Non-`mmap` builds: the whole-program cache is unavailable.
 #[cfg(not(feature = "mmap"))]
 #[must_use]
-pub fn warm_load_program(_p: &mut Parser, _script_abspath: &str) -> bool {
+pub fn warm_load_program(
+    _p: &mut Parser,
+    _script_abspath: &str,
+    _store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
+) -> bool {
     false
 }
 #[cfg(not(feature = "mmap"))]

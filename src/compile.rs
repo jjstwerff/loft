@@ -19,7 +19,18 @@ use std::io::{Error, Write};
 /// emits its bytecode into `state`, then materialises constant
 /// vectors into `CONST_STORE`.
 pub fn byte_code(state: &mut State, data: &mut Data) {
-    byte_code_from(state, data, 0);
+    byte_code_from(state, data, 0, None);
+}
+
+/// @PLAN54 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
+/// store (the mmap'd cache bundle), so codegen reads bodies straight from it via
+/// `def_body_node` — no per-run materialise and no `read_data` body rebuild.
+pub fn byte_code_with_store(
+    state: &mut State,
+    data: &mut Data,
+    program_store: Option<&(crate::database::Stores, crate::keys::DbRef)>,
+) {
+    byte_code_from(state, data, 0, program_store);
 }
 
 /// Incremental variant of [`byte_code`] — only emit bytecode for
@@ -38,7 +49,12 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
 /// `Codegen::gen_text` (which writes long string literals into
 /// `CONST_STORE` via `set_str`) tripped the assertion on the now-locked
 /// store.  Compiling only the new wrapper avoids the re-emission entirely.
-pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
+pub fn byte_code_from(
+    state: &mut State,
+    data: &mut Data,
+    start_d_nr: u32,
+    warm_store: Option<&(crate::database::Stores, crate::keys::DbRef)>,
+) {
     // Step 0 (startup-cache plan): env-gated phase timing.  No-op unless
     // LOFT_TIMING is set.  Separates native::init from the codegen loop.
     let timing = std::env::var("LOFT_TIMING").is_ok();
@@ -49,14 +65,20 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
     }
     let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
     let t_codegen = std::time::Instant::now();
-    // @PLAN54 G2/M2 — when LOFT_CODEGEN_STORE is set, materialise the whole
-    // `Data` into a persistent program store ONCE; `def_code` reads each body
-    // from it (store-backed lowering) instead of re-materialising per function.
-    // Default off → the native lowering path is unchanged.
-    let program_store = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+    // @PLAN54 G2/M2/M6 — codegen body source:
+    //  * `warm_store` (M6): a pre-loaded mmap'd cache bundle — read bodies
+    //    straight from it (no materialise, no `read_data` body rebuild).
+    //  * else `LOFT_CODEGEN_STORE` (M2/M5 proof): materialise the whole `Data`
+    //    into a fresh store once.
+    //  * else None → native lowering (default, unchanged).
+    let cold_materialized;
+    let program_store: Option<&(crate::database::Stores, DbRef)> = if warm_store.is_some() {
+        warm_store
+    } else if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
         let mut stores = crate::database::Stores::new();
         let root = crate::ir_store::materialize_data(&mut stores, data);
-        Some((stores, root))
+        cold_materialized = (stores, root);
+        Some(&cold_materialized)
     } else {
         None
     };
@@ -64,10 +86,10 @@ pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
-        state.def_code(d_nr, data, program_store.as_ref());
+        state.def_code(d_nr, data, program_store);
     }
     if start_d_nr == 0 {
-        build_const_vectors(state, data, program_store.as_ref());
+        build_const_vectors(state, data, program_store);
         state.database.allocations[crate::database::CONST_STORE as usize]
             .lock_with_origin("compile.rs::compile (CONST_STORE init)");
     }

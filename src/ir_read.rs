@@ -376,13 +376,26 @@ fn read_keys(stores: &Stores, slot: Node) -> Vec<Key> {
 /// re-derived via [`Data::rebuild_indices`], mirroring the @PLAN28 JSON loader.
 #[must_use]
 pub fn read_data(stores: &Stores, root: DbRef) -> Data {
+    read_data_with(stores, root, true)
+}
+
+/// @PLAN54 G2/M6 — like [`read_data`] but leaves each function body in the store
+/// (`Definition.code = Null`), for warm-cache store-backed codegen which reads
+/// bodies via [`def_body_node`] instead of reconstructing them.  Skipping the
+/// body `Value` trees (the bulk of the IR) is the warm-load performance win.
+#[must_use]
+pub fn read_data_skeleton(stores: &Stores, root: DbRef) -> Data {
+    read_data_with(stores, root, false)
+}
+
+fn read_data_with(stores: &Stores, root: DbRef, bodies: bool) -> Data {
     let r = Record::new(root);
     let mut data = Data::new();
     data.source = r.field_int(stores, ds::DATA_SOURCE) as u16;
     let defs = r.field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
     for i in 0..defs.len(stores) {
         data.definitions
-            .push(read_definition(stores, defs.get(i, stores)));
+            .push(read_definition(stores, defs.get(i, stores), bodies));
     }
     data.rebuild_indices();
     data
@@ -490,6 +503,41 @@ pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
     Ok((data, schema))
 }
 
+/// @PLAN54 G2/M6 — warm-cache store-backed load.  Mmap the bundle into a
+/// standalone [`Stores`], reconstruct only the def **table**
+/// ([`read_data_skeleton`] — bodies stay in the store), and return the store +
+/// the `definitions`-vector root so codegen reads each body via
+/// [`def_body_node`].  Skips reconstructing the body `Value` trees (the bulk of
+/// the IR) — the warm-load win.  The returned `Stores` must outlive codegen
+/// (it backs the bodies).
+///
+/// # Errors
+/// `NotFound` on a missing / non-store / corrupt bundle (a clean cache miss).
+#[cfg(feature = "mmap")]
+pub fn open_program_store(path: &str) -> std::io::Result<(Stores, DbRef, Data, Vec<SchemaType>)> {
+    if !crate::store::Store::is_store_file(path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("IR bundle missing or not a valid store: {path}"),
+        ));
+    }
+    let fstore = crate::store::Store::open(path);
+    let mut stores = Stores::new();
+    let nr = stores.adopt_store(fstore);
+    let root = DbRef {
+        store_nr: nr,
+        rec: ds::IR_ROOT_REC,
+        pos: ds::IR_ROOT_POS,
+    };
+    let data_root = DbRef {
+        pos: root.pos + ds::BUNDLE_DATA,
+        ..root
+    };
+    let data = read_data_skeleton(&stores, data_root);
+    let schema = read_schema(&stores, Record::new(root), ds::BUNDLE_TYPES);
+    Ok((stores, data_root, data, schema))
+}
+
 /// Load a bundle (see [`open_bundle`]) and install its database type schema
 /// into `database`, returning the native `Data`.  The `pub` entry point the
 /// startup cache (`main.rs`, @PLAN54 D2b) uses, since `Stores::install_schema`
@@ -515,7 +563,7 @@ pub fn open_bundle_into(path: &str, database: &mut Stores) -> std::io::Result<Da
 /// If a stored `def_type` / `purity` code is out of range — only possible on a
 /// record not written by [`crate::ir_store`] (a corrupt or foreign store).
 #[must_use]
-pub fn read_definition(stores: &Stores, r: Record) -> Definition {
+pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
     let name = r.field_str(stores, ds::DEF_NAME).to_string();
     let position = Position {
         file: r
@@ -543,7 +591,14 @@ pub fn read_definition(stores: &Stores, r: Record) -> Definition {
         source: r.field_int(stores, ds::DEF_SOURCE) as u16,
         def_type: def_type_from_code(r.field_int(stores, ds::DEF_DEF_TYPE)),
         parent: r.field_int(stores, ds::DEF_PARENT) as u32,
-        code: read_node_child(stores, r.field_vec(ds::DEF_CODE)),
+        // @PLAN54 G2/M6 — `bodies=false` leaves the body in the store
+        // (`Value::Null` marker); warm-cache store-backed codegen reads it via
+        // `def_body_node` instead of reconstructing it here.
+        code: if bodies {
+            read_node_child(stores, r.field_vec(ds::DEF_CODE))
+        } else {
+            Value::Null
+        },
         returned: read_type_child(stores, r.field_recvec(ds::DEF_RETURNED, ds::TYPET_STRIDE)),
         returned_not_null: r.field_bool(stores, ds::DEF_RETURNED_NOT_NULL),
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),

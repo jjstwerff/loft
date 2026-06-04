@@ -4094,8 +4094,12 @@ fn main() {
     // caches `default/` only.  Unset → both are no-ops, behaviour unchanged.
     let program_cache_on = std::env::var_os("LOFT_PROGRAM_CACHE").is_some_and(|v| !v.is_empty());
     p.track_sources = program_cache_on;
-    let program_warm =
-        program_cache_on && loft::startup_cache::warm_load_program(&mut p, &abs_file);
+    // @PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
+    // as a SKELETON (def table only) and the mmap'd bundle store is returned
+    // here so codegen reads bodies straight from it (no read_data body rebuild).
+    let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
+    let program_warm = program_cache_on
+        && loft::startup_cache::warm_load_program(&mut p, &abs_file, &mut warm_store);
     if !program_warm {
         // When building a program cache, parse `default/` fresh so every stdlib
         // file lands in the program's drift manifest; otherwise use the D2b
@@ -4251,7 +4255,8 @@ fn main() {
         .unwrap_or_default();
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
-    compile::byte_code(&mut state, &mut p.data);
+    // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+    compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
