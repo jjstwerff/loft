@@ -35,9 +35,15 @@ shrinks to a one-line pointer to where the protocol now lives.
 ## C1 — Brittleness over bugs
 
 **Status:** *the primary design concern.*  Recorded; protocol pending
-verification.  First test: the string/text-allocation memory-bound work (a
-brittleness problem — works in the tested regime, OOM-cliffs when the load
-pattern shifts; the shape `Stores` had before plan-57).
+verification.  First *forward* test (predict-then-build): the string/text-allocation
+memory-bound work (a brittleness problem — works in the tested regime, OOM-cliffs when
+the load pattern shifts; the shape `Stores` had before plan-57).  First *retrospective*
+measurement: **@PLN9** (program-relative paths) — the tell fired in the plan's own
+sentence ("the 18 file-op sites the resolver becomes the chokepoint for"), was overridden
+for shipping pragmatism, and the brittle spray landed: `delete`/`move`/`mkdir` bypassed
+`resolve_path`, producing a silent *exists-resolves-but-delete-doesn't* mismatch inside a
+single `delete()`.  Evidence the count-tell reads true — and that it must **gate action,
+not merely inform** (the countable-form note below is what that measurement taught).
 
 **The concern.**  The real risk in a design is not *bugs* (inevitable, discrete,
 local — caught per-cell by a matrix) but **brittleness**: an algorithm correct
@@ -90,6 +96,38 @@ genuinely-distinct cases under a false invariant, which is itself brittleness
 (question 6, *wider than the domain*), breaking when the cases assert their real
 differences.  (A deliberate, measured fast-path is the remaining exception:
 brittle-but-faster by intent.)
+
+**The countable form — read the tell off the design, not the keyboard.**  "Longer
+than expected" is a feeling mid-build; its precise, **prospective** form is a number
+you read off the design itself: **how many independent sites must re-assert the
+invariant for the design to be correct?**  When the answer is N>1 *and omission at a
+site is silent* (no compile error — a wrong result, not a failed build), **N is the
+brittleness, fixed at design time** — no code needed.  The plan's own words carry the
+verdict: "one `resolve_path` **chokepoint** the 18 file-op sites route through" is a
+*contradiction* — a chokepoint is *one* site; "N sites each call one function" is a
+spray wearing the word.  The estimate (10 or 18 — the exact figure is irrelevant)
+already named the shape.  This turns question 3's "O(N sites)" into something you
+**count before writing**, and sharpens the meter: brittleness ≈ **re-assertion sites ×
+silence-of-omission**.  N sites where forgetting is a *compile error* (a `Resolved`
+path-type nothing else can open through) is **not** brittle — the type re-asserts for
+you.  So the two cures attack the two factors: collapse N toward 1 (the real
+chokepoint), or make omission *loud* (a guard / a type) — drive the product toward zero.
+
+**The count reads in two directions.**  N itself diagnoses the **algorithm you're
+adding** (one gate, or a spray?).  The *gap between estimate and actual* — N much
+larger than you predicted — diagnoses the **layer that was already there**: you
+under-counted because the existing subsystem already lacked the chokepoint your change
+should have pivoted on, and that sprawl was invisible behind its interface until you
+went looking.  The *magnitude of the miss* is a reading of **pre-existing** brittleness
+you could not have invented — the code answering back.  Its actionable form: a site
+count *much* higher than expected is the trigger to **build the missing gate** (refactor
+the substrate), not to diligently thread the fix through every site to match the
+existing scatter — threading-a-spray is the wrong virtue.  (It is "fix at the chokepoint,
+no wider," except the chokepoint does not exist yet, so the move is to *create* it.)  One
+guard: the miss reads as *brittleness* only for a concern you'd expect **cohesive**
+(file I/O *should* funnel through one open); under-counting an inherently-distributed
+concern (every call site that logs) is ignorance, not a verdict — the signal is
+"expected cohesion, found scatter," not "I miscounted."
 
 **Verification questions** (run a design past these):
 
