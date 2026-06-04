@@ -35,7 +35,10 @@ pub(crate) fn yield_slot_write(
         YieldSlot::Bool => writeln!(w, "                dest[{slot}] = (({expr}) as u8) as i64;"),
         // f64::to_bits → u64 / f32::to_bits → u32, both zero-extend to i64.
         YieldSlot::F64 | YieldSlot::F32 => {
-            writeln!(w, "                dest[{slot}] = (({expr}).to_bits()) as i64;")
+            writeln!(
+                w,
+                "                dest[{slot}] = (({expr}).to_bits()) as i64;"
+            )
         }
         YieldSlot::Ref => {
             let s1 = slot + 1;
