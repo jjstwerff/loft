@@ -73,7 +73,7 @@ impl Parser {
 
         // Resolve the method on the element type.
         let type_name = match elem_tp {
-            Type::Reference(d, _) | Type::Enum(d, _, _) => self.data.def(*d).name.clone(),
+            Type::Reference(d, _) | Type::Enum(d, _, _) => self.data.def(*d).name().to_string(),
             _ => {
                 if !self.first_pass {
                     diagnostic!(
@@ -115,7 +115,7 @@ impl Parser {
             return (u32::MAX, Type::Unknown(0));
         }
         self.data.def_used(d_nr);
-        let ret_type = self.data.def(d_nr).returned.clone();
+        let ret_type = self.data.def(d_nr).returned().clone();
         // S23: generator functions (return type iterator<T>) cannot be par() workers.
         // Worker threads do not have access to the main thread's coroutines table.
         // Return u32::MAX + Unknown in both passes so build_parallel_for_ir doesn't
@@ -197,7 +197,7 @@ impl Parser {
             let n_params = (0..self.data.attributes(d_nr))
                 .filter(|&a| {
                     !self.data.attr_name(d_nr, a).starts_with("__")
-                        && !self.data.def(d_nr).attributes[a].hidden
+                        && !self.data.def(d_nr).attributes()[a].hidden
                 })
                 .count();
             let n_extra = extra_vals.len();
@@ -212,7 +212,7 @@ impl Parser {
             }
         }
         self.data.def_used(d_nr);
-        let ret_type = self.data.def(d_nr).returned.clone();
+        let ret_type = self.data.def(d_nr).returned().clone();
         // S23: generator functions (return type iterator<T>) cannot be par() workers.
         // Worker threads do not have access to the main thread's coroutines table.
         // Return u32::MAX + Unknown in both passes so build_parallel_for_ir doesn't
@@ -347,7 +347,7 @@ impl Parser {
         // vector element storage (e.g. Score{value:integer} is 4 bytes inline, not 12).
         let elem_size = {
             let elm_td = self.data.type_elm(&elem_tp);
-            let known = self.data.def(elm_td).known_type;
+            let known = self.data.def(elm_td).known_type();
             let db_size = i32::from(self.database.size(known));
             if db_size > 0 {
                 db_size

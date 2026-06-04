@@ -1832,6 +1832,36 @@ impl Definition {
         &self.rust
     }
 
+    /// Parent definition (`EnumValue` / `StructPart`), or `u32::MAX` if none.
+    #[must_use]
+    pub fn parent(&self) -> u32 {
+        self.parent
+    }
+
+    /// Closure-record def_nr for a capturing lambda, or `u32::MAX`.
+    #[must_use]
+    pub fn closure_record(&self) -> u32 {
+        self.closure_record
+    }
+
+    /// @PLAN22 — names of captured bindings mutated inside this lambda body.
+    #[must_use]
+    pub fn mutated_captures(&self) -> &[String] {
+        &self.mutated_captures
+    }
+
+    /// @PLAN22 — local scalar bindings captured-and-mutated by an inner lambda.
+    #[must_use]
+    pub fn scalars_to_box(&self) -> &[String] {
+        &self.scalars_to_box
+    }
+
+    /// Synthesis origin tag for compiler-generated defs; `None` for user code.
+    #[must_use]
+    pub fn synthetic(&self) -> Option<&'static str> {
+        self.synthetic
+    }
+
     #[must_use]
     pub fn is_operator(&self) -> bool {
         matches!(self.def_type, DefType::Function)

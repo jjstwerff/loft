@@ -22,7 +22,8 @@ impl Parser {
         let implemented: HashSet<u32> = nrs
             .iter()
             .filter_map(|nr| {
-                if let Type::Reference(a_nr, _) = self.data.def(*nr as u32).attributes[0].typedef {
+                if let Type::Reference(a_nr, _) = self.data.def(*nr as u32).attributes()[0].typedef
+                {
                     Some(a_nr)
                 } else {
                     None
@@ -50,11 +51,11 @@ impl Parser {
     pub(crate) fn create_enum_dispatch_fn(&mut self, e_nr: u32, nrs: &[usize]) {
         let from_nr = nrs[0] as u32;
         let name = self.data.def(from_nr).original_name().clone();
-        let attrs = self.data.def(from_nr).attributes[1..].to_vec();
+        let attrs = self.data.def(from_nr).attributes()[1..].to_vec();
         let mut common = attrs.len();
         for nr in &nrs[1..] {
             let mut c = 0;
-            for a in &self.data.def(*nr as u32).attributes[1..] {
+            for a in &self.data.def(*nr as u32).attributes()[1..] {
                 for o in &attrs {
                     if a.name == o.name && a.typedef == o.typedef {
                         c += 1;
@@ -66,8 +67,8 @@ impl Parser {
             }
         }
         for nr in nrs {
-            if self.data.def(*nr as u32).attributes.len() > common + 1 {
-                for a in &self.data.def(*nr as u32).attributes[common + 1..] {
+            if self.data.def(*nr as u32).attributes().len() > common + 1 {
+                for a in &self.data.def(*nr as u32).attributes()[common + 1..] {
                     if a.value == Value::Null {
                         return;
                     }
@@ -92,9 +93,9 @@ impl Parser {
         let fn_nr = self.data.add_fn(&mut self.lexer, &name, &args);
         self.data.mark_synthetic(fn_nr, "enum_dispatcher");
         self.context = fn_nr;
-        self.vars = Function::new(&name, &self.data.def(from_nr).position.file);
+        self.vars = Function::new(&name, &self.data.def(from_nr).position().file);
         self.data
-            .set_returned(fn_nr, self.data.def(from_nr).returned.clone());
+            .set_returned(fn_nr, self.data.def(from_nr).returned().clone());
         for a in &args {
             let v_nr = self.create_var(&a.name, &a.typedef);
             if v_nr != u16::MAX {
@@ -126,7 +127,7 @@ impl Parser {
         );
         ls.push(Value::Null);
         self.data.definitions[fn_nr as usize].code =
-            v_block(ls, self.data.def(from_nr).returned.clone(), "dynamic_fn");
+            v_block(ls, self.data.def(from_nr).returned().clone(), "dynamic_fn");
         self.data.definitions[self.context as usize].variables = self.vars.clone();
         self.warn_missing_enum_variants(e_nr, nrs, &name);
     }
@@ -141,14 +142,15 @@ impl Parser {
                 continue;
             }
             if let Type::Reference(e_tp, _) = &d.attributes[0].typedef
-                && matches!(self.data.def(*e_tp).returned, Type::Enum(_, true, _))
-                && self
-                    .data
-                    .find_fn(u16::MAX, &d.original_name(), &self.data.def(*e_tp).returned)
-                    == u32::MAX
-                && let Type::Enum(e_nr, true, _) = self.data.def(*e_tp).returned
+                && matches!(self.data.def(*e_tp).returned(), Type::Enum(_, true, _))
+                && self.data.find_fn(
+                    u16::MAX,
+                    &d.original_name(),
+                    self.data.def(*e_tp).returned(),
+                ) == u32::MAX
+                && let Type::Enum(e_nr, true, _) = self.data.def(*e_tp).returned()
             {
-                todo.entry(e_nr).or_insert(vec![]).push(d_nr);
+                todo.entry(*e_nr).or_insert(vec![]).push(d_nr);
             }
         }
         for (e_nr, nrs) in todo {
@@ -167,17 +169,17 @@ impl Parser {
     ) {
         for nr in nrs {
             let d_nr = nr as u32;
-            let a_nr = if let Type::Reference(nr, _) = self.data.def(d_nr).attributes[0].typedef {
+            let a_nr = if let Type::Reference(nr, _) = self.data.def(d_nr).attributes()[0].typedef {
                 nr
             } else {
                 0
             };
-            let e_nr = if let Value::Enum(nr, _) = self.data.def(a_nr).attributes[0].value {
+            let e_nr = if let Value::Enum(nr, _) = self.data.def(a_nr).attributes()[0].value {
                 nr
             } else {
                 0
             };
-            let self_type = self.data.def(d_nr).attributes[0].typedef.clone();
+            let self_type = self.data.def(d_nr).attributes()[0].typedef.clone();
             let mut call_args = vec![Value::Var(0)];
             call_args.extend_from_slice(extra_args);
             let mut call_types = vec![self_type];
@@ -284,9 +286,9 @@ impl Parser {
                 // Enum values start with 1 as 0 is de null/undefined value.
                 self.data
                     .set_attr_value(d_nr, nr as usize, Value::Enum(nr + 1, u16::MAX));
-            } else if self.data.def(d_nr).returned != self.data.def(v_nr).returned {
+            } else if *self.data.def(d_nr).returned() != *self.data.def(v_nr).returned() {
                 self.data.definitions[v_nr as usize].returned =
-                    self.data.def(d_nr).returned.clone();
+                    self.data.def(d_nr).returned().clone();
             }
             // accept trailing comma after the last variant,
             // matching the trailing-comma guard on the field-list loop above.
@@ -309,11 +311,11 @@ impl Parser {
         // pattern match / construction / return paths all see the same
         // struct-enum discriminator width.
         if self.first_pass {
-            let parent_returned = self.data.def(d_nr).returned.clone();
+            let parent_returned = self.data.def(d_nr).returned().clone();
             if matches!(parent_returned, Type::Enum(_, true, _)) {
-                let num_variants = self.data.def(d_nr).attributes.len();
+                let num_variants = self.data.def(d_nr).attributes().len();
                 for a_nr in 0..num_variants {
-                    let v_name = self.data.def(d_nr).attributes[a_nr].name.clone();
+                    let v_name = self.data.def(d_nr).attributes()[a_nr].name.clone();
                     let v_nr = self.data.def_nr(&v_name);
                     if v_nr != u32::MAX {
                         self.data.definitions[v_nr as usize].returned = parent_returned.clone();
@@ -355,8 +357,8 @@ impl Parser {
             // would overwrite the existing definition's type and crash in
             // `set_returned` below.  Emit a clear diagnostic naming the
             // existing definition's location.
-            let prev_pos = self.data.def(d_nr).position.clone();
-            let prev_kind = format!("{:?}", self.data.def(d_nr).def_type).to_lowercase();
+            let prev_pos = self.data.def(d_nr).position().clone();
+            let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -406,8 +408,8 @@ impl Parser {
         if self.first_pass {
             let existing = self.data.def_nr(&type_name);
             if existing != u32::MAX {
-                let prev_pos = self.data.def(existing).position.clone();
-                let prev_kind = format!("{:?}", self.data.def(existing).def_type).to_lowercase();
+                let prev_pos = self.data.def(existing).position().clone();
+                let prev_kind = format!("{:?}", self.data.def(existing).def_type()).to_lowercase();
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -495,9 +497,9 @@ impl Parser {
                     self.data.set_returned(c_nr, tp);
                     self.data.definitions[c_nr as usize].code = val;
                 } else {
-                    let prev_pos = self.data.def(existing).position.clone();
+                    let prev_pos = self.data.def(existing).position().clone();
                     let prev_kind =
-                        format!("{:?}", self.data.def(existing).def_type).to_lowercase();
+                        format!("{:?}", self.data.def(existing).def_type()).to_lowercase();
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -710,7 +712,7 @@ impl Parser {
                 for iface_nr in iface_nrs {
                     let children: Vec<u32> = self.data.children_of(iface_nr).collect();
                     for child_nr in children {
-                        let child_name = self.data.def(child_nr).name.clone();
+                        let child_name = self.data.def(child_nr).name().to_string();
                         // Extract method name from interface-scoped stub names:
                         // "__iface_{d_nr}_{method}" → "method"
                         // Also handle legacy "t_4Self_{method}" format.
@@ -732,7 +734,7 @@ impl Parser {
                         if self.data.def_nr(&t_stub_name) != u32::MAX {
                             continue; // already created (e.g. multiple bounds share a method)
                         }
-                        let attrs_count = self.data.def(child_nr).attributes.len();
+                        let attrs_count = self.data.def(child_nr).attributes().len();
                         let t_stub_nr =
                             self.data
                                 .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
@@ -747,7 +749,7 @@ impl Parser {
                             self.data
                                 .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
                         }
-                        let ret_type = self.data.def(child_nr).returned.clone();
+                        let ret_type = self.data.def(child_nr).returned().clone();
                         let t_ret_type = Self::substitute_type(
                             ret_type,
                             self_nr,
@@ -863,9 +865,9 @@ impl Parser {
         // from constructors (dep empty, own).
         if self.first_pass && self.lexer.peek_token(";") {
             let def = &self.data.definitions[self.context as usize];
-            if let Some(self_attr) = def.attributes.first()
+            if let Some(self_attr) = def.attributes().first()
                 && self_attr.name == "self"
-                && let Type::Enum(ret_nr, true, dep) = &def.returned
+                && let Type::Enum(ret_nr, true, dep) = def.returned()
                 && dep.is_empty()
                 && let Type::Enum(self_nr, true, _) = &self_attr.typedef
                 && ret_nr == self_nr
@@ -944,8 +946,8 @@ impl Parser {
             // Don't warn about unused parameters in that case.
             let is_stub = {
                 let def = &self.data.definitions[self.context as usize];
-                let body_empty = matches!(&def.code, Value::Block(bl) if bl.operators.is_empty());
-                let first_is_self = def.attributes.first().is_some_and(|a| a.name == "self");
+                let body_empty = matches!(def.code(), Value::Block(bl) if bl.operators.is_empty());
+                let first_is_self = def.attributes().first().is_some_and(|a| a.name == "self");
                 body_empty && first_is_self
             };
             if !is_stub {
@@ -1000,7 +1002,7 @@ impl Parser {
                     // back in — bare `#native` is the only spelling for the
                     // common case; an explicit string is reserved for a
                     // symbol that genuinely DIFFERS from the fn name.
-                    let canonical = self.data.def(self.context).name.clone();
+                    let canonical = self.data.def(self.context).name().to_string();
                     if sym == canonical {
                         diagnostic!(
                             self.lexer,
@@ -1016,7 +1018,7 @@ impl Parser {
                     // function's own name.  A free `fn foo(...)` is stored as
                     // `n_foo` (see `Data::add_fn`), which IS the conventional
                     // native symbol, so the binding needs no separate string.
-                    let default_sym = self.data.def(self.context).name.clone();
+                    let default_sym = self.data.def(self.context).name().to_string();
                     self.data.definitions[self.context as usize].native = default_sym;
                 }
             } else if self.default && id == Some("rust".to_string()) {
@@ -1324,7 +1326,7 @@ impl Parser {
                 || (self.first_pass && matches!(dt, DefType::Struct))
             {
                 Some(Type::Reference(tp_nr, dep))
-            } else if matches!(self.data.def(tp_nr).returned, Type::Text(_)) {
+            } else if matches!(self.data.def(tp_nr).returned(), Type::Text(_)) {
                 Some(Type::Text(dep))
             } else {
                 // when a user-typed integer alias carries an
@@ -1337,7 +1339,7 @@ impl Parser {
                 // Skip the base `integer` primitive: its `forced_size = 8`
                 // matches the default heuristic; stamping would clutter
                 // every `Type::Integer` with `Some(8)` for no benefit.
-                let mut tp = self.data.def(tp_nr).returned.clone();
+                let mut tp = self.data.def(tp_nr).returned().clone();
                 if type_name != "integer"
                     && let Type::Integer(mut spec) = tp
                     && let Some(forced) = self.data.forced_size(tp_nr)
@@ -1507,7 +1509,7 @@ impl Parser {
                         sub_name,
                         dt,
                         type_name,
-                        self.data.def(dn).position
+                        self.data.def(dn).position()
                     );
                     // Consume the rest of the <...> so the parser stays
                     // synchronised on the next token.
@@ -1724,8 +1726,8 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
             } else {
-                let prev_pos = self.data.def(d_nr).position.clone();
-                let prev_kind = format!("{:?}", self.data.def(d_nr).def_type).to_lowercase();
+                let prev_pos = self.data.def(d_nr).position().clone();
+                let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();
                 diagnostic!(
                     self.lexer,
                     Level::Error,

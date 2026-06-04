@@ -99,7 +99,7 @@ impl Parser {
                 let mut p = Value::Null;
                 let et = self.expression(&mut p);
                 self.lexer.token(")");
-                let tp = self.data.def(self.data.type_def_nr(&et)).known_type;
+                let tp = self.data.def(self.data.type_def_nr(&et)).known_type();
                 t = Type::Integer(IntegerSpec {
                     min: 0,
                     max: 65536,
@@ -112,14 +112,14 @@ impl Parser {
             }
         } else if self.closure_param != u16::MAX
             && !self.first_pass
-            && self.data.def(self.context).closure_record != u32::MAX
+            && self.data.def(self.context).closure_record() != u32::MAX
             && self
                 .data
-                .attr(self.data.def(self.context).closure_record, name)
+                .attr(self.data.def(self.context).closure_record(), name)
                 != usize::MAX
         {
             // A5.3/A5.4: redirect captured variable reads to closure record field.
-            let closure_d_nr = self.data.def(self.context).closure_record;
+            let closure_d_nr = self.data.def(self.context).closure_record();
             let fnr = self.data.attr(closure_d_nr, name);
             *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
             t = self.data.attr_type(closure_d_nr, fnr);
@@ -142,7 +142,7 @@ impl Parser {
                     let arg_types: Vec<Type> = (0..n_args)
                         .map(|a| self.data.attr_type(fn_d_nr, a))
                         .collect();
-                    let ret_type = self.data.def(fn_d_nr).returned.clone();
+                    let ret_type = self.data.def(fn_d_nr).returned().clone();
                     return Type::Function(arg_types, Box::new(ret_type), vec![]);
                 }
             }
@@ -242,7 +242,7 @@ impl Parser {
             let closure_d_nr = if self.closure_param == u16::MAX || self.first_pass {
                 u32::MAX
             } else {
-                self.data.def(self.context).closure_record
+                self.data.def(self.context).closure_record()
             };
             let fnr = if closure_d_nr == u32::MAX {
                 usize::MAX
@@ -276,9 +276,9 @@ impl Parser {
             // under their plain name still resolve here.
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {
-                t = self.data.def(dnr).returned.clone();
+                t = self.data.def(dnr).returned().clone();
             } else if self.data.def_type(dnr) == DefType::EnumValue {
-                t = Type::Enum(self.data.def(dnr).parent, true, Vec::new());
+                t = Type::Enum(self.data.def(dnr).parent(), true, Vec::new());
             } else {
                 t = Type::Null;
             }
@@ -348,7 +348,7 @@ impl Parser {
                     let arg_types: Vec<Type> = (0..n_args)
                         .map(|a| self.data.attr_type(fn_d_nr, a))
                         .collect();
-                    let ret_type = self.data.def(fn_d_nr).returned.clone();
+                    let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), vec![]);
                 }
             } else if !self.first_pass {
@@ -399,10 +399,10 @@ impl Parser {
         let Type::Reference(d_nr, _) = &t else {
             return t;
         };
-        if !self.data.def(*d_nr).name.starts_with("__cell_") {
+        if !self.data.def(*d_nr).name().starts_with("__cell_") {
             return t;
         }
-        let Some(value_attr) = self.data.def(*d_nr).attributes.first() else {
+        let Some(value_attr) = self.data.def(*d_nr).attributes().first() else {
             return t;
         };
         if value_attr.name != "value" {
@@ -513,7 +513,7 @@ impl Parser {
                     if let Type::Reference(d_nr, _) = &tp
                         && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
                     {
-                        let tname = self.data.def(*d_nr).name.clone();
+                        let tname = self.data.def(*d_nr).name().to_string();
                         diagnostic!(
                             self.lexer,
                             Level::Error,
@@ -574,7 +574,7 @@ impl Parser {
                         } else {
                             let db_sz = self
                                 .database
-                                .size(self.data.def(self.data.type_elm(&tp)).known_type);
+                                .size(self.data.def(self.data.type_elm(&tp)).known_type());
                             if db_sz == 0 {
                                 None
                             } else {
@@ -613,7 +613,7 @@ impl Parser {
                     } else {
                         let db_sz = self
                             .database
-                            .size(self.data.def(self.data.type_elm(&hint)).known_type);
+                            .size(self.data.def(self.data.type_elm(&hint)).known_type());
                         if db_sz == 0 {
                             None
                         } else {
@@ -718,7 +718,7 @@ impl Parser {
     /// Collection fields (sorted/index/hash/spacial) cannot be serialised by the binary
     /// file I/O routines; callers should emit a compile-time error when this returns `Some`.
     fn first_collection_field(d_nr: u32, data: &super::Data) -> Option<String> {
-        for a in &data.def(d_nr).attributes {
+        for a in data.def(d_nr).attributes() {
             if matches!(
                 a.typedef,
                 Type::Sorted(..) | Type::Index(..) | Type::Hash(..) | Type::Spacial(..)
@@ -739,7 +739,7 @@ impl Parser {
         if let Type::Reference(d_nr, _) = val_type
             && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
         {
-            let type_name = self.data.def(*d_nr).name.clone();
+            let type_name = self.data.def(*d_nr).name().to_string();
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -820,13 +820,13 @@ impl Parser {
         };
         if d_nr != u32::MAX {
             self.data.def_used(d_nr);
-            t = self.data.def(d_nr).returned.clone();
+            t = self.data.def(d_nr).returned().clone();
             if self.data.def_type(d_nr) == DefType::Function {
                 t = Type::Routine(d_nr);
             } else if matches!(
                 self.data.def_type(d_nr),
                 DefType::Struct | DefType::EnumValue
-            ) && !matches!(self.data.def(d_nr).returned, Type::Enum(_, false, _))
+            ) && !matches!(self.data.def(d_nr).returned(), Type::Enum(_, false, _))
             {
                 if self.lexer.peek_token("{") {
                     let tp = self.parse_object(d_nr, code);
@@ -844,7 +844,7 @@ impl Parser {
             // variant reference, not a method call.  Save a link and
             // revert if "parse" doesn't follow.
             } else if self.data.def_type(d_nr) == DefType::Enum
-                && matches!(self.data.def(d_nr).returned, Type::Enum(_, true, _))
+                && matches!(self.data.def(d_nr).returned(), Type::Enum(_, true, _))
                 && self.lexer.peek_token(".")
             {
                 let link = self.lexer.link();
@@ -854,8 +854,8 @@ impl Parser {
                 }
                 self.lexer.revert(link);
             } else if self.data.def_type(d_nr) == DefType::Constant {
-                let const_code = self.data.def(d_nr).code.clone();
-                let const_tp = self.data.def(d_nr).returned.clone();
+                let const_code = self.data.def(d_nr).code().clone();
+                let const_tp = self.data.def(d_nr).returned().clone();
                 // vector constants are pre-built in CONST_STORE during
                 // byte_code(). Emit OpConstRef + OpCopyRecord to deep-copy
                 // from the constant store into a fresh runtime store.
@@ -885,13 +885,13 @@ impl Parser {
                         // the same `OpDatabase` + field-init sequence that
                         // `parse_object` would for the struct-variant form.
                         let parent_is_mixed =
-                            matches!(self.data.def(en).returned, Type::Enum(_, true, _));
+                            matches!(self.data.def(en).returned(), Type::Enum(_, true, _));
                         if parent_is_mixed && !self.first_pass {
                             let e_nr = self.data.def_nr(name);
-                            if e_nr != u32::MAX && self.data.def(e_nr).known_type != u16::MAX {
-                                let ret = self.data.def(en).returned.clone();
+                            if e_nr != u32::MAX && self.data.def(e_nr).known_type() != u16::MAX {
+                                let ret = self.data.def(en).returned().clone();
                                 let w = self.vars.work_refs(&ret, &mut self.lexer);
-                                let known_type = i32::from(self.data.def(e_nr).known_type);
+                                let known_type = i32::from(self.data.def(e_nr).known_type());
                                 let mut list = Vec::new();
                                 list.push(v_set(w, Value::Null));
                                 list.push(
@@ -998,7 +998,7 @@ impl Parser {
             // struct-enum, the actual stdlib decl shape).
             let is_jsonvalue = match &arg_tp {
                 Type::Reference(d, _) | Type::Enum(d, true, _) => {
-                    self.data.def(*d).name == "JsonValue"
+                    self.data.def(*d).name() == "JsonValue"
                 }
                 _ => false,
             };
@@ -1012,7 +1012,7 @@ impl Parser {
                     u32::MAX,
                     "n_struct_from_jsonvalue must be registered in NATIVE_FNS"
                 );
-                let known_tp = self.data.def(d_nr).known_type;
+                let known_tp = self.data.def(d_nr).known_type();
                 *code = Value::Call(n_walker, vec![arg_expr, Value::Int(i32::from(known_tp))]);
             } else {
                 // Text or other → legacy lenient text-parse path
@@ -1024,7 +1024,7 @@ impl Parser {
                 if !matches!(arg_tp, Type::Text(_)) {
                     self.convert(&mut text_expr, &arg_tp, &Type::Text(Vec::new()));
                 }
-                let known_tp = self.data.def(d_nr).known_type;
+                let known_tp = self.data.def(d_nr).known_type();
                 *code = self.cl(
                     "OpCastVectorFromText",
                     &[text_expr, Value::Int(i32::from(known_tp))],
@@ -1048,7 +1048,7 @@ impl Parser {
                 self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
             }
             // Get the database vector type for vector<elem>.
-            let elem_kt = self.data.def(elem_d_nr).known_type;
+            let elem_kt = self.data.def(elem_d_nr).known_type();
             let vec_kt = self.database.vector(elem_kt);
             let parse_call = self.cl(
                 "OpCastVectorFromText",
@@ -1056,7 +1056,7 @@ impl Parser {
             );
             // The parse returns a DbRef to the wrapper struct main_vector<T>.
             // Extract the vector field (at position 0) so the result is directly iterable.
-            let wrapper_name = format!("main_vector<{}>", self.data.def(elem_d_nr).name);
+            let wrapper_name = format!("main_vector<{}>", self.data.def(elem_d_nr).name());
             let wrapper_d_nr = self.data.def_nr(&wrapper_name);
             if wrapper_d_nr == u32::MAX {
                 *code = parse_call;
@@ -1522,21 +1522,21 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Unknown field {}.{field} — did you mean '{s}'?",
-                    self.data.def(td_nr).name
+                    self.data.def(td_nr).name()
                 );
             } else {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "Unknown field {}.{field}",
-                    self.data.def(td_nr).name
+                    self.data.def(td_nr).name()
                 );
             }
         } else {
             let td = self.data.attr_type(td_nr, nr);
             let pos = self
                 .database
-                .position(self.data.def(td_nr).known_type, &field);
+                .position(self.data.def(td_nr).known_type(), &field);
             found_fields.insert(field.clone());
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)
@@ -1587,7 +1587,7 @@ impl Parser {
                     list.push(v_set(*v_nr, Value::Null));
                 }
                 self.data.set_referenced(td_nr, self.context, Value::Null);
-                let tp = i32::from(self.data.def(td_nr).known_type);
+                let tp = i32::from(self.data.def(td_nr).known_type());
                 list.push(self.cl("OpDatabase", &[Value::Var(*v_nr), Value::Int(tp)]));
             } else if (!type_matches
                 || (!self.vars.is_independent(*v_nr) && !self.vars.is_compiler_generated(*v_nr)))
@@ -1618,9 +1618,9 @@ impl Parser {
                 // used safely as a method-call argument.
                 new_object = true;
                 self.data.set_referenced(td_nr, self.context, Value::Null);
-                let ret = &self.data.def(td_nr).returned;
+                let ret = self.data.def(td_nr).returned();
                 let w = self.vars.work_refs(ret, &mut self.lexer);
-                let tp = i32::from(self.data.def(td_nr).known_type);
+                let tp = i32::from(self.data.def(td_nr).known_type());
                 list.push(v_set(w, Value::Null));
                 list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
                 *code = Value::Var(w);
@@ -1628,9 +1628,9 @@ impl Parser {
         } else if !self.first_pass && !self.is_field(code) {
             new_object = true;
             self.data.set_referenced(td_nr, self.context, Value::Null);
-            let ret = &self.data.def(td_nr).returned;
+            let ret = self.data.def(td_nr).returned();
             let w = self.vars.work_refs(ret, &mut self.lexer);
-            let tp = i32::from(self.data.def(td_nr).known_type);
+            let tp = i32::from(self.data.def(td_nr).known_type());
             list.push(v_set(w, Value::Null));
             list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
             *code = Value::Var(w);
@@ -1654,16 +1654,16 @@ impl Parser {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
-            for a_nr in 0..self.data.def(td_nr).attributes.len() {
-                let check = self.data.def(td_nr).attributes[a_nr].check.clone();
+            for a_nr in 0..self.data.def(td_nr).attributes().len() {
+                let check = self.data.def(td_nr).attributes()[a_nr].check.clone();
                 if check != Value::Null {
                     let bound = Self::replace_record_ref(check, code);
                     let nm = self.data.attr_name(td_nr, a_nr);
-                    let msg = match &self.data.def(td_nr).attributes[a_nr].check_message {
+                    let msg = match &self.data.def(td_nr).attributes()[a_nr].check_message {
                         Value::Text(s) => Value::Text(s.clone()),
                         _ => Value::Text(format!(
                             "field constraint failed on {}.{nm}",
-                            self.data.def(td_nr).name
+                            self.data.def(td_nr).name()
                         )),
                     };
                     let pos = self.lexer.pos();
@@ -1749,11 +1749,13 @@ impl Parser {
         for aid in 0..self.data.attributes(td_nr) {
             let tp = self.data.attr_type(td_nr, aid);
             let nm = self.data.attr_name(td_nr, aid);
-            let fld = self.database.position(self.data.def(td_nr).known_type, &nm);
+            let fld = self
+                .database
+                .position(self.data.def(td_nr).known_type(), &nm);
             // Skip computed fields (not stored) and already-provided fields.
             if found_fields.contains(&nm)
                 || matches!(tp, Type::Routine(_))
-                || self.data.def(td_nr).attributes[aid].constant
+                || self.data.def(td_nr).attributes()[aid].constant
             {
                 continue;
             }
@@ -1784,15 +1786,15 @@ impl Parser {
     pub(crate) fn keyed_field_kt(&mut self, td: &Type) -> Option<u16> {
         match td {
             Type::Hash(d, key, _) => {
-                let c = self.data.def(*d).known_type;
+                let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.hash(c, key))
             }
             Type::Sorted(d, key, _) => {
-                let c = self.data.def(*d).known_type;
+                let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.sorted(c, key))
             }
             Type::Index(d, key, _) => {
-                let c = self.data.def(*d).known_type;
+                let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
             _ => None,
@@ -1832,7 +1834,7 @@ impl Parser {
                 if !self.first_pass && !matches!(value, Value::Insert(_) | Value::Null) {
                     let pos = self
                         .database
-                        .position(self.data.def(td_nr).known_type, field);
+                        .position(self.data.def(td_nr).known_type(), field);
                     // `vector_of` consults
                     // `Data::narrow_vector_content` and registers a
                     // narrow element type when the content is a narrow
@@ -1875,7 +1877,7 @@ impl Parser {
                 // (copy_claims panics for it, per @P295).
                 let pos = self
                     .database
-                    .position(self.data.def(td_nr).known_type, field);
+                    .position(self.data.def(td_nr).known_type(), field);
                 let field_ref = self.cl(
                     "OpGetField",
                     &[
@@ -1923,7 +1925,7 @@ impl Parser {
                     Level::Error,
                     "Cannot assign {} to field {}.{field} of type {}",
                     exp_tp.show(&self.data, &self.vars),
-                    self.data.def(td_nr).name,
+                    self.data.def(td_nr).name(),
                     td.show(&self.data, &self.vars)
                 );
             }
@@ -1941,8 +1943,8 @@ impl Parser {
     ) {
         let e_nr = self
             .data
-            .def_nr(&self.data.def(d_nr).attributes[enum_nr as usize - 1].name);
-        let tp = self.data.def(e_nr).returned.clone();
+            .def_nr(&self.data.def(d_nr).attributes()[enum_nr as usize - 1].name);
+        let tp = self.data.def(e_nr).returned().clone();
         let v = self.create_unique("enum", &tp);
         let mut cd = if pos != 0 {
             list.push(v_set(
