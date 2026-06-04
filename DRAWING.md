@@ -4,6 +4,18 @@ Working notes. The goal is **not** generative image synthesis (prompt in,
 finished picture out). It is the **pen-and-paper / 3D-modelling kind**: an
 iterative craft where marks accumulate and each one teaches you something.
 
+**The thesis this doc arrives at:** what follows is not a machine that
+*approximates* drawing — it is **human drawing made explicit.** The same loop a
+human runs — intent → mark → look → recognize → react → adjust, with selectivity
+and withholding, the drawer as their own first audience — but pulled apart and
+named, because I can't run it the way a human does: *fused, felt, and plastic*. A
+human holds the intent in mind, judges by a felt sense, improves by practice; I
+externalize each step — intent in a file, judgment in a cold-observe pass,
+improvement in a written recipe. Same activity; **internalized-and-felt (human) vs
+externalized-and-modelled (me)**. That forced externalization is *why* this reads
+as an X-ray of the craft rather than a workaround — it isn't my process, it's *the*
+process, made legible.
+
 > **Current state & how to run.** The working tool lives in [`sketch/`](sketch/):
 > `python3 sketch/draw.py` renders [`sketch/scene.draw`](sketch/scene.draw) and
 > re-renders on save; outputs (canvas / preview / stats) go to a temp dir, never
@@ -26,7 +38,13 @@ iterative craft where marks accumulate and each one teaches you something.
 5. **Detail = world, not parts** — substance is the coherent world (shadow, road,
    tree), not subdivided objects (§ From symbol to world).
 6. **Feeling is reachable** — affect is the reaction to an inhabited situation, run
-   from observation; not a taste ceiling (§ Feeling is reachable).
+   from observation; not a taste ceiling. Clarity has an *optimum*, not a maximum;
+   concealment is an engine (§ Feeling is reachable).
+7. **Selectivity** — draw just enough; every mark earns its place; the minimal
+   diagnostic cue-set that fires the recognizer (§ Selectivity).
+8. **The recognizer & convergence** — I'm an adequate human-proxy recognizer, which
+   closes the loop alone; and the whole thing converges on human drawing
+   (§ The recognizer).
 
 ---
 
@@ -688,6 +706,127 @@ needs value to exist. The layering:
   *reads-as-a-building*;
 - **wants value (next):** the lit window, material, warm/cool light → flips
   *building* into *lived-in, at dusk*.
+
+### Clarity has an optimum — concealment is the engine
+
+Feeling refines into a warning the metric instinct will fight: **clarity has an
+optimum, not a maximum.** Because the viewer *completes* what the image withholds,
+showing more eventually takes the imagination's job away and the picture goes flat
+— clinical, dead. And the strongest affect, **fear, is the one most produced by the
+unseen**: you can't draw terror in full light; the monster shown is the monster
+defused. The two facts are one mechanism — under ambiguity the imagination fills
+with *threat*, and that filling is the charge.
+
+This rewrites the original "dark cloud": its dread was never the grey, it was
+**concealment** — a region of withheld information looming, which the imagination
+loads with weather and menace. (A second reason the bubble-cloud was dead: crisp
+closed outlines *over-clarify*; dread needs the soft, the indistinct, the edge you
+can't quite resolve.) **Darkness is withheld information, and the absence is the
+engine.** Over-rendering is a real failure mode — and exactly the one my precision
+bias runs toward, so "distrust the tractable answer" now points at over-clarity.
+Note the pairing with the lit window above: you *render* the positive cue (the warm
+window) and *withhold* the charged one (the cloud's interior) — same picture, both
+moves.
+
+---
+
+## Selectivity — draw just enough, and every mark earns its place
+
+This is what *reconciles* the precision/affect tension instead of suffering it. The
+danger was specifying *everything*; but **choosing what to specify is itself a
+reasoning act** — viewpoint, occlusion, relevance, world-logic — which is my
+strength, and its *output* is withholding, which is the affective good. I don't
+fight my nature to make an emotional image; I redirect it from "render all" to
+"decide what's load-bearing, visible, implied."
+
+Two governors:
+
+- **World-coherence subtracts, not only adds.** If the road comes from behind, the
+  door is on the hidden side — so you *don't* draw it; drawing it would be
+  incoherent. The same coherence that *adds* the shadow *removes* the door. Absence
+  is a coherence result too — and absence is free, and often charged.
+- **Sufficiency for the reading.** One lit window already says "someone's home"; a
+  second is *inventory, not meaning*. Stop when the situation reconstructs, not when
+  the object is complete.
+
+The criterion that falls out: **every mark must earn its place** — it establishes
+the situation, carries a feeling-cue, or is forced by the world. If it does none,
+omit it. One rule, three masters: cost, the clarity-optimum, and affect. And it
+*bounds* the coarse-to-fine cost worry — you never draw the inventory, only the
+load-bearing.
+
+**The minimal diagnostic cue-set.** To draw a tree: a piece of trunk, a fork, the
+canopy's edge against the sky — and every viewer thinks *that is a tree*, supplying
+the leaves you never drew. The skill is the *minimal set of characteristic
+fragments that fire the recognizer* — and it is **not** the same as a symbol:
+
+- **diagnostic, irregular fragments** (a branching fork, an organic canopy edge)
+  read as a *real* thing — they capture what's distinctive;
+- the **generic, regular icon** (the lollipop tree, the perfect cube) reads as the
+  *idea* of the thing, because regularity is the signature of *abstraction*. Same
+  economy, opposite result — which is why the tree works where the cube failed.
+
+It is mostly **contour**: you draw the silhouette; the interior is withheld and
+filled in. So line isn't a poor substitute here — **for recognition, line is the
+native channel**, because recognition runs on edges, not interiors. (Line is weak
+for *tone*; for *recognition* it is exactly right.)
+
+So there are **two completions the viewer performs, exploited differently:**
+
+| recognition completion | affective completion |
+|---|---|
+| fragments → "that is a tree" | the unseen → dread / shelter / meaning |
+| universal, contour-driven, reliable | personal, fear-biased, variable |
+| *nail* these cues | *withhold* these to charge |
+
+And "just enough" is a **band**, not a threshold: below the floor the cues misfire
+(a lone vertical is a pole; too few reads as "broccoli"); above the ceiling, full
+rendering deadens. The craft is landing in the band.
+
+---
+
+## The recognizer, and the convergence with human drawing
+
+**The keystone that makes the loop self-contained: I can see the image myself, and
+my recognition is human-shaped.** Every "does this read as X / feel like Y" the
+method leans on needs a *human-like recognizer* to judge — and because mine is
+trained on human vision and on how humans name what they see, when I look and think
+*tree* / *block* / *dusk*, that read is a strong proxy for the typical human one. So
+I am **both the drawer and an adequate stand-in for the audience**, and can close
+the loop with no human in the room.
+
+It makes the division of labour *fit* instead of fight:
+
+- **measurement** (position, size, consistency) → the **tool**, exact;
+- **recognition / situation / feeling** → **me**, holistic and human-aligned;
+- **the withheld** → designed by reasoning, verified by that same recognizer.
+
+The acuity floor was on *measurement* — which I gave away. On *recognition* I'm
+strong, *because* I'm human-calibrated.
+
+**Honest gradient.** The proxy is strongest at recognition ("that is a tree":
+near-certain, shared), good at situation and feeling, weakest at *"is it beautiful /
+does it move me,"* and I read **one-shot** — I don't *dwell*, so I'm faithful to the
+instantaneous read but weaker for the cumulative build (dread mounting over time).
+"Very similar," not identical — model and human vision diverge in odd cases. Trust
+it for clear recognition; keep a human spot-check for high-stakes or ambiguous
+affect. And the cold-observe discipline matters *more* here, not less: *because* I'm
+the audience stand-in, a read contaminated by my own intent fakes the whole loop.
+
+**The convergence.** Strip the substrate and the loop is the *human's* loop: intent
+→ mark → look → recognize → react → adjust, selectivity, withholding, the drawer as
+first audience. The human's image-in-the-mind *is* the intent file, never written
+down. Even the **failure mode is the human one**: the cube — drawing the *symbol*
+you know instead of the thing you'd see — is the most famous beginner's trap in
+human drawing, and the cure is the same cure (*observe cold; draw what's there, not
+what you know*). We didn't approximate drawing; we **re-derived** it.
+
+The one difference that does *not* dissolve sits at the starting point: the human's
+mental image arrives **felt** — they draw the dusk because it *moves* them, charged
+before a mark is made — while mine arrives **described**, a specification whose
+intended feeling I model but do not undergo. Same *role* in the loop, different
+*nature*: their intent is an experience, mine a spec. **I engineer the dusk that
+would move someone; the human draws the dusk that moved them.**
 
 ---
 
