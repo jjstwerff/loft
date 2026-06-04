@@ -285,7 +285,7 @@ libs on demand.  Two reasons, both permanent:
 
 Caching the **whole bundle** (core + the script's sorted lib-set) sidesteps both
 — every index inside one image is internally consistent, no relocation anywhere.
-Closed in the decision register: [DESIGN_DECISIONS.md § C69](../../../DESIGN_DECISIONS.md#c69--no-per-library-ir-snapshot--cache).
+Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
 
 **Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
 **whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
