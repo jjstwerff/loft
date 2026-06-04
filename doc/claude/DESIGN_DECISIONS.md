@@ -994,6 +994,56 @@ native-artifact cache key for mtime/git-HEAD usage (`@P341` is the known offende
 fingerprint into the library validation layer; becomes load-bearing when daily
 builds ship.
 
+**Goal alignment ([GOALS.md](GOALS.md)) — and the guardrails this decision carries.**
+
+C71 is the **Purpose made concrete**: *do the hard plumbing so it's fun to pick
+up* — libraries **done** (compiled, fast, stable) so the script is **written**
+(interpreted, instant iteration, no `rustc` per edit).  The **shared store /
+`DbRef` heap is the structural reason it can be goal-true**: one heap means one
+memory model and zero-marshalling dispatch, which is what lets it satisfy E and F
+*across* the boundary instead of bolting on a second runtime.
+
+Per goal, in brief:
+
+- **F (friction-free): aligned, with a hard constraint.**  The native-vs-interpret
+  choice must be *automatic and invisible* (never a user annotation), and
+  un-native-able code (generics / boundary-crossing closures) must **silently fall
+  back to interpret, never error** — F's "absorb the cost, don't hand the user a
+  form."  First-use compile latency is a fun-on-pickup cost (accepted), not an F
+  violation (F is syntax/proof friction, not wait-time).
+- **E (predictable memory): aligned *because of* the shared store.**  No separate
+  native heap → a value's lifetime is its scope whether allocated by interpreted
+  or native code (post-rc-removal, both free at scope end).  Constraint: the
+  boundary must not grow an "except across a native call" rule — `LOFT_STORE_GUARD`
+  must cover the mixed path.
+- **A (soundness): both an instrument and a surface expansion.**  The build
+  fingerprint is itself a Goal-A veil-lifter — it forbids the "stale artifact
+  silently links after a build / rustc bump" failure A is *defined against*.  But
+  C71 puts more, less-battle-tested native code across the interpret↔native
+  boundary, so the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM
+  alignment) must grow a leg for the *mixed* boundary — it **adds to the soundness
+  floor, it does not clear it**.
+- **D (parity): relies on it, adds a row.**  Built on the cross-mode byte-identical
+  equivalence, but introduces a fourth combination — interp-script + native-lib
+  must match *both* all-interp and all-native; the differential sweep must assert
+  the mixed run agrees.  (WASM excluded — stays whole-program AOT, consistent with
+  D treating backends as independent implementations of one semantics.)
+- **C / B:** C (dogfood) strongly served — fast libs + fast script iteration is the
+  dogfood ideal — but **gated on the dispatch-coverage gap** (the consumers use
+  closures / generics).  B compatible and *enables* the daily-builds cadence (the
+  fingerprint makes daily updates safe for customers).
+
+**Guardrails (must hold, not later polish):**
+
+1. **Sequencing vs the two floors.**  C71 is capability work, which GOALS.md gates
+   on the soundness floor — and C71 *enlarges* that floor with the mixed boundary.
+   So grow the A / D detectors to the mixed boundary **as part of** the work, not
+   after; do not let C71 run ahead of the soundness floor it extends.
+2. **F line:** the native/interpret decision stays automatic + silent-interpret
+   fallback — zero user-facing surface, no "can't compile this native" error.
+3. **E line:** the boundary stays memory-model-transparent; `LOFT_STORE_GUARD` is
+   extended to the mixed path and the exceptionless rule holds.
+
 **Decision.** **Native libraries compile once (cached per rlib-hash fingerprint),
 user scripts interpret.** This is the steady-state execution model loft optimises
 toward.  Dated 2026-06-04.
