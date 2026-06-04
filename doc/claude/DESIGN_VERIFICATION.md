@@ -126,6 +126,32 @@ that converts an unknown axis into a known one — real consumers wander into
 regions invisible from the desk, and each harvested lesson is a new axis.  "Real
 consumers, not toys," because a toy only exercises the axes already visible.
 
+**Candidate protocol shape (graduation target — not yet active).**  When a real
+consumer has verified the way-of-working, the protocol this concern graduates into is
+expected to take the matrix-before-fix shape one level up — *commitment before
+action, so the action is checked against something other than its own momentum*:
+
+1. **Before writing the code, write down the expected shape** — the one invariant you
+   expect to carry it, the axes it must cover, and a rough size/structure (one
+   function? one match? a table?).  If you can't name the invariant up front, that is
+   already the first flag.
+2. **Build it.**
+3. **Validate the build against the written shape.**  A divergence — most often
+   *bigger / more mechanisms than predicted* — is an alarm, **not a verdict**: route
+   it to the essential-vs-accidental search above.  Find the invariant → the code
+   collapses back toward the predicted shape.  Find none honestly → the length is
+   essential, and the surprise just taught you a domain axis you couldn't see at
+   prediction time; feed that into the next estimate, and into the
+   [composition-axes list](plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)
+   if it is a new one.
+
+The written prediction is what turns "longer than expected" into a concrete,
+falsifiable comparison instead of a feeling you can rationalise away after the fact —
+and it **externalises the prior**, so the check works even when the gut estimate
+doesn't.  (Step 3 stays a *search*, never a pass/fail on size — a length protocol that
+asserted "match the prediction" would be the over-unification this concern warns
+against, applied to itself.)
+
 **See also:**
 [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
 ·
