@@ -18,7 +18,7 @@ impl Output<'_> {
         var: u16,
         to: &Value,
     ) -> std::io::Result<()> {
-        let variables = &self.data.def(self.def_nr).variables;
+        let variables = self.data.def(self.def_nr).variables();
         // P224: writes to coroutine-persistent locals target the struct
         // field directly so the value survives across `next_*` calls.
         // The same Var/Set pair would otherwise produce a state-arm-scoped
@@ -98,13 +98,13 @@ impl Output<'_> {
         // Deep-copy to prevent aliasing.
         if let (Some(d_nr), Value::Call(fn_nr, args)) =
             (variables.tp(var).heap_def_nr(), to_unspanned)
-            && self.data.def(*fn_nr).name.starts_with("n_")
-            && self.data.def(*fn_nr).code != Value::Null
-            && self.data.def(*fn_nr).attributes.iter().any(|a| {
+            && self.data.def(*fn_nr).name().starts_with("n_")
+            && *self.data.def(*fn_nr).code() != Value::Null
+            && self.data.def(*fn_nr).attributes().iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             })
         {
-            let tp_nr = self.data.def(d_nr).known_type;
+            let tp_nr = self.data.def(d_nr).known_type();
             if !self.declared.contains(&var) {
                 self.declared.insert(var);
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
@@ -128,7 +128,7 @@ impl Output<'_> {
             // return type carries a `dep` chain naming one of its args): the
             // "source" is then a slice of an arg's store, and freeing it would
             // corrupt the caller.  Return-dep inference tags these correctly.
-            let is_borrowed_view = !self.data.def(*fn_nr).returned.depend().is_empty();
+            let is_borrowed_view = !self.data.def(*fn_nr).returned().depend().is_empty();
             let tp_with_free: i32 = if is_borrowed_view {
                 i32::from(tp_nr)
             } else {
@@ -137,7 +137,7 @@ impl Output<'_> {
             // Emit the call into a temporary, then deep-copy.
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
-            write!(w, "{{ let _src = {}(cell", self.data.def(*fn_nr).name)?;
+            write!(w, "{{ let _src = {}(cell", self.data.def(*fn_nr).name())?;
             for arg in args {
                 write!(w, ", ")?;
                 if let Some(vr) = self.create_stack_var(arg) {
@@ -162,7 +162,7 @@ impl Output<'_> {
             && variables.tp(*src).heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));
-            let tp_nr = self.data.def(d_nr).known_type;
+            let tp_nr = self.data.def(d_nr).known_type();
             if self.declared.contains(&var) {
                 // Reassignment: the variable was pre-declared via null_named
                 // (Set(var, Null)) at function entry.  OpDatabase below
@@ -242,8 +242,8 @@ impl Output<'_> {
             let mut hoisted: Vec<Option<String>> = vec![None; args.len()];
             for (idx, arg) in args.iter().enumerate() {
                 if contains_op_database(IrNode::Native(arg), self.data) {
-                    let param_tp = if idx < def_fn.attributes.len() {
-                        rust_type(&def_fn.attributes[idx].typedef, &Context::Argument)
+                    let param_tp = if idx < def_fn.attributes().len() {
+                        rust_type(&def_fn.attributes()[idx].typedef, &Context::Argument)
                     } else {
                         "DbRef".to_string()
                     };
@@ -267,12 +267,12 @@ impl Output<'_> {
             // per-fn ABI tagging via `crate::codegen_runtime::abi_of`:
             //   - Cell  → `name(cell, args...)`     (default)
             //   - None  → `name(args...)`           (no implicit Stores)
-            let abi = if def_fn.code == Value::Null {
-                crate::codegen_runtime::abi_of(&def_fn.name)
+            let abi = if *def_fn.code() == Value::Null {
+                crate::codegen_runtime::abi_of(def_fn.name())
             } else {
                 crate::codegen_runtime::Abi::Cell
             };
-            write!(w, "{}(", def_fn.name)?;
+            write!(w, "{}(", def_fn.name())?;
             let mut first_arg = true;
             if matches!(abi, crate::codegen_runtime::Abi::Cell) {
                 write!(w, "cell")?;
@@ -375,7 +375,7 @@ impl Output<'_> {
                 // (the common case for assignment RHS — same shape as P228).
                 let text_local_clone = needs_to_string
                     && matches!(to.unspan(), Value::Var(v) if {
-                        let vars = &self.data.def(self.def_nr).variables;
+                        let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
                     });
                 // @P283 — source is a `RefVar(Text)` argument (`&mut String`).
@@ -388,7 +388,7 @@ impl Output<'_> {
                 // `String` of the correct type.
                 let refvar_text_clone = needs_to_string
                     && matches!(to.unspan(), Value::Var(v) if {
-                        let vars = &self.data.def(self.def_nr).variables;
+                        let vars = self.data.def(self.def_nr).variables();
                         vars.is_argument(*v)
                             && matches!(vars.tp(*v), Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
                     });
@@ -412,7 +412,7 @@ impl Output<'_> {
                 let to_inner = to.unspan();
                 let tuple_text_elem_clone = needs_to_string
                     && matches!(to_inner, Value::TupleGet(v, idx) if {
-                        let vars = &self.data.def(self.def_nr).variables;
+                        let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v)
                             && matches!(vars.tp(*v),
                                 Type::Tuple(elems)
@@ -431,28 +431,28 @@ impl Output<'_> {
                 let nested_tuple_clone = matches!(variables.tp(var), Type::Tuple(elems)
                     if tuple_has_non_copy_leaf(elems))
                     && matches!(to_inner, Value::TupleGet(v, _) if {
-                        let vars = &self.data.def(self.def_nr).variables;
+                        let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
                     });
                 if text_local_clone {
                     if let Value::Var(v) = to.unspan() {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.clone()")?;
                     }
                 } else if refvar_text_clone {
                     if let Value::Var(v) = to.unspan() {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.to_string()")?;
                     }
                 } else if tuple_text_elem_clone {
                     // P228: read through the same unspan as the detection above.
                     if let Value::TupleGet(v, idx) = to.unspan() {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
                 } else if nested_tuple_clone {
                     if let Value::TupleGet(v, idx) = to.unspan() {
-                        let src_name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
                 } else {
@@ -486,7 +486,7 @@ impl Output<'_> {
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),
                     // add a cast so Rust accepts the assignment.
                     let var_tp_str = rust_type(variables.tp(var), &Context::Variable);
-                    let ret = &self.data.def(*d_nr).returned;
+                    let ret = self.data.def(*d_nr).returned();
                     let ret_str = rust_type(ret, &Context::Variable);
                     if ret_str != var_tp_str && !matches!(ret, Type::Void) {
                         write!(w, " as {var_tp_str}")?;
@@ -510,7 +510,7 @@ impl Output<'_> {
         name: &str,
         first: bool,
     ) -> std::io::Result<()> {
-        let variables = &self.data.def(self.def_nr).variables;
+        let variables = self.data.def(self.def_nr).variables();
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
         let owns_store = match variables.tp(var) {
@@ -542,7 +542,7 @@ impl Output<'_> {
                     // is zero-initialised.  Resolves to the same database
                     // type id that struct-field registration uses.
                     Type::Sorted(td, key, _) | Type::Index(td, key, _) => {
-                        let c = self.data.def(*td).known_type;
+                        let c = self.data.def(*td).known_type();
                         if c == u16::MAX {
                             u16::MAX
                         } else {
@@ -567,7 +567,7 @@ impl Output<'_> {
                         }
                     }
                     Type::Hash(td, key, _) | Type::Spacial(td, key, _) => {
-                        let c = self.data.def(*td).known_type;
+                        let c = self.data.def(*td).known_type();
                         if c == u16::MAX {
                             u16::MAX
                         } else {
@@ -662,7 +662,7 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         let def_fn = self.data.def(def_nr);
-        let name: &str = &def_fn.name;
+        let name: &str = def_fn.name();
         // Phase 09 phase 00 step 0.6: registry-first dispatch.  When a
         // custom emitter is registered for this Op, run it instead of
         // the special-case match arms below.  Today the registry is
@@ -678,7 +678,7 @@ impl Output<'_> {
             };
             return crate::generation::ops::emit_op(&mut ctx, &name_owned, vals);
         }
-        if def_fn.rust.is_empty() {
+        if def_fn.rust().is_empty() {
             self.output_call_user_fn(w, def_fn, vals)
         } else {
             self.output_call_template(w, def_fn, vals)

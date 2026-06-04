@@ -1818,6 +1818,20 @@ impl Definition {
         &self.variables
     }
 
+    /// The kind of definition (function / struct field / enum value / …).
+    /// Returned by value (cheap — a unit-variant enum): a store read decodes an
+    /// integer discriminant into a fresh `DefType`, never a borrow.
+    #[must_use]
+    pub fn def_type(&self) -> DefType {
+        self.def_type.clone()
+    }
+
+    /// Inline Rust body (`#rust "…"`), or empty for a non-native definition.
+    #[must_use]
+    pub fn rust(&self) -> &str {
+        &self.rust
+    }
+
     #[must_use]
     pub fn is_operator(&self) -> bool {
         matches!(self.def_type, DefType::Function)

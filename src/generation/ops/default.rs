@@ -35,7 +35,7 @@ pub struct DefaultEmitter;
 
 impl OpEmitter for DefaultEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        if ctx.def_fn.rust.is_empty() {
+        if ctx.def_fn.rust().is_empty() {
             ctx.output.user_fn_call_body(&mut *ctx.w, ctx.def_fn, args)
         } else {
             ctx.output

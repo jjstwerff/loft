@@ -144,7 +144,7 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
 /// `("", "elm")` — byte-identical to the original single-`DbRef` path.
 fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str) {
     let worker_def = ctx.output.data.def(fn_d_nr);
-    let Some(elem_attr) = worker_def.attributes.first() else {
+    let Some(elem_attr) = worker_def.attributes().first() else {
         return (String::new(), "elm");
     };
     let Type::Tuple(elems) = &elem_attr.typedef else {
@@ -186,8 +186,8 @@ impl OpEmitter for ParallelForEmitter {
         }
 
         let worker_def = ctx.output.data.def(fn_d_nr);
-        let worker_name = worker_def.name.clone();
-        let worker_ret = worker_def.returned.clone();
+        let worker_name = worker_def.name().to_string();
+        let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
 
         // Extra context args: vals[5..len-1].  The trailing element
@@ -218,7 +218,7 @@ impl OpEmitter for ParallelForEmitter {
             // struct-enum (`Type::Enum(_, true, _)`) route here;
             // `heap_def_nr()` returns the def for both.
             let (struct_size, known_type) = if let Some(d_nr) = worker_ret.heap_def_nr() {
-                let kt = ctx.output.data.def(d_nr).known_type;
+                let kt = ctx.output.data.def(d_nr).known_type();
                 (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
             } else {
                 (0, 0)
@@ -317,8 +317,8 @@ impl OpEmitter for ParallelQueueEmitter {
         }
 
         let worker_def = ctx.output.data.def(fn_d_nr);
-        let worker_name = worker_def.name.clone();
-        let worker_ret = worker_def.returned.clone();
+        let worker_name = worker_def.name().to_string();
+        let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
 
         // Extras: args[5..len-1]; trailing args[len-1] is the n_extra count.
@@ -345,7 +345,7 @@ impl OpEmitter for ParallelQueueEmitter {
         write!(ctx.w, ", ")?;
         if shape == ClosureShape::HeapRef {
             let (struct_size, known_type) = if let Some(d_nr) = worker_ret.heap_def_nr() {
-                let kt = ctx.output.data.def(d_nr).known_type;
+                let kt = ctx.output.data.def(d_nr).known_type();
                 (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
             } else {
                 (0, 0)
@@ -440,7 +440,7 @@ impl OpEmitter for ParallelFoldEmitter {
         }
 
         let worker_def = ctx.output.data.def(fn_d_nr);
-        let worker_name = worker_def.name.clone();
+        let worker_name = worker_def.name().to_string();
 
         // Helper call: `n_parallel_fold_native(cell, input, init, threads, |cell, acc, row| worker(cell, acc, row))`.
         write!(ctx.w, "n_parallel_fold_native(cell, ")?;
@@ -469,7 +469,7 @@ pub struct ParallelBufRenameEmitter;
 
 impl OpEmitter for ParallelBufRenameEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        let native_name = format!("{}_native", ctx.def_fn.name);
+        let native_name = format!("{}_native", ctx.def_fn.name());
         write!(ctx.w, "{native_name}(cell")?;
         for arg in args {
             write!(ctx.w, ", ")?;

@@ -113,7 +113,7 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
             // closure refers to a fn that never gets emitted and rustc
             // fails with "cannot find function" (E0425).
             if matches!(
-                data.def(d).name.as_str(),
+                data.def(d).name(),
                 "n_parallel_for"
                     | "n_parallel_for_light"
                     | "n_parallel_queue"
@@ -132,7 +132,7 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
             // (after input + init).  Same reason for the insert: the
             // ParallelFoldEmitter generates `worker_name(cell, acc, row)`
             // and the worker must be in the reachable set.
-            if data.def(d).name.as_str() == "n_parallel_fold"
+            if data.def(d).name() == "n_parallel_fold"
                 && args.len() >= 4
                 && args.get(2).kind() == ValueType::Int
                 && args.get(2).int_value() >= 0
@@ -261,8 +261,8 @@ fn collect_fn_ref_literals(
                 && let Value::Int(dn) = arg2.unspan()
                 && *dn >= 0
                 && (*dn as u32) < data.definitions()
-                && matches!(data.def(*dn as u32).def_type, DefType::Function)
-                && !data.def(*dn as u32).name.starts_with("Op")
+                && matches!(data.def(*dn as u32).def_type(), DefType::Function)
+                && !data.def(*dn as u32).name().starts_with("Op")
             {
                 calls.insert(*dn as u32);
             }
@@ -343,12 +343,12 @@ pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
         }
         let def = data.def(d);
         let mut calls = HashSet::new();
-        collect_calls(IrNode::Native(&def.code), data, &mut calls);
+        collect_calls(IrNode::Native(def.code()), data, &mut calls);
         // #263: a fn-ref returned as a bare d_nr is only a fn-ref literal when
         // this def's return type IS a fn-ref — otherwise an ordinary integer
         // return would be misread as a reachable fn d_nr.
-        let returns_fn = matches!(def.returned, Type::Function(_, _, _) | Type::Routine(_));
-        collect_fn_ref_literals(&def.code, data, &def.variables, &mut calls, returns_fn);
+        let returns_fn = matches!(def.returned(), Type::Function(_, _, _) | Type::Routine(_));
+        collect_fn_ref_literals(def.code(), data, def.variables(), &mut calls, returns_fn);
         for c in calls {
             if !reachable.contains(&c) {
                 queue.push_back(c);
@@ -672,7 +672,7 @@ extern crate loft;"
             let mut declared_natives = std::collections::HashSet::new();
             for d_nr in 0..data.definitions() {
                 let def = data.def(d_nr);
-                if def.native.is_empty() || declared_natives.contains(&def.native) {
+                if def.native().is_empty() || declared_natives.contains(def.native()) {
                     continue;
                 }
                 // @P321c browser-WASM (2026-05-29): skip the host-import
@@ -686,18 +686,18 @@ extern crate loft;"
                 // declares its OWN host imports — still no extern needed
                 // at this layer.
                 let stores_loft_ref =
-                    matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
-                let has_ref_arg = def.attributes.iter().any(|a| {
+                    matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+                let has_ref_arg = def.attributes().iter().any(|a| {
                     !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
                 });
                 if stores_loft_ref || has_ref_arg {
                     continue;
                 }
-                declared_natives.insert(def.native.clone());
+                declared_natives.insert(def.native().to_string());
                 // Build the C-ABI signature from loft parameter types.
                 use std::fmt::Write as _;
                 let mut params = String::new();
-                for attr in &def.attributes {
+                for attr in def.attributes() {
                     if attr.name.starts_with("__") {
                         continue;
                     }
@@ -730,7 +730,7 @@ extern crate loft;"
                         }
                     }
                 }
-                let ret = match &def.returned {
+                let ret = match def.returned() {
                     Type::Void => String::new(),
                     // Post-2c round 10c: wide Type::Integer returns as i64.
                     Type::Integer(s) if s.is_wide() => " -> i64".to_string(),
@@ -740,7 +740,7 @@ extern crate loft;"
                     Type::Boolean => " -> bool".to_string(),
                     _ => " -> i32".to_string(),
                 };
-                writeln!(w, "    safe fn {}({params}){ret};", def.native)?;
+                writeln!(w, "    safe fn {}({params}){ret};", def.native())?;
             }
             writeln!(w, "}}")?;
         } else {
@@ -807,10 +807,10 @@ extern crate loft;"
             let mut entries: Vec<u32> = Vec::new();
             for d in 0..self.data.definitions() {
                 let def = self.data.def(d);
-                if !matches!(def.def_type, DefType::Function) {
+                if !matches!(def.def_type(), DefType::Function) {
                     continue;
                 }
-                let pos_file = &def.position.file;
+                let pos_file = &def.position().file;
                 // Match `/default/` and `/lib/` segments under EITHER path
                 // separator — Windows uses `\` so a bare `/default/`
                 // substring check misses `default\01_code.loft` and
@@ -888,7 +888,7 @@ extern crate loft;"
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
-        if (0..till).any(|d| self.data.def(d).name == "n_main") {
+        if (0..till).any(|d| self.data.def(d).name() == "n_main") {
             if self.wasm_browser {
                 // exported cdylib entry point for browser WASM.  WASM
                 // doesn't have an argv, so user_args stays empty —
@@ -963,13 +963,13 @@ extern crate loft;"
         for dnr in from..till {
             self.start_fn(dnr);
             let def = self.data.def(dnr);
-            let type_id = def.known_type;
+            let type_id = def.known_type();
             let is_enum_value_with_attrs =
-                def.def_type == DefType::EnumValue && !def.attributes.is_empty();
+                def.def_type() == DefType::EnumValue && !def.attributes().is_empty();
             if type_id != u16::MAX
-                && (matches!(def.def_type, DefType::Struct)
-                    || def.def_type == DefType::Enum
-                    || def.def_type == DefType::Vector
+                && (matches!(def.def_type(), DefType::Struct)
+                    || def.def_type() == DefType::Enum
+                    || def.def_type() == DefType::Vector
                     || is_enum_value_with_attrs)
             {
                 type_defs.push((type_id, dnr));
@@ -1088,15 +1088,15 @@ extern crate loft;"
         let mut deps: HashMap<u16, Vec<u16>> = HashMap::new();
         for &(type_id, dnr) in &type_defs {
             let def = self.data.def(dnr);
-            let is_container = matches!(def.def_type, DefType::Struct)
-                || (def.def_type == DefType::EnumValue && !def.attributes.is_empty());
-            let is_enum = def.def_type == DefType::Enum;
+            let is_container = matches!(def.def_type(), DefType::Struct)
+                || (def.def_type() == DefType::EnumValue && !def.attributes().is_empty());
+            let is_enum = def.def_type() == DefType::Enum;
             if !is_container && !is_enum {
                 continue;
             }
             let mut d: Vec<u16> = Vec::new();
             if is_container {
-                for a in &def.attributes.clone() {
+                for a in &def.attributes().to_vec() {
                     let c_nr = match &a.typedef {
                         Type::Sorted(c_nr, _, _)
                         | Type::Hash(c_nr, _, _)
@@ -1111,7 +1111,7 @@ extern crate loft;"
                         _ => None,
                     };
                     if let Some(c_nr) = c_nr {
-                        let c_tp = self.data.def(c_nr).known_type;
+                        let c_tp = self.data.def(c_nr).known_type();
                         if c_tp != u16::MAX && type_id_to_dnr.contains_key(&c_tp) {
                             d.push(c_tp);
                         }
@@ -1119,7 +1119,7 @@ extern crate loft;"
                 }
             } else {
                 // is_enum: typed variants referenced by `db.value(enum, name, t{N})`.
-                for a in &def.attributes.clone() {
+                for a in &def.attributes().to_vec() {
                     if matches!(a.typedef, Type::Enum(_, true, _)) {
                         // Resolve the EnumValue def_nr whose parent matches.
                         let v_dnr = (0..self.data.definitions()).find(|&v| {
@@ -1129,7 +1129,7 @@ extern crate loft;"
                                 && vd.name == a.name
                         });
                         if let Some(v_dnr) = v_dnr {
-                            let v_tp = self.data.def(v_dnr).known_type;
+                            let v_tp = self.data.def(v_dnr).known_type();
                             if v_tp != u16::MAX && type_id_to_dnr.contains_key(&v_tp) {
                                 d.push(v_tp);
                             }
@@ -1205,7 +1205,7 @@ extern crate loft;"
         // typed variant structs have been created, so the enum ↔
         // variant mutual-recursion cycle resolves without forward refs.
         for &(type_id, dnr) in &type_defs {
-            if self.data.def(dnr).def_type == DefType::Enum {
+            if self.data.def(dnr).def_type() == DefType::Enum {
                 self.emit_type_fields_mode(
                     w,
                     type_id,
@@ -1234,7 +1234,7 @@ extern crate loft;"
         // emitting an unused `db.const_refs.resize(...)` that'd
         // produce a dead-code warning under `-D warnings`).
         let have_any = (0..till).any(|d| {
-            self.data.def(d).def_type == DefType::Constant && self.data.def(d).const_ref.is_some()
+            self.data.def(d).def_type() == DefType::Constant && self.data.def(d).const_ref.is_some()
         });
         if !have_any {
             return Ok(());
@@ -1249,17 +1249,17 @@ extern crate loft;"
         )?;
         for d_nr in 0..till {
             let def = self.data.def(d_nr);
-            if def.def_type != DefType::Constant {
+            if def.def_type() != DefType::Constant {
                 continue;
             }
             if def.const_ref.is_none() {
                 continue;
             }
-            let crate::data::Type::Vector(ref elem_tp_box, _) = def.returned else {
+            let crate::data::Type::Vector(elem_tp_box, _) = def.returned() else {
                 continue;
             };
             let elem_tp = (**elem_tp_box).clone();
-            let values = crate::compile::extract_literal_values_public(&def.code, self.data);
+            let values = crate::compile::extract_literal_values_public(def.code(), self.data);
             if values.is_empty() {
                 continue;
             }
@@ -1268,7 +1268,7 @@ extern crate loft;"
             if vec_struct_dnr == u32::MAX {
                 continue;
             }
-            let vec_tp = self.data.def(vec_struct_dnr).known_type;
+            let vec_tp = self.data.def(vec_struct_dnr).known_type();
             if vec_tp == u16::MAX {
                 continue;
             }
@@ -1469,8 +1469,8 @@ extern crate loft;"
             return Ok(());
         }
         let def = self.data.def(dnr);
-        if matches!(def.def_type, DefType::Struct)
-            || (def.def_type == DefType::EnumValue && !def.attributes.is_empty())
+        if matches!(def.def_type(), DefType::Struct)
+            || (def.def_type() == DefType::EnumValue && !def.attributes().is_empty())
         {
             // Walk fields in source order, mirroring parse-time
             // `fill_database` exactly.  For each collection field
@@ -1480,26 +1480,26 @@ extern crate loft;"
             // runtime index as parse time.  Then emit the field itself,
             // which triggers inline `db.vector / sorted / hash / index`
             // creation at the next runtime id — matching parse-time.
-            let enum_value = if def.def_type == DefType::EnumValue {
+            let enum_value = if def.def_type() == DefType::EnumValue {
                 let parent = self.data.def(def.parent);
                 parent
                     .attributes
                     .iter()
                     .enumerate()
-                    .find(|(_, a)| a.name == def.name)
+                    .find(|(_, a)| a.name == def.name())
                     .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1)
             } else {
                 0
             };
             let s_var = format!("t{type_id}");
             if enum_value > 0
-                && def.known_type != u16::MAX
-                && self.stores.position(def.known_type, "enum") == 0
+                && def.known_type() != u16::MAX
+                && self.stores.position(def.known_type(), "enum") == 0
             {
                 writeln!(w, "    let byte_enum = db.byte(0, false);")?;
                 writeln!(w, "    db.field({s_var}, \"enum\", byte_enum);")?;
             }
-            let attrs = def.attributes.clone();
+            let attrs = def.attributes().to_vec();
             for a in &attrs {
                 // Resolve field's content dep and recurse inline
                 // before the field is emitted — parse-time
@@ -1509,13 +1509,13 @@ extern crate loft;"
                 let dep_tp = match &a.typedef {
                     Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
                         (*c_nr != u32::MAX)
-                            .then(|| self.data.def(*c_nr).known_type)
+                            .then(|| self.data.def(*c_nr).known_type())
                             .filter(|t| *t != u16::MAX)
                     }
                     Type::Vector(c_type, _) => {
                         let n = self.data.type_def_nr(c_type);
                         (n != u32::MAX)
-                            .then(|| self.data.def(n).known_type)
+                            .then(|| self.data.def(n).known_type())
                             .filter(|t| *t != u16::MAX)
                     }
                     // Plan-06 phase 4d: tuple struct fields inline the
@@ -1527,7 +1527,7 @@ extern crate loft;"
                     Type::Tuple(_) => {
                         let n = self.data.type_def_nr(&a.typedef);
                         (n != u32::MAX)
-                            .then(|| self.data.def(n).known_type)
+                            .then(|| self.data.def(n).known_type())
                             .filter(|t| *t != u16::MAX)
                     }
                     _ => None,
@@ -1548,7 +1548,7 @@ extern crate loft;"
                     )?;
                 }
                 let td_nr = self.data.type_def_nr(&a.typedef);
-                let field_type_id = self.data.def(td_nr).known_type;
+                let field_type_id = self.data.def(td_nr).known_type();
                 let forced = self.data.forced_size(a.alias_d_nr);
                 self.emit_field(
                     w,
@@ -1606,9 +1606,9 @@ extern crate loft;"
         // interpreter's table and two same-named library structs don't
         // collide in generated code either.
         let reg_name = &self.stores.types[type_id as usize].name;
-        if matches!(def.def_type, DefType::Struct) {
+        if matches!(def.def_type(), DefType::Struct) {
             writeln!(w, "    let t{type_id} = db.structure(\"{reg_name}\", 0);")?;
-        } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
+        } else if def.def_type() == DefType::EnumValue && !def.attributes().is_empty() {
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
                 return Ok(());
@@ -1618,15 +1618,15 @@ extern crate loft;"
                 .attributes
                 .iter()
                 .enumerate()
-                .find(|(_, a)| a.name == def.name)
+                .find(|(_, a)| a.name == def.name())
                 .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
             writeln!(
                 w,
                 "    let t{type_id} = db.structure(\"{reg_name}\", {enum_value});"
             )?;
-        } else if def.def_type == DefType::Enum {
-            writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;
-        } else if def.def_type == DefType::Vector {
+        } else if def.def_type() == DefType::Enum {
+            writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name())?;
+        } else if def.def_type() == DefType::Vector {
             // prefer the actual registered Parts::Vector
             // content from `stores.types[type_id]` — that's what
             // `fill_database` stored, including narrow-integer content
@@ -1638,13 +1638,13 @@ extern crate loft;"
             {
                 c
             } else if def.parent != u32::MAX {
-                self.data.def(def.parent).known_type
-            } else if let Type::Vector(ref c_type, _) = def.returned {
+                self.data.def(def.parent).known_type()
+            } else if let Type::Vector(c_type, _) = def.returned() {
                 let c_dnr = self.data.type_def_nr(c_type);
                 if c_dnr == u32::MAX {
                     u16::MAX
                 } else {
-                    self.data.def(c_dnr).known_type
+                    self.data.def(c_dnr).known_type()
                 }
             } else {
                 u16::MAX
@@ -1678,20 +1678,20 @@ extern crate loft;"
             return Ok(());
         }
         let def = self.data.def(dnr);
-        if matches!(def.def_type, DefType::Struct)
-            || (def.def_type == DefType::EnumValue && !def.attributes.is_empty())
+        if matches!(def.def_type(), DefType::Struct)
+            || (def.def_type() == DefType::EnumValue && !def.attributes().is_empty())
         {
             if matches!(
                 mode,
                 FieldPhase::Simple | FieldPhase::Collection | FieldPhase::AllFields
             ) {
-                let enum_value = if def.def_type == DefType::EnumValue {
+                let enum_value = if def.def_type() == DefType::EnumValue {
                     let parent = self.data.def(def.parent);
                     parent
                         .attributes
                         .iter()
                         .enumerate()
-                        .find(|(_, a)| a.name == def.name)
+                        .find(|(_, a)| a.name == def.name())
                         .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1)
                 } else {
                     0
@@ -1706,7 +1706,7 @@ extern crate loft;"
                     bare_emitted,
                 )?;
             }
-        } else if def.def_type == DefType::Enum && matches!(mode, FieldPhase::EnumValues) {
+        } else if def.def_type() == DefType::Enum && matches!(mode, FieldPhase::EnumValues) {
             output_enum_values(w, dnr, self.data, type_id)?;
         }
         Ok(())
@@ -1732,7 +1732,7 @@ extern crate loft;"
             None
         };
         for dnr in from..till {
-            if !matches!(self.data.def(dnr).def_type, DefType::Function) {
+            if !matches!(self.data.def(dnr).def_type(), DefType::Function) {
                 continue;
             }
             if let Some(r) = reachable
@@ -1863,7 +1863,7 @@ extern crate loft;"
                 let inner_def = self.data.type_def_nr(innermost);
                 if inner_def != u32::MAX {
                     use std::fmt::Write as _;
-                    let inner_kt = self.data.def(inner_def).known_type;
+                    let inner_kt = self.data.def(inner_def).known_type();
                     self.flush_bare_through(w, bare_io, bare_emitted, inner_kt)?;
                     let inner_type_ref = type_id_ref(inner_kt);
                     let mut expr = format!("{{ let _v0 = db.vector({inner_type_ref});");
@@ -1879,7 +1879,7 @@ extern crate loft;"
             }
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
-                let content = self.data.def(c_def).known_type;
+                let content = self.data.def(c_def).known_type();
                 // @P353: flush the content bare type if it is registered
                 // after this wrapper struct (forward reference in id order).
                 self.flush_bare_through(w, bare_io, bare_emitted, content)?;
@@ -1937,7 +1937,7 @@ extern crate loft;"
             return Ok(());
         }
         if let Type::Sorted(c_nr, keys, _) = typedef {
-            let c_tp = self.data.def(*c_nr).known_type;
+            let c_tp = self.data.def(*c_nr).known_type();
             let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
@@ -1954,7 +1954,7 @@ extern crate loft;"
             return Ok(());
         }
         if let Type::Hash(c_nr, keys, _) = typedef {
-            let c_tp = self.data.def(*c_nr).known_type;
+            let c_tp = self.data.def(*c_nr).known_type();
             let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
@@ -1971,7 +1971,7 @@ extern crate loft;"
             return Ok(());
         }
         if let Type::Index(c_nr, keys, _) = typedef {
-            let c_tp = self.data.def(*c_nr).known_type;
+            let c_tp = self.data.def(*c_nr).known_type();
             let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
@@ -2043,13 +2043,13 @@ extern crate loft;"
         // fields are added.
         if phase == FieldPhase::Simple
             && enum_value > 0
-            && def.known_type != u16::MAX
-            && self.stores.position(def.known_type, "enum") == 0
+            && def.known_type() != u16::MAX
+            && self.stores.position(def.known_type(), "enum") == 0
         {
             writeln!(w, "    let byte_enum = db.byte(0, false);")?;
             writeln!(w, "    db.field({s_var}, \"enum\", byte_enum);")?;
         }
-        for a in &def.attributes {
+        for a in def.attributes() {
             let is_coll = is_collection_field(&a.typedef);
             let emit = match phase {
                 FieldPhase::AllFields => true,
@@ -2061,7 +2061,7 @@ extern crate loft;"
                 continue;
             }
             let td_nr = self.data.type_def_nr(&a.typedef);
-            let field_type_id = self.data.def(td_nr).known_type;
+            let field_type_id = self.data.def(td_nr).known_type();
             assert_ne!(def_nr, u32::MAX, "Unknown def_nr for {:?}", a.typedef);
             let forced = self.data.forced_size(a.alias_d_nr);
             self.emit_field(
@@ -2090,22 +2090,22 @@ extern crate loft;"
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
         // Skip Op functions with no callable body.
-        if def.name.starts_with("Op") && def.code == Value::Null {
+        if def.name().starts_with("Op") && *def.code() == Value::Null {
             return Ok(());
         }
         // Skip functions implemented in codegen_runtime — emitting a stub
         // would shadow the real implementation.  Plan 09 phase 01
         // consolidated the hardcoded list into the registry in
         // `src/codegen_runtime.rs::CODEGEN_RUNTIME_FNS`.
-        if def.code == Value::Null && crate::codegen_runtime::is_codegen_runtime_fn(&def.name) {
+        if *def.code() == Value::Null && crate::codegen_runtime::is_codegen_runtime_fn(def.name()) {
             return Ok(());
         }
         // N8b.1: generator functions (returning iterator<T>) are emitted as state machines.
-        if matches!(def.returned, Type::Iterator(_, _)) {
+        if matches!(def.returned(), Type::Iterator(_, _)) {
             return self.output_coroutine(w, def_nr);
         }
         // n_assert needs generic Display parameters to accept both Str and &str.
-        if def.name == "n_assert" && def.code == Value::Null {
+        if def.name() == "n_assert" && *def.code() == Value::Null {
             writeln!(
                 w,
                 "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: bool, msg: M, file: F, line: i64) {{"
@@ -2121,30 +2121,30 @@ extern crate loft;"
         // above each function so rustc errors at the function header
         // (e.g. wrong arg type, missing trait impl) map directly to
         // the .loft definition site.
-        if !def.position.file.is_empty() {
-            writeln!(w, "// loft:{}:{}", def.position.file, def.position.line)?;
+        if !def.position().file.is_empty() {
+            writeln!(w, "// loft:{}:{}", def.position().file, def.position().line)?;
         }
-        write!(w, "fn {}(cell: &std::cell::UnsafeCell<Stores>", def.name)?;
-        for a in &def.attributes {
+        write!(w, "fn {}(cell: &std::cell::UnsafeCell<Stores>", def.name())?;
+        for a in def.attributes() {
             let tp = rust_type(&a.typedef, &Context::Argument);
             write!(w, ", mut var_{}: {tp}", sanitize(&a.name))?;
         }
         write!(w, ") ")?;
-        if def.returned != Type::Void {
-            write!(w, "-> {} ", rust_type(&def.returned, &Context::Result))?;
+        if *def.returned() != Type::Void {
+            write!(w, "-> {} ", rust_type(def.returned(), &Context::Result))?;
         }
         // Mark argument variables as already declared so Set won't re-declare them.
-        for arg_nr in def.variables.arguments() {
+        for arg_nr in def.variables().arguments() {
             self.declared.insert(arg_nr);
         }
         // Determine the user-visible loft name for the shadow call stack.
-        let loft_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-        let loft_file = &def.position.file;
-        let loft_line = def.position.line;
+        let loft_name = def.name().strip_prefix("n_").unwrap_or(def.name());
+        let loft_file = &def.position().file;
+        let loft_line = def.position().line;
         // Only instrument user-defined functions (Block body, n_ prefix).
-        let instrument = matches!(&def.code, Value::Block(_)) && def.name.starts_with("n_");
-        let returns_text = matches!(def.returned, Type::Text(_));
-        if let Value::Block(bl) = &def.code {
+        let instrument = matches!(def.code(), Value::Block(_)) && def.name().starts_with("n_");
+        let returns_text = matches!(def.returned(), Type::Text(_));
+        if let Value::Block(bl) = def.code() {
             // An empty-body loft function (explicit stub) has no operators and result Void,
             // but the function signature may still declare a non-void return type.
             // Rust requires an explicit return value in that case, so emit a null default.
@@ -2159,13 +2159,13 @@ extern crate loft;"
             } else {
                 IrBlock::Native(bl)
             };
-            if block_empty && def.returned != Type::Void {
+            if block_empty && *def.returned() != Type::Void {
                 writeln!(w, "{{")?;
                 writeln!(
                     w,
                     "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                 )?;
-                writeln!(w, "  {}", default_native_value(&def.returned))?;
+                writeln!(w, "  {}", default_native_value(def.returned()))?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.
@@ -2191,7 +2191,7 @@ extern crate loft;"
                 self.output_block(w, body, returns_text)?;
                 self.call_stack_prefix = None;
             }
-        } else if def.code == Value::Null {
+        } else if *def.code() == Value::Null {
             // Native-only function with no loft body.
             // @PLAN12 phase 2 step 2 (2026-05-24): check `def.native` FIRST.
             // The manifest's `[native.functions]` table now populates
@@ -2209,16 +2209,16 @@ extern crate loft;"
             // either in the current crate or already imported.  Today the
             // primary callers always have a crate, so the def.native path
             // wins.
-            let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-            if !def.native.is_empty() {
+            let user_name = def.name().strip_prefix("n_").unwrap_or(def.name());
+            if !def.native().is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
                     // call the imported function directly (unqualified).
                     // The function is declared in the preamble via
                     // #[link(wasm_import_module = "loft_gl")].
-                    self.output_native_direct_call(w, def_nr, &def.native)?;
-                } else if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
-                    let qualified = format!("{}::{}", krate, def.native);
+                    self.output_native_direct_call(w, def_nr, def.native())?;
+                } else if let Some(krate) = self.data.native_symbol_crates.get(def.native()) {
+                    let qualified = format!("{}::{}", krate, def.native());
                     self.output_native_direct_call(w, def_nr, &qualified)?;
                 } else {
                     // P269: refuse to emit a runtime panic for a reachable
@@ -2228,15 +2228,16 @@ extern crate loft;"
                     // declarations don't reject otherwise-valid programs.
                     let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
                     writeln!(w, "{{")?;
-                    if def.returned != Type::Void {
+                    if *def.returned() != Type::Void {
                         if reachable {
                             writeln!(
                                 w,
                                 "  compile_error!(\"loft --native: native fn `{}` (#native \\\"{}\\\") has no implementation in any registered native crate; either run via --interpret or wire the symbol in a #native package or src/codegen_runtime.rs (P269)\")",
-                                def.name, def.native
+                                def.name(),
+                                def.native()
                             )?;
                         } else {
-                            writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                            writeln!(w, "  todo!(\"native function {}\")", def.name())?;
                         }
                     }
                     writeln!(w, "}}")?;
@@ -2254,13 +2255,13 @@ extern crate loft;"
                 // Internal i_ functions have implementations in codegen_runtime.rs;
                 // all others get a todo!() stub.
                 writeln!(w, "{{")?;
-                if def.name == "i_parse_errors" {
+                if def.name() == "i_parse_errors" {
                     writeln!(
                         w,
                         "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                     )?;
                     writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
-                } else if def.name == "i_parse_error_push" {
+                } else if def.name() == "i_parse_error_push" {
                     writeln!(
                         w,
                         "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
@@ -2269,13 +2270,13 @@ extern crate loft;"
                         w,
                         "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
                     )?;
-                } else if def.name == "n_json_errors" {
+                } else if def.name() == "n_json_errors" {
                     writeln!(
                         w,
                         "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                     )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
-                } else if def.returned != Type::Void {
+                } else if *def.returned() != Type::Void {
                     // P269: same compile-time-error escalation as above for
                     // reachable unimplemented natives without a `#native`
                     // annotation.  Unreachable internal stubs (e.g. unused
@@ -2306,11 +2307,11 @@ extern crate loft;"
                     // safe placeholder that costs nothing unless
                     // someone takes the address of the fn) instead
                     // of `compile_error!()`.
-                    let is_iface_stub = def.name.starts_with("__iface_");
-                    let is_t_stub = is_t_param_stub(&def.name);
-                    let has_custom_op_emitter = ops::has_custom_emitter(&def.name);
+                    let is_iface_stub = def.name().starts_with("__iface_");
+                    let is_t_stub = is_t_param_stub(def.name());
+                    let has_custom_op_emitter = ops::has_custom_emitter(def.name());
                     let reachable = (self.reachable.is_empty() || self.reachable.contains(&def_nr))
-                        && def.rust.is_empty()
+                        && def.rust().is_empty()
                         && !is_iface_stub
                         && !is_t_stub
                         && !has_custom_op_emitter;
@@ -2318,10 +2319,10 @@ extern crate loft;"
                         writeln!(
                             w,
                             "  compile_error!(\"loft --native: built-in fn `{}` has no native implementation; wire it in src/codegen_runtime.rs or run via --interpret (P269)\")",
-                            def.name
+                            def.name()
                         )?;
                     } else {
-                        writeln!(w, "  todo!(\"native function {}\")", def.name)?;
+                        writeln!(w, "  todo!(\"native function {}\")", def.name())?;
                     }
                 }
                 writeln!(w, "}}")?;
@@ -2332,7 +2333,7 @@ extern crate loft;"
                 w,
                 "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
             )?;
-            self.output_code_inner(w, &def.code)?;
+            self.output_code_inner(w, def.code())?;
             writeln!(w, "\n}}")?;
         }
         writeln!(w, "\n")
@@ -2354,7 +2355,7 @@ extern crate loft;"
             "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
         )?;
         write!(w, "  {rust_symbol}(stores")?;
-        for attr in &def.attributes {
+        for attr in def.attributes() {
             if attr.name.starts_with("__") {
                 continue;
             }
@@ -2425,13 +2426,13 @@ extern crate loft;"
                 .iter()
                 .find(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
             let returns_loft_ref =
-                matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+                matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
             if returns_loft_ref || first_ref_arg.is_some() {
                 // lib_plan-29 W1c (2026-05-29): the routing table is now
                 // built from each library's `[wasm.bridge]` manifest
                 // section (`data.wasm_bridge_routes`).  No library symbols
                 // hard-coded in the compiler crate.
-                let bridge_target = self.data.wasm_bridge_routes.get(&def.native).map(
+                let bridge_target = self.data.wasm_bridge_routes.get(def.native()).map(
                     |(bridge_crate, bridge_fn)| {
                         let crate_ident = bridge_crate.replace('-', "_");
                         format!("{crate_ident}::{bridge_fn}")
@@ -2447,7 +2448,7 @@ extern crate loft;"
                         "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                     )?;
                     write!(w, "  {target}(stores")?;
-                    for attr in &def.attributes {
+                    for attr in def.attributes() {
                         if attr.name.starts_with("__") {
                             continue;
                         }
@@ -2466,9 +2467,9 @@ extern crate loft;"
                 writeln!(
                     w,
                     "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})",
-                    def.native
+                    def.native()
                 )?;
-                match &def.returned {
+                match def.returned() {
                     Type::Void => {}
                     Type::Boolean => writeln!(w, "  false")?,
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
@@ -2497,7 +2498,7 @@ extern crate loft;"
 
         // Pre-declare per-vector extraction variables before the call expression
         // so that raw pointers are stable for the duration of the unsafe block.
-        for attr in &def.attributes {
+        for attr in def.attributes() {
             if attr.name.starts_with("__") {
                 continue;
             }
@@ -2555,7 +2556,7 @@ extern crate loft;"
         // `needs_loft_store` drives the store-handle + guard + `_ls` first arg.
         // They diverge for a Reference-arg fn with a scalar return (imaging's
         // `load_png` returns `boolean`): store handle yes, return conversion no.
-        let returns_loft_ref = matches!(&def.returned, Type::Vector(_, _) | Type::Reference(_, _));
+        let returns_loft_ref = matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
         let needs_loft_store = returns_loft_ref || first_ref_arg.is_some();
         if needs_loft_store {
             // Order matters: extract `store_nr` as a SEPARATE statement so it
@@ -2583,14 +2584,14 @@ extern crate loft;"
             )?;
         }
 
-        let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
+        let needs_ret_cast = matches!(def.returned(), Type::Integer(_));
         // P244: `text`-returning natives return `loft_ffi::LoftStr` from the
         // extern, but the wrapper's declared return type (per `rust_type` with
         // `Context::Result`) is `Str`.  Capture the LoftStr as a typed local
         // and copy its bytes into `stores.scratch`, then hand back a `Str`
         // borrowed from the long-lived scratch buffer (mirrors the P205
         // pattern used by text-returning loft functions).
-        let needs_text_wrap = matches!(&def.returned, Type::Text(_));
+        let needs_text_wrap = matches!(def.returned(), Type::Text(_));
         if needs_ret_cast {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
         } else if needs_text_wrap {
@@ -2615,7 +2616,7 @@ extern crate loft;"
             write!(w, "_ls")?;
             first = false;
         }
-        for attr in &def.attributes {
+        for attr in def.attributes() {
             if attr.name.starts_with("__") {
                 continue;
             }
@@ -2793,7 +2794,7 @@ fn output_enum_values(
 ) -> std::io::Result<()> {
     let def = data.def(d_nr);
     let e_var = format!("t{type_id}");
-    for a in &def.attributes {
+    for a in def.attributes() {
         let variant_type = if matches!(a.typedef, Type::Enum(_, true, _)) {
             // Find the EnumValue definition whose parent is this enum and name matches.
             (0..data.definitions())
@@ -2803,7 +2804,7 @@ fn output_enum_values(
                         && v_def.parent == d_nr
                         && v_def.name == a.name
                 })
-                .map_or(u16::MAX, |v| data.def(v).known_type)
+                .map_or(u16::MAX, |v| data.def(v).known_type())
         } else {
             u16::MAX
         };

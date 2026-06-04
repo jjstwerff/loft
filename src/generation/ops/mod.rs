@@ -362,7 +362,7 @@ mod tests {
     struct DefAccessEmitter;
     impl OpEmitter for DefAccessEmitter {
         fn emit(&self, ctx: &mut EmitCtx<'_, '_>, _args: &[Value]) -> io::Result<()> {
-            let name = ctx.def_fn.name.as_str();
+            let name = ctx.def_fn.name();
             write!(ctx.w, "/* {name} */")
         }
     }

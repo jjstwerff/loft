@@ -14,7 +14,7 @@ use super::{Output, narrow_int_cast, rust_type, sanitize};
 pub(super) fn contains_op_database(node: IrNode, data: &Data) -> bool {
     match node.kind() {
         ValueType::Call => {
-            if data.def(node.call_to()).name == "OpDatabase" {
+            if data.def(node.call_to()).name() == "OpDatabase" {
                 return true;
             }
             node.call_args()
@@ -51,7 +51,7 @@ impl Output<'_> {
         def_fn: &Definition,
         vals: &[Value],
     ) -> std::io::Result<()> {
-        let name = def_fn.name.clone();
+        let name = def_fn.name().to_string();
         let mut ctx = crate::generation::ops::EmitCtx {
             w,
             def_fn,
@@ -71,7 +71,7 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         // N8b.2: generator function calls produce a DbRef via the coroutine table.
-        let is_generator = matches!(def_fn.returned, Type::Iterator(_, _));
+        let is_generator = matches!(def_fn.returned(), Type::Iterator(_, _));
         if is_generator {
             write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
         }
@@ -81,12 +81,12 @@ impl Output<'_> {
         // `CODEGEN_RUNTIME_FNS` registry.  `abi_of(name)` returns:
         //   - `Cell`  → emit `name(cell, args...)`     (default)
         //   - `None`  → emit `name(args...)`           (no implicit Stores)
-        let abi = if def_fn.code == Value::Null {
-            crate::codegen_runtime::abi_of(&def_fn.name)
+        let abi = if *def_fn.code() == Value::Null {
+            crate::codegen_runtime::abi_of(def_fn.name())
         } else {
             crate::codegen_runtime::Abi::Cell
         };
-        write!(w, "{}(", def_fn.name)?;
+        write!(w, "{}(", def_fn.name())?;
         let mut first_arg = true;
         if matches!(abi, crate::codegen_runtime::Abi::Cell) {
             write!(w, "cell")?;
@@ -98,28 +98,28 @@ impl Output<'_> {
             }
             first_arg = false;
             if let Some(vr) = self.create_stack_var(v) {
-                let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
+                let name = sanitize(self.data.def(self.def_nr).variables().name(vr));
                 write!(w, "&mut var_{name}")?;
             // OpCreateStack wrapping an addressable expression
             // (e.g. v[i] as & param).  Emit a temporary + &mut so the
             // callee can write through the DbRef into the store.
             } else if let Value::Call(d_nr, args) = v.unspan()
-                && self.data.def(*d_nr).name == "OpCreateStack"
+                && self.data.def(*d_nr).name() == "OpCreateStack"
                 && args.len() == 1
                 && !matches!(&args[0], Value::Var(_))
             {
                 let expr = self.generate_expr_buf(&args[0])?;
                 write!(w, "&mut ({expr})")?;
-            } else if idx < def_fn.attributes.len()
-                && matches!(def_fn.attributes[idx].typedef, Type::RefVar(_))
+            } else if idx < def_fn.attributes().len()
+                && matches!(def_fn.attributes()[idx].typedef, Type::RefVar(_))
                 && let Value::Var(nr) = v
                 && matches!(
-                    self.data.def(self.def_nr).variables.tp(*nr),
+                    self.data.def(self.def_nr).variables().tp(*nr),
                     Type::RefVar(_)
                 )
             {
                 // forwarding a & parameter to another & parameter.
-                let caller_vars = &self.data.def(self.def_nr).variables;
+                let caller_vars = self.data.def(self.def_nr).variables();
                 let name = sanitize(caller_vars.name(*nr));
                 if caller_vars.is_argument(*nr) {
                     // An argument RefVar is already &mut DbRef — pass it
@@ -132,10 +132,10 @@ impl Output<'_> {
                 }
             } else {
                 // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
-                let param_is_fnref = idx < def_fn.attributes.len()
-                    && matches!(def_fn.attributes[idx].typedef, Type::Function(_, _, _));
-                let param_is_routine = idx < def_fn.attributes.len()
-                    && matches!(def_fn.attributes[idx].typedef, Type::Routine(_));
+                let param_is_fnref = idx < def_fn.attributes().len()
+                    && matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _));
+                let param_is_routine = idx < def_fn.attributes().len()
+                    && matches!(def_fn.attributes()[idx].typedef, Type::Routine(_));
                 if param_is_fnref && matches!(v, Value::Int(_)) {
                     let mut buf = Vec::new();
                     self.output_code_inner(&mut buf, v)?;
@@ -178,7 +178,7 @@ impl Output<'_> {
                             match probe {
                                 Value::CallRef(vr, _) => {
                                     break matches!(
-                                        self.data.def(self.def_nr).variables.tp(*vr),
+                                        self.data.def(self.def_nr).variables().tp(*vr),
                                         Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
                                     );
                                 }
@@ -210,13 +210,13 @@ impl Output<'_> {
                     let arg_is_text_block_string = matches!(v_unspanned, Value::Block(b)
                         if matches!(b.result, Type::Text(_))
                             && self.block_contains_ncc_skip_free(b));
-                    let needs_deref = idx < def_fn.attributes.len()
-                        && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
+                    let needs_deref = idx < def_fn.attributes().len()
+                        && matches!(def_fn.attributes()[idx].typedef, Type::Text(_))
                         && (arg_is_text_callref
                             || arg_is_text_block_string
                             || matches!(v_unspanned, Value::Call(d, _) if
-                                matches!(self.data.def(*d).returned, Type::Text(_))
-                                && !self.data.def(*d).name.starts_with("Op")));
+                                matches!(self.data.def(*d).returned(), Type::Text(_))
+                                && !self.data.def(*d).name().starts_with("Op")));
                     // Post-2c: Op* runtime helpers (defined in
                     // `src/codegen_runtime.rs`) keep hand-written i32 params
                     // for tp-numbers / field offsets / flag enums.  When the
@@ -228,9 +228,9 @@ impl Output<'_> {
                     // from `rust_type`, which widens narrow Integer to i64
                     // in Context::Argument — so this narrow-match only
                     // applies to Op-prefixed runtime calls.
-                    let param_is_narrow = def_fn.name.starts_with("Op")
-                        && idx < def_fn.attributes.len()
-                        && narrow_int_cast(&def_fn.attributes[idx].typedef).is_some();
+                    let param_is_narrow = def_fn.name().starts_with("Op")
+                        && idx < def_fn.attributes().len()
+                        && narrow_int_cast(&def_fn.attributes()[idx].typedef).is_some();
                     if needs_deref {
                         write!(w, "&*(")?;
                     }
@@ -248,7 +248,7 @@ impl Output<'_> {
         write!(w, ")")?;
         if is_generator {
             write!(w, ")")?; // close alloc_coroutine(...)
-        } else if narrow_int_cast(&def_fn.returned).is_some() {
+        } else if narrow_int_cast(def_fn.returned()).is_some() {
             // Narrow integer return types (u8/u16/i8/i16) must be widened so that
             // assignments and comparisons with default-Integer expressions type-check.
             // Post-2c: widen to i64 (the default Integer width).
@@ -275,7 +275,7 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         // Clone the name so we can pass it to `emit_op` without
         // co-borrowing `def_fn` from inside the EmitCtx.
-        let name = def_fn.name.clone();
+        let name = def_fn.name().to_string();
         let mut ctx = crate::generation::ops::EmitCtx {
             w,
             def_fn,
@@ -300,7 +300,7 @@ impl Output<'_> {
         def_fn: &Definition,
         vals: &[Value],
     ) -> std::io::Result<()> {
-        let mut res = def_fn.rust.clone();
+        let mut res = def_fn.rust().to_string();
         // @P361 — a `#rust` body that names a loft-internal *pub module* must
         // qualify it `loft::…` in generated code (native + wasm both `use
         // loft::…` and link loft as an extern crate), NOT `crate::…` — the
@@ -318,8 +318,8 @@ impl Output<'_> {
         // renders `null` as `(()).to_string()` (E0599: `()` is not `Display`)
         // and would store a real string regardless.  Triggered by e.g.
         // `vec_of_text += null` (lib/arguments `flag()`: `self.results += null`).
-        if def_fn.name == "OpSetText"
-            && let Some(vi) = def_fn.attributes.iter().position(|a| a.name == "val")
+        if def_fn.name() == "OpSetText"
+            && let Some(vi) = def_fn.attributes().iter().position(|a| a.name == "val")
             && matches!(vals.get(vi), Some(Value::Null))
         {
             res = "{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), 0u32);}}".to_string();
@@ -359,7 +359,7 @@ impl Output<'_> {
         // wrapping `{ ... }`.  The substitution loop below then rewrites the
         // single remaining `@<name>` (the let-RHS) into the actual value
         // expression; subsequent uses read `_v_<name>` instead of re-evaluating.
-        for a in &def_fn.attributes {
+        for a in def_fn.attributes() {
             let placeholder = format!("@{}", a.name);
             if res.matches(&placeholder).count() >= 2 {
                 let local = format!("_v_{}", a.name);
@@ -367,7 +367,7 @@ impl Output<'_> {
                 res = format!("{{ let {local} = {placeholder}; {res} }}");
             }
         }
-        for (a_nr, a) in def_fn.attributes.iter().enumerate() {
+        for (a_nr, a) in def_fn.attributes().iter().enumerate() {
             let name = "@".to_string() + &a.name;
             if a_nr < vals.len() {
                 // For enum-typed parameters, Value::Null means the null enum byte (255).
@@ -401,7 +401,10 @@ impl Output<'_> {
                 // ops::to_char() because the template expects a `char`, not `i32`.
                 if matches!(a.typedef, Type::Character)
                     && let Value::Var(n) = vals[a_nr]
-                    && matches!(self.data.def(self.def_nr).variables.tp(n), Type::Character)
+                    && matches!(
+                        self.data.def(self.def_nr).variables().tp(n),
+                        Type::Character
+                    )
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
@@ -416,7 +419,7 @@ impl Output<'_> {
                 // `i32` (from `var_t.0`) and rustc rejects with E0308.
                 if matches!(a.typedef, Type::Character)
                     && let Value::TupleGet(v, idx) = vals[a_nr].unspan()
-                    && let Type::Tuple(elems) = self.data.def(self.def_nr).variables.tp(*v)
+                    && let Type::Tuple(elems) = self.data.def(self.def_nr).variables().tp(*v)
                     && elems
                         .get(*idx as usize)
                         .is_some_and(|e| matches!(e, Type::Character))
@@ -429,7 +432,7 @@ impl Output<'_> {
                 // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
                 if matches!(a.typedef, Type::Character)
                     && let Value::Call(d, _) = vals[a_nr].unspan()
-                    && matches!(self.data.def(*d).returned, Type::Character)
+                    && matches!(self.data.def(*d).returned(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
@@ -459,7 +462,7 @@ impl Output<'_> {
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))
                     && let Value::Call(d, _) = vals[a_nr].unspan()
-                    && matches!(self.data.def(*d).returned, Type::Text(_))
+                    && matches!(self.data.def(*d).returned(), Type::Text(_))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(&*({inner}))"));
@@ -470,10 +473,13 @@ impl Output<'_> {
                 if matches!(a.typedef, Type::Integer(_)) {
                     let val_is_char = match vals[a_nr].unspan() {
                         Value::Var(n) => {
-                            matches!(self.data.def(self.def_nr).variables.tp(*n), Type::Character)
+                            matches!(
+                                self.data.def(self.def_nr).variables().tp(*n),
+                                Type::Character
+                            )
                         }
                         Value::Call(d, _) => {
-                            matches!(self.data.def(*d).returned, Type::Character)
+                            matches!(self.data.def(*d).returned(), Type::Character)
                         }
                         _ => false,
                     };
@@ -491,7 +497,7 @@ impl Output<'_> {
                     // until a fn-ref-aware OpSet variant exists.
                     let val_is_fn_ref_tuple_elem = match vals[a_nr].unspan() {
                         Value::TupleGet(var, idx) => {
-                            match self.data.def(self.def_nr).variables.tp(*var) {
+                            match self.data.def(self.def_nr).variables().tp(*var) {
                                 Type::Tuple(elems) => matches!(
                                     elems.get(*idx as usize),
                                     Some(Type::Function(_, _, _))
@@ -533,7 +539,7 @@ impl Output<'_> {
             } else {
                 println!(
                     "Problem def_fn {def_fn} attributes {:?} vals {vals:?}",
-                    def_fn.attributes
+                    def_fn.attributes()
                 );
                 break;
             }
@@ -604,9 +610,9 @@ impl Output<'_> {
         // errors when compared against the default Integer width (post-2c: i64).
         // Multi-statement template bodies (containing `;`) are wrapped in `{...}` so
         // they are valid in expression position when inlined as function arguments.
-        if matches!(def_fn.returned, Type::Character) {
+        if matches!(def_fn.returned(), Type::Character) {
             write!(w, "({res}) as u32 as i32")
-        } else if narrow_int_cast(&def_fn.returned).is_some() {
+        } else if narrow_int_cast(def_fn.returned()).is_some() {
             if res.contains(';') {
                 write!(w, "({{{res}}}) as i64")
             } else {

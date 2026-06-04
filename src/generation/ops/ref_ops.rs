@@ -49,14 +49,14 @@ impl OpEmitter for OpFreeRefEmitter {
             // Non-capturing lambdas have store_nr = u16::MAX (null sentinel).
             if let Value::Var(v) = db_val
                 && matches!(
-                    ctx.output.data.def(ctx.output.def_nr).variables.tp(*v),
+                    ctx.output.data.def(ctx.output.def_nr).variables().tp(*v),
                     Type::Function(_, _, _)
                 )
             {
                 let vn = format!(
                     "var_{}",
                     super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
                     )
                 );
                 write!(
@@ -71,7 +71,7 @@ impl OpEmitter for OpFreeRefEmitter {
                 format!(
                     "var_{}",
                     super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
                     )
                 )
             } else {
@@ -132,14 +132,14 @@ impl OpEmitter for OpFreeRefTagEmitter {
             // fn-ref: free + verify only the closure component when set.
             if let Value::Var(v) = db_val
                 && matches!(
-                    ctx.output.data.def(ctx.output.def_nr).variables.tp(*v),
+                    ctx.output.data.def(ctx.output.def_nr).variables().tp(*v),
                     Type::Function(_, _, _)
                 )
             {
                 let vn = format!(
                     "var_{}",
                     super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
                     )
                 );
                 write!(
@@ -154,7 +154,7 @@ impl OpEmitter for OpFreeRefTagEmitter {
                 format!(
                     "var_{}",
                     super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
                     )
                 )
             } else {
@@ -186,7 +186,7 @@ impl OpEmitter for OpFreeRefIfDistinctEmitter {
                 format!(
                     "var_{}",
                     super::super::sanitize(
-                        ctx.output.data.def(ctx.output.def_nr).variables.name(*v)
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
                     )
                 )
             } else {

@@ -17,7 +17,7 @@ pub(super) fn count_format_ops(ops: &[Value], start: usize, data: &Data) -> usiz
         .filter(|v| !matches!(v, Value::Line(_)))
         .take_while(|v| {
             if let Value::Call(d, _) = v.unspan() {
-                let name = &data.def(*d).name;
+                let name = data.def(*d).name();
                 name.starts_with("OpFormat") || name.starts_with("OpAppend")
             } else {
                 false
@@ -33,7 +33,7 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
-            let v_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let v_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             write!(
                 w,
                 "if var_{v_nr}.rec != 0 {{ vector::clear_vector(&var_{v_nr}, &mut stores.allocations); }}"
@@ -151,7 +151,7 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr)] = vals {
-            let variables = &self.data.def(self.def_nr).variables;
+            let variables = self.data.def(self.def_nr).variables();
             let s_nr = sanitize(variables.name(*nr));
             // When the variable is a `&mut String` parameter (RefVar(Text)), the capacity
             // re-allocation assignment needs an explicit dereference; auto-deref does not
@@ -189,7 +189,7 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             write!(
                 w,
@@ -203,7 +203,7 @@ impl Output<'_> {
     /// Use this to emit `OpAppendText` as a `+=` on the target string variable.
     pub(super) fn append_text(&mut self, w: &mut dyn Write, vals: &[Value]) -> std::io::Result<()> {
         if let [Value::Var(nr), val] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             // P222: when the RHS expression references the destination
             // variable (e.g. `s = s + s` lowers to OpAppendText(s, Var(s))
@@ -234,7 +234,7 @@ impl Output<'_> {
             Value::Int(token),
         ] = vals
         {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             // All text-returning calls produce either `Str` or `String` (never `&str`).
             // Wrap with `&*` so `format_text` (which expects `&str`) always gets the right type.
@@ -248,11 +248,11 @@ impl Output<'_> {
             // String-returning Block with E0308 (`expected &str,
             // found String`).
             let val_str = if let Value::Call(d, _) = val.unspan()
-                && matches!(self.data.def(*d).returned, Type::Text(_))
+                && matches!(self.data.def(*d).returned(), Type::Text(_))
             {
                 format!("&*({val_expr})")
             } else if let Value::CallRef(v_nr, _) = val.unspan()
-                && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables.tp(*v_nr)
+                && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables().tp(*v_nr)
                 && matches!(**ret, Type::Text(_))
             {
                 format!("&*({val_expr})")
@@ -296,7 +296,7 @@ impl Output<'_> {
             Value::Int(dir),
         ] = vals
         {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prefix = if stack { "" } else { "&mut " };
@@ -316,7 +316,7 @@ impl Output<'_> {
         stack: bool,
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val, width, prec, dir] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
@@ -339,7 +339,7 @@ impl Output<'_> {
         stack: bool,
     ) -> std::io::Result<()> {
         if let [Value::Var(nr), val, width, prec, dir] = vals {
-            let s_nr = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+            let s_nr = sanitize(self.data.def(self.def_nr).variables().name(*nr));
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
             let prec_expr = self.generate_expr_buf(prec)?;
