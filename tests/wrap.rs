@@ -45,8 +45,10 @@ const SUITE_SKIP: &[&str] = &[];
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
     "19-threading.loft", // todo!(); WASM threading model differs
-    // #255 / @PLN9 Phase 0: the wasm `source_dir()` anchor is Phase 1 — un-skip
-    // when the per-backend anchor lands.
+    // #255 / @PLN9: the wasm `source_dir()` anchor is unverified — `current_exe()`
+    // is unreliable under WASI, and the host has no source-tree.  A wasm host
+    // anchor (the JS bridge could supply it) is a follow-up; the crawler runs
+    // interp/native, not wasm.  Un-skip when the wasm anchor is wired.
     "191-source-dir.loft",
 ];
 

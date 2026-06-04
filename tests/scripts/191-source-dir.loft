@@ -1,18 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// #255 / @PLN9 Phase 0 — `source_dir()` is populated for EVERY execution path
-// via the single parser-level home (`Parser::parse`), not per-runner ad-hoc
-// code.  Before the fix the wrap/test runners left it empty, so source-relative
-// asset resolution (the point of @PLN9) had no anchor under test.
+// #255 / @PLN9 — `source_dir()` returns the running program's OWN directory on
+// every backend, the anchor source-relative asset loading builds on:
+//   - `--interpret` / test runner → the source file's directory (set once at
+//     parse time, the single home in `Parser::parse`);
+//   - `--native` → the executable's directory (`current_exe().parent()`).
 //
-// Interpreter-scoped: the `--native` exe-dir anchor and the wasm anchor are
-// @PLN9 Phase 1 — until those land, native `source_dir()` returns "" (see
-// `Stores::source_dir_native`), so this file is in SCRIPTS_NATIVE_SKIP and
-// WASM_SKIP.  Remove it from both when Phase 1 ships the per-backend anchor.
+// The exact value differs per backend (source dir vs exe dir), so the portable
+// cross-backend invariant asserted here is simply that it is POPULATED — the
+// bug this guards was `source_dir()` returning "" under the test runners and
+// natively.  The printed value makes the per-backend directory visible.
 fn main() {
     sd = source_dir();
-    assert(sd != "", "source_dir() must be populated under the test runner (was empty)");
-    assert(sd.ends_with("scripts"), "source_dir() should be the test file's directory, got [{sd}]");
+    assert(sd != "", "source_dir() must be populated on every backend (was empty)");
     print("source_dir=[{sd}]\n");
 }

@@ -580,19 +580,24 @@ impl Stores {
         crate::wasm::host_fs_program_dir()
     }
 
-    /// Pre-existing latent symbol referenced by `default/03_text.loft`'s
-    /// `#rust"Stores::source_dir_native()"` template — never compiled
-    /// before because no test exercised the symbol.  Surfaced by P227's
-    /// fn-ref dispatch widening (every `fn() -> text` candidate is now
-    /// compiled into the dispatch table).  Returns an empty string;
-    /// `source_dir`'s real implementation requires `stores.source_dir`
-    /// access and is reachable through the `n_source_dir` interp path
-    /// (`src/native.rs:558`).  A future patch should change the loft
-    /// declaration to take `cell` and read from a stores-bearing helper
-    /// — out of scope for P227.
+    /// Native backend for `source_dir()` (`default/03_text.loft`'s
+    /// `#rust"Stores::source_dir_native()"` template).
+    ///
+    /// #255 / @PLN9 Phase 1: under `--native` the program's "own directory" is
+    /// the **executable's directory** (the interpreter uses the source file's
+    /// dir; a compiled binary has no source tree, so the binary's location is
+    /// the program-relative anchor).  This mirrors `current_exe()` use in
+    /// `native_utils::loft_lib_dir_for`.  Returns "" only when `current_exe()`
+    /// is unavailable (e.g. some sandboxed wasm hosts) — callers treat empty as
+    /// "no anchor, fall back to cwd".
     #[must_use]
     pub fn source_dir_native() -> String {
-        String::new()
+        std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 }
 
