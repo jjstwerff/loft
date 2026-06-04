@@ -4253,6 +4253,12 @@ fn main() {
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // #255 / @PLN9: LOFT_PATHS overrides the path-resolution mode for this run
+    // (`program` = re-home relative paths to the program's own directory;
+    // `cwd` = the process cwd).  Unset → the parsed default / `#cwd` directive.
+    if let Ok(mode) = std::env::var("LOFT_PATHS") {
+        state.database.program_relative = mode.eq_ignore_ascii_case("program");
+    }
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
     // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.

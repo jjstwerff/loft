@@ -3953,13 +3953,13 @@ impl Parser {
                         &yield_tp,
                         &crate::data::Context::Argument,
                     ));
-                    // @P327 / @P328 — same packed encoding as the
-                    // for-loop's `iterator()` path; tag 1 = tuple-of-i64,
-                    // tag 2 = fn-ref.
-                    let channel_tag: i32 = if matches!(&yield_tp,
-                        Type::Tuple(elems) if !elems.is_empty()
-                        && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
-                    {
+                    // @PLAN16 phase 02 — same packed encoding as the
+                    // for-loop's `iterator()` path; tag 1 = layout-driven
+                    // tuple walk (kind codes appended as extra args), tag 2 =
+                    // fn-ref.  `tuple_kinds` is the shared gate so the consumer
+                    // and the generator's producer never diverge.
+                    let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
+                    let channel_tag: i32 = if tkinds.is_some() {
                         1
                     } else if matches!(&yield_tp, Type::Function(_, _, _)) {
                         2
@@ -3970,6 +3970,9 @@ impl Parser {
                     let op = self.data.def_nr("OpCoroutineNext");
                     let mut args = list.to_vec();
                     args.push(Value::Int(value_size));
+                    if let Some(kinds) = &tkinds {
+                        args.extend(kinds.iter().map(|k| Value::Int(k.code())));
+                    }
                     *val = Value::Call(op, args);
                     return yield_tp;
                 }

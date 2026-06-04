@@ -442,9 +442,18 @@ impl Stores {
         if file.rec == 0 {
             return false;
         }
+        // #255 / @PLN9: re-home a relative path against the program anchor.
+        // Resolve read-only first (drops the borrow), then re-borrow mutably
+        // for fill_file.  The original path stays in the struct's `.path` field.
+        let raw = {
+            let store = self.store(file);
+            store
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                .to_owned()
+        };
+        let resolved = self.resolve_path(&raw);
         let store = self.store_mut(file);
-        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
-        let path = std::path::Path::new(filename);
+        let path = std::path::Path::new(&resolved);
         fill_file(path, store, file)
     }
 
@@ -522,7 +531,9 @@ impl Stores {
 
     #[cfg(not(feature = "wasm"))]
     pub fn get_dir(&mut self, file_path: &str, result: &DbRef) -> bool {
-        let path = std::path::Path::new(&file_path);
+        // #255 / @PLN9: re-home a relative dir path against the program anchor.
+        let resolved = self.resolve_path(file_path);
+        let path = std::path::Path::new(&resolved);
         if let Ok(iter) = std::fs::read_dir(path) {
             let vector = DbRef {
                 store_nr: result.store_nr,
@@ -603,9 +614,11 @@ impl Stores {
     */
     #[cfg(feature = "png")]
     pub fn get_png(&mut self, file_path: &str, result: &DbRef) -> bool {
+        // #255 / @PLN9: re-home against the program anchor.
+        let resolved = self.resolve_path(file_path);
         let store = self.store_mut(result);
-        if let Ok((img, width, height)) = crate::png_store::read(file_path, store) {
-            if let Some(name) = std::path::Path::new(&file_path).file_name() {
+        if let Ok((img, width, height)) = crate::png_store::read(&resolved, store) {
+            if let Some(name) = std::path::Path::new(&resolved).file_name() {
                 let name_pos = store.set_str(name.to_str().unwrap());
                 store.set_u32_raw(result.rec, result.pos, name_pos);
                 store.set_int(result.rec, result.pos + 4, i64::from(width));
@@ -639,11 +652,17 @@ impl Stores {
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.files.len() as i32;
+            // #255 / @PLN9: resolve against the program anchor before borrowing
+            // the store mutably.
+            let resolved_name = {
+                let s = self.store(file);
+                let raw = s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned();
+                self.resolve_path(&raw)
+            };
             let s = self.store_mut(file);
             let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                let file_name = s.get_str(s.get_u32_raw(file.rec, file.pos + 24));
-                if let Ok(f) = std::fs::File::create(file_name) {
+                if let Ok(f) = std::fs::File::create(&resolved_name) {
                     s.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.files.push(Some(f));
                 }

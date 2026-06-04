@@ -55,6 +55,9 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // with `?? <int>` mis-compiled); @P316 is fixed, so 135 now runs natively
     // and doubles as the @P316 regression guard.
     //
+    // 191-source-dir.loft runs natively as of @PLN9 Phase 1 — the exe-dir anchor
+    // (`Stores::source_dir_native` via `current_exe()`) makes `source_dir()`
+    // non-empty under `--native`, so it is no longer skipped here.
 ];
 
 /// Locate `libloft.rlib` and its sibling deps directory for standalone `rustc` compilation.

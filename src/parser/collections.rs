@@ -199,10 +199,13 @@ impl Parser {
                 &yield_tp,
                 &crate::data::Context::Argument,
             ));
-            let channel_tag: i32 = if matches!(&yield_tp,
-                Type::Tuple(elems) if !elems.is_empty()
-                && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)))
-            {
+            // @PLAN16 phase 02 — a tuple whose every element classifies into a
+            // transport slot rides channel 1 (the layout-driven flatten-walk);
+            // the per-slot kind codes ride as extra args so the native consumer
+            // reconstructs the tuple.  `tuple_kinds` is the SAME decision the
+            // producer's `is_tuple_into` makes, so the two ends agree.
+            let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
+            let channel_tag: i32 = if tkinds.is_some() {
                 1
             } else if matches!(&yield_tp, Type::Function(_, _, _)) {
                 2
@@ -210,7 +213,11 @@ impl Parser {
                 0
             };
             let value_size: i32 = (channel_tag << 8) | byte_size;
-            return Value::Call(op, vec![Value::Var(gen_var), Value::Int(value_size)]);
+            let mut call_args = vec![Value::Var(gen_var), Value::Int(value_size)];
+            if let Some(kinds) = &tkinds {
+                call_args.extend(kinds.iter().map(|k| Value::Int(k.code())));
+            }
+            return Value::Call(op, call_args);
         }
         if is_type == should {
             // Non-coroutine pre-existing iterator (sorted/hash/index).

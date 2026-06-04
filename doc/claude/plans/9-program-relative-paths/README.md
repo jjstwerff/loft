@@ -7,14 +7,40 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **design decided, cost estimated, ready to phase.** Tracked as
-[`@PLN9`](https://github.com/loft-lang/plans/issues/9) (loft-lang/plans); promoted from
-loft issue [#255](https://github.com/jjstwerff/loft/issues/255) (an enhancement that
-grew phase-worthy). The anchor decision is ratified: relative file paths resolve
-**program-relative by default**, with a one-line **cwd opt-in** for CLI tools. A
-*current* consumer — the **crawler agent** — depends on Phase 1 (it runs generated
-programs from a sandbox cwd and needs program-relative asset resolution), so this is
-prioritised, not deferred. Effort MH; not yet started.
+**Shipped on `local_assets` (interp + native) — program-relative by default with the
+`#cwd` opt-in.** Tracked as [`@PLN9`](https://github.com/loft-lang/plans/issues/9)
+(loft-lang/plans); promoted from loft issue
+[#255](https://github.com/jjstwerff/loft/issues/255). A relative file path resolves
+against the program's own directory by default; CLI tools opt back into cwd with the
+one-line `#cwd` file directive.
+
+Landed (Phases 0 → 3):
+- **0** — `source_dir()` populated once at parse time (`Parser::parse`, the single
+  home); `Stores::clone` preserves it.
+- **1a** — native anchor: `source_dir()` = the executable's dir via `current_exe()`.
+- **1b** — the `resolve_path` chokepoint (`Stores::resolve_path`) every file-op site
+  routes through (interp io.rs + database/io.rs + png; native codegen_runtime; the
+  standalone delete/move/mkdir ops in fill.rs + the `#rust` templates).  Resolution
+  happens at the OS boundary, so `File.path` keeps the value the user passed.
+- **2** — the `#cwd` file directive opts a program out → cwd.
+- **3** — `Stores::new` defaults program-relative (the flip); native bakes the
+  parse-time value via `const LOFT_PROGRAM_RELATIVE`; the corpus migration added `#cwd`
+  to the 13 tests that do cwd-relative file I/O.  Also a `LOFT_PATHS=program|cwd`
+  per-invocation override.
+
+Verified on both backends: default rehomes a bundled asset from a foreign cwd; `#cwd`
+and `LOFT_PATHS=cwd` stay cwd; absolute untouched; program-relative write/read/delete
+round-trips with no leak.  Interp suite green (wrap 50/0, issues 684/0); native_scripts
++ native_dir green.
+
+Open: **1w** — the wasm anchor *code* is wired (`source_dir()` = the host working dir
+via `current_dir()`), but running `191` under wasm is gated on
+[#268](https://github.com/jjstwerff/loft/issues/268) (wasip2 `print()` codegen calls an
+undeclared `loft_host_print`); and **4** the graphics consumer — **PR'd**
+([loft-libs-graphics#2](https://github.com/loft-lang/loft-libs-graphics/pull/2)):
+`gl_load_font` now wraps the raw native binding and resolves a relative path
+program-relative via `source_dir()`.  Pending: merge + a graphics release tag +
+re-sync the in-repo fixture (`sync-fixtures.sh`).
 
 ## Goal
 
@@ -72,11 +98,13 @@ is unaffected, and the opt-in flips resolution to cwd — on the right backend.
 
 | Phase | Item | Effort | Status |
 |---|---|---|---|
-| **0** | `source_dir` correctness — survive `Stores::clone`, populate it in the test runner (prototyped, uncommitted) | S | Open |
-| **1** | **Resolver + anchor** — one `resolve_path` chokepoint the ~10 raw `std::fs` file-op sites route through; anchor = source-dir (interp) / exe-dir (native); default program-relative. **Unblocks the crawler.** | M | Open |
-| **2** | **cwd opt-in** — the one-line per-program declaration + the runtime flag the resolver checks | S–M | Open |
-| **3** | **Corpus migration** — flip the default; the file guards surface the ~27 cwd-dependent files (152 call sites, but per-file opt-in); add the opt-in per file; suite green both backends | S–M (risk) | Open |
-| **4** | **Graphics consumer** — `gl_load_font` et al. land on the new anchor; canonical change in external `loft-libs-graphics` (the in-repo fixture is a pinned mirror) | S + cross-repo | Open |
+| **0** | `source_dir` correctness — populate once at parse time (`Parser::parse`, single home); `Stores::clone` preserves it. Regression `191-source-dir.loft`. | S | **Shipped** (`c2979ff3`) |
+| **1a** | **Native anchor** — `source_dir()` = exe dir via `current_exe()` under `--native` (was ""). interp + native green. | S | **Shipped** (`f2a7fafe`) |
+| **1b** | **Resolver chokepoint** — `Stores::resolve_path`, the single home every file-op site routes through (interp io.rs + database/io.rs + png; native codegen_runtime ×5; standalone delete/move/mkdir in fill.rs + `#rust` templates). Resolves at the OS boundary (keeps `File.path`). | M | **Shipped** (`7519de96`) |
+| **2** | **`#cwd` opt-in** — file-level directive parsed in `parse_file`; native bakes it via `const LOFT_PROGRAM_RELATIVE`. + `LOFT_PATHS` env override. | S | **Shipped** (`7519de96`) |
+| **3** | **Default flip + corpus migration** — `Stores::new` defaults program-relative; 13 cwd-relative tests migrated with `#cwd`; suite green both backends. | S–M | **Shipped** (`7519de96`) |
+| **1w** | **Wasm anchor** — `source_dir()` = host working dir via `current_dir()` (was "" under WASI). Code wired; 191 wasm-run gated on [#268](https://github.com/jjstwerff/loft/issues/268). | S | **Shipped** (`25feaac2`) · test gated on #268 |
+| **4** | **Graphics consumer** — `gl_load_font` wraps the raw native binding + resolves program-relative via `source_dir()`. Canonical change in external `loft-libs-graphics` ([PR #2](https://github.com/loft-lang/loft-libs-graphics/pull/2)). | S + cross-repo | **PR'd** · pending merge + release tag + fixture re-sync |
 
 ## Phase ordering
 

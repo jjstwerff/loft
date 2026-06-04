@@ -13,6 +13,12 @@
 //   "// Demonstrates:" or "// Features:" line  →  short description
 //   Full source becomes the gallery preview.
 
+// @PLN9: this is a repo-root build tool — its file() paths (`tools/`,
+// `doc/gallery-examples.js`) are relative to the working directory it is run
+// from (the repo root), not to the script's own location.  `#cwd` opts out of
+// the program-relative default so those paths resolve against the cwd.
+#cwd
+
 fn escape_js(s: text) -> text {
   r = "";
   for c in s {

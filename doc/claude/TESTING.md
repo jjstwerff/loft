@@ -266,7 +266,7 @@ Family today:
 | `tests/template_matrix.rs` | @PLAN17 | T-parameter usage × bound shape | bounded-generic / interface surface |
 
 Future matrices follow the same shape (coroutine validation
-is active under `plans/16-coroutine-validation/`; match
+is active under `plans/finished/16-coroutine-validation/`; match
 validation pending in `plans/future/18-match-validation/`).  Closure validation
 shipped as `plans/finished/15-closure-validation/` 2026-05-12;
 22 cells in `tests/closure_matrix.rs` plus 5 leak guards in

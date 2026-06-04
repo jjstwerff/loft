@@ -67,9 +67,9 @@ fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16);
 fn OpSeekFile(file: File, pos: integer);
 fn OpSizeFile(file: File) -> integer;
 fn OpDelete(path: text) -> boolean;
-#rust"codegen_runtime::fs_delete(@path)"
+#rust"codegen_runtime::fs_delete(&s.database.resolve_path(@path))"
 fn OpMoveFile(from: text, to: text) -> boolean;
-#rust"codegen_runtime::fs_move(@from, @to)"
+#rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
 fn OpTruncateFile(self: File, size: integer) -> boolean;
 fn OpSyncFile(self: File) -> boolean;
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
@@ -81,9 +81,9 @@ fn OpSyncFile(self: File) -> boolean;
 fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
 fn OpMkdir(path: text) -> boolean;
-#rust"codegen_runtime::fs_mkdir(@path)"
+#rust"codegen_runtime::fs_mkdir(&s.database.resolve_path(@path))"
 fn OpMkdirAll(path: text) -> boolean;
-#rust"codegen_runtime::fs_mkdir_all(@path)"
+#rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 

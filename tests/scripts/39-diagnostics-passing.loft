@@ -3,6 +3,8 @@
 // Tests that verify specific patterns compile and run without errors/warnings.
 // --- Passing tests (no error/warning expected) ---
 
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
 fn test_remove_from_iterated_allowed() {
   v = [1, 2, 3];
   for e in v if e > 1 { e#remove; }

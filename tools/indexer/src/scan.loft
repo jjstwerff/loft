@@ -34,6 +34,10 @@
 // works in both backends and the call cost is one allocation
 // per `main()` invocation, which is fine for a single-shot
 // scanner.
+//
+// @PLN9: cwd-relative repo-root scanner — reads doc/, src/, etc. from the
+// working directory; #cwd opts out of the program-relative default.
+#cwd
 fn source_roots() -> vector<text> {
     // Match the set bash's `git ls-files` enumerates.  `examples`
     // is included optimistically (currently empty); `.claude` and

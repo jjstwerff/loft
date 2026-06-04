@@ -12,10 +12,67 @@
 //!   double-borrow when advancing the sub-generator from within the outer
 //!   generator's `next_i64` call.
 
+use crate::coroutine_layout::{YieldSlot, tuple_kinds};
 use crate::data::{Context, Type, Value};
 use std::io::Write;
 
 use super::{Output, rust_type, sanitize};
+
+/// Producer side of the layout-driven yield codec (`coroutine_layout`).  Write
+/// one yielded tuple element of kind `kind` into the `dest` transport buffer at
+/// `slot`.  The consumer's [`yield_slot_read`] is the exact mirror — both are
+/// derived from the same `YieldSlot`, so they agree by construction.
+pub(crate) fn yield_slot_write(
+    w: &mut dyn Write,
+    kind: YieldSlot,
+    slot: usize,
+    expr: &str,
+) -> std::io::Result<()> {
+    match kind {
+        YieldSlot::Int | YieldSlot::CharI32 | YieldSlot::Routine => {
+            writeln!(w, "                dest[{slot}] = ({expr}) as i64;")
+        }
+        YieldSlot::Bool => writeln!(w, "                dest[{slot}] = (({expr}) as u8) as i64;"),
+        // f64::to_bits → u64 / f32::to_bits → u32, both zero-extend to i64.
+        YieldSlot::F64 | YieldSlot::F32 => {
+            writeln!(
+                w,
+                "                dest[{slot}] = (({expr}).to_bits()) as i64;"
+            )
+        }
+        YieldSlot::Ref => {
+            let s1 = slot + 1;
+            writeln!(
+                w,
+                "                {{ let _r = {expr}; \
+                 dest[{slot}] = _r.store_nr as i64; \
+                 dest[{s1}] = ((_r.rec as u64) | ((_r.pos as u64) << 32)) as i64; }}"
+            )
+        }
+    }
+}
+
+/// Consumer side of the layout-driven yield codec — the exact mirror of
+/// [`yield_slot_write`].  Returns the Rust expression that reconstructs a
+/// tuple element of kind `kind` from the `_loft_yield_buf` transport buffer at
+/// `slot`.
+#[must_use]
+pub(crate) fn yield_slot_read(kind: YieldSlot, slot: usize) -> String {
+    let s1 = slot + 1;
+    match kind {
+        YieldSlot::Int => format!("_loft_yield_buf[{slot}]"),
+        YieldSlot::CharI32 => format!("(_loft_yield_buf[{slot}] as i32)"),
+        YieldSlot::Bool => format!("(_loft_yield_buf[{slot}] != 0)"),
+        YieldSlot::F64 => format!("f64::from_bits(_loft_yield_buf[{slot}] as u64)"),
+        YieldSlot::F32 => format!("f32::from_bits(_loft_yield_buf[{slot}] as u32)"),
+        YieldSlot::Routine => format!("(_loft_yield_buf[{slot}] as u32)"),
+        YieldSlot::Ref => format!(
+            "DbRef {{ store_nr: (_loft_yield_buf[{slot}] as u16), \
+             rec: (_loft_yield_buf[{s1}] as u64 as u32), \
+             pos: (((_loft_yield_buf[{s1}] as u64) >> 32) as u32) }}"
+        ),
+    }
+}
 
 /// Derive the generator struct name from the loft function name.
 /// `n_count` → `NCountGen`, `n_gen_len` → `NGenLenGen`.
@@ -393,9 +450,13 @@ impl Output<'_> {
         // yield arm in the match below knows which packing layout to emit
         // based on the type-specific flags (`is_tuple_into` /
         // `is_fnref_into`).
-        let is_tuple_into = matches!(yield_tp,
-            Type::Tuple(elems) if !elems.is_empty()
-            && elems.iter().all(|e| matches!(e, Type::Integer(_) | Type::Float)));
+        // @PLAN16 phase 02 — a tuple whose every element classifies into a
+        // transport slot rides the unified `next_into` channel via the
+        // layout-driven flatten-walk (`coroutine_layout`).  This is the SAME
+        // decision the consumer's channel-1 selection makes (both call
+        // `tuple_kinds` on the same `T`), so the two ends never diverge.
+        let tkinds = tuple_kinds(yield_tp);
+        let is_tuple_into = tkinds.is_some();
         let is_fnref_into = matches!(yield_tp, Type::Function(_, _, _));
         let uses_next_into = is_tuple_into || is_fnref_into;
         let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
@@ -591,13 +652,20 @@ impl Output<'_> {
                     }
                     writeln!(w, "                self.state = {};", state_idx + 1)?;
                     if is_tuple_into {
-                        // @P327 native — write each tuple slot into
-                        // `dest[i]` and return `true`.  `val` is a
-                        // `Value::Tuple([…])`; walk its elements.
+                        // @PLAN16 phase 02 — layout-driven flatten-walk.
+                        // `val` is a `Value::Tuple([…])`; encode each element
+                        // per its `YieldSlot` kind at the running transport
+                        // slot.  Slot offsets accumulate by kind width (a `Ref`
+                        // takes two), so a tuple of mixed scalar/ref kinds packs
+                        // correctly — and the consumer's `yield_slot_read`
+                        // mirror unpacks the identical layout.
+                        let kinds = tkinds.as_ref().expect("is_tuple_into ⇒ tuple_kinds");
                         if let crate::data::Value::Tuple(elems) = val {
-                            for (i, elem) in elems.iter().enumerate() {
+                            let mut slot = 0usize;
+                            for (elem, &kind) in elems.iter().zip(kinds.iter()) {
                                 let code = self.generate_expr_buf(elem)?;
-                                writeln!(w, "                dest[{i}] = ({code}) as i64;")?;
+                                yield_slot_write(w, kind, slot, &code)?;
+                                slot += kind.width();
                             }
                         }
                         writeln!(w, "                return true;")?;

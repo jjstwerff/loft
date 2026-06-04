@@ -7,6 +7,10 @@
 //
 // Usage:
 //   loft --path <repo>/ lib/moros_render/examples/moros_glb.loft <map.json> <out.glb>
+//
+// @PLN9: CLI tool — its <map.json> / <out.glb> path args are cwd-relative;
+// #cwd opts out of the program-relative default.
+#cwd
 use moros_map;
 use moros_render;
 

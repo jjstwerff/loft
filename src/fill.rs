@@ -2008,14 +2008,17 @@ fn size_file(s: &mut State) {
 
 fn delete(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_delete(v_path.str());
+    let new_value = codegen_runtime::fs_delete(&s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
 fn move_file(s: &mut State) {
     let v_to = s.string();
     let v_from = s.string();
-    let new_value = codegen_runtime::fs_move(v_from.str(), v_to.str());
+    let new_value = codegen_runtime::fs_move(
+        &s.database.resolve_path(v_from.str()),
+        &s.database.resolve_path(v_to.str()),
+    );
     s.put_stack(new_value);
 }
 
@@ -2035,13 +2038,13 @@ fn call_ref(s: &mut State) {
 
 fn mkdir(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir(v_path.str());
+    let new_value = codegen_runtime::fs_mkdir(&s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
 fn mkdir_all(s: &mut State) {
     let v_path = s.string();
-    let new_value = codegen_runtime::fs_mkdir_all(v_path.str());
+    let new_value = codegen_runtime::fs_mkdir_all(&s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 

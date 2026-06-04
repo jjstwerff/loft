@@ -45,6 +45,12 @@ const SUITE_SKIP: &[&str] = &[];
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
     "19-threading.loft", // todo!(); WASM threading model differs
+    // #255 / @PLN9 Phase 1w: the wasm `source_dir()` anchor IS wired now (the
+    // host working directory via `current_dir()` — the WASI preopen).  191 stays
+    // skipped because it can't be run under wasm yet: it `print()`s, which hits
+    // #268 (wasip2 codegen calls undeclared `loft_host_print`).  (Also moot today
+    // — `wasm_dir` sweeps tests/docs, not tests/scripts.)  Un-skip when #268 lands.
+    "191-source-dir.loft",
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then

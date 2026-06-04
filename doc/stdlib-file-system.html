@@ -8,7 +8,7 @@
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <span class="cur">File System</span> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <span class="cur">File System</span> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>File System</h1>
 <article>
 <div class="item">
@@ -44,15 +44,15 @@
 <pre><code>pub struct File {
   path: text,
 
-  size: long,
+  size: integer,
 
   format: Format,
 
   ref: i32,
 
-  current: long,
+  current: integer,
 
-  next: long
+  next: integer
 }</code></pre>
 </div>
 <div class="item">
@@ -73,7 +73,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean</code></pre>
-<p>Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+<p>Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat). Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
@@ -88,7 +88,30 @@
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn set_file_size(self: File, size: long) -&gt; FileResult</code></pre>
+<pre><code>pub fn mtime(path: text) -&gt; integer</code></pre>
+<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters like @PLAN37 phase 07's `plans_recent` 60-day cutoff: pass the path, convert the returned seconds back to YYYY-MM-DD, and compare lexicographically against `ymd_days_ago(60)`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_durable_check(path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 phase 01b — durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_durable_seal(path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_persist_bind(r: hash, path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 — &quot;the hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
+<p>First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.</p>
+<p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
+<p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
+<p>Typical dryopea-style pattern: pw = PaintedWorld { painted: hash&lt;PaintedHex[q, r]&gt;::new() } store_persist_bind(pw.painted, &quot;dryopea_world.store&quot;) // …mutations to pw.painted now hit mmap'd bytes…</p>
+</div>
+<div class="item">
+<pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn sync(self: File) -&gt; boolean</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt;</code></pre>

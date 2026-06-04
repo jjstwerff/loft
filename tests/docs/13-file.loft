@@ -16,6 +16,11 @@
 // NotExists. `delete(path)` removes a file and returns a `FileResult` enum;
 // use `.ok()` to check success.
 // Clean up any leftover files from a previous interrupted run.
+// `#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a
+// relative path resolves against the working directory, not the program's own
+// directory.  Without it, relative paths re-home next to the program (the
+// portable-bundle default) — see @PLN9.
+#cwd
 fn cleanup() {
   delete("test.bin");
   delete("test2.bin");

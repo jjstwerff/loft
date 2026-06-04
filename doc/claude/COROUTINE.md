@@ -1134,6 +1134,22 @@ Implement the suspend/resume cycle.
 | CL-4 | Generator `iterator<T>` values must not cross `par(...)` boundaries | Accumulate parallel results in a collection, then iterate the collection outside `par(...)` |
 | CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |
 | CL-6 | Mutable-reference parameters (`&vector<T>`) in a generator function are not visible to the frame copy | Pass collections by value or use `reference<T>` and write through the reference |
+| CL-8 | On `--native`, a generator yielding a tuple with a **text element** (`iterator<(text, integer)>`) does not yet compile — a yielded `text` is a `&str`, so riding the unified yield codec needs a store intern (`db_from_text`) with a lifetime question still open. Scalar and DbRef-ref tuple elements (`(integer, float)`, `(vector, integer)`, …) work on both backends. | Yield the text from a separate single-`text` generator, or wrap the pair in a record and yield its `reference<S>` |
+
+### Native yield codec — status (@PLAN16 phase 02)
+
+The native value channel is **layout-driven**: a yielded tuple is flattened into
+transport slots derived from `T`'s slot kinds (`src/coroutine_layout.rs`) — each
+scalar slot inline as one `i64`, each reference slot as its full `DbRef` across
+two — and *both* the producer (`generation/coroutine.rs`) and the consumer
+(`generation/ops/coroutine.rs`) derive the **same** walk from the **same** `T`, so
+they agree by construction (no per-shape template, no runtime shape tag).
+`tests/coroutine_matrix.rs` is 18/18 green on both backends.  Open tail:
+text-*element* tuples (CL-8), the tuple-through-higher-order / comprehension cells
+(`y4_x3` / `y4_x4`), and deleting the legacy `next_i64` / `next_text` /
+`next_dbref` channels once every shape routes through the codec (pure subtraction).
+Full record: the @PLAN16 closure doc at
+[`plans/finished/16-coroutine-validation/README.md`](plans/finished/16-coroutine-validation/README.md).
 
 ---
 

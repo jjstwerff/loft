@@ -225,6 +225,13 @@ stay so existing `loft.lock` pins keep resolving.  If a
 version turns out to be broken or vulnerable, yank it
 (below) rather than removing the row.
 
+> **In-tree-tested libraries** (the loft dogfood libs — `graphics`,
+> `shapes`, `gridmesh`, `imaging`, `arguments`, `game_protocol`, `web`,
+> `hex_world`, `time`) have one extra step: re-sync the loft monorepo
+> test fixture so the compiler suite tracks the new tag.  See
+> [LIBRARY_AUTHORING.md § 5d](LIBRARY_AUTHORING.md#5d-re-sync-the-loft-monorepo-fixture-in-tree-tested-libs-only).
+> A pure registry-only library has no fixture and skips it.
+
 ---
 
 ## Yanking a broken release

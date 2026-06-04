@@ -354,6 +354,13 @@ pub struct Stores {
     /// Directory of the main source file being executed.
     /// Set by `main.rs` after parsing; used by `source_dir()` built-in.
     pub source_dir: String,
+    /// #255 / @PLN9: when true, a *relative* program-supplied file path
+    /// re-homes against `source_dir` (the program's own directory) instead of
+    /// the process cwd.  Absolute paths are never touched.  Parse-time config:
+    /// the default (set in `Stores::new`), overridable per-program by the
+    /// `#cwd` directive and per-invocation by the `LOFT_PATHS` env var.  Read by
+    /// `resolve_path`, the single home every file-op site routes through.
+    pub program_relative: bool,
     /// FY.1: When true, the interpreter loop yields back to the caller.
     /// Set by `gl_swap_buffers` in WASM mode; cleared by `resume_frame`.
     pub frame_yield: bool,
@@ -475,7 +482,16 @@ impl Clone for Stores {
             had_fatal: false,
             runtime_error: None,
             format_fault_tag: None,
-            source_dir: String::new(),
+            // #255: `source_dir` is parse-time CONFIG (the main source file's
+            // directory), not runtime state — it must survive `clone()` so the
+            // `source_dir()` builtin works after the test runner / native paths
+            // rebuild a fresh `State` from a cloned schema db.  Resetting it to
+            // empty here left source-relative asset resolution broken in those
+            // contexts.
+            source_dir: self.source_dir.clone(),
+            // #255: parse-time config like source_dir — preserve across clone so
+            // the path mode survives the per-test-function State rebuild.
+            program_relative: self.program_relative,
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
@@ -936,6 +952,10 @@ impl Stores {
             runtime_error: None,
             format_fault_tag: None,
             source_dir: String::new(),
+            // #255 / @PLN9: program-relative by default — a relative file path
+            // re-homes against the program's own directory, so "program + assets"
+            // is a portable bundle.  CLI tools opt back into cwd with `#cwd`.
+            program_relative: true,
             frame_yield: false,
             poison_free: false,
             disable_slot_reuse: false,
@@ -969,6 +989,28 @@ impl Stores {
         result.base_type("text", 4); // 5
         result.base_type("character", 4); // 6
         result
+    }
+
+    /// #255 / @PLN9: the single home every file-op site routes a
+    /// program-supplied path through.  Absolute paths and the cwd-relative
+    /// default pass through unchanged; under `program_relative` a *relative*
+    /// path re-homes against `source_dir` — the program's own directory (the
+    /// source dir under `--interpret`, the executable's dir under `--native`),
+    /// so "program + assets" is a portable bundle that runs from any cwd.
+    /// Empty `source_dir` (no anchor) falls back to cwd, never to a wrong file.
+    #[must_use]
+    pub fn resolve_path(&self, raw: &str) -> String {
+        if !self.program_relative || self.source_dir.is_empty() {
+            return raw.to_string();
+        }
+        let p = std::path::Path::new(raw);
+        if p.is_absolute() {
+            return raw.to_string();
+        }
+        std::path::Path::new(&self.source_dir)
+            .join(p)
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Plan-07 phase 4c — Stores-side counterpart of `State::raise`.

@@ -273,6 +273,38 @@ Rate limiting: at most 5 messages per 60-second window per call site (configurab
 
 Types and functions for reading and writing files. A `File` value is obtained via `file()` and carries the path, format, and an internal reference.
 
+### Path resolution (program-relative by default)
+
+A **relative** file path resolves against **the program's own directory**, not
+the process working directory:
+
+- under `--interpret` / tests → the directory of the main source file;
+- under `--native` → the directory of the compiled executable;
+- queryable as `source_dir()` (works on every backend).
+
+So `file("assets/font.ttf")` loads the asset that ships **next to the program**,
+regardless of where it was launched from — "program + assets" is a portable
+bundle.  **Absolute paths are never rewritten.**
+
+This applies uniformly to every path-taking operation — `file()`, `exists()`,
+`read_file`/`write_file`, the `File` methods, `delete`/`move`/`mkdir`/`mkdir_all`,
+and image loads — so they all agree on where a relative path points.
+
+**Opting into cwd-relative (CLI tools).** A program that takes a *user-supplied*
+relative path (`loft tidy.loft data.csv` — `data.csv` is in the user's cwd, not
+beside the script) declares the file-top directive:
+
+```loft
+#cwd
+fn main(args: vector<text>) { ... }   // relative paths now resolve against the cwd
+```
+
+`#cwd` is whole-program and must precede the first declaration.  Per-invocation,
+the `LOFT_PATHS` environment variable overrides both: `LOFT_PATHS=program` forces
+program-relative, `LOFT_PATHS=cwd` forces cwd-relative.  `source_dir() -> text`
+returns the anchor (empty only when there is none, e.g. a wasm host with no
+filesystem).
+
 ### Types
 
 **`Format`** (enum): Describes how a file is opened.

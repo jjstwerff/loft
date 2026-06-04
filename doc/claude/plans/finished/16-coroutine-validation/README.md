@@ -5,21 +5,48 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLAN16 — Coroutine validation: yielded-type × drive-context matrix
 
-**Status: ACTIVE 2026-05-23 (moved from `plans/future/` per audience-demo
-session feedback).  Pre-flight 2026-05-04 surfaced 0/7 cells passing.
-@P210 closed 2026-05-04, @P211 closed 2026-05-05.**
+**Status: FINISHED 2026-06-04.**  Core goal met — the cross-mode matrix
+(`tests/coroutine_matrix.rs`) is **18/18 green on both backends** across
+Y1–Y5 × X1–X4, and the interp/native divergences that motivated the plan are
+closed.  Phase 02 was repurposed from the original "text row" into the
+**layout-driven yield-codec collapse**: the per-shape native codec spray
+(`next_i64` / `next_text` / `next_dbref` / a hand-written template per yield
+shape) was replaced by **one flatten-walk derived from `T`'s slot kinds**
+(`src/coroutine_layout.rs`) — see [02-codec-collapse.md](02-codec-collapse.md).
+Three previously-`--native`-broken composite shapes (`(integer,float)`,
+`(integer,boolean)`, `(vector,integer)`) now compile and run via the single walk
+with **zero per-shape code**.
 
-**Why active now:** coroutines remain too brittle between the
-interpreter and `--native` backend for confident library work
-(see @P322 — the surviving real leak is `51-coroutines.loft`'s
-for-loop-driven iterator over a vector literal, and a single
-small repro this session was enough to surface it).  Each new
-consumer of `iterator<T>` (generators in the audience-demo,
-moros_sim event-streams, future stream parsers) keeps tripping
-the same interp/native divergence in a slightly different cell
-of the matrix.  This plan IS the toolkit for nailing those
-divergences down at the cell level so the iterator library can
-then be built on a known-good surface.
+**Second outcome — this plan was the design-protocol with-arm.**  The codec
+collapse was produced *with* the predict-validate procedure (predict → probe →
+build); two of the design's claims were falsified **by probe** before any
+regression (the store-layout framing; an over-unification that falsely absorbed
+@P325), and the build validated the invariant under construction.  That measured
+run graduated `DESIGN_VERIFICATION.md § C1` into
+[Design Protocol 1](../../../DESIGN_PROTOCOL.md) and seeded the `engineering-rigor`
+skill (`.claude/skills/engineering-rigor/`) — the canonical "a design is a
+testable hypothesis" record.
+
+**Shipped:** @P210/@P211/@P218/@P219 (state-machine lowering fixes, below);
+phase 01 unified transport (`next_into`); phase 02 layout-driven codec
+(scalar + DbRef-ref slice); the Y1–Y5 × X1–X4 matrix green on both backends.
+
+**Remaining tail — small, triggered, routed to `COROUTINE.md § Open work` (not a
+held plan, per the light-flow lifecycle):**
+- **text-*element* yields** inside a tuple (`(text, integer)`) on `--native` — a
+  yielded `text` is a `&str`, so riding the codec buffer needs a store intern
+  (`codegen_runtime::db_from_text`) with the lifetime question that entails; the
+  one excluded codec cell.
+- **tuple-through-higher-order / comprehension** composite cells (y4_x3, y4_x4).
+- **full legacy-channel deletion** (`next_i64`/`next_text`/`next_dbref` + the
+  high-byte channel tag) once every shape routes through the codec — the codec's
+  finishing move, pure subtraction.
+- @P226 (mixed Simple+ForLoopBody `__vdb_*` arm-scoping) — same family as @P218.
+
+---
+
+The active-phase rationale and per-P-issue closure notes are retained below as
+the closure record.
 
 @P210: `collect_segments` in `src/generation/coroutine.rs` now
 recognises `Value::Loop` (while) alongside `Value::Block` (for),
@@ -56,8 +83,10 @@ Pinned by `tests/issues.rs::p219_vector_for_yield_in_generator`
 backing locals scoped to one arm) filed 2026-05-05 during @P219
 fix-variant probing.  Same scoping family as @P218 / @P224.
 
-Y3 (Reference) and Y4 (tuple) cells still need re-probe with the
-new yield-type infrastructure.  Phase 00 wiring not yet started.
+_(Superseded — see the FINISHED status block above: phase 00/01 landed, the
+matrix is wired and 18/18 green on both backends, and Y3/Y4/Y5 cells re-probed
+under the unified channel + layout codec.  Y4 composite-through-higher-order
+cells y4_x3/y4_x4 remain in the routed tail.)_
 
 ## Goal
 
@@ -187,13 +216,13 @@ Each cell `(Yi, Xj)` has one of:
 
 ## Cross-references
 
-- [COROUTINE.md](../../COROUTINE.md) — coroutine design,
+- [COROUTINE.md](../../../COROUTINE.md) — coroutine design,
   "Known Limitations" section.
-- [LIFETIME.md](../../LIFETIME.md) — yielded-value lifetime
+- [LIFETIME.md](../../../LIFETIME.md) — yielded-value lifetime
   rules for text and Reference.
-- [@PLAN14 phase 00](../finished/14-tuple-validation/00-matrix.md) — donor
+- [@PLAN14 phase 00](../14-tuple-validation/00-matrix.md) — donor
   template.
-- [@PLAN15 closure validation](../finished/15-closure-validation/README.md)
+- [@PLAN15 closure validation](../15-closure-validation/README.md)
   — phase 05 prerequisite (now SHIPPED 2026-05-12).
 - `src/state/codegen.rs` — coroutine state-machine lowering.
 - `src/data.rs::Type::Iterator` — iterator type.

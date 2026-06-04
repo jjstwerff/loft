@@ -8,6 +8,8 @@
 // equal the cast type's storage width.
 // LHS-driven inference target — `s.field = f#read` infers the byte
 // width from the field's declared type, symmetric with `f += s.field`.
+// @PLN9: cwd-relative paths — this test creates and reads scratch files in the cwd.
+#cwd
 struct LhsTarget { a: i32 not null, b: u8 not null, c: u16 not null }
 
 fn cleanup() { delete("test_loft_inferred.bin"); }

@@ -693,7 +693,10 @@ impl Stores {
             had_fatal: false,
             runtime_error: None,
             format_fault_tag: None,
-            source_dir: String::new(),
+            // #255 / @PLN9: a parallel worker's file ops must resolve paths the
+            // same way as the main thread — carry the anchor + mode.
+            source_dir: self.source_dir.clone(),
+            program_relative: self.program_relative,
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
@@ -775,7 +778,10 @@ impl Stores {
             had_fatal: false,
             runtime_error: None,
             format_fault_tag: None,
-            source_dir: String::new(),
+            // #255 / @PLN9: a parallel worker's file ops must resolve paths the
+            // same way as the main thread — carry the anchor + mode.
+            source_dir: self.source_dir.clone(),
+            program_relative: self.program_relative,
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,

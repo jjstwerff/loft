@@ -581,6 +581,23 @@ types, give them distinct names.  (Loop variables are also inference-only —
 
 ## File I/O patterns
 
+### Path resolution — relative means program-relative
+
+A **relative** path resolves against the **program's own directory**
+(`source_dir()` — source dir under `--interpret`, exe dir under `--native`), not
+the process cwd.  So `file("assets/x")` loads the asset bundled beside the
+program on every backend, regardless of launch directory.  **Absolute paths are
+untouched.**  The file builtins (`file`, `exists`, `read_file`/`write_file`,
+`delete`/`move`/`mkdir`, image loads) all resolve this way — so **don't hand-roll
+`"{source_dir()}/{path}"` joins** in normal loft; just pass the relative path.
+(Do the explicit join only when handing a path to a *non-loft* consumer, e.g. a
+native asset loader that reads the filesystem directly.)
+
+A program that must resolve a *user-supplied* relative path against the **working
+directory** (CLI tools — `loft tidy.loft data.csv`) declares `#cwd` as the
+file-top directive (before the first declaration).  `LOFT_PATHS=program|cwd`
+overrides per-invocation.
+
 ### Text files (UTF-8)
 
 ```loft

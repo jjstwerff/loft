@@ -904,9 +904,15 @@ extern crate loft;"
                 // src/main.rs does for the interpreter path
                 // (state.database.user_args.clone_from(&user_args)).
                 // @PLAN37 phase 10.3 fix.
+                // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
+                writeln!(
+                    w,
+                    "const LOFT_PROGRAM_RELATIVE: bool = {};",
+                    self.stores.program_relative
+                )?;
                 write!(
                     w,
-                    "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
+                    "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n"
                 )?;
                 w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
                 writeln!(w, "}}")?;
@@ -919,9 +925,15 @@ extern crate loft;"
     fn emit_main_bootstrap(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
         let main_nr = self.data.def_nr("n_main");
         if main_nr < till {
+            // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
+            writeln!(
+                w,
+                "const LOFT_PROGRAM_RELATIVE: bool = {};",
+                self.stores.program_relative
+            )?;
             write!(
                 w,
-                "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); }}\n    init(&cell);\n    n_main(&cell);\n"
+                "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
             writeln!(w, "}}")?;

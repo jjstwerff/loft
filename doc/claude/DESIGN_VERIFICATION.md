@@ -34,10 +34,23 @@ shrinks to a one-line pointer to where the protocol now lives.
 
 ## C1 — Brittleness over bugs
 
-**Status:** *the primary design concern.*  Recorded; protocol pending
-verification.  First test: the string/text-allocation memory-bound work (a
-brittleness problem — works in the tested regime, OOM-cliffs when the load
-pattern shifts; the shape `Stores` had before plan-57).
+**Status:** *the primary design concern.* **GRADUATED** → the runnable procedure is
+now [**Design Protocol 1 — A Design Is a Testable Hypothesis**](DESIGN_PROTOCOL.md)
+(the teachable, transferable form).  This entry stays as the **reference**: the
+concern statement, the countable form, and the six verification questions the
+protocol runs a design past.  The with-arm that earned graduation — the
+[coroutine yield codec](plans/finished/16-coroutine-validation/README.md),
+predicted then probed (two claims falsified) then built (invariant held, three
+composite shapes absorbed zero-per-shape) — is recorded under *Where the
+measurement stands* below.  First *forward* test (predict-then-build): the string/text-allocation
+memory-bound work (a brittleness problem — works in the tested regime, OOM-cliffs when
+the load pattern shifts; the shape `Stores` had before plan-57).  First *retrospective*
+measurement: **@PLN9** (program-relative paths) — the tell fired in the plan's own
+sentence ("the 18 file-op sites the resolver becomes the chokepoint for"), was overridden
+for shipping pragmatism, and the brittle spray landed: `delete`/`move`/`mkdir` bypassed
+`resolve_path`, producing a silent *exists-resolves-but-delete-doesn't* mismatch inside a
+single `delete()`.  Evidence the count-tell reads true — and that it must **gate action,
+not merely inform** (the countable-form note below is what that measurement taught).
 
 **The concern.**  The real risk in a design is not *bugs* (inevitable, discrete,
 local — caught per-cell by a matrix) but **brittleness**: an algorithm correct
@@ -91,6 +104,38 @@ genuinely-distinct cases under a false invariant, which is itself brittleness
 differences.  (A deliberate, measured fast-path is the remaining exception:
 brittle-but-faster by intent.)
 
+**The countable form — read the tell off the design, not the keyboard.**  "Longer
+than expected" is a feeling mid-build; its precise, **prospective** form is a number
+you read off the design itself: **how many independent sites must re-assert the
+invariant for the design to be correct?**  When the answer is N>1 *and omission at a
+site is silent* (no compile error — a wrong result, not a failed build), **N is the
+brittleness, fixed at design time** — no code needed.  The plan's own words carry the
+verdict: "one `resolve_path` **chokepoint** the 18 file-op sites route through" is a
+*contradiction* — a chokepoint is *one* site; "N sites each call one function" is a
+spray wearing the word.  The estimate (10 or 18 — the exact figure is irrelevant)
+already named the shape.  This turns question 3's "O(N sites)" into something you
+**count before writing**, and sharpens the meter: brittleness ≈ **re-assertion sites ×
+silence-of-omission**.  N sites where forgetting is a *compile error* (a `Resolved`
+path-type nothing else can open through) is **not** brittle — the type re-asserts for
+you.  So the two cures attack the two factors: collapse N toward 1 (the real
+chokepoint), or make omission *loud* (a guard / a type) — drive the product toward zero.
+
+**The count reads in two directions.**  N itself diagnoses the **algorithm you're
+adding** (one gate, or a spray?).  The *gap between estimate and actual* — N much
+larger than you predicted — diagnoses the **layer that was already there**: you
+under-counted because the existing subsystem already lacked the chokepoint your change
+should have pivoted on, and that sprawl was invisible behind its interface until you
+went looking.  The *magnitude of the miss* is a reading of **pre-existing** brittleness
+you could not have invented — the code answering back.  Its actionable form: a site
+count *much* higher than expected is the trigger to **build the missing gate** (refactor
+the substrate), not to diligently thread the fix through every site to match the
+existing scatter — threading-a-spray is the wrong virtue.  (It is "fix at the chokepoint,
+no wider," except the chokepoint does not exist yet, so the move is to *create* it.)  One
+guard: the miss reads as *brittleness* only for a concern you'd expect **cohesive**
+(file I/O *should* funnel through one open); under-counting an inherently-distributed
+concern (every call site that logs) is ignorance, not a verdict — the signal is
+"expected cohesion, found scatter," not "I miscounted."
+
 **Verification questions** (run a design past these):
 
 1. **Name the invariant.**  Can you state, in one sentence, the single invariant
@@ -131,19 +176,47 @@ consumer has verified the way-of-working, the protocol this concern graduates in
 mirrors the matrix-before-fix shape one level up — *commitment before action, so the
 action is checked against something other than its own momentum*:
 
-1. **Before writing the code, write down the expected shape** — the one invariant you
-   expect to carry it, the axes it must cover, and a rough size/structure (one
-   function? one match? a table?).  If you can't name the invariant up front, that is
-   already the first flag.
-2. **Build it.**
-3. **Validate the build against the written shape.**  A divergence — most often
-   *bigger / more mechanisms than predicted* — is an alarm, **not a verdict**: route
-   it to the essential-vs-accidental search above.  Find the invariant → the code
+1. **Write down the expected shape first** — the one invariant you expect to carry it,
+   the axes it must cover, a rough size/structure (one function? one match? a table?),
+   and **how many sites must re-assert the invariant**.  Then **screen the prediction
+   against itself** — the **first firing point**: if the prediction *already* describes
+   a spray (N>1 re-assertion sites with silent omission — a "chokepoint-for-N"
+   contradiction), the alarm has tripped *before any code exists*.  Not being able to
+   name the invariant up front is the first flag of all.
+2. **Build it** — or, auditing old code, **inspect it**.  (The *actual* comes from the
+   build for new code, from a full read for old — same comparison either way.)
+3. **Validate against the written shape** — the **second firing point**: a divergence,
+   most often *bigger / more mechanisms than predicted*, is an alarm, **not a verdict**:
+   route it to the essential-vs-accidental search above.  Find the invariant → the code
    collapses back toward the predicted shape.  Find none honestly → the length is
    essential, and the surprise just taught you a domain axis you couldn't see at
    prediction time; feed that into the next estimate, and into the
    [composition-axes list](plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)
    if it is a new one.
+
+**Whichever point trips, the alarm gates the *decision* — it must not merely log.**  A
+fired alarm routes to the essential-vs-accidental search *before* the approach is chosen,
+and the search's output gates **build-the-gate vs thread-through**: "thread it" stays
+legal, but only ever as the search's *conclusion*, never the default.  The sharpest
+failure is not *missing* the alarm but **seeing it and overriding it** — @PLN9's "18
+sites" was in the plan, and the spray shipped anyway because the alarm lost to shipping
+momentum.  So "ignore the alarm" splits in two: *didn't-see-it* (a sight gap the matrix
+closes) and *saw-it-and-overrode* (a discipline gap only the gate closes).
+
+**The same shape audits old code, not just new.**  Steps 1–3 read as "before
+writing," but the mechanism is one comparison — *expected size vs actual* — and the
+only variable is where the *actual* comes from: **building** it (new code) or
+**inspecting** it (old code).  So before *touching* an existing subsystem, predict
+what a cohesive version of it would cost (step 1, read off its interface), then *read
+it* (step 2 = full inspection in place of build), then compare (step 3).  The same
+alarm fires — *actual ≫ predicted, with silent omission* — but on old code it
+diagnoses the **substrate**: the subsystem already lacks the chokepoint your change
+should pivot on.  The value is identical to the new-code case and just as prospective:
+predicting *before reading* turns the sprawl into a falsifiable surprise at the moment
+you choose **thread-through vs build-the-gate**, instead of a work-list you absorb
+silently ("18 sites — I'll handle them all").  @PLN9's 18 came from exactly this — a
+full inspection of the file layer — and the *missing* prediction is why the sprawl read
+as a task list rather than a verdict on the substrate.
 
 The written prediction is what turns "longer than expected" into a concrete,
 falsifiable comparison instead of a feeling you can rationalise away after the fact —
@@ -173,6 +246,41 @@ final code shape (lines / mechanisms / is the invariant nameable?), and cost (ef
 spent vs brittleness prevented).  The pattern across tasks decides it — and if it helps
 on load-bearing designs but overloads on trivial ones, that *is* the empirical basis
 for the tell-gates-the-procedure split above.
+
+**Where the measurement stands (so the concern doesn't self-promote on one data point).**
+@PLN9 supplied the first data point — but as the **control** arm: *without* the protocol
+gating the build, the count-tell's prediction came true and the brittle spray shipped.
+That tests the **tell** (reads true), not the **procedure** (its *help*).
+
+The **with** arm has now landed: the
+[coroutine yield codec](plans/finished/16-coroutine-validation/README.md) (@PLAN16
+phase 02), run *with* the predict-validate procedure end to end.  What it measured —
+on artifacts, not on how it felt:
+
+- **The procedure caught brittleness the prose hid.**  Two of the design's claims were
+  **falsified by probes** after they had already been written down as settled: the
+  invariant's *framing* (store-layout → transport-ABI) and an **over-unification** (a
+  false "this also fixes the 17 GB bug").  Re-reading the design did not catch either;
+  the probe did.  This is the first direct evidence for the **over-unification** failure
+  mode (*obey the alarm blindly*) as a thing the procedure detects — the symmetric
+  partner to @PLN9's *ignore the alarm*.
+- **The build validated the invariant under construction.**  The single flatten-walk
+  absorbed three previously-`--native`-broken composite shapes with **zero per-shape
+  code**, both backends, no regression — the predicted "one site derives the layout,
+  every end re-derives the same" held exactly.  Final code shape: one classifier
+  (`coroutine_layout::tuple_kinds`) consulted at N sites that **cannot disagree**
+  (they derive from it), i.e. `N × silence` driven to zero by construction — the count
+  cure, realised.
+- **Cost vs prevented brittleness.**  The procedure's expensive part (write-probe-build)
+  ran only because the tell tripped on a load-bearing codegen contract; it prevented a
+  per-shape spray that would have grown combinatorially with every future yield type.
+
+Two arms now exist — control (@PLN9, *tell* reads true) and with (@PLAN16, *procedure*
+helps).  That cleared the bar to graduate the runnable procedure into
+[Design Protocol 1](DESIGN_PROTOCOL.md).  A **second unrelated** with-arm (e.g. the
+string-allocation invariant, or a loft2 core-representation design) is what raises
+confidence from "graduated, one measured win" to "load-bearing default" — the protocol
+itself says *the pattern across tasks decides it*, never one data point.
 
 **See also:**
 [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)

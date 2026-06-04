@@ -921,6 +921,9 @@ pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content:
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
+    // #255 / @PLN9: re-home against the program anchor (native parity with
+    // the interpreter's `State::get_file_text`).
+    let file_path = stores.resolve_path(&file_path);
     content.clear();
     if let Ok(mut f) = File::open(&file_path)
         && f.read_to_string(content).is_err()
@@ -976,6 +979,8 @@ pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_path = stores.resolve_path(&file_path);
     if let Ok(meta) = std::fs::metadata(&file_path) {
         meta.len().cast_signed()
     } else {
@@ -1005,6 +1010,8 @@ pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_path = stores.resolve_path(&file_path);
     // Close any open handle so resize starts from a clean state.
     let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
@@ -1084,6 +1091,8 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
             store.get_byte(file.rec, file.pos + 32, 0),
         )
     };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_name = stores.resolve_path(&file_name);
     match OpenOptions::new()
         .read(true)
         .write(true)
@@ -1126,6 +1135,8 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
+    // #255 / @PLN9: re-home against the program anchor.
+    let file_name = stores.resolve_path(&file_name);
     match OpenOptions::new().read(true).open(&file_name) {
         Ok(mut f) => {
             if initial_pos > 0 {

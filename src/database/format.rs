@@ -580,19 +580,40 @@ impl Stores {
         crate::wasm::host_fs_program_dir()
     }
 
-    /// Pre-existing latent symbol referenced by `default/03_text.loft`'s
-    /// `#rust"Stores::source_dir_native()"` template — never compiled
-    /// before because no test exercised the symbol.  Surfaced by P227's
-    /// fn-ref dispatch widening (every `fn() -> text` candidate is now
-    /// compiled into the dispatch table).  Returns an empty string;
-    /// `source_dir`'s real implementation requires `stores.source_dir`
-    /// access and is reachable through the `n_source_dir` interp path
-    /// (`src/native.rs:558`).  A future patch should change the loft
-    /// declaration to take `cell` and read from a stores-bearing helper
-    /// — out of scope for P227.
+    /// Native backend for `source_dir()` (`default/03_text.loft`'s
+    /// `#rust"Stores::source_dir_native()"` template).
+    ///
+    /// #255 / @PLN9 Phase 1: under `--native` the program's "own directory" is
+    /// the **executable's directory** (the interpreter uses the source file's
+    /// dir; a compiled binary has no source tree, so the binary's location is
+    /// the program-relative anchor).  This mirrors `current_exe()` use in
+    /// `native_utils::loft_lib_dir_for`.  Returns "" only when `current_exe()`
+    /// is unavailable (e.g. some sandboxed wasm hosts) — callers treat empty as
+    /// "no anchor, fall back to cwd".
     #[must_use]
     pub fn source_dir_native() -> String {
-        String::new()
+        // #255 / @PLN9 Phase 1w: under wasm there is no executable path
+        // (`current_exe()` is unreliable / empty under WASI).  The program's
+        // effective "own directory" is the host's working directory — the WASI
+        // preopen under wasmtime, or the asset base the browser host serves from
+        // — which is also where relative file ops already resolve.  Under the
+        // browser (no filesystem) `current_dir()` returns Err → "", and an empty
+        // anchor makes `resolve_path` fall back to passthrough, letting the host
+        // bridge resolve — the correct behaviour there.
+        #[cfg(target_arch = "wasm32")]
+        {
+            return std::env::current_dir()
+                .ok()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 }
 

@@ -18,6 +18,40 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
+### Relative file paths are now program-relative — portable "program + assets" bundles
+
+A relative file path — `file("assets/font.ttf")`, `read_file("data.bin")`,
+`delete("out.tmp")` — now resolves against **the program's own directory** (the
+source dir under `--interpret`, the executable's dir under `--native`), not the
+process working directory.  An asset addressed relative to your program loads no
+matter where the program is launched from:
+
+```loft
+f = file("assets/level1.dat");   // beside the program, wherever it runs from
+```
+
+This is what #255 needed: a bundled font worked from the source tree but vanished
+under `--native` (which runs from a temp dir), because the path resolved against
+the cwd.  **Absolute paths are never rewritten.**  Resolution is uniform across
+`file()`, `exists()`, `read_file`/`write_file`, the `File` methods,
+`delete`/`move`/`mkdir`, and image loads.
+
+**CLI tools opt back into cwd** with a one-line file-top directive — a
+*user-supplied* relative path then resolves against the working directory:
+
+```loft
+#cwd
+fn main(args: vector<text>) { data = read_file(args[1]); }
+```
+
+Per-invocation, `LOFT_PATHS=program` / `LOFT_PATHS=cwd` overrides both.
+`source_dir()` returns the anchor and now works under `--native` (was empty
+before).
+
+**Breaking change** — a program that read or wrote a relative path expecting the
+*working directory* now needs `#cwd` at the top.  The in-tree corpus that did so
+(13 file-I/O tests) was migrated in this release.
+
 ### File `+=` is now append-only — and `file.sync()` lets you flush
 
 `f += value` now **appends** to the end of the file, matching how

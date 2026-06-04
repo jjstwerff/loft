@@ -315,6 +315,42 @@ $ loft update --check         # CI gate: exit 1 if updates available
 `loft update` auto-skips yanked versions via the same
 `find_best_version` filter that picks installs.
 
+### 5d. Re-sync the loft monorepo fixture (in-tree-tested libs only)
+
+This step is **only** for libraries that the loft compiler's own
+test-suite exercises through a pinned source mirror under
+[`jjstwerff/loft`](https://github.com/jjstwerff/loft)'s
+`tests/fixtures/libs/<pkg>/` — the dogfood libraries (`arguments`,
+`graphics`, `gridmesh`, `shapes`, `imaging`, `game_protocol`, `web`,
+`hex_world`, `time`).  A pure registry-only library has no fixture; skip
+to step 5c's registry PR and you're done.
+
+The fixture is a **deliberate snapshot, not auto-latest** — so a
+library change that affects the compiler tests is a reviewable commit in
+the loft repo, never silent drift.  After the new tag exists in the
+chunk repo (5a step 2):
+
+1. In `jjstwerff/loft`, bump the tag in `scripts/sync-fixtures.sh`'s
+   `PINNED_REFS` table for your package
+   (`graphics  graphics-v0.1.0` → `graphics  graphics-v0.1.1`).
+2. Refresh the snapshot:
+   ```
+   $ scripts/sync-fixtures.sh            # clones the tag, copies <pkg>/ into the fixture
+   ```
+3. Run the suites the fixture feeds — at minimum `cargo test --release
+   --test wrap` (interpreter) and any package-specific gold tests
+   (e.g. `graphics_gold`) — to confirm the new snapshot still passes.
+4. Commit the `PINNED_REFS` bump **and** the `tests/fixtures/libs/<pkg>/`
+   diff together as one reviewable commit (per the branch policy: on a
+   feature branch, PR to `main`).
+5. The CI invariant `scripts/sync-fixtures.sh --check` (exit 1 on
+   fixture-vs-tag drift) now passes for that package.
+
+Why the fixture and not a registry install: zero network during `cargo
+test`, reproducible across machines + CI, and it survives the eventual
+removal of the in-monorepo `lib/<pkg>/` source.  Full rationale +
+`PINNED_REFS` semantics live in the `scripts/sync-fixtures.sh` header.
+
 ## Reference
 
 | Topic | Source |
@@ -325,6 +361,7 @@ $ loft update --check         # CI gate: exit 1 if updates available
 | Security advisory channel (consumer side) | [`lib_plans/12-library-extraction/security.md`](lib_plans/12-library-extraction/security.md) |
 | Canonical `library-ci.yml` template | [`lib_plans/12-library-extraction/library-ci.yml.example`](lib_plans/12-library-extraction/library-ci.yml.example) |
 | Cross-package consumer matrix (moros / dryopea / bumper) | [`lib_plans/12-library-extraction/README.md` § Cross-project consumers](lib_plans/12-library-extraction/README.md#cross-project-consumers--moros--dryopea--bumper-airplanes) |
+| Monorepo test-fixture re-sync (dogfood libs — step 5d) | [`scripts/sync-fixtures.sh`](../../scripts/sync-fixtures.sh) header (`PINNED_REFS`, `--check`) |
 
 ## Troubleshooting
 
