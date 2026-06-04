@@ -226,6 +226,32 @@ your approval · M need a design call · K parked (deferred)*.
 - **"work the bugs"** — ripe bugs only.
 - **"work #NNN"** — a single item, still gated on it being workable.
 
+### The mirror — "what's blocked on you?"
+
+`"work the queue"` is the **agent** half of the loop; the **maintainer** half is its
+inverse.  Ask:
+
+> **"What's blocked on you — highest-leverage first?"**
+
+It returns **decisions and authorizations, not status** — only the things the
+maintainer's attention is the bottleneck for — **ranked by how much each unblocks**, so
+one spare minute goes to the item that frees the most.  The answer is a short list,
+each row = *the item · the one decision it needs · the minimum to decide it* — never a
+status report.
+
+What lands in the maintainer's court (the "surface to you" column above, plus the
+out-of-band gates):
+- **decisions** — approve a `need-approval` enhancement (set `status:approved`), pick a
+  scope on a `needs-design` item, reclassify, set priority;
+- **authorizations** — force-push, open a PR, merge, run an interactive command only
+  the maintainer can (a login, a real host);
+- **information** — answer the question a `status:unclear` item is blocked on;
+- **external actions** — a change in another repo, or a resource only the maintainer has.
+
+Together the two halves are the **combined workflow**: *work the queue* drains what the
+agent can do; *what's blocked on you* surfaces, ranked, exactly what it can't — so
+nothing stalls silently and the maintainer's time goes to the highest-leverage call.
+
 ## Beyond bugs — the unified model (plans · lib-plans · enhancements)
 
 **Initial design (2026-06) — draft.**  Bugs were the pilot; the same split
