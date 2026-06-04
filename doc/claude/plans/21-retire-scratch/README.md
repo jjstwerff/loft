@@ -3,6 +3,15 @@ render_with_liquid: false
 ---
 # @PLAN21 — Retiring `stores.scratch`
 
+**Status: ACTIVE 2026-06-04 — `@PLN10` ([loft-lang/plans#10](https://github.com/loft-lang/plans/issues/10)).**
+Promoted from `future/`.  Material update since this doc was written: **@P227**
+(the §5.2 Phase C blocker — text-returning fn-ref crashes) **closed 2026-05-05**,
+and its fix shipped exactly the `RefVar(Text)` work-buffer threading that Phase C's
+fn-ref piece needs.  So Phase C is far more unblocked than §5 states; the blocker
+analysis wants a re-audit.  **First slice: Phase A** (mechanical, ~95% of scratch
+traffic by call volume, independently shippable, removes the in-statement-growth
++ re-entrancy hazards).
+
 Design note for retiring the `Vec<String>` lifetime-extension buffer that
 backs `Str` returns from native and code-generated text producers.
 

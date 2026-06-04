@@ -155,7 +155,7 @@ the fix is at the read/assign site, not the free-emission site.
 
 ## Cross-arc dependencies
 
-- [plan-21 retire-scratch](../../future/21-retire-scratch/) — text values are
+- [plan-21 retire-scratch](../../21-retire-scratch/) — text values are
   `Str` views into `Stores::scratch`; this plan touches the same text-lifetime
   surface (item A) but does not depend on retiring scratch.
 - [plan-42 warning-quality](../../future/42-warning-quality/) — the runtime `Warn`
