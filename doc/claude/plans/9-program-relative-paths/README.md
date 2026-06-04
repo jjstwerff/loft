@@ -7,14 +7,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **design decided, cost estimated, ready to phase.** Tracked as
-[`@PLN9`](https://github.com/loft-lang/plans/issues/9) (loft-lang/plans); promoted from
-loft issue [#255](https://github.com/jjstwerff/loft/issues/255) (an enhancement that
-grew phase-worthy). The anchor decision is ratified: relative file paths resolve
-**program-relative by default**, with a one-line **cwd opt-in** for CLI tools. A
-*current* consumer — the **crawler agent** — depends on Phase 1 (it runs generated
-programs from a sandbox cwd and needs program-relative asset resolution), so this is
-prioritised, not deferred. Effort MH; not yet started.
+**In progress — the per-backend anchor is shipped; the resolver + default flip is the
+next arc.** Tracked as [`@PLN9`](https://github.com/loft-lang/plans/issues/9)
+(loft-lang/plans); promoted from loft issue
+[#255](https://github.com/jjstwerff/loft/issues/255). The anchor decision is ratified:
+relative file paths resolve **program-relative by default**, with a one-line **cwd
+opt-in** for CLI tools.
+
+Landed on `local_assets` (Phase 0 + Phase 1a):
+- **Phase 0** — `source_dir()` is populated once at parse time (`Parser::parse`, the
+  single home), so it works on every interpreter execution path (was empty under the
+  wrap / `loft --test` runners). `Stores::clone` preserves it.
+- **Phase 1a** — `source_dir()` now has a real **native** anchor (the executable's
+  directory via `current_exe()`); interp = source dir, native = exe dir. Regression
+  `tests/scripts/191-source-dir.loft` runs on interp + native.
+
+The reframe that set the sequencing: `source_dir()` working IS the crawler's unblock —
+its generated code can anchor explicitly (`file("{source_dir()}/x")`). The
+`resolve_path` chokepoint + the program-relative **default flip** is the *ergonomic*
+layer and the behaviour-changing part, so it is its own deliberate arc (Phases 1b–3).
+
+Open: the resolver chokepoint (18 file-op sites), the cwd opt-in, the corpus migration
+(~13 files re-home under the flip — confirmed, e.g. `19-files.loft`), the wasm host
+anchor, and the graphics consumer. Effort MH.
 
 ## Goal
 
@@ -72,10 +87,12 @@ is unaffected, and the opt-in flips resolution to cwd — on the right backend.
 
 | Phase | Item | Effort | Status |
 |---|---|---|---|
-| **0** | `source_dir` correctness — survive `Stores::clone`, populate it in the test runner (prototyped, uncommitted) | S | Open |
-| **1** | **Resolver + anchor** — one `resolve_path` chokepoint the ~10 raw `std::fs` file-op sites route through; anchor = source-dir (interp) / exe-dir (native); default program-relative. **Unblocks the crawler.** | M | Open |
-| **2** | **cwd opt-in** — the one-line per-program declaration + the runtime flag the resolver checks | S–M | Open |
-| **3** | **Corpus migration** — flip the default; the file guards surface the ~27 cwd-dependent files (152 call sites, but per-file opt-in); add the opt-in per file; suite green both backends | S–M (risk) | Open |
+| **0** | `source_dir` correctness — populate once at parse time (`Parser::parse`, single home); `Stores::clone` preserves it. Regression `191-source-dir.loft`. | S | **Shipped** (`c2979ff3`) |
+| **1a** | **Native anchor** — `source_dir()` = exe dir via `current_exe()` under `--native` (was ""). interp + native green. | S | **Shipped** (`f2a7fafe`) |
+| **1b** | **Resolver chokepoint** — one `resolve_path` the **18** raw file-op sites route through (interp `io.rs` ×8, native `codegen_runtime.rs` ×5, the `file()` ctor ×3, PNG ×1, +2 wasm bridges); anchor = `source_dir()`. Built as a passthrough first (default cwd, no behaviour change). | M | Open |
+| **2** | **cwd opt-in** — the one-line per-program declaration + the runtime flag the resolver checks (open question: directive vs `loft.toml` vs helper) | S–M | Open |
+| **3** | **Default flip + corpus migration** — flip default to program-relative; the file guards surface the cwd-dependent files (~13 confirmed, e.g. `19-files.loft`'s `file("tests/example")`); add the opt-in per file; suite green both backends | S–M (risk) | Open |
+| **1w** | **Wasm anchor** — host-supplied `source_dir()` (`current_exe()` unreliable under WASI); un-skip `191` for wasm | S | Open |
 | **4** | **Graphics consumer** — `gl_load_font` et al. land on the new anchor; canonical change in external `loft-libs-graphics` (the in-repo fixture is a pinned mirror) | S + cross-repo | Open |
 
 ## Phase ordering
