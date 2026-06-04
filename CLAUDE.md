@@ -199,6 +199,7 @@ src/main.rs              CLI entry; loads default/ then user file
 - Operators: `OpCamelCase` in loft source → `op_snake_case` in Rust (`fill.rs`).
 - `#rust "..."` annotations in `default/*.loft` supply the Rust body for code generation.
 - Full naming and null-sentinel rules: see [CODE.md](doc/claude/CODE.md).
+- Response shape (reporting to the user): lead with the ONE highest-leverage item in full — the decision + the minimum to act on it — then a one-line summary of the rest; don't dump long detailed lists. Full norm + the combined "work the queue" / "what's blocked on you" workflow: [ISSUE_TRACKING.md § The work queue](doc/claude/ISSUE_TRACKING.md).
 
 ---
 
