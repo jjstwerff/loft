@@ -183,6 +183,21 @@ action is checked against something other than its own momentum*:
    [composition-axes list](plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)
    if it is a new one.
 
+**The same shape audits old code, not just new.**  Steps 1–3 read as "before
+writing," but the mechanism is one comparison — *expected size vs actual* — and the
+only variable is where the *actual* comes from: **building** it (new code) or
+**inspecting** it (old code).  So before *touching* an existing subsystem, predict
+what a cohesive version of it would cost (step 1, read off its interface), then *read
+it* (step 2 = full inspection in place of build), then compare (step 3).  The same
+alarm fires — *actual ≫ predicted, with silent omission* — but on old code it
+diagnoses the **substrate**: the subsystem already lacks the chokepoint your change
+should pivot on.  The value is identical to the new-code case and just as prospective:
+predicting *before reading* turns the sprawl into a falsifiable surprise at the moment
+you choose **thread-through vs build-the-gate**, instead of a work-list you absorb
+silently ("18 sites — I'll handle them all").  @PLN9's 18 came from exactly this — a
+full inspection of the file layer — and the *missing* prediction is why the sprawl read
+as a task list rather than a verdict on the substrate.
+
 The written prediction is what turns "longer than expected" into a concrete,
 falsifiable comparison instead of a feeling you can rationalise away after the fact —
 and it **externalises the prior**, so the check works even when the gut estimate
