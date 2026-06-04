@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
-"""Sketch renderer over an annotated source file, with a METRIC channel.
+"""Sketch renderer over an annotated source (scene.draw), with a METRIC channel
+and VALUE (tone) support.
 
-Companion to ../DRAWING.md (the design rationale). Drawing is a perceive->mark->
-see-gap->adjust loop; this tool's job is to make the *seeing* cheap and to move
-metric judgments (position/size) off the eye onto exact measurement.
+Companion to ../DRAWING.md. Drawing is a perceive->mark->see-gap->adjust loop;
+this tool makes the *seeing* cheap and moves metric judgments off the eye onto
+exact measurement. Value support adds the late "tone" pass: a gradient sky and
+filled gray masses, so dusk (dark cloud, glowing horizon, lit window) is possible.
 
-It watches a scene source and re-renders on save. On every render it writes:
-  canvas.png        clean drawing            (gestalt look)
-  canvas_check.png  drawing + target guides  (gap made visible)
+Outputs each render (reloads when the file is saved):
+  canvas.png        the drawing
+  canvas_check.png  drawing + target guides
   preview.png       small image
-  stats.txt         density map + element bboxes + CHECK results (the metric channel)
+  stats.txt         density map + element bboxes + CHECK results (metric channel)
 
 Usage:
   python3 draw.py [scene-file]        # default: ./scene.draw next to this script
   SKETCH_OUT=/path python3 draw.py    # output dir (default: <tmp>/loft_sketch)
 
-Requires Pillow (`pip install pillow`).
+Requires Pillow.
 
-Source commands (coords are fractions of paper; origin top-left, y down):
+Commands (coords are fractions; origin top-left, y down; gray L in 0..1, 0=black):
   size WxH
-  name <element>                              tag following strokes (for measurement)
+  Background top=A bottom=B               vertical gradient sky (A at top, B at bottom)
+  name <element>                          tag following marks (for measurement)
   Line (x1,y1) - (x2,y2) [w=N]
-  Circle (cx,cy) r=R [n=N] [flat=F] [w=N]     round by default (aspect-corrected)
-  Poly (x1,y1) (x2,y2) ... [w=N]
-  landmark <name> = <value>                   a reference y (or any scalar)
-  check <prop> <op> <term> [tol T]            op: ~ < > <= >= ; term: num|prop|land [+/- num]
-                                              prop: <element>.{left,right,top,bottom,cx,cy,w,h}
-  # ...                                       comment / SHOULD note (ignored, searchable)
+  Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [fill=L]   round; fill=L => filled gray
+  Poly (x1,y1) (x2,y2) ... [w=N] [fill=L]            stroke; fill=L => filled gray
+  landmark <name> = <value>
+  check <prop> <op> <term> [tol T]        op: ~ < > <= >= ; arithmetic on RHS only
+  # ...                                    comment / SHOULD note (ignored, searchable)
 """
 import sys, time, re, os, math, tempfile
 from PIL import Image, ImageDraw
@@ -50,15 +52,41 @@ LINE = re.compile(r"Line\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*-\s*"
                   r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(?:w\s*=\s*(\d+))?", re.I)
 SIZE = re.compile(r"size\s+(\d+)\s*x\s*(\d+)", re.I)
 CIRCLE = re.compile(r"Circle\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*r=([-\d.]+)"
-                    r"(?:\s+n=(\d+))?(?:\s+flat=([-\d.]+))?(?:\s+w=(\d+))?", re.I)
+                    r"(?:\s+n=(\d+))?(?:\s+flat=([-\d.]+))?", re.I)
+BG = re.compile(r"Background\s+top\s*=\s*([\d.]+)\s+bot(?:tom)?\s*=\s*([\d.]+)", re.I)
 PT = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)")
-WOPT = re.compile(r"w\s*=\s*(\d+)", re.I)
+WOPT = re.compile(r"\bw\s*=\s*(\d+)", re.I)
+FILL = re.compile(r"\bfill\s*=\s*([\d.]+)", re.I)
+RGB = re.compile(r"\brgb\s*=\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?", re.I)
+BGC = re.compile(r"Background\s+topc\s*=\s*\(?(\d+),(\d+),(\d+)\)?\s+botc\s*=\s*\(?(\d+),(\d+),(\d+)\)?", re.I)
 LAND = re.compile(r"landmark\s+(\w+)\s*=\s*([-\d.]+)", re.I)
+
+
+def gray(L):
+    g = max(0, min(255, int(round(L * 255))))
+    return (g, g, g)
+
+
+def _fillcolor(s):
+    """A shape's fill: rgb=R,G,B (colour) or fill=L (grayscale), else None (stroke)."""
+    m = RGB.search(s)
+    if m:
+        return (int(m[1]), int(m[2]), int(m[3]))
+    m = FILL.search(s)
+    if m:
+        return gray(float(m[1]))
+    return None
+
+
+def circle_pts(cx, cy, r, n, flat, W, H):
+    ary = r * (W / H) * (1 - flat)
+    return [(cx + r*math.cos(2*math.pi*i/n), cy + ary*math.sin(2*math.pi*i/n))
+            for i in range(n + 1)]
 
 
 def parse(text):
     W = H = 800
-    segs = []
+    ops = []          # ordered draw program
     elems = {}        # name -> [minx, miny, maxx, maxy]
     landmarks = {}
     checks = []
@@ -74,8 +102,9 @@ def parse(text):
             b[0] = min(b[0], x); b[1] = min(b[1], y)
             b[2] = max(b[2], x); b[3] = max(b[3], y)
 
-    def addseg(x1, y1, x2, y2, w):
-        segs.append((x1, y1, x2, y2, w)); acc(x1, y1); acc(x2, y2)
+    def accpts(pts):
+        for x, y in pts:
+            acc(x, y)
 
     for raw in text.splitlines():
         s = raw.strip()
@@ -91,6 +120,16 @@ def parse(text):
             continue
         if low.startswith("check"):
             checks.append(s[5:].strip()); continue
+        if low.startswith("background"):
+            mc = BGC.search(s)
+            if mc:
+                ops.append(("grad", (int(mc[1]), int(mc[2]), int(mc[3])),
+                            (int(mc[4]), int(mc[5]), int(mc[6]))))
+            else:
+                m = BG.search(s)
+                if m:
+                    ops.append(("grad", gray(float(m[1])), gray(float(m[2]))))
+            continue
         m = SIZE.fullmatch(s)
         if m:
             W, H = int(m[1]), int(m[2]); continue
@@ -99,25 +138,32 @@ def parse(text):
             cx, cy, r = float(m[1]), float(m[2]), float(m[3])
             n = int(m[4]) if m[4] else 28
             flat = float(m[5]) if m[5] else 0.0
-            w = int(m[6]) if m[6] else 3
-            ary = r * (W / H) * (1 - flat)
-            pts = [(cx + r*math.cos(2*math.pi*i/n), cy + ary*math.sin(2*math.pi*i/n))
-                   for i in range(n + 1)]
-            for p, q in zip(pts, pts[1:]):
-                addseg(p[0], p[1], q[0], q[1], w)
+            pts = circle_pts(cx, cy, r, n, flat, W, H)
+            accpts(pts)
+            col = _fillcolor(s)
+            if col is not None:
+                ops.append(("fill", pts, col))
+            else:
+                wm = WOPT.search(s)
+                ops.append(("stroke", pts, int(wm[1]) if wm else 3))
             continue
         if low.startswith("poly"):
             pts = [(float(a), float(b)) for a, b in PT.findall(s)]
-            wm = WOPT.search(s.split(")")[-1])
-            w = int(wm[1]) if wm else 3
-            for p, q in zip(pts, pts[1:]):
-                addseg(p[0], p[1], q[0], q[1], w)
+            accpts(pts)
+            col = _fillcolor(s)
+            if col is not None:
+                ops.append(("fill", pts, col))
+            else:
+                wm = WOPT.search(s)
+                ops.append(("stroke", pts, int(wm[1]) if wm else 3))
             continue
         m = LINE.search(s)
         if m:
             w = int(m[5]) if m[5] else 3
-            addseg(float(m[1]), float(m[2]), float(m[3]), float(m[4]), w)
-    return W, H, segs, elems, landmarks, checks
+            p = [(float(m[1]), float(m[2])), (float(m[3]), float(m[4]))]
+            accpts(p)
+            ops.append(("stroke", p, w))
+    return W, H, ops, elems, landmarks, checks
 
 
 def props(b):
@@ -154,7 +200,6 @@ def term_of(expr, elems, landmarks):
 
 
 def eval_check(c, elems, landmarks):
-    """Return dict: text, ok, target (for overlay), prop (lhs token)."""
     tol = 0.02
     mt = re.search(r"\btol\s+([\d.]+)", c)
     if mt:
@@ -174,18 +219,126 @@ def eval_check(c, elems, landmarks):
     return {"text": txt, "ok": ok, "target": rhs, "prop": m[1]}
 
 
-def write_stats(img, W, H, nseg, elems, results):
-    gray = img.convert("L")
-    gw, gh = gray.size
+def _largest_flat_rect(flat):
+    """Largest all-1 rectangle in a binary grid (1 = flat/uniform cell).
+    Returns (area_cells, r0, c0, r1, c1)."""
+    rows = len(flat)
+    cols = len(flat[0]) if rows else 0
+    height = [0] * cols
+    best = (0, 0, 0, 0, 0)
+    for r in range(rows):
+        for c in range(cols):
+            height[c] = height[c] + 1 if flat[r][c] else 0
+        stack = []  # (start_col, height)
+        for c in range(cols + 1):
+            cur = height[c] if c < cols else 0
+            start = c
+            while stack and stack[-1][1] > cur:
+                sc, sh = stack.pop()
+                area = sh * (c - sc)
+                if area > best[0]:
+                    best = (area, r - sh + 1, sc, r, c - 1)
+                start = sc
+            stack.append((start, cur))
+    return best
+
+
+def composition_lines(img):
+    """Global composition / notan report (visual weight = darkness)."""
+    g = img.convert("L")
+    gw, gh = g.size
+    SW, SH = 100, 70
+    px = g.resize((SW, SH)).load()
+    total = cx = cy = 0.0
+    left = right = top = bottom = 0.0
+    dk = md = lt = 0
+    for yy in range(SH):
+        for xx in range(SW):
+            v = px[xx, yy]
+            d = (255 - v) / 255.0
+            total += d
+            cx += d * (xx + 0.5) / SW
+            cy += d * (yy + 0.5) / SH
+            if xx < SW / 2:
+                left += d
+            else:
+                right += d
+            if yy < SH / 2:
+                top += d
+            else:
+                bottom += d
+            if v < 85:
+                dk += 1
+            elif v < 170:
+                md += 1
+            else:
+                lt += 1
+    out = ["", "COMPOSITION (visual weight = darkness):"]
+    if left + right > 0:
+        lp = 100 * left / (left + right)
+        v = "balanced" if 42 <= lp <= 58 else ("LEFT-heavy" if lp > 58 else "RIGHT-heavy")
+        out.append(f"  L/R weight: {lp:.0f}/{100-lp:.0f}  ({v})")
+    if top + bottom > 0:
+        tp = 100 * top / (top + bottom)
+        v = "balanced" if 42 <= tp <= 58 else ("TOP-heavy" if tp > 58 else "BOTTOM-heavy")
+        out.append(f"  T/B weight: {tp:.0f}/{100-tp:.0f}  ({v})")
+    if total > 0:
+        mx, my = cx / total, cy / total
+        thirds = [(1/3, 1/3), (2/3, 1/3), (1/3, 2/3), (2/3, 2/3)]
+        nd, tx, ty = min(((((mx-a)**2+(my-b)**2)**0.5), a, b) for a, b in thirds)
+        cd = ((mx-0.5)**2 + (my-0.5)**2) ** 0.5
+        if cd < 0.07:
+            fv = "DEAD-CENTRE (static)"
+        elif nd < 0.10:
+            fv = f"near thirds ({tx:.2f},{ty:.2f}) (dynamic)"
+        else:
+            fv = "off-grid"
+        out.append(f"  weight centre: ({mx:.2f},{my:.2f})  {fv}")
+    td = dk + md + lt
+    out.append(f"  value spread: dark {100*dk/td:.0f}% / mid {100*md/td:.0f}% / light {100*lt/td:.0f}%")
+    if 100*md/td > 55:
+        nv = "muddy (mid-dominated)"
+    elif 100*dk/td > 55:
+        nv = "dark-dominant"
+    elif 100*lt/td > 55:
+        nv = "light-dominant"
+    else:
+        nv = "clear spread"
+    out.append(f"  notan: {nv}")
+    GC, GR = 24, 16
+    cw, ch = gw / GC, gh / GR
+    flat = []
+    for r in range(GR):
+        row = []
+        for c in range(GC):
+            box = (int(c*cw), int(r*ch),
+                   max(int((c+1)*cw), int(c*cw)+1), max(int((r+1)*ch), int(r*ch)+1))
+            mn, mxv = g.crop(box).getextrema()
+            row.append(1 if (mxv - mn) < 28 else 0)
+        flat.append(row)
+    area, r0, c0, r1, c1 = _largest_flat_rect(flat)
+    if area > 0:
+        fx0, fy0, fx1, fy1 = c0/GC, r0/GR, (c1+1)/GC, (r1+1)/GR
+        reg = g.crop((int(fx0*gw), int(fy0*gh), int(fx1*gw), int(fy1*gh)))
+        mv = reg.resize((1, 1)).getpixel((0, 0))
+        kind = "dark mass" if mv < 90 else ("light/empty field" if mv > 165 else "mid field")
+        out.append(f"  largest flat region: x[{fx0:.2f}..{fx1:.2f}] y[{fy0:.2f}..{fy1:.2f}]  "
+                   f"{100*area/(GC*GR):.0f}% of frame, {kind} (v={mv})")
+    return out
+
+
+def write_stats(img, W, H, nops, elems, results):
+    g = img.convert("L")
+    gw, gh = g.size
     cw, ch = gw / GRID_COLS, gh / GRID_ROWS
-    lines = [f"segments: {nseg}", f"paper: {W}x{H}", ""]
+    lines = [f"ops: {nops}", f"paper: {W}x{H}", ""]
     lines.append("density (darker = more ink):")
     for ry in range(GRID_ROWS):
         row = []
         for rx in range(GRID_COLS):
             box = (int(rx*cw), int(ry*ch),
                    max(int((rx+1)*cw), int(rx*cw)+1), max(int((ry+1)*ch), int(ry*ch)+1))
-            dark = 255 - gray.crop(box).getextrema()[0]
+            dark = 255 - g.crop(box).getextrema()[0]
             row.append(RAMP[min(len(RAMP)-1, dark*len(RAMP)//256)])
         lines.append("".join(row))
     lines.append("")
@@ -197,6 +350,7 @@ def write_stats(img, W, H, nseg, elems, results):
     lines.append(f"CHECKS  {npass}/{len(results)} pass:")
     for r in results:
         lines.append("  " + r["text"])
+    lines += composition_lines(img)
     with open(STATS, "w") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -206,18 +360,32 @@ def render():
         text = open(SRC).read()
     except FileNotFoundError:
         text = ""
-    W, H, segs, elems, landmarks, checks = parse(text)
-    img = Image.new("RGB", (W, H), "white")
+    W, H, ops, elems, landmarks, checks = parse(text)
+    S = 3  # supersample, then downscale => anti-aliased (no hard faceted edges)
+    BW, BH = W * S, H * S
+    img = Image.new("RGB", (BW, BH), "white")
     d = ImageDraw.Draw(img)
-    for x1, y1, x2, y2, w in segs:
-        d.line([(x1*W, y1*H), (x2*W, y2*H)], fill="black", width=w)
+    for op in ops:
+        if op[0] == "grad":
+            _, top, bot = op
+            for yy in range(BH):
+                t = yy / max(1, BH - 1)
+                c = tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3))
+                d.line([(0, yy), (BW, yy)], fill=c)
+        elif op[0] == "fill":
+            _, pts, col = op
+            d.polygon([(x*BW, y*BH) for x, y in pts], fill=col)
+        elif op[0] == "stroke":
+            _, pts, w = op
+            for p, q in zip(pts, pts[1:]):
+                d.line([(p[0]*BW, p[1]*BH), (q[0]*BW, q[1]*BH)], fill=(38, 32, 36), width=max(1, w*S))
+    img = img.resize((W, H), Image.LANCZOS)
     img.save(OUT)
     ph = max(1, round(PREVIEW_W * H / W))
     img.resize((PREVIEW_W, ph)).save(PREVIEW)
 
     results = [eval_check(c, elems, landmarks) for c in checks]
 
-    # overlay: targets/landmarks/bboxes drawn so the gap is VISIBLE
     over = img.copy()
     od = ImageDraw.Draw(over)
     GRAY, GREEN, RED = (170, 170, 170), (40, 150, 40), (220, 40, 40)
@@ -228,11 +396,11 @@ def render():
     for r in results:
         if not r["ok"] and r["target"] is not None and r["prop"] and \
            any(r["prop"].endswith(s) for s in (".cy", ".top", ".bottom")):
-            y = int(r["target"] * H)
-            od.line([(0, y), (W, y)], fill=RED, width=2)
+            yy = int(r["target"] * H)
+            od.line([(0, yy), (W, yy)], fill=RED, width=2)
     over.save(CHECKIMG)
 
-    write_stats(img, W, H, len(segs), elems, results)
+    write_stats(img, W, H, len(ops), elems, results)
 
 
 def main():
