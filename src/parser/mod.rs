@@ -453,6 +453,21 @@ impl Parser {
         // a watchdog-fired hard-kill localises any parse-time hang.
         crate::timeout::checkpoint_parse(filename, 0);
         self.default = default;
+        // #255 / @PLN9: establish `source_dir` (the running program's own
+        // directory) once, at the first non-default parse.  This is the single
+        // home every execution path inherits — CLI run, `loft --test`, the wrap
+        // integration runner, and the wasm/native front-ends all reach this
+        // `parse()`.  `data.reset()` below clears `Data` but not `Stores`, so the
+        // value survives the two-pass re-parse; the `is_empty()` guard keeps the
+        // *first* (main) file winning over later directory/import re-parses.
+        // (main.rs additionally sets it for the startup-cache path, which loads a
+        // pre-parsed snapshot and never calls `parse()`.)
+        if !default && self.database.source_dir.is_empty() {
+            self.database.source_dir = std::path::Path::new(filename)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
         self.vars.logging = false;
         self.lexer.switch(filename);
         self.first_pass = true;

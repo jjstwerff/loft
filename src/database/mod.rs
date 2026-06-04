@@ -475,7 +475,13 @@ impl Clone for Stores {
             had_fatal: false,
             runtime_error: None,
             format_fault_tag: None,
-            source_dir: String::new(),
+            // #255: `source_dir` is parse-time CONFIG (the main source file's
+            // directory), not runtime state — it must survive `clone()` so the
+            // `source_dir()` builtin works after the test runner / native paths
+            // rebuild a fresh `State` from a cloned schema db.  Resetting it to
+            // empty here left source-relative asset resolution broken in those
+            // contexts.
+            source_dir: self.source_dir.clone(),
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,

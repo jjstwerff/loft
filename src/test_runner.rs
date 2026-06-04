@@ -742,6 +742,9 @@ pub(crate) fn run_tests(
                 }
             }
             let clean_data = p.data;
+            // #255 / @PLN9: `source_dir` is now populated at parse time
+            // (`Parser::parse`, the single home) — `p.database` already carries
+            // the test file's directory, so no per-runner set is needed here.
             let clean_db = p.database;
 
             total_files += 1;

@@ -45,6 +45,9 @@ const SUITE_SKIP: &[&str] = &[];
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
     "19-threading.loft", // todo!(); WASM threading model differs
+    // #255 / @PLN9 Phase 0: the wasm `source_dir()` anchor is Phase 1 — un-skip
+    // when the per-backend anchor lands.
+    "191-source-dir.loft",
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
