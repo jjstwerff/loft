@@ -147,8 +147,27 @@ variant of an assumption you can test.*  Two probes, two refinements:
 That second catch is the result worth keeping: the prediction *located* the
 invariant, but only the probes kept it *matched to the domain* — without them the
 doc would have shipped a real cohesion fix wrapped in a false "and it fixes @P325
-too."  The remaining test is the one no desk reasoning can settle: whether
-*building* the flatten-walk collapses the composite cells with zero new code.
+too."
+
+- **Probe 3 — empirical, the premise.**  A `(text, integer)` yield — a `(ref,scalar)`
+  mixed shape the spray does not cover — was run on both backends.  **interp:**
+  correct (`out=abb n=30`, uniform).  **native:** `error[E0605]: non-primitive cast:
+  (&'static str, i64) as i64` — the producer's scalar arm fired on the whole tuple
+  for lack of a template.  This **confirms** (not falsifies) the design's premise:
+  the brittleness is real and native, and the interp's uniformity proves the
+  flatten-walk target is reachable (same program, correct, zero per-shape code).
+  Regression-in-waiting: `/tmp/coro_mixed.loft` (graduate to `coroutine_matrix.rs`
+  when the walk lands).
+
+The one remaining test no desk reasoning settles: **build** the flatten-walk and
+confirm `(text,integer)` (and the other composite cells) compile + run native with
+**zero shape-specific code** — and the already-green scalar/text/int-tuple cells
+do not regress.  That build is a real codegen change (the producer `next_into`
+match → per-element walk; the consumer emitter templates → per-element decode;
+delete the tag + legacy methods), and it carries this design's own probe list
+(byte-exact producer↔consumer agreement; ref-elements store-then-pack; no nested
+inlining) — i.e. it deserves the full predict-validate-with-a-matrix pass, not a
+tail-of-session edit.
 
 ## See also
 
