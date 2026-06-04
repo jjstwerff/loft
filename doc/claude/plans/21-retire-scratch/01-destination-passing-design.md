@@ -141,3 +141,42 @@ Acceptance bar unchanged from the README: `scratch.push` 39 → 0, then delete t
 field + assert it stays empty.  But the **order** is corrected: append/field/arg
 + the destination-less family first (they leak today); the already-done
 assignment shape is not the slice.
+
+## 7. Build log — what the builds settled (Protocol step 6)
+
+**Build 1 — the `Span` footgun fix (committed).**  One line: unspan both operands
+in `try_text_dest_pass` (`codegen.rs:2251`).  Re-running the matrix afterward
+settled a prediction the desk could not:
+
+| Shape | before | after Build 1 | reading |
+|---|---|---|---|
+| `out += native()` | scratch | **`_dest`** | the targeted fix |
+| `s = a.lower() + b.upper()` (concat) | 2× scratch | **2× `_dest`** | **collapsed for free** — concat lowers to `s += a.lower(); s += b.upper()`, so the *same* fix covered it with zero per-shape code |
+| `b.name = native()` (field) | scratch | scratch | named dest, not routed |
+| `s = if c {…} else {…}` (cond) | scratch | scratch | named dest (s), not routed through the if-expr |
+| `v += [native()]` (vpush) | scratch | scratch | named dest (vector slot), not routed |
+| `"x={native()}y"` (format) | scratch | scratch | named dest (format work-buf), not routed |
+| `native() == "x"` (compare) | scratch | scratch | **genuine synth-temp** (transient) |
+| `f(native())` (arg) | scratch | scratch | **genuine synth-temp** |
+| `native().native()` (chain) | scratch | scratch | **genuine synth-temp** (inner) |
+| `fn f() -> text { native() }` | scratch | scratch | **escape family** (separate) |
+
+**Refined family structure (was desk-reasoned in §4; now build-evidenced):**
+- **Family 1 (named destination)** — assignment, append, **concat** all dest-pass
+  now.  `field`, `cond`, `vpush`, `format` are the *remaining* named-dest shapes:
+  each has a reachable destination the lowering doesn't yet route.
+- **Family 2 (genuine synth-temp)** is *smaller* than §4 listed — only `compare`,
+  `arg`, `chain`.  These have no persistent destination.
+- **Family 3 (escape)** — `return` (and closure/yield) — confirmed separate.
+
+**The design decision this surfaces for Build 2.**  Routing the four remaining
+named-dest shapes *per-consumer* (field-set, if-expr, vpush, format) would be the
+N-site spray §3 warned against — each a silent-omission site.  The chokepoint that
+avoids it is **producer-side**: at the text-native-call lowering, *always*
+synthesize a scope-bound temp destination and route to `_dest` (the existing
+direct-into-named-dest paths — `set_var`, `try_text_dest_pass` — become
+optimizations layered on top).  That uniform synth-temp makes **all** of family 1
+and 2 dest-pass through one mechanism, but it is a parse-time + scope-analysis
+build (the temp must be visible to `scopes::free_vars` so its `String` is freed) —
+the genuine Phase-A "destination synthesis," not a quick slice.  Build 2 is that
+chokepoint; it is scoped, not yet built.
