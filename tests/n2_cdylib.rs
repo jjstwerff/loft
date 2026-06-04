@@ -551,3 +551,66 @@ fn main() {
     run_shared_dispatch(&so, native_decl, source);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A function taking a `text` arg (passed as `&str` — ptr+len borrowed from the
+/// shared store) and returning a scalar.
+const STR_LEN_LIB: &str = "pub fn str_len(s: text) -> integer {\n\
+                           \x20   n = 0;\n\
+                           \x20   for c in s { n += 1; }\n\
+                           \x20   n\n\
+                           }";
+
+/// N2 store-touching: a `text` ARG crosses the boundary.  `--native` takes a
+/// `text` parameter as `&str` (ptr+len), not a `DbRef`; the bridge borrows the
+/// store-backed bytes for the call.  `str_len("hello") == 5`.
+#[test]
+fn dispatches_text_arg_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_shared_t", STR_LEN_LIB, "str_len")
+    else {
+        return;
+    };
+
+    let native_decl =
+        "pub fn str_len(s: text) -> integer not null;\n#native \"loft_shared_n_str_len\"\n";
+    let source = r#"
+fn main() {
+    n = str_len("hello");
+    assert(n == 5, "str_len('hello') should be 5, got {n}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A function RETURNING `text` — `--native` uses the `text_return` `&mut String`
+/// work buffer (hidden param) and returns a `Str`.  The bridge owns a local
+/// `String`, then copies the result into the shared store's scratch.
+const SHOUT_LIB: &str = "pub fn shout(s: text) -> text {\n\
+                         \x20   s + \"!\"\n\
+                         }";
+
+/// N2 store-touching: a `text` RETURN crosses the boundary.  The native body
+/// builds the result in a work `String`; the bridge copies it into the shared
+/// store's scratch so it survives back in the interpreter.  `shout("hi") == "hi!"`.
+#[test]
+fn dispatches_text_return_from_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_shared_tr", SHOUT_LIB, "shout") else {
+        return;
+    };
+
+    let native_decl = "pub fn shout(s: text) -> text not null;\n#native \"loft_shared_n_shout\"\n";
+    let source = r#"
+fn main() {
+    r = shout("hi");
+    assert(r == "hi!", "shout('hi') should be 'hi!', got {r}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -94,9 +94,10 @@ fn is_scalar_type(t: &Type) -> bool {
 /// `#native` forward-decl still models only the public params.
 ///
 /// A struct `reference` return is supported (no hidden dest — the body allocates
-/// the record fresh).  Not yet handled (a function is excluded if any holds): a
-/// data-`enum` return; a `Text` param/return; a `__`-prefixed synthetic param
-/// (closures, text work buffers).
+/// the record fresh).  `Text` params (`&str`) and `Text` returns (via the
+/// `text_return` `&mut String` work buffer the bridge owns) are supported.  Not
+/// yet handled (a function is excluded if any holds): a data-`enum` return; a
+/// `__closure` (or other non-text-work `__`-prefixed) synthetic param.
 #[must_use]
 pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
     native_compilable(data)
@@ -107,17 +108,25 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
             // A vector return uses `--native`'s hidden destination param (the bridge
             // allocates it); a struct `reference` return does NOT (the body
             // allocates the record fresh and returns its `DbRef` —
-            // `n_make_point(cell, a, b) -> DbRef`), so it needs no hidden dest.
+            // `n_make_point(cell, a, b) -> DbRef`), so it needs no hidden dest.  A
+            // `text` return uses `text_return`'s `&mut String` work buffer (the
+            // bridge owns a local `String` and copies the result into scratch).
+            let ret_text = matches!(ret, Type::Text(_));
             let ret_ok = matches!(ret, Type::Void | Type::Null)
                 || is_scalar_type(ret)
-                || matches!(ret, Type::Vector(_, _) | Type::Reference(_, _));
+                || matches!(ret, Type::Vector(_, _) | Type::Reference(_, _))
+                || ret_text;
             ret_ok
                 && def.attributes().iter().all(|a| {
                     if a.hidden {
                         // The only hidden destination the bridge allocates is a vector.
                         matches!(a.typedef, Type::Vector(_, _))
+                    } else if crate::native_lib::is_text_work_buffer(&a.typedef) {
+                        // text_return `&mut String` work buffer — valid iff the
+                        // function actually returns text.
+                        ret_text
                     } else if a.name.starts_with("__") {
-                        false // closures / text work buffers — not handled
+                        false // closures — not handled
                     } else {
                         is_bridge_type(&a.typedef)
                     }
@@ -126,14 +135,18 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
         .collect()
 }
 
-/// A type passable through the shared-store `LibArg` bridge: a scalar (by value)
-/// or a `DbRef`-backed aggregate (`vector`/`reference`/data-`enum`/sorted/index/
-/// hash/spacial), the latter shared by pointer through the caller's store.
+/// A type passable through the shared-store `LibArg` bridge **as a parameter**: a
+/// scalar (by value), a `text` (as `&str` — ptr+len borrowed from the shared
+/// store), or a `DbRef`-backed aggregate (`vector`/`reference`/data-`enum`/sorted/
+/// index/hash/spacial), the latter shared by pointer through the caller's store.
+/// (A `text` *return* is gated separately — it needs the `text_return` work
+/// buffer, not just a slot.)
 fn is_bridge_type(t: &Type) -> bool {
     is_scalar_type(t)
         || matches!(
             t,
-            Type::Vector(_, _)
+            Type::Text(_)
+                | Type::Vector(_, _)
                 | Type::Reference(_, _)
                 | Type::Enum(_, true, _)
                 | Type::Sorted(_, _, _)

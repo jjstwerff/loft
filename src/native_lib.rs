@@ -46,12 +46,33 @@ use std::collections::HashSet;
 #[derive(Clone, Copy)]
 pub struct LibArg {
     /// Scalar payload: an `i64`, `f64::to_bits() as i64`, `f32::to_bits() as i64`,
-    /// or a boolean as `0/1`.  Junk for ref/vector slots.
+    /// or a boolean as `0/1`.  Junk for non-scalar slots.
     pub scalar: i64,
     /// Reference payload: the raw stack `DbRef` for a `vector`/`reference` slot
     /// (passed through unchanged — the `--native` body expects the same indirect
-    /// form the interpreter holds).  Junk for scalar slots.
+    /// form the interpreter holds).  Junk for non-ref slots.
     pub dbref: crate::keys::DbRef,
+    /// Text payload pointer: for a `text` arg, the UTF-8 bytes (borrowed from the
+    /// caller's store for the call's duration — `--native` takes `&str`).  Null
+    /// for non-text slots.
+    pub text_ptr: *const u8,
+    /// Text payload length (bytes), paired with `text_ptr`.
+    pub text_len: usize,
+}
+
+impl LibArg {
+    /// All-zero slot — the spread base so each `LibArg` literal sets only the one
+    /// field its type uses (`LibArg { scalar: x, ..LibArg::ZERO }`, etc.).
+    pub const ZERO: LibArg = LibArg {
+        scalar: 0,
+        dbref: crate::keys::DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        },
+        text_ptr: std::ptr::null(),
+        text_len: 0,
+    };
 }
 
 /// Build the shared `--native` program (header + `init` + only the functions
@@ -193,13 +214,20 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
                 "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
             );
             let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+            let _ = write!(fwd, ", {var}");
+        } else if is_text_work_buffer(&a.typedef) {
+            // text_return work buffer (`&mut String`) — own a LOCAL String, pass
+            // `&mut`.  The returned `Str` points into it; the return handler copies
+            // the bytes into the shared store's scratch before this frame drops.
+            let _ = writeln!(body, "    let mut {var}: String = String::new();");
+            let _ = write!(fwd, ", &mut {var}");
         } else {
             let ty = rust_type(&a.typedef, &Context::Argument);
             let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
             let _ = writeln!(body, "    let {var}: {ty} = {read};");
             slot += 1;
+            let _ = write!(fwd, ", {var}");
         }
-        let _ = write!(fwd, ", {var}");
     }
 
     let call = format!("{inner}(cell{fwd})");
@@ -247,6 +275,10 @@ fn bridge_read(t: &Type, slot: &str) -> String {
         Type::Boolean => format!("{slot}.scalar != 0"),
         Type::Float => format!("f64::from_bits({slot}.scalar as u64)"),
         Type::Single => format!("f32::from_bits({slot}.scalar as u32)"),
+        // Text arg → `&str` borrowed from the slot's (store-backed) bytes.
+        Type::Text(_) => format!(
+            "unsafe {{ std::str::from_utf8_unchecked(std::slice::from_raw_parts({slot}.text_ptr, {slot}.text_len)) }}"
+        ),
         Type::Vector(_, _)
         | Type::Reference(_, _)
         | Type::Enum(_, true, _)
@@ -278,6 +310,27 @@ fn bridge_write_ret(t: &Type, expr: &str) -> String {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _) => format!("unsafe {{ (*ret).dbref = ({expr}); }}"),
+        // Text return: the inner fn returns a `Str` pointing into a local work
+        // `String` (about to drop).  Copy the bytes into the shared store's scratch
+        // (stable, outlives this frame) and point `ret` at that — mirroring the
+        // legacy `bridge_push_str`.  The dispatcher reads ptr+len back onto the stack.
+        Type::Text(_) => format!(
+            "let __r = ({expr});\n    \
+             let __t = __r.str();\n    \
+             let __st: &mut Stores = unsafe {{ &mut *cell.get() }};\n    \
+             __st.scratch.clear();\n    \
+             __st.scratch.push(__t.to_string());\n    \
+             let __s = &__st.scratch[0];\n    \
+             unsafe {{ (*ret).text_ptr = __s.as_ptr(); (*ret).text_len = __s.len(); }}"
+        ),
         _ => "compile_error!(\"unsupported shared-store return type\");".to_string(),
     }
+}
+
+/// Is `t` a `text_return` work buffer — a `&mut String` the inner fn appends the
+/// result into (loft IR type `RefVar(Text)`)?  The bridge owns a local `String`
+/// for each and passes `&mut`.  Shared with `native_gate` (the gate admits exactly
+/// these as the one allowed `__`-prefixed param, and only for a text-returning fn).
+pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
+    matches!(t, Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
 }

@@ -537,47 +537,48 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         }
     };
 
-    const ZERO_REF: DbRef = DbRef {
-        store_nr: 0,
-        rec: 0,
-        pos: 0,
-    };
     // Pop in reverse (stack is LIFO), then restore declaration order.
     let mut args: Vec<LibArg> = Vec::with_capacity(sig.params.len());
     for &t in sig.params.iter().rev() {
         let slot = match t {
             ArgT::I32 | ArgT::I64 => LibArg {
                 scalar: *stores.get::<i64>(stack),
-                dbref: ZERO_REF,
+                ..LibArg::ZERO
             },
             ArgT::F64 => LibArg {
                 scalar: (*stores.get::<f64>(stack)).to_bits() as i64,
-                dbref: ZERO_REF,
+                ..LibArg::ZERO
             },
             ArgT::F32 => LibArg {
                 scalar: i64::from((*stores.get::<f64>(stack) as f32).to_bits()),
-                dbref: ZERO_REF,
+                ..LibArg::ZERO
             },
             ArgT::Bool => LibArg {
                 scalar: i64::from(*stores.get::<bool>(stack)),
-                dbref: ZERO_REF,
+                ..LibArg::ZERO
             },
             // The raw stack DbRef, passed UNCHANGED (the --native body consumes
             // the indirect-header form, not the dereferenced direct record).
             ArgT::Ref | ArgT::Vec => LibArg {
-                scalar: 0,
                 dbref: *stores.get::<DbRef>(stack),
+                ..LibArg::ZERO
             },
-            ArgT::Text => panic!("shared-store bridge: Text args not yet supported"),
+            // Text arg → `&str` for the body: the store-backed bytes (borrowed for
+            // the call's duration, valid because the store is shared and live).
+            ArgT::Text => {
+                let s = *stores.get::<crate::keys::Str>(stack);
+                LibArg {
+                    text_ptr: s.ptr,
+                    text_len: s.len as usize,
+                    ..LibArg::ZERO
+                }
+            }
         };
         args.push(slot);
     }
     args.reverse();
 
-    let mut ret = LibArg {
-        scalar: 0,
-        dbref: ZERO_REF,
-    };
+    let mut ret = LibArg::ZERO;
     let stores_ptr: *mut crate::database::Stores = stores;
     // SAFETY: `bridge_ptr` is a `loft_shared_…` export of an auto-generated cdylib
     // that links this exact `LibArg` / `Stores` / `DbRef` from libloft, so the ABI
@@ -605,7 +606,15 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         Some(ArgT::F32) => stores.put::<f64>(stack, f64::from(f32::from_bits(ret.scalar as u32))),
         Some(ArgT::Bool) => stores.put(stack, ret.scalar != 0),
         Some(ArgT::Ref | ArgT::Vec) => stores.put::<DbRef>(stack, ret.dbref),
-        Some(ArgT::Text) => panic!("shared-store bridge: Text returns not yet supported"),
+        // The bridge already copied the result text into `stores.scratch[0]`
+        // (stable); point the stack `Str` at it (mirrors `bridge_push_str`).
+        Some(ArgT::Text) => {
+            let s = crate::keys::Str {
+                ptr: ret.text_ptr,
+                len: ret.text_len as u32,
+            };
+            stores.put(stack, s);
+        }
     }
 }
 
