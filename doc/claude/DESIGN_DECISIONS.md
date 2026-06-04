@@ -1051,6 +1051,16 @@ toward.  Dated 2026-06-04.
 Full narrative, risks, and sequencing: [BROADENING.md § Native-library execution
 model](BROADENING.md#native-library-execution-model--the-steady-state-design).
 
+**Status (2026-06-04).**  The dispatch **mechanism is proven end-to-end** — an
+interpreted script calling an auto-generated, auto-compiled cdylib over the shared
+`*mut Stores` (zero-marshalling), across **all common types both directions**
+(scalars, vectors, structs, text, plain+data enums, keyed `sorted`), plus the
+source-form lean interface and the `use`-shaped core (`mark_native_exports` →
+`build_shared_cdylib` → `wire_shared_native_fns`, a normal library fn dispatched
+with no `#native`).  See [plan-54 Arc N](plans/future/54-data-as-store/README.md#arc-n--native-library-execution-model-c71-build-out)
+and its **§ Landing sequence** for the ordered, landable path from here to the
+steady state (A: wire `use`; B: make it invisible; C: soundness sweep; D: polish).
+
 **Revisit when.** The dispatch-coverage audit reveals that the C-ABI boundary
 cannot express a critical class of library API without marshalling cost that
 erases the native-speed advantage — and a concrete measurement shows this matters
