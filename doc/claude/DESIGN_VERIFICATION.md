@@ -34,8 +34,15 @@ shrinks to a one-line pointer to where the protocol now lives.
 
 ## C1 — Brittleness over bugs
 
-**Status:** *the primary design concern.*  Recorded; protocol pending
-verification.  First *forward* test (predict-then-build): the string/text-allocation
+**Status:** *the primary design concern.* **GRADUATED** → the runnable procedure is
+now [**Design Protocol 1 — A Design Is a Testable Hypothesis**](DESIGN_PROTOCOL.md)
+(the teachable, transferable form).  This entry stays as the **reference**: the
+concern statement, the countable form, and the six verification questions the
+protocol runs a design past.  The with-arm that earned graduation — the
+[coroutine yield codec](plans/16-coroutine-validation/02-codec-collapse.md),
+predicted then probed (two claims falsified) then built (invariant held, three
+composite shapes absorbed zero-per-shape) — is recorded under *Where the
+measurement stands* below.  First *forward* test (predict-then-build): the string/text-allocation
 memory-bound work (a brittleness problem — works in the tested regime, OOM-cliffs when
 the load pattern shifts; the shape `Stores` had before plan-57).  First *retrospective*
 measurement: **@PLN9** (program-relative paths) — the tell fired in the plan's own
@@ -243,12 +250,37 @@ for the tell-gates-the-procedure split above.
 **Where the measurement stands (so the concern doesn't self-promote on one data point).**
 @PLN9 supplied the first data point — but as the **control** arm: *without* the protocol
 gating the build, the count-tell's prediction came true and the brittle spray shipped.
-That tests the **tell** (reads true), not the **procedure** (its *help* is still
-unmeasured — it wasn't run).  The matching **with** arm is identified and load-bearing:
-the **chokepoint refactor** — the robust-by-construction version of @PLN9 — run *with*
-the predict-gate step (predict "one gate," gate on the count, build the single resolution
-point, validate it collapsed the 18 cells).  Promotion from candidate to active protocol
-waits on that run and a second unrelated one — not on this retrospective.
+That tests the **tell** (reads true), not the **procedure** (its *help*).
+
+The **with** arm has now landed: the
+[coroutine yield codec](plans/16-coroutine-validation/02-codec-collapse.md) (@PLAN16
+phase 02), run *with* the predict-validate procedure end to end.  What it measured —
+on artifacts, not on how it felt:
+
+- **The procedure caught brittleness the prose hid.**  Two of the design's claims were
+  **falsified by probes** after they had already been written down as settled: the
+  invariant's *framing* (store-layout → transport-ABI) and an **over-unification** (a
+  false "this also fixes the 17 GB bug").  Re-reading the design did not catch either;
+  the probe did.  This is the first direct evidence for the **over-unification** failure
+  mode (*obey the alarm blindly*) as a thing the procedure detects — the symmetric
+  partner to @PLN9's *ignore the alarm*.
+- **The build validated the invariant under construction.**  The single flatten-walk
+  absorbed three previously-`--native`-broken composite shapes with **zero per-shape
+  code**, both backends, no regression — the predicted "one site derives the layout,
+  every end re-derives the same" held exactly.  Final code shape: one classifier
+  (`coroutine_layout::tuple_kinds`) consulted at N sites that **cannot disagree**
+  (they derive from it), i.e. `N × silence` driven to zero by construction — the count
+  cure, realised.
+- **Cost vs prevented brittleness.**  The procedure's expensive part (write-probe-build)
+  ran only because the tell tripped on a load-bearing codegen contract; it prevented a
+  per-shape spray that would have grown combinatorially with every future yield type.
+
+Two arms now exist — control (@PLN9, *tell* reads true) and with (@PLAN16, *procedure*
+helps).  That cleared the bar to graduate the runnable procedure into
+[Design Protocol 1](DESIGN_PROTOCOL.md).  A **second unrelated** with-arm (e.g. the
+string-allocation invariant, or a loft2 core-representation design) is what raises
+confidence from "graduated, one measured win" to "load-bearing default" — the protocol
+itself says *the pattern across tasks decides it*, never one data point.
 
 **See also:**
 [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
