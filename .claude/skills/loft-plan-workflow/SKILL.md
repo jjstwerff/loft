@@ -61,8 +61,10 @@ Use when the plan's primary deliverable is a feature ship or fix landing.
 4. Fill in Status + Goal first.  Add Sub-arcs / Phase ordering / Open questions /
    Cross-arc dependencies / See also as the design clarifies.  Link the source issue(s)
    and carry `@PLN<N>` in the body.
-5. **No ROADMAP row.**  Tag the value category (S / R / G / F / U / C / Q / N) as a
-   *label on the loft-lang issue*.
+5. **Label the loft-lang issue** — `plan` (type) + `subject:*` (`loft` / `libs` /
+   `audience`) + `status:*` (`future` = planned · `active` = in progress · `finished`).
+   **No ROADMAP row** — the value categories (S/R/G/F/U/C/Q/N) were a ROADMAP concept,
+   retired with it.
 6. **No `plans/README.md` Future-table row** — tracking lives in the loft-lang issues.
 7. **Do NOT add a CLAUDE.md doc index entry by default.**  Add only if the plan
    introduces a NEW top-level reference concept (vanishingly rare).
