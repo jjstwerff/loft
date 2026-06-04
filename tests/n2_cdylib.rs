@@ -702,6 +702,44 @@ fn dispatches_data_enum_into_shared_cdylib() {
     let _ = std::fs::remove_dir_all(&tmp_m);
 }
 
+/// A function taking a keyed `sorted` collection (`DbRef` to the container, like
+/// a vector — the body walks it through the shared store).
+const SORTED_LIB: &str = "struct Item { k: integer not null, v: integer not null }\n\
+                          pub fn sum_values(items: sorted<Item[k]>) -> integer {\n\
+                          \x20   total = 0;\n\
+                          \x20   for it in items { total += it.v; }\n\
+                          \x20   total\n\
+                          }";
+
+/// N2 store-touching: a keyed `sorted` aggregate crosses the boundary as a
+/// `DbRef` (same ABI as a vector/struct).  The native body walks the collection
+/// in the shared store.  `sum_values({k:1 v:10, k:2 v:20}) == 30`.  (Uses a
+/// hand-written `#native` decl — `generate_interface` does not yet render the
+/// `sorted<T[key]>` type name.)
+#[test]
+fn dispatches_sorted_arg_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_sorted", SORTED_LIB, "sum_values")
+    else {
+        return;
+    };
+
+    let native_decl = "struct Item { k: integer not null, v: integer not null }\npub fn sum_values(items: sorted<Item[k]>) -> integer not null;\n#native \"loft_shared_n_sum_values\"\n";
+    let source = r#"
+fn main() {
+    s: sorted<Item[k]> = [];
+    s += [Item { k: 1, v: 10 }];
+    s += [Item { k: 2, v: 20 }];
+    a = sum_values(s);
+    assert(a == 30, "sum_values should be 30, got {a}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// N2 lean interface: a script drives native dispatch using ONLY the
 /// auto-generated interface (`native_lib::generate_interface`) — the library's
 /// public type defs + `#native` forward-decls as loft source.  No hand-written

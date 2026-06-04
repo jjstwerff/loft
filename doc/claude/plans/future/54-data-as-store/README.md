@@ -362,9 +362,15 @@ from the type-schema concern, then struct/`Text`/`Reference` signatures.
      agrees **by construction**.  (A binary schema load — the D2a cache — is the
      robust successor covering non-public type ordering; this source form covers
      the common case where the public types are the only ones.)
-   - **Remaining:** `sorted`/`index`/`hash`/`spacial` aggregates (the `DbRef` ABI
-     already routes them — untested); closures (`__closure` param); auto-deriving
-     the whole flow (compile cdylib + interface) from `use <lib>` (N3 policy /
+   - **Keyed aggregates route too** — `sum_values(sorted<Item[k]>) → 30`
+     (`dispatches_sorted_arg_into_shared_cdylib`): a `sorted` collection crosses as
+     a `DbRef` (same ABI as a vector/struct), and the native body walks it through
+     the shared store.  `hash`/`index`/`spacial` use the identical code path.
+   - **Remaining:** closures (`__closure` param); `generate_interface` rendering of
+     aggregate type names (`Type::name` debug-formats the key — `sorted<Item,[("k",
+     true)]>` not `sorted<Item[k]>` — so a `sorted`-typed public fn needs a
+     hand-written decl until the renderer reconstructs `[key]`); auto-deriving the
+     whole flow (compile cdylib + interface) from `use <lib>` (N3 policy /
      productization).
 3. **N5 soundness** of the boundary, woven through both.
 
