@@ -100,7 +100,10 @@ while IFS= read -r line; do
         fi
         dest="$FIXTURE_ROOT/$pkg"
         if [[ $CHECK_ONLY -eq 1 ]]; then
-            if ! diff -qr "$src" "$dest" >/dev/null 2>&1; then
+            # Exclude `target/` — the sync strips `native/target` from the
+            # fixture (build artifacts), so a locally-built native fixture would
+            # otherwise false-flag as drift against the (artifact-free) clone.
+            if ! diff -qr -x target "$src" "$dest" >/dev/null 2>&1; then
                 echo "[check] DRIFT: tests/fixtures/libs/$pkg vs $chunk@$ref"
                 drift=1
             fi

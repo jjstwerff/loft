@@ -238,6 +238,20 @@ jobs:
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
 
+  fixtures-check:
+    name: lib fixtures vs pinned tags (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify tests/fixtures/libs/ match sync-fixtures.sh PINNED_REFS
+        # Clones each pinned <chunk>@<tag> and diffs the in-repo fixture against
+        # it.  Advisory (not a required check): drift surfaces on the PR but does
+        # not block — external chunk-repo availability is outside this repo's
+        # control.  When the drift is intentional (a dogfood lib shipped a new
+        # version), bump PINNED_REFS + re-sync in the same PR — see
+        # LIBRARY_AUTHORING.md § 5d.
+        run: scripts/sync-fixtures.sh --check
+
   # @PLAN53 Wave 2 — the per-PR ASan gate.  ASan is cheap enough (~few min,
   # ubuntu-only, parallel under the windows `Test` long pole) to gate every PR,
   # giving UAF / OOB / double-free detection at PR time — the @P383 founding bug
