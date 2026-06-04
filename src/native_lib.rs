@@ -492,3 +492,142 @@ fn bridge_write_ret(t: &Type, expr: &str) -> String {
 pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
     matches!(t, Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
 }
+
+/// @PLAN54 Arc N / N3 — locate the running build's `libloft.rlib` + its sibling
+/// `deps/` directory, for linking an auto-generated cdylib against the **same**
+/// libloft this process links (so `Stores`/`DbRef`/`LibArg` are ABI-identical).
+///
+/// Works in both contexts the cdylib must build in: a real `cargo run --bin loft`
+/// (an unhashed `target/<prof>/libloft.rlib`, or `deps/`) and an integration test
+/// (a hashed `libloft-<hash>.rlib` in the test binary's `deps/`).  Returns the
+/// chosen rlib path and the `deps/` dir to add to the link search path.
+#[must_use]
+pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // Search the exe dir and its `deps/` for `libloft.rlib` (unhashed) or the
+    // newest `libloft-<hash>.rlib` (hashed, as cargo emits for dependencies).
+    for dir in [exe_dir.clone(), exe_dir.join("deps")] {
+        if !dir.is_dir() {
+            continue;
+        }
+        let exact = dir.join("libloft.rlib");
+        if exact.exists() {
+            return Some((exact, dir));
+        }
+        let hashed = std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with("libloft-") && has_rlib_ext(&n)
+            })
+            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+            .map(|e| e.path());
+        if let Some(rlib) = hashed {
+            return Some((rlib, dir));
+        }
+    }
+    None
+}
+
+/// Does filename `n` have a (case-insensitive) `.rlib` extension?
+fn has_rlib_ext(n: &str) -> bool {
+    std::path::Path::new(n)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("rlib"))
+}
+
+/// `--extern name=path` flags for the optional feature-dep rlibs (random/png/…) in
+/// `deps` that the generated stdlib code may reference — every `libX-<hash>.rlib`
+/// except `libloft*` (which is passed explicitly as `--extern loft=`).
+fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(deps) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("lib") || !has_rlib_ext(&n) || n.starts_with("libloft") {
+            continue;
+        }
+        if let Some(stem) = n
+            .strip_prefix("lib")
+            .and_then(|s| s.rsplit_once('-'))
+            .map(|x| x.0)
+        {
+            out.push((stem.to_string(), e.path()));
+        }
+    }
+    out
+}
+
+/// Platform cdylib filename for `stem` (`lib<stem>.so` / `.dylib` / `<stem>.dll`).
+#[must_use]
+pub fn platform_cdylib_name(stem: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{stem}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{stem}.dylib")
+    } else {
+        format!("lib{stem}.so")
+    }
+}
+
+/// @PLAN54 Arc N / N3 — generate **and compile** the shared-store cdylib for
+/// `export_set` into `out_dir`, returning the built cdylib path.  This is the
+/// production build step `use <lib>` runs after `byte_code`: it locates the
+/// running build's `libloft.rlib` ([`find_loft_rlib`]), writes `lib.rs`
+/// ([`generate_shared_cdylib_lib_rs`]), and invokes `rustc` with the `--native`
+/// flag set (cdylib, edition 2024, `--extern loft=` + feature-dep externs).
+///
+/// # Errors
+/// Returns a message if the rlib can't be found, the source can't be written,
+/// `rustc` can't be launched, or compilation fails (the message includes the
+/// `rustc` stderr tail and the kept `lib.rs` path for inspection).
+pub fn build_shared_cdylib(
+    data: &Data,
+    stores: &Stores,
+    export_set: &HashSet<u32>,
+    out_dir: &std::path::Path,
+    stem: &str,
+) -> Result<std::path::PathBuf, String> {
+    let (rlib, deps) = find_loft_rlib().ok_or("libloft.rlib not found for this build")?;
+    let src = generate_shared_cdylib_lib_rs(data, stores, export_set);
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
+    let rs = out_dir.join(format!("{stem}.rs"));
+    std::fs::write(&rs, &src).map_err(|e| format!("write {}: {e}", rs.display()))?;
+    let so = out_dir.join(platform_cdylib_name(stem));
+
+    let mut cmd = std::process::Command::new("rustc");
+    cmd.arg("--edition=2024")
+        .arg("-C")
+        .arg("debuginfo=0")
+        .arg("-C")
+        .arg("opt-level=0")
+        .arg("--crate-type")
+        .arg("cdylib")
+        .arg("-o")
+        .arg(&so)
+        .arg(&rs)
+        .arg("--extern")
+        .arg(format!("loft={}", rlib.display()))
+        .arg("-L")
+        .arg(&deps);
+    for (name, path) in extra_externs(&deps) {
+        cmd.arg("--extern")
+            .arg(format!("{name}={}", path.display()));
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("launch rustc: {e} (is the Rust toolchain installed?)"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(30).collect();
+        let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!(
+            "cdylib compile failed (source kept at {}):\n{tail}",
+            rs.display()
+        ));
+    }
+    Ok(so)
+}

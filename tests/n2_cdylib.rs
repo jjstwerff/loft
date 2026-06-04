@@ -816,10 +816,9 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
     let _lock = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((rlib, deps)) = find_loft_rlib() else {
-        return;
-    };
-    if Command::new("rustc").arg("--version").output().is_err() {
+    if loft::native_lib::find_loft_rlib().is_none()
+        || Command::new("rustc").arg("--version").output().is_err()
+    {
         return;
     }
     let pid = std::process::id();
@@ -865,9 +864,17 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
-    // Build the cdylib from the marked export set, then load + wire + run.
-    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
-    let so = compile_cdylib(&src, "loft_n3_auto", &tmp, &rlib, &deps);
+    // Build the cdylib from the marked export set via the PRODUCTION build path
+    // (locates this build's libloft.rlib, generates lib.rs, rustc-compiles), then
+    // load + wire + run — exactly the steps `use <lib>` runs after byte_code.
+    let so = loft::native_lib::build_shared_cdylib(
+        &p.data,
+        &state.database,
+        &export,
+        &tmp,
+        "loft_n3_auto",
+    )
+    .expect("build_shared_cdylib");
     extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
     extensions::wire_shared_native_fns(&mut state, &p.data);
     state.execute_argv("main", &p.data, &[]);
