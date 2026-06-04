@@ -24,9 +24,13 @@ measurements reframed the cost/benefit and point to a clear priority order:
    upgrade invalidates stale bundles instead of warm-loading an incompatible
    store (the previous gap: key/manifest had no binary identity, and
    `Store::is_store_file`'s fixed magic can't catch a layout change).  Remaining
-   for the flip itself: an opt-*out* (`LOFT_NO_CACHE`), and a call on the
+   for the flip itself: an opt-*out* (`LOFT_NO_CACHE`), a call on the
    first-run save cost (~tax on one-shot/CI runs) + unbounded cache growth
-   (one bundle per script, no eviction).  Near-zero code, highest ROI.
+   (one bundle per script, no eviction), **and a dev-safety gap that is a hard
+   prerequisite** — the build signature keys on the *committed* HEAD, not the
+   running binary, so it does NOT invalidate on an uncommitted compiler rebuild
+   (see § Debugging-iteration cost + the default-on dev-safety caveat below).
+   Near-zero code, highest ROI.
 
 2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
    key measured finding: **M6-warm gives only ~5%** because the **variable
@@ -56,6 +60,60 @@ measurements reframed the cost/benefit and point to a clear priority order:
 **~0.8 ms** (vs 0.6 ms native — handle navigation is near-native).  Warm `read_data`
 = **~2.2 ms variable tables + ~0.6 ms bodies** (so skipping bodies alone is small;
 the whole-`read_data` skip is the E2-gated prize).
+
+### Debugging-iteration cost + the default-on dev-safety caveat (2026-06-04)
+
+Evaluating the cache against the **debug-a-loft-feature loop** (edit compiler →
+rebuild → run many tests to inspect behaviour) surfaced a hard prerequisite for
+rec #1 — and reframed what the cache is even worth in that loop.
+
+**1. The debug loop's floor is rustc, not loft startup.**  An edit to `src/*.rs`
+costs tens of seconds of `cargo build --release` + a test-binary relink before a
+single test runs.  loft's own startup (15 ms cold / 4–5 ms warm) is *noise* next
+to that.  Optimising startup buys ~10 ms against a loop whose floor is the Rust
+recompile.  The real levers for this loop are unchanged: **targeted suites**
+(`issues` ~6 s, `expressions` ~1 s) over the ~7-min full run, `cached_default()`
+(amortises the per-test stdlib parse), and `./scripts/find_problems.sh --bg` for
+the wide net while editing.
+
+**2. The two test-running modes have opposite cache relevance.**
+   - **`cargo test` (the `code!`/`expr!` in-process path — the primary loop)
+     never touches the program cache** — the cache lives in `main.rs` (the binary
+     path), not the `State::execute` path.  So `LOFT_PROGRAM_CACHE` is irrelevant
+     to `cargo test --test issues`: zero benefit, zero cost.
+   - **Direct `loft script.loft` runs** (a hand-written reproducer run
+     repeatedly) *do* use the cache — 3–3.6× startup — but that's the secondary
+     loop, and it carries the hazard below.
+
+**3. The dev-safety gap (the hard prerequisite for default-on).**
+`cache::build_signature()` mixes in `LOFT_BUILD_ID`, which `build.rs` sets to
+`git rev-parse --short HEAD` (re-run only when `.git/HEAD`/`refs`/`build.rs`
+change).  **So an uncommitted compiler rebuild leaves the signature unchanged** —
+the release-upgrade invalidation (`0b9e69a`) protects users moving between
+*committed* builds, but does **not** fire during a debug session.  With a
+default-on cache, a re-run cached script would then silently warm-load a
+**parse/scopes-stale** bundle:
+
+   | You edited (uncommitted) | Default-on cache, re-running a cached `loft script.loft` |
+   |---|---|
+   | `src/state/codegen.rs`, `src/fill.rs` (codegen/runtime) | **Safe** — codegen re-runs from `Data` each time |
+   | `src/parser/*`, `src/typedef.rs`, `src/scopes.rs` | **Staled** — warm load skips parse+scopes → the change appears to do *nothing* |
+
+That is the worst failure mode to hit while debugging: a correct parser/scopes
+fix silently no-ops until you commit (or edit a `.loft` source, which the drift
+manifest *does* hash).  `LOFT_STDLIB_CACHE` shares the blind spot with a smaller
+blast radius (only the `default/` parse).
+
+**Consequences:**
+   - **While debugging the compiler, keep both caches OFF.**  Opt-in today is
+     therefore correct; the ~10 ms saving is irrelevant next to rustc and the
+     stale-parse risk is real.  Inner loop: raw `loft script.loft` (no cache) +
+     `LOFT_LOG=minimal`/`crash_tail:N`.
+   - **Before the default-on flip, `build_signature()` needs a dev-safe input** —
+     mix in the running binary's own mtime or a self-hash so *any* rebuild
+     (committed or not) invalidates — and/or honour `LOFT_NO_CACHE`.  This is a
+     **separate, not-yet-done** prerequisite beyond the release-upgrade
+     invalidation already shipped in `0b9e69a`.
 
 ---
 
