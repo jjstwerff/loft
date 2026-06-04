@@ -869,24 +869,7 @@ extern crate loft;"
         till: u32,
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
-        let reachable = reachable_functions(self.data, entry_defs);
-        self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
-        writeln!(
-            w,
-            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
-        )?;
-        // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
-        self.output_init(w, 0, till)?;
-        writeln!(w, "    db.finish();")?;
-        // Initiative 03 Phase 3b: emit code to build CONST_STORE
-        // vectors and populate `db.const_refs` — mirrors the
-        // interpreter path in `compile::build_const_vectors`.
-        self.emit_const_vectors(w, till)?;
-        writeln!(w, "}}\n")?;
-        // Emit only reachable functions across the full definition range.
-        self.output_functions(w, 0, till, Some(&reachable))?;
+        self.emit_native_reachable_body(w, till, entry_defs)?;
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name() == "n_main") {
             if self.wasm_browser {
@@ -919,6 +902,54 @@ extern crate loft;"
             }
         }
         Ok(())
+    }
+
+    /// @PLAN54 Arc N — emit the reachable native program as a **library** cdylib:
+    /// header + `init` + only the reachable functions, with **no `fn main()` /
+    /// `loft_start` bootstrap** even if an `n_main` exists in `data` (it belongs to
+    /// the consuming script, not the library, and isn't reachable from the
+    /// library's exports — emitting it would reference an undefined `n_main`).
+    ///
+    /// # Errors
+    /// Returns any `io::Error` from writing to `w`.
+    pub fn output_native_library(
+        &mut self,
+        w: &mut dyn Write,
+        _from: u32,
+        till: u32,
+        entry_defs: &[u32],
+    ) -> std::io::Result<()> {
+        self.emit_native_reachable_body(w, till, entry_defs)
+    }
+
+    /// Shared prelude of [`Self::output_native_reachable`] /
+    /// [`Self::output_native_library`]: header + `init` (all types) + const
+    /// vectors + only the reachable functions.  The two callers differ only in
+    /// whether they then emit the `main` bootstrap.
+    fn emit_native_reachable_body(
+        &mut self,
+        w: &mut dyn Write,
+        till: u32,
+        entry_defs: &[u32],
+    ) -> std::io::Result<()> {
+        let reachable = reachable_functions(self.data, entry_defs);
+        self.reachable.clone_from(&reachable);
+        Self::emit_file_header(w, self.data, self.wasm_browser)?;
+        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
+        writeln!(
+            w,
+            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
+        // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
+        self.output_init(w, 0, till)?;
+        writeln!(w, "    db.finish();")?;
+        // Initiative 03 Phase 3b: emit code to build CONST_STORE
+        // vectors and populate `db.const_refs` — mirrors the
+        // interpreter path in `compile::build_const_vectors`.
+        self.emit_const_vectors(w, till)?;
+        writeln!(w, "}}\n")?;
+        // Emit only reachable functions across the full definition range.
+        self.output_functions(w, 0, till, Some(&reachable))
     }
 
     /// Emit a Rust `fn main()` bootstrap if the program defines a loft `main` function.

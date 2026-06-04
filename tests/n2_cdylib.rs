@@ -799,3 +799,78 @@ fn main() {
     run_shared_dispatch(&so, &interface, source);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// N3 core: a NORMAL library function (a body, NO hand-written `#native`) is
+/// auto-marked for native dispatch (`native_lib::mark_native_exports`),
+/// auto-compiled to a shared cdylib, and dispatched — the script calls it
+/// normally, with no `#native` decl anywhere.  This is the in-process shape of
+/// what `use <lib>` will do: parse the library into the `Data`, mark its
+/// dispatchable functions native, build + load the cdylib, wire the bridge.
+#[test]
+fn auto_native_marks_and_dispatches_normal_library_fn() {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((rlib, deps)) = find_loft_rlib() else {
+        return;
+    };
+    if Command::new("rustc").arg("--version").output().is_err() {
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n3_auto_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // One Data: the library function + the calling script, as `use` would produce.
+    // `double` is a NORMAL function — a body, `pub`, and NO `#native` annotation.
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        "pub fn double(x: integer) -> integer { x * 2 }",
+        "mylib",
+        false,
+    );
+    p.parse_str(
+        "fn main() { r = double(21); assert(r == 42, \"auto-native double(21) should be 42, got {r}\") }",
+        "test",
+        false,
+    );
+    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
+    scopes::check(&mut p.data);
+
+    // Auto-mark the library's function native (the `use`-time hook).  Before
+    // byte_code, so calls route through OpStaticCall.
+    let double_nr = p.data.def_nr("n_double");
+    let candidates: std::collections::HashSet<u32> = std::iter::once(double_nr).collect();
+    let export = loft::native_lib::mark_native_exports(&mut p.data, &candidates);
+    assert!(
+        export.contains(&double_nr),
+        "double should be auto-marked native"
+    );
+    assert_eq!(
+        p.data.def(double_nr).native(),
+        "loft_shared_n_double",
+        "the bridge symbol must be set"
+    );
+
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // Build the cdylib from the marked export set, then load + wire + run.
+    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
+    let so = compile_cdylib(&src, "loft_n3_auto", &tmp, &rlib, &deps);
+    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    extensions::wire_shared_native_fns(&mut state, &p.data);
+    state.execute_argv("main", &p.data, &[]);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

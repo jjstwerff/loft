@@ -92,6 +92,29 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
     src
 }
 
+/// @PLAN54 Arc N / N3 — mark a library's functions for native dispatch.  Of the
+/// `candidates` (a library's functions — e.g. all functions from a `use`d
+/// library's source), the **shared-store-dispatchable** subset has its
+/// `def.native` set to the bridge symbol `loft_shared_<name>`.  Returns that
+/// subset (the cdylib export set).
+///
+/// This is the hook that turns a *normal* library function (a body, no
+/// hand-written `#native`) into a native-dispatched one: once `def.native` is set,
+/// `byte_code` routes every call to it through `OpStaticCall` (codegen.rs), the
+/// stub is registered by `register_native_stubs`, and `wire_shared_native_fns`
+/// wires the real bridge after the cdylib loads.  **Call before `byte_code`.**
+pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSet<u32> {
+    let exportable: HashSet<u32> = crate::native_gate::shared_store_dispatchable(data)
+        .intersection(candidates)
+        .copied()
+        .collect();
+    for &d in &exportable {
+        let sym = format!("loft_shared_{}", data.def(d).name());
+        data.def_mut(d).native = sym;
+    }
+    exportable
+}
+
 /// Add to `types` (transitively, in definition order) the struct/enum defs that
 /// loft type `t` references.
 fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
@@ -235,7 +258,7 @@ fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
         // Only the exported functions + their transitive deps (header + init + the
         // reachable subset) — exactly what a `--native` binary emits from `n_main`,
         // so unreachable operator stubs never surface.
-        let _ = out.output_native_reachable(&mut buf, 0, data.definitions(), entry);
+        let _ = out.output_native_library(&mut buf, 0, data.definitions(), entry);
     }
     String::from_utf8(buf).unwrap_or_default()
 }
