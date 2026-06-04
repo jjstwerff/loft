@@ -2248,8 +2248,12 @@ impl State {
         if stack.data.def(op).name() != "OpAppendText" || parameters.len() < 2 {
             return false;
         }
+        // P217-class footgun: the parser wraps the appended RHS in a
+        // `Value::Span` for source-position tracking, so matching `&parameters[1]`
+        // as a bare `Value::Call` silently misses every `out += native()` and
+        // routed it through scratch instead of `_dest`.  Unspan both operands.
         let (Value::Var(dest_var), Value::Call(inner_op, inner_args)) =
-            (&parameters[0], &parameters[1])
+            (parameters[0].unspan(), parameters[1].unspan())
         else {
             return false;
         };
