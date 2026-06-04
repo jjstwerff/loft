@@ -12,6 +12,22 @@ analysis wants a re-audit.  **First slice: Phase A** (mechanical, ~95% of scratc
 traffic by call volume, independently shippable, removes the in-statement-growth
 + re-entrancy hazards).
 
+## Session-2 correction (2026-06-05) — see [`01-destination-passing-design.md`](01-destination-passing-design.md)
+
+**A boundary matrix overturned session-1's premise.**  The "next slice"
+(`s = x.to_lowercase()` destination-passing) is **already shipped** (the
+`set_var` path, `codegen.rs:3200`).  The shapes that still leak are
+`out += native()`, field-write, arg-position, fn-return, and the
+destination-less family (concat / format / compare / vector-push / chain /
+cond).  And `OpClearScratch` is **never emitted** (confirmed three ways) — so
+scratch is an append-only, never-cleared leak; the §2.2 dangling hazard below is
+closed *by accident*, and the clear must **not** be re-enabled.  The corrected
+design (invariant, the N≥7 silent-site alarm, the 3-family structure, the
+one-chokepoint plan, and the build prediction) is in
+[`01-destination-passing-design.md`](01-destination-passing-design.md).  Read
+that first; the session-1 note and §§1–8 below are kept for context but their
+*sequencing* is superseded.
+
 ## Session-1 progress + next pickup (2026-06-04, branch `strings`)
 
 Work happens on branch **`strings`** (= `main` + the promotion commit + the
