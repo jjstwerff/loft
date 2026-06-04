@@ -655,7 +655,12 @@ impl LoftValue {
     /// Read as `i64`.  Debug-asserts the tag is `I64`.
     #[must_use]
     pub fn as_i64(&self) -> i64 {
-        debug_assert_eq!(self.tag, LoftTag::I64, "LoftValue::as_i64 on {:?}", self.tag);
+        debug_assert_eq!(
+            self.tag,
+            LoftTag::I64,
+            "LoftValue::as_i64 on {:?}",
+            self.tag
+        );
         // SAFETY: tag selects the active union field.
         unsafe { self.payload.i }
     }
@@ -663,7 +668,12 @@ impl LoftValue {
     /// Read as `f64`.  Debug-asserts the tag is `F64`.
     #[must_use]
     pub fn as_f64(&self) -> f64 {
-        debug_assert_eq!(self.tag, LoftTag::F64, "LoftValue::as_f64 on {:?}", self.tag);
+        debug_assert_eq!(
+            self.tag,
+            LoftTag::F64,
+            "LoftValue::as_f64 on {:?}",
+            self.tag
+        );
         // SAFETY: tag selects the active union field.
         unsafe { self.payload.f }
     }
@@ -671,7 +681,12 @@ impl LoftValue {
     /// Read as `bool`.  Debug-asserts the tag is `Bool`.
     #[must_use]
     pub fn as_bool(&self) -> bool {
-        debug_assert_eq!(self.tag, LoftTag::Bool, "LoftValue::as_bool on {:?}", self.tag);
+        debug_assert_eq!(
+            self.tag,
+            LoftTag::Bool,
+            "LoftValue::as_bool on {:?}",
+            self.tag
+        );
         // SAFETY: tag selects the active union field.
         unsafe { self.payload.b }
     }
@@ -679,7 +694,12 @@ impl LoftValue {
     /// Read as a borrowed text view.  Debug-asserts the tag is `Text`.
     #[must_use]
     pub fn as_text(&self) -> LoftStr {
-        debug_assert_eq!(self.tag, LoftTag::Text, "LoftValue::as_text on {:?}", self.tag);
+        debug_assert_eq!(
+            self.tag,
+            LoftTag::Text,
+            "LoftValue::as_text on {:?}",
+            self.tag
+        );
         // SAFETY: tag selects the active union field.
         unsafe { self.payload.text }
     }
@@ -687,7 +707,12 @@ impl LoftValue {
     /// Read as a store reference.  Debug-asserts the tag is `Ref`.
     #[must_use]
     pub fn as_ref(&self) -> LoftRef {
-        debug_assert_eq!(self.tag, LoftTag::Ref, "LoftValue::as_ref on {:?}", self.tag);
+        debug_assert_eq!(
+            self.tag,
+            LoftTag::Ref,
+            "LoftValue::as_ref on {:?}",
+            self.tag
+        );
         // SAFETY: tag selects the active union field.
         unsafe { self.payload.r }
     }

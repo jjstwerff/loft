@@ -1889,9 +1889,7 @@ impl Scopes {
         let def = data.def(*fn_nr);
         // Only user/method bodies (n_* / t_*) — native helpers and the
         // OpCreateStack/OpVar* lowering ops never own a fresh return store here.
-        if (!def.name.starts_with("n_") && !def.name.starts_with("t_"))
-            || def.code == Value::Null
-        {
+        if (!def.name.starts_with("n_") && !def.name.starts_with("t_")) || def.code == Value::Null {
             return None;
         }
         match &def.returned {

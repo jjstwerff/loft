@@ -2266,12 +2266,11 @@ impl Parser {
                         Value::FnRefDnr(*v)
                     }
                     Value::Call(_, _) => {
-                        let fn_type =
-                            if let Type::Function(params, ret, _) = in_t {
-                                Type::Function(params.clone(), ret.clone(), vec![])
-                            } else {
-                                in_t.clone()
-                            };
+                        let fn_type = if let Type::Function(params, ret, _) = in_t {
+                            Type::Function(params.clone(), ret.clone(), vec![])
+                        } else {
+                            in_t.clone()
+                        };
                         let tmp = self.create_unique("__fn_ref_tmp", &fn_type);
                         self.vars.defined(tmp);
                         // The temp is a borrowed fn-ref value; its closure
