@@ -14,7 +14,7 @@ correctly on both backends through the single walk with **zero per-shape code**,
 the one excluded cell (a text element's native repr is `&str`, needing a store
 intern — `codegen_runtime::db_from_text` — with the lifetime question that
 entails: a separate slice).  This was produced as the *with-arm* of the
-[`DESIGN_VERIFICATION.md` § C1](../../DESIGN_VERIFICATION.md) predict-validate
+[`DESIGN_VERIFICATION.md` § C1](../../../DESIGN_VERIFICATION.md) predict-validate
 protocol — see § Provenance.  Supersedes the migration tail of
 [01-unified-channel.md](01-unified-channel.md): phase 01 unified the
 *transport* (one `next_into` writing into one `[i64]` buffer); this phase
@@ -181,5 +181,5 @@ tail-of-session edit.
 
 - [01-unified-channel.md](01-unified-channel.md) — phase 01 (transport unified).
 - [00-matrix.md](00-matrix.md) — the Y×X cell space this collapses.
-- [COROUTINE.md](../../COROUTINE.md) — frame design + the `iterator<T>` contract.
-- [DESIGN_VERIFICATION.md § C1](../../DESIGN_VERIFICATION.md) — the protocol this run tests.
+- [COROUTINE.md](../../../COROUTINE.md) — frame design + the `iterator<T>` contract.
+- [DESIGN_VERIFICATION.md § C1](../../../DESIGN_VERIFICATION.md) — the protocol this run tests.

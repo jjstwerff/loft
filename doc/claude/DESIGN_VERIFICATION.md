@@ -39,7 +39,7 @@ now [**Design Protocol 1 — A Design Is a Testable Hypothesis**](DESIGN_PROTOCO
 (the teachable, transferable form).  This entry stays as the **reference**: the
 concern statement, the countable form, and the six verification questions the
 protocol runs a design past.  The with-arm that earned graduation — the
-[coroutine yield codec](plans/16-coroutine-validation/02-codec-collapse.md),
+[coroutine yield codec](plans/finished/16-coroutine-validation/02-codec-collapse.md),
 predicted then probed (two claims falsified) then built (invariant held, three
 composite shapes absorbed zero-per-shape) — is recorded under *Where the
 measurement stands* below.  First *forward* test (predict-then-build): the string/text-allocation
@@ -253,7 +253,7 @@ gating the build, the count-tell's prediction came true and the brittle spray sh
 That tests the **tell** (reads true), not the **procedure** (its *help*).
 
 The **with** arm has now landed: the
-[coroutine yield codec](plans/16-coroutine-validation/02-codec-collapse.md) (@PLAN16
+[coroutine yield codec](plans/finished/16-coroutine-validation/02-codec-collapse.md) (@PLAN16
 phase 02), run *with* the predict-validate procedure end to end.  What it measured —
 on artifacts, not on how it felt:
 

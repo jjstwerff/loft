@@ -200,7 +200,7 @@ safe; the dogfood loop grows what is visible.
   graduated from; the six **verification questions** (name-the-invariant,
   consequence/cause ratio, cost-of-next-case, one-home-per-fact, subtraction,
   matched-to-domain) are the checklist this protocol runs a design past in step 1.
-- [plans/16-coroutine-validation/02-codec-collapse.md](plans/16-coroutine-validation/02-codec-collapse.md)
+- [plans/finished/16-coroutine-validation/02-codec-collapse.md](plans/finished/16-coroutine-validation/02-codec-collapse.md)
   — the with-arm in full: the predictions, the three probes (two falsified, one
   confirmed), and the build that settled it.
 - [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
