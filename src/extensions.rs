@@ -1934,13 +1934,22 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
+    // @PLAN54 Arc N / N0 — reuse a cached artifact only if it was built by THIS
+    // loft build (its fingerprint sidecar matches).  A loft rebuild flips the
+    // fingerprint, so a stale package rlib / cdylib is rebuilt instead of being
+    // silently linked against a changed loft ABI — the automatic replacement for
+    // `make rebuild-native-cdylibs`.
+    let fp = crate::cache::loft_build_fingerprint();
     let find_existing = || {
         for root in &search_roots {
             for profile in ["release", "debug"] {
                 let dir = root.join(profile);
                 let lib = dir.join(&lib_name);
                 let rlib = dir.join(&rlib_name);
-                if lib.exists() && rlib.exists() {
+                if lib.exists()
+                    && rlib.exists()
+                    && crate::cache::native_artifact_fingerprint_matches(&dir, fp)
+                {
                     return Some(lib.to_string_lossy().to_string());
                 }
             }
@@ -1996,8 +2005,15 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let built_path = target_root.join("release").join(&lib_name);
     let status = cmd.status();
     match status {
-        Ok(s) if s.success() && built_path.exists() => {
-            Some(built_path.to_string_lossy().to_string())
+        Ok(s) if s.success() => {
+            // @PLAN54 Arc N / N0 — stamp the build fingerprint on ANY successful
+            // cargo build: the rlib is produced even for rlib-only packages whose
+            // cdylib `built_path` is absent, so a later loft change still
+            // invalidates it (see `find_existing` / `add_native_extern_flags`).
+            crate::cache::write_native_artifact_fingerprint(&target_root.join("release"), fp);
+            built_path
+                .exists()
+                .then(|| built_path.to_string_lossy().to_string())
         }
         _ => None,
     }

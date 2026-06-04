@@ -293,6 +293,86 @@ pub fn file_hash(path: &str) -> Option<[u8; 32]> {
     Some(h.finalize().into())
 }
 
+/// @PLAN54 Arc N / N0 — locate `libloft.rlib` for THIS build (dev `target/<prof>/`,
+/// its `deps/`, or an installed `<prefix>/share/loft/`).
+fn loft_rlib_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    for cand in [
+        exe_dir.join("libloft.rlib"),
+        exe_dir.join("deps").join("libloft.rlib"),
+    ] {
+        if cand.exists() {
+            return Some(cand);
+        }
+    }
+    if exe_dir.file_name().is_some_and(|n| n == "bin") {
+        let share = exe_dir
+            .parent()?
+            .join("share")
+            .join("loft")
+            .join("libloft.rlib");
+        if share.exists() {
+            return Some(share);
+        }
+    }
+    None
+}
+
+/// @PLAN54 Arc N / N0 — the canonical fingerprint of THIS loft build, for
+/// native-artifact validity (C71 "build fingerprint").  A native artifact links
+/// `libloft.rlib`, so it is valid only against the loft build whose rlib it links:
+/// this is the rlib's **content** hash (sha256 → `u64`), memoised per process.  A
+/// loft codegen/runtime change, a rustc bump, or a cross-target build all rewrite
+/// the rlib bytes (cargo rebuilds it), so all flip the fingerprint.  This is the
+/// single seam the native-artifact cache — and, eventually, the library
+/// validation layer — consults; do NOT key on mtime or git-`BUILD_ID` (both miss
+/// an *uncommitted* dev rebuild, which is exactly when the stale-link bites).
+/// Returns `0` when the rlib can't be located, so callers degrade to
+/// existence-only (the prior behaviour) rather than churn.
+#[must_use]
+pub fn loft_build_fingerprint() -> u64 {
+    use std::sync::OnceLock;
+    static FP: OnceLock<u64> = OnceLock::new();
+    *FP.get_or_init(|| {
+        loft_rlib_path()
+            .and_then(|p| file_hash(&p.to_string_lossy()))
+            .map_or(0, |h| {
+                u64::from_le_bytes(h[..8].try_into().unwrap_or([0; 8]))
+            })
+    })
+}
+
+/// @PLAN54 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
+fn fp_sidecar(profile_dir: &std::path::Path) -> std::path::PathBuf {
+    profile_dir.join(".loft-build-fp")
+}
+
+/// @PLAN54 Arc N / N0 — true iff `profile_dir` carries a build-fingerprint sidecar
+/// equal to `fp`.  A missing / stale / unreadable sidecar returns `false`, so the
+/// caller rebuilds — this is what makes a loft change (new fingerprint) invalidate
+/// an already-built package rlib / cdylib instead of silently linking the stale
+/// one (the `make rebuild-native-cdylibs` hazard).  `fp == 0` (no rlib to
+/// fingerprint) matches anything → existence-only fallback, no spurious churn.
+#[must_use]
+pub fn native_artifact_fingerprint_matches(profile_dir: &std::path::Path, fp: u64) -> bool {
+    if fp == 0 {
+        return true;
+    }
+    std::fs::read_to_string(fp_sidecar(profile_dir))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .is_some_and(|stored| stored == fp)
+}
+
+/// @PLAN54 Arc N / N0 — stamp `profile_dir` with `fp` after building an artifact
+/// there (best-effort; no-op when `fp == 0`).
+pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64) {
+    if fp != 0 {
+        let _ = std::fs::write(fp_sidecar(profile_dir), fp.to_string());
+    }
+}
+
 /// @PLAN54 arc E — the `(bundle, manifest)` paths for the whole-program cache of
 /// the script at `script_abspath`.  Keyed on the script's path so each script
 /// gets a stable slot; the manifest (every parsed source + its content hash)
@@ -504,6 +584,38 @@ mod tests {
     #[test]
     fn collect_stdlib_sources_missing_dir_is_empty() {
         assert!(collect_stdlib_sources("nonexistent-dir-xyz").is_empty());
+    }
+
+    #[test]
+    fn native_artifact_fingerprint_sidecar_gate() {
+        let dir = std::env::temp_dir().join(format!("loft_fpgate_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // No sidecar yet → a non-zero fp must NOT match (forces a rebuild).
+        assert!(!native_artifact_fingerprint_matches(&dir, 0xABCD));
+        // Stamp it: the same fp matches, a different (stale) one does not.
+        write_native_artifact_fingerprint(&dir, 0xABCD);
+        assert!(native_artifact_fingerprint_matches(&dir, 0xABCD));
+        assert!(
+            !native_artifact_fingerprint_matches(&dir, 0x1234),
+            "a stale loft fingerprint must not match → forces a rebuild"
+        );
+        // fp == 0 (can't fingerprint) is the existence-only fallback → matches.
+        assert!(native_artifact_fingerprint_matches(&dir, 0));
+        // Writing fp == 0 is a no-op — it must not clobber the real stamp.
+        write_native_artifact_fingerprint(&dir, 0);
+        assert!(
+            native_artifact_fingerprint_matches(&dir, 0xABCD),
+            "a 0-fp write must not overwrite the existing stamp"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loft_build_fingerprint_is_deterministic() {
+        // Memoised + content-hashed → stable within a process (the value depends
+        // on whether the rlib is present in this test layout; assert determinism).
+        assert_eq!(loft_build_fingerprint(), loft_build_fingerprint());
     }
 
     #[test]
