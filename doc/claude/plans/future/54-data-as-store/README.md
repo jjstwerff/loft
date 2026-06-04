@@ -181,7 +181,7 @@ cache; and the cross-mode byte-identical equivalence harness.
 |---|---|---|---|---|
 | **N0 — build fingerprint** ✅ | **Done.**  `cache::loft_build_fingerprint()` = the loft rlib's sha256 **content** hash (memoised) — the single seam.  **Audit finding:** the user-binary cache key (`native_cache_key`) was *already* content-hash (BUILD2) and **no** native key folds git-HEAD — nothing to migrate.  The real gap was that `auto_build_native` / `add_native_extern_flags` reused a cached package rlib / cdylib on **existence only**, so a loft change linked the *stale* one (the `make rebuild-native-cdylibs` hazard).  Fix = the "do both" **per-artifact backstop**: a `.loft-build-fp` sidecar stamps each built artifact with the fingerprint; reuse is gated on a match, so a loft change rebuilds it.  (The per-artifact gate subsumes the coarse startup nuke — a rebuild overwrites in place, so no orphans accumulate.)  Goal-A veil-lifter as designed. | `cache::native_artifact_fingerprint_sidecar_gate` (unit) + `tests/n0_fingerprint.rs` (stale sidecar → rebuild + re-stamp) + a real `loft --native` run stamps the fp; native suite green | ✅ | S — **done** |
 | **N1 — per-library native artifact cache** 🔄 | **Idle-TTL eviction model done + applied to the program cache.**  `cache::cache_ttl()` (`LOFT_CACHE_TTL_HOURS`, default 24 h) + `cache::touch_now()` (touch-on-use mtime bump) + `prune_dir` now evicts **idle-TTL first** (drop bundles unused past the TTL) with the size-cap as a runaway backstop; a warm program-cache hit `touch_now`s its bundle, so actively-run programs persist and one-offs age out.  (The "compile each library once, fingerprint-validated" half *is* N0's `auto_build_native` + sidecar.)  **Remaining — the idle-TTL on a *native-artifact* cache:** the default local build compiles libraries **in-tree** (`lib/<pkg>/native/target/`), which is the dev build, **not an evictable cache** — so the native-artifact idle-TTL needs the registry build-cache (`~/.loft/build-cache/`, feature-gated) or a new shared local native cache.  Deferred until that surface exists rather than shipping untested registry-gated GC (Goal-A "verify, don't assert"). | `prune_dir_idle_ttl_evicts_unused` (unit) + `arc_e_program_cache` warm-hit touch path; suites green | 🔄 | M — **model + program-cache done; native-cache application deferred** |
-| **N2 — native dispatch + lean interface load** *(gate prerequisite done)* | The headline: an interpreted script calling a compiled user library over the shared store.  **Prerequisite landed** — the compilability gate (`native_gate::native_compilable`, the N4 row) tells the compiler *which* library functions to compile native vs interpret.  Remaining: compile the native subgraph to a loadable cdylib (reuse the `--native` backend) + emit `OpStaticCall` for native callees (the stdlib `#native` dispatch path, generalised to user libs) + interpret the rest; and the lean interface (exported types → schema, signatures, symbol→def map) so the script type-checks without re-parsing the lib bodies (builds on the `Definition` seam + the D2a schema cache).  Data crossing the boundary is free (shared store / `DbRef`). | a script using a native lib dispatches to its compiled subgraph, interprets the rest; output byte-identical to the all-interpreted run (Goal D) | ⬜ (gate done) | M |
+| **N2 — native dispatch + lean interface load** *(scalar slice PROVEN end-to-end)* | The headline: an interpreted script calling a compiled user library over the shared store.  **Step 1 + step 2 landed (scalar slice).**  `native_lib::generate_cdylib_lib_rs` emits a cdylib `lib.rs` from a library's scalar-dispatchable functions (`--native` `output_native_reachable` for the bodies + `#[no_mangle] pub extern "C" fn loft_<name>` export wrappers); `tests/n2_cdylib.rs` proves it (1) **compiles** against `libloft.rlib` and (2) **dispatches end-to-end** — an interpreted script `double(21)` returns `42` from the auto-built cdylib.  **Key finding:** the generated `loft_n_double(a0: i64) -> i64` wrapper is **ABI-identical to a hand-written scalar `#native` symbol** (cf. `native_loader`'s `ext_add_one`), so the dispatch **reuses the existing `#native` path wholesale** — `OpStaticCall` (set via `def.native`) → `load_all` dlopen → `wire_native_fns` dlsym + auto-marshal — **no new runtime machinery**.  The wrapper stands up a per-call `UnsafeCell<Stores>` + `init()` (safe for scalars: no store ref crosses the boundary).  **Remaining:** the store-touching slice (the `&UnsafeCell<Stores>` ↔ `LoftStore` FFI-handle bridge); auto-deriving the `#native` decl from `use <lib>` (N3 policy); and the lean interface (exported types → schema, signatures, symbol→def map) so the script type-checks without re-parsing the lib bodies (builds on the `Definition` seam + the D2a schema cache). | a script using a native lib dispatches to its compiled subgraph, interprets the rest; output byte-identical to the all-interpreted run (Goal D) | 🔄 (scalar slice done) | M |
 | **N3 — native/interpret decision policy** | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag. | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | ⬜ | M |
 | **N4 — compilability gate + silent interpret fallback** *(re-scoped 2026-06-04; gate analysis 🔄 done)* | **Gate analysis landed — `src/native_gate.rs::native_compilable(data) -> HashSet<u32>`**: the maximal native subgraph, computed by a transitive, **exhaustive** (no `_` arm — Goal-F-safe: an un-native-able construct can never silently slip through) `Value`-tree walk.  **Empirical finding (the de-risk made real):** the `--native` backend already emits *everything* — structs, enums, vectors, **generics, closures** — so the denylist is just the concurrency constructs `parallel{}` / `par_for` / `yield` (`emit.rs` writes a non-code comment for those; `NATIVE_SKIP`/`SCRIPTS_NATIVE_SKIP` are both empty).  The "generics/closures research problem" was a **phantom** — measured **461/461 stdlib functions native-compilable (100%)**.  The gate is transitive (native iff the fn *and all `Call` callees* are native) so the subgraph is **closed** → the boundary is only ever interpret→native (`OpStaticCall`); `CallRef` is conservatively excluded (dynamic callee unprovable).  Tests: `walk_classifies_leaves_and_denylist`, `walk_finds_nested_denylist_construct`, `stdlib_is_mostly_native_compilable`.  **Remaining:** the dispatch side (compile the subgraph to a cdylib + emit `OpStaticCall` for native callees, interpret the rest) — overlaps **N2**.  Making concurrency itself native is the *only* later optional item, and it is tiny. | gate: the native subgraph excludes exactly the concurrency users; library runs native where compilable, interprets where not, no user-visible error | 🔄 | gate **done** · dispatch (with N2) S–M |
 | **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ⬜ | M (continuous) |
@@ -215,8 +215,17 @@ The compilability gate (`native_gate::native_compilable`, N4 row) shows the
 needed for almost nothing — the conservative-silent detector (flagged as a core
 risk above) turned out to be a small exhaustive `Value`-walk, and the fallback path
 fires only for `parallel{}`/`par_for`/`yield` users.  This collapses N4 to "wire the
-dispatch" and removes the last real uncertainty from the headline estimate.  The
-remaining headline work is purely N2's dispatch + cdylib packaging.
+dispatch" and removes the last real uncertainty from the headline estimate.
+
+**Update (scalar dispatch landed, 2026-06-04) — the headline is half-proven.**  The
+N2 scalar slice is **end-to-end green**: an interpreted script calling an
+auto-generated, auto-compiled cdylib (`tests/n2_cdylib.rs`, `double(21) → 42`).  The
+decisive finding is that the auto-generated export wrapper is **ABI-identical to a
+hand-written scalar `#native` symbol**, so the entire dispatch path (`OpStaticCall`
+→ dlsym → auto-marshal) is **reused with zero new runtime code** — the cdylib
+*generation* (`native_lib::generate_cdylib_lib_rs`) was the only new piece.  The
+remaining headline work is the **store-touching slice** (the `&UnsafeCell<Stores>`
+↔ `LoftStore` FFI-handle bridge) + the `use`-driven decl auto-derivation (N3).
 
 ### N2 dispatch — implementation design (2026-06-04, post-investigation)
 
@@ -241,12 +250,24 @@ path).  Bridging `&UnsafeCell<Stores>` ↔ the `LoftStore` FFI handle is the mul
 weight of N2.
 
 **Sequencing (scalar-first — the store bridge is deferred, not skipped):**
-1. **Scalar-only, store-free functions** — the export wrapper is trivial (the body
-   never touches `_cell`).  This is the tractable first slice + the end-to-end proof
-   (`double(21) → 42` over a real auto-built cdylib).  Needs a *store-free* gate
-   refinement (scalar signature **and** a transitive store-free body walk) on top of
-   `native_gate`, the crate generator, symbol registration, and an end-to-end test.
+1. **Scalar-only functions** — ✅ **DONE (proven end-to-end, 2026-06-04).**  The
+   export wrapper is trivial: `loft_<name>(scalars) -> ret` stands up a per-call
+   `UnsafeCell<Stores>` + `init()` and forwards to the `--native` inner fn.  Safe
+   because a scalar-return function cannot leak a store ref out, so any internal
+   store use is contained and dropped with the cell — **no store-free body walk was
+   needed** (the original plan's gate refinement turned out unnecessary; the
+   per-call cell handles a store-touching-but-scalar-signature body too).
+   `native_lib::generate_cdylib_lib_rs` is the crate generator (`scalar_dispatchable`
+   from `native_gate` selects the export set; `output_native_reachable` emits only
+   the export set + its transitive deps, so no unreachable operator stubs surface).
+   The end-to-end proof is `tests/n2_cdylib.rs` — `double(21) → 42` over a real
+   auto-built cdylib, dispatched from an interpreted script.  **The decisive
+   realisation:** the wrapper ABI **equals** a hand-written scalar `#native` symbol,
+   so registration + dispatch is the *existing* path (`def.native` → `OpStaticCall`
+   → `load_all`/`wire_native_fns` → dlsym auto-marshal) — zero new runtime code.
 2. **Store-touching functions** — the `&UnsafeCell<Stores>` ↔ `LoftStore` bridge.
+   *(Next slice.)*  Functions whose signature carries `Text`/`Vector`/`Reference`
+   need the FFI handle so the caller's store backs the callee's reads/writes.
 3. **N5 soundness** of the boundary, woven through both.
 
 The acceptance gate for each slice is **end-to-end** (an interpreted script calls an
