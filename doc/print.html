@@ -10,7 +10,7 @@
 <header class="print-header">
 <h1>Loft Language Reference</h1>
 <p class="tagline">Complete language and standard library documentation</p>
-<p class="version">v0.8.3</p>
+<p class="version">v0.8.4</p>
 <p><a href="index.html">&#8592; Back to online documentation</a> &nbsp;|&nbsp; <a href="00-vs-rust.html">vs Rust comparison</a></p>
 </header>
 <nav class="print-toc">
@@ -47,6 +47,8 @@
 <li><a href="#28-tuples">Tuples</a> — <span class="toc-desc">Grouping values without defining a struct</span></li>
 <li><a href="#29-match">Match</a> — <span class="toc-desc">Pattern matching with match expressions</span></li>
 <li><a href="#30-formatting">Formatting</a> — <span class="toc-desc">Format strings — interpolation, alignment, and number bases</span></li>
+<li><a href="#31-ref-forward">Reference parameter forwarding</a> — <span class="toc-desc">Forwarding &amp; parameters between functions</span></li>
+<li><a href="#32-time">Time</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -61,6 +63,8 @@
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
 <li class="toc-indent"><a href="#stdlib-time">Time</a></li>
+<li class="toc-indent"><a href="#stdlib-memory-diagnostics">Memory diagnostics</a></li>
+<li class="toc-indent"><a href="#stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</a></li>
 </ul>
 </nav>
 <section class="print-section" id="01-keywords">
@@ -181,8 +185,8 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{nexts}"</span> == <span class="st">"[1,2,3,7,8]"</span>, <span class="st">"Character nexts was {nexts}"</span>);</code></pre>
 <h2 id="searching-inside-text">Searching inside text</h2>
 <p>These built-in functions answer common "does this text contain…?" questions. <code>starts_with</code> and <code>ends_with</code> check the boundaries. <code>find</code> returns the byte offset of the first match, or null if not found. <code>contains</code> is true if the needle appears anywhere in the text. All positions are byte offsets, consistent with <code>len()</code> and slicing.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-text.html">starts_with</a></span>(<span class="st">"some"</span>), <span class="st">"starts_with"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-text.html">ends_with</a></span>(<span class="st">"thing"</span>), <span class="st">"ends_with"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations-t2-8-t2-5.html">starts_with</a></span>(<span class="st">"some"</span>), <span class="st">"starts_with"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations-t2-8-t2-5.html">ends_with</a></span>(<span class="st">"thing"</span>), <span class="st">"ends_with"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-text.html">find</a></span>(<span class="st">"th"</span>) == <span class="nm">4</span>, <span class="st">"find returns byte offset"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a longer text"</span>.<span class="fn-call"><a href="stdlib-text.html">contains</a></span>(<span class="st">"longer"</span>), <span class="st">"contains"</span>);</code></pre>
 <p><code>trim()</code> removes spaces and other whitespace from both ends of a text value. It is useful when reading user input or parsing text from a file.</p>
@@ -218,14 +222,18 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
 <p><code>abs()</code> returns the absolute value — the distance from zero, always positive.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
-<h2 id="division-by-zero-produces-null-not-a-crash">Division by zero produces null, not a crash</h2>
-<p>Most languages crash or throw an exception on division by zero. Loft produces null instead, which behaves like false in conditions. This lets you handle missing or bad data gracefully with a simple <code>!</code>.</p>
+<h2 id="division-by-zero-explicit-null-with-null">Division by zero — explicit null with <code>?? null</code></h2>
+<p>Most languages crash on division by zero.  Loft has TWO modes:</p>
+<ul>
+<li><strong>Defended</strong> (with <code>?? null</code> or <code>if x != null { ... }</code> after): the divide silently produces null and execution continues. This lets you handle missing or bad data gracefully.</li>
+<li><strong>Undefended</strong> (bare <code>1 / 0</code>): in development the program halts with a typed <code>error: divide by zero</code> and the source location; in production the program logs a warning + continues with the null sentinel so deployed games / servers never abort on user-attributable edge cases.</li>
+</ul>
 <pre><code>  a = <span class="nm">2</span> * <span class="nm">2</span>;
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a), <span class="st">"Division by zero gives null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / a ?? <span class="kw">null</span>), <span class="st">"Division by zero gives null when defended with `?? null`"</span>);</code></pre>
 <h2 id="warning-when-you-write-a-literal-zero-divisor">Warning when you write a literal zero divisor</h2>
-<p>When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero The expression still runs and returns null — the warning is informational, not an error. Use a variable (like <code>a</code> above) when you intentionally want null-on-zero division without a warning.</p>
+<p>When the divisor is a literal 0 written directly in your source code, loft warns you while reading your code (before running it), because that is almost certainly a mistake: n / 0   // warning: Division by constant zero n % 0   // warning: Modulo by constant zero Use a variable (like <code>a</code> above) when you intentionally want null-on-zero division without a warning.</p>
 <h2 id="embedding-integers-in-text">Embedding integers in text</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a{12}b"</span> == <span class="st">"a12b"</span>, <span class="st">"Integer in format string"</span>);</code></pre>
 <p>A full expression can appear inside <code>{...}</code>, not just a variable name.</p>
@@ -242,13 +250,13 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0xFF</span> == <span class="nm">255</span>, <span class="st">"Uppercase hex literal"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x2A</span> == <span class="nm">42</span>, <span class="st">"Uppercase hex digit"</span>);</code></pre>
 <h2 id="the-long-type-for-large-numbers">The <code>long</code> type for large numbers</h2>
-<p><code>long</code> is a 64-bit signed integer — use it when values might exceed 2 billion. Write a long literal by appending <code>l</code>: <code>1l</code>, <code>100000000000l</code>. Long values support the same arithmetic and format specifiers as integer. Convert a long back to an integer with <code>as integer</code>.</p>
-<pre><code>  big = <span class="nm">1000000000l</span> * <span class="nm">5l</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big == <span class="nm">5000000000l</span>, <span class="st">"Long arithmetic"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1l + 1:+4}"</span> == <span class="st">"  +2"</span>, <span class="st">"Long in format string"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12l</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">12</span>, <span class="st">"Long to integer conversion"</span>);</code></pre>
+<p><code>long</code> is a 64-bit signed integer — use it when values might exceed 2 billion. Write a long literal by appending <code>l</code>: <code>1</code>, <code>100000000000</code>. Long values support the same arithmetic and format specifiers as integer. Convert a long back to an integer with <code>as integer</code>.</p>
+<pre><code>  big = <span class="nm">1000000000</span> * <span class="nm">5</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big == <span class="nm">5000000000</span>, <span class="st">"Long arithmetic"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1 + 1:+4}"</span> == <span class="st">"  +2"</span>, <span class="st">"Long in format string"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">12</span>, <span class="st">"Long to integer conversion"</span>);</code></pre>
 <h2 id="common-pitfall-integer-overflow">Common pitfall: integer overflow</h2>
-<p>If a 32-bit integer calculation overflows the max value (~2 billion), the result wraps around silently. Use <code>long</code> when you expect large values. For example, a score that multiplies two large numbers can silently wrap. Switching to <code>long</code> avoids this: <code>score = big_a as long * big_b as long</code>.</p>
+<p>If a 32-bit integer calculation overflows the max value (~2 billion), the result wraps around silently. Use <code>long</code> when you expect large values. For example, a score that multiplies two large numbers can silently wrap. Switching to <code>long</code> avoids this: <code>score = big_a as integer * big_b as integer</code>.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="04-boolean">
@@ -266,9 +274,9 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> || <span class="nm">3</span> &gt; <span class="nm">4</span>), <span class="st">"Both false → 'or' is false"</span>);</code></pre>
 <h2 id="null-in-boolean-context">Null in boolean context</h2>
-<p>Division by zero (and other failed operations) produce null. Null in a boolean context is treated as false, so <code>!</code> is true. This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... }</p>
+<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Without <code>?? null</code>, a bare <code>1 / 0</code> halts in development and logs a warning + continues with the sentinel in production.</p>
 <pre><code>  zero = <span class="nm">0</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero), <span class="st">"null from division-by-zero is false-like"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero ?? <span class="kw">null</span>), <span class="st">"null from division-by-zero is false-like when defended"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> &gt; <span class="nm">0</span>, <span class="st">"positive integer is true"</span>);</code></pre>
 <h2 id="bitwise-operators">Bitwise operators</h2>
 <p>While <code>and</code>/<code>or</code> work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.</p>
@@ -378,7 +386,7 @@
   a * factor
 }</code></pre>
 <h2 id="type-based-dispatch">Type-Based Dispatch</h2>
-<p>You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
+<p>You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   <span class="st">"integer:{v}"</span>
 }</code></pre>
@@ -632,7 +640,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">4</span>, <span class="st">"integer: 4 bytes"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u8</a></span>) == <span class="nm">1</span>, <span class="st">"u8: 1 byte (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u16</a></span>) == <span class="nm">2</span>, <span class="st">"u16: 2 bytes (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Colour</span>) == <span class="nm">3</span>, <span class="st">"Colour: 3 × u8 = 3 bytes"</span>);
@@ -742,13 +750,13 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
     _         =&gt; <span class="st">"high"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"low"</span>, <span class="st">"scalar or-pattern"</span>);</code></pre>
-<p>A <code>null</code> pattern matches when the value is absent (e.g. division by zero).</p>
+<p>A <code>null</code> pattern matches when the value is absent (e.g. defended division by zero — <code>?? null</code> opts into the silent-null behaviour instead of the typed-error halt path).</p>
 <pre><code>  zero = <span class="nm">0</span>;
-  check = match <span class="nm">1</span> / zero {
+  check = match <span class="nm">1</span> / zero ?? <span class="kw">null</span> {
     <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,
     _    =&gt; <span class="st">"present"</span>
   };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(check == <span class="st">"absent"</span>, <span class="st">"null pattern matches div-by-zero"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(check == <span class="st">"absent"</span>, <span class="st">"null pattern matches div-by-zero when defended"</span>);</code></pre>
 <p>Character literals work in match arms.</p>
 <pre><code>  vowel = match <span class="ch">'e'</span> {
     <span class="ch">'a'</span> | <span class="ch">'e'</span> | <span class="ch">'i'</span> | <span class="ch">'o'</span> | <span class="ch">'u'</span> =&gt; <span class="kw">true</span>,
@@ -1026,8 +1034,9 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <h1>File</h1>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
+<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run. <code>#cwd</code> opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default) — see @PLN9.</p>
+<pre><code>#cwd
+<span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>);
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>);
@@ -1055,12 +1064,12 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;
   f += <span class="nm">0x4050607</span>;
-  f += <span class="nm">0x8090a0b0c0d0e0fl</span>;</code></pre>
-<p><code>f#size</code> returns the total number of bytes written so far.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16l</span>, <span class="st">"Should have written 16 bytes."</span>);</code></pre>
+  f += <span class="nm">0x8090a0b0c0d0e0f</span>;</code></pre>
+<p><code>f#size</code> returns the total number of bytes written so far. Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">20</span>, <span class="st">"Should have written 20 bytes."</span>);</code></pre>
 <p>Text is written as raw UTF-8 bytes with no length prefix.</p>
 <pre><code>  f += <span class="st">"Hello world!"</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">28l</span>, <span class="st">"Size should be 28 bytes (16 + 12)."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Size should be 32 bytes (20 + 12)."</span>);
  }  <span class="cm">// The file closes when the handle goes out of scope.</span></code></pre>
 <p><code>move(src, dst)</code> renames a file. It refuses if the destination already exists or if either path would leave the project directory.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should exist after writing."</span>);
@@ -1074,20 +1083,20 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>The file was written as BigEndian, so reading the same 4 bytes as LittleEndian produces a byte-swapped value — that is intentional here and confirms that the bytes were stored in the order you chose.</p>
 <pre><code>  v = f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">0x3020100</span>, <span class="st">"BigEndian bytes 0..3 read as LittleEndian i32."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">0l</span>, <span class="st">"Last read started at byte 0."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">4l</span>, <span class="st">"Next read starts at byte 4."</span>);</code></pre>
-<p>Seek to byte 16 to skip past the integers and read the text directly.</p>
-<pre><code>  f#next = <span class="nm">16l</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">0</span>, <span class="st">"Last read started at byte 0."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">4</span>, <span class="st">"Next read starts at byte 4."</span>);</code></pre>
+<p>Seek to byte 20 to skip past the integers and read the text directly. (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)</p>
+<pre><code>  f#next = <span class="nm">20</span>;
   s = f#<span class="fn-call">read</span>(<span class="nm">5</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="st">"Hello"</span>, <span class="st">"Partial text read from offset 16."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">16l</span>, <span class="st">"Last read started at byte 16."</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">21l</span>, <span class="st">"Next position after 5-byte text read."</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="st">"Hello"</span>, <span class="st">"Partial text read from offset 20."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">20</span>, <span class="st">"Last read started at byte 20."</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">25</span>, <span class="st">"Next position after 5-byte text read."</span>);</code></pre>
 <p>Requesting more bytes than remain simply returns whatever is left.</p>
 <pre><code>  rest = f#<span class="fn-call">read</span>(<span class="nm">100</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(rest == <span class="st">" world!"</span>, <span class="st">"Read continues to end of file."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == f#size, <span class="st">"Position should be at end of file."</span>);</code></pre>
 <p>You can seek back to any position and re-read.</p>
-<pre><code>  f#next = <span class="nm">0l</span>;
+<pre><code>  f#next = <span class="nm">0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="fn-call">read</span>(<span class="nm">4</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">i32</a></span> == <span class="nm">0x3020100</span>, <span class="st">"Seek-and-reread matches original."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test2.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove the test file."</span>);</code></pre>
@@ -1097,10 +1106,10 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   f#format = <span class="en">LittleEndian</span>;
   ints =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>];
   f += ints;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16l</span>, <span class="st">"Four i32 values = 16 bytes"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Four integers = 32 bytes (8 each, post-2c)"</span>);</code></pre>
 <p>Truncate to the first two integers.</p>
-<pre><code>  f#size = <span class="nm">8l</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">8l</span>, <span class="st">"Truncated to 8 bytes"</span>);
+<pre><code>  f#size = <span class="nm">16</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16</span>, <span class="st">"Truncated to 16 bytes"</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin after vector write test."</span>);</code></pre>
 <p>Write a count followed by individual float values. <code>sizeof(T)</code> returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.</p>
@@ -1145,19 +1154,18 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <h2 id="reading-tokens">Reading Tokens</h2>
 <p><code>parse_string(name, source)</code> feeds source text into the lexer. The name is used in error messages and position reports. After that, call the typed reader functions one by one to consume tokens in order.</p>
 <p><code>int()</code> consumes and returns the next integer token, or null if the current token is not an integer. <code>long_int()</code> does the same for integers suffixed with <code>l</code>. <code>matches(s)</code> consumes the next token only when it equals s and returns true; otherwise it leaves the token in place and returns false. <code>peek()</code> returns the next token as text without consuming it. <code>position()</code> returns the current location as <code>file:line:col</code>.</p>
-<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Tokens"</span>, <span class="st">"12 += -2 * 3l &gt;&gt; 4"</span>);
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Tokens"</span>, <span class="st">"12 += -2 * 3 &gt;&gt; 4"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">12</span>, <span class="st">"Integer"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect plus"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() != <span class="st">"+"</span>, <span class="st">"Incorrect plus"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+="</span>), <span class="st">"Incorrect plus_is"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == -<span class="nm">2</span>, <span class="st">"Second integer"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"*"</span>), <span class="st">"Incorrect multiply"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() != <span class="nm">3</span>, <span class="st">"Third number"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">long_int</span>() == <span class="nm">3</span>, <span class="st">"Incorrect long"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:15"</span>, <span class="st">"Incorrect position {l.position()}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">3</span>, <span class="st">"Third number"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:14"</span>, <span class="st">"Incorrect position {l.position()}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"&gt;"</span>), <span class="st">"Incorrect higher"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"&gt;&gt;"</span>), <span class="st">"Incorrect logical shift"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:18"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:17"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
 <h2 id="string-literals-and-comments">String Literals and Comments</h2>
 <p><code>constant_text()</code> reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). <code>constant_character()</code> reads a single-quoted character literal and returns it as text.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
@@ -1577,20 +1585,20 @@ ticks()   — microseconds elapsed since program start (monotonic clock).
 <h2 id="wall-clock-time-now">Wall-clock time: now()</h2>
 <p><code>now()</code> returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.</p>
 <pre><code>  t = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0l</span>, <span class="st">"now() must be positive"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0</span>, <span class="st">"now() must be positive"</span>);</code></pre>
 <p>Two successive calls return non-decreasing values.</p>
 <pre><code>  t2 = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt;= t, <span class="st">"now() must be non-decreasing"</span>);</code></pre>
 <h2 id="elapsed-time-ticks">Elapsed time: ticks()</h2>
 <p><code>ticks()</code> measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.</p>
 <pre><code>  start = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0l</span>, <span class="st">"ticks() must be non-negative"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0</span>, <span class="st">"ticks() must be non-negative"</span>);
   end = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(end &gt;= start, <span class="st">"ticks() must be monotonically non-decreasing"</span>);</code></pre>
 <h2 id="measuring-elapsed-time">Measuring elapsed time</h2>
 <p>Subtract two <code>ticks()</code> values to get the duration in microseconds. Divide by 1000 to convert to milliseconds.</p>
 <pre><code>elapsed_us  = end_ticks - start_ticks
-elapsed_ms  = elapsed_us / 1000l
+elapsed_ms  = elapsed_us / 1000
 </code></pre>
 <p>Example: measure how long a loop takes.</p>
 <pre><code>  t_before = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
@@ -1600,12 +1608,12 @@ elapsed_ms  = elapsed_us / 1000l
   }
   t_after = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
   elapsed = t_after - t_before;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(elapsed &gt;= <span class="nm">0l</span>, <span class="st">"elapsed time must be non-negative: {elapsed}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(elapsed &gt;= <span class="nm">0</span>, <span class="st">"elapsed time must be non-negative: {elapsed}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">499500</span>, <span class="st">"loop produced wrong sum: {sum}"</span>);</code></pre>
 <h2 id="common-patterns">Common patterns</h2>
-<p>Timestamp a log entry (seconds since epoch): seconds = now() / 1000l</p>
+<p>Timestamp a log entry (seconds since epoch): seconds = now() / 1000</p>
 <p>Seed the random number generator with the current time: rand_seed(now() as integer)</p>
-<p>Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000l} ms")</p>
+<p>Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000} ms")</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="23-safety">
@@ -1630,10 +1638,10 @@ elapsed_ms  = elapsed_us / 1000l
 <li><code>reference</code>       — record 0 is null</li>
 <li>plain <code>enum</code>      — byte value 255 is null (limits enums to 255 variants)</li>
 </ul>
-<p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648. Division by zero also produces this same value, so both paths look the same to your code:</p>
+<p>This means there is one value per type that you cannot distinguish from null. For integers, that is -2 147 483 648.  When defended with <code>?? null</code> (or a following null-check), division by zero produces this same value, so both paths look the same to your code:</p>
 <pre><code>  zero = <span class="nm">0</span>;
-  n = <span class="nm">1</span> / zero;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!n, <span class="st">"div-by-zero is null"</span>);
+  n = <span class="nm">1</span> / zero ?? <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!n, <span class="st">"div-by-zero defended with `?? null` is null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -2 147 483 648"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i32::MIN is the most negative 32-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
@@ -1645,9 +1653,9 @@ elapsed_ms  = elapsed_us / 1000l
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(empty, <span class="st">"empty string is NOT null — this surprises most newcomers"</span>);</code></pre>
 <p>Mitigation: Use <code>long</code> when you need the full 32-bit integer range, or declare struct fields as <code>not null</code> so that reserved value can be used as data.</p>
 <h2 id="integer-overflow-wraps-silently">Integer overflow wraps silently</h2>
-<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use <code>long</code> (64-bit) when multiplying or summing large values: <code>big as long + big as long</code> avoids the wrap. Design: a future <code>--debug</code> flag will turn silent overflow into a logged WARN with file:line context so overflows are visible during development without affecting release performance.</p>
+<p>32-bit integers wrap when they exceed roughly 2 billion. There is no runtime overflow check and no exception. The result is a small or negative number and the program continues as if nothing happened. The following would wrap silently in a release build: big = 2000000000; big + big  →  negative number Mitigation: Use <code>long</code> (64-bit) when multiplying or summing large values: <code>big as integer + big as integer</code> avoids the wrap. Design: a future <code>--debug</code> flag will turn silent overflow into a logged WARN with file:line context so overflows are visible during development without affecting release performance.</p>
 <pre><code>  big = <span class="nm">2000000000</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span> == <span class="nm">4000000000l</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> + big <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">4000000000</span>, <span class="st">"long avoids wrap"</span>);</code></pre>
 <h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
 <p>All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is the identity element for OR, XOR, and shift; zero for AND.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> &amp; <span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
@@ -1738,9 +1746,10 @@ elapsed_ms  = elapsed_us / 1000l
   email: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
 <h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
-<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Both JSON-style quoted field names ("name": value) and loft-style unquoted field names (name: value) are accepted.  Missing fields get null sentinels. Extra fields in the input are silently skipped.</p>
+<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally, so malformed input lands in <code>json_errors()</code> rather than silently corrupting the struct.  Missing fields get null sentinels.</p>
 <pre><code>user = User.parse(json_text)
 </code></pre>
+<p>Callers wanting explicit staging can write <code>User.parse(json_parse(text))</code> to inspect <code>json_errors()</code> between the two steps.</p>
 <h2 id="vectors">Vectors</h2>
 <p>Parse a JSON array into a vector of structs with <code>vector&lt;T&gt;.parse(text)</code>.</p>
 <pre><code>scores = vector&lt;Score&gt;.parse("[{\"v\":1},{\"v\":2}]")
@@ -1749,9 +1758,9 @@ elapsed_ms  = elapsed_us / 1000l
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="parse-errors">Parse Errors</h2>
-<p>After parsing, check <code>#errors</code> on the result to see what went wrong. Each error is a text string describing the problem and its location.</p>
-<pre><code>data = MyType.parse(bad_json)
-for e in data#errors { log_warn(e) }
+<p>Call <code>json_errors()</code> to see what went wrong with a malformed input.  Schema-level mismatches (e.g. a field declared integer but receiving a JSON string) currently land as the loft null sentinel in the struct; Q1 schema-side diagnostics will add path-qualified reports in a follow-up.</p>
+<pre><code>data = MyType.parse(bad_json);
+if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </code></pre>
 <h2 id="nested-structs">Nested Structs</h2>
 <p>Structs with struct-typed fields parse nested JSON objects automatically.</p>
@@ -1775,13 +1784,9 @@ for e in data#errors { log_warn(e) }
 <pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
+<p>Type-mismatched fields (id: string, name: number) parse as JSON fine but the struct unwrap produces null sentinels. Schema-level diagnostics are a Q1 follow-up — for now verify the unwrap does not crash on mismatched shapes.</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
-  errs = <span class="nm">0</span>;
-  <span class="kw">for</span> err <span class="kw">in</span> bad#errors {
-    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"parse error: {err}"</span>);
-    errs += <span class="nm">1</span>;
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(errs &gt; <span class="nm">0</span>, <span class="st">"expected parse errors, got {errs}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="kw">null</span>, <span class="st">"type-mismatched id becomes null: {bad.id}"</span>);</code></pre>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
   total = <span class="nm">0</span>;
   <span class="kw">for</span> s <span class="kw">in</span> scores {
@@ -2247,7 +2252,7 @@ for e in data#errors { log_warn(e) }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{for fmt_n in 1..4 {fmt_n * 10}:04}"</span> == <span class="st">"[0010,0020,0030]"</span>, <span class="st">"formatted vector elements"</span>);</code></pre>
 <h2 id="long-and-single-types">Long and single types</h2>
 <p>Long integers and single-precision floats use the same format specifiers.</p>
-<pre><code>  n = <span class="nm">1000000l</span>;
+<pre><code>  n = <span class="nm">1000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"1000000"</span>, <span class="st">"long default"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n:&gt;10}"</span> == <span class="st">"   1000000"</span>, <span class="st">"long right-aligned"</span>);
   f = <span class="nm">1.5f</span>;
@@ -2258,6 +2263,111 @@ for e in data#errors { log_warn(e) }
 <h2 id="boolean-format">Boolean format</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true}"</span> == <span class="st">"true"</span>, <span class="st">"boolean true"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="31-ref-forward">
+<h1>Reference parameter forwarding</h1>
+<p>@ARGS: --lib tests/lib When a function receives a <code>&amp;Struct</code> (mutable reference) parameter and passes it to another function that also takes <code>&amp;Struct</code>, the reference must be forwarded without dereferencing. This is P144.</p>
+<pre><code><span class="kw">use</span> p144_entry;</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>box_set_val calls box_ensure(b) internally — forwarding the &amp; param.</p>
+<pre><code>  b = <span class="en">Box</span> { items: [] };
+  <span class="fn-call">box_set_val</span>(b, <span class="nm">42</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.items[<span class="nm">0</span>].val == <span class="nm">42</span>, <span class="st">"P144: &amp; forwarded — item set to 42"</span>);</code></pre>
+<p>Calling the inner function directly also works.</p>
+<pre><code>  b2 = <span class="en">Box</span> { items: [] };
+  <span class="fn-call">box_ensure</span>(b2);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b2.items) == <span class="nm">1</span>, <span class="st">"ensure added one item"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b2.items[<span class="nm">0</span>].val == <span class="nm">0</span>, <span class="st">"default val is 0"</span>);</code></pre>
+<p>Multiple forwards: ensure is idempotent.</p>
+<pre><code>  <span class="fn-call">box_ensure</span>(b2);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b2.items) == <span class="nm">1</span>, <span class="st">"ensure idempotent"</span>);</code></pre>
+<p>Set a second value via box_set_val on a pre-populated box.</p>
+<pre><code>  b3 = <span class="en">Box</span> { items: [] };
+  b3.items += [<span class="en">Inner</span> { val: <span class="nm">10</span> }];
+  b3.items += [<span class="en">Inner</span> { val: <span class="nm">0</span> }];
+  <span class="fn-call">box_set_val</span>(b3, <span class="nm">99</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">0</span>].val == <span class="nm">10</span>, <span class="st">"existing item preserved"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">1</span>].val == <span class="nm">99</span>, <span class="st">"zero item replaced"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="32-time">
+<h1>Time</h1>
+<p>@ARGS: --lib tests/fixtures/libs</p>
+<p>The <code>time</code> library represents a point in time as a plain <code>integer</code> (i64) holding milliseconds since the Unix epoch — the same unit <code>now()</code> returns.  All calendar math is UTC and uses the proleptic Gregorian calendar, so results are identical on the interpreter, <code>--native</code>, and WebAssembly.  Import it with <code>use time;</code> and call its free functions with the <code>time::</code> prefix.</p>
+<p>Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (<code>to_local</code> / <code>local_day</code> / <code>today</code>).  There is no timezone database and no daylight-saving handling — a fixed offset only.</p>
+<pre><code><span class="kw">use</span> time;</code></pre>
+<h2 id="parsing-and-field-access">Parsing and field access</h2>
+<p><code>parse</code> reads an ISO date "YYYY-MM-DD", optionally followed by a time. The accessors return UTC calendar fields; <code>weekday</code> is 0=Mon..6=Sun.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">show_fields</span>() {
+  d = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">year</span>(d) == <span class="nm">2026</span>, <span class="st">"year"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month</span>(d) == <span class="nm">5</span>, <span class="st">"month"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">day</span>(d) == <span class="nm">25</span>, <span class="st">"day"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday</span>(d) == <span class="nm">0</span>, <span class="st">"2026-05-25 is a Monday"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday_name</span>(d) == <span class="st">"Mon"</span>, <span class="st">"weekday name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month_name</span>(d) == <span class="st">"May"</span>, <span class="st">"month name"</span>);</code></pre>
+<pre><code>  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hour</span>(t) == <span class="nm">14</span>, <span class="st">"hour"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minute</span>(t) == <span class="nm">30</span>, <span class="st">"minute"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">second</span>(t) == <span class="nm">7</span>, <span class="st">"second"</span>);</code></pre>
+<p>The "T...Z" ISO form parses to the same instant as the space form.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25T14:30:07Z"</span>) == t, <span class="st">"ISO T/Z form"</span>);</code></pre>
+<p>Malformed input parses to null — test with <code>!</code>.</p>
+<pre><code>  bad = time::<span class="fn-call">parse</span>(<span class="st">"not-a-date"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"garbage is null"</span>);
+}</code></pre>
+<h2 id="formatting">Formatting</h2>
+<pre><code><span class="kw">fn</span> <span class="fn-call">show_formatting</span>() {
+  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(t) == <span class="st">"2026-05-25"</span>, <span class="st">"format_date"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_time</span>(t) == <span class="st">"14:30"</span>, <span class="st">"format_time"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_seconds</span>(t) == <span class="st">"14:30:07"</span>, <span class="st">"format_seconds"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(t) == <span class="st">"2026-05-25 14:30"</span>, <span class="st">"format_datetime"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_iso</span>(t) == <span class="st">"2026-05-25T14:30:07Z"</span>, <span class="st">"format_iso"</span>);
+}</code></pre>
+<h2 id="arithmetic-and-differences">Arithmetic and differences</h2>
+<p>Stepping never desynchronises across leap years — the math is exact.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">show_arithmetic</span>() {
+  jan1 = time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_weeks</span>(jan1, <span class="nm">1</span>)) == <span class="st">"2026-01-08"</span>, <span class="st">"add_weeks"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(jan1, <span class="nm">365</span>)) == <span class="st">"2027-01-01"</span>, <span class="st">"add_days"</span>);</code></pre>
+<p>Leap-day boundary.</p>
+<pre><code>  feb28 = time::<span class="fn-call">parse</span>(<span class="st">"2024-02-28"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(feb28, <span class="nm">1</span>)) == <span class="st">"2024-02-29"</span>, <span class="st">"leap day"</span>);</code></pre>
+<pre><code>  dec31 = time::<span class="fn-call">parse</span>(<span class="st">"2026-12-31"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">days_between</span>(jan1, dec31) == <span class="nm">364</span>, <span class="st">"days_between"</span>);</code></pre>
+<pre><code>  hourly = time::<span class="fn-call">seconds_between</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 00:00:00"</span>),
+                                 time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 01:00:00"</span>));
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hourly == <span class="nm">3600</span>, <span class="st">"seconds_between"</span>);
+}</code></pre>
+<h2 id="week-boundaries-and-iso-week-numbering">Week boundaries and ISO week numbering</h2>
+<pre><code><span class="kw">fn</span> <span class="fn-call">show_weeks</span>() {</code></pre>
+<p>start_of_week snaps back to Monday 00:00.</p>
+<pre><code>  wed = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-27"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">start_of_week</span>(wed)) == <span class="st">"2026-05-25"</span>, <span class="st">"Monday of week"</span>);</code></pre>
+<p>2026-01-01 is a Thursday -&gt; ISO week 1 of 2026.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">2026</span>, <span class="st">"iso_year"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">1</span>, <span class="st">"iso_week"</span>);</code></pre>
+<p>2021-01-01 is a Friday -&gt; still ISO week 53 of 2020.</p>
+<pre><code>  jan1_2021 = time::<span class="fn-call">parse</span>(<span class="st">"2021-01-01"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(jan1_2021) == <span class="nm">2020</span>, <span class="st">"iso_year rollback"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(jan1_2021) == <span class="nm">53</span>, <span class="st">"iso_week 53"</span>);
+}</code></pre>
+<h2 id="local-day-at-a-fixed-offset">Local day at a fixed offset</h2>
+<p>23:30 UTC at +120 minutes is 01:30 the next local day.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">show_local</span>() {
+  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 23:30:00"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(time::<span class="fn-call">to_local</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26 01:30"</span>, <span class="st">"to_local"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">local_day</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26"</span>, <span class="st">"local_day"</span>);
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="fn-call">show_fields</span>();
+  <span class="fn-call">show_formatting</span>();
+  <span class="fn-call">show_arithmetic</span>();
+  <span class="fn-call">show_weeks</span>();
+  <span class="fn-call">show_local</span>();
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"time library: all checks passed"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">
@@ -2450,12 +2560,8 @@ for e in data#errors { log_warn(e) }
 <p>Primitive types built into lav. True or false value.</p>
 </div>
 <div class="item">
-<pre><code>pub type integer size(4)</code></pre>
-<p>32-bit signed integer.</p>
-</div>
-<div class="item">
-<pre><code>pub type long size(8)</code></pre>
-<p>64-bit signed integer. Use when values exceed ~2 billion.</p>
+<pre><code>pub type integer size(8)</code></pre>
+<p>64-bit signed integer.</p>
 </div>
 <div class="item">
 <pre><code>pub type single size(4)</code></pre>
@@ -2493,23 +2599,27 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub type i32 = integer size(4)</code></pre>
 <p>Full 32-bit integer range, 4 bytes.</p>
 </div>
+<div class="item">
+<pre><code>pub type u32 = integer limit(0, 4294967294) size(4)</code></pre>
+<p>4-byte unsigned: 0 – 4_294_967_294.  size(4) forces 4-byte storage and serialisation symmetric with `i32`.  Stored as Parts::Int so the in-memory representation is signed i32; values in the upper half (2^31..2^32-2) round-trip through file I/O via 4-byte raw bytes but read back as negative i64s in expressions.  For full 0..2^32-1 values needed in expression-time arithmetic, declare the field / variable as plain `integer` (8-byte) instead — `u32` is for the file / wire-format use cases (magic numbers, counts, tick fields) where the byte width is the load-bearing property.</p>
+</div>
 <h2 id="stdlib-interfaces">Interfaces</h2>
 <p class="section-desc">Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.</p>
 <div class="item">
 <pre><code>pub interface Ordered</code></pre>
-<p>Types that support the `&lt;` comparison operator. Satisfied by integer, long, single, float, text, and any user type defining OpLt.</p>
+<p>Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Equatable</code></pre>
-<p>Types that support the `==` equality operator. Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.</p>
+<p>Types that support the `==` equality operator. Satisfied by integer, single, float, text, boolean, and user types defining OpEq.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Addable</code></pre>
-<p>Types that support the `+` addition operator, returning the same type. Satisfied by integer, long, single, float, and user types defining OpAdd.</p>
+<p>Types that support the `+` addition operator, returning the same type. Satisfied by integer, single, float, and user types defining OpAdd.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Numeric</code></pre>
-<p>Types that support `*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.</p>
+<p>Types that support `*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, single, float, and user types defining OpMul and OpMin.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Scalable</code></pre>
@@ -2524,10 +2634,6 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn abs(both: integer) -&gt; integer</code></pre>
 <p>Absolute value. Removes the sign from a negative integer.</p>
-</div>
-<div class="item">
-<pre><code>pub fn abs(both: long) -&gt; long</code></pre>
-<p>Absolute value for long integers.</p>
 </div>
 <div class="item">
 <pre><code>pub fn abs(both: single) -&gt; single</code></pre>
@@ -2667,15 +2773,6 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn clamp(both: integer, lo: integer, hi: integer) -&gt; integer</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn min(both: long, b: long) -&gt; long</code></pre>
-</div>
-<div class="item">
-<pre><code>pub fn max(both: long, b: long) -&gt; long</code></pre>
-</div>
-<div class="item">
-<pre><code>pub fn clamp(both: long, lo: long, hi: long) -&gt; long</code></pre>
-</div>
-<div class="item">
 <pre><code>pub fn min(both: single, b: single) -&gt; single</code></pre>
 </div>
 <div class="item">
@@ -2712,19 +2809,19 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn split(self: text, separator: character) -&gt; vector &lt; text &gt;</code></pre>
 </div>
 <div class="item">
+<pre><code>pub fn split_text(self: text, separator: text) -&gt; vector &lt; text &gt;</code></pre>
+</div>
+<div class="item">
 <pre><code>pub fn join(self: vector&lt;text&gt;, jn_sep: text) -&gt; text</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn starts_with(self: text, value: text) -&gt; boolean</code></pre>
-<p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
-</div>
-<div class="item">
-<pre><code>pub fn ends_with(self: text, value: text) -&gt; boolean</code></pre>
-<p>Returns true if self ends with value. Use for suffix matching (e.g., file extension checks).</p>
+<pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
+<p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
+<p>Added in @PLAN37 phase 10.5 — closes a stdlib gap surfaced by scan.loft's @PLAN matcher doing `line[i+1] == 'P' &amp;&amp; line[i+2] == 'L' &amp;&amp; line[i+3] == 'A' &amp;&amp; line[i+4] == 'N'` per-char instead of `line.starts_with_at(i, &quot;PLAN&quot;)`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>
-<p>Removes leading and trailing whitespace. Use when processing user input or file content.</p>
+<p>(Path helpers `dir` / `basename` / `join` / `resolve` moved to `02_files.loft` § Path helpers, so they're available before `03_text.loft` loads — same call shape, same `pub fn` signatures.) Removes leading and trailing whitespace. Use when processing user input or file content.</p>
 </div>
 <div class="item">
 <pre><code>pub fn trim_start(self: text) -&gt; text[self]</code></pre>
@@ -2825,6 +2922,10 @@ for e in data#errors { log_warn(e) }
 <p>Number of elements in the vector. Use in loop bounds: for i in 0..v.len().</p>
 </div>
 <div class="item">
+<pre><code>pub fn len(both: sorted) -&gt; integer</code></pre>
+<p>Number of elements in a sorted collection.</p>
+</div>
+<div class="item">
 <pre><code>pub fn clear(both: vector)</code></pre>
 <p>Remove all elements from the vector, setting its length to 0.</p>
 </div>
@@ -2832,10 +2933,14 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn hash_sorted(h: reference, tp: integer) -&gt; reference</code></pre>
 <p>C60 Step 3a-part2: iterate a hash in ascending key order. Returns a fresh vector&lt;reference&lt;T&gt;&gt; with the hash's records sorted by key field(s).  The parser desugars `for e in h { … }` into a call with the hash's type id; direct user calls need to supply the id via `sizeof`-style introspection (not yet exposed).  Inefficient by design — walks + sorts all records per call.  See CAVEATS.md C60.</p>
 </div>
+<div class="item">
+<pre><code>pub fn len(both: hash) -&gt; integer</code></pre>
+<p>Number of elements in a hash collection.</p>
+</div>
 <h2 id="stdlib-output-and-diagnostics">Output and Diagnostics</h2>
 <div class="item">
 <pre><code>pub fn assert(test: boolean, message: text, file: text, line: integer)</code></pre>
-<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually.</p>
+<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: #impure(host_io) — assertion failures write to log/stderr (host bridges serialise), so par workers may call assert.</p>
 </div>
 <div class="item">
 <pre><code>pub fn panic(message: text, file: text, line: integer)</code></pre>
@@ -2843,7 +2948,7 @@ for e in data#errors { log_warn(e) }
 </div>
 <div class="item">
 <pre><code>pub fn log_info(message: text, file: text, line: integer)</code></pre>
-<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually.</p>
+<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: log_* are #impure(host_io) — observable side effect (writes to log sink) but the host serialises calls across par workers, so they're par-safe.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_warn(message: text, file: text, line: integer)</code></pre>
@@ -2860,6 +2965,14 @@ for e in data#errors { log_warn(e) }
 </div>
 <div class="item">
 <pre><code>pub fn println(v1: text)</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn eprint(v1: text)</code></pre>
+<p>Writes v to standard ERROR without a newline. Companion to print() — use to separate human-readable status / progress / summary lines from machine-readable stdout (JSON, structured data piped to downstream consumers).</p>
+</div>
+<div class="item">
+<pre><code>pub fn eprintln(v1: text)</code></pre>
+<p>Writes v followed by a newline to standard ERROR.</p>
 </div>
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <p class="section-desc">Internal helpers for reduce-based aggregates.</p>
@@ -2884,7 +2997,7 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub enum FieldValue {
   FvBool   { v: boolean },
   FvInt    { v: integer },
-  FvLong   { v: long },
+  FvLong   { v: integer },
   FvFloat  { v: float },
   FvSingle { v: single },
   FvChar   { v: character },
@@ -2898,6 +3011,25 @@ for e in data#errors { log_warn(e) }
   value: FieldValue,
 }</code></pre>
 <p>Represents a single struct field during compile-time iteration.</p>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: integer) -&gt; text</code></pre>
+<p>Built-in `to_text` impls so primitives satisfy `Printable` automatically.  Placed after every OpFormat* / OpAppend* declaration above so format-string interpolation in the bodies can resolve to the relevant built-in.  Without these impls, `&lt;T: Printable&gt;(x: T)` rejects built-in element types with &quot;missing to_text&quot; (plan-17 phase 03 — also restores the INTERFACES.md and loft-write-skill claim that built-ins satisfy Printable automatically).</p>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: float) -&gt; text</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: single) -&gt; text</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: boolean) -&gt; text</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: character) -&gt; text</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn to_text(self: text) -&gt; text</code></pre>
 </div>
 <h2 id="stdlib-file-system">File System</h2>
 <div class="item">
@@ -2933,15 +3065,15 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub struct File {
   path: text,
 
-  size: long,
+  size: integer,
 
   format: Format,
 
   ref: i32,
 
-  current: long,
+  current: integer,
 
-  next: long
+  next: integer
 }</code></pre>
 </div>
 <div class="item">
@@ -2962,7 +3094,7 @@ for e in data#errors { log_warn(e) }
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean</code></pre>
-<p>Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+<p>Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat). Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
@@ -2977,7 +3109,30 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn set_file_size(self: File, size: long) -&gt; FileResult</code></pre>
+<pre><code>pub fn mtime(path: text) -&gt; integer</code></pre>
+<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters like @PLAN37 phase 07's `plans_recent` 60-day cutoff: pass the path, convert the returned seconds back to YYYY-MM-DD, and compare lexicographically against `ymd_days_ago(60)`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_durable_check(path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 phase 01b — durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_durable_seal(path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_persist_bind(r: hash, path: text) -&gt; boolean</code></pre>
+<p>@PLAN38 — &quot;the hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
+<p>First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.</p>
+<p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
+<p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
+<p>Typical dryopea-style pattern: pw = PaintedWorld { painted: hash&lt;PaintedHex[q, r]&gt;::new() } store_persist_bind(pw.painted, &quot;dryopea_world.store&quot;) // …mutations to pw.painted now hit mmap'd bytes…</p>
+</div>
+<div class="item">
+<pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn sync(self: File) -&gt; boolean</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt;</code></pre>
@@ -2999,6 +3154,13 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn arguments() -&gt; vector &lt; text &gt;</code></pre>
 </div>
 <div class="item">
+<pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
+<p>Returns the UTC calendar date `days` days before today, formatted as `YYYY-MM-DD`.  Reuses `src/logger.rs::days_to_ymd`.  Use for cutoff-date computation in time-window filters (e.g. &quot;P-issues closed in the last 30 days&quot;).  Negative `days` clamps to today. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  scan.loft (@PLAN37 phase 07 indexer) uses this for its per-byte tag scanner — ~5-10× speedup vs `text[i]` for pure ASCII checks.</p>
+</div>
+<div class="item">
+<pre><code>pub fn ymd_days_ago(days: integer) -&gt; text</code></pre>
+</div>
+<div class="item">
 <pre><code>pub fn directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the current working directory, optionally with v appended as a subpath. Use to construct absolute paths relative to where the program was launched.</p>
 </div>
@@ -3016,12 +3178,43 @@ for e in data#errors { log_warn(e) }
 </div>
 <h2 id="stdlib-time">Time</h2>
 <div class="item">
-<pre><code>pub fn now() -&gt; long</code></pre>
+<pre><code>pub fn now() -&gt; integer</code></pre>
 <p>Returns the current wall-clock time as milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC). Use for timestamps and logging.</p>
 </div>
 <div class="item">
-<pre><code>pub fn ticks() -&gt; long</code></pre>
+<pre><code>pub fn ticks() -&gt; integer</code></pre>
 <p>Returns microseconds elapsed since program start (monotonic clock). Unaffected by system clock adjustments. Use for benchmarks and frame timing.</p>
+</div>
+<h2 id="stdlib-memory-diagnostics">Memory diagnostics</h2>
+<div class="item">
+<pre><code>pub fn store_memory() -&gt; text</code></pre>
+<p>Returns a multi-line snapshot of all LIVE stores' internal memory utilisation: total capacity vs actual claimed data vs free space, record + free-block counts, mergeable adjacent-free pairs (free neighbours that should have coalesced), and the largest stores by capacity with their creation site (`bc:&lt;pos&gt;` — a bytecode position on the interpreter; 0 on --native) and type name.  Use to watch memory growth in a running program.</p>
+</div>
+<h2 id="stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</h2>
+<p class="section-desc">reverse(v) and sort(v) are compiler special-cased in parse_call.</p>
+<div class="item">
+<pre><code>pub fn starts_with(self: text, value: text) -&gt; boolean</code></pre>
+<p>Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
+</div>
+<div class="item">
+<pre><code>pub fn ends_with(self: text, value: text) -&gt; boolean</code></pre>
+<p>Returns true if self ends with value. Use for suffix matching (e.g., file extension checks).</p>
+</div>
+<div class="item">
+<pre><code>pub fn dir(self: text) -&gt; text</code></pre>
+<p>Directory part of a path — strips the trailing `/&lt;segment&gt;`. &quot;doc/claude/PROBLEMS.md&quot;.dir() → &quot;doc/claude&quot; &quot;CLAUDE.md&quot;.dir()              → &quot;&quot;   (no `/`) &quot;/etc/passwd&quot;.dir()            → &quot;/etc&quot; &quot;&quot;.dir()                        → &quot;&quot;</p>
+</div>
+<div class="item">
+<pre><code>pub fn basename(self: text) -&gt; text</code></pre>
+<p>Last segment of a path — the part after the trailing `/`. &quot;doc/claude/PROBLEMS.md&quot;.basename() → &quot;PROBLEMS.md&quot; &quot;CLAUDE.md&quot;.basename()              → &quot;CLAUDE.md&quot; &quot;/foo/&quot;.basename()                   → &quot;&quot;    (trailing slash) &quot;&quot;.basename()                        → &quot;&quot;</p>
+</div>
+<div class="item">
+<pre><code>pub fn join(self: text, other: text) -&gt; text</code></pre>
+<p>Join two paths — `self/other` with a single `/` separator. Special cases: - other starts with `/` (absolute) → return other unchanged - self is empty                     → return other - self ends with `/`                → no extra separator inserted</p>
+</div>
+<div class="item">
+<pre><code>pub fn resolve(self: text, target: text) -&gt; text</code></pre>
+<p>Resolve `target` against `self` (where self is a base directory). Strips leading `./` repeatedly; each `../` segment trims the last component from `self`.  Mirrors scan.loft's `resolve_link_path`. &quot;doc/claude&quot;.resolve(&quot;../README.md&quot;)     → &quot;doc/README.md&quot; &quot;doc/claude&quot;.resolve(&quot;./PROBLEMS.md&quot;)    → &quot;doc/claude/PROBLEMS.md&quot; &quot;a/b/c&quot;.resolve(&quot;../../x&quot;)               → &quot;a/x&quot; &quot;&quot;.resolve(&quot;foo&quot;)                        → &quot;foo&quot;</p>
 </div>
 </section>
 </body>
