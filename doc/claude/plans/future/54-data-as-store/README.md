@@ -348,12 +348,24 @@ from the type-schema concern, then struct/`Text`/`Reference` signatures.
      a `DbRef` like a struct, allocated fresh on return (`area(Circle{r:2}) → 12`,
      `make_rect(3,4)` → 12).
    - **N2 store-touching now covers ALL the common types — scalars, vectors,
-     structs, text, and enums (plain + data) — both directions** (13 green tests in
-     `tests/n2_cdylib.rs`).  **Remaining:** `sorted`/`index`/`hash`/`spacial`
-     aggregates (the `DbRef` ABI already routes them — untested); closures
-     (`__closure` param); the *lean interface* / schema-sync so the script need not
-     redefine the library's types identically; and auto-deriving the `#native` decl
-     from `use <lib>` (N3 policy).
+     structs, text, and enums (plain + data) — both directions** (14 green tests in
+     `tests/n2_cdylib.rs`).
+   - **Lean interface (source form) DONE** — `native_lib::generate_interface(data,
+     export_set)` emits the library's public type defs + `#native "loft_shared_…"`
+     forward-decls as **loft source** (types in the library's definition order via
+     `Type::name` + `children_of`, skipping the auto-added `enum` discriminant
+     field).  `lean_interface_drives_shared_dispatch`: a script whose *only*
+     declaration is the generated interface dispatches `make_rect → area == 12` —
+     **no hand-written type redefinition, no hand-written `#native` decl**.  The
+     script parses only the interface (layouts + signatures + symbols), never the
+     library bodies, and adopts the library's exact types in order, so the schema
+     agrees **by construction**.  (A binary schema load — the D2a cache — is the
+     robust successor covering non-public type ordering; this source form covers
+     the common case where the public types are the only ones.)
+   - **Remaining:** `sorted`/`index`/`hash`/`spacial` aggregates (the `DbRef` ABI
+     already routes them — untested); closures (`__closure` param); auto-deriving
+     the whole flow (compile cdylib + interface) from `use <lib>` (N3 policy /
+     productization).
 3. **N5 soundness** of the boundary, woven through both.
 
 The acceptance gate for each slice is **end-to-end** (an interpreted script calls an
