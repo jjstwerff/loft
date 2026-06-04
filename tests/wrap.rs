@@ -355,11 +355,14 @@ const LIB_TESTS_SKIP: &[&str] = &[
 /// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
 /// interpreter crashes can't be run file-by-file here.
 const LIB_PKGS_SKIP: &[&str] = &[
-    // input — design + API draft landed 2026-06-01 (LAVITION W.13);
-    // runtime blocked on @P391 (cross-package struct constructor lands
-    // in CONST_STORE → `Write to read-only store` panic on the first
-    // field write in `input_tick_from_state`).  Un-skip once @P391 ships.
-    "input",
+    // (empty) — `input` un-gated 2026-06-04.  Its two blockers are both fixed:
+    // #248 (@P391: cross-package struct ctor + inline heap-call method arg →
+    // CONST_STORE panic; interpreter `scan_args` force-lift, regression
+    // `tests/scripts/188-…`) and #266 (nested `&self` method call's writes not
+    // persisting on `--interpret`; `convert` no longer re-wraps an already-
+    // borrowed reference receiver in `OpCreateStack`, regression
+    // `tests/scripts/189-issue-266-nested-self-method.loft`).  `lib/input`'s
+    // `01-basics` now passes on both `--interpret` and `--native`.
 ];
 
 /// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the

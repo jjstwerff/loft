@@ -2238,11 +2238,54 @@ impl Parser {
                 // Plan-06 phase 4d.A.2 — fn-ref vector elements store
                 // the 4-byte i32 d_nr.  Emit OpSetInt4 (4-byte write)
                 // not OpSetInt (8-byte) so adjacent element slots
-                // aren't corrupted by overflow.  The Value `p` here
-                // is `Value::Int(d_nr as i32)` (from `parse_fn_ref`),
-                // so the int4 write picks up the correct value.
+                // aren't corrupted by overflow.
+                //
+                // #263: the element is a 4-byte d_nr slot, but a fn-ref
+                // *value* source (a local `f = dbl`, or a call-returned
+                // `getfn()`) is a 20-byte slot ([d_nr 8B][closure DbRef
+                // 12B]).  A bare `OpSetInt4(elm, 0, <fn-ref value>)`
+                // reads the wrong 4 bytes (the high end of the slot —
+                // part of the closure DbRef), storing a garbage d_nr
+                // that crashes when later called/freed.  Project the
+                // d_nr (the low 8 bytes, truncated to 4 by OpSetInt4):
+                //   - a literal `Value::Int(d_nr)` from parse_fn_ref is
+                //     already the bare d_nr — write it directly.
+                //   - a `Value::Var(v)` (a fn-ref local) → FnRefDnr(v),
+                //     which projects the d_nr via OpVarInt (mirrors the
+                //     struct-field path at parser/mod.rs:6064).
+                //   - a `Value::Call(..)` (a call-returned fn-ref) →
+                //     materialise the call into a non-capturing fn-ref
+                //     temp first (skip_free so its null closure half is
+                //     never dereferenced), then FnRefDnr(tmp).
+                // Capturing sources are already rejected above (the #247
+                // guard), so discarding the closure half here is lossless.
                 let pos = Value::Int(0);
-                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]));
+                let dnr_val = match p.unspan() {
+                    Value::Int(_) => p.clone(),
+                    Value::Var(v) if matches!(self.vars.tp(*v), Type::Function(_, _, _)) => {
+                        Value::FnRefDnr(*v)
+                    }
+                    Value::Call(_, _) => {
+                        let fn_type = if let Type::Function(params, ret, _) = in_t {
+                            Type::Function(params.clone(), ret.clone(), vec![])
+                        } else {
+                            in_t.clone()
+                        };
+                        let tmp = self.create_unique("__fn_ref_tmp", &fn_type);
+                        self.vars.defined(tmp);
+                        // The temp is a borrowed fn-ref value; its closure
+                        // half is the null sentinel (non-capturing).  Mark
+                        // skip_free so scope-exit cleanup never frees it.
+                        self.vars.set_skip_free(tmp);
+                        if !self.first_pass {
+                            self.change_var_type(tmp, &fn_type);
+                        }
+                        ls.push(v_set(tmp, p.clone()));
+                        Value::FnRefDnr(tmp)
+                    }
+                    _ => p.clone(),
+                };
+                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), pos, dnr_val]));
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }

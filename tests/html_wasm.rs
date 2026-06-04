@@ -475,10 +475,12 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
     // without a JS host bridge (out of scope for now).  Un-skip if a future
     // JS-host VirtFS bridge ships.
     "hex_world",
-    // input — design draft landed 2026-06-01 (LAVITION W.13); blocked on
-    // @P391 on every backend (cross-package constructor → CONST_STORE).
-    // Un-skip once @P391 ships.
-    "input",
+    // `input` un-gated on node 2026-06-04: both its blockers — #248 (@P391
+    // cross-package ctor → CONST_STORE) and #266 (nested `&self` writes not
+    // persisting on `--interpret`) — are fixed, and `01-basics` builds + runs
+    // green on the node (`wasm32-unknown-unknown` / browser) path.  It remains
+    // in LIB_PKGS_WASMTIME_SKIP below for an UNRELATED reason (E0463: the
+    // graphics native crate is absent from the wasmtime sysroot).
 ];
 
 /// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
@@ -493,10 +495,14 @@ const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
     // false, breaking `assert(img.width == 256)`.  Browsers handle this
     // fine.
     "imaging",
-    // input — design draft landed 2026-06-01 (LAVITION W.13); the
-    // graphics native crate isn't present in the wasmtime sysroot →
-    // E0463 at lib resolution; same root cause as @P391 on the other
-    // backends.  Un-skip once @P391 ships.
+    // input — the #248/@P391 + #266 language blockers are FIXED (it now runs
+    // green on `--interpret`, `--native`, and the node/browser wasm path).
+    // STILL gated here for an UNRELATED build issue: `input` depends on
+    // `graphics`, whose native crate is absent from the wasmtime (wasip2)
+    // sysroot, so `--html` codegen fails with E0463 at lib resolution.
+    // Verified failing 2026-06-04.  Un-skip once the graphics crate is
+    // available to the wasmtime build (a wasm-sysroot / packaging task, not a
+    // language bug).
     "input",
 ];
 

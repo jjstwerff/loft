@@ -793,7 +793,6 @@ when-to-reach-for-which:
 | `Undefined type string` | Use `text`, not `string` |
 | `Allocating a used store` | Field named `key` in hash-value struct — rename the field |
 | `<fn> is not found` for `say(...)` | Use `println()` |
-| `Unknown record N` on nested field access | Avoid deep chaining on vector elements (P105) |
 | `Cannot pass a literal or expression to a '&' parameter` | Assign to a named variable first, then pass it. `v[i]` and `s.field` work directly (P160). |
 | `match arm separator is \`=>\`, not \`->\`` | Replace `->` with `=>` in the arm.  (P206 — was a parser hang before the recovery helper landed.) |
 | `'fn' definitions must be at file scope, not inside a function or block` | Move the helper fn out of the enclosing fn body.  Lambdas (`|x| { … }` or `fn(x: T) { … }`) are the only function-shaped values allowed inside a fn body. |

@@ -199,6 +199,7 @@ src/main.rs              CLI entry; loads default/ then user file
 - Operators: `OpCamelCase` in loft source → `op_snake_case` in Rust (`fill.rs`).
 - `#rust "..."` annotations in `default/*.loft` supply the Rust body for code generation.
 - Full naming and null-sentinel rules: see [CODE.md](doc/claude/CODE.md).
+- Response shape (reporting to the user): lead with the ONE highest-leverage item in full — the decision + the minimum to act on it — then a one-line summary of the rest; don't dump long detailed lists. Full norm + the combined "work the queue" / "what's blocked on you" workflow: [ISSUE_TRACKING.md § The work queue](doc/claude/ISSUE_TRACKING.md).
 
 ---
 
@@ -297,6 +298,46 @@ states that are harder to debug than the original problem.
   3–5 files is faster and safer than any automated bisect.
 - If a regression appeared after a specific recent commit, use `git show <commit>` or
   `git diff <commit>^ <commit>` to read that change — do not re-run old code.
+
+### Before fixing a non-trivial bug: build the boundary matrix (matrix-first)
+
+The urge to apply a fix is the signal you have NOT earned it yet.  On any
+non-trivial bug — *especially* a crash or silent corruption — run this protocol
+before touching code.  It is the lightweight default (`/tmp` probes, no plan
+needed); inside an investigation plan it becomes the formal
+[`_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md) flow.
+
+1. **Don't fix on the first read.**  A coherent explanation is a *hypothesis*, not a
+   conclusion — most of all an elegant one-line fix (real bugs are complex-variant;
+   the clean story is usually the part of the picture you haven't looked at yet).
+2. **Build the boundary matrix** in throwaway `/tmp` probes — on `--interpret` only.
+   Vary ONE dimension per probe along the **composition axes**
+   ([plans/README § The composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies):
+   type-kind / construction-path / context / access / depth / null / backend — the
+   same list a feature's Stage A matrix uses).  Distinctive collision-resistant
+   values, every index/position — a weak probe (small values, only index `[0]`, no
+   length check) hides cases.  SEE on the interpreter: strides and types are IR operands it
+   surfaces in seconds, whereas `--native` pays a rustc compile *per probe* — that
+   cost belongs at the final verify (step 7), never in the seeing loop.
+3. **Map pass/fail; find the real boundary.**  Expect the filed/assumed scope to be
+   wrong — it usually is (#263 "into a collection" was actually *any runtime fn-ref
+   value*; #262 "3-deep copy" was actually *every single context*; cluster III was
+   three different mechanisms, two of them not even nesting).
+4. **The matrix is how you SEE the root.**  The shared mechanism behind a family of
+   "different" symptoms is visible *in the matrix* and invisible in any one repro.
+   Treat "I can't see the root yet" as "the matrix isn't finished," NEVER as license
+   to patch the one case in hand.
+5. **Fix at the chokepoint, enforcing exactly the invariant** the whole failing
+   region violates — no narrower (a per-case/per-type patch leaves siblings broken),
+   no wider (re-resolving the type drags blast radius).  An un-generalized remainder
+   is the same bug, unfinished.
+6. **If a multi-site fix regresses, bisect by SITE** — apply one site at a time and
+   re-run the matrix — after the FIRST regression, not the third.
+7. **Verify against the full matrix on BOTH backends** — this is where `--native`
+   earns its compile cost (interp-vs-native divergence is a real hazard).  During fix
+   iteration re-run only the targeted subset the change touches; run the full matrix
+   once, at the end.  Graduate the guarantee probes to `tests/scripts/`, keep the
+   rest as landmarks.
 
 ---
 
@@ -427,6 +468,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | **Closed/historical bug archive** (FIXED rows = regression record; the big `###` entries are design references).  OPEN bugs are now [GitHub Issues](https://github.com/jjstwerff/loft/issues) |
 | [QUALITY.md](doc/claude/QUALITY.md) | Reference + open work — open programmer-biting issues, active sprint (P54 JsonValue enum), active designs (Q1-Q4 JSON ecosystem, P54-U unified parser, Dep-inference for native fn returns), compiler blockers (B2-B7 struct-enum bugs), enhancement tiers, recommended landing order.  C54 (integer→i64) historical record kept as the canonical "LANDED via …" closure pattern.  See [§ Open work — actionable summary](doc/claude/QUALITY.md#open-work--actionable-summary) for the at-a-glance status table. |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
+| [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) | **Design verification list** — concerns to check a design against (ignorable by default; pull out when a design is load-bearing).  Append-only; the incubator from which verified concerns graduate into protocols.  C1: brittleness-over-bugs (the real risk is brittle algorithms, not bugs — name the invariant, consequence/cause ratio, one-home-per-fact, subtraction-not-a-guard) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) in `## Open work` section. |
@@ -464,7 +506,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Debug a runtime crash | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) (closed archive) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
+| Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md` — run-it-down mechanics, native-env gotchas, the matrix-first route) → [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) (closed archive) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) standard library function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
 | Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmarks, root-cause analysis, optimisation designs |

@@ -819,8 +819,33 @@ impl State {
         }
     }
 
+    /// #263: pad a fn-ref **return value** to the full 20-byte ABI slot.
+    ///
+    /// A fn-ref returned as a bare d_nr (e.g. `return dbl`, which lowers to
+    /// `Value::Int(d_nr)` via parser/objects.rs) pushes only the 4-byte d_nr,
+    /// but the `Function` return ABI is a 20-byte slot ([d_nr 8B][closure DbRef
+    /// 12B]).  Without padding, `OpReturn` copies 20 bytes — 12 of them stale
+    /// eval-stack garbage — into the caller's fn-ref slot, so the closure half
+    /// is wild and a later `OpFreeRef`/`store_mut` dereferences it as a
+    /// `store_nr` (OOB / SIGSEGV).  Push a null-ref sentinel so a non-capturing
+    /// call-returned fn-ref has a well-formed (null) closure half, mirroring the
+    /// block-result padding in `generate_block` and the `f = dbl` assignment
+    /// path in `gen_fn_ref_value`.  `before` is `stack.position` captured before
+    /// the return value was generated.
+    fn pad_fn_ref_return(&mut self, stack: &mut Stack, before: u16) {
+        let return_is_fn = matches!(
+            stack.data.def(stack.def_nr).returned(),
+            Type::Function(_, _, _)
+        );
+        if return_is_fn && stack.position.saturating_sub(before) < 16 {
+            self.emit_push_sentinel(stack);
+        }
+    }
+
     pub(super) fn gen_return(&mut self, v: IrNode, stack: &mut Stack) -> Type {
+        let before = stack.position;
         self.generate_node(v, stack, false);
+        self.pad_fn_ref_return(stack, before);
         let return_type = stack.data.def(stack.def_nr).returned();
         // CO1.3c: generator functions use OpCoroutineReturn instead of OpReturn.
         if matches!(return_type, Type::Iterator(_, _)) {
@@ -2934,7 +2959,10 @@ impl State {
                 has_return = true;
                 if return_expr == 0 {
                     return_expr = s_pos;
+                    let before = stack.position;
                     self.generate_node(v.return_inner(), stack, false);
+                    // #263: pad a bare-d_nr fn-ref return to the 20-byte ABI.
+                    self.pad_fn_ref_return(stack, before);
                 }
                 self.add_return(stack, return_expr);
                 return_expr = 0;

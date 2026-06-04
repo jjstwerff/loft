@@ -141,13 +141,169 @@ Filing is half the loop; closing is the other half.
 - **Don't file a bug you fix in the same change** — the fix + its test ARE the
   record (CLAUDE.md § Bug-filing policy).
 
-## Features & enhancements
+## Item lifecycle — the `status:` axis (bugs + enhancements)
 
-Bugs are the focus above.  FEATURE requests use the `feature_request` template +
-the `enhancement` label, and connect to the roadmap: a planned feature lives in
-ROADMAP.md / PLANNING.md (or a `plans/` slot if multi-phase); a `gh` Project board
-tracks "which release bundles which consumer-driven work" across the org repos.
-The Issue is the lightweight capture; the plan/roadmap is the design + sequencing.
+Every item carries a `status:*` label = **what it is waiting on**, on one shared
+axis.  Bugs take the **short** path; enhancements take the **full** path — because a
+*want* must clear value-vs-cost before it is committed, where a *fault* is committed
+to by default.  (An enhancement is a small plan; the outcomes below are the plan
+outcomes at issue scale — see *Beyond bugs — the unified model* below.)
+
+**Intake gate (well-formedness).**  An item is not actionable until its body makes
+the gap explicit — a **bug**: *expected vs observed* (+ a reproducer); an
+**enhancement**: *what works now* vs *what you want from us*.  Until then it sits at
+**`status:unclear`** (blocked on **information**).
+
+**Intermediate (open):**
+
+| `status:` | waiting on | bug | enhancement |
+|---|---|---|---|
+| `unclear` | information | ✓ | ✓ |
+| `need-approval` | a decision — needs the **cost** beside the value: effort, systems changed, risks | — *(a fault is fixed by default; `needs-design` / `attention` cover the rare fix that needs a design call)* | ✓ |
+| `approved` | doing it — **maintainer greenlit it** (the go decision; design may still need pinning) | — | ✓ |
+| `designed` | doing it — approved AND the design is pinned, ready to code | — *(a bug's design is the inline investigation)* | ✓ |
+
+**Resolution:**
+
+| outcome | bug | enhancement | closes? · register |
+|---|---|---|---|
+| implemented / fixed | fixed | implemented | yes, on merge · `fixed-pending-merge` interim |
+| **deferred** | — *(edge: a parked low-sev bug)* | ✓ — **stays open**, parked, un-defer trigger | no · `status:deferred` + DEFERRED.md |
+| declined | `wontfix` / `by-design` | `rejected` | yes · rejected → DESIGN_DECISIONS.md |
+
+A **bug has 2 terminals** (fixed / declined); an **enhancement 3** (implemented /
+deferred / rejected) — the extra `deferred` is the *want* that can wait.  An
+enhancement **links out to a `@PLN` / `plans/<NN>/` lazily** — only when the design
+grows phase-worthy (usually at `status:designed`); no renumber, the issue stays the
+lightweight capture.  Feature requests use the `feature_request` template; the plan /
+ROADMAP carries the design + sequencing.
+
+### Ripeness — a `status:` is earned by its data, not assigned
+
+A `status:` claims the ticket holds the data that state requires.  **Evaluate the
+ticket against the entry criteria before promoting it; if the data isn't there it is
+*not ripe* and stays at the lower state.**  (A label assigned without the data is the
+same failure as a fix asserted without the matrix.)
+
+- **leave `unclear`** — the gate is filled (bug: *expected vs observed* + a repro;
+  enh: *now vs wanted*).  A ticket also stays `unclear` whenever it is not yet
+  *decidable* — e.g. value is clear but the cost can't be assessed until an upstream
+  design/scope call is made (mark that with `needs-design`).
+- **enter `need-approval`** — the body holds **all three**: (1) **value** (now-vs-wanted);
+  (2) **cost** — the systems/files changed, a rough effort, the risks/blast-radius;
+  (3) a **decidable proposal** — a decider can pick implement / defer / reject *without
+  first doing design exploration*.  Missing any → not ripe → stays `unclear`.
+- **enter `designed`** — `need-approval` passed *and* approved *and* the design settled
+  (scope chosen, approach pinned).
+- **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
+  that data must be present to defer or reject *informedly*, never by default.
+
+### Designing — `needs-design` is earned by its use cases
+
+`needs-design` is **earned, not assigned** — like every status, by data, and its data
+is **the use cases.**  A ticket that doesn't yet state its use cases isn't
+`needs-design`; it's `unclear` — you can't see what it's *for*, let alone that it
+needs a design call.  So before a ticket earns `needs-design`, the **use cases must be
+included**, and they must pose a real scope/approach decision (usually a tension the
+breaking cases expose).  Earning the state comes first; the design pass then resolves
+it.
+
+Clearing it — `needs-design` → `designed` — is the design pass, which works **both
+halves of the use-case matrix**:
+
+1. **Use cases served** — what the design makes possible (the *want*).
+2. **Use cases broken or changed** — what existing, legitimate behaviour it affects.
+
+The second half is the one that does the work: it is the matrix discipline applied to
+*design*, and **the breaking cases reveal the real boundary** (the matched scope —
+*no wider*).  A design that lists only what it serves is the "no-wider" failure
+waiting to ship.  #255 is the worked example — "switch the path anchor from cwd to the
+program" looked decided until the breaking case (a CLI tool resolving the *user's*
+file) exposed **two kinds** of relative path, and the matched design became
+single-anchor + a one-line opt-in, not a global switch.  Until that pass is run the
+ticket stays `needs-design`; cost can't be assessed against a scope the breaking cases
+haven't bounded.
+
+### The done-gate — `fixed` / `implemented` is earned, not declared
+
+Ripeness guards the way *in*; the **done-gate guards the way out**.  Before a ticket
+earns `fixed` (bug) or `implemented` (enhancement), evaluate the *result* against two
+checks — their failure has a loud symptom: **the requester immediately files a slight
+variation** (the production-time form of *"the un-generalized remainder is the same
+bug, unfinished"* — found by the user instead of by us).
+
+1. **Class coverage** — did the fix enforce the **invariant / whole class**, not just
+   the filed repro?  A narrower fix leaves siblings and the requester files one.  (The
+   matrix protocol's "no narrower," checked at closure: the `i16` case, the nested one,
+   the other backend, the other context.)
+2. **Intent match** — does the result deliver **what the requester actually wanted**,
+   not just what they literally typed?  (#255: the literal complaint was *wrong*; a
+   perfect fix of the words would have missed the real want.)
+
+Operational test — **"would the requester read this result and file a slight
+variation?"**  *"…but what about &lt;sibling&gt;"* → class miss; *"…but that's not what
+I meant"* → intent miss.  Either → **not done**: widen the fix, or re-scope to the
+intent, before closing.  Any residual that legitimately can't be closed now (a real
+*separate* sibling, a verification you couldn't run) is **named on the ticket**, not
+left silent — that is the difference between a tracked follow-up and a slip.
+
+## The work queue — what's workable, and the dual flow
+
+A goal that says *"work the queue"* acts only on items that are **workable now**, and
+the predicate **differs by type** (the bug/enhancement duality).  Items needing a
+human decision are **surfaced, not churned**, and **the loop ends when no workable
+item remains** — even with open items left, because the rest are in your court or
+parked.
+
+| type | workable when… | the agent does | not workable → surface to you |
+|---|---|---|---|
+| **bug** | **ripe** — well-formed (expected/observed + repro), not `needs-design` / `attention` | matrix-first investigate (code-only agent) → fix → regression → verify both backends → `fixed-pending-merge` | `status:unclear` (info/repro) · `needs-design` / `attention` (a design call) |
+| **enhancement** | **`status:approved`** (or `designed`) — you greenlit it | implement within the approved scope (pin the design first if not yet `designed`) → `fixed-pending-merge` | `status:unclear` (clarify/scope) · `status:need-approval` (**your decision**) · `status:deferred` (parked) |
+
+The two **reasons work can be done** are different by design: a *bug* is workable
+because it is **ripe** (a fault, ready to fix); an *enhancement* because it is
+**approved** (a want, greenlit).  That is the duality — and `status:approved` is the
+trigger **you** set to move an enhancement from your court to the agent's.
+
+**Termination + report.**  When nothing is workable, **stop** — do not read "open
+items remain" as "incomplete."  Report the remainder by *why it's yours*: *N awaiting
+your approval · M need a design call · K parked (deferred)*.
+
+**Goal phrasings:**
+- **"work the queue"** — fix every ripe bug + implement every `status:approved`
+  enhancement, then stop and report what's in my court.
+- **"work the bugs"** — ripe bugs only.
+- **"work #NNN"** — a single item, still gated on it being workable.
+
+### The mirror — "what's blocked on you?"
+
+`"work the queue"` is the **agent** half of the loop; the **maintainer** half is its
+inverse.  Ask:
+
+> **"What's blocked on you — highest-leverage first?"**
+
+It returns **decisions and authorizations, not status** — only the things the
+maintainer's attention is the bottleneck for — **ranked by how much each unblocks**, so
+one spare minute goes to the item that frees the most.  **Format matters: lead with
+the ONE highest-leverage item in full** — the decision it needs + the minimum to make
+it — then **a one-line summary of each of the rest**, never twenty detailed rows.  One
+thing to act on now; the others at a glance, so the landscape is visible without
+making the maintainer process all of it.  (This is the reporting norm for the whole
+workflow, not just this question — long detailed lists spend the maintainer's
+attention on reading instead of deciding.)
+
+What lands in the maintainer's court (the "surface to you" column above, plus the
+out-of-band gates):
+- **decisions** — approve a `need-approval` enhancement (set `status:approved`), pick a
+  scope on a `needs-design` item, reclassify, set priority;
+- **authorizations** — force-push, open a PR, merge, run an interactive command only
+  the maintainer can (a login, a real host);
+- **information** — answer the question a `status:unclear` item is blocked on;
+- **external actions** — a change in another repo, or a resource only the maintainer has.
+
+Together the two halves are the **combined workflow**: *work the queue* drains what the
+agent can do; *what's blocked on you* surfaces, ranked, exactly what it can't — so
+nothing stalls silently and the maintainer's time goes to the highest-leverage call.
 
 ## Beyond bugs — the unified model (plans · lib-plans · enhancements)
 

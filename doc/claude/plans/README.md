@@ -91,6 +91,73 @@ The sequence is **probe → code-only investigation agent → fix → verify aga
 the probe corpus**, never an ad-hoc fix from a first read.  Full rule:
 [`_INVESTIGATION_TEMPLATE.md § Fixing a finding`](_INVESTIGATION_TEMPLATE.md#fixing-a-finding--probe--agent-before-code-required).
 
+### The matrix is how you *see* the root — and the proportionate fix is the invariant
+
+Edge-probing isn't only for *scoping* a fix; the completed probe matrix is what lets
+you **see the general picture** — the one mechanism behind a family of "different"
+bugs — that you would otherwise overlook.  The pattern is reliable: the unifying
+root becomes visible *after* the matrix exists and gets missed *before* it.  In
+plan-58 the `single` SIGSEGV, `boolean` overlap, `i32` corruption, and comprehension
+skew were **one** `vector<T>`↔`vector<vector<T>>` handle-stride conflation — obvious
+in the 34-cell matrix, invisible in any single repro, and "fixed" three different
+wrong ways while the matrix was still incomplete.  So treat **"I can't see the root
+yet" as "the matrix isn't finished," never as license to patch the one case in
+hand.**  (Some readers reach the pattern by intuition with no data; if you don't,
+the matrix is your eyes — build it first, then the root is as visible to you as it
+was to them.)
+
+And the fix must be **proportionate to the problem, not the symptom.**  A multi-line
+fix special-cased to one *type*, in a language whose types are near-identical, is a
+shape-mismatch — it signals you are patching downstream of the shared chokepoint
+every type flows through.  Find the **invariant** the whole class violates and
+enforce *exactly* that: no **narrower** (a per-type patch leaves siblings broken)
+and no **wider** (re-resolving the type drags blast radius — plan-58's `db_type`
+attempt was the right *unify* instinct aimed at the wrong dimension; it should have
+enforced the stride invariant, not re-derived the type).  An **un-generalized
+remainder** (plan-58's accepted ≥4 over-reservation) is the *same bug, unfinished* —
+"benign" is making peace with a fix proportionate to one type, not to the problem.
+The sanitizer **guard** worth building is just that invariant made executable
+(*every vector handle strides by 4*) — see [GOALS.md](../GOALS.md) two-engine model.
+
+### The composition axes — the dimensions a matrix varies
+
+A matrix is only as good as the axes it crosses, and the axes are **not** invented
+per bug or per feature — they are loft's **fixed degrees of freedom**, the things any
+new value, type, or operation must compose with.  This is the one canonical list;
+the **debug** matrix ([CLAUDE.md § Debugging policy](../../../CLAUDE.md) step 2, to
+*bound a bug*) and the **feature-plan Stage A** ([`_TEMPLATE.md`](_TEMPLATE.md), to
+*bound a feature*) both vary against it.  Cross the axes your change actually
+touches; a weak matrix that exercises the easy axes and skips the load-bearing one
+(plan-58 ran wide elements and skipped narrow) hides exactly the cell that crashes.
+
+1. **Type-kind** of the element/operand — wide scalar (`i32`/`f32`/`bool`/`char`),
+   **narrow scalar** (`i8`/`i16`/`u8`/`u16` — distinct stride, where plan-58 split),
+   `text`, struct, enum, vector, tuple, closure / fn-ref.  Plus the **null** of each.
+2. **Construction path** — literal, comprehension, function return, append/push,
+   copy (assignment / element-copy), default / zero-init.  (plan-58's four clusters
+   were *one* bug spread across four of these.)
+3. **Storage context** — local slot, struct field, vector element, global,
+   const/static, argument, captured-by-closure.
+4. **Access** — read vs store, *every* index/position (not just `[0]`), length
+   afterwards — a probe that checks only `[0]` with no length passes *on* corruption.
+5. **Nesting depth** — 1 / 2 / 3+ (where the `vector<T>`↔`vector<vector<T>>` type-id
+   divergence surfaced).
+6. **Null / sentinel** — the null representation *per type* (`f32` NaN → wild rec-id
+   vs `i64::MIN` → harmless; the @P380 axis).
+7. **Backend** — `--interpret` vs `--native` (vs WASM where relevant); divergence
+   between the two is its own hazard, verified at the end (step 7).
+
+The **design** use is this same list run *forward in time*.  Before building a
+feature, its cells against these axes are its conformance spec: it is done not when
+the demo runs but when **every cell is green on both backends**, and those probes
+become its regression suite.  The bug class plan-58 shipped — one invariant
+(*a handle is 4 bytes*) re-derived in four code paths, validated only where the
+derivations happened to coincide — is *structurally* a set of matrix cells the
+feature never crossed.  The representation that makes the class **impossible** is
+[Goal E](../GOALS.md) (source is the truth) applied to construction: give each fact
+the feature introduces **one home** every path consults, and the off-diagonal cells
+have nothing to disagree about.
+
 ### Sibling bugs are discoveries to *record*, not cases to *fix in-place*
 
 Edge-probing one bug routinely surfaces **other** bugs at adjacent crossings —

@@ -957,6 +957,27 @@ impl Parser {
         if let Type::RefVar(ref_tp) = should
             && ref_tp.is_equal(is_type)
         {
+            // #266: a receiver/argument that is ITSELF an already-borrowed
+            // reference (its declared var type is `RefVar(_)`, e.g. a `&self`
+            // parameter) must be forwarded to a `&`-parameter by VALUE, not
+            // re-wrapped in `OpCreateStack`.  A borrowed-reference var's slot
+            // already holds a DbRef that points one level up (toward the
+            // owning struct); `OpCreateStack` would build a DbRef pointing at
+            // *that slot*, so the callee's single `OpGetStackRef` deref lands
+            // on the borrowing frame instead of the struct — the inner
+            // method's writes hit the stack store and never persist (and
+            // clobber the caller's reference slot).  Passing the var through
+            // unchanged gives the callee exactly the same live borrow the
+            // current frame holds.  Native passes the reference by the Rust
+            // ABI and is immune, so this is interpreter-correctness parity.
+            // Only non-text references need this — `&text` borrows have their
+            // own work-text copy semantics handled in the Text arm below.
+            if !matches!(**ref_tp, Type::Text(_))
+                && let Value::Var(v) = code
+                && matches!(self.vars.tp(*v), Type::RefVar(vinner) if vinner.is_equal(ref_tp))
+            {
+                return true;
+            }
             if matches!(**ref_tp, Type::Text(_)) {
                 // Text → &text: use OpCreateStack for plain variables (write-back),
                 // allocate a work-text copy for complex expressions (read-only).

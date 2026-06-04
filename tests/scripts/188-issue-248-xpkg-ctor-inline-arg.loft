@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// Regression for issue #248 — a cross-package struct constructor returning a
+// struct with a runtime-built vector field is consumed via the deep-copy
+// assignment path (`s = pkg::ctor(...)`, because the ctor takes a value arg).
+// Calling a `&self` method on `s` with an INLINE vector-returning helper call
+// as a later argument used to crash the INTERPRETER with
+//   "Write to read-only store at rec=N fld=K (locked by: CONST_STORE init)".
+//
+// Root cause (interpreter-only; native passes args by the Rust ABI and was
+// immune): the inline frame-growing call argument shifted the borrowed `&self`
+// receiver's stack slot relative to where the callee read `self`, so the field
+// write landed on a CONST_STORE record.  Fix: `src/scopes.rs::scan_args` now
+// force-lifts such a trailing heap-returning call argument into a `__lift_N`
+// temp (evaluated before the receiver `OpCreateStack`) when the first argument
+// is a borrowed CreateStack receiver — the `x = mk(); m.f(x)` shape that always
+// worked on both backends.
+//
+// The fixture package is `tests/lib/p248_pkg/`.
+
+use p248_pkg;
+
+// vector-returning helper built via `+= [..]` so it carries a hidden `__ref_N`
+// work-ref (the shape `scan_args::inline_struct_return` deliberately skips, so
+// it is the case the #248 fix had to cover).
+fn make_keys() -> vector<boolean> {
+  v: vector<boolean> = [];
+  for _ in 0..4 { v += [true]; }
+  v
+}
+
+fn main() {
+  // Cross-package ctor with a value arg → deep-copy assignment path for `s`.
+  s = p248_pkg::p248_new(7);
+  assert(p248_pkg::p248_scalar(s) == 7, "ctor scalar: {p248_pkg::p248_scalar(s)}");
+
+  // The trigger: `&self` method with an INLINE heap-returning call argument.
+  s.p248_load(99, make_keys());
+
+  assert(p248_pkg::p248_scalar(s) == 99,
+    "after load scalar: expected 99 got {p248_pkg::p248_scalar(s)}");
+  // every element written from the inline-call argument
+  assert(p248_pkg::p248_key(s, 0), "key0 set");
+  assert(p248_pkg::p248_key(s, 1), "key1 set");
+  assert(p248_pkg::p248_key(s, 2), "key2 set");
+  assert(p248_pkg::p248_key(s, 3), "key3 set");
+
+  // The free-function-call form (receiver as an explicit first arg) hit the
+  // same hazard — cover it too.
+  s2 = p248_pkg::p248_new(1);
+  p248_pkg::p248_load(s2, 42, make_keys());
+  assert(p248_pkg::p248_scalar(s2) == 42,
+    "free-fn form scalar: expected 42 got {p248_pkg::p248_scalar(s2)}");
+  assert(p248_pkg::p248_key(s2, 3), "free-fn form key3 set");
+
+  print("issue-248 cross-package ctor + inline-arg: ok\n");
+}

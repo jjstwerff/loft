@@ -29,7 +29,7 @@ This skill is **procedural-only**.  Definitions / rationale / templates live in 
 
 | Work shape | Path |
 |---|---|
-| Bug fix (single root cause, fits in one commit) | PROBLEMS.md row + regression test + commit.  No plan, no Open work entry. |
+| Bug fix (single root cause, fits in one commit) | Fix + regression test + commit (`Fixes #NNN` if a GitHub Issue exists; otherwise the fix + test ARE the record).  No plan, no Open work entry, no PROBLEMS.md row — PROBLEMS.md is the closed archive; open bugs are GitHub Issues. |
 | Tiny deliverable (demo deploy, version bump) | ROADMAP row only.  No plan. |
 | Operational change (CI tweak, doc fix) | Direct commit, no ROADMAP row needed. |
 | **Light TODO** (the normal flow) — work that fits in a row of a reference-doc table | `## Open work` section in the relevant `doc/claude/<NAME>.md` (NATIVE.md / PERFORMANCE.md / PACKAGES.md / QUALITY.md are canonical examples).  Same lifecycle as a plan, just one row. |
@@ -43,13 +43,31 @@ The light flow is the **default**.  Promote to a plan only when the work is genu
 
 Use when the plan's primary deliverable is a feature ship or fix landing.
 
-1. Pick the next free integer in the relevant tracker (`plans/future/` for core-language; `lib_plans/future/` for libraries — independent counters).
-2. `mkdir doc/claude/{plans,lib_plans}/future/<NN>-<slug>`
-3. `cp doc/claude/plans/_TEMPLATE.md doc/claude/{plans,lib_plans}/future/<NN>-<slug>/README.md`
-4. Fill in Status + Goal first.  Add Sub-arcs / Phase ordering / Open questions / Cross-arc dependencies / See also as the design clarifies.
-5. Add ROADMAP row(s) citing this plan + tag with value category (S / R / G / F / U / C / Q / N).
-6. Add `lib_plans/README.md` or `plans/README.md` Future-table row.
-7. **Do NOT add a CLAUDE.md doc index entry by default.**  Plans are discoverable via plans/README.md; per-plan CLAUDE.md entries are redundant.  Add only if the plan introduces a NEW top-level reference concept (vanishingly rare).
+> **NEW MODEL (2026-06) — supersedes the per-repo bookkeeping in the steps below
+> (and everywhere this skill says "next free integer" / "future/" / "ROADMAP row").**
+> A plan's identity is its **[`loft-lang/plans`](https://github.com/loft-lang/plans/issues)
+> issue number** (`@PLN<N>`); its dir is **flat** `plans/<N>-<slug>/` — no
+> `future/`/`deferred/`/`finished/` subdirs (state lives on the *issue*, not the
+> directory); and there is **no ROADMAP row** (the overview is *derived* from the
+> loft-lang issues — do not hand-maintain `ROADMAP.md`). Design lives in the dir; the
+> issue is the tracker.
+
+1. **Number = the `loft-lang/plans` issue.**  Create (or find) the plan's issue at
+   `loft-lang/plans` — its number is the plan's `@PLN<N>` identity.  Next free #:
+   `gh issue list -R loft-lang/plans --state all --limit 1`.  (NOT the next local dir
+   integer.)
+2. `mkdir doc/claude/{plans,lib_plans}/<N>-<slug>` — **flat**, no `future/`.
+3. `cp doc/claude/plans/_TEMPLATE.md doc/claude/{plans,lib_plans}/<N>-<slug>/README.md`
+4. Fill in Status + Goal first.  Add Sub-arcs / Phase ordering / Open questions /
+   Cross-arc dependencies / See also as the design clarifies.  Link the source issue(s)
+   and carry `@PLN<N>` in the body.
+5. **Label the loft-lang issue** — `plan` (type) + `subject:*` (`loft` / `libs` /
+   `audience`) + `status:*` (`future` = planned · `active` = in progress · `finished`).
+   **No ROADMAP row** — the value categories (S/R/G/F/U/C/Q/N) were a ROADMAP concept,
+   retired with it.
+6. **No `plans/README.md` Future-table row** — tracking lives in the loft-lang issues.
+7. **Do NOT add a CLAUDE.md doc index entry by default.**  Add only if the plan
+   introduces a NEW top-level reference concept (vanishingly rare).
 
 Length budget: 100-300 lines.  Longer means reference content is leaking in — extract to `doc/claude/<NAME>.md`.
 
@@ -152,6 +170,12 @@ Common to close + defer:
 ---
 
 ## Procedure D — ROADMAP cleanup pass
+
+> **RETIRED (2026-06).** `ROADMAP.md` is no longer hand-maintained — the plan
+> overview is derived from the `loft-lang/plans` issues (see the NEW MODEL banner in
+> Procedure A).  Do not run a ROADMAP cleanup pass or add/curate ROADMAP rows.  The
+> only live use of the value categories (S/R/G/F/U/C/Q/N) is as *labels on the
+> loft-lang issues*.  The steps below are kept for historical reference only.
 
 1. **Sweep for time projections.**  Grep for: `weeks of focused`, `multi-week`, `next [0-9]+ months`, `expected to take`, `2-3 weeks`, milestone version numbers as time anchors.  Replace with effort letters (XS/S/M/MH/H/VH/L) or remove.
 2. **Sweep for shipped items.**  Per the Maintenance rule: completed items get removed from ROADMAP (closure lives in CHANGELOG + git history).
