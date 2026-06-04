@@ -198,11 +198,18 @@ same failure as a fix asserted without the matrix.)
 - **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
   that data must be present to defer or reject *informedly*, never by default.
 
-### Designing — the use-case matrix (served *and* broken)
+### Designing — `needs-design` is earned by its use cases
 
-`needs-design` (an enhancement blocked on a scope/approach call before it can be
-costed; a bug whose fix needs a behaviour decision) reaches `designed` only when the
-design has enumerated **both halves of its use-case matrix**:
+`needs-design` is **earned, not assigned** — like every status, by data, and its data
+is **the use cases.**  A ticket that doesn't yet state its use cases isn't
+`needs-design`; it's `unclear` — you can't see what it's *for*, let alone that it
+needs a design call.  So before a ticket earns `needs-design`, the **use cases must be
+included**, and they must pose a real scope/approach decision (usually a tension the
+breaking cases expose).  Earning the state comes first; the design pass then resolves
+it.
+
+Clearing it — `needs-design` → `designed` — is the design pass, which works **both
+halves of the use-case matrix**:
 
 1. **Use cases served** — what the design makes possible (the *want*).
 2. **Use cases broken or changed** — what existing, legitimate behaviour it affects.
