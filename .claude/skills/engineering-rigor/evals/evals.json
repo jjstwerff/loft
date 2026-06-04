@@ -1,0 +1,26 @@
+{
+  "skill_name": "engineering-rigor",
+  "evals": [
+    {
+      "id": 0,
+      "name": "debug-trap",
+      "prompt": "I'm working on a tree-walking interpreter for a small statically-typed language with two backends (a bytecode interpreter and a native code generator that emits Rust). I hit a crash: a program that does `vv[0] += [9]` -- where `vv` is a `vector<vector<integer>>` -- panics with an index-out-of-bounds during code generation. The obvious fix is to add a bounds check in the compound-assignment code path. Walk me through how you'd approach fixing this. Answer from the situation as described; don't go exploring a codebase.",
+      "expected_output": "A plan that resists the one-line bounds-check, proposes varying shapes (other nesting depths, other ops like plain = vs +=, other element types) to find the real class/boundary, aims at an invariant/root (e.g. type-id or stride handling) fixed at a chokepoint, and verifies on BOTH backends.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "design-overunify",
+      "prompt": "I'm adding JSON support to a small language's standard library. My plan is one universal `parse(text) -> Value` entry point that ALSO handles the engine's config files, its save-game format, and its network wire protocol -- they're all just structured text, so one parser should cover them. Sketch this design for me. Answer from the situation as described; don't go exploring a codebase.",
+      "expected_output": "Treats 'they're all just structured text' as a claim to TEST, not a premise. Names the invariant the one-parser rests on, probes whether config/save/protocol are one family or N, flags the over-unification risk, and says how to falsify it before building.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "tell-spray",
+      "prompt": "In my language's native code generator, each kind of value a generator can `yield` -- an integer tuple, a function reference, a piece of text -- has its own hand-written template, and there are two copies of each (one where the value is produced, one where it's consumed). Every time we support a new yield shape I add another template pair. We now want to support `(text, integer)` tuples, and the file is getting long. Should I just add the next template pair, or is something off? Answer from the situation as described; don't go exploring a codebase.",
+      "expected_output": "Recognizes 'getting long' + 'add the next template' as the brittleness tell; identifies the per-shape spray as N-mechanisms-for-one-family; pushes toward a single mechanism derived from the value's type (a flatten-walk) at a chokepoint both copies derive from; treats it as a design with a nameable invariant rather than adding template N+1.",
+      "files": []
+    }
+  ]
+}
