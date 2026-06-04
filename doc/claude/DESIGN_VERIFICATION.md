@@ -152,6 +152,28 @@ doesn't.  (Step 3 stays a *search*, never a pass/fail on size — a length proto
 asserted "match the prediction" would be the over-unification this concern warns
 against, applied to itself.)
 
+**Keep it light — the procedure must not consume the judgment it serves.**  The
+*tell* ("longer than expected") is the cheap, always-available sensor; the full
+write-down-predict-validate procedure is the expensive part, and it fires only when
+the tell trips on something load-bearing — never reflexively per function.  An
+ever-on checklist would be friction ([Goal F](GOALS.md)) and would burn the very
+capacity the essential-vs-accidental judgment depends on.  And writing the shape down
+is a load *reducer*, not a tax: it moves the prior onto the page so working memory is
+freed for the building and the judgment.  Design is intrinsically heavy — it holds
+the whole composition space at once — so the page is where you put down what you'd
+otherwise drown carrying.  (Robustness by subtraction, applied to attention.)
+
+**How it graduates — by measurement, not assertion.**  Whether this procedure *helps*
+or *overloads* is itself a claim to test like a debug matrix, not to assert.  Run real
+design tasks (starting with the string-allocation invariant) **with** the
+predict-validate step and, where feasible, a **without** control, and compare on
+*artifacts, not on how it felt* (self-report on one's own load is unreliable): outcome
+robustness (did the written prediction catch a brittle version the control shipped?),
+final code shape (lines / mechanisms / is the invariant nameable?), and cost (effort
+spent vs brittleness prevented).  The pattern across tasks decides it — and if it helps
+on load-bearing designs but overloads on trivial ones, that *is* the empirical basis
+for the tell-gates-the-procedure split above.
+
 **See also:**
 [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
 ·
