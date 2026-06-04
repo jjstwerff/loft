@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
+
+Relative file paths now resolve against the **program's own directory** (source
+dir under `--interpret`, exe dir under `--native`, host cwd under wasm) instead of
+the launch cwd — so bundled assets (fonts, images) load regardless of where the
+program is started, unblocking the native games.  `Stores::resolve_path()` is the
+single resolution home; absolute paths untouched.  Opt back into cwd-relative with
+the `#cwd` file directive (the repo-root tools that operate on the working dir —
+the doc generators, the tracker indexer/scanner, the branch-review viewer, the GLB
+exporters — declare it); override globally with `LOFT_PATHS=program|cwd`.  Shipped
+both backends + a 13-file corpus migration; the wasip2 print path stays gated on
+#268.  (PR #269.)
+
+### Coroutine native yield codec — per-shape spray → one layout-driven flatten-walk (@PLAN16) (2026-06-04)
+
+The `--native` coroutine value channel had a per-shape codec: a hand-written
+producer+consumer template per yield shape, gated on a runtime tag.  New composite
+shapes fell through to the wrong arm — `(integer,float)`, `(integer,boolean)`,
+`(vector,integer)` failed to compile.  Replaced with one **flatten-walk derived
+from `T`'s slot kinds** (`src/coroutine_layout.rs`): each scalar slot inline as an
+`i64`, each reference slot as a full `DbRef`; the per-slot kind list rides as extra
+`OpCoroutineNext` args so producer (from `T`) and consumer (from the transmitted
+kinds) agree by construction — no runtime shape tag.  Three previously-broken
+composite shapes now compile + run via the single walk, zero per-shape code;
+`coroutine_matrix` 18/18 green on both backends.  `(text, …)` tuples remain the one
+excluded cell (a text element's `&str` repr needs a store intern).  @PLAN16 closed
+→ `finished/`; the build was the *with-arm* that graduated DESIGN_VERIFICATION C1
+into [Design Protocol 1](DESIGN_PROTOCOL.md).  (PR #269.)
+
 ### Nested-vector layout — four corruption/crash clusters fixed (plan-58) (2026-06-03)
 
 Closed the `vector<vector<…>>` stability class across depth × element-type ×

@@ -12,6 +12,43 @@ analysis wants a re-audit.  **First slice: Phase A** (mechanical, ~95% of scratc
 traffic by call volume, independently shippable, removes the in-statement-growth
 + re-entrancy hazards).
 
+## Session-1 progress + next pickup (2026-06-04, branch `strings`)
+
+Work happens on branch **`strings`** (= `main` + the promotion commit + the
+baseline test).  The goal is **Goal E reached for strings** — *a produced `text`
+lives only in its destination; the runtime holds nothing the source doesn't
+imply* — not merely deleting the buffer.
+
+**The matrix corrected the scope.**  `tests/scripts/192-text-lifetime.loft`
+exercises five shapes a produced text is held across a boundary (local-across-line,
+comprehension-accumulate, coroutine-yield, fn-return, in-statement-chain) on both
+backends — **all pass today.**  So the cross-statement *dangling* hazard §2.2
+leads with is **already closed** (interp copies into the destination; native via
+@P227's work buffers).  `scratch` is therefore **not a correctness bug** — it is
+the **Goal-E memory-predictability cost** (the same shape as `rc`): every produced
+text is held *twice* — once in its real destination, once in `scratch` until the
+line ends (a transient duplicate the source never implies) — plus a `Vec` capacity
+that only grows.
+
+**Acceptance bar — the Goal-E "Check" for strings, made measurable:**
+`grep -rn 'scratch.push' src/` = **39 sites across 7 files** today → drive to **0**
+→ delete the field + `OpClearScratch` + the `Value::Line` injection → add a
+`#[cfg(debug_assertions)]` assertion that `scratch` stays empty so the duplicate
+cannot silently re-acquire.  `tests/scripts/192` is the correctness net the
+migration must keep green on both backends throughout.
+
+**Next slice — `to_lowercase` end-to-end (proof of the pattern).**  `to_lowercase`
+already has a `_dest` variant, but today it only fires inside
+`out += x.to_lowercase()` (`try_text_dest_pass`, `state/codegen.rs:1845`).  Extend
+the destination-synthesis to the `s = x.to_lowercase()` / `let` shape — retarget
+the call's destination to the LHS's `RefVar(Text)`, the same machinery
+`text_return` (`parser/control.rs:2405`) uses for user fns.  Confirm `scratch.push`
+is gone for that shape and `192` stays green on both backends.  Reading order: §7.
+The remaining producers (§1 inventory) then follow mechanically; Phase C closes the
+yield/closure side-tables; the field deletes last.
+
+---
+
 Design note for retiring the `Vec<String>` lifetime-extension buffer that
 backs `Str` returns from native and code-generated text producers.
 
