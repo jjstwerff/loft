@@ -309,11 +309,13 @@ needed); inside an investigation plan it becomes the formal
 1. **Don't fix on the first read.**  A coherent explanation is a *hypothesis*, not a
    conclusion — most of all an elegant one-line fix (real bugs are complex-variant;
    the clean story is usually the part of the picture you haven't looked at yet).
-2. **Build the boundary matrix** in throwaway `/tmp` probes.  Take the repro and vary
-   ONE dimension per probe (source / container / context / store-vs-read / depth /
-   element-type / *both backends*).  Distinctive collision-resistant values, every
-   index/position — a weak probe (small values, only index `[0]`, no length check)
-   hides cases.
+2. **Build the boundary matrix** in throwaway `/tmp` probes — on `--interpret` only.
+   Take the repro and vary ONE dimension per probe (source / container / context /
+   store-vs-read / depth / element-type).  Distinctive collision-resistant values,
+   every index/position — a weak probe (small values, only index `[0]`, no length
+   check) hides cases.  SEE on the interpreter: strides and types are IR operands it
+   surfaces in seconds, whereas `--native` pays a rustc compile *per probe* — that
+   cost belongs at the final verify (step 7), never in the seeing loop.
 3. **Map pass/fail; find the real boundary.**  Expect the filed/assumed scope to be
    wrong — it usually is (#263 "into a collection" was actually *any runtime fn-ref
    value*; #262 "3-deep copy" was actually *every single context*; cluster III was
@@ -328,8 +330,11 @@ needed); inside an investigation plan it becomes the formal
    is the same bug, unfinished.
 6. **If a multi-site fix regresses, bisect by SITE** — apply one site at a time and
    re-run the matrix — after the FIRST regression, not the third.
-7. **Verify against the full matrix on both backends**; graduate the guarantee probes
-   to `tests/scripts/`, keep the rest as landmarks.
+7. **Verify against the full matrix on BOTH backends** — this is where `--native`
+   earns its compile cost (interp-vs-native divergence is a real hazard).  During fix
+   iteration re-run only the targeted subset the change touches; run the full matrix
+   once, at the end.  Graduate the guarantee probes to `tests/scripts/`, keep the
+   rest as landmarks.
 
 ---
 
