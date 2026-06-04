@@ -127,9 +127,9 @@ regions invisible from the desk, and each harvested lesson is a new axis.  "Real
 consumers, not toys," because a toy only exercises the axes already visible.
 
 **Candidate protocol shape (graduation target — not yet active).**  When a real
-consumer has verified the way-of-working, the protocol this concern graduates into is
-expected to take the matrix-before-fix shape one level up — *commitment before
-action, so the action is checked against something other than its own momentum*:
+consumer has verified the way-of-working, the protocol this concern graduates into
+mirrors the matrix-before-fix shape one level up — *commitment before action, so the
+action is checked against something other than its own momentum*:
 
 1. **Before writing the code, write down the expected shape** — the one invariant you
    expect to carry it, the axes it must cover, and a rough size/structure (one
