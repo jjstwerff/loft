@@ -395,16 +395,17 @@ mark → build → load → dispatch, with no `#native` decl.  Productization wi
    `lexer.switch` parses it into the `Data`), record `(lib_source, pkg_dir)`.  After
    parsing, before `byte_code`: `candidates = {d | data.def(d).source() == lib_source}`,
    then `mark_native_exports(data, candidates)`.
-3. **Build after `byte_code`.**  The cdylib source needs the post-`byte_code` type
-   schema (`state.database`).  So after `byte_code`:
-   `generate_shared_cdylib_lib_rs(data, state.database, export_set)` →
-   `output_native_library` (no main bootstrap) → write `lib.rs` → rustc-compile
-   against the running binary's `libloft.rlib` (`cache::loft_rlib_path` locates the
-   build's rlib; **caveat:** the test context finds a *hashed* `libloft-<hash>.rlib`
-   in `deps/` while a real `cargo run` finds the unhashed `target/<prof>/libloft.rlib`
-   — the build helper must handle both, or take the rlib dir as a parameter) →
-   `.so` cached (N0's `.loft-build-fp` sidecar gates staleness; N1's idle-TTL evicts).
-   Push the `.so` to `pending_native_libs`.
+3. **Build after `byte_code`.**  ✅ **Production helper landed:**
+   `native_lib::build_shared_cdylib(data, stores, export_set, out_dir, stem)` does
+   it all — `find_loft_rlib()` (locates this build's `libloft.rlib` + `deps/`,
+   **handling both contexts**: a real `cargo run` unhashed `target/<prof>/libloft.rlib`
+   *and* a test's hashed `libloft-<hash>.rlib` in `deps/` — the cross-context risk,
+   resolved) → `generate_shared_cdylib_lib_rs` → `output_native_library` (no main
+   bootstrap) → write `lib.rs` → rustc (`--crate-type cdylib`, edition 2024,
+   `--extern loft=` + feature-dep externs).  Proven in the test context by
+   `auto_native_marks_and_dispatches_normal_library_fn`.  **Remaining for `main.rs`:**
+   call it after `byte_code`, cache the `.so` (N0's `.loft-build-fp` sidecar gates
+   staleness; N1's idle-TTL evicts), push to `pending_native_libs`.
 4. **Load + wire.**  `main.rs` already calls `load_all(pending_native_libs)` +
    `wire_native_fns`; add `wire_shared_native_fns(&mut state, &p.data)` alongside it.
 
