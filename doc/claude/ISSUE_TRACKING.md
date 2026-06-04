@@ -235,9 +235,13 @@ inverse.  Ask:
 
 It returns **decisions and authorizations, not status** — only the things the
 maintainer's attention is the bottleneck for — **ranked by how much each unblocks**, so
-one spare minute goes to the item that frees the most.  The answer is a short list,
-each row = *the item · the one decision it needs · the minimum to decide it* — never a
-status report.
+one spare minute goes to the item that frees the most.  **Format matters: lead with
+the ONE highest-leverage item in full** — the decision it needs + the minimum to make
+it — then **a one-line summary of each of the rest**, never twenty detailed rows.  One
+thing to act on now; the others at a glance, so the landscape is visible without
+making the maintainer process all of it.  (This is the reporting norm for the whole
+workflow, not just this question — long detailed lists spend the maintainer's
+attention on reading instead of deciding.)
 
 What lands in the maintainer's court (the "surface to you" column above, plus the
 out-of-band gates):
