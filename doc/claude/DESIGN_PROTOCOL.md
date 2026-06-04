@@ -200,9 +200,10 @@ safe; the dogfood loop grows what is visible.
   graduated from; the six **verification questions** (name-the-invariant,
   consequence/cause ratio, cost-of-next-case, one-home-per-fact, subtraction,
   matched-to-domain) are the checklist this protocol runs a design past in step 1.
-- [plans/finished/16-coroutine-validation/02-codec-collapse.md](plans/finished/16-coroutine-validation/02-codec-collapse.md)
-  — the with-arm in full: the predictions, the three probes (two falsified, one
-  confirmed), and the build that settled it.
+- [plans/finished/16-coroutine-validation/README.md](plans/finished/16-coroutine-validation/README.md)
+  — the @PLAN16 closure record (a finished plan); its `02-codec-collapse.md`
+  phase doc is the with-arm in full: the predictions, the three probes (two
+  falsified, one confirmed), and the build that settled it.
 - [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
   — the bug-level sibling of this protocol (matrix-before-fix).
 - [GOALS.md](GOALS.md) (Goal E) — robustness by subtraction, the deep reason the

@@ -1148,8 +1148,8 @@ they agree by construction (no per-shape template, no runtime shape tag).
 text-*element* tuples (CL-8), the tuple-through-higher-order / comprehension cells
 (`y4_x3` / `y4_x4`), and deleting the legacy `next_i64` / `next_text` /
 `next_dbref` channels once every shape routes through the codec (pure subtraction).
-Full record:
-[`plans/finished/16-coroutine-validation/02-codec-collapse.md`](plans/finished/16-coroutine-validation/02-codec-collapse.md).
+Full record: the @PLAN16 closure doc at
+[`plans/finished/16-coroutine-validation/README.md`](plans/finished/16-coroutine-validation/README.md).
 
 ---
 
