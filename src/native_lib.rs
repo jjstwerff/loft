@@ -279,6 +279,8 @@ fn bridge_read(t: &Type, slot: &str) -> String {
         Type::Text(_) => format!(
             "unsafe {{ std::str::from_utf8_unchecked(std::slice::from_raw_parts({slot}.text_ptr, {slot}.text_len)) }}"
         ),
+        // Plain (tag-only) enum → a `u8` tag riding in the scalar slot.
+        Type::Enum(_, false, _) => format!("{slot}.scalar as u8"),
         Type::Vector(_, _)
         | Type::Reference(_, _)
         | Type::Enum(_, true, _)
@@ -298,7 +300,8 @@ fn bridge_read(t: &Type, slot: &str) -> String {
 fn bridge_write_ret(t: &Type, expr: &str) -> String {
     match t {
         Type::Void | Type::Null => format!("let _ = {expr};"),
-        Type::Integer(_) | Type::Character | Type::Boolean => {
+        // Plain (tag-only) enum returns a `u8` tag → widen into the scalar slot.
+        Type::Integer(_) | Type::Character | Type::Boolean | Type::Enum(_, false, _) => {
             format!("unsafe {{ (*ret).scalar = ({expr}) as i64; }}")
         }
         Type::Float => format!("unsafe {{ (*ret).scalar = ({expr}).to_bits() as i64; }}"),

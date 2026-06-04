@@ -93,11 +93,11 @@ fn is_scalar_type(t: &Type) -> bool {
 /// the bridge wrapper allocates that destination itself, so the script-side
 /// `#native` forward-decl still models only the public params.
 ///
-/// A struct `reference` return is supported (no hidden dest — the body allocates
-/// the record fresh).  `Text` params (`&str`) and `Text` returns (via the
-/// `text_return` `&mut String` work buffer the bridge owns) are supported.  Not
-/// yet handled (a function is excluded if any holds): a data-`enum` return; a
-/// `__closure` (or other non-text-work `__`-prefixed) synthetic param.
+/// Struct `reference` and data-`enum` returns are supported (no hidden dest — the
+/// body allocates the record fresh).  Plain (tag-only) `enum` (a `u8` tag), `Text`
+/// params (`&str`) and `Text` returns (via the `text_return` `&mut String` work
+/// buffer the bridge owns) are supported.  Not yet handled: a `__closure` (or other
+/// non-text-work `__`-prefixed) synthetic param (the function is then excluded).
 #[must_use]
 pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
     native_compilable(data)
@@ -112,9 +112,15 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
             // `text` return uses `text_return`'s `&mut String` work buffer (the
             // bridge owns a local `String` and copies the result into scratch).
             let ret_text = matches!(ret, Type::Text(_));
+            // Enum(_, _, _) covers both a plain (tag-only) enum (returned as a u8
+            // tag) and a data enum (a DbRef, allocated fresh like a struct — no
+            // hidden dest); `bridge_write_ret` distinguishes them.
             let ret_ok = matches!(ret, Type::Void | Type::Null)
                 || is_scalar_type(ret)
-                || matches!(ret, Type::Vector(_, _) | Type::Reference(_, _))
+                || matches!(
+                    ret,
+                    Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _)
+                )
                 || ret_text;
             ret_ok
                 && def.attributes().iter().all(|a| {
@@ -142,13 +148,15 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
 /// (A `text` *return* is gated separately — it needs the `text_return` work
 /// buffer, not just a slot.)
 fn is_bridge_type(t: &Type) -> bool {
+    // Enum(_, _, _): a plain (tag-only) enum (a u8 tag) or a data enum (a DbRef);
+    // `bridge_read` distinguishes them.
     is_scalar_type(t)
         || matches!(
             t,
             Type::Text(_)
+                | Type::Enum(_, _, _)
                 | Type::Vector(_, _)
                 | Type::Reference(_, _)
-                | Type::Enum(_, true, _)
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)

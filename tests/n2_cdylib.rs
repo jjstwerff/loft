@@ -614,3 +614,90 @@ fn main() {
     run_shared_dispatch(&so, native_decl, source);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Plain (tag-only) enum: `--native` represents it as a `u8` tag (both arg and
+/// return — no hidden dest), riding in the `LibArg` scalar slot.
+const DIR_LIB: &str = "enum Direction { North, East, South, West }\n\
+                       pub fn dir_code(d: Direction) -> integer {\n\
+                       \x20   match d { North => 0, East => 1, South => 2, West => 3 }\n\
+                       }\n\
+                       pub fn dir_from(n: integer) -> Direction {\n\
+                       \x20   if n == 1 { East } else { North }\n\
+                       }";
+
+/// N2 store-touching: a plain `enum` crosses the boundary as a `u8` tag, both as
+/// an ARG (`dir_code(South) == 2`) and a RETURN (`dir_from(1) == East`, verified
+/// by round-tripping through `dir_code`).
+#[test]
+fn dispatches_plain_enum_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // dir_code: enum arg, scalar return.
+    let Some((so_c, tmp_c)) = build_shared_lib_cdylib("loft_n2_enum_c", DIR_LIB, "dir_code") else {
+        return;
+    };
+    let decl_c = "enum Direction { North, East, South, West }\npub fn dir_code(d: Direction) -> integer not null;\n#native \"loft_shared_n_dir_code\"\n";
+    run_shared_dispatch(
+        &so_c,
+        decl_c,
+        "fn main() { c = dir_code(South); assert(c == 2, \"dir_code(South) should be 2, got {c}\") }",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_c);
+
+    // dir_from: scalar arg, enum return — verify by feeding it back to dir_code.
+    let Some((so_f, tmp_f)) = build_shared_lib_cdylib("loft_n2_enum_f", DIR_LIB, "dir_from") else {
+        return;
+    };
+    let decl_f = "enum Direction { North, East, South, West }\npub fn dir_from(n: integer) -> Direction not null;\n#native \"loft_shared_n_dir_from\"\n";
+    run_shared_dispatch(
+        &so_f,
+        decl_f,
+        "fn main() { d = dir_from(1); r = match d { East => 1, _ => 0 }; assert(r == 1, \"dir_from(1) should be East, got tag {r}\") }",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_f);
+}
+
+/// Data enum (variants carrying fields): `--native` represents it as a `DbRef`
+/// (like a struct), both arg and return — no hidden dest.
+const SHAPE_LIB: &str = "enum Shape { Circle { r: integer }, Rect { w: integer, h: integer } }\n\
+                         pub fn area(s: Shape) -> integer {\n\
+                         \x20   match s { Circle { r } => r * r * 3, Rect { w, h } => w * h }\n\
+                         }\n\
+                         pub fn make_rect(w: integer, h: integer) -> Shape {\n\
+                         \x20   Rect { w: w, h: h }\n\
+                         }";
+
+/// N2 store-touching: a data `enum` crosses the boundary as a `DbRef`, both as an
+/// ARG (`area(Circle{r:2}) == 12`) and a RETURN (`make_rect(3,4)` then `area` → 12),
+/// the latter allocated by native code in the shared store.
+#[test]
+fn dispatches_data_enum_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // area: data-enum arg, scalar return.
+    let Some((so_a, tmp_a)) = build_shared_lib_cdylib("loft_n2_denum_a", SHAPE_LIB, "area") else {
+        return;
+    };
+    let decl_a = "enum Shape { Circle { r: integer }, Rect { w: integer, h: integer } }\npub fn area(s: Shape) -> integer not null;\n#native \"loft_shared_n_area\"\n";
+    run_shared_dispatch(
+        &so_a,
+        decl_a,
+        "fn main() { s = Circle { r: 2 }; a = area(s); assert(a == 12, \"area(Circle r=2) should be 12, got {a}\") }",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_a);
+
+    // make_rect: data-enum RETURN (allocated in the shared store), read via area.
+    let Some((so_m, tmp_m)) = build_shared_lib_cdylib("loft_n2_denum_m", SHAPE_LIB, "make_rect")
+    else {
+        return;
+    };
+    let decl_m = "enum Shape { Circle { r: integer }, Rect { w: integer, h: integer } }\npub fn make_rect(w: integer, h: integer) -> Shape not null;\n#native \"loft_shared_n_make_rect\"\n";
+    run_shared_dispatch(
+        &so_m,
+        decl_m,
+        "fn main() { s = make_rect(3, 4); r = match s { Rect { w, h } => w * h, _ => 0 }; assert(r == 12, \"make_rect(3,4) area should be 12, got {r}\") }",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_m);
+}
