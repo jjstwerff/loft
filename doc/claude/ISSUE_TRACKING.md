@@ -160,7 +160,8 @@ the gap explicit — a **bug**: *expected vs observed* (+ a reproducer); an
 |---|---|---|---|
 | `unclear` | information | ✓ | ✓ |
 | `need-approval` | a decision — needs the **cost** beside the value: effort, systems changed, risks | — *(a fault is fixed by default; `needs-design` / `attention` cover the rare fix that needs a design call)* | ✓ |
-| `designed` | doing it (approved + design settled) | — *(a bug's design is the inline investigation)* | ✓ |
+| `approved` | doing it — **maintainer greenlit it** (the go decision; design may still need pinning) | — | ✓ |
+| `designed` | doing it — approved AND the design is pinned, ready to code | — *(a bug's design is the inline investigation)* | ✓ |
 
 **Resolution:**
 
@@ -196,6 +197,34 @@ same failure as a fix asserted without the matrix.)
   (scope chosen, approach pinned).
 - **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
   that data must be present to defer or reject *informedly*, never by default.
+
+## The work queue — what's workable, and the dual flow
+
+A goal that says *"work the queue"* acts only on items that are **workable now**, and
+the predicate **differs by type** (the bug/enhancement duality).  Items needing a
+human decision are **surfaced, not churned**, and **the loop ends when no workable
+item remains** — even with open items left, because the rest are in your court or
+parked.
+
+| type | workable when… | the agent does | not workable → surface to you |
+|---|---|---|---|
+| **bug** | **ripe** — well-formed (expected/observed + repro), not `needs-design` / `attention` | matrix-first investigate (code-only agent) → fix → regression → verify both backends → `fixed-pending-merge` | `status:unclear` (info/repro) · `needs-design` / `attention` (a design call) |
+| **enhancement** | **`status:approved`** (or `designed`) — you greenlit it | implement within the approved scope (pin the design first if not yet `designed`) → `fixed-pending-merge` | `status:unclear` (clarify/scope) · `status:need-approval` (**your decision**) · `status:deferred` (parked) |
+
+The two **reasons work can be done** are different by design: a *bug* is workable
+because it is **ripe** (a fault, ready to fix); an *enhancement* because it is
+**approved** (a want, greenlit).  That is the duality — and `status:approved` is the
+trigger **you** set to move an enhancement from your court to the agent's.
+
+**Termination + report.**  When nothing is workable, **stop** — do not read "open
+items remain" as "incomplete."  Report the remainder by *why it's yours*: *N awaiting
+your approval · M need a design call · K parked (deferred)*.
+
+**Goal phrasings:**
+- **"work the queue"** — fix every ripe bug + implement every `status:approved`
+  enhancement, then stop and report what's in my court.
+- **"work the bugs"** — ripe bugs only.
+- **"work #NNN"** — a single item, still gated on it being workable.
 
 ## Beyond bugs — the unified model (plans · lib-plans · enhancements)
 
