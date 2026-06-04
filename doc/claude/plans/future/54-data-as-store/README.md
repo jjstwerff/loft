@@ -319,9 +319,19 @@ from the type-schema concern, then struct/`Text`/`Reference` signatures.
    - **Drive-by product fix:** the `loft_register_v1` guard keyed on a global
      "registry non-empty" proxy → false-positived a *second* zero-registration
      cdylib; now keyed per-library (`LOADED_LIBS` tracks `uses_v1`), preserving
-     issue #119.  **Remaining sub-slices:** `reference`/struct returns + struct
-     **args** (need type-id agreement — the *lean interface* / schema-sync, since
-     library and script are separate `Data`); `Text`; plain (tag-only) `enum`.
+     issue #119.
+   - **Schema-agreement PROVEN for structs (the de-risk made real):** a struct
+     `reference` **arg** crosses correctly — `point_sum(Point{x:3,y:4}) → 7`
+     (`dispatches_struct_arg_into_shared_cdylib`).  The library cdylib and the
+     interpreter, built from **separate `Data`**, assign an *identically-defined*
+     `Point` the **same type id + field offsets** (identical stdlib prefix +
+     identical struct def → same definition index → same `db.finish()` layout), so
+     the shared `DbRef` reads `p.x`/`p.y` correctly.  This validates the
+     zero-marshalling shared-store ABI for schema-dependent types; the *lean
+     interface* would formalise "the script adopts the library's exact schema"
+     rather than relying on identical redefinition.  **Remaining sub-slices:**
+     `reference`/struct **returns** (the hidden-dest type id is the struct's, not
+     `main_vector<…>`); `Text`; plain (tag-only) `enum`.
 3. **N5 soundness** of the boundary, woven through both.
 
 The acceptance gate for each slice is **end-to-end** (an interpreted script calls an

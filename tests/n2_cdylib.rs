@@ -486,3 +486,34 @@ fn main() {
     run_shared_dispatch(&so, native_decl, source);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A function taking a struct `reference` (schema-DEPENDENT — the native body
+/// reads `p.x`/`p.y` at `db.finish()`-computed field offsets).
+const POINT_SUM_LIB: &str = "struct Point { x: integer, y: integer }\n\
+                             pub fn point_sum(p: Point) -> integer { p.x + p.y }";
+
+/// N2 store-touching probe: a struct `reference` ARG crosses the boundary.  This
+/// is the first SCHEMA-DEPENDENT case — the library cdylib and the interpreter,
+/// built from SEPARATE `Data`, must assign `Point` the same type id + field
+/// offsets for the shared `DbRef` to read correctly.  `point_sum(Point{3,4}) == 7`.
+#[test]
+fn dispatches_struct_arg_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_shared_s", POINT_SUM_LIB, "point_sum")
+    else {
+        return;
+    };
+
+    let native_decl = "struct Point { x: integer, y: integer }\npub fn point_sum(p: Point) -> integer not null;\n#native \"loft_shared_n_point_sum\"\n";
+    let source = r#"
+fn main() {
+    p = Point { x: 3, y: 4 };
+    r = point_sum(p);
+    assert(r == 7, "point_sum of x=3 y=4 should be 7, got {r}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
