@@ -178,5 +178,35 @@ direct-into-named-dest paths — `set_var`, `try_text_dest_pass` — become
 optimizations layered on top).  That uniform synth-temp makes **all** of family 1
 and 2 dest-pass through one mechanism, but it is a parse-time + scope-analysis
 build (the temp must be visible to `scopes::free_vars` so its `String` is freed) —
-the genuine Phase-A "destination synthesis," not a quick slice.  Build 2 is that
-chokepoint; it is scoped, not yet built.
+the genuine Phase-A "destination synthesis," not a quick slice.
+
+**Build 2 — the producer-side synth-temp chokepoint (committed).**  One parse-time
+transform (`Parser::wrap_value_text_dest`, run in `parse_code` on the final pass):
+walk the body IR; replace every value-position `Call(text-dest-native, args)` with
+`Block([Set(w, native()), Var(w)])` where `w = work_text()` — reusing the proven
+`set_var` dest-pass for the inner `Set`, and the existing `work_texts` null-init +
+slot-alloc + `OpFreeText` for `w`'s lifetime.  Skips the two fast-path positions
+(`Set`-value, `OpAppendText`-operand) so they keep their direct (no-copy) routing.
+**~110 lines, one chokepoint, zero per-shape code.**
+
+The build settled the over-unification question — and **over-delivered the
+prediction**.  All twelve matrix shapes dest-pass (`scratch=0`), correct output on
+both backends, full suite `2021 passed / 0 failed`:
+
+- the four named-dest shapes (`field`, `cond`, `format`, `vpush`) — collapsed.
+- the three genuine synth-temp shapes (`compare`, `arg`, `chain`) — collapsed.
+- **`return` (the "escape family" §4 predicted as separate) collapsed too** — its
+  tail native is value-position, so the temp + `text_return`'s caller-buffer copy
+  compose with zero extra code.  The invariant was *wider* than the desk analysis
+  credited: one mechanism, every consumer.
+- the **loop-reuse hazard** (a reused temp accumulating across iterations) did
+  **not** materialize — `set_var`'s `CreateStack` re-inits `w` empty each
+  iteration (`for … { native() == "x" }` → fresh value every time).
+
+Regression: `tests/scripts/193-text-dest-synth-temp.loft` (interp + native + wasm).
+The `scratch.push` *site* count is unchanged (the non-`_dest` natives still exist
+for any future non-`is_text_dest_native` producer) — but runtime scratch traffic
+for `to_lowercase` / `to_uppercase` / `replace` is now **zero** in every position.
+Remaining toward the 39→0 acceptance bar: add `_dest` variants for the other
+producers (`to_json`, `sha256`, …) so they ride the same chokepoint, then delete
+the field + the dead `clear_scratch` / `OpClearScratch`.
