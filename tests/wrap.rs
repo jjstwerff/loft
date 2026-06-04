@@ -355,10 +355,16 @@ const LIB_TESTS_SKIP: &[&str] = &[
 /// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
 /// interpreter crashes can't be run file-by-file here.
 const LIB_PKGS_SKIP: &[&str] = &[
-    // input — design + API draft landed 2026-06-01 (LAVITION W.13);
-    // runtime blocked on @P391 (cross-package struct constructor lands
-    // in CONST_STORE → `Write to read-only store` panic on the first
-    // field write in `input_tick_from_state`).  Un-skip once @P391 ships.
+    // input — design + API draft landed 2026-06-01 (LAVITION W.13).
+    // The original blocker, #248 (@P391: cross-package struct ctor + inline
+    // heap-call method arg → `Write to read-only store` CONST_STORE panic), is
+    // FIXED (interpreter `scan_args` force-lift; regression
+    // `tests/scripts/188-issue-248-xpkg-ctor-inline-arg.loft`).  Still gated on
+    // #266 — a SEPARATE, pre-existing interpreter bug it unmasked: a nested
+    // `&self` method call (`advance_tick` inside the per-tick update) does not
+    // persist its vector-element writes on `--interpret` (native passes), so the
+    // cross-tick edge-detection reads stale state.  Reproduces same-file with no
+    // #248 involvement.  Un-skip once #266 ships.
     "input",
 ];
 

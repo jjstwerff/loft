@@ -1743,8 +1743,50 @@ impl Scopes {
     ) -> (Vec<Value>, Vec<Value>) {
         let mut preamble: Vec<Value> = Vec::new();
         let mut ls: Vec<Value> = Vec::new();
-        for a in args {
+        // #248 (interpreter arg-layout) — when the call's first argument is a
+        // borrowed receiver pushed via `OpCreateStack(Var(_))` (a `&self` / `&T`
+        // method or free-function call), a LATER argument that is an inline
+        // heap-returning call which grows the eval frame (e.g. `tick(s, mk(), …)`
+        // where `mk()` returns a vector via a hidden `__ref_N` work buffer)
+        // shifts the receiver's stack slot relative to where the callee reads
+        // `self`.  The interpreter then derefs the receiver at the wrong offset
+        // and lands on a CONST_STORE record → "Write to read-only store".  The
+        // native backend passes args by the Rust ABI and is immune.  Force such a
+        // trailing call argument into a `__lift_N` temp (preamble), so it is
+        // evaluated and its store materialised BEFORE the receiver `OpCreateStack`
+        // is pushed — exactly the shape `x = mk(); tick(s, x, …)` that already
+        // works on both backends.  Gated on a CreateStack-receiver first arg so
+        // ordinary calls keep their existing argument lowering untouched.
+        let create_stack_nr = data.def_nr("OpCreateStack");
+        let has_create_stack_receiver = args.first().is_some_and(|a| {
+            matches!(a.unspan(), Value::Call(d, cargs)
+                if *d == create_stack_nr
+                    && matches!(cargs.first().map(Value::unspan), Some(Value::Var(_))))
+        });
+        for (arg_idx, a) in args.iter().enumerate() {
             let scanned = self.scan(a, function, data);
+            // #248 — force-lift a trailing inline heap-returning call argument
+            // (one NOT already lifted by the `inline_struct_return` arms below
+            // because it returns via a hidden work-ref / non-empty dep) when the
+            // receiver is a borrowed CreateStack ref.  Must run before the
+            // Insert/`inline_struct_return` handling so it is not skipped for the
+            // exact shape that triggers the bug.
+            if has_create_stack_receiver
+                && arg_idx > 0
+                && Self::inline_struct_return(&scanned, data, outer_call).is_none()
+                && let Some(tp) = Self::heap_call_return(&scanned, data)
+            {
+                self.lift_counter += 1;
+                let name = format!("__lift_{}", self.lift_counter);
+                let tmp = function.add_temp_var(&name, &tp);
+                function.mark_inline_ref(tmp);
+                self.var_scope.insert(tmp, self.scope);
+                self.var_order.push(tmp);
+                self.lift_vars.push(tmp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
+                continue;
+            }
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
                 let is_a56_hoisted = ops.len() == 2
@@ -1822,6 +1864,42 @@ impl Scopes {
             }
         }
         (preamble, ls)
+    }
+
+    /// #248 — does this scanned argument lower to an inline call (or an
+    /// `Insert`/`Span` whose final op is one) that PRODUCES a heap value
+    /// (vector / reference / struct-enum)?  Used by `scan_args` to force-lift a
+    /// trailing heap-returning call argument when the call's receiver is a
+    /// borrowed `OpCreateStack` ref — the interpreter arg-layout hazard #248.
+    ///
+    /// Unlike [`inline_struct_return`], this DOES match calls that return via a
+    /// hidden caller work-ref (non-empty dep like `["??"]`): those are exactly
+    /// the frame-growing inline calls that `inline_struct_return` skips but that
+    /// still shift the receiver's stack slot.  Returns the owned element/struct
+    /// type (empty dep) for the `__lift_N` temp, or `None`.
+    fn heap_call_return(val: &Value, data: &Data) -> Option<Type> {
+        // Peel `Span` / trailing-op-of-`Insert` to reach the producing call.
+        let inner = match val.unspan() {
+            Value::Insert(ops) => ops.last()?.unspan(),
+            other => other,
+        };
+        let Value::Call(fn_nr, _) = inner else {
+            return None;
+        };
+        let def = data.def(*fn_nr);
+        // Only user/method bodies (n_* / t_*) — native helpers and the
+        // OpCreateStack/OpVar* lowering ops never own a fresh return store here.
+        if (!def.name.starts_with("n_") && !def.name.starts_with("t_"))
+            || def.code == Value::Null
+        {
+            return None;
+        }
+        match &def.returned {
+            Type::Vector(elem, _) => Some(Type::Vector(elem.clone(), Vec::new())),
+            Type::Reference(d_nr, _) => Some(Type::Reference(*d_nr, Vec::new())),
+            Type::Enum(d_nr, true, _) => Some(Type::Enum(*d_nr, true, Vec::new())),
+            _ => None,
+        }
     }
 
     /// Check whether a scanned argument at position `arg_idx` is an inline
