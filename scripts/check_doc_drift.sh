@@ -177,8 +177,10 @@ check_stale() {
 
 # ---- Check 4: ROADMAP plan-state cross-check ----
 # Rules:
-#   - Active plans (plans/<NN>, plans/future/<NN>) MUST appear on ROADMAP at
-#     their canonical path.  No dual citation at the wrong bucket.
+#   - Active plans (plans/<NN>, plans/future/<NN>) MAY appear on ROADMAP, but
+#     absence is NOT drift — plan tracking lives in the issues (loft-lang/plans),
+#     not a hand-maintained ROADMAP table.  Only a dual / wrong-bucket citation
+#     of whatever IS on ROADMAP is flagged.
 #   - Deferred plans (plans/deferred/<NN>) MUST NOT appear on ROADMAP.
 #     Their home is DEFERRED.md (trigger index).
 #   - Finished plans (plans/finished/<NN>) MUST NOT appear on ROADMAP as
@@ -223,18 +225,11 @@ check_roadmap() {
             fi
             ;;
           *)
-            # Active plan (current or future).  Must be cited at canonical path.
-            if ! grep -qE "$canonical" "$roadmap"; then
-              wrong=$(grep -nE "$tracker(/(future|deferred|finished))?/$slug" "$roadmap" | head -1)
-              if [ -n "$wrong" ]; then
-                red "  $canonical → wrong bucket on ROADMAP:"
-                echo "    $wrong"
-              else
-                red "  $canonical → MISSING from ROADMAP"
-              fi
-              hits=$((hits + 1))
-            else
-              # Check for dual / stale citations at OTHER buckets.
+            # Active plan (current or future).  Tracking lives in the issues now
+            # (loft-lang/plans), NOT a hand-maintained ROADMAP — so being absent
+            # from ROADMAP is FINE, not drift.  Only flag a plan cited at MULTIPLE
+            # / wrong buckets (a real inconsistency in whatever IS on ROADMAP).
+            if grep -qE "$canonical" "$roadmap"; then
               other_buckets=""
               for other_b in '' future deferred finished; do
                 [ "$other_b" = "$bucket" ] && continue

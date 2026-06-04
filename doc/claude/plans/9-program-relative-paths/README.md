@@ -3,13 +3,14 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 59 — Program-relative paths (source-relative asset loading)
+# 9 — Program-relative paths (source-relative asset loading)  ·  `@PLN9` ([loft-lang/plans#9](https://github.com/loft-lang/plans/issues/9))
 
 ## Status
 
-Open — **design decided, cost estimated, ready to phase.** Promoted from issue
-[#255](https://github.com/jjstwerff/loft/issues/255) (an enhancement that grew
-phase-worthy). The anchor decision is ratified: relative file paths resolve
+Open — **design decided, cost estimated, ready to phase.** Tracked as
+[`@PLN9`](https://github.com/loft-lang/plans/issues/9) (loft-lang/plans); promoted from
+loft issue [#255](https://github.com/jjstwerff/loft/issues/255) (an enhancement that
+grew phase-worthy). The anchor decision is ratified: relative file paths resolve
 **program-relative by default**, with a one-line **cwd opt-in** for CLI tools. A
 *current* consumer — the **crawler agent** — depends on Phase 1 (it runs generated
 programs from a sandbox cwd and needs program-relative asset resolution), so this is
@@ -31,7 +32,7 @@ source dir under `--interpret`/test, the executable's dir under `--native`), so
 
 ## The design evaluation — the use-case matrix (served *and* broken)
 
-Per [`ISSUE_TRACKING.md` § Designing](../../../ISSUE_TRACKING.md): a design is settled
+Per [`ISSUE_TRACKING.md` § Designing](../../ISSUE_TRACKING.md): a design is settled
 only when **both halves** of its use-case matrix are enumerated. The *broken* half is
 what flipped the answer from a naive "switch the anchor" to "single anchor + default +
 opt-in."
@@ -87,7 +88,7 @@ migrating cwd-dependent files onto it). `4` last (consumes the anchor, cross-rep
 
 1. **The cwd opt-in mechanism** — a source directive (e.g. `#cwd` at file top), a
    `loft.toml` flag, or an explicit `cwd(path)` helper. A whole-program directive is the
-   friction-free shape ([Goal F](../../../GOALS.md)); decide in Phase 2.
+   friction-free shape ([Goal F](../../GOALS.md)); decide in Phase 2.
 2. **Test-runner anchor** — the test *file's* dir, or the package root? (Affects how
    library tests find fixtures.)
 
@@ -104,7 +105,7 @@ migrating cwd-dependent files onto it). `4` last (consumes the anchor, cross-rep
 - Issue [#255](https://github.com/jjstwerff/loft/issues/255) — the use-case framing, the
   ratified decision, and this cost breakdown (the lightweight capture; this plan is the
   design + sequencing).
-- [`ISSUE_TRACKING.md` § Designing](../../../ISSUE_TRACKING.md) — the use-case-matrix
+- [`ISSUE_TRACKING.md` § Designing](../../ISSUE_TRACKING.md) — the use-case-matrix
   procedure this plan exercises.
-- [`GOALS.md`](../../../GOALS.md) — Goal E (source is the truth) / Goal F (friction-free):
+- [`GOALS.md`](../../GOALS.md) — Goal E (source is the truth) / Goal F (friction-free):
   the anchor + opt-in shape.
