@@ -34,10 +34,10 @@ shrinks to a one-line pointer to where the protocol now lives.
 
 ## C1 — Brittleness over bugs
 
-**Status:** recorded concern; protocol pending verification.  First test: the
-string/text-allocation memory-bound work (a brittleness problem — works in the
-tested regime, OOM-cliffs when the load pattern shifts; the shape `Stores` had
-before plan-57).
+**Status:** *the primary design concern.*  Recorded; protocol pending
+verification.  First test: the string/text-allocation memory-bound work (a
+brittleness problem — works in the tested regime, OOM-cliffs when the load
+pattern shifts; the shape `Stores` had before plan-57).
 
 **The concern.**  The real risk in a design is not *bugs* (inevitable, discrete,
 local — caught per-cell by a matrix) but **brittleness**: an algorithm correct
@@ -55,6 +55,22 @@ is the organ that makes the whole class visible so a unifying invariant can
 surface — *see the family, then enforce its invariant*.  You cannot enforce the
 invariant over a class you cannot see; the matrix is the precondition of the
 robust fix, not a sibling to it.
+
+**The early tell — length against expectation, before the matrix and before the
+crash.**  The brittle version is *almost always longer than you expect, and less
+efficient* — and the **length is the first thing you feel**: code longer than it
+should be for what it does already trips the worry, before any matrix, profile, or
+crash.  That is not a coincidence; it is the inverse of subtraction (question 5).
+The robust design covers N cases with **one** mechanism (one invariant, one path,
+the coincidence deleted), so it lands *short*.  The brittle design covers them with
+**N** mechanisms (a special-case per case — question 3, O(N sites); a guard per
+disagreement; a branch per type), so it *accretes* — and that accretion shows up
+immediately as **bulk** (and then, at runtime, as **cost**).  So treat "this is
+longer than I expected for what it does" as the first **brittleness alarm**: stop
+and look for the invariant you're missing — the shorter version is usually the more
+robust one.  (Honest bound: *almost* always — a deliberate, measured fast-path can
+be brittle-but-faster by intent; the tell fires on *unintended* accretion, a pile of
+per-case arms, not on a documented optimization.)
 
 **Verification questions** (run a design past these):
 
