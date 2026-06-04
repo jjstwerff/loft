@@ -517,3 +517,37 @@ fn main() {
     run_shared_dispatch(&so, native_decl, source);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A function that constructs and RETURNS a struct.  Unlike a vector return,
+/// `--native` does NOT use a hidden destination — the body allocates the record
+/// fresh and returns its `DbRef` (`n_make_point(cell, a, b) -> DbRef`).
+const MAKE_POINT_LIB: &str = "struct Point { x: integer, y: integer }\n\
+                              pub fn make_point(a: integer, b: integer) -> Point {\n\
+                              \x20   Point { x: a, y: b }\n\
+                              }";
+
+/// N2 store-touching: a struct `reference` RETURN crosses the boundary.  The
+/// native body allocates a `Point` in the shared store and returns its `DbRef`;
+/// the interpreter reads its fields.  `make_point(3,4)` → `p.x*10 + p.y == 34`.
+#[test]
+fn dispatches_struct_return_from_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) =
+        build_shared_lib_cdylib("loft_n2_shared_sr", MAKE_POINT_LIB, "make_point")
+    else {
+        return;
+    };
+
+    let native_decl = "struct Point { x: integer, y: integer }\npub fn make_point(a: integer, b: integer) -> Point not null;\n#native \"loft_shared_n_make_point\"\n";
+    let source = r#"
+fn main() {
+    p = make_point(3, 4);
+    r = p.x * 10 + p.y;
+    assert(r == 34, "make_point(3,4) fields should give 34, got {r}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

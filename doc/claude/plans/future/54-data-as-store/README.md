@@ -329,9 +329,16 @@ from the type-schema concern, then struct/`Text`/`Reference` signatures.
      the shared `DbRef` reads `p.x`/`p.y` correctly.  This validates the
      zero-marshalling shared-store ABI for schema-dependent types; the *lean
      interface* would formalise "the script adopts the library's exact schema"
-     rather than relying on identical redefinition.  **Remaining sub-slices:**
-     `reference`/struct **returns** (the hidden-dest type id is the struct's, not
-     `main_vector<…>`); `Text`; plain (tag-only) `enum`.
+     rather than relying on identical redefinition.
+   - **Struct returns also DONE** — `make_point(3,4) → Point` read as `34`
+     (`dispatches_struct_return_from_shared_cdylib`).  Unlike a vector return, a
+     struct `reference` return uses **no** hidden destination (`--native` emits
+     `n_make_point(cell, a, b) -> DbRef` — the body allocates the record fresh and
+     returns its `DbRef`), so the gate just admits `reference` returns; the native
+     allocation is valid back in the interpreter via the shared store.  **N2 now
+     covers scalars, vectors, and structs — both directions.**  **Remaining
+     sub-slices:** `Text` params/returns; plain (tag-only) `enum`; data-`enum`
+     returns; auto-deriving the `#native` decl from `use <lib>` (N3 policy).
 3. **N5 soundness** of the boundary, woven through both.
 
 The acceptance gate for each slice is **end-to-end** (an interpreted script calls an

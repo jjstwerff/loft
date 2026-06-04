@@ -93,10 +93,10 @@ fn is_scalar_type(t: &Type) -> bool {
 /// the bridge wrapper allocates that destination itself, so the script-side
 /// `#native` forward-decl still models only the public params.
 ///
-/// Not yet handled (a function is excluded if any holds): a `reference`/`enum`-data
-/// **return** (its destination needs the struct's type id, not `main_vector<…>`);
-/// a `Text` param/return; a `__`-prefixed synthetic param (closures, text work
-/// buffers).
+/// A struct `reference` return is supported (no hidden dest — the body allocates
+/// the record fresh).  Not yet handled (a function is excluded if any holds): a
+/// data-`enum` return; a `Text` param/return; a `__`-prefixed synthetic param
+/// (closures, text work buffers).
 #[must_use]
 pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
     native_compilable(data)
@@ -104,9 +104,13 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
         .filter(|&d| {
             let def = data.def(d);
             let ret = def.returned();
+            // A vector return uses `--native`'s hidden destination param (the bridge
+            // allocates it); a struct `reference` return does NOT (the body
+            // allocates the record fresh and returns its `DbRef` —
+            // `n_make_point(cell, a, b) -> DbRef`), so it needs no hidden dest.
             let ret_ok = matches!(ret, Type::Void | Type::Null)
                 || is_scalar_type(ret)
-                || matches!(ret, Type::Vector(_, _));
+                || matches!(ret, Type::Vector(_, _) | Type::Reference(_, _));
             ret_ok
                 && def.attributes().iter().all(|a| {
                     if a.hidden {
