@@ -68,9 +68,28 @@ disagreement; a branch per type), so it *accretes* — and that accretion shows 
 immediately as **bulk** (and then, at runtime, as **cost**).  So treat "this is
 longer than I expected for what it does" as the first **brittleness alarm**: stop
 and look for the invariant you're missing — the shorter version is usually the more
-robust one.  (Honest bound: *almost* always — a deliberate, measured fast-path can
-be brittle-but-faster by intent; the tell fires on *unintended* accretion, a pile of
-per-case arms, not on a documented optimization.)
+robust one.
+
+**But this is a prior, not a verdict — which is why it stays a hard problem.**  The
+length tell says *look*, not what you will *find*.  Sometimes a right implementation
+genuinely needs a lot of code, and the real judgment is **essential vs accidental
+length**.  *Accidental* (brittle) is N mechanisms for cases that are really **one
+family** — a missed invariant; finding it makes the code shorter and more robust
+together.  *Essential* (correct) is N mechanisms for genuinely **N families** (no
+invariant exists to find), or code spelled out to make an invariant **explicit**
+where the short version would hide it in cleverness (clever-short is brittleness too
+— Goal E cuts both ways), or the honest cost of covering the **full input space**
+instead of betting on the unenumerated cell.  No metric decides which it is — it
+takes actually understanding whether the cases share a deeper structure (the matrix
+shows the cases; the *collapse* is the hard insight).  So the alarm triggers the
+**search** for the invariant; it never dictates shortening.  Search and find one →
+shorter + robust.  Search honestly and find none → the length is essential, accept it
+— the alarm did its job by making you check.  The two ways to fail: **ignore** the
+alarm (ship accreted brittleness), or **obey it blindly** — compress
+genuinely-distinct cases under a false invariant, which is itself brittleness
+(question 6, *wider than the domain*), breaking when the cases assert their real
+differences.  (A deliberate, measured fast-path is the remaining exception:
+brittle-but-faster by intent.)
 
 **Verification questions** (run a design past these):
 
