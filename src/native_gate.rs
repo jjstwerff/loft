@@ -79,13 +79,22 @@ fn is_scalar_type(t: &Type) -> bool {
 }
 
 /// @PLAN54 Arc N / N2 — the **shared-store-dispatchable** subset: native-compilable
-/// functions whose parameters and return are all marshallable through the uniform
-/// `native_lib::LibArg` slot — scalars **plus** the `DbRef`-backed aggregates
-/// (`vector`/`reference`/data-`enum`/sorted/index/hash/spacial).  These dispatch
-/// over the **shared `*mut Stores` bridge** (`generate_shared_cdylib_lib_rs`): the
-/// caller's store is shared by pointer (no `LoftStore` handle, no marshalling), so
-/// a non-scalar value can cross the boundary.  A `void` return is allowed.
-/// `Text` and plain (tag-only) `enum` are deferred to a later sub-slice.
+/// functions that dispatch over the **shared `*mut Stores` bridge**
+/// (`generate_shared_cdylib_lib_rs`): the caller's store is shared by pointer (no
+/// `LoftStore` handle, no marshalling), so a non-scalar value can cross the
+/// boundary.
+///
+/// **Parameters** may be any bridge type — scalars **plus** the `DbRef`-backed
+/// aggregates (`vector`/`reference`/data-`enum`/sorted/index/hash/spacial), passed
+/// as the raw stack `DbRef`.  **The return must be scalar or `void`** (for now):
+/// a non-scalar return triggers `--native`'s **hidden destination-parameter**
+/// convention — the function body gains a trailing `DbRef` work-vector that the
+/// *caller* pre-allocates (`stores.null_named` + `OpDatabase(<type_id>)`) and
+/// passes in.  That makes the compiled body's arity exceed the public signature,
+/// which the script-side `#native` forward-decl doesn't model — so non-scalar
+/// returns are a **separate sub-slice** (the bridge wrapper must allocate the
+/// destination itself).  `Text` params and plain (tag-only) `enum` are likewise
+/// deferred.
 #[must_use]
 pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
     native_compilable(data)
@@ -93,7 +102,9 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
         .filter(|&d| {
             let def = data.def(d);
             let ret = def.returned();
-            let ret_ok = matches!(ret, Type::Void | Type::Null) || is_bridge_type(ret);
+            // Scalar / void returns only — see the doc comment on hidden
+            // destination params for why non-scalar returns are deferred.
+            let ret_ok = matches!(ret, Type::Void | Type::Null) || is_scalar_type(ret);
             ret_ok
                 && def
                     .attributes()
