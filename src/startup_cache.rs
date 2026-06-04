@@ -202,6 +202,9 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     if std::fs::write(&tmp, lines.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, &manifest);
     }
+    // @PLAN54 G2 / track 1 — with the cache default-on, bound the directory size
+    // by evicting the oldest bundles after each cold save.
+    crate::cache::prune_program_cache();
 }
 
 /// Non-`mmap` builds: the whole-program cache is unavailable.

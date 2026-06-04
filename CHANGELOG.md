@@ -52,6 +52,22 @@ before).
 *working directory* now needs `#cwd` at the top.  The in-tree corpus that did so
 (13 file-I/O tests) was migrated in this release.
 
+### Faster startup, automatically — the program cache is on by default
+
+Running the same program again is now **~3× faster to start**: the first
+run caches the fully-parsed program (the standard library, every library
+you `use`, and your script) next to your other caches, and later runs of
+the unchanged program skip parsing entirely.  It just works — no flag to
+set.  If anything the program reads changes, the cache notices and
+re-parses, so you never get a stale result.
+
+- **Turn it off** with `LOFT_NO_CACHE=1` (e.g. for one-shot batch jobs
+  where the first-run save isn't worth it).
+- **Cap its size** with `LOFT_CACHE_MAX_MB` (default 512 MiB); the oldest
+  bundles are evicted past the limit.
+- It automatically stays **off inside `cargo run` / `cargo test`**, so
+  building the compiler never serves a stale parse.
+
 ### File `+=` is now append-only — and `file.sync()` lets you flush
 
 `f += value` now **appends** to the end of the file, matching how

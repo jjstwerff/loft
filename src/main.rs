@@ -4087,12 +4087,15 @@ fn main() {
     let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
     let default_str = default_dir.to_string_lossy().to_string();
-    // @PLAN54 arc E / D2b — opt-in startup caches (default off).  The
-    // whole-program cache (`LOFT_PROGRAM_CACHE`) mmaps the ENTIRE parsed program
-    // (stdlib + lazily-loaded libs + user file) on a repeated unchanged run,
-    // skipping all parsing; the narrower stdlib cache (`LOFT_STDLIB_CACHE`, D2b)
-    // caches `default/` only.  Unset → both are no-ops, behaviour unchanged.
-    let program_cache_on = std::env::var_os("LOFT_PROGRAM_CACHE").is_some_and(|v| !v.is_empty());
+    // @PLAN54 arc E / D2b / track 1 — the whole-program startup cache mmaps the
+    // ENTIRE parsed program (stdlib + lazily-loaded libs + user file) on a
+    // repeated unchanged run, skipping all parsing (~3–3.6× faster).  It is now
+    // **default-on** (`cache::program_cache_enabled`): off only under
+    // `LOFT_NO_CACHE`, or automatically when running inside Cargo (`cargo run` /
+    // the test suite — the dev-safety + test-isolation default).  The narrower
+    // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
+    // just when the program cache is off.
+    let program_cache_on = loft::cache::program_cache_enabled();
     p.track_sources = program_cache_on;
     // @PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned

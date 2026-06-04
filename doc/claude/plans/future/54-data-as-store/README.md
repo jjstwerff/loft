@@ -14,23 +14,33 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 The codegen migration (M2–M6.warm) is **done and proven**, but the session's
 measurements reframed the cost/benefit and point to a clear priority order:
 
-1. **Ship the win that already exists — make the program cache default-on.**
-   The **3–3.6× startup speedup** (G1, parse-skip) is built, proven, and robust
-   (atomic write, corrupt-bundle fallback, content-hash drift), but it is
-   **invisible to users** because it's gated behind `LOFT_PROGRAM_CACHE`.
-   **Correctness prerequisite DONE (2026-06-04, commit `0b9e69a`):** the program
-   manifest now pins a **build signature** (`cache::build_signature` →
-   format/version/build-id/target/features) as its first line, so a `loft`
-   upgrade invalidates stale bundles instead of warm-loading an incompatible
-   store (the previous gap: key/manifest had no binary identity, and
-   `Store::is_store_file`'s fixed magic can't catch a layout change).  Remaining
-   for the flip itself: an opt-*out* (`LOFT_NO_CACHE`), a call on the
-   first-run save cost (~tax on one-shot/CI runs) + unbounded cache growth
-   (one bundle per script, no eviction), **and a dev-safety gap that is a hard
-   prerequisite** — the build signature keys on the *committed* HEAD, not the
-   running binary, so it does NOT invalidate on an uncommitted compiler rebuild
-   (see § Debugging-iteration cost + the default-on dev-safety caveat below).
-   Near-zero code, highest ROI.
+1. ✅ **SHIPPED (2026-06-04) — the program cache is now default-on (track 1).**
+   The **3–3.6× startup speedup** (G1, parse-skip) was invisible because it sat
+   behind `LOFT_PROGRAM_CACHE`; it is now **on by default**
+   (`cache::program_cache_enabled`).  Delivered as four pieces:
+   - **Default-on with a kill switch** — `LOFT_NO_CACHE` opts out;
+     `LOFT_PROGRAM_CACHE` still force-enables (used by the cache's own tests).
+   - **Auto-off under Cargo** — when `CARGO_MANIFEST_DIR` is in the environment
+     (`cargo run` / `cargo test`) the cache disables itself, so the whole
+     integration-test suite and the compiler-debug loop neither write nor read
+     bundles **with zero per-test wiring** (verified: 20 `exit_codes` subprocess
+     tests wrote 0 bundles to an isolated cache dir).  This *is* the dev-safety
+     default the caveat below called for.
+   - **Dev-safety signature** — `build_signature` now also folds in the running
+     executable's **mtime** (`binary_signature_tag`), so an *uncommitted* rebuild
+     invalidates bundles too (git-HEAD `BUILD_ID` alone did not — see § caveat).
+     The release-upgrade build-signature (format/version/build-id/target/features)
+     landed earlier in commit `0b9e69a`.
+   - **Bounded growth** — `cache::prune_program_cache` evicts whole
+     `(.store + .manifest)` pairs oldest-first after each cold save, keeping the
+     dir under `LOFT_CACHE_MAX_MB` (default 512 MiB).
+   - **First-run save cost — decision:** *accepted.*  The one cold save (~7 MiB
+     bundle) per `(script, binary)` is the price of every future warm hit; it is
+     paid by real installed invocations only (dev/test/CI are auto-off or use
+     `LOFT_NO_CACHE`), bounded by eviction.
+   Tests: `cache_decision_precedence`, `prune_dir_evicts_oldest_over_budget`,
+   `build_signature_is_deterministic_and_carries_version` (lib) + the existing
+   `arc_e_program_cache` / `g2_m6_warm_store` / `p254_cache_poisoning` suites.
 
 2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
    key measured finding: **M6-warm gives only ~5%** because the **variable
@@ -104,16 +114,17 @@ fix silently no-ops until you commit (or edit a `.loft` source, which the drift
 manifest *does* hash).  `LOFT_STDLIB_CACHE` shares the blind spot with a smaller
 blast radius (only the `default/` parse).
 
-**Consequences:**
-   - **While debugging the compiler, keep both caches OFF.**  Opt-in today is
-     therefore correct; the ~10 ms saving is irrelevant next to rustc and the
-     stale-parse risk is real.  Inner loop: raw `loft script.loft` (no cache) +
-     `LOFT_LOG=minimal`/`crash_tail:N`.
-   - **Before the default-on flip, `build_signature()` needs a dev-safe input** —
-     mix in the running binary's own mtime or a self-hash so *any* rebuild
-     (committed or not) invalidates — and/or honour `LOFT_NO_CACHE`.  This is a
-     **separate, not-yet-done** prerequisite beyond the release-upgrade
-     invalidation already shipped in `0b9e69a`.
+**Consequences (✅ both resolved by track 1, 2026-06-04):**
+   - **While debugging the compiler, the caches are OFF automatically.**  The
+     default-on flip disables the cache whenever `CARGO_MANIFEST_DIR` is in the
+     environment — i.e. under `cargo run` and `cargo test` — so the compiler-debug
+     loop never warm-loads a stale parse, with no flag to remember.  `LOFT_NO_CACHE`
+     is the explicit kill switch for any other context.
+   - **`build_signature()` now folds in the running binary's mtime**
+     (`binary_signature_tag`), so *any* rebuild — committed or not — invalidates
+     bundles, closing the git-HEAD-`BUILD_ID` blind spot.  This was the
+     not-yet-done prerequisite beyond the release-upgrade invalidation
+     (`0b9e69a`); it is now done.
 
 ---
 
