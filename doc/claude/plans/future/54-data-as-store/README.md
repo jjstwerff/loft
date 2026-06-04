@@ -9,6 +9,49 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **G2/M5 reached for BOTH backends (2026-06-03): the interpreter AND `--native` codegen run fully store-backed, proven byte-identical to native.**  Both lowering dispatches (`generate_inner` / `output_code_node`) read the IR through the `IrNode`/`IrNodeList`/`IrBlock` handles; the intricate native-`Value`/`&Block`-clone clusters materialise at their boundary (zero-cost for native).  `def_code` / `output_function` flip to `IrNode::Store` under `LOFT_CODEGEN_STORE`, lowering whole programs from a store with identical output across `tests/scripts/*.loft` (interpreter) + the full native suite + the M5 equivalence tests.  Built on G1 (cold-start cache shipped) + the M0 harness.  **Remaining:** M6 (drop the native graph for true zero-copy — needs M2/DefView so the bodies live in a *persistent* store-backed `Data`, plus converting the remaining IR readers: scopes/parser-passes/native helper files); M2/M1b/M1c (the `Definition` store-backing seams M6 builds on); M7 (parser emits store IR directly); E2 (locked-mmap mutability).  M5's per-function re-materialise is the proof harness; M6 is the architectural endpoint.
 
+### Recommendation — where to go next (2026-06-04)
+
+The codegen migration (M2–M6.warm) is **done and proven**, but the session's
+measurements reframed the cost/benefit and point to a clear priority order:
+
+1. **Ship the win that already exists — make the program cache default-on.**
+   The **3–3.6× startup speedup** (G1, parse-skip) is built, proven, and robust
+   (atomic write, corrupt-bundle fallback, content-hash drift), but it is
+   **invisible to users** because it's gated behind `LOFT_PROGRAM_CACHE`.  A
+   default flip (with an opt-*out* like `LOFT_NO_CACHE` + a "first run is cold"
+   note) delivers the entire win to everyone — near-zero code, highest ROI.
+
+2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
+   key measured finding: **M6-warm gives only ~5%** because the **variable
+   tables (~2.2 ms), not the bodies (~0.6 ms), dominate `read_data`.**  The
+   *real* M6/E2 prize is bigger — skipping the **entire** `read_data`
+   reconstruction (~3 ms ≈ ~50% of warm startup) by reading the whole `Data`
+   from the mmap — but that needs **E2** (a writable store IR so `scopes` can
+   rewrite bodies), a multi-week, memory-safety-sensitive rewrite of the
+   compiler's largest mutating pass.  Worth it *eventually* if startup latency
+   is a headline goal, but as a **planned, fresh-context arc**, not a rushed
+   branch extension.
+
+3. **If you want more startup perf sooner, profile `read_function` first.**  The
+   actual warm-load bottleneck is the **variable-table reconstruction**
+   (~2.2 ms).  A targeted decode/encoding/lazy-load optimisation there is a
+   **smaller, lower-risk lever** that may beat the whole E2 migration — measure
+   before committing to E2.
+
+4. **Land this branch.**  ~54 green, all-opt-in (default-off) commits.  The
+   `IrNode` handle, the cross-backing equivalence harness, store-backed codegen
+   on both backends, and the cache are a coherent, safe-to-merge foundation
+   whose architectural value (self-hosting, the handle abstraction) stands on
+   its own; the longer it diverges from `main`, the more the rebase costs.
+
+**Cost split that drives this (measured):** cold store-codegen = `materialize_data`
+**~5.5 ms** (the tax M6-warm avoids by using the mmap'd cache) + store reads
+**~0.8 ms** (vs 0.6 ms native — handle navigation is near-native).  Warm `read_data`
+= **~2.2 ms variable tables + ~0.6 ms bodies** (so skipping bodies alone is small;
+the whole-`read_data` skip is the E2-gated prize).
+
+---
+
 **In-progress — arc A0 + arc A landed; arc B's write path COMPLETE; arc C's store→native reader COMPLETE and the round-trip is now FULLY LOSSLESS.**  The whole real `default/` stdlib round-trips `native → store → native` **bit-for-bit** — the full `compare_data` oracle (every `Definition` field including the per-function variable table: `vars` + `names` + `inline_refs`) is green across all definitions.  The store schema was grown (`Function` gained `names: vector<NameNr>` + `inline_refs: vector<integer>`) after confirming neither is reconstructible from the variable list and that codegen reads both on the load path.  A store-materialised `Data` is now indistinguishable from a fresh parse.  **Arc D probe (proven end-to-end):** the full mmap loop works today — materialize the stdlib into a **file-backed** store, drop, reopen via `Store::open` (mmap), and `read_data` rebuilds the native `Data` with **no re-parse and no schema registration** — **~12× faster than `parse_dir`** (0.92 ms vs 11.4 ms median; see § Open design questions Q5).
 
 - **Arc A0** (typed field cursor, commit `a07ed8d`) — landed as `RecordCursor`/`RecordCursorMut` wrapping `Store`'s raw primitives.  That cursor form has since been superseded by the typed handle layer (see § Arc A0 — handle layer below); `src/data_store.rs` is now the accessor seam, not a bare cursor.
