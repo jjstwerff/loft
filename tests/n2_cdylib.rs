@@ -1,17 +1,36 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N2 — the auto-generated native-library cdylib must COMPILE.
+//! @PLAN54 Arc N / N2 — the auto-generated native-library cdylib must COMPILE
+//! and be DISPATCHABLE from an interpreted script.
 //!
 //! `native_lib::generate_cdylib_lib_rs` produces a cdylib `lib.rs` from a
 //! library's scalar-dispatchable functions (the `--native` program + export
-//! wrappers).  This is the first verifiable milestone of N2's dispatch: the
-//! generated source actually builds as a `cdylib` against `libloft.rlib`, and the
-//! export symbol (`loft_n_double`) is present.  (Dispatching to it — the
-//! end-to-end `double(21)→42` — is the next slice.)
+//! wrappers).  Two milestones:
+//!
+//! 1. `generated_cdylib_compiles_and_exports_scalar_symbol` — the generated
+//!    source actually builds as a `cdylib` against `libloft.rlib`, and the export
+//!    symbol (`loft_n_double`) is present.
+//! 2. `dispatches_scalar_call_into_generated_cdylib` — an interpreted script that
+//!    declares `double` as `#native "loft_n_double"` and calls `double(21)`
+//!    dispatches into the generated cdylib and gets `42` — the full
+//!    interpret→native store-ABI round trip for the scalar slice.  (Auto-deriving
+//!    the `#native` decl from `use <lib>` is N3 policy; here it's written by hand
+//!    to isolate the dispatch mechanism.)
 
-use std::path::PathBuf;
+extern crate loft;
+
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+mod common;
+use common::cached_default;
+
+// load_all / wire_native_fns mutate process-global registries (NATIVE_REGISTRY,
+// STUB_SYMBOLS, LOADED_LIBS); byte_code calls set_stub_symbols.  Serialise both
+// tests so one's stub set can't clobber the other's between wire and execute.
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Locate `libloft.rlib` + its sibling `deps/` for standalone rustc, matching the
 /// feature set of this test binary (mirrors `tests/native.rs::find_loft_rlib`).
@@ -31,7 +50,7 @@ fn find_loft_rlib() -> Option<(PathBuf, PathBuf)> {
 
 /// `--extern name=path` for optional feature deps (random/png) that the generated
 /// stdlib code may reference, mirroring `tests/native.rs::collect_extra_externs`.
-fn extra_externs(deps: &std::path::Path) -> Vec<(String, PathBuf)> {
+fn extra_externs(deps: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(deps) {
         for e in entries.flatten() {
@@ -51,70 +70,23 @@ fn extra_externs(deps: &std::path::Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-#[test]
-fn generated_cdylib_compiles_and_exports_scalar_symbol() {
-    let Some((rlib, deps)) = find_loft_rlib() else {
-        println!("skip: libloft.rlib not found");
-        return;
-    };
-    if Command::new("rustc").arg("--version").output().is_err() {
-        println!("skip: rustc unavailable");
-        return;
-    }
-
-    // Parse stdlib + a tiny library with one scalar function.
-    let pid = std::process::id();
-    let tmp = std::env::temp_dir().join(format!("loft_n2cdylib_{pid}"));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    let lib = tmp.join("lib.loft");
-    // A pure library — no `main`, so no `n_main` and no `fn main()` bootstrap is
-    // emitted; only the exported function + its transitive deps are generated.
-    std::fs::write(&lib, "pub fn double(x: integer) -> integer { x * 2 }\n").unwrap();
-
-    let mut p = loft::parser::Parser::new();
-    if p.parse_dir("default", true, false).is_err() {
-        println!("skip: default/ stdlib not parseable here");
-        return;
-    }
-    p.parse(&lib.to_string_lossy(), false);
-    loft::scopes::check(&mut p.data);
-    p.data.namespace_colliding_native_fns();
-
-    // The export set is the LIBRARY's own public scalar-dispatchable functions —
-    // here just `double`.  (A cdylib exports the library's public API, not the
-    // whole stdlib; the stdlib is a reachable dependency, inlined/emitted as
-    // needed.)  Passing the whole stdlib scalar set would try to wrap operator
-    // definitions (`OpAddSingle`, …) that `--native` inlines rather than emits.
-    let scalar = loft::native_gate::scalar_dispatchable(&p.data);
-    let double_nr = p.data.def_nr("n_double");
-    assert!(
-        scalar.contains(&double_nr),
-        "double should be scalar-dispatchable"
-    );
-    let export: std::collections::HashSet<u32> = std::iter::once(double_nr).collect();
-
-    // Compile to bytecode to populate the database (the type schema codegen reads).
-    let mut state = loft::state::State::new(p.database);
-    loft::compile::byte_code(&mut state, &mut p.data);
-
-    // Generate the cdylib source.
-    let src = loft::native_lib::generate_cdylib_lib_rs(&p.data, &state.database, &export);
-    assert!(
-        src.contains("pub extern \"C\" fn loft_n_double"),
-        "the export wrapper for double must be present"
-    );
-    let rs = tmp.join("lib.rs");
-    std::fs::write(&rs, &src).unwrap();
-
-    // Compile it as a cdylib against libloft.rlib (mirrors the --native rustc call).
-    let so = tmp.join(if cfg!(target_os = "windows") {
-        "loft_n2.dll"
+/// Platform cdylib filename for `stem`.
+fn cdylib_name(stem: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{stem}.dll")
     } else if cfg!(target_os = "macos") {
-        "libloft_n2.dylib"
+        format!("lib{stem}.dylib")
     } else {
-        "libloft_n2.so"
-    });
+        format!("lib{stem}.so")
+    }
+}
+
+/// Compile `src` as a cdylib against `libloft.rlib`, mirroring the `--native`
+/// rustc invocation.  Panics (keeping the source for inspection) on failure.
+fn compile_cdylib(src: &str, stem: &str, tmp: &Path, rlib: &Path, deps: &Path) -> PathBuf {
+    let rs = tmp.join(format!("{stem}.rs"));
+    std::fs::write(&rs, src).unwrap();
+    let so = tmp.join(cdylib_name(stem));
     let mut args: Vec<String> = vec![
         "--edition=2024".into(),
         "-C".into(),
@@ -131,7 +103,7 @@ fn generated_cdylib_compiles_and_exports_scalar_symbol() {
         "-L".into(),
         deps.display().to_string(),
     ];
-    for (name, path) in extra_externs(&deps) {
+    for (name, path) in extra_externs(deps) {
         args.push("--extern".into());
         args.push(format!("{name}={}", path.display()));
     }
@@ -139,24 +111,128 @@ fn generated_cdylib_compiles_and_exports_scalar_symbol() {
         .args(&args)
         .output()
         .expect("invoke rustc");
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // Keep the generated source for inspection on failure.
-        panic!(
-            "cdylib compile FAILED. source at {}\n--- rustc stderr (tail) ---\n{}",
-            rs.display(),
-            stderr
-                .lines()
-                .rev()
-                .take(40)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
+    assert!(
+        out.status.success(),
+        "cdylib compile FAILED. source at {}\n--- rustc stderr (tail) ---\n{}",
+        rs.display(),
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .rev()
+            .take(40)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     assert!(so.exists(), "cdylib output should exist");
+    so
+}
+
+/// Build the cdylib for `pub fn double(x: integer) -> integer { x * 2 }` and
+/// return (so_path, tmp_dir).  Shared by both tests.  Returns None when the
+/// rlib/rustc/stdlib aren't available (test skips).
+fn build_double_cdylib(stem: &str) -> Option<(PathBuf, PathBuf)> {
+    let (rlib, deps) = find_loft_rlib()?;
+    if Command::new("rustc").arg("--version").output().is_err() {
+        println!("skip: rustc unavailable");
+        return None;
+    }
+
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n2_{stem}_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // The LIBRARY: a pure library (no `main`) with one scalar function.
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        "pub fn double(x: integer) -> integer { x * 2 }",
+        "lib",
+        false,
+    );
+    loft::scopes::check(&mut p.data);
+
+    let scalar = loft::native_gate::scalar_dispatchable(&p.data);
+    let double_nr = p.data.def_nr("n_double");
+    assert!(
+        scalar.contains(&double_nr),
+        "double should be scalar-dispatchable"
+    );
+    let export: std::collections::HashSet<u32> = std::iter::once(double_nr).collect();
+
+    // Compile to bytecode to populate the database (the type schema codegen reads).
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+
+    let src = loft::native_lib::generate_cdylib_lib_rs(&p.data, &state.database, &export);
+    assert!(
+        src.contains("pub extern \"C\" fn loft_n_double"),
+        "the export wrapper for double must be present"
+    );
+
+    let so = compile_cdylib(&src, stem, &tmp, &rlib, &deps);
+    Some((so, tmp))
+}
+
+#[test]
+fn generated_cdylib_compiles_and_exports_scalar_symbol() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_double_cdylib("loft_n2_compile") else {
+        return;
+    };
+    assert!(so.exists(), "cdylib output should exist");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn dispatches_scalar_call_into_generated_cdylib() {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_double_cdylib("loft_n2_dispatch") else {
+        return;
+    };
+
+    // The SCRIPT: declare `double` as a native import of the cdylib symbol, then
+    // call it.  This is exactly what N3 will auto-generate from `use <lib>`.
+    let native_decl = "pub fn double(x: integer) -> integer not null;\n#native \"loft_n_double\"\n";
+    let source = r#"
+fn main() {
+    assert(double(21) == 42, "double(21) should dispatch to native and return 42, got {double(21)}")
+}
+"#;
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(native_decl, "native_decl", false);
+    p.parse_str(source, "test", false);
+    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
+    scopes::check(&mut p.data);
+
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // Load the generated cdylib (zero-registration: resolved via dlsym) and wire
+    // the auto-marshal dispatcher for `loft_n_double`.
+    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    extensions::wire_native_fns(&mut state, &p.data);
+
+    // Executes the assert: if dispatch failed (stub panic) or returned the wrong
+    // value, this panics.
+    state.execute_argv("main", &p.data, &[]);
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
