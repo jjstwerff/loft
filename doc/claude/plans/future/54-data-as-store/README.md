@@ -63,7 +63,10 @@ measurements reframed the cost/benefit and point to a clear priority order:
    NEVER materialised at startup — the allocation cost E2 eliminates is simply
    not incurred.  E2 therefore drops to low priority for performance.  Its
    architectural value (self-hosting, store-backed IR, mmap) stands on its own;
-   the perf rationale no longer applies.
+   the perf rationale no longer applies.  **The forward work is now § Arc N —
+   native-library execution model (C71 build-out)** below: the phased,
+   timeline-tracked plan for building that architecture (everything except the
+   deferred library validation layer).
 
 3. ✅ **PROFILED (2026-06-04) — there is no cheap `read_function` win; the cost is
    allocation-bound, so E2 (zero-copy) is the only lever.**  `bench_read_data_breakdown`
@@ -152,6 +155,50 @@ blast radius (only the `default/` parse).
      bundles, closing the git-HEAD-`BUILD_ID` blind spot.  This was the
      not-yet-done prerequisite beyond the release-upgrade invalidation
      (`0b9e69a`); it is now done.
+
+---
+
+### Arc N — native-library execution model (C71 build-out)
+
+**The forward arc.**  Per [DESIGN_DECISIONS § C71](../../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
+the steady state is **native libraries + interpreted scripts**; this arc builds
+that architecture.  It **supersedes the G2 zero-copy endgame for perf** (E2 /
+M6-cold / M7 are parked — see recommendation #2): native libraries are never
+materialised, so the allocation-bound `read_data` cost is *avoided*, not chased
+with a multi-week rewrite.  Scope = **the full interpreted+native architecture
+EXCEPT the library validation layer** (deferred, customer-facing — see § Excluded).
+Each phase lands as a **self-contained, default-safe increment in `main`** (the
+dispatch primitive + caches stay opt-in / behind the automatic policy until N3+N5
+make them safe-by-default).
+
+**Builds on (already landed):** the `OpStaticCall` → `library_names` →
+`extensions::wire_native_fns` → `try_dlsym` dispatch primitive (+ `native_packages`);
+BUILD2's memoised `libloft.rlib` content hash (`native_utils::native_cache_key`);
+the complete `Definition` read seam (M1a/M1b/M1c); the D2a database-type-schema
+cache; and the cross-mode byte-identical equivalence harness.
+
+| Phase | Deliverable | Validation (done-when) | Status | Effort |
+|---|---|---|---|---|
+| **N0 — build fingerprint** | Extract one `loft_build_fingerprint()` (rlib content hash, reuse BUILD2's memoisation); **audit + migrate every native-artifact cache key off mtime / git-HEAD** (`@P341` native-package path is the known offender); add the **nuke-on-recompile** startup trigger (current fingerprint vs a stored marker → clear native cache on mismatch).  Also a Goal-A veil-lifter (forbids the stale-artifact-links-after-a-build-bump failure). | the recurring stale-artifact "generated rust-code error" stops; `make rebuild-native-cdylibs` is obsolete; touch-rebuilding loft auto-invalidates the native cache | ⬜ | S |
+| **N1 — per-library native artifact cache** | Compile each `use`d library to a native artifact **once**, content-addressed on `fingerprint · lib-content · target · features`; persist locally; **idle-TTL eviction** (touch-on-use last-use mtime; startup GC of entries idle > `LOFT_CACHE_TTL_HOURS`, default 24 h).  Refines Track 1's size-cap eviction with touch-on-use. | a re-run of the same lib-set reuses cached artifacts; common sets persist, a one-off's libs age out in 24 h; a loft rebuild's orphans are nuked by N0 | ⬜ | M |
+| **N2 — lean library interface load** | Load each native library's **interface only** — exported types → schema, function signatures, symbol→def map — without parsing the lib source or materialising bodies/var-tables, so the interpreted script type-checks calls + emits native dispatch against it.  Builds on the `Definition` seam + the D2a schema cache. | a script using a native lib loads its interface, not its bodies; output byte-identical to the all-interpreted run (Goal D) | ⬜ | M |
+| **N3 — native/interpret decision policy** | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag. | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | ⬜ | M |
+| **N4 — mixed-mode dispatch coverage** | Generalise interp→native dispatch beyond simple `#native`: generics, closures crossing the boundary, complex exported types (PACKAGES.md "What must be native" / C-ABI).  Un-native-able constructs **silently fall back to interpret** (Goal F — absorb the cost, never an error). | dogfood-consumer libraries (closures/generics) run native where possible, interpret where not, **with no user-visible error**; cross-mode output identical | ⬜ | L |
+| **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ⬜ | M (continuous) |
+
+**Sequencing.**  N0 first (correctness + unblocks; small, dev-facing) → N1 + N2 are
+the core mechanism (cache + interface) → N3 makes it invisible (F) → N4 is the
+capability unlock (C) and the largest piece.  **N5 is woven through each phase, not
+appended** — per C71's guardrail that the A/D detectors grow to the mixed boundary
+*as part of* the work, and per [GOALS.md](../../../GOALS.md) "two floors," this arc
+is **gated on the soundness floor it extends** (it adds a new interp↔native surface
+to that floor rather than clearing it).
+
+**Excluded — the library validation layer (deferred, customer-facing).**  The
+fingerprint's eventual owner: an artifact's validity = content · target · features ·
+loft-build-fingerprint · signature, plus registry distribution of per-target
+artifacts.  Becomes load-bearing when **daily builds** ship (C71's
+developer-vs-customer framing).  Tracked as a future arc, **not here**.
 
 ---
 
