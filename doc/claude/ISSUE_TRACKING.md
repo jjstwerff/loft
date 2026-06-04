@@ -177,6 +177,26 @@ grows phase-worthy (usually at `status:designed`); no renumber, the issue stays 
 lightweight capture.  Feature requests use the `feature_request` template; the plan /
 ROADMAP carries the design + sequencing.
 
+### Ripeness — a `status:` is earned by its data, not assigned
+
+A `status:` claims the ticket holds the data that state requires.  **Evaluate the
+ticket against the entry criteria before promoting it; if the data isn't there it is
+*not ripe* and stays at the lower state.**  (A label assigned without the data is the
+same failure as a fix asserted without the matrix.)
+
+- **leave `unclear`** — the gate is filled (bug: *expected vs observed* + a repro;
+  enh: *now vs wanted*).  A ticket also stays `unclear` whenever it is not yet
+  *decidable* — e.g. value is clear but the cost can't be assessed until an upstream
+  design/scope call is made (mark that with `needs-design`).
+- **enter `need-approval`** — the body holds **all three**: (1) **value** (now-vs-wanted);
+  (2) **cost** — the systems/files changed, a rough effort, the risks/blast-radius;
+  (3) a **decidable proposal** — a decider can pick implement / defer / reject *without
+  first doing design exploration*.  Missing any → not ripe → stays `unclear`.
+- **enter `designed`** — `need-approval` passed *and* approved *and* the design settled
+  (scope chosen, approach pinned).
+- **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
+  that data must be present to defer or reject *informedly*, never by default.
+
 ## Beyond bugs — the unified model (plans · lib-plans · enhancements)
 
 **Initial design (2026-06) — draft.**  Bugs were the pilot; the same split
