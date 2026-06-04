@@ -266,10 +266,10 @@ Reason categories:
 
 | Reason format | Meaning | Example |
 |---|---|---|
-| `P###` | Open bug tracked in PROBLEMS.md.  Un-ignore in the same commit that closes the P-id. | `#[ignore = "P207 — native char-tuple-elem eq codegen bug"]` |
+| `P###` / `#NNN` | Open bug — now a **GitHub Issue** (legacy `P###` ids survive as references; PROBLEMS.md is the closed archive).  Un-ignore in the commit that closes it (`Fixes #NNN`). | `#[ignore = "P207 — native char-tuple-elem eq codegen bug"]` |
 | `<feature-tag> — <plan-ref>` | Waiting on a feature or plan phase that hasn't shipped.  Un-ignore in a one-line follow-up commit when the feature lands. | `#[ignore = "T1.8a — plan-06 phase 9a"]` |
 | `tuple_matrix — run with …` | Heavy-by-default test.  Auto-applied by `cross_mode!`.  Don't write by hand. | (macro-applied) |
-| `<plan>-<phase>` | Pending implementation in a multi-phase plan.  Same un-ignore rules as P### but tracked via the plan rather than PROBLEMS.md. | `#[ignore = "plan-14 phase 03"]` |
+| `<plan>-<phase>` | Pending implementation in a multi-phase plan.  Same un-ignore rules as a bug, but tracked via the plan rather than an Issue. | `#[ignore = "plan-14 phase 03"]` |
 | `<plan> (<sub>) — un-ignore when <trigger>` | User-facing lock-in test: the test demonstrates a today-broken behaviour, marked ignored so CI stays green; auto-flips to PASS when the trigger fires. | `#[ignore = "plan-17 (A) caveat — implicit generic-tuple type inference; un-ignore when the parser propagates substituted return types to receiving variables (DEFERRED.md / USER_FACING.md)"]` |
 
 **The trigger phrase is mandatory.** Acceptable forms include
@@ -318,28 +318,24 @@ trace the audit trail in one grep.
 
 ---
 
-## P-id filing rules
+## Filing a bug you find while testing
 
-Authoritative rules (see also memory `feedback_fix_old_clippy.md`):
+Authoritative policy: `CLAUDE.md` § Bug-filing policy + `doc/claude/ISSUE_TRACKING.md`.
+**Open bugs live as GitHub Issues now, not PROBLEMS.md rows** (PROBLEMS.md is the
+closed/historical archive; the legacy `P###` ids survive only as references).
 
-1. **DO file** P-ids in `doc/claude/PROBLEMS.md` for genuine open bugs
-   you discover while doing other work — runtime crashes, wrong
-   results, codegen mismatches, parser hangs.  Filing prevents the
-   issue from getting lost when you context-switch.
-2. **Do NOT file** P-ids for:
-   - Clippy lints / formatter complaints (those are routine
-     maintenance — fix in the same branch and describe in the commit
-     message, not in PROBLEMS.md).
-   - Bugs that are fixed in the same commit — the commit message and
-     regression test carry the audit trail; a born-resolved P-id is
-     noise.
-3. **Pin every fix with a regression test** and reference the test in
-   the closing P-id text.  The convention from the existing 200-series
-   entries:  
-   `Pinned by `p<NNN>_<short_name>` regression tests in
-   `tests/<binary>.rs`.`
-4. P-ids are global; the next free number is one past the last entry
-   in PROBLEMS.md (P207 as of 2026-05-04).
+1. **Default is to FIX, not file.** A bug you surface while testing is the cheapest
+   you'll ever fix — code paths warm, repro at hand: fix it + pin a regression.  File
+   only when you are NOT fixing it now (it blocks the task, or it's M+/needs design).
+2. **When you file → `gh issue create`** (the `bug_report` template): a minimal
+   reproducer (expected vs observed per backend), `sev:` + `area:` labels, and a
+   **verified** `wa:*` workaround.  Not a PROBLEMS.md row.
+3. **Do NOT file** for: clippy / formatter complaints (fix in-branch, note the commit
+   — memory `feedback_fix_old_clippy.md`); or a bug you fix in the SAME change (the
+   fix + regression test ARE the record — close it with `Fixes #NNN`, don't also file).
+4. **Pin every fix with a regression test.** Name it `p<NNN>_<short>` for a legacy
+   P-id or `tests/scripts/NN-<slug>.loft` for a GitHub issue; reference it in the
+   commit (`Fixes #NNN`).
 
 ---
 
@@ -506,8 +502,9 @@ pre-emptively.  `src/trace.rs` documents the steps:
 
 - [TESTING.md](../../../doc/claude/TESTING.md) — runtime debugging knobs:
   `LogConfig`, `LOFT_LOG`, dump file format, `LOFT_DUMP_DEPTH`.
-- [PROBLEMS.md](../../../doc/claude/PROBLEMS.md) — open P-ids; check
-  before filing a new one.
+- [ISSUE_TRACKING.md](../../../doc/claude/ISSUE_TRACKING.md) — where bugs
+  live (open → GitHub Issues, closed → PROBLEMS.md archive) + the item
+  lifecycle.  Run `gh issue list` before filing a new one.
 - [DEVELOPMENT.md](../../../doc/claude/DEVELOPMENT.md) — branch policy,
   commit ordering, push gate.
 - [loft-write skill](../loft-write/SKILL.md) — for the loft-source

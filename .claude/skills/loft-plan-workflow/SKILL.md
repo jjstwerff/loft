@@ -29,7 +29,7 @@ This skill is **procedural-only**.  Definitions / rationale / templates live in 
 
 | Work shape | Path |
 |---|---|
-| Bug fix (single root cause, fits in one commit) | PROBLEMS.md row + regression test + commit.  No plan, no Open work entry. |
+| Bug fix (single root cause, fits in one commit) | Fix + regression test + commit (`Fixes #NNN` if a GitHub Issue exists; otherwise the fix + test ARE the record).  No plan, no Open work entry, no PROBLEMS.md row — PROBLEMS.md is the closed archive; open bugs are GitHub Issues. |
 | Tiny deliverable (demo deploy, version bump) | ROADMAP row only.  No plan. |
 | Operational change (CI tweak, doc fix) | Direct commit, no ROADMAP row needed. |
 | **Light TODO** (the normal flow) — work that fits in a row of a reference-doc table | `## Open work` section in the relevant `doc/claude/<NAME>.md` (NATIVE.md / PERFORMANCE.md / PACKAGES.md / QUALITY.md are canonical examples).  Same lifecycle as a plan, just one row. |
