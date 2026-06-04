@@ -33,9 +33,11 @@ and `LOFT_PATHS=cwd` stay cwd; absolute untouched; program-relative write/read/d
 round-trips with no leak.  Interp suite green (wrap 50/0, issues 684/0); native_scripts
 + native_dir green.
 
-Open: **1w** the wasm host anchor (`current_exe()` is unreliable under WASI — un-skip
-`191` for wasm when wired) and **4** the graphics consumer (`gl_load_font` on the new
-anchor, in external `loft-libs-graphics`).
+Open: **1w** — the wasm anchor *code* is wired (`source_dir()` = the host working dir
+via `current_dir()`), but running `191` under wasm is gated on
+[#268](https://github.com/jjstwerff/loft/issues/268) (wasip2 `print()` codegen calls an
+undeclared `loft_host_print`); and **4** the graphics consumer (`gl_load_font` on the
+new anchor, in external `loft-libs-graphics`).
 
 ## Goal
 
@@ -98,7 +100,7 @@ is unaffected, and the opt-in flips resolution to cwd — on the right backend.
 | **1b** | **Resolver chokepoint** — `Stores::resolve_path`, the single home every file-op site routes through (interp io.rs + database/io.rs + png; native codegen_runtime ×5; standalone delete/move/mkdir in fill.rs + `#rust` templates). Resolves at the OS boundary (keeps `File.path`). | M | **Shipped** (`7519de96`) |
 | **2** | **`#cwd` opt-in** — file-level directive parsed in `parse_file`; native bakes it via `const LOFT_PROGRAM_RELATIVE`. + `LOFT_PATHS` env override. | S | **Shipped** (`7519de96`) |
 | **3** | **Default flip + corpus migration** — `Stores::new` defaults program-relative; 13 cwd-relative tests migrated with `#cwd`; suite green both backends. | S–M | **Shipped** (`7519de96`) |
-| **1w** | **Wasm anchor** — host-supplied `source_dir()` (`current_exe()` unreliable under WASI); un-skip `191` for wasm | S | Open |
+| **1w** | **Wasm anchor** — `source_dir()` = host working dir via `current_dir()` (was "" under WASI). Code wired; 191 wasm-run gated on [#268](https://github.com/jjstwerff/loft/issues/268). | S | **Shipped** (`25feaac2`) · test gated on #268 |
 | **4** | **Graphics consumer** — `gl_load_font` et al. land on the new anchor; canonical change in external `loft-libs-graphics` (the in-repo fixture is a pinned mirror) | S + cross-repo | Open |
 
 ## Phase ordering
