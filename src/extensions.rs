@@ -251,6 +251,14 @@ struct NativeSig {
 #[cfg(feature = "native-extensions")]
 static NATIVE_SIGS: Mutex<Option<HashMap<u16, (String, NativeSig)>>> = Mutex::new(None);
 
+/// @PLAN54 Arc N — side table for the **shared-store** bridge
+/// (`native_lib::generate_shared_cdylib_lib_rs`): library index → (bridge fn ptr,
+/// signature).  Populated by `wire_shared_native_fns`, read by
+/// `shared_store_dispatch`.  Separate from `NATIVE_SIGS` because the ABI differs
+/// (a `*mut Stores` + `LibArg` bridge, not the `LoftStore`/raw-ptr marshalling).
+#[cfg(feature = "native-extensions")]
+static SHARED_SIGS: Mutex<Option<HashMap<u16, (FnPtr, NativeSig)>>> = Mutex::new(None);
+
 /// Compute the argument type list and return type from a definition's signature.
 /// Returns `None` if the signature contains types that can't be auto-marshalled
 /// (e.g. struct references, vectors).
@@ -351,6 +359,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
                 continue;
             }
             let sym = &def.native;
+            // @PLAN54 Arc N: shared-store bridges are wired by
+            // `wire_shared_native_fns` (a different ABI) — skip them here.
+            if sym.starts_with("loft_shared_") {
+                continue;
+            }
             if let Some(stubs) = stub_syms
                 && !stubs.contains(sym)
             {
@@ -414,6 +427,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
         let sym = &def.native;
 
+        // @PLAN54 Arc N: shared-store bridges use a different dispatcher — skip.
+        if sym.starts_with("loft_shared_") {
+            continue;
+        }
+
         // Only replace stubs — skip hand-written glue from native::init().
         if let Some(stubs) = stub_syms
             && !stubs.contains(sym)
@@ -447,6 +465,149 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
 #[cfg(not(feature = "native-extensions"))]
 pub fn wire_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
+
+/// @PLAN54 Arc N — wire the **shared-store** bridge dispatchers.  For every
+/// `#native "loft_shared_…"` definition (the marker for an auto-generated
+/// shared-store bridge), resolve the bridge symbol from the loaded cdylibs via
+/// dlsym, record `(bridge_ptr, signature)` in `SHARED_SIGS`, and replace the stub
+/// `OpStaticCall` target with `shared_store_dispatch`.  Call this *after*
+/// `load_all` (and, if also using legacy `#native`, after `wire_native_fns` —
+/// they handle disjoint symbol sets, `wire_native_fns` skips `loft_shared_…`).
+#[cfg(feature = "native-extensions")]
+pub fn wire_shared_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
+    // Phase 1: collect resolvable shared bridges (no lock held).
+    let mut wired: Vec<(String, u16, *const (), NativeSig)> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        let sym = &def.native;
+        if !sym.starts_with("loft_shared_") {
+            continue;
+        }
+        let Some((ptr, _uses_v1)) = try_dlsym(sym) else {
+            continue; // bridge not in any loaded cdylib (yet)
+        };
+        let Some(sig) = compute_sig(data, d_nr) else {
+            continue; // signature not bridge-marshallable
+        };
+        let Some(&lib_idx) = state.library_names.get(sym) else {
+            continue;
+        };
+        wired.push((sym.clone(), lib_idx, ptr, sig));
+    }
+
+    // Phase 2: record signatures, then replace the stub dispatch targets.
+    {
+        let mut guard = SHARED_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = guard.get_or_insert_with(HashMap::new);
+        for (_, lib_idx, ptr, sig) in &wired {
+            table.insert(*lib_idx, (FnPtr(*ptr), sig.clone()));
+        }
+    }
+    for (sym, ..) in &wired {
+        state.replace_static_fn(sym, shared_store_dispatch);
+    }
+}
+
+#[cfg(not(feature = "native-extensions"))]
+pub fn wire_shared_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
+
+/// @PLAN54 Arc N — the shared-store bridge dispatcher.  Invoked via `OpStaticCall`
+/// for a function whose `#native` symbol is an auto-generated `loft_shared_…`
+/// bridge.  Reads the call's args off the interpreter stack into `LibArg` slots
+/// (scalars by value; `vector`/`reference` as the **raw** stack `DbRef`, no
+/// deref — the `--native` body expects the same indirect form), passes the
+/// caller's `*mut Stores` directly (zero-marshalling shared store), calls the
+/// bridge, and writes the return back onto the stack.
+#[cfg(feature = "native-extensions")]
+fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef) {
+    use crate::keys::DbRef;
+    use crate::native_lib::LibArg;
+
+    let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
+    let (bridge_ptr, sig) = {
+        let guard = SHARED_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = guard.as_ref().expect("SHARED_SIGS not initialized");
+        match table.get(&lib_idx) {
+            Some((p, s)) => (p.0, s.clone()),
+            None => panic!("no shared signature for lib_idx {lib_idx}"),
+        }
+    };
+
+    const ZERO_REF: DbRef = DbRef {
+        store_nr: 0,
+        rec: 0,
+        pos: 0,
+    };
+    // Pop in reverse (stack is LIFO), then restore declaration order.
+    let mut args: Vec<LibArg> = Vec::with_capacity(sig.params.len());
+    for &t in sig.params.iter().rev() {
+        let slot = match t {
+            ArgT::I32 | ArgT::I64 => LibArg {
+                scalar: *stores.get::<i64>(stack),
+                dbref: ZERO_REF,
+            },
+            ArgT::F64 => LibArg {
+                scalar: (*stores.get::<f64>(stack)).to_bits() as i64,
+                dbref: ZERO_REF,
+            },
+            ArgT::F32 => LibArg {
+                scalar: i64::from((*stores.get::<f64>(stack) as f32).to_bits()),
+                dbref: ZERO_REF,
+            },
+            ArgT::Bool => LibArg {
+                scalar: i64::from(*stores.get::<bool>(stack)),
+                dbref: ZERO_REF,
+            },
+            // The raw stack DbRef, passed UNCHANGED (the --native body consumes
+            // the indirect-header form, not the dereferenced direct record).
+            ArgT::Ref | ArgT::Vec => LibArg {
+                scalar: 0,
+                dbref: *stores.get::<DbRef>(stack),
+            },
+            ArgT::Text => panic!("shared-store bridge: Text args not yet supported"),
+        };
+        args.push(slot);
+    }
+    args.reverse();
+
+    let mut ret = LibArg {
+        scalar: 0,
+        dbref: ZERO_REF,
+    };
+    let stores_ptr: *mut crate::database::Stores = stores;
+    // SAFETY: `bridge_ptr` is a `loft_shared_…` export of an auto-generated cdylib
+    // that links this exact `LibArg` / `Stores` / `DbRef` from libloft, so the ABI
+    // matches.  `stores_ptr` is borrowed from the live `&mut Stores`; the bridge
+    // uses it (and only it) for the duration of the call.
+    let bridge: unsafe extern "C" fn(
+        *mut crate::database::Stores,
+        *const LibArg,
+        usize,
+        *mut LibArg,
+    ) = unsafe { std::mem::transmute(bridge_ptr) };
+    unsafe {
+        bridge(
+            stores_ptr,
+            args.as_ptr(),
+            args.len(),
+            std::ptr::from_mut(&mut ret),
+        )
+    };
+
+    match sig.ret {
+        None => {}
+        Some(ArgT::I32 | ArgT::I64) => stores.put::<i64>(stack, ret.scalar),
+        Some(ArgT::F64) => stores.put::<f64>(stack, f64::from_bits(ret.scalar as u64)),
+        Some(ArgT::F32) => stores.put::<f64>(stack, f64::from(f32::from_bits(ret.scalar as u32))),
+        Some(ArgT::Bool) => stores.put(stack, ret.scalar != 0),
+        Some(ArgT::Ref | ArgT::Vec) => stores.put::<DbRef>(stack, ret.dbref),
+        Some(ArgT::Text) => panic!("shared-store bridge: Text returns not yet supported"),
+    }
+}
 
 /// Generic auto-marshal dispatcher. Called via `OpStaticCall` for all
 /// auto-wired native functions. Reads signature from `NATIVE_SIGS` using

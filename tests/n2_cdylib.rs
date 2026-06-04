@@ -390,3 +390,57 @@ fn generated_shared_cdylib_compiles() {
     assert!(so.exists(), "shared cdylib output should exist");
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Run a SCRIPT that declares `native_decl` (a `#native "loft_shared_…"` import
+/// of an auto-generated shared-store bridge) and calls it from `main`,
+/// dispatching into `so` over the shared `*mut Stores` ABI.
+fn run_shared_dispatch(so: &Path, native_decl: &str, source: &str) {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(native_decl, "native_decl", false);
+    p.parse_str(source, "test", false);
+    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
+    scopes::check(&mut p.data);
+
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    extensions::wire_shared_native_fns(&mut state, &p.data);
+
+    state.execute_argv("main", &p.data, &[]);
+}
+
+/// N2 store-touching slice, milestone 2: dispatch a `vector<integer>` argument
+/// into the generated shared-store bridge end-to-end.  The interpreter builds the
+/// vector in its store; the bridge shares that store by pointer; the `--native`
+/// body sums it — `vec_sum([10,20,30]) == 60`.  The raw stack `DbRef` crosses
+/// unchanged (no deref) and resolves correctly in the shared store.
+#[test]
+fn dispatches_vector_arg_into_shared_cdylib() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_shared_d", VEC_SUM_LIB, "vec_sum")
+    else {
+        return;
+    };
+
+    let native_decl = "pub fn vec_sum(data: vector<integer>) -> integer not null;\n#native \"loft_shared_n_vec_sum\"\n";
+    let source = r#"
+fn main() {
+    d = [10, 20, 30];
+    assert(vec_sum(d) == 60, "vec_sum([10,20,30]) should be 60, got {vec_sum(d)}")
+}
+"#;
+    run_shared_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
