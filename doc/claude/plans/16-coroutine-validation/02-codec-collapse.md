@@ -5,7 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 02 — Layout-driven yield codec (the full channel collapse)
 
-**Status: DESIGN (proposed).**  Produced as the *with-arm* of the
+**Status: BUILT + validated (scalar + DbRef-ref slice).**  The layout-driven
+flatten-walk is implemented (`src/coroutine_layout.rs` + the four wiring sites);
+three previously-`--native`-broken composite shapes — `(integer, float)`,
+`(integer, boolean)`, `(vector<integer>, integer)` — now compile and run
+correctly on both backends through the single walk with **zero per-shape code**,
+`coroutine_matrix` 18/18 green on both backends, no regression.  `(text, …)` is
+the one excluded cell (a text element's native repr is `&str`, needing a store
+intern — `codegen_runtime::db_from_text` — with the lifetime question that
+entails: a separate slice).  This was produced as the *with-arm* of the
 [`DESIGN_VERIFICATION.md` § C1](../../DESIGN_VERIFICATION.md) predict-validate
 protocol — see § Provenance.  Supersedes the migration tail of
 [01-unified-channel.md](01-unified-channel.md): phase 01 unified the

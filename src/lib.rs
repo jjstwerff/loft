@@ -76,6 +76,7 @@ pub mod tree;
 mod typedef;
 
 pub mod const_eval;
+pub mod coroutine_layout;
 pub mod create;
 pub mod fill;
 pub mod parallel;

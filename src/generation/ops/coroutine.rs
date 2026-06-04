@@ -10,6 +10,7 @@
 //! present (no `DefaultEmitter` fallback).
 
 use super::{EmitCtx, OpEmitter};
+use crate::coroutine_layout::{YieldSlot, slot_count};
 use crate::data::Value;
 use std::io;
 
@@ -38,23 +39,63 @@ impl OpEmitter for OpCoroutineNextEmitter {
             let channel = (raw_value_size >> 8) & 0xFF;
             let byte_size = raw_value_size & 0xFF;
             if channel == 1 {
-                // @P327 native — unified channel, tuple-of-i64 rebuild.
-                // Buffer size = ceil(byte_size / 8) i64 slots; emit an
-                // inline block that allocates the buffer, calls
-                // `coroutine_next_into`, and rebuilds the consumer's
-                // tuple from the buffer slots.
-                let slots = (byte_size as usize).div_ceil(8);
+                // @PLAN16 phase 02 — unified channel, layout-driven rebuild.
+                // The per-slot kind list rides as extra OpCoroutineNext args
+                // (`args[2..]`, each `Int(code)`); the interpreter ignores
+                // them, and both ends derive the list from `tuple_kinds` over
+                // the same `T`, so producer (`yield_slot_write`) and consumer
+                // (`yield_slot_read`) agree by construction.  Buffer size is the
+                // accumulated slot count (a `Ref` element takes two slots), not
+                // `byte_size`.
+                let kinds: Vec<YieldSlot> = args[2..]
+                    .iter()
+                    .filter_map(|a| match a {
+                        Value::Int(c) => Some(YieldSlot::from_code(*c)),
+                        _ => None,
+                    })
+                    .collect();
+                if kinds.is_empty() {
+                    // Defensive: a channel-1 call without a kind list (should
+                    // not occur post-@PLAN16) decodes as the legacy all-i64
+                    // tuple so it never silently emits an empty `()`.
+                    let slots = (byte_size as usize).div_ceil(8);
+                    write!(
+                        ctx.w,
+                        "{{ let mut _loft_yield_buf: [i64; {slots}] = [0; {slots}]; \
+                         loft::codegen_runtime::coroutine_next_into({gen_code}, stores, &mut _loft_yield_buf); \
+                         ("
+                    )?;
+                    for i in 0..slots {
+                        if i > 0 {
+                            write!(ctx.w, ", ")?;
+                        }
+                        write!(ctx.w, "_loft_yield_buf[{i}]")?;
+                    }
+                    write!(ctx.w, ") }}")?;
+                    return Ok(());
+                }
+                let slots = slot_count(&kinds);
                 write!(
                     ctx.w,
                     "{{ let mut _loft_yield_buf: [i64; {slots}] = [0; {slots}]; \
                      loft::codegen_runtime::coroutine_next_into({gen_code}, stores, &mut _loft_yield_buf); \
                      ("
                 )?;
-                for i in 0..slots {
+                let mut slot = 0usize;
+                for (i, &kind) in kinds.iter().enumerate() {
                     if i > 0 {
                         write!(ctx.w, ", ")?;
                     }
-                    write!(ctx.w, "_loft_yield_buf[{i}]")?;
+                    write!(
+                        ctx.w,
+                        "{}",
+                        crate::generation::coroutine::yield_slot_read(kind, slot)
+                    )?;
+                    slot += kind.width();
+                }
+                // A 1-element tuple needs the trailing comma to stay a tuple.
+                if kinds.len() == 1 {
+                    write!(ctx.w, ",")?;
                 }
                 write!(ctx.w, ") }}")?;
                 return Ok(());
