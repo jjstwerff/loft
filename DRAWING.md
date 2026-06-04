@@ -4,6 +4,30 @@ Working notes. The goal is **not** generative image synthesis (prompt in,
 finished picture out). It is the **pen-and-paper / 3D-modelling kind**: an
 iterative craft where marks accumulate and each one teaches you something.
 
+> **Current state & how to run.** The working tool lives in [`sketch/`](sketch/):
+> `python3 sketch/draw.py` renders [`sketch/scene.draw`](sketch/scene.draw) and
+> re-renders on save; outputs (canvas / preview / stats) go to a temp dir, never
+> git. **For current mechanics — the scene grammar, the metric `check` channel, the
+> earned-rules ledger — `sketch/README.md` + `sketch/scene.draw` are the source of
+> truth, not this file.** This document is the *reasoning record*: why the tool is
+> shaped the way it is, and the honest limits. Where an early section below
+> describes an earlier design (append-only `cmds.txt`, `gen.py`, a separate
+> `intent.txt`), it is flagged **Historical (v1)** and superseded by `sketch/`.
+
+### Reading map — the through-lines
+
+1. **The loop** — perceive → mark → see-gap → adjust (§ The premise, § Closing the loop).
+2. **Cost asymmetry** — drawing is cheap, looking is expensive; a near-free text
+   channel carries most iterations (§ Optimizing the loop, § the human loop).
+3. **Not practice — recipe** — repetition is worthless to me; only written lessons
+   cross sessions, and they cross in one read (§ Not practice).
+4. **Numbers→image rule set** — the gap is closed the way debugging expertise is, a
+   read-once rule set; corrections graduate into the tool (§ The numbers→image gap).
+5. **Detail = world, not parts** — substance is the coherent world (shadow, road,
+   tree), not subdivided objects (§ From symbol to world).
+6. **Feeling is reachable** — affect is the reaction to an inhabited situation, run
+   from observation; not a taste ceiling (§ Feeling is reachable).
+
 ---
 
 ## The premise — drawing is a way of *seeing*, not a way of *outputting*
@@ -61,6 +85,11 @@ Three parts, in increasing order of difficulty:
 
 ## The efficient input primitive — a long-lived canvas fed one line at a time
 
+> **Historical (v1).** The append-and-tail `cmds.txt` model below was replaced by a
+> single editable `scene.draw` source the daemon reloads on save (editing *is*
+> undo). The *reasoning* — stateful canvas, cheap incremental marks — still holds;
+> the current mechanics live in [`sketch/`](sketch/).
+
 The naive approach (regenerate a Python script per drawing) **reinvents the pen
 on every stroke** — wasteful and stateless. The efficient design:
 
@@ -91,6 +120,11 @@ from scratch), and idempotent.
 ---
 
 ## Command grammar (v0)
+
+> **Historical (v1).** This is the first grammar. The shipped tool adds `Circle`
+> (round by default), `Poly`, `name` / `landmark` / `check` (the metric channel),
+> and `# SHOULD` comments, and reads [`sketch/scene.draw`](sketch/scene.draw) (not a
+> `/tmp` `cmds.txt`). **Current grammar: [`sketch/README.md`](sketch/README.md).**
 
 Coordinates are **fractions of the paper size (0..1)**, so they're
 resolution-independent. Origin top-left, y grows downward (image convention).
@@ -570,6 +604,93 @@ distrust the tractable answer.**
 
 ---
 
+## Feeling is reachable — it's a reaction to an inhabited situation, not "taste"
+
+It's tempting to call affect the irreducible ceiling: unmeasurable taste, the one
+thing the method can't reach. That's wrong, and the correction is load-bearing.
+
+**Feeling is a derivation, not a property of the marks.** A viewer doesn't react
+to lines; they (1) *observe* the image, (2) *reconstruct the situation* it depicts
+and imagine being in it, (3) *react* — and the feeling is the reaction to the
+imagined situation. The drawing is a **device for inducing a situational
+reconstruction** vivid enough that the viewer's ordinary situation-reaction
+machinery fires. "Last light" feels like something because *being* at day's end —
+low warm light, a dark mass looming — produces a real lived reaction.
+
+This **dissolves the taste ceiling**: I can run that chain, because I hold a
+world-model of situation→reaction. And it **unifies the whole arc** — world-
+coherence isn't a step *before* feeling, it *is the substrate of* feeling.
+Inhabitability is the precondition of affect: you can't inhabit a cube, so it
+evokes nothing of a home. "I don't want to live in a cube" was the thesis all along.
+
+**A failed drawing evokes the *wrong* feeling, not no feeling.** Observed honestly,
+a cube reconstructs "an abstract solid / a block," so you inhabit a *toy* and the
+reaction is *playing with blocks*. So the affect-critic isn't "does it evoke the
+target?" — it's **"what does it evoke?"**, and the critique is the gap between that
+and the intent (here: child's-play vs shelter-at-dusk).
+
+The critic, runnable:
+
+> observe the rendered image → reconstruct the situation it depicts → imagine being
+> in it → name the reaction → compare to the intended feeling → if off, adjust the
+> *situational cues* (sun lower, shadows longer, cloud heavier, a window lit) →
+> re-observe → re-feel.
+
+Feeling is partly **compositional**: dusk → day ending; dark cloud → weather/threat;
+lit window → shelter; road → arrival/departure. Read each situational fact and its
+valence; the gestalt is their composition.
+
+**The load-bearing discipline:** run the critic from **observation, not intent**.
+Reconstruct from what the marks *show*; ask "what does *this* depict." Inhabit the
+**image**, never the **intent** — else you feel what you meant, not what you drew
+(goalpost-drift again). The ordering *see → imagine the situation → react* enforces it.
+
+So where does the difficulty actually live? It collapses back into the
+**observation/rendering** step: a coarse read reconstructs an impoverished
+situation, so the simulated feeling is off — but that's the rendering+perception
+problem already mapped as reachable (vocabulary, overlay/metric tricks, reference
+anchors), not a separate wall. The only true residue is modest viewer-variance
+(people inhabit with different memories); the *typical* reaction is estimable.
+
+**Verdict on reachability.** For a *specifiable* intent — composition, world,
+rendering — the method converges, cumulatively. For an *evocative* intent, feeling
+is reachable too, because it is downstream of the inhabitable world the method is
+built to construct; it is *not* a magisterium beyond the loop. The ceiling I first
+named was mostly the rendering ceiling wearing a mystical mask.
+
+### Worked fault: the house still reads as a cube
+
+The current drawing's biggest affective leak: the house reads as a *cube*, so it
+evokes *playing with blocks*, not *home at dusk*. Why a square+triangle reads as a
+cube, not a dwelling:
+
+- **platonic regularity** — a near-perfect symmetric box is the *generic* solid,
+  the icon of "box"; real architecture isn't that regular;
+- **no apertures** — door/windows are what say *interior life / habitation*; a
+  solid with no openings can only be a block (the strongest tell);
+- **no depth** — a flat outline is a 2D shape on a page, not an object in space;
+- **generic, not specific** — a cube is the maximally generic solid; **realness is
+  specificity** (*this* house, not "a house"), the same as a real instance vs a
+  `print` stub.
+
+The fix is not decoration — it's the cues that flip the reconstructed situation
+from *block* to *a dwelling someone lives in*: apertures, a roof that **overhangs**
+the walls, broken proportion (not 1:1), a hint of a second face for depth. For
+*this* intent the highest-leverage cue is a **warm-lit window at dusk** — shelter,
+warmth, someone home against the dimming outside; that one cue carries most of the
+"last light" payload.
+
+Which **re-motivates tone — correctly this time**: value matters not as polish but
+because the glowing window is the strongest affective cue the scene has, and a glow
+needs value to exist. The layering:
+
+- **line-doable now:** apertures + overhang + depth + proportion → flips cube into
+  *reads-as-a-building*;
+- **wants value (next):** the lit window, material, warm/cool light → flips
+  *building* into *lived-in, at dusk*.
+
+---
+
 ## Open questions / next steps
 
 - **Coordinate convention.** y-down (image) vs y-up (math/paper, origin
@@ -579,18 +700,23 @@ distrust the tractable answer.**
   acuity — measure it. Draw a known shape, read it back, report concretely how
   much of the gap I can and can't see. (Matrix-first: probe the boundary, don't
   speculate about it.)
-- **The next step is world-coherence, not richer marks (corrected).** I first put
-  tone/fill as the top gap — the mechanical answer. The real next step (§ From
-  symbol to world) is the *consequences of a shared world*: cast shadows, a road,
-  a tree — much of it derivable and tool-enforceable via inter-object checks.
-  Tone / colour / fill are real vocabulary gaps but *secondary and later*;
-  substance-as-world comes first.
-- **Next experiment: the world pass.** Derive the house's shadow from the low sun
-  (long, thrown right — which also re-says "last light"), add a road reaching the
-  house and a tree on the hill, and extend the metric channel from intra-object to
-  *inter-object* consistency checks. Expected to be the first picture that's a
-  *place*, not a sticker album — and to expose where scene-completion stops being
-  derivable.
+- **Next step: world-coherence first — but value is back near the top.** I first
+  put tone/fill as the top gap (mechanical), then demoted it for world-coherence
+  (cast shadows, road, tree — derivable, inter-object-checkable). The affect
+  analysis (§ Feeling) pulls **value** back up: not as polish, but as the carrier
+  of the strongest dusk cue, the **lit window**. So: relationships *and* the few
+  value-cues that carry feeling — together, not tone-as-finish.
+- **Next experiment: the world pass + a real house.** Redraw the house to read as a
+  *dwelling* (apertures, overhang, broken proportion, a depth face — a window
+  indicated as lit); derive its shadow from the low sun (long, thrown right); add a
+  road reaching the door and a tree on the hill; extend the metric channel to
+  *inter-object* consistency. Then run the **affect-critic** — observe cold, ask
+  *what does it evoke* — to test whether it flips from "blocks at play" to "home at
+  dusk." Expect line-only to stall at "house icon," naming value as the next build.
+- **Bake the affect-critic into the loop.** The metric channel measures geometry;
+  nothing yet runs observe→reconstruct→inhabit→name-reaction→compare. It can't be a
+  `check` (it's perceptual), but it can be a fixed prompt run from the *rendered*
+  image each pass — the perceptual counterpart to the metric board.
 - **Tighten the loop's clock.** The per-iteration cost is dominated by the
   PNG readback (a multimodal read), not the draw call. Cheaper/coarser preview
   reads? Render at lower res for fast iteration, full res to verify.
