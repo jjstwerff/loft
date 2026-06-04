@@ -1869,7 +1869,7 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
     // dir's own `native/target/` is the target root.
     #[cfg(not(feature = "registry"))]
     {
-        return pkg_dir.join("native").join("target");
+        pkg_dir.join("native").join("target")
     }
     #[cfg(feature = "registry")]
     {

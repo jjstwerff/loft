@@ -114,6 +114,9 @@ pub struct Parser {
     /// resolve — i.e. a package the user has NOT declared as a dependency but
     /// that the registry says provides the method.  `None` until first miss;
     /// cached empty when the catalog is absent or the registry feature is off.
+    // Only read by the `#[cfg(feature = "registry")]` `catalog_trigger_map`; with
+    // the registry feature off the field is initialised but never consulted.
+    #[cfg_attr(not(feature = "registry"), allow(dead_code))]
     auto_use_catalog_map: Option<std::collections::HashMap<String, String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
