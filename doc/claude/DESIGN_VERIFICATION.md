@@ -169,19 +169,32 @@ consumer has verified the way-of-working, the protocol this concern graduates in
 mirrors the matrix-before-fix shape one level up — *commitment before action, so the
 action is checked against something other than its own momentum*:
 
-1. **Before writing the code, write down the expected shape** — the one invariant you
-   expect to carry it, the axes it must cover, and a rough size/structure (one
-   function? one match? a table?).  If you can't name the invariant up front, that is
-   already the first flag.
-2. **Build it.**
-3. **Validate the build against the written shape.**  A divergence — most often
-   *bigger / more mechanisms than predicted* — is an alarm, **not a verdict**: route
-   it to the essential-vs-accidental search above.  Find the invariant → the code
+1. **Write down the expected shape first** — the one invariant you expect to carry it,
+   the axes it must cover, a rough size/structure (one function? one match? a table?),
+   and **how many sites must re-assert the invariant**.  Then **screen the prediction
+   against itself** — the **first firing point**: if the prediction *already* describes
+   a spray (N>1 re-assertion sites with silent omission — a "chokepoint-for-N"
+   contradiction), the alarm has tripped *before any code exists*.  Not being able to
+   name the invariant up front is the first flag of all.
+2. **Build it** — or, auditing old code, **inspect it**.  (The *actual* comes from the
+   build for new code, from a full read for old — same comparison either way.)
+3. **Validate against the written shape** — the **second firing point**: a divergence,
+   most often *bigger / more mechanisms than predicted*, is an alarm, **not a verdict**:
+   route it to the essential-vs-accidental search above.  Find the invariant → the code
    collapses back toward the predicted shape.  Find none honestly → the length is
    essential, and the surprise just taught you a domain axis you couldn't see at
    prediction time; feed that into the next estimate, and into the
    [composition-axes list](plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)
    if it is a new one.
+
+**Whichever point trips, the alarm gates the *decision* — it must not merely log.**  A
+fired alarm routes to the essential-vs-accidental search *before* the approach is chosen,
+and the search's output gates **build-the-gate vs thread-through**: "thread it" stays
+legal, but only ever as the search's *conclusion*, never the default.  The sharpest
+failure is not *missing* the alarm but **seeing it and overriding it** — @PLN9's "18
+sites" was in the plan, and the spray shipped anyway because the alarm lost to shipping
+momentum.  So "ignore the alarm" splits in two: *didn't-see-it* (a sight gap the matrix
+closes) and *saw-it-and-overrode* (a discipline gap only the gate closes).
 
 **The same shape audits old code, not just new.**  Steps 1–3 read as "before
 writing," but the mechanism is one comparison — *expected size vs actual* — and the
@@ -226,6 +239,16 @@ final code shape (lines / mechanisms / is the invariant nameable?), and cost (ef
 spent vs brittleness prevented).  The pattern across tasks decides it — and if it helps
 on load-bearing designs but overloads on trivial ones, that *is* the empirical basis
 for the tell-gates-the-procedure split above.
+
+**Where the measurement stands (so the concern doesn't self-promote on one data point).**
+@PLN9 supplied the first data point — but as the **control** arm: *without* the protocol
+gating the build, the count-tell's prediction came true and the brittle spray shipped.
+That tests the **tell** (reads true), not the **procedure** (its *help* is still
+unmeasured — it wasn't run).  The matching **with** arm is identified and load-bearing:
+the **chokepoint refactor** — the robust-by-construction version of @PLN9 — run *with*
+the predict-gate step (predict "one gate," gate on the count, build the single resolution
+point, validate it collapsed the 18 cells).  Promotion from candidate to active protocol
+waits on that run and a second unrelated one — not on this retrospective.
 
 **See also:**
 [plans/README.md § The matrix is how you see the root](plans/README.md#the-matrix-is-how-you-see-the-root--and-the-proportionate-fix-is-the-invariant)
