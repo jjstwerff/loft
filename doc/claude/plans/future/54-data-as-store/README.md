@@ -241,13 +241,39 @@ that crate's `lib.rs` from the library's native-compilable functions (`--native`
 `output_function` for the bodies + the `#native` export wrappers), then reuse N0's
 build + the existing load/dispatch.
 
-**THE CRUX — the store-ABI bridge (the real complexity, not "just plumbing").**
-`output_function` emits `fn n_<name>(_cell: &UnsafeCell<Stores>, args…) -> ret` —
-it touches the heap through a Rust `&UnsafeCell<Stores>`.  But the `#native` *export*
-ABI is either a typed `extern "C" fn(scalars) -> ret` (no store) **or**, for
-store-touching functions, a `LoftStore` **FFI handle** (the `loft_ffi::vec_wrapper!`
-path).  Bridging `&UnsafeCell<Stores>` ↔ the `LoftStore` FFI handle is the multi-day
-weight of N2.
+**THE CRUX — REFRAMED (2026-06-04, post scalar-slice).**  The original framing —
+"bridge `&UnsafeCell<Stores>` ↔ the `LoftStore` FFI handle" — was **the wrong bridge
+for an auto-generated cdylib.**  `output_function` emits `fn n_<name>(_cell:
+&UnsafeCell<Stores>, args…) -> ret`, touching the heap through a Rust
+`&UnsafeCell<Stores>`.  The investigation of the dispatch internals
+(`extensions::make_loft_store`) showed the `LoftStore` handle exposes only **one
+store's raw buffer + alloc callbacks** — it exists for **hand-written** cdylibs that
+**don't link `loft::database::Stores`**.  But an **auto-generated** cdylib **does
+link libloft** (`--extern loft=libloft.rlib`; its body already calls
+`loft::database::Stores` / `loft::keys::DbRef`), so `Stores`/`DbRef`/`Store` are the
+**same Rust types with the same layout on both sides**.  ⇒ The store-touching wrapper
+**shares the real `Stores` by pointer** — `loft_n_<name>(stores: *mut Stores, args…)
+-> ret` casts `*mut Stores` → `&UnsafeCell<Stores>` (`UnsafeCell` is
+`repr(transparent)`) and forwards to the inner fn, **no per-call cell, no `init`, no
+marshalling** (the caller's `Stores` is live + initialised; `DbRef` args are already
+valid in the shared store).  **This is C71's zero-marshalling shared-store ABI
+literally** — and it's *simpler* than the FFI handle, not a multi-day bridge.
+
+**Schema agreement (the one real soundness dependency) is already proven.**  A
+store-touching `--native` body reads struct fields at offsets computed by
+`db.finish()`; the shared `Stores` must lay those fields out identically to what the
+interpreter built.  The **cross-mode byte-identical equivalence tests** (interp vs
+`--native` across the whole corpus) already require exactly this — identical type IDs
++ field offsets — so the shared-pointer read is sound for every type the corpus
+covers.  The scalar slice didn't exercise this; the store-touching slice rests on it.
+
+**Remaining ABI plumbing (the now-bounded store-touching work):** the scalar slice
+reused the existing `#native` dispatch (a *per-call* `Stores` cell, fine because no
+ref crosses).  Store-touching needs a **shared-pointer dispatch arm** that passes
+`stores as *mut Stores` + the raw stack args (scalars by value, `DbRef` by its 12
+bytes), distinct from the `LoftValue`/`LoftStore` marshalling.  Start with
+`vector<integer>` (schema-*independent* generic inline layout) to isolate the ABI
+from the type-schema concern, then struct/`Text`/`Reference` signatures.
 
 **Sequencing (scalar-first — the store bridge is deferred, not skipped):**
 1. **Scalar-only functions** — ✅ **DONE (proven end-to-end, 2026-06-04).**  The
