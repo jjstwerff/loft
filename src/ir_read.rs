@@ -1401,6 +1401,111 @@ mod tests {
         );
     }
 
+    /// @PLAN54 G2 — warm-load cost breakdown: full `read_data` vs
+    /// `read_data_skeleton` (def table + variable tables, bodies left in the
+    /// store).  The difference is the body-tree reconstruction cost; the skeleton
+    /// is the variable-table-dominated cost the plan flags as the warm-load
+    /// bottleneck (recommendation #3 — measure before committing to E2).
+    /// Run: `cargo test --release --lib bench_read_data_breakdown -- --ignored --nocapture`.
+    #[cfg(feature = "mmap")]
+    #[test]
+    #[ignore = "perf bench — run manually with --ignored --nocapture"]
+    #[allow(clippy::cast_precision_loss)]
+    fn bench_read_data_breakdown() {
+        use crate::ir_store::materialize_data_at;
+        use crate::store::Store;
+        use std::time::Instant;
+
+        let path = std::env::temp_dir().join(format!("loft_brk_{}.store", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let (rec, pos, ndefs, nvars, nnames) = {
+            let mut p = crate::parser::Parser::new();
+            p.parse_dir("default", true, false).expect("parse default/");
+            let fresh = p.data;
+            let nd = fresh.definitions();
+            let nv: usize = (0..nd)
+                .map(|d| fresh.def(d).variables().count() as usize)
+                .sum();
+            let nn: usize = (0..nd)
+                .map(|d| fresh.def(d).variables().snapshot_names().len())
+                .sum();
+            let fstore = Store::open(path_str);
+            let mut stores = Stores::new();
+            let nr = stores.adopt_store(fstore);
+            let r = stores.allocations[nr as usize].claim(16);
+            let root = DbRef {
+                store_nr: nr,
+                rec: r,
+                pos: 8,
+            };
+            materialize_data_at(&mut stores, root, &fresh);
+            (r, root.pos, nd, nv, nn)
+        };
+
+        let iters = 40;
+        let median = |mut v: Vec<u128>| {
+            v.sort_unstable();
+            v[v.len() / 2]
+        };
+        let time_it = |f: &dyn Fn(&Stores, DbRef) -> Data| {
+            let mut us = Vec::new();
+            for _ in 0..iters {
+                let fstore = Store::open(path_str);
+                let mut s2 = Stores::new();
+                let nr2 = s2.adopt_store(fstore);
+                let root2 = DbRef {
+                    store_nr: nr2,
+                    rec,
+                    pos,
+                };
+                let t = Instant::now();
+                let d = f(&s2, root2);
+                us.push(t.elapsed().as_micros());
+                std::hint::black_box(&d);
+            }
+            median(us)
+        };
+
+        let full = time_it(&|s, r| read_data(s, r));
+        let skel = time_it(&|s, r| read_data_skeleton(s, r));
+        // Variable-table reconstruction in isolation: walk every def record and
+        // rebuild just its Function (read_function), nothing else.
+        let mut vt = Vec::new();
+        for _ in 0..iters {
+            let fstore = Store::open(path_str);
+            let mut s2 = Stores::new();
+            let nr2 = s2.adopt_store(fstore);
+            let root2 = DbRef {
+                store_nr: nr2,
+                rec,
+                pos,
+            };
+            let defs = Record::new(root2).field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
+            let t = Instant::now();
+            for i in 0..defs.len(&s2) {
+                let f = read_function(&s2, defs.get(i, &s2), ds::DEF_VARIABLES);
+                std::hint::black_box(&f);
+            }
+            vt.push(t.elapsed().as_micros());
+        }
+        let vt = median(vt);
+        let _ = std::fs::remove_file(&path);
+        eprintln!("\n=== read_data breakdown ({iters} iters) ===");
+        eprintln!("defs {ndefs}  vars {nvars}  name-entries {nnames}");
+        eprintln!("read_data (full)      : {full} us");
+        eprintln!("read_data_skeleton    : {skel} us   (def table + variable tables)");
+        eprintln!(
+            "body-tree reconstruct : {} us   (full - skeleton)",
+            full.saturating_sub(skel)
+        );
+        eprintln!("variable tables only  : {vt} us   (read_function over all defs)");
+        eprintln!(
+            "def fields (non-var)  : {} us   (skeleton - variable tables)",
+            skel.saturating_sub(vt)
+        );
+    }
+
     /// @PLAN54 D2a step 3 — `read_schema` is the inverse of `materialize_schema`:
     /// materialize the real stdlib's database type schema into a store, read it
     /// back, and assert the reconstructed `Vec<database::Type>` equals the

@@ -43,21 +43,32 @@ measurements reframed the cost/benefit and point to a clear priority order:
    `arc_e_program_cache` / `g2_m6_warm_store` / `p254_cache_poisoning` suites.
 
 2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
-   key measured finding: **M6-warm gives only ~5%** because the **variable
-   tables (~2.2 ms), not the bodies (~0.6 ms), dominate `read_data`.**  The
-   *real* M6/E2 prize is bigger — skipping the **entire** `read_data`
-   reconstruction (~3 ms ≈ ~50% of warm startup) by reading the whole `Data`
-   from the mmap — but that needs **E2** (a writable store IR so `scopes` can
-   rewrite bodies), a multi-week, memory-safety-sensitive rewrite of the
-   compiler's largest mutating pass.  Worth it *eventually* if startup latency
-   is a headline goal, but as a **planned, fresh-context arc**, not a rushed
-   branch extension.
+   key measured finding: **M6-warm gives only ~5%** because it skips only the
+   *body* trees (20% of `read_data` — see #3's breakdown), not the def-fields +
+   variable tables (80%) that dominate.  The *real* M6/E2 prize is skipping the
+   **entire** `read_data` reconstruction — but on the stdlib that is only **~0.7 ms**
+   (it scales with def + variable count; a large whole-program bundle is more), and
+   it needs **E2** (a writable store IR so `scopes` can rewrite bodies), a multi-week,
+   memory-safety-sensitive rewrite of the compiler's largest mutating pass.  Worth it
+   *eventually* if startup latency is a headline goal, but as a **planned,
+   fresh-context arc**, not a rushed branch extension.
 
-3. **If you want more startup perf sooner, profile `read_function` first.**  The
-   actual warm-load bottleneck is the **variable-table reconstruction**
-   (~2.2 ms).  A targeted decode/encoding/lazy-load optimisation there is a
-   **smaller, lower-risk lever** that may beat the whole E2 migration — measure
-   before committing to E2.
+3. ✅ **PROFILED (2026-06-04) — there is no cheap `read_function` win; the cost is
+   allocation-bound, so E2 (zero-copy) is the only lever.**  `bench_read_data_breakdown`
+   (`ir_read.rs`, `--ignored`) splits the warm `read_data` on the real stdlib bundle:
+   **693 µs total = def-fields 453 µs (65%) + variable-tables 98 µs (14%) + bodies
+   142 µs (20%)**.  The variable-table decode is **~0.39 µs/variable** (98 µs / 251
+   vars) — so the plan's earlier "~2.2 ms variable tables" figure is a *whole-program*
+   bundle (a real consumer with ~5–6k vars), not the stdlib, and it scales **linearly
+   with allocation count**: each variable rebuilds a `String` name + a boxed `Type`
+   (`read_type_child`), each def rebuilds its attribute + return-type `Type` trees.
+   That cost **is** the native-graph materialisation — exactly what E2/zero-copy
+   skips wholesale — so a "targeted decode optimisation" cannot beat E2 (there is no
+   redundant work to shave; `collect()` already pre-sizes the `names` map from the
+   Vec size-hint).  **Conclusion:** drop the "optimise `read_function`" idea; if warm
+   startup ever becomes a headline goal for large programs, E2 is the lever, and its
+   prize is **the whole `read_data` (~0.7 ms stdlib, scaling with def+var count)**,
+   not the ~2.2 ms the variable-table framing implied.
 
 4. **Land this branch.**  ~54 green, all-opt-in (default-off) commits.  The
    `IrNode` handle, the cross-backing equivalence harness, store-backed codegen
@@ -68,8 +79,12 @@ measurements reframed the cost/benefit and point to a clear priority order:
 **Cost split that drives this (measured):** cold store-codegen = `materialize_data`
 **~5.5 ms** (the tax M6-warm avoids by using the mmap'd cache) + store reads
 **~0.8 ms** (vs 0.6 ms native — handle navigation is near-native).  Warm `read_data`
-= **~2.2 ms variable tables + ~0.6 ms bodies** (so skipping bodies alone is small;
-the whole-`read_data` skip is the E2-gated prize).
+on the **stdlib bundle = ~0.7 ms** — def-fields **65%** (attribute + return-type
+`Type` trees) + variable tables **14%** (~0.39 µs/var) + bodies **20%**
+(`bench_read_data_breakdown`).  So M6-warm (skip bodies only) trims ~20% of an
+already-sub-ms read; the whole-`read_data` skip is the E2-gated prize and the cost
+is **allocation-bound** — it scales with def + variable count and is exactly what
+zero-copy eliminates (see recommendation #3).
 
 ### Debugging-iteration cost + the default-on dev-safety caveat (2026-06-04)
 
