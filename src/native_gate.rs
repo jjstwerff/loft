@@ -78,6 +78,50 @@ fn is_scalar_type(t: &Type) -> bool {
     )
 }
 
+/// @PLAN54 Arc N / N2 — the **shared-store-dispatchable** subset: native-compilable
+/// functions whose parameters and return are all marshallable through the uniform
+/// `native_lib::LibArg` slot — scalars **plus** the `DbRef`-backed aggregates
+/// (`vector`/`reference`/data-`enum`/sorted/index/hash/spacial).  These dispatch
+/// over the **shared `*mut Stores` bridge** (`generate_shared_cdylib_lib_rs`): the
+/// caller's store is shared by pointer (no `LoftStore` handle, no marshalling), so
+/// a non-scalar value can cross the boundary.  A `void` return is allowed.
+/// `Text` and plain (tag-only) `enum` are deferred to a later sub-slice.
+#[must_use]
+pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
+    native_compilable(data)
+        .into_iter()
+        .filter(|&d| {
+            let def = data.def(d);
+            let ret = def.returned();
+            let ret_ok = matches!(ret, Type::Void | Type::Null) || is_bridge_type(ret);
+            ret_ok
+                && def
+                    .attributes()
+                    .iter()
+                    // skip synthetic / hidden params (`__closure`, work buffers, …)
+                    .filter(|a| !a.name.starts_with("__"))
+                    .all(|a| is_bridge_type(&a.typedef))
+        })
+        .collect()
+}
+
+/// A type passable through the shared-store `LibArg` bridge: a scalar (by value)
+/// or a `DbRef`-backed aggregate (`vector`/`reference`/data-`enum`/sorted/index/
+/// hash/spacial), the latter shared by pointer through the caller's store.
+fn is_bridge_type(t: &Type) -> bool {
+    is_scalar_type(t)
+        || matches!(
+            t,
+            Type::Vector(_, _)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+        )
+}
+
 /// Transitive native-compilability of function `d_nr`: its body uses no
 /// un-native-able construct AND every function it `Call`s is itself native.
 /// `visited` breaks recursion cycles optimistically (a recursive self-call is

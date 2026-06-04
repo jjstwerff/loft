@@ -175,6 +175,51 @@ fn build_scalar_lib_cdylib(stem: &str, lib_src: &str, fn_name: &str) -> Option<(
     Some((so, tmp))
 }
 
+/// Build a cdylib from `lib_src` (a pure library — no `main`) exporting the
+/// **shared-store-dispatchable** function `fn_name` as `loft_shared_n_<fn_name>`
+/// (the `*mut Stores` bridge, for a non-scalar value crossing the boundary).
+/// Returns (so_path, tmp_dir), or None when the toolchain isn't available.
+fn build_shared_lib_cdylib(stem: &str, lib_src: &str, fn_name: &str) -> Option<(PathBuf, PathBuf)> {
+    let (rlib, deps) = find_loft_rlib()?;
+    if Command::new("rustc").arg("--version").output().is_err() {
+        println!("skip: rustc unavailable");
+        return None;
+    }
+
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n2_{stem}_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(lib_src, "lib", false);
+    loft::scopes::check(&mut p.data);
+
+    let shared = loft::native_gate::shared_store_dispatchable(&p.data);
+    let fn_nr = p.data.def_nr(&format!("n_{fn_name}"));
+    assert!(
+        shared.contains(&fn_nr),
+        "{fn_name} should be shared-store-dispatchable"
+    );
+    let export: std::collections::HashSet<u32> = std::iter::once(fn_nr).collect();
+
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+
+    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
+    let want = format!("pub extern \"C\" fn loft_shared_n_{fn_name}");
+    assert!(
+        src.contains(&want),
+        "the shared bridge for {fn_name} must be present"
+    );
+
+    let so = compile_cdylib(&src, stem, &tmp, &rlib, &deps);
+    Some((so, tmp))
+}
+
 /// The canonical `double` library used by the compile + dispatch milestones.
 fn build_double_cdylib(stem: &str) -> Option<(PathBuf, PathBuf)> {
     build_scalar_lib_cdylib(
@@ -321,4 +366,27 @@ fn two_zero_registration_cdylibs_dont_trip_v1_guard() {
 
     let _ = std::fs::remove_dir_all(&tmp1);
     let _ = std::fs::remove_dir_all(&tmp2);
+}
+
+/// The store-touching slice's library: `vec_sum` takes a `vector<integer>` (a
+/// non-scalar value crossing the boundary) and returns its sum.
+const VEC_SUM_LIB: &str = "pub fn vec_sum(data: vector<integer>) -> integer {\n\
+                           \x20   total = 0;\n\
+                           \x20   for x in data { total += x; }\n\
+                           \x20   total\n\
+                           }";
+
+/// N2 store-touching slice, milestone 1: the shared-store bridge (`*mut Stores`
+/// + `LibArg` ABI) for a `vector<integer>`-arg function must COMPILE.
+#[test]
+fn generated_shared_cdylib_compiles() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so, tmp)) = build_shared_lib_cdylib("loft_n2_shared_c", VEC_SUM_LIB, "vec_sum")
+    else {
+        return;
+    };
+    assert!(so.exists(), "shared cdylib output should exist");
+    let _ = std::fs::remove_dir_all(&tmp);
 }
