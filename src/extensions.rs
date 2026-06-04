@@ -74,10 +74,14 @@ pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
 #[cfg(not(feature = "native-extensions"))]
 pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 
-/// Loaded libraries kept alive for the process lifetime.
-/// Used by `try_dlsym` to look up symbols from previously loaded cdylibs.
+/// Loaded libraries kept alive for the process lifetime, each paired with
+/// whether it exported `loft_register_v1` (the registration protocol).  Used by
+/// `try_dlsym` to look up symbols from previously loaded cdylibs *and* report
+/// whether the resolving library opted into registration — so the "unregistered
+/// symbol" guard fires only for a library that chose the protocol, not for a
+/// (legitimately) zero-registration cdylib loaded after one that did.
 #[cfg(feature = "native-extensions")]
-static LOADED_LIBS: Mutex<Vec<libloading::Library>> = Mutex::new(Vec::new());
+static LOADED_LIBS: Mutex<Vec<(libloading::Library, bool)>> = Mutex::new(Vec::new());
 
 /// Load a single native extension shared library.
 ///
@@ -112,8 +116,13 @@ fn load_one(path: &str) {
         }
     };
 
-    // Try the registration protocol first.
+    // Try the registration protocol first.  Records whether this library opted
+    // into it — `try_dlsym` reports the flag so the unregistered-symbol guard
+    // only fires for a library that chose the protocol (issue #119), not for a
+    // zero-registration cdylib that legitimately relies on dlsym.
+    let mut uses_v1 = false;
     if let Ok(register_sym) = unsafe { lib.get::<RegisterFn>(b"loft_register_v1\0") } {
+        uses_v1 = true;
         let register_sym = *register_sym;
         let mut collected: Vec<(String, *const ())> = Vec::new();
         unsafe {
@@ -150,23 +159,24 @@ fn load_one(path: &str) {
     LOADED_LIBS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(lib);
+        .push((lib, uses_v1));
 }
 
-/// Try to resolve a symbol by name from any loaded cdylib.
-/// Called by `wire_native_fns` as a fallback when the symbol wasn't
-/// provided via `loft_register_v1`. This enables zero-registration cdylibs:
+/// Try to resolve a symbol by name from any loaded cdylib.  Returns the symbol
+/// pointer paired with whether the resolving library opted into
+/// `loft_register_v1`.  Called by `wire_native_fns` as a fallback when the symbol
+/// wasn't provided via the registry. This enables zero-registration cdylibs:
 /// just export `#[unsafe(no_mangle)] pub extern "C" fn n_my_func(...)`.
 #[cfg(feature = "native-extensions")]
-fn try_dlsym(name: &str) -> Option<*const ()> {
+fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
     let libs = LOADED_LIBS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut sym_name = name.to_string();
     sym_name.push('\0');
-    for lib in libs.iter() {
+    for (lib, uses_v1) in libs.iter() {
         if let Ok(sym) = unsafe { lib.get::<*const ()>(sym_name.as_bytes()) } {
-            return Some(*sym);
+            return Some((*sym, *uses_v1));
         }
     }
     None
@@ -354,23 +364,18 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         drop(reg_guard);
         drop(stub_guard);
 
-        // Check if any library used loft_register_v1 (i.e. registry is non-empty).
-        // If so, dlsym fallback is a registration bug — the library chose
-        // the registration protocol, so all its symbols should be registered.
-        let has_v1 = {
-            let rg = NATIVE_REGISTRY
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            rg.as_ref().is_some_and(|r| !r.is_empty())
-        };
-
-        // Resolve via dlsym (no locks held).
+        // Resolve via dlsym (no locks held).  The guard is now keyed on the
+        // *resolving library's* own `uses_v1` flag (returned by `try_dlsym`), not
+        // a global "registry non-empty" proxy — so a zero-registration cdylib
+        // loaded after one that used the protocol no longer false-positives, while
+        // issue #119 (a v1 library's unregistered-but-dlsym-found symbol) still
+        // panics.
         for sym in to_resolve {
-            if let Some(ptr) = try_dlsym(&sym) {
-                // The library used loft_register_v1 but didn't register
+            if let Some((ptr, lib_uses_v1)) = try_dlsym(&sym) {
+                // The resolving library used loft_register_v1 but didn't register
                 // this symbol — this is a registration bug.
                 assert!(
-                    !has_v1,
+                    !lib_uses_v1,
                     "native symbol '{sym}' was not registered via loft_register_v1 \
                      but was found via dlsym. This is a registration bug — \
                      add reg!(b\"{sym}\", <fn>) to loft_register_v1.",

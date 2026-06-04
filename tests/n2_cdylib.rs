@@ -129,10 +129,11 @@ fn compile_cdylib(src: &str, stem: &str, tmp: &Path, rlib: &Path, deps: &Path) -
     so
 }
 
-/// Build the cdylib for `pub fn double(x: integer) -> integer { x * 2 }` and
-/// return (so_path, tmp_dir).  Shared by both tests.  Returns None when the
-/// rlib/rustc/stdlib aren't available (test skips).
-fn build_double_cdylib(stem: &str) -> Option<(PathBuf, PathBuf)> {
+/// Build a cdylib from `lib_src` (a pure library — no `main`) exporting the
+/// scalar-dispatchable function `fn_name` as `loft_n_<fn_name>`.  Returns
+/// (so_path, tmp_dir), or None when the rlib/rustc/stdlib aren't available
+/// (test skips).
+fn build_scalar_lib_cdylib(stem: &str, lib_src: &str, fn_name: &str) -> Option<(PathBuf, PathBuf)> {
     let (rlib, deps) = find_loft_rlib()?;
     if Command::new("rustc").arg("--version").output().is_err() {
         println!("skip: rustc unavailable");
@@ -144,38 +145,43 @@ fn build_double_cdylib(stem: &str) -> Option<(PathBuf, PathBuf)> {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
 
-    // The LIBRARY: a pure library (no `main`) with one scalar function.
     let (data, db) = cached_default();
     let mut p = loft::parser::Parser::new();
     p.data = data;
     p.database = db;
-    p.parse_str(
-        "pub fn double(x: integer) -> integer { x * 2 }",
-        "lib",
-        false,
-    );
+    p.parse_str(lib_src, "lib", false);
     loft::scopes::check(&mut p.data);
 
     let scalar = loft::native_gate::scalar_dispatchable(&p.data);
-    let double_nr = p.data.def_nr("n_double");
+    let fn_nr = p.data.def_nr(&format!("n_{fn_name}"));
     assert!(
-        scalar.contains(&double_nr),
-        "double should be scalar-dispatchable"
+        scalar.contains(&fn_nr),
+        "{fn_name} should be scalar-dispatchable"
     );
-    let export: std::collections::HashSet<u32> = std::iter::once(double_nr).collect();
+    let export: std::collections::HashSet<u32> = std::iter::once(fn_nr).collect();
 
     // Compile to bytecode to populate the database (the type schema codegen reads).
     let mut state = loft::state::State::new(p.database);
     loft::compile::byte_code(&mut state, &mut p.data);
 
     let src = loft::native_lib::generate_cdylib_lib_rs(&p.data, &state.database, &export);
+    let want = format!("pub extern \"C\" fn loft_n_{fn_name}");
     assert!(
-        src.contains("pub extern \"C\" fn loft_n_double"),
-        "the export wrapper for double must be present"
+        src.contains(&want),
+        "the export wrapper for {fn_name} must be present"
     );
 
     let so = compile_cdylib(&src, stem, &tmp, &rlib, &deps);
     Some((so, tmp))
+}
+
+/// The canonical `double` library used by the compile + dispatch milestones.
+fn build_double_cdylib(stem: &str) -> Option<(PathBuf, PathBuf)> {
+    build_scalar_lib_cdylib(
+        stem,
+        "pub fn double(x: integer) -> integer { x * 2 }",
+        "double",
+    )
 }
 
 #[test]
@@ -190,13 +196,38 @@ fn generated_cdylib_compiles_and_exports_scalar_symbol() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-#[test]
-fn dispatches_scalar_call_into_generated_cdylib() {
+/// Run a SCRIPT that declares `native_decl` (a `#native "loft_…"` import of a
+/// cdylib symbol) and calls it from `main`, dispatching into `so`.  Panics if the
+/// dispatch fails (stub panic) or the assert in `source` fails.
+fn run_dispatch(so: &Path, native_decl: &str, source: &str) {
     use loft::compile::byte_code;
     use loft::extensions;
     use loft::scopes;
     use loft::state::State;
 
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(native_decl, "native_decl", false);
+    p.parse_str(source, "test", false);
+    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
+    scopes::check(&mut p.data);
+
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // Load the generated cdylib (zero-registration: resolved via dlsym) and wire
+    // the auto-marshal dispatcher.
+    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    extensions::wire_native_fns(&mut state, &p.data);
+
+    state.execute_argv("main", &p.data, &[]);
+}
+
+#[test]
+fn dispatches_scalar_call_into_generated_cdylib() {
     let _lock = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -212,27 +243,82 @@ fn main() {
     assert(double(21) == 42, "double(21) should dispatch to native and return 42, got {double(21)}")
 }
 "#;
-    let (data, db) = cached_default();
-    let mut p = loft::parser::Parser::new();
-    p.data = data;
-    p.database = db;
-    p.parse_str(native_decl, "native_decl", false);
-    p.parse_str(source, "test", false);
-    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
-    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
-    scopes::check(&mut p.data);
-
-    let mut state = State::new(p.database);
-    byte_code(&mut state, &mut p.data);
-
-    // Load the generated cdylib (zero-registration: resolved via dlsym) and wire
-    // the auto-marshal dispatcher for `loft_n_double`.
-    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
-    extensions::wire_native_fns(&mut state, &p.data);
-
-    // Executes the assert: if dispatch failed (stub panic) or returned the wrong
-    // value, this panics.
-    state.execute_argv("main", &p.data, &[]);
-
+    run_dispatch(&so, native_decl, source);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A scalar-signature function whose *body* allocates on the heap (builds and
+/// sums a `vector<integer>`).  The per-call `Stores` cell in the export wrapper
+/// backs that internal allocation — no store reference crosses the boundary, so
+/// the scalar slice already covers it.  This is the reach the slice unlocks: any
+/// scalar-in/scalar-out function regardless of internal heap use.
+#[test]
+fn dispatches_internal_heap_scalar_fn() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lib_src = "pub fn sum_first_n(n: integer) -> integer {\n\
+                   \x20   v: vector<integer> = [];\n\
+                   \x20   for i in 0..n { v += [i]; }\n\
+                   \x20   total = 0;\n\
+                   \x20   for x in v { total += x; }\n\
+                   \x20   total\n\
+                   }";
+    let Some((so, tmp)) = build_scalar_lib_cdylib("loft_n2_heap", lib_src, "sum_first_n") else {
+        return;
+    };
+
+    let native_decl =
+        "pub fn sum_first_n(n: integer) -> integer not null;\n#native \"loft_n_sum_first_n\"\n";
+    // 0 + 1 + … + 9 = 45.
+    let source = r#"
+fn main() {
+    assert(sum_first_n(10) == 45, "sum_first_n(10) should be 45, got {sum_first_n(10)}")
+}
+"#;
+    run_dispatch(&so, native_decl, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Regression: loading TWO zero-registration cdylibs in sequence must not trip
+/// the "unregistered via loft_register_v1" guard.  Before the per-library
+/// `uses_v1` fix, the first lib's dlsym-inserted symbol left `NATIVE_REGISTRY`
+/// non-empty, so the second lib's `wire_native_fns` false-positived (the guard
+/// keyed on "registry non-empty" as a proxy for "a v1 lib loaded").  The C71
+/// model auto-loads many zero-registration cdylibs, so this must hold.
+#[test]
+fn two_zero_registration_cdylibs_dont_trip_v1_guard() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((so1, tmp1)) = build_scalar_lib_cdylib(
+        "loft_n2_guard_a",
+        "pub fn triple(x: integer) -> integer { x * 3 }",
+        "triple",
+    ) else {
+        return;
+    };
+    let Some((so2, tmp2)) = build_scalar_lib_cdylib(
+        "loft_n2_guard_b",
+        "pub fn quad(x: integer) -> integer { x * 4 }",
+        "quad",
+    ) else {
+        return;
+    };
+
+    run_dispatch(
+        &so1,
+        "pub fn triple(x: integer) -> integer not null;\n#native \"loft_n_triple\"\n",
+        "fn main() { assert(triple(7) == 21, \"triple(7) should be 21, got {triple(7)}\") }",
+    );
+    // The second zero-registration cdylib: before the fix this panicked with the
+    // "not registered via loft_register_v1" guard.
+    run_dispatch(
+        &so2,
+        "pub fn quad(x: integer) -> integer not null;\n#native \"loft_n_quad\"\n",
+        "fn main() { assert(quad(5) == 20, \"quad(5) should be 20, got {quad(5)}\") }",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp1);
+    let _ = std::fs::remove_dir_all(&tmp2);
 }
