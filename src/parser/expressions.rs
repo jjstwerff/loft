@@ -331,6 +331,108 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
 }
 
 impl Parser {
+    /// @PLN10 — wrap every text-dest native called in *value position* in a
+    /// scope-bound work-text temp, so its result lives in a freed local instead
+    /// of the never-cleared `stores.scratch` buffer.  Replaces
+    /// `Call(native, args)` with `Block([Set(w, native()), Var(w)])` where `w`
+    /// is a fresh `work_text` — reusing the proven `set_var` dest-pass for the
+    /// inner `Set`.  The two codegen fast paths already dest-pass their shapes
+    /// directly, so we skip wrapping a *bare* native that is the value of a
+    /// `Set` (set_var) or the appended operand of `OpAppendText`
+    /// (try_text_dest_pass) — but still recurse into their sub-arguments.
+    fn wrap_value_text_dest(&mut self, v: &mut Value) {
+        // A text-dest native reached here (not via a fast-path skip) is in
+        // value position — recurse into its args (nested natives), then wrap.
+        let wrap_here = matches!(
+            &*v,
+            Value::Call(op, _) if crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
+        );
+        if wrap_here {
+            if let Value::Call(_, args) = v {
+                for a in args.iter_mut() {
+                    self.wrap_value_text_dest(a);
+                }
+            }
+            let w = self.vars.work_text(&mut self.lexer);
+            let call = std::mem::replace(v, Value::Null);
+            *v = v_block(
+                vec![v_set(w, call), Value::Var(w)],
+                Type::Text(vec![w]),
+                "synth text dest",
+            );
+            return;
+        }
+        match v {
+            Value::Call(op, args)
+                if self.data.def(*op).name() == "OpAppendText" && args.len() == 2 =>
+            {
+                self.wrap_value_text_dest(&mut args[0]);
+                self.descend_skip_direct(&mut args[1]);
+            }
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args.iter_mut() {
+                    self.wrap_value_text_dest(a);
+                }
+            }
+            Value::Set(_, rhs) => self.descend_skip_direct(rhs),
+            Value::Block(bl) | Value::Loop(bl) => {
+                for s in &mut bl.operators {
+                    self.wrap_value_text_dest(s);
+                }
+            }
+            Value::Insert(steps) => {
+                for s in steps {
+                    self.wrap_value_text_dest(s);
+                }
+            }
+            Value::If(c, t, e) => {
+                self.wrap_value_text_dest(c);
+                self.wrap_value_text_dest(t);
+                self.wrap_value_text_dest(e);
+            }
+            Value::Return(x)
+            | Value::Drop(x)
+            | Value::Yield(x)
+            | Value::BreakWith(_, x)
+            | Value::TuplePut(_, _, x) => self.wrap_value_text_dest(x),
+            Value::Iter(_, a, b, c) => {
+                self.wrap_value_text_dest(a);
+                self.wrap_value_text_dest(b);
+                self.wrap_value_text_dest(c);
+            }
+            Value::Tuple(vs) | Value::Parallel(vs) => {
+                for x in vs {
+                    self.wrap_value_text_dest(x);
+                }
+            }
+            Value::Span(b) => self.wrap_value_text_dest(&mut b.1),
+            Value::ParFor(b) => {
+                self.wrap_value_text_dest(&mut b.input);
+                self.wrap_value_text_dest(&mut b.worker);
+                self.wrap_value_text_dest(&mut b.threads);
+                self.wrap_value_text_dest(&mut b.body);
+            }
+            _ => {}
+        }
+    }
+
+    /// Descend into a fast-path position (a `Set` value or `OpAppendText`'s
+    /// appended operand): a *bare* text-dest native here is dest-passed
+    /// directly by codegen, so don't wrap it — only recurse into its args
+    /// (nested natives still need a temp).  Any other shape walks normally.
+    fn descend_skip_direct(&mut self, v: &mut Value) {
+        if let Value::Call(op, args) = v.unspan_mut() {
+            let is_dest = crate::state::codegen::is_text_dest_native(self.data.def(*op).name());
+            if is_dest {
+                for a in args.iter_mut() {
+                    self.wrap_value_text_dest(a);
+                }
+                return;
+            }
+        }
+        self.wrap_value_text_dest(v);
+    }
+
     // <code> = '{' <block> '}'
     /// Parse the code on the last inserted definition.
     /// This way we can use recursion with the definition itself.
@@ -342,6 +444,14 @@ impl Parser {
             self.data.def(self.context).returned.clone()
         };
         self.parse_block("return from block", &mut v, &result);
+        // @PLN10 — synth a scope-bound work-text destination for every text-dest
+        // native called in *value position*, so its result lives in a freed temp
+        // instead of the never-cleared `stores.scratch` buffer.  Runs on the final
+        // pass before the work_texts null-init loop below, so the synthesized
+        // temps get null-inited + slot-allocated + freed like any work-text.
+        if !self.first_pass {
+            self.wrap_value_text_dest(&mut v);
+        }
         if let Value::Block(bl) = &mut v {
             let ls = &mut bl.operators;
             for wt in self.vars.work_texts() {

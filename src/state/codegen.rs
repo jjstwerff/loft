@@ -46,7 +46,7 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
 }
 
 /// Text-returning natives that accept a destination buffer instead of allocating one.
-fn is_text_dest_native(name: &str) -> bool {
+pub(crate) fn is_text_dest_native(name: &str) -> bool {
     matches!(
         name,
         "t_4text_replace" | "t_4text_to_lowercase" | "t_4text_to_uppercase"
