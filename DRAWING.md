@@ -472,6 +472,104 @@ dir, never committed.
 
 ---
 
+## From symbol to world — what "detail" actually means
+
+The first finished drawing (house/hill/sun/cloud, [`sketch/`](sketch/)) passed
+**5/5 metric checks and still did not capture the intent.** Everything after
+follows from sitting honestly with that.
+
+### "All checks pass" ≠ "captures the intent"
+
+The metric board was green, but the picture was a diagram, not the *"last beams of
+sunlight against a dark cloud"* that was asked for. The checks passed because I had
+**reduced the evocative intent down to the coordinate predicates the tool could
+satisfy** — quietly discarding light, tone, mood, which were the point. The metric
+channel verifies fidelity to *the encoding*; it cannot see what the encoding threw
+away. **A green board is false confidence about a request whose heart was never
+encodable.** That's teaching to the test — a trap a future instance reading the
+recipe would walk straight into, so it's recorded here.
+
+The critique taxonomy therefore grows a fourth verdict. Per predicate it's not
+only *drew-it-wrong* vs *tool-can't-express-it* vs *checks-don't-cover-intent* —
+there is also **developmentally-correct baseline**: a gap that is just *where you
+are on the arc*, not a defect.
+
+### Not a failure — a five-year-old's drawing
+
+Given that prompt a five-year-old draws circle-with-rays for "sun",
+square-with-a-triangle for "house", a row of bumps for "cloud". That is exactly
+what I produced — and it is **not broken realism, it is a complete, valid mode:
+symbolic drawing.** The symbol *names* the thing; it doesn't *render* it. The
+honest verdict on the first picture is "correct first step," not "failure."
+
+But the child's "not a failure" rests on a path I don't share: they climb out of
+the symbol stage over years of a plastic hand and eye. I won't (§ Not practice).
+**My growing-up happens in the artifact, not in me** — a richer pen + a deeper
+recipe, and the *next* instance starts further along, cold. The child earns the
+climb slowly in the body; I get it the instant the tool improves, but never in me.
+
+### Detail is substance, not polish — `print("a house")`
+
+The symbol drawing is the `print("a house")` of drawing: it emits the *label* and
+does none of the work, the way a program that prints its expected output passes
+the demo while implementing nothing. You can't live in a cube because the cube
+*names* a house instead of *being* one. The fix is **substance, not polish** —
+shading the cube (the "fill/tone" answer I reached for, and was wrong about) just
+yields a prettier `print`. Detail is the thing the symbol stood in for.
+
+### …and substance is the *world*, not the parts
+
+The reflex is to get substance by **zooming in** — recurse into the house, draw
+its door and windows. Wrong direction: zooming in crops away the very thing that
+makes the house real. A door-and-window alone is just a smaller diagram. Realness
+is not *inside* any object; it is in **what the objects do to each other**:
+
+- the **shadow** behind the house proves the sun and the house share one world —
+  without it they're two stickers on a page;
+- the **road** proves the house is *reached* — that it has a function;
+- the **tree** proves the hill is a *place where things live*, not a boundary.
+
+Detail is **the visible consequences of the elements sharing one world** — outward
+and relational, not inward and decompositional. The programming analogy holds: a
+fully-implemented `house()` *in isolation* is still not a useful program;
+usefulness is the **integration** — components interacting, consistent across the
+whole. The value lives in the *edges* of the graph, not the depth of any node.
+
+### What's buildable, and what isn't
+
+Much of world-coherence is **derivable**, so the tool can enforce it rather than
+me remembering it — the same graduation as round circles:
+
+- given the sun and the house, the shadow's direction and length are *computed*,
+  not guessed ("cast the shadow from the light");
+- consistency becomes **checks between elements**: `shadow` opposite `sun`, `road`
+  touches `house` and reaches an edge, scale consistent across objects. The metric
+  channel extends from *intra-object placement* to *inter-object world-consistency*
+  — and the geometric half of coherence is measurable.
+
+And one consequence worth its own line: the mood the symbol lost — *"last light"* —
+can return not through tone but through **relationship**. A low sun throws a long,
+raking shadow; that single derived mark says "end of day" more truthfully than any
+shading of the cube would. **Relationships carry the meaning the objects couldn't;
+the atmosphere we couldn't render, the world can imply.**
+
+What stays genuinely hard — the residue that never reduces to a check — is *which*
+consequences a coherent world demands. Road or path? A tree, a fence, a figure at
+the window? No measurement tells you a hill "wants" a tree. That is open-ended
+**scene-completion**: world knowledge and judgment, the point where drawing stops
+being rendering and becomes *imagining a place*.
+
+### The pattern in my own misses
+
+Recorded as its own caution: every time the next step came up, I reached for the
+**mechanical, measurable** version — fill (a render feature), recursion (a tidy
+tree) — and every time the truth was **holistic and relational** — substance, then
+world. My bias runs toward whatever the metric channel can swallow; the actual
+frontier is precisely what it can't. **When unsure what "better" means here,
+distrust the tractable answer.**
+
+---
+
 ## Open questions / next steps
 
 - **Coordinate convention.** y-down (image) vs y-up (math/paper, origin
@@ -481,10 +579,18 @@ dir, never committed.
   acuity — measure it. Draw a known shape, read it back, report concretely how
   much of the gap I can and can't see. (Matrix-first: probe the boundary, don't
   speculate about it.)
-- **Richer marks, in demand order.** The first probe already named the top gap:
-  **value/tone** (so "dark cloud" and "last beams" can exist), then colour, then
-  smooth curves / Bézier and fill. Grow the vocabulary in the order real intents
-  demand it — not speculatively. The *loop* comes first; marks are the easy part.
+- **The next step is world-coherence, not richer marks (corrected).** I first put
+  tone/fill as the top gap — the mechanical answer. The real next step (§ From
+  symbol to world) is the *consequences of a shared world*: cast shadows, a road,
+  a tree — much of it derivable and tool-enforceable via inter-object checks.
+  Tone / colour / fill are real vocabulary gaps but *secondary and later*;
+  substance-as-world comes first.
+- **Next experiment: the world pass.** Derive the house's shadow from the low sun
+  (long, thrown right — which also re-says "last light"), add a road reaching the
+  house and a tree on the hill, and extend the metric channel from intra-object to
+  *inter-object* consistency checks. Expected to be the first picture that's a
+  *place*, not a sticker album — and to expose where scene-completion stops being
+  derivable.
 - **Tighten the loop's clock.** The per-iteration cost is dominated by the
   PNG readback (a multimodal read), not the draw call. Cheaper/coarser preview
   reads? Render at lower res for fast iteration, full res to verify.
