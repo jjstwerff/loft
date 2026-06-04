@@ -330,7 +330,15 @@ impl Output<'_> {
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
+                    // #263: see the non-If path below — a fn-ref return
+                    // whose branches are bare d_nrs must emit the
+                    // `(u32, DbRef)` tuple per branch.
+                    let prev_fn_ref_ctx = self.fn_ref_context;
+                    if matches!(returned, Type::Function(_, _, _)) {
+                        self.fn_ref_context = true;
+                    }
                     self.output_if_inner(w, test, true_v, false_v, true)?;
+                    self.fn_ref_context = prev_fn_ref_ctx;
                     if if_needs_scratch {
                         write!(
                             w,
@@ -448,7 +456,20 @@ impl Output<'_> {
                     if returns_text_tuple && matches!(&**val, Value::Tuple(_)) {
                         self.tuple_text_to_string = true;
                     }
+                    // #263: a fn-ref returned as a bare d_nr (e.g.
+                    // `return dbl` → `Value::Int(d_nr)`) must emit the
+                    // full `(u32, DbRef)` fn-ref tuple, not a bare
+                    // `i64`, or rustc rejects with E0308 ("expected
+                    // `(u32, DbRef)`, found `i64`").  Set fn_ref_context
+                    // so the Int arm (emit.rs ~53) emits the tuple with a
+                    // null-sentinel closure half — the native mirror of
+                    // the interpreter's gen_return sentinel padding.
+                    let prev_fn_ref_ctx = self.fn_ref_context;
+                    if matches!(returned, Type::Function(_, _, _)) {
+                        self.fn_ref_context = true;
+                    }
                     self.output_code_inner(w, val)?;
+                    self.fn_ref_context = prev_fn_ref_ctx;
                     self.tuple_text_to_string = prev_tuple_text;
                     if needs_p205_scratch {
                         write!(

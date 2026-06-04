@@ -222,6 +222,14 @@ fn collect_fn_ref_literals(
     data: &Data,
     variables: &crate::variables::Function,
     calls: &mut HashSet<u32>,
+    // #263: true when the enclosing definition's return type is a fn-ref
+    // (`Function`/`Routine`).  A fn-ref returned as a bare d_nr (`return dbl`
+    // → `Value::Return(Value::Int(d_nr))`) is otherwise invisible to this
+    // walk — the `Return` arm recurses into a plain `Int`, which hits the
+    // `_ => {}` no-op — so the returned lambda is pruned as unreachable and
+    // the caller's `f(x)` dispatch panics with `invalid fn-ref`.  Same shape
+    // as the @P299 (`OpSetInt4(field, …)`) and @P328 (`yield`) recoveries.
+    returns_fn: bool,
 ) {
     match val {
         Value::Set(var, inner) => {
@@ -231,7 +239,7 @@ fn collect_fn_ref_literals(
             ) {
                 collect_int_fn_refs(IrNode::Native(inner), calls);
             }
-            collect_fn_ref_literals(inner, data, variables, calls);
+            collect_fn_ref_literals(inner, data, variables, calls, returns_fn);
         }
         Value::Call(d, args) => {
             let callee = data.def(*d);
@@ -267,29 +275,39 @@ fn collect_fn_ref_literals(
                 {
                     collect_int_fn_refs(IrNode::Native(a), calls);
                 }
-                collect_fn_ref_literals(a, data, variables, calls);
+                collect_fn_ref_literals(a, data, variables, calls, returns_fn);
             }
         }
         Value::Block(bl) | Value::Loop(bl) => {
             for op in &bl.operators {
-                collect_fn_ref_literals(op, data, variables, calls);
+                collect_fn_ref_literals(op, data, variables, calls, returns_fn);
             }
         }
         Value::If(test, t, f) => {
-            collect_fn_ref_literals(test, data, variables, calls);
-            collect_fn_ref_literals(t, data, variables, calls);
-            collect_fn_ref_literals(f, data, variables, calls);
+            collect_fn_ref_literals(test, data, variables, calls, returns_fn);
+            collect_fn_ref_literals(t, data, variables, calls, returns_fn);
+            collect_fn_ref_literals(f, data, variables, calls, returns_fn);
         }
-        Value::Return(v) | Value::Drop(v) => collect_fn_ref_literals(v, data, variables, calls),
+        Value::Return(v) => {
+            // #263: a fn-ref-returning fn whose return value is a bare d_nr
+            // (`return dbl` → `Int(d_nr)`) — pick the Int up as a reachable
+            // fn-ref literal.  `collect_int_fn_refs` recurses through any
+            // block/if wrapping the return value too.
+            if returns_fn {
+                collect_int_fn_refs(IrNode::Native(v), calls);
+            }
+            collect_fn_ref_literals(v, data, variables, calls, returns_fn);
+        }
+        Value::Drop(v) => collect_fn_ref_literals(v, data, variables, calls, returns_fn),
         Value::Insert(ops) => {
             for op in ops {
-                collect_fn_ref_literals(op, data, variables, calls);
+                collect_fn_ref_literals(op, data, variables, calls, returns_fn);
             }
         }
         Value::Iter(_, create, next, extra) => {
-            collect_fn_ref_literals(create, data, variables, calls);
-            collect_fn_ref_literals(next, data, variables, calls);
-            collect_fn_ref_literals(extra, data, variables, calls);
+            collect_fn_ref_literals(create, data, variables, calls, returns_fn);
+            collect_fn_ref_literals(next, data, variables, calls, returns_fn);
+            collect_fn_ref_literals(extra, data, variables, calls, returns_fn);
         }
         // FnRef inside a Block result (closure allocation block).
         Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
@@ -307,7 +325,7 @@ fn collect_fn_ref_literals(
         // Span wraps most operators for parser diagnostics — recurse so
         // Set / Call args that arrive as Span(...) still trigger the
         // fn-ref-literal walk.
-        Value::Span(b) => collect_fn_ref_literals(&b.1, data, variables, calls),
+        Value::Span(b) => collect_fn_ref_literals(&b.1, data, variables, calls, returns_fn),
         _ => {}
     }
 }
@@ -326,7 +344,11 @@ pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
         let def = data.def(d);
         let mut calls = HashSet::new();
         collect_calls(IrNode::Native(&def.code), data, &mut calls);
-        collect_fn_ref_literals(&def.code, data, &def.variables, &mut calls);
+        // #263: a fn-ref returned as a bare d_nr is only a fn-ref literal when
+        // this def's return type IS a fn-ref — otherwise an ordinary integer
+        // return would be misread as a reachable fn d_nr.
+        let returns_fn = matches!(def.returned, Type::Function(_, _, _) | Type::Routine(_));
+        collect_fn_ref_literals(&def.code, data, &def.variables, &mut calls, returns_fn);
         for c in calls {
             if !reachable.contains(&c) {
                 queue.push_back(c);
