@@ -99,6 +99,7 @@ pub mod lockfile;
 pub mod log_config;
 pub mod logger;
 pub mod manifest;
+pub mod native_gate;
 #[cfg(feature = "registry")]
 pub mod package;
 pub mod registry;
