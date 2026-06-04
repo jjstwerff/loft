@@ -701,3 +701,63 @@ fn dispatches_data_enum_into_shared_cdylib() {
     );
     let _ = std::fs::remove_dir_all(&tmp_m);
 }
+
+/// N2 lean interface: a script drives native dispatch using ONLY the
+/// auto-generated interface (`native_lib::generate_interface`) — the library's
+/// public type defs + `#native` forward-decls as loft source.  No hand-written
+/// struct/enum redefinition and no hand-written `#native` decl: the script adopts
+/// the library's exact types (in the library's order, so ids align) and dispatches
+/// `make_rect`/`area` round-trip.
+#[test]
+fn lean_interface_drives_shared_dispatch() {
+    use loft::compile::byte_code;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((rlib, deps)) = find_loft_rlib() else {
+        return;
+    };
+    if Command::new("rustc").arg("--version").output().is_err() {
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n2_iface_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Parse the library (Shape + area + make_rect) and pick both as the export set.
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(SHAPE_LIB, "lib", false);
+    scopes::check(&mut p.data);
+    let area_nr = p.data.def_nr("n_area");
+    let make_nr = p.data.def_nr("n_make_rect");
+    let shared = loft::native_gate::shared_store_dispatchable(&p.data);
+    assert!(shared.contains(&area_nr) && shared.contains(&make_nr));
+    let export: std::collections::HashSet<u32> = [area_nr, make_nr].into_iter().collect();
+
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // The two generated artifacts: the cdylib and the loft-source interface.
+    let interface = loft::native_lib::generate_interface(&p.data, &export);
+    println!("--- generated interface ---\n{interface}\n---------------------------");
+    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
+    let so = compile_cdylib(&src, "loft_n2_iface", &tmp, &rlib, &deps);
+
+    // The script uses ONLY the generated interface as its native declaration.
+    let source = r#"
+fn main() {
+    s = make_rect(3, 4);
+    a = area(s);
+    assert(a == 12, "lean-interface dispatch: make_rect then area should be 12, got {a}")
+}
+"#;
+    run_shared_dispatch(&so, &interface, source);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

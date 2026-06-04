@@ -29,10 +29,142 @@
 //! args are already valid in it).  Args/return are passed through the uniform
 //! [`LibArg`] slot.
 
-use crate::data::{Context, Data, Type};
+use crate::data::{Context, Data, DefType, Type};
 use crate::database::Stores;
 use crate::generation::{Output, rust_type};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+
+/// @PLAN54 Arc N / N2 (lean interface) — generate the loft-source **interface** a
+/// script adopts to call a native library: the public type definitions the
+/// exported functions reference (transitively) plus, per exported function, a
+/// `#native "loft_shared_…"` forward declaration.
+///
+/// This is the lean half of "an interpreted script calling a compiled library":
+/// the script parses only this interface (type layouts + signatures + dispatch
+/// symbols), **never the library bodies**, and gets the library's types defined
+/// in the library's own order — so type ids align by construction rather than by
+/// the caller redefining the types identically.  (A binary schema load — the D2a
+/// cache — is the robust successor that also covers non-public ordering; this
+/// source form covers the common case where the public types are the only ones.)
+#[must_use]
+pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
+    use std::fmt::Write as _;
+    // Referenced struct/enum defs, transitively, kept in definition order (BTreeSet
+    // on `d_nr`) so the script registers them in the library's order.
+    let mut types: BTreeSet<u32> = BTreeSet::new();
+    for &d in export_set {
+        let def = data.def(d);
+        for a in def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+        {
+            collect_type_defs(data, &a.typedef, &mut types);
+        }
+        collect_type_defs(data, def.returned(), &mut types);
+    }
+
+    let mut src = String::new();
+    for &t in &types {
+        emit_type_def(data, t, &mut src);
+        src.push('\n');
+    }
+    let mut fns: Vec<u32> = export_set.iter().copied().collect();
+    fns.sort_unstable();
+    for d in fns {
+        let def = data.def(d);
+        let name = def.name().strip_prefix("n_").unwrap_or(def.name());
+        let params: Vec<String> = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef) && !a.name.starts_with("__"))
+            .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
+            .collect();
+        let ret = def.returned();
+        let ret_clause = if matches!(ret, Type::Void | Type::Null) {
+            String::new()
+        } else {
+            format!(" -> {} not null", ret.name(data))
+        };
+        let _ = writeln!(src, "pub fn {name}({}){ret_clause};", params.join(", "));
+        let _ = writeln!(src, "#native \"loft_shared_{}\"", def.name());
+    }
+    src
+}
+
+/// Add to `types` (transitively, in definition order) the struct/enum defs that
+/// loft type `t` references.
+fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
+    // The struct/enum `def_nr` this type references, if any.  Reference / Enum /
+    // Sorted / Index / Hash / Spacial all carry a leading element-struct `def_nr`;
+    // a Vector recurses into its element type; everything else is a leaf.
+    let d = match t {
+        Type::Reference(d, _)
+        | Type::Enum(d, _, _)
+        | Type::Sorted(d, _, _)
+        | Type::Index(d, _, _)
+        | Type::Hash(d, _, _)
+        | Type::Spacial(d, _, _) => *d,
+        Type::Vector(elm, _) => {
+            collect_type_defs(data, elm, types);
+            return;
+        }
+        _ => return,
+    };
+    if !types.insert(d) {
+        return; // already collected (also breaks cycles)
+    }
+    let def = data.def(d);
+    for a in def.attributes() {
+        collect_type_defs(data, &a.typedef, types);
+    }
+    // enum variants carry their own fields (DefType::EnumValue children)
+    for v in data.children_of(d) {
+        for a in data.def(v).attributes() {
+            collect_type_defs(data, &a.typedef, types);
+        }
+    }
+}
+
+/// Emit the loft-source definition of struct/enum `d_nr` into `src`.
+fn emit_type_def(data: &Data, d_nr: u32, src: &mut String) {
+    use std::fmt::Write as _;
+    let def = data.def(d_nr);
+    match def.def_type() {
+        DefType::Struct => {
+            let _ = writeln!(src, "struct {} {{", def.name());
+            for a in def.attributes() {
+                let _ = writeln!(src, "    {}: {},", a.name, a.typedef.name(data));
+            }
+            src.push_str("}\n");
+        }
+        DefType::Enum => {
+            let variants: Vec<u32> = data.children_of(d_nr).collect();
+            let parts: Vec<String> = variants
+                .iter()
+                .map(|&v| {
+                    let vd = data.def(v);
+                    let vname = vd.name().rsplit('.').next().unwrap_or(vd.name());
+                    // Each variant carries an auto-added `enum` discriminant field
+                    // (definitions.rs) — skip it; emit only the user-declared fields.
+                    let fields: Vec<String> = vd
+                        .attributes()
+                        .iter()
+                        .filter(|a| a.name != "enum")
+                        .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
+                        .collect();
+                    if fields.is_empty() {
+                        vname.to_string()
+                    } else {
+                        format!("{vname} {{ {} }}", fields.join(", "))
+                    }
+                })
+                .collect();
+            let _ = writeln!(src, "enum {} {{ {} }}", def.name(), parts.join(", "));
+        }
+        _ => {}
+    }
+}
 
 /// @PLAN54 Arc N — a uniform 16/24-byte argument/return slot for the
 /// **shared-store** native-library bridge ([`generate_shared_cdylib_lib_rs`]).
