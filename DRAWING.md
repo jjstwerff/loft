@@ -378,6 +378,10 @@ borrowed from human practice:
 Stages, increasing resolution (look-cadence rides them: cheap channel through 1–2,
 expensive looks at transitions and the end):
 
+0. **Composition / thumbnail** — *before any object exists*: the arrangement of
+   abstract masses in the frame — focal point, horizon, eye-path, balance, scale
+   contrast, negative space. The most upstream pass, and the easiest to skip (I did
+   — see § Composition). Everything below is placed *within* it.
 1. **Block-in / construction** — a few big shapes locating everything; `mark` it.
 2. **Contour** — the main edges.
 3. **Detail** — small features (door, window, ray texture).
@@ -830,6 +834,78 @@ would move someone; the human draws the dusk that moved them.**
 
 ---
 
+## The world pass — convergence, not arrival
+
+Running the real loop (a *dwelling* not a cube, a path that reaches the door, a tree
+as a minimal cue-set, the beams dropped, honest tool-floor calls on shadow and the
+lit window) produced a **coherent place** — and three findings worth keeping:
+
+- **The house flipped cube→home.** Depth (a side face), overhanging eaves, door,
+  window, chimney — recognition succeeded; the central fault is fixed.
+- **A diagnostic cue can be load-bearing — I over-cut.** Dropping the beams for
+  reading as "wires" also stripped the sun of its *identity*: a bare circle reads as
+  a ball. The fix is precise — *short radial rays* (the sun's diagnostic cue), not
+  *long beams across the scene* (the wires). Selectivity can cut a mark the
+  recognition needs; "earns its place" must weigh recognition, not just tidiness.
+- **Symbols carry default affect.** Fixing the sun with the ray-symbol then imported
+  *cheerful daytime*, fighting the somber intent. A clean diagnostic symbol brings
+  the *idea*'s mood with it; recognition↑ can mean fidelity-to-intent↓.
+
+The honest result: a competent **first pass** — recognizable, coherent, a *place* —
+exactly the children's-book / five-year-old stage done well. No dusk *feeling* yet.
+
+And that exposed an error of my own: I judged it by asking *"did this pass reach the
+intent?"* — the **single-shot verdict this whole doc opens by rejecting.** For an
+iterative craft the right question is **"is it converging?"** — and it is (cube→home,
+ball→sun, sticker-album→place). A human's first pass is moodless too (the *ugly
+stage*); **mood is a late-pass, tone-built phenomenon, never a first-pass one.**
+
+So separate two limits I had blurred into one "ceiling":
+
+- **the single-pass limit** — universal, human, *dissolves with iteration*; just
+  "we're at pass one";
+- **the vocabulary limit** — real: line can't lay value, so no number of line passes
+  reaches a *tonal* dusk; a later pass needs a tool it lacks.
+
+Two axes — **passes (time)** and **vocabulary (capability)**. "See it working" means
+*the loop converging across passes*, not one pass arriving. By that measure, it works.
+
+---
+
+## Composition — the missing upstream layer (and an affect lever that works in line)
+
+A whole layer was missing, distinct from recognition, coherence, and tone:
+**composition** — the arrangement of the *whole* within the frame: focal hierarchy,
+balance, eye-path, scale contrast, horizon placement, negative space as an active
+element.
+
+It corrects the "blocked on tone" verdict. **Composition carries affect in pure
+line, no value needed.** A tiny house dwarfed under a vast looming dark mass, a low
+horizon, an oppressive weight of empty sky — that *arrangement* evokes smallness and
+foreboding by **placement alone**. So there is a route to the feeling available now,
+in line, that the first pass threw away.
+
+Because compositionally the world-pass is the **five-year-old layout**: elements
+lined up on the ground-line, all one size, no focal point, the horizon parked across
+the dead middle, the cloud floating, a band of dead space in the centre. An
+*inventory laid out*, not a composition. Part of why it reads as a storybook page is
+not the tone at all — *nothing is composed.*
+
+And composition is the **most upstream pass**, the one I skipped: the thumbnail —
+abstract masses, focal point, eye-path, horizon, the big light/dark balance — decided
+*before any object is identifiable.* It belongs **above block-in** (§ coarse to fine,
+Stage 0), and it belongs in the **intent**: my intent files have been an object-list
+plus a feeling, but a human's mental image includes its *arrangement*. Composition is
+part of what "the image we want" even means.
+
+It suits me, like coherence: mostly **principle-driven and measurable** — thirds,
+leading lines, balance of visual weight, scale ratios, horizon position,
+negative-space distribution — explicit rules, checkable on the metric channel. The
+residue is the perceptual *does it feel balanced / unified / does the eye flow*, for
+the cold-observe critic.
+
+---
+
 ## Open questions / next steps
 
 - **Coordinate convention.** y-down (image) vs y-up (math/paper, origin
@@ -845,13 +921,21 @@ would move someone; the human draws the dusk that moved them.**
   analysis (§ Feeling) pulls **value** back up: not as polish, but as the carrier
   of the strongest dusk cue, the **lit window**. So: relationships *and* the few
   value-cues that carry feeling — together, not tone-as-finish.
-- **Next experiment: the world pass + a real house.** Redraw the house to read as a
-  *dwelling* (apertures, overhang, broken proportion, a depth face — a window
-  indicated as lit); derive its shadow from the low sun (long, thrown right); add a
-  road reaching the door and a tree on the hill; extend the metric channel to
-  *inter-object* consistency. Then run the **affect-critic** — observe cold, ask
-  *what does it evoke* — to test whether it flips from "blocks at play" to "home at
-  dusk." Expect line-only to stall at "house icon," naming value as the next build.
+- **World pass: DONE** (§ The world pass) — produced a coherent *place* (cube→home,
+  the sun-ray fix), confirmed it converges, and surfaced the over-cut-sun and
+  symbols-carry-affect findings.
+- **Next experiment: the compositional re-pass.** The next pass is to *re-compose*
+  the same scene — drop the horizon low, shrink the house onto a thirds line, let the
+  dark cloud-mass grow and press down, use the path as a leading line, turn the dead
+  centre into oppressive sky. Pure line, no tone — test whether *arrangement alone*
+  lifts it off the children's-book baseline toward foreboding. Then the value pass.
+- **Destination: a Claude skill (gated on working).** The end is to package this as a
+  skill — the read-once recipe that is the only thing that crosses sessions (§ Not
+  practice); authoring it *is* "learning to draw," for me. Discipline: **don't
+  package until it demonstrably works** — a skill encoding a not-yet-working method
+  just propagates the stub. The SKILL.md is the *operational recipe* (terse,
+  imperative: the loop + critics + earned rules + the tool), distinct from this doc
+  (the *rationale*).
 - **Bake the affect-critic into the loop.** The metric channel measures geometry;
   nothing yet runs observe→reconstruct→inhabit→name-reaction→compare. It can't be a
   `check` (it's perceptual), but it can be a fixed prompt run from the *rendered*
