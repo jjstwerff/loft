@@ -78,6 +78,21 @@ pub fn feature_signature() -> String {
     feats.join(",")
 }
 
+/// @PLAN54 G2/M6 — a stable string identifying THIS binary build, for the
+/// whole-program cache **manifest**.  Mirrors the version inputs of
+/// [`stdlib_cache_key`] (format / version / rebuild-id / target / features) so a
+/// binary upgrade invalidates a stale program bundle: a bundle written by one
+/// build must never be loaded by another (its baked store layout / codegen may
+/// differ, which `Store::is_store_file`'s fixed magic does NOT catch).
+#[must_use]
+pub fn build_signature() -> String {
+    format!(
+        "v{CACHE_FORMAT_VERSION}|{LOFT_VERSION}|{BUILD_ID}|{}|{}",
+        target_triple(),
+        feature_signature(),
+    )
+}
+
 /// Compute the stdlib cache key: a SHA-256 over every input that can
 /// change the compiled standard library.
 ///

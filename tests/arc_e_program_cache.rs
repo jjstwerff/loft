@@ -88,3 +88,58 @@ fn program_cache_cold_warm_then_drift() {
     let _ = std::fs::remove_file(&script);
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+/// @PLAN54 G2/M6 — the manifest's build-signature line invalidates a stale
+/// bundle on a (simulated) binary upgrade.  Without it, a bundle written by an
+/// older build would be warm-loaded by a newer one whose store layout/codegen
+/// differs — a silent stale-load.  We simulate the upgrade by rewriting the
+/// manifest's `sig ` line; the next run must reparse (cache miss), not load the
+/// stale bundle, and still produce correct output.
+#[test]
+fn manifest_build_signature_invalidates_stale_bundle() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_sig_{pid}.loft"));
+    std::fs::write(&script, "fn main() { print(\"answer={6*7}\\n\"); }\n").expect("write script");
+    let cache_dir = tmp.join(format!("loft_sig_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    // Cold run primes the bundle + a manifest whose first line is `sig <build>`.
+    let (ok_cold, _) = run(&script, Some(&cache_dir));
+    assert!(ok_cold, "cold run failed");
+    let dir = cache_dir.join("loft");
+    let manifest = std::fs::read_dir(&dir)
+        .expect("cache dir")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("manifest"))
+        .expect("manifest written");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    assert!(
+        text.starts_with("sig "),
+        "manifest must start with the sig line: {text:?}"
+    );
+
+    // Simulate a binary upgrade: clobber the sig line with a different build.
+    let body: String = text.lines().skip(1).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&manifest, format!("sig STALE-OTHER-BUILD\n{body}")).expect("tamper manifest");
+
+    // Next run must treat it as a cache miss (reparse) and still be correct —
+    // NOT warm-load the now-"foreign" bundle.
+    let (ok, out) = run(&script, Some(&cache_dir));
+    assert!(ok, "run after sig mismatch failed: {out}");
+    assert!(
+        out.contains("answer=42"),
+        "must reparse to correct output: {out}"
+    );
+
+    // And it should have re-saved a manifest with THIS build's real signature.
+    let restored = std::fs::read_to_string(&manifest).expect("read manifest");
+    assert!(
+        !restored.contains("STALE-OTHER-BUILD"),
+        "a cold reparse should overwrite the stale-sig manifest"
+    );
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}

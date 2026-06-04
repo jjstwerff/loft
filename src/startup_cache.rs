@@ -102,8 +102,17 @@ fn manifest_matches(manifest: &std::path::Path) -> bool {
     let Ok(text) = std::fs::read_to_string(manifest) else {
         return false;
     };
+    let mut lines = text.lines();
+    // @PLAN54 G2/M6 — the first line pins THIS build's signature.  A binary
+    // upgrade (new store layout / codegen / version / features) changes it, so a
+    // stale bundle is a clean cache miss (reparse), never a wrong-format load
+    // (`Store::is_store_file`'s fixed magic can't catch a layout change).
+    match lines.next().and_then(|l| l.strip_prefix("sig ")) {
+        Some(sig) if sig == crate::cache::build_signature() => {}
+        _ => return false,
+    }
     let mut any = false;
-    for line in text.lines() {
+    for line in lines {
         let Some((hexhash, path)) = line.split_once(' ') else {
             return false;
         };
@@ -112,7 +121,7 @@ fn manifest_matches(manifest: &std::path::Path) -> bool {
             _ => return false,
         }
     }
-    any // an empty manifest is not a valid hit
+    any // an empty source list is not a valid hit
 }
 
 /// Whole-program warm load: if a valid bundle exists for `script_abspath` and
@@ -168,14 +177,17 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     paths.sort_unstable();
     paths.dedup();
     let mut lines = String::new();
+    // @PLAN54 G2/M6 — pin the build signature first so a binary upgrade
+    // invalidates this bundle (see `manifest_matches`).
+    let _ = writeln!(lines, "sig {}", crate::cache::build_signature());
     for path in &paths {
         let Some(h) = crate::cache::file_hash(path) else {
             return; // an unreadable source → don't cache (would never validate)
         };
         let _ = writeln!(lines, "{} {path}", hex32(&h));
     }
-    if lines.is_empty() {
-        return;
+    if paths.is_empty() {
+        return; // no sources → an unvalidatable manifest; skip caching
     }
 
     if let Some(parent) = bundle.parent() {
