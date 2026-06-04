@@ -138,6 +138,9 @@ pub fn warm_load_program(
     if !manifest_matches(&manifest) {
         return false;
     }
+    // @PLAN54 Arc N / N1 — touch-on-use: a warm hit marks the bundle recently-used
+    // so the idle-TTL GC keeps actively-run programs and ages out one-offs.
+    crate::cache::touch_now(&bundle);
     let bundle_s = bundle.to_string_lossy();
     // @PLAN54 G2/M6 — with LOFT_CODEGEN_STORE, do a *skeleton* load: mmap the
     // bundle, reconstruct only the def table (bodies stay in the store), and

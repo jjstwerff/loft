@@ -406,21 +406,46 @@ fn program_cache_budget_bytes() -> u64 {
         .saturating_mul(1024 * 1024)
 }
 
-/// @PLAN54 G2 / track 1 — bound unbounded cache growth.  With the cache default-on
-/// each distinct script gets its own `program-<hash>.store` bundle (~7 MiB) and
-/// nothing ever removes them; over a long-lived install that grows without limit.
-/// After a cold save, prune the program-cache directory back under the budget
-/// ([`program_cache_budget_bytes`]) by evicting whole (`.store` + `.manifest`)
-/// pairs oldest-first (mtime, which a drift re-save refreshes).  Best-effort.
+/// @PLAN54 Arc N / N1 — the idle-TTL after which an *unused* cached artifact is
+/// evicted (`LOFT_CACHE_TTL_HOURS`, default 24 h).  A re-use ([`touch_now`]) or a
+/// re-save refreshes the entry's mtime, so an actively-used "library set" persists
+/// indefinitely while a one-off ages out — "store common sets longer, clear when
+/// idle 24 h" (C71).  A malformed value falls back to the default.
+#[must_use]
+fn cache_ttl() -> std::time::Duration {
+    let hours = std::env::var("LOFT_CACHE_TTL_HOURS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(24);
+    std::time::Duration::from_secs(hours.saturating_mul(3600))
+}
+
+/// @PLAN54 Arc N / N1 — mark a cached file as used *now* (touch-on-use): bumps its
+/// modification time so the idle-TTL GC keeps it.  Best-effort (no-op if the file
+/// is missing / unopenable).
+pub fn touch_now(path: &std::path::Path) {
+    if let Ok(f) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// @PLAN54 G2 / track 1 + Arc N / N1 — bound cache growth.  With the cache
+/// default-on each distinct script gets its own `program-<hash>.store` bundle
+/// (~7 MiB) and nothing removes them.  Eviction is **idle-TTL primary**
+/// ([`cache_ttl`]) — drop any bundle not used within the TTL — with the size-cap
+/// ([`program_cache_budget_bytes`]) as a runaway backstop.  Whole (`.store` +
+/// `.manifest`) pairs are removed.  Best-effort.
 pub fn prune_program_cache() {
-    prune_dir(&cache_base_dir(), program_cache_budget_bytes());
+    prune_dir(&cache_base_dir(), program_cache_budget_bytes(), cache_ttl());
 }
 
 /// The eviction core, factored out of [`prune_program_cache`] so it is testable
-/// against a temp dir with an explicit budget (no env, no global cache dir).
+/// against a temp dir with an explicit budget + TTL (no env, no global cache dir).
 /// Only `program-*.store` files (and their sibling `.manifest`) are considered;
-/// any other cache file (e.g. the stdlib bundle) is left untouched.
-fn prune_dir(base: &std::path::Path, budget_bytes: u64) {
+/// any other cache file (e.g. the stdlib bundle) is left untouched.  Phase 1 drops
+/// every bundle idle longer than `ttl` (the primary policy); phase 2 is the
+/// oldest-first size-cap backstop on what remains.
+fn prune_dir(base: &std::path::Path, budget_bytes: u64, ttl: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(base) else {
         return;
     };
@@ -430,7 +455,6 @@ fn prune_dir(base: &std::path::Path, budget_bytes: u64) {
         size: u64,
     }
     let mut bundles: Vec<Bundle> = Vec::new();
-    let mut total: u64 = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         let is_program_store = path.extension().and_then(|x| x.to_str()) == Some("store")
@@ -444,15 +468,28 @@ fn prune_dir(base: &std::path::Path, budget_bytes: u64) {
         let Ok(meta) = entry.metadata() else {
             continue;
         };
-        let size = meta.len();
-        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-        total = total.saturating_add(size);
         bundles.push(Bundle {
             store: path,
-            mtime,
-            size,
+            mtime: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+            size: meta.len(),
         });
     }
+    let now = std::time::SystemTime::now();
+    let remove_pair = |store: &std::path::Path| {
+        let _ = std::fs::remove_file(store);
+        let _ = std::fs::remove_file(store.with_extension("manifest"));
+    };
+    // Phase 1 — idle-TTL: drop any bundle not used within `ttl`.
+    bundles.retain(|b| {
+        if now.duration_since(b.mtime).unwrap_or_default() > ttl {
+            remove_pair(&b.store);
+            false
+        } else {
+            true
+        }
+    });
+    // Phase 2 — size-cap backstop on the survivors.
+    let mut total: u64 = bundles.iter().map(|b| b.size).sum();
     if total <= budget_bytes {
         return;
     }
@@ -461,8 +498,7 @@ fn prune_dir(base: &std::path::Path, budget_bytes: u64) {
         if total <= budget_bytes {
             break;
         }
-        let _ = std::fs::remove_file(&b.store);
-        let _ = std::fs::remove_file(b.store.with_extension("manifest"));
+        remove_pair(&b.store);
         total = total.saturating_sub(b.size);
     }
 }
@@ -665,7 +701,9 @@ mod tests {
         std::fs::write(dir.join("stdlib-zzz.store"), b"keepme").unwrap();
 
         // Budget 25 bytes: 3×10 = 30 > 25 → evict the single oldest (→ 20 ≤ 25).
-        prune_dir(&dir, 25);
+        // TTL of a year so the (recent-mtime) bundles never trip the idle pass —
+        // this exercises the size-cap backstop in isolation.
+        prune_dir(&dir, 25, Duration::from_hours(24 * 365));
         assert!(
             !dir.join("program-aaa.store").exists(),
             "oldest store evicted"
@@ -679,6 +717,42 @@ mod tests {
         assert!(
             dir.join("stdlib-zzz.store").exists(),
             "non-program cache file untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_dir_idle_ttl_evicts_unused() {
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("loft_idle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |name: &str, age_secs: u64| {
+            let store = dir.join(format!("{name}.store"));
+            std::fs::write(&store, b"x").unwrap();
+            std::fs::write(dir.join(format!("{name}.manifest")), b"m").unwrap();
+            let when = std::time::SystemTime::now() - Duration::from_secs(age_secs);
+            std::fs::File::open(&store)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        };
+        mk("program-fresh", 60); // used a minute ago
+        mk("program-stale", 2 * 86400); // idle two days
+        // Huge budget so the size-cap never fires → only the idle-TTL pass acts.
+        // TTL = 1 day: the 2-day-idle bundle is evicted, the fresh one kept.
+        prune_dir(&dir, u64::MAX, Duration::from_hours(24));
+        assert!(
+            dir.join("program-fresh.store").exists(),
+            "a recently-used bundle is kept regardless of age"
+        );
+        assert!(
+            !dir.join("program-stale.store").exists(),
+            "a bundle idle longer than the TTL is evicted"
+        );
+        assert!(
+            !dir.join("program-stale.manifest").exists(),
+            "the idle bundle's manifest is evicted with it"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
