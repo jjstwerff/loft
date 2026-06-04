@@ -1,0 +1,62 @@
+# =====================================================================
+# SCENE: a house on a hill, low sun in the last light, a large dark
+#        cloud behind, beams of light.  (black line on white)
+#
+# RULES (earned by looking — measure the gap, don't invent it):
+#   C1 round circles ............ Circle is auto aspect-corrected   [-> tool]
+#   C2 "near the horizon" ....... within ~0.05 of the LOCAL hill y; hill
+#                                 at left ~0.76, so low sun y~0.70
+#   C3 a cloud .................. >=4 overlapping lumps, not one ellipse
+#   C4 "behind X" ............... cloud bottom must OVERLAP house top (~y0.48)
+#   C5 stats density ............ darkest-pixel-per-cell             [-> tool]
+#   C6 cloud silhouette ......... overlapping-circle OUTLINES show internal
+#                                 arcs and read as 'bubbles', not a cloud; need
+#                                 outer silhouette only (fill/occlusion).
+#                                 line-only CAN'T do this -> tone/fill gap.
+#
+# METRIC: positional intent is encoded as `check` predicates below, measured
+# exactly by the tool (text, no eye). The eye is reserved for the perceptual.
+# Coords are fractions; origin top-left, y grows down. Editing IS undo.
+# =====================================================================
+size 1000x700
+
+# === HILL ===  SHOULD: gentle rise, crest right-of-center (~x0.6); house on the crest.
+name hill
+Poly (0.00,0.78) (0.20,0.74) (0.45,0.69) (0.62,0.66) (0.80,0.70) (1.00,0.75) w=2
+
+# === HOUSE ===  SHOULD: small box + pitched roof, on the crest, right-of-center.
+name house
+Line (0.55,0.55) - (0.66,0.55) w=2
+Line (0.66,0.55) - (0.66,0.66) w=2
+Line (0.66,0.66) - (0.55,0.66) w=2
+Line (0.55,0.66) - (0.55,0.55) w=2
+Line (0.53,0.55) - (0.605,0.48) w=2
+Line (0.605,0.48) - (0.68,0.55) w=2
+
+# === SUN ===  SHOULD: round disc, LOW near the horizon, left, just above the hill (~y0.70). [C1,C2]
+name sun
+Circle (0.16,0.70) r=0.045 n=28 w=2
+
+# === CLOUD ===  SHOULD: large LUMPY dark mass, upper, center-to-right, bottom overlapping house top. [C3,C4]
+# GAP: reads BUBBLY — internal arcs visible (C6); fix needs fill/occlusion, not numbers (tone-floor).
+name cloud
+Circle (0.50,0.30) r=0.085 n=24 flat=0.25 w=2
+Circle (0.62,0.26) r=0.105 n=24 flat=0.25 w=2
+Circle (0.75,0.28) r=0.095 n=24 flat=0.25 w=2
+Circle (0.86,0.31) r=0.075 n=24 flat=0.25 w=2
+Circle (0.64,0.385) r=0.095 n=24 flat=0.25 w=2
+
+# === BEAMS ===  SHOULD: a few straight rays from the sun toward house/cloud.
+name beams
+Line (0.205,0.690) - (0.45,0.50) w=1
+Line (0.205,0.705) - (0.55,0.45) w=1
+Line (0.205,0.720) - (0.60,0.55) w=1
+
+# === METRIC CHECKS (intent as coordinates; measured by the tool, not the eye) ===
+landmark horizon_sun = 0.76
+check sun.cy ~ horizon_sun - 0.06 tol 0.03
+check cloud.bottom >= house.top
+# house.w bbox INCLUDES the roof eaves (x0.53..0.68) -> ~0.15, not the 0.11 box
+check house.w ~ 0.15 tol 0.02
+check cloud.left ~ 0.45 tol 0.06
+check cloud.right ~ 0.90 tol 0.06

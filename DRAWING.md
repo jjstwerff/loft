@@ -450,8 +450,9 @@ form, each observed gap between the numbers I chose and the image they produced.
 
 ### Where the gap is stored: the annotated drawing source (NOT a project doc)
 
-The storable, re-readable format is **not** a prose ledger in this repo — it is
-the **drawing source file itself**, kept *outside* the project. Every stroke is
+The storable, re-readable format is **not** a prose ledger — it is the **drawing
+source file itself** (the tool lives in [`sketch/`](sketch/); the example source
+is `sketch/scene.draw`, generated images stay out of git). Every stroke is
 output to that file, and each element carries an inline `# SHOULD:` comment
 stating what it must look like, right next to the numbers that draw it; earned
 general corrections live in a `# RULES` header at the top. The renderer ignores
@@ -465,8 +466,9 @@ save).
 it. Corrections that prove stable **graduate into the tool** — round-`Circle`
 (was C1, "equal fractional radii aren't round") and darkest-cell stats (was C5)
 have already moved from notes into `draw.py`. That is the recipe improving without
-practice. Live source: `/tmp/sketch/scene.draw` (relocate to a persistent
-non-project home).
+practice. Tool + worked example in repo: [`sketch/`](sketch/) (`draw.py`,
+`scene.draw`, rendered `example.png`); generated images/stats default to a temp
+dir, never committed.
 
 ---
 
