@@ -2919,6 +2919,58 @@ safeguards landed).  Independent of BUILD1.
 
 ---
 
+## Startup cache (shipped, default-on)
+
+**Status: SHIPPED as part of @PLAN54 G2 Track 1 (commit `77da481`).**
+
+The whole-program startup cache skips ALL parsing — stdlib + lazily-`use`d
+libs + user file — on warm runs by writing a binary bundle (content-addressed
+`.store` + `.manifest`) to `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`).
+Warm-run speedup measured at **~3–3.6×**.
+
+### What is cached
+
+The bundle contains the fully-parsed IR (`Data`) for the entire program prefix:
+every `default/*.loft` file, every `use`-d library, and the user script.  It is
+keyed on a drift manifest holding a SHA-256 of each parsed source's bytes
+(`cache::file_hash`), so any source edit invalidates the cache automatically.
+
+### Default-on behaviour and overrides
+
+`cache::program_cache_enabled()` (`src/cache.rs`) implements the precedence
+order:
+
+1. `LOFT_NO_CACHE` (non-empty) → **off** — the explicit kill switch for
+   production scripts that must never read/write bundles.
+2. `LOFT_PROGRAM_CACHE` (non-empty) → **on** — explicit force; used by the
+   cache's own tests to override the cargo-context default below.
+3. `CARGO_MANIFEST_DIR` present → **off** — auto-disables inside
+   `cargo run` / `cargo test`.  The compiler-debug loop and the entire
+   integration-test suite never read/write bundles with zero per-test wiring.
+4. otherwise → **on** — the default for installed / real invocations.
+
+### Invalidation
+
+`build_signature()` folds together:
+
+- The cache-format version constant, loft version, and git HEAD (`BUILD_ID`).
+- The running binary's mtime (`binary_signature_tag()`) so an *uncommitted*
+  compiler rebuild invalidates bundles.  `BUILD_ID` (git HEAD) alone does not
+  change across uncommitted edits; the mtime addition closes that gap.
+
+### Eviction
+
+`cache::prune_program_cache()` is called after each cold save.  It evicts the
+oldest `(.store + .manifest)` pairs until the cache directory is under
+`LOFT_CACHE_MAX_MB` (default **512 MiB**).
+
+### See also
+
+Full design, E1/E2/E3 arc, and the zero-copy follow-up: see
+`doc/claude/plans/future/54-data-as-store/README.md`.
+
+---
+
 ## Open work
 
 The 9 design entries above (P1, P2, P3, N1, N2, N3, N4, N5, W1)
@@ -2942,6 +2994,7 @@ plan-cleanup audits:
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
 | **BUILD1** — Eliminate lib/bin double compilation | § Design: BUILD1 | — | Build-time | Open — discovered 2026-05-30 wiring the tmpfs safeguards.  `main.rs` re-declares 41 modules already in `lib.rs` (~38,520 LOC of single-file modules) → whole crate compiled twice (rlib + bin).  Fix = thin-binary lib/bin split.  M–L, crate-wide; needs its own change.  Until then, shared `platform` helpers used only by `tests/` carry `#[allow(dead_code)]` in the binary view. |
 | **BUILD2** — Persist native-test binary cache across CI runs | § Design: BUILD2 | — | Build-time (CI + local) | **LANDED 2026-05-30.**  Both cache keys fold rlib CONTENT hash (was mtime) + ci.yml sets `LOFT_TMPDIR=target/loft-native-cache` (persisted by actions/cache) + prune step.  Warm runs skip ~565s/OS of native recompiles; also a local speedup (rlib rebuild no longer busts the native cache on the mtime bump).  NB: `libraries4` `f73e58a0 @P334` fixes the world.loft wasip2 stub at the source — supersedes the harness preopen workaround when it merges. |
+| **E2 (zero-copy `read_data`)** — `read_data` profiling breakdown | `§ Startup cache` above | — | Startup / parse | Open — `bench_read_data_breakdown` (`src/ir_read.rs`, `#[ignore]`) measured on the real stdlib bundle: full `read_data` = **693 µs** = def-fields **453 µs (65%)** (attribute + return-type `Type` trees) + variable tables **98 µs (14%)** + body trees **142 µs (20%)**.  Variable-table decode is **~0.39 µs/variable** (linear in allocation count).  The cost IS native-graph materialisation (each variable = a `String` name + a boxed `Type`; each def = its attribute/return `Type` trees) — exactly what E2 (zero-copy store-backed reads) eliminates.  There is no cheap targeted `read_function` optimisation — the hot work is the per-object allocation, so E2 is the only lever.  The earlier "~2.2 ms variable tables" figure was for a whole-program bundle (~5–6 k vars, not 251); it scales linearly.  E2 startup prize: **~0.7 ms on the stdlib** (scales with def + var count).  Full arc: `plans/future/54-data-as-store/README.md`. |
 
 Other ROADMAP rows that conceptually belong here but lack
 PERFORMANCE.md design content yet — A12 (lazy work-variable
