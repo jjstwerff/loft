@@ -4214,14 +4214,23 @@ fn main() {
     // route through `OpStaticCall`); the cdylib is built + loaded after.  A program
     // using an auto-native library bypasses the program cache for now (the
     // mark/build runs every cold run; artifact caching is N1/Phase D).
-    let auto_native_exports: Vec<(String, std::collections::HashSet<u32>)> =
+    // `LOFT_NO_NATIVE_LIBS=1` forces every `use`d library to interpret (skip the
+    // mark/build/dispatch).  This is the **parity reference**: the same program run
+    // with and without it must produce byte-identical output (Step 1's invariant —
+    // a library run native ≡ run interpreted); it is also the manual escape hatch.
+    let native_libs_off = std::env::var_os("LOFT_NO_NATIVE_LIBS").is_some();
+    let auto_native_exports: Vec<(String, std::collections::HashSet<u32>)> = if native_libs_off {
+        p.pending_native_compile.clear();
+        Vec::new()
+    } else {
         std::mem::take(&mut p.pending_native_compile)
             .into_iter()
             .map(|pkg_dir| {
                 let export = loft::native_lib::mark_library_native(&mut p.data, &pkg_dir);
                 (pkg_dir, export)
             })
-            .collect();
+            .collect()
+    };
     let has_auto_native = auto_native_exports.iter().any(|(_, e)| !e.is_empty());
     // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
