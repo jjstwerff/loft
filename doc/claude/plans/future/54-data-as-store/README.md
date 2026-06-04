@@ -17,9 +17,16 @@ measurements reframed the cost/benefit and point to a clear priority order:
 1. **Ship the win that already exists — make the program cache default-on.**
    The **3–3.6× startup speedup** (G1, parse-skip) is built, proven, and robust
    (atomic write, corrupt-bundle fallback, content-hash drift), but it is
-   **invisible to users** because it's gated behind `LOFT_PROGRAM_CACHE`.  A
-   default flip (with an opt-*out* like `LOFT_NO_CACHE` + a "first run is cold"
-   note) delivers the entire win to everyone — near-zero code, highest ROI.
+   **invisible to users** because it's gated behind `LOFT_PROGRAM_CACHE`.
+   **Correctness prerequisite DONE (2026-06-04, commit `0b9e69a`):** the program
+   manifest now pins a **build signature** (`cache::build_signature` →
+   format/version/build-id/target/features) as its first line, so a `loft`
+   upgrade invalidates stale bundles instead of warm-loading an incompatible
+   store (the previous gap: key/manifest had no binary identity, and
+   `Store::is_store_file`'s fixed magic can't catch a layout change).  Remaining
+   for the flip itself: an opt-*out* (`LOFT_NO_CACHE`), and a call on the
+   first-run save cost (~tax on one-shot/CI runs) + unbounded cache growth
+   (one bundle per script, no eviction).  Near-zero code, highest ROI.
 
 2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
    key measured finding: **M6-warm gives only ~5%** because the **variable
