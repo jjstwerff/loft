@@ -4,26 +4,37 @@
 //! Function call code generation: user-defined functions and `#rust` template calls.
 
 use crate::data::{Context, Data, Definition, Type, Value};
+use crate::data_store::ValueType;
+use crate::ir_node::IrNode;
 use std::io::Write;
 
 use super::{Output, narrow_int_cast, rust_type, sanitize};
 
 /// Check if a Value tree contains a Call to OpDatabase (which mutates stores).
-pub(super) fn contains_op_database(val: &Value, data: &Data) -> bool {
-    match val {
-        Value::Call(d_nr, args) => {
-            if data.def(*d_nr).name == "OpDatabase" {
+pub(super) fn contains_op_database(node: IrNode, data: &Data) -> bool {
+    match node.kind() {
+        ValueType::Call => {
+            if data.def(node.call_to()).name == "OpDatabase" {
                 return true;
             }
-            args.iter().any(|a| contains_op_database(a, data))
+            node.call_args()
+                .iter()
+                .any(|a| contains_op_database(a, data))
         }
-        Value::Block(bl) => bl.operators.iter().any(|v| contains_op_database(v, data)),
-        Value::Insert(ops) => ops.iter().any(|v| contains_op_database(v, data)),
-        Value::Set(_, to) => contains_op_database(to, data),
-        Value::If(t, a, b) => {
-            contains_op_database(t, data)
-                || contains_op_database(a, data)
-                || contains_op_database(b, data)
+        ValueType::Block => node
+            .as_block()
+            .operators()
+            .iter()
+            .any(|v| contains_op_database(v, data)),
+        ValueType::Insert => node
+            .insert_items()
+            .iter()
+            .any(|v| contains_op_database(v, data)),
+        ValueType::Set => contains_op_database(node.set_inner(), data),
+        ValueType::If => {
+            contains_op_database(node.if_cond(), data)
+                || contains_op_database(node.if_then(), data)
+                || contains_op_database(node.if_else(), data)
         }
         _ => false,
     }

@@ -42,11 +42,18 @@ unsafe extern "C" {
 #[macro_use]
 pub mod diagnostics;
 pub mod base64;
+pub mod cache;
 mod calc;
 pub mod crash_report;
 pub mod data;
+pub mod data_store;
 pub mod database;
 pub mod hash;
+pub mod ir_node;
+pub mod ir_read;
+pub mod ir_schema;
+pub mod ir_schema_gen;
+pub mod ir_store;
 pub mod json;
 pub mod keys;
 mod lexer;
@@ -77,6 +84,7 @@ pub mod state;
 
 pub mod compile;
 pub mod extensions;
+pub mod startup_cache;
 // @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
 // at the crate root so generated native code can write
 // `use loft::native_call;` without coupling to the extensions module.

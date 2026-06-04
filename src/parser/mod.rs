@@ -65,6 +65,17 @@ struct ResolvedPkg {
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
+    /// @PLAN54 arc E — set by the driver (`main.rs`) only when the whole-program
+    /// startup cache is enabled; gates [`Parser::parsed_sources`] tracking so a
+    /// normal (non-cache) run pays nothing.
+    pub track_sources: bool,
+    /// @PLAN54 arc E — paths of every source file parsed (stdlib + lazily-loaded
+    /// libs + user file), in load order, recorded only when `track_sources`.
+    /// Only the parser sees the dynamically-loaded lib set; the whole-program
+    /// cache hashes these files' contents to key the bundle + detect drift.
+    /// Paths only (content is re-read once at save time — no per-file memory);
+    /// may contain duplicates across the two parse passes, deduped at use.
+    pub parsed_sources: Vec<String>,
     /// All definitions
     pub data: Data,
     pub database: Stores,
@@ -368,6 +379,8 @@ impl Parser {
         }
         Parser {
             todo_files: Vec::new(),
+            track_sources: false,
+            parsed_sources: Vec::new(),
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -431,6 +444,10 @@ impl Parser {
         #[cfg(feature = "wasm")]
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
+        }
+        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        if self.track_sources {
+            self.parsed_sources.push(filename.to_string());
         }
         // @PLAN49 T1 — set the breadcrumb phase + initial file/line so
         // a watchdog-fired hard-kill localises any parse-time hang.
@@ -648,6 +665,10 @@ impl Parser {
     /// Used by the WASM virtual-FS path to bypass real filesystem access.
     #[cfg(feature = "wasm")]
     fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
+        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        if self.track_sources {
+            self.parsed_sources.push(filename.to_string());
+        }
         self.default = default;
         self.vars.logging = false;
         self.first_pass = true;

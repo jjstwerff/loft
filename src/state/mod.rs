@@ -372,9 +372,9 @@ impl State {
             // execution; same pattern as the call-stack snapshot path
             // earlier in this file (line ~375) and drop_text_locals_in_bytes.
             let data = unsafe { &*self.data_ptr };
-            let attr_count = data.def(d_nr as u32).attributes.len();
+            let attr_count = data.def(d_nr as u32).attributes().len();
             for a_idx in 0..attr_count {
-                let attr = &data.def(d_nr as u32).attributes[a_idx];
+                let attr = &data.def(d_nr as u32).attributes()[a_idx];
                 if !attr.hidden {
                     continue;
                 }
@@ -461,12 +461,12 @@ impl State {
                         && (f.d_nr as usize) < data.definitions.len()
                     {
                         let def = &data.definitions[f.d_nr as usize];
-                        let name = if def.name.starts_with("n_") {
-                            def.name[2..].to_string()
+                        let name = if def.name().starts_with("n_") {
+                            def.name()[2..].to_string()
                         } else {
-                            def.name.clone()
+                            def.name().to_owned()
                         };
-                        let file = def.position.file.clone();
+                        let file = def.position().file.clone();
                         // Fix #92: line resolution for parallel-worker frames.
                         // The CallFrame.line is only updated by `fn_call`, which
                         // never runs for the worker's entry frame.  Fall back to
@@ -677,7 +677,7 @@ impl State {
         let Some(def) = data.definitions.get(d_nr as usize) else {
             return 0;
         };
-        let vars = &def.variables;
+        let vars = &def.variables();
         // local_start = total argument bytes + return-address slot.
         // @PLAN53 cluster 2 / S4: 8-rounded stepped spans, mirroring
         // scopes.rs's local_start.
@@ -725,7 +725,7 @@ impl State {
         let Some(def) = data.definitions.get(d_nr as usize) else {
             return;
         };
-        let vars = &def.variables;
+        let vars = &def.variables();
         for v in 0..vars.count() {
             if vars.is_argument(v) {
                 continue;
@@ -818,7 +818,7 @@ impl State {
         let mut text_owned: Vec<(u32, String)> = Vec::new();
         let mut byte_offset: usize = 0;
 
-        for attr in &def.attributes {
+        for attr in def.attributes() {
             if byte_offset >= args_size as usize {
                 break; // only scan the arg region
             }
@@ -1875,7 +1875,7 @@ impl State {
                 .iter()
                 .rev() // innermost first
                 .map(|frame| {
-                    let name = data.def(frame.d_nr).name.clone();
+                    let name = data.def(frame.d_nr).name().to_owned();
                     name.strip_prefix("n_").unwrap_or(&name).to_string()
                 })
                 .collect()
@@ -2071,7 +2071,7 @@ impl State {
             line: 0,
         });
         // If fn main declares a vector<text> parameter, push argv before the return address.
-        let attrs = &data.def(d_nr).attributes;
+        let attrs = &data.def(d_nr).attributes();
         if attrs.len() == 1 && matches!(attrs[0].typedef, Type::Vector(_, _)) {
             let args_vec = self.database.text_vector(argv);
             self.put_stack(args_vec);
@@ -2149,13 +2149,13 @@ impl State {
                         ("?".to_owned(), pos)
                     } else {
                         (
-                            data.def(fn_nr).name.trim_start_matches("n_").to_owned(),
+                            data.def(fn_nr).name().trim_start_matches("n_").to_owned(),
                             pos - data.def(fn_nr).code_position,
                         )
                     };
                     let op_name = (0..data.definitions())
-                        .find(|&d| data.def(d).op_code == u16::from(trail_op[idx]))
-                        .map_or("?", |d| data.def(d).name.as_str());
+                        .find(|&d| data.def(d).op_code() == u16::from(trail_op[idx]))
+                        .map_or("?", |d| data.def(d).name());
                     let _ = writeln!(msg, "  {label}+{offset}: {op_name}");
                 }
                 panic!("{msg}");

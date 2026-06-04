@@ -2,14 +2,33 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Lazy stdlib loading — pay for what you use
+# Pay-for-what-you-use stdlib — via `use`-loaded libraries
 
-Design note: load `default/*.loft` modules and their Rust backing
-**only when the user's code references them**, instead of always.
+Goal: a CLI script (or any program) should not pay the parse + bytecode
++ symbol-table cost of stdlib it never touches.
 
-Status: **design, not implemented.**  Regex (see [REGEX.md](../01-regex/README.md))
-is the first concrete consumer that motivates the mechanism; the
-design stands on its own and generalises to many other features.
+Status: **re-premised (scripting branch, 2026-05-31).**  The original
+plan proposed a bespoke **trigger registry** that auto-loads
+`default/*.loft` modules when the parser sees a type/identifier
+trigger.  A code-path audit during the `scripting` branch found that
+**loft already has the exact mechanism this needs** — packages in
+`lib/*` load only when a program does `use <name>` — and that the
+`crypto` module has *already* used it to move its natives out of the
+always-loaded core (`src/native.rs:2056`).  The plan is therefore
+re-premised:
+
+> **Don't build deferral for the stdlib.  Ship new modules as
+> `use`-loaded `lib/*` packages (the crypto precedent), and leave the
+> existing `default/*` core where it is.**
+
+See [§ Decision — supersede the trigger registry](#decision--supersede-the-trigger-registry-with-use-loaded-libraries)
+for the full rationale, the one ergonomic tradeoff, and the two-track
+recommendation.  The trigger-registry design below
+([§ Mechanism](#mechanism) onward) is **retained as superseded
+context** — its *analysis* (three-layer model, host-bridge strategy,
+datetime/Unicode case studies) still applies to the `lib/*` approach;
+only its *loading machinery* is dropped.  The verified audit is at
+[§ Implementation notes](#implementation-notes--verified-code-path-audit-scripting-branch).
 
 ---
 
@@ -27,12 +46,105 @@ images, text) but does not scale as loft broadens (BROADENING.md):
 - Games import everything anyway; CLI scripts pay for a renderer
   they never touch.
 
-Conditional loading resolves the conflict: always-available syntax,
-zero cost when unused.
+Conditional loading resolves the conflict.  The original plan resolved
+it with a trigger registry (below); the **re-premised plan resolves it
+with `use`-loaded libraries** (next section), trading "always-available
+syntax" for one `use` line per module and gaining a mechanism that
+already ships.
+
+---
+
+## Decision — supersede the trigger registry with `use`-loaded libraries
+
+**The mechanism already exists and is proven.**  `default/*.loft`
+loads unconditionally via `Parser::parse_dir` at startup.  `lib/*`
+packages — there are ~20 today (markdown, server, web, imaging, time,
+…), each with a `loft.toml` manifest — load **only when a program does
+`use <name>`**, through the `pending_imports` / `ImportSpec` path in
+`src/parser/mod.rs`.  Moving a unit of functionality from `default/`
+to `lib/` **is** the defer: its lines stop being parsed at startup for
+every program that doesn't `use` it.  No trigger registry, no
+mid-parse re-entry, no lexer hooks, no new error-attribution surface.
+
+**The precedent is already in the tree.**  `crypto`'s native `n_*`
+implementations were moved to `lib/crypto/native/src/lib.rs` (cdylib),
+loaded at runtime via `extensions::wire_native_fns` *"when a program
+does `use crypto`"* (`src/native.rs:2056-2060`).  That is exactly this
+proposal, already shipped and tested.
+
+### The one real tradeoff (a product decision)
+
+The trigger registry's whole reason for existing was to keep modules
+**always-available without `use`** — `regex(...)` would just work, no
+import line.  The `lib/*` approach replaces that with an explicit
+`use regex;`.  This is the entire substance of the choice:
+
+| | Trigger registry (original) | `use`-loaded libs (re-premised) |
+|---|---|---|
+| Cold-start when unused | zero | zero |
+| New code to build | registry + triggers + mid-parse loader + error attribution (~4-day bootstrap) | **none** — mechanism ships today |
+| User boilerplate | none (auto-loaded) | one `use x;` per module |
+| Risk | new parser machinery, ambiguity/cycle/error-attribution edge cases | well-trodden path (~20 libs use it) |
+| Discoverability | implicit (magic) | explicit (greppable `use`) |
+
+The cost is one `use` line; the saving is an entire subsystem of
+parser machinery that no longer needs to be built or maintained.  The
+explicit `use` is also arguably *better* for the CLI/scripting
+audience this targets — it is the same import discipline as Rust,
+Python, Go, and it makes the dependency surface greppable.
+
+### Two-track recommendation
+
+1. **New modules (regex, datetime, http, crypto, csv, …): ship as
+   `lib/*`, loaded via `use`.**  Captures all the *forward-looking*
+   cold-start value — which the audit established is the actual point
+   (the present-day stdlib saving is small; the win is keeping
+   cold-start flat as breadth grows).  Zero new machinery.  This is
+   what makes the trigger registry unnecessary.
+
+2. **Existing `default/*` core: leave it.**  The present-day deferral
+   win is ~9 % (json alone; see the audit), and json is the *hardest*
+   piece to extract — its types and methods are wired into the
+   compiler across 13 source files (`src/parser/fields.rs` lowers
+   `.to_json()`; `src/state/codegen.rs` + `src/codegen_runtime.rs`
+   carry `--native` JsonValue codegen; `stores.name("JsonValue")`
+   lookups assume it is loaded).  `coroutine` *cannot* move (its
+   opcodes live in core `default/02_files.loft` and feed the iterator
+   path); `stacktrace` has byte-offset native coupling
+   (`src/native.rs:1812`).  Migrating any of these costs more than the
+   cold-start it buys.  Revisit only if a concrete need appears.
+
+### What this means for the rest of this document
+
+- **Superseded:** [§ Mechanism](#mechanism), [§ Triggers](#triggers),
+  [§ Load sequence](#load-sequence),
+  [§ Sub-modules and multi-tier loading](#sub-modules-and-multi-tier-loading),
+  [§ Implementation scope](#implementation-scope), and
+  [§ Recommended adoption order](#recommended-adoption-order) describe
+  the trigger-registry machinery that is **not being built**.  Kept for
+  context and in case the "no-`use` ergonomic" is ever judged worth the
+  cost.
+- **Still valid, retargeted to `lib/*`:**
+  [§ The three-layer model](#the-three-layer-model--what-lazy-loading-saves-and-what-it-doesnt)
+  (loft-level / Rust-level / host-bridge cost separation applies
+  identically to a `use`-loaded lib),
+  [§ Broader principle — "use the host" on WASM](#broader-principle--use-the-host-on-wasm),
+  and both case studies
+  ([datetime](#case-study--datetime-as-a-two-tier-lazy-module),
+  [Unicode](#case-study--unicode-and-the-rust-registry-problem)) — a
+  `lib/datetime` still wants core vs `tzdata` vs `locale` split, still
+  bridges tzdata to `Intl.DateTimeFormat` on WASM, etc.  Read
+  "sub-module trigger" there as "a finer-grained `use` or a
+  feature-gated reader."
 
 ---
 
 ## Mechanism
+
+> **Superseded** (see [§ Decision](#decision--supersede-the-trigger-registry-with-use-loaded-libraries)).
+> This and the next three sub-sections describe the trigger-registry
+> machinery that the re-premised plan does **not** build; the `use`
+> mechanism in `lib/*` replaces it.
 
 The compiler already has the pieces:
 
@@ -618,6 +730,15 @@ principle on existing code before extending it to new modules.
 
 ## Implementation scope
 
+> **Superseded** (see [§ Decision](#decision--supersede-the-trigger-registry-with-use-loaded-libraries)).
+> The ~4-day bootstrap below is the trigger-registry build that the
+> re-premised plan does **not** do.  The `use`-loaded-lib path needs
+> **zero** of this — the registry, trigger hooks, mid-parse insertion,
+> error attribution, and module-set cache key are all already provided
+> by the existing `lib/*` + `use` machinery.  The only remaining work
+> is per-module: author the `lib/<name>/` package and its `loft.toml`
+> (the markdown/crypto packages are the template).
+
 Independent of any consumer:
 
 - **Lazy module registry** — refactor `default/*.loft` loading into
@@ -640,7 +761,36 @@ datetime, http, ...) reuses the mechanism.
 
 ---
 
-## Recommended adoption order
+## Recommended adoption order (re-premised — `use`-loaded libs)
+
+This replaces the trigger-registry adoption order (kept below as
+superseded context).  The forward-looking value — keeping cold-start
+flat as breadth grows — is captured entirely by shipping new modules
+as `lib/*`:
+
+1. **No mechanism step.**  There is nothing to "land" — `use`-loading
+   ships today.  Skip straight to consumers.
+2. **Ship `regex` as `lib/regex`** (see [REGEX.md](../01-regex/README.md)),
+   loaded via `use regex;`.  Code-only payload; the cleanest first
+   case.  Confirms the pattern for a brand-new module with native
+   backing (crypto is the precedent for the native-cdylib half).
+3. **Ship `datetime` as `lib/datetime`** with the core / `tzdata` /
+   `locale` split from the case study below — expressed as finer
+   `use` granularity and/or feature-gated readers rather than
+   sub-module triggers.  Bridge `tzdata` to `Intl.DateTimeFormat` on
+   WASM (zero bytes).  See [`lib_plans/21-datetime`](../../21-datetime/README.md).
+4. **Apply the Rust-level / host-bridge levers independently** (still
+   valid): feature-gate the `char::is_*` predicates, add WASM bridge
+   branches, ship `loft --html --minimal`.  These are orthogonal to
+   how loft *code* is loaded — see the three-layer model.
+5. **New modules (http, crypto, csv, parquet) ship as `use`-loaded
+   libs from day one.**  `http` bridges to `fetch`; `crypto` to
+   `crypto.subtle` (already done).
+6. **Leave existing `default/*` core in place** (json/stacktrace/
+   coroutine) — see the Decision section for why migrating them costs
+   more than it saves.
+
+### Superseded adoption order (trigger registry — not being built)
 
 1. **Land lazy-stdlib mechanism** with `json` as the validation
    consumer.  Ship the refactor; measure cold-start delta on a
@@ -683,6 +833,183 @@ datetime, http, ...) reuses the mechanism.
    `http` bridges to `fetch` on WASM; `crypto` bridges to
    `crypto.subtle`; `server` and `csv` / `parquet` are native-only
    in practice but still lazy.
+
+---
+
+## Implementation notes — verified code-path audit (scripting branch)
+
+Recorded from a read of the actual loading path before any code
+changes.  Line numbers are as-of the `scripting` branch tip and will
+drift; the function names are the stable anchors.  Where a location
+could not be re-confirmed cleanly, the function is named without a
+line number.
+
+### The actual default set is six files, not the design's "code / images / text"
+
+```
+default/01_code.loft        1408 lines   core
+default/02_files.loft        592 lines   core (this is "files", NOT "images")
+default/03_text.loft         203 lines   core
+default/04_stacktrace.loft    70 lines   deferrable but marginal
+default/05_coroutine.loft     24 lines   NOT cleanly deferrable (see below)
+default/06_json.loft         233 lines   real candidate (the doc's validation consumer)
+                            ─────
+                            2530 lines
+```
+
+**Doc correction:** the candidate-modules table above lists the
+always-load core as `code (01) / images (02) / text (03)`.  The real
+`default/02` is **`files`**, and there is no standalone `images`
+default file.  The true always-loaded core is **code / files /
+text**.
+
+**Per-file deferral verdict (verified against the code, not just
+file numbering):**
+
+- **`06_json` — genuinely deferrable.**  Core (01/02/03) contains no
+  reference to `JsonValue` / `json_parse` / `json_stringify`; the only
+  Rust coupling (`src/native.rs:2068`) lives in the json native, which
+  only runs when json is used.  Clean type-reference +
+  function-call triggers.  This is the one real win and the design's
+  named validation consumer.
+- **`04_stacktrace` — deferrable but marginal.**  No core references,
+  so it *can* defer (trigger: a `stack_trace()` call or
+  `StackFrame` / `ArgValue` type reference).  But it is only 70 lines
+  and `n_stack_trace` (`src/native.rs:1804`) reads the `StackFrame`
+  schema by name with **hardcoded byte-offset coupling** to the file's
+  field order (`src/native.rs:1812` warns about drift).  Deferring
+  trades a load-ordering constraint for a ~3 % parse saving.
+- **`05_coroutine` — NOT cleanly deferrable.**  The coroutine
+  *opcodes* (`OpCoroutineCreate/Next/Yield/Return/Exhausted`) are
+  declared in **`default/02_files.loft` — core, always-loaded**
+  (lines 451–467), and are woven into always-on machinery:
+  `src/state/codegen.rs` emits `OpCoroutineYield` / `OpCoroutineReturn`
+  for any generator function, and `src/parser/collections.rs:186`
+  resolves `def_nr("OpCoroutineNext")` in the **for-loop / iterator
+  materialisation path**.  The standalone `05_coroutine.loft` is only
+  24 lines (a `CoroutineStatus` enum + a one-line `exhausted()`
+  wrapper); deferring it saves nothing and its surface is entangled
+  with the core iterator path.
+
+### Loading path — two ingestion routes that both need the lazy hook
+
+| Target | Entry | Mechanism |
+|---|---|---|
+| **Native / interpreter** | `src/main.rs` calls `Parser::parse_dir(default/, default=true, debug=false)` | `parse_dir` (`src/parser/mod.rs:652`) collects `.loft` files into a `BTreeSet` (so load order is lexical 01→06), then calls `Parser::parse(file, default)` (`src/parser/mod.rs:401`) once per file. |
+| **WASM** | embedded, not disk | The same six files are `include_str!`-baked in `src/wasm.rs:629–650` and fed through `parse_virtual` (`src/parser/mod.rs:622`). |
+
+**Consequence for implementation:** the lazy-module registry must be
+populated from *both* sources — the disk walk (`parse_dir`) and the
+static embedded list (`wasm.rs`).  A single registry keyed by module
+name with a `loaded: bool` flag (per the design's Implementation
+scope) can back both, but the embedded list in `wasm.rs` must be
+restructured from "parse all six now" into "register all six,
+parse on trigger".
+
+### `Parser::parse` runs both passes per file
+
+Each `parse(file, default)` call internally runs pass 1 (with
+`resolve_deferred_unknowns`) then pass 2 on the same file.  Lazy
+loading a module mid-parse therefore means re-entering this two-pass
+machinery for the triggered module while the user file's parse is
+suspended — the design's "parser pauses at the trigger site" step.
+The existing `deferred_unknown` stub mechanism (`src/parser/mod.rs`
+~530–589) already defers *unresolved type references to the end of a
+pass*; the trigger hook is a narrower, eager variant of the same idea
+(resolve by loading the owning module rather than by waiting).
+
+### Native registry is wired at compile time, unconditionally — confirms the three-layer model
+
+`FUNCTIONS` (`src/native.rs`) is installed into the runtime by
+`native::init`, invoked from `compile.rs::byte_code_from` at first
+compile — i.e. at **compile time, not parse time**, and over the
+whole table at once.  So deferring a loft module's *parse* does **not**
+by itself defer its native registration.  This is exactly what the
+"three-layer model" section already predicts: loft-level lazy loading
+saves parse + bytecode + symbol-table cost; the Rust-level
+function-pointer table and its linked data are a separate lever
+(feature-gating).  No surprise, but it confirms the audit task in the
+adoption order: the loft-side and Rust-side savings are independent.
+
+The only existing conditional-registry precedent is
+`#[cfg(feature = "threading")]` on the `FUNCTIONS` entries — there is
+**no existing on-demand / lazy loading of any default file** today.
+
+### `default/`-origin is detected by path prefix in several places
+
+`position.file.starts_with("default/")` (and `/default/` for absolute
+paths) gates behaviour in `src/compile.rs:263` and `:399`,
+`src/introspect.rs:441`, and `src/main.rs` (two sites).  **Lazy
+modules must keep their `default/<NN>_<name>.loft` path** so these
+checks continue to classify them as stdlib.  No change needed there —
+just a constraint on the registry: load by path, not by stripping the
+prefix.
+
+### Revised win estimate — quantifying the design's claim
+
+The design motivates lazy loading as "cold-start stays fast as loft
+broadens."  The audit lets us put numbers on *today's* stdlib — and
+the per-file verdict above corrects an earlier, looser estimate that
+lumped all three non-core files together:
+
+- **Genuinely deferrable today: `json` alone — 233 lines (~9 %)** of
+  the 2530-line stdlib.  `stacktrace` (70 lines, ~3 %) is a marginal
+  add-on with a schema-coupling caveat; `coroutine` (24 lines) is not
+  deferrable because its opcodes are core.
+- Effectively always-loaded (core + entangled): **~2297 lines
+  (~91 %)**, dominated by `01_code` at 1408 lines alone (~56 %).
+
+So loft-level lazy loading of the *current* stdlib is at best a ~9 %
+parse-cost reduction — smaller than a first pass suggested, and that
+*strengthens* the framing below.  **The mechanism's real payoff is
+forward-looking:** it keeps cold-start flat as regex, datetime, http,
+crypto, csv/parquet join the always-available surface.  Without it,
+each new always-loaded module taxes every CLI invocation (the
+BROADENING.md Tier 2 concern); with it, a script that touches none of
+them pays nothing.  This sharpens — rather than contradicts — the
+Motivation section: the win is not in shrinking what exists, it is in
+making future breadth free for non-users.
+
+### Baseline measurement (scripting branch, native `--release`)
+
+Trivial script (`fn main() { print("hi"); }`) — full stdlib parse
+(all 6 default files) + compile + run, 5 warm runs:
+
+```
+0.18s  0.17s  0.19s  0.20s  0.19s   wall   (~0.18s median)
+~30 MB RSS
+```
+
+So native cold-start is already **~180 ms**, with the full 2530-line
+stdlib parsed on every invocation.  The only cleanly deferrable file
+today is `json` (~233 lines, ~9 %; see the per-file verdict above);
+at a roughly proportional parse share that is a single-digit-
+millisecond saving on *today's* stdlib — confirming the win is
+forward-looking (keeping this ~180 ms flat as regex/datetime/http/
+crypto join), not a large reduction now.  The interpreter `--release`
+parse path is also far faster than the WASM ~90–180 ms re-parse the
+const-store doc measures, so the *browser* target stands to gain more
+per deferred line than native does.
+
+### Open items for this branch
+
+- **Per-file parse attribution** (pending): instrument `parse_dir` to
+  print per-file parse time so the ~9 % line-count proxy can be
+  replaced with a real per-module cost split (01_code likely dominates
+  disproportionately given its 1408 lines).  (Informational only — the
+  re-premise means we are not deferring `default/*`, so this just
+  confirms there is no large win being left on the table.)
+- **Verify the `use`-load cold-start delta**: measure a
+  `use markdown;` program vs a no-`use` program to confirm `lib/*`
+  loading really does skip the package parse at startup (expected from
+  the `pending_imports` path, but measure it).  This is the empirical
+  proof that the re-premised approach delivers the cold-start win
+  without new machinery.
+
+The trigger-registry build items (registry shape, mid-parse loader,
+error attribution, `json` extraction) are **dropped** per the Decision
+section — `use`-loading already provides them, and existing
+`default/*` stays put.
 
 ---
 

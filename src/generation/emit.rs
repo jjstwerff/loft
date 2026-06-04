@@ -4,110 +4,278 @@
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
 use crate::data::{Block, Context, IntegerSpec, Type, Value};
+use crate::data_store::ValueType;
+use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
 
 use super::text::count_format_ops;
 use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
-    /// Central recursive dispatch from a `Value` node to its Rust representation.
-    /// All emit functions ultimately call this; complex variants are delegated to
-    /// dedicated helpers to keep each match arm concise.
-    #[allow(clippy::too_many_lines)]
+    /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
+    /// [`Self::output_code_node`].  @PLAN54 G2/M4 (cf. interpreter `generate`):
+    /// every existing caller keeps this signature; M5's store-backed entry calls
+    /// `output_code_node(IrNode::Store(…))`.
     pub(super) fn output_code_inner(
         &mut self,
         w: &mut dyn Write,
         code: &Value,
     ) -> std::io::Result<()> {
-        match code {
-            // Phase 09 phase 00 step 0.7 — synthetic raw-expression
-            // passthrough used by fn-ref dispatch to thread pre-evaluated
-            // `let _farg_N` bindings through `output_call_user_fn`.  Emit
-            // the string verbatim with no transformation.
-            Value::RawExpr(s) => write!(w, "{s}")?,
-            Value::Text(txt) => {
-                // Use debug format to produce a properly escaped Rust string literal.
-                write!(w, "{txt:?}")?;
+        self.output_code_node(w, IrNode::Native(code))
+    }
+
+    /// Central recursive dispatch from an IR node to its Rust representation
+    /// (@PLAN54 G2/M4).  Dispatches on `node.kind()` and reads payloads through
+    /// the `IrNode` handle; arms not yet converted fall to the `match
+    /// node.as_native()` below (native-backed bridge, lifted as they convert).
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn output_code_node(
+        &mut self,
+        w: &mut dyn Write,
+        node: IrNode,
+    ) -> std::io::Result<()> {
+        match node.kind() {
+            // Phase 09 step 0.7 — synthetic raw-expression passthrough (fn-ref
+            // dispatch); emit the string verbatim.
+            ValueType::RawExpr => return write!(w, "{}", node.text()),
+            ValueType::Text => {
+                // Debug format → a properly escaped Rust string literal.
+                write!(w, "{:?}", node.text())?;
                 if self.tuple_text_to_string {
-                    // Inside a `(String, String, …)` variable assignment:
-                    // wrap the `&str` literal so it fits a `String`-typed
-                    // tuple slot.  Argument-context tuples (function calls
-                    // taking `(&str, &str)`) clear this flag, so they keep
-                    // the borrowed-string form.
+                    // Inside a `(String, String, …)` slot: wrap the `&str`
+                    // literal so it fits a `String`-typed tuple element.
                     write!(w, ".to_string()")?;
                 }
+                return Ok(());
             }
-            Value::Long(v) => write!(w, "{v}_i64")?,
-            Value::Int(v) => {
+            ValueType::Long => return write!(w, "{}_i64", node.int_value()),
+            ValueType::Int => {
                 if self.fn_ref_context {
                     // in fn-ref context (if-else branch), emit tuple.
-                    write!(
+                    return write!(
                         w,
-                        "({v}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
+                        "({}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})",
+                        node.int_value()
+                    );
                 } else if self.i32_literal_context {
-                    // tp-number / field-index / flag-enum slot: runtime
-                    // still expects i32.
-                    write!(w, "{v}_i32")?;
-                } else {
-                    write!(w, "{v}_i64")?;
+                    // tp-number / field-index / flag-enum slot: runtime wants i32.
+                    return write!(w, "{}_i32", node.int_value());
                 }
+                return write!(w, "{}_i64", node.int_value());
             }
-            Value::Enum(v, _) => write!(w, "{v}_u8")?,
-            Value::Boolean(v) => write!(w, "{v}")?,
-            Value::Float(v) => write!(w, "{v}_f64")?,
-            Value::Single(v) => write!(w, "{v}_f32")?,
-            Value::Null => write!(w, "()")?,
-            // P198 / DX-source-map: emit a `// loft:<file>:<line>`
-            // comment so rustc errors on generated Rust code can be
-            // traced back to the originating loft source line.  The
-            // comment is on its own line, ahead of the next emitted
-            // statement.  File is implicit (per-function) so the
-            // comment uses the current def's source path.
-            Value::Line(line) => {
+            ValueType::Enum => return write!(w, "{}_u8", node.enum_pair().0),
+            ValueType::Boolean => return write!(w, "{}", node.bool_value()),
+            ValueType::Float => return write!(w, "{}_f64", node.float_value()),
+            ValueType::Single => return write!(w, "{}_f32", node.single_value()),
+            ValueType::Null => return write!(w, "()"),
+            // @PLAN54 G2/M4.2 — scalar arms (no Value child).
+            ValueType::Line => {
+                // P198 / DX-source-map: a `// loft:<file>:<line>` comment so
+                // rustc errors trace back to the loft source line.
                 let file = self.data.def(self.def_nr).position.file.replace('\n', "");
-                writeln!(w, "// loft:{file}:{line}")?;
+                return writeln!(w, "// loft:{file}:{}", node.line_nr());
             }
-            Value::Break(n) => {
-                if *n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "break")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
-                    write!(w, "break 'l{}", self.loop_stack[idx])?;
+            ValueType::Break => {
+                let n = node.break_nr();
+                if n == 0 || self.loop_stack.is_empty() {
+                    return write!(w, "break");
                 }
+                let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
+                return write!(w, "break 'l{}", self.loop_stack[idx]);
             }
-            Value::BreakWith(n, val) => {
-                if *n == 0 || self.loop_stack.is_empty() {
+            ValueType::Continue => {
+                let n = node.continue_nr();
+                if n == 0 || self.loop_stack.is_empty() {
+                    return write!(w, "continue");
+                }
+                let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
+                return write!(w, "continue 'l{}", self.loop_stack[idx]);
+            }
+            // @PLAN54 G2/M4.4 — single/list-child arms recurse via output_code_node.
+            ValueType::Drop => return self.output_code_node(w, node.drop_inner()),
+            ValueType::BreakWith => {
+                let n = node.breakwith_nr();
+                if n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break ")?;
                 } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
+                    let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
                     write!(w, "break 'l{} ", self.loop_stack[idx])?;
                 }
-                self.output_code_inner(w, val)?;
+                return self.output_code_node(w, node.breakwith_inner());
             }
-            Value::Continue(n) => {
-                if *n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "continue")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
-                    write!(w, "continue 'l{}", self.loop_stack[idx])?;
-                }
-            }
-            Value::Drop(v) => self.output_code_inner(w, v)?,
-            Value::Insert(ops) => {
+            ValueType::Insert => {
+                let ops = node.insert_items();
+                let n = ops.len();
                 for (vnr, v) in ops.iter().enumerate() {
                     self.indent(w)?;
                     self.indent += 1;
-                    self.output_code_inner(w, v)?;
+                    self.output_code_node(w, v)?;
                     self.indent -= 1;
-                    if vnr < ops.len() - 1 {
+                    if vnr < n - 1 {
                         writeln!(w, ";")?;
                     } else {
                         writeln!(w)?;
                     }
                 }
+                return Ok(());
             }
-            Value::Block(bl) => self.output_block(w, bl, false)?,
+            // @PLAN54 G2/M4.5 — self-contained arms (no &Value-helper delegation).
+            ValueType::Yield => {
+                if self.yield_collect {
+                    // Inside a ForLoopBody factory: push to the collector.
+                    write!(w, "__values.push((")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                    if self.yield_collect_text {
+                        write!(w, ").to_string())")?;
+                    } else {
+                        write!(w, ") as i64)")?;
+                    }
+                } else {
+                    write!(w, "yield ")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                }
+                return Ok(());
+            }
+            // C39/C47: FnRef emits a (u32, DbRef) tuple — closure var's DbRef, or
+            // a null sentinel when non-capturing.
+            ValueType::FnRef => {
+                let clos_var = node.fnref_clos_var();
+                let clos_name = if clos_var == u16::MAX {
+                    None
+                } else {
+                    let variables = &self.data.def(self.def_nr).variables;
+                    Some(sanitize(variables.name(clos_var)))
+                };
+                let d_nr = node.fnref_dnr();
+                if let Some(name) = clos_name {
+                    return write!(w, "({d_nr}_u32, var_{name})");
+                }
+                return write!(
+                    w,
+                    "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                );
+            }
+            ValueType::Parallel => {
+                return write!(w, "/* parallel {{}} — not supported in native codegen */");
+            }
+            ValueType::FnRefDnr => {
+                // P215: project the d_nr from a fn-ref var's (u32, DbRef) tuple.
+                let var_name = sanitize(
+                    self.data
+                        .def(self.def_nr)
+                        .variables
+                        .name(node.fnref_dnr_var()),
+                );
+                return write!(w, "(var_{var_name}.0 as i64)");
+            }
+            // Plan-07 — Span is transparent in native emit.
+            ValueType::Span => return self.output_code_node(w, node.span_inner()),
+            ValueType::Iter => return write!(w, "{:?}", node.as_native()),
+            // Plan-06 spine step 3 — ParFor native codegen lands in step 3b.
+            ValueType::ParFor => {
+                return write!(
+                    w,
+                    "/* par_for(...) — native codegen lands in spine step 3b */"
+                );
+            }
+            // @PLAN54 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
+            // keeps a native bridge as it is a &Value-only predicate).
+            ValueType::Var => {
+                let var = node.var_nr();
+                let variables = &self.data.def(self.def_nr).variables;
+                let var_name = sanitize(variables.name(var));
+                if self.coroutine_persistent_vars.contains(&var) {
+                    // P224: read from the coroutine struct field.
+                    if matches!(variables.tp(var), Type::Text(_)) {
+                        return write!(w, "&self.var_{var_name}");
+                    }
+                    return write!(w, "self.var_{var_name}");
+                } else if variables.is_argument(var) {
+                    if let Type::RefVar(inner) = variables.tp(var) {
+                        // By-ref argument: holds &mut T — dereference to read.
+                        if matches!(**inner, Type::Text(_)) {
+                            return write!(w, "&*var_{var_name}");
+                        }
+                        return write!(w, "*var_{var_name}");
+                    }
+                    return write!(w, "var_{var_name}");
+                } else if matches!(variables.tp(var), Type::Text(_)) && !self.tuple_text_to_string {
+                    // Text locals are `String` — `&` coerces to `&str`.  Inside a
+                    // (String, …) tuple-return literal (@P330) emit the bare name.
+                    return write!(w, "&var_{var_name}");
+                }
+                return write!(w, "var_{var_name}");
+            }
+            ValueType::Tuple => {
+                write!(w, "(")?;
+                let elems = node.tuple_items();
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
+                    self.output_code_node(w, e)?;
+                    // Wrap a text-returning element with `.to_string()` so it
+                    // fits a `String`-typed tuple slot (skip a Text literal — its
+                    // own arm appends `.to_string()` via the same flag).
+                    if elem_is_text && self.tuple_text_to_string && e.kind() != ValueType::Text {
+                        write!(w, ".to_string()")?;
+                    }
+                }
+                write!(w, ")")?;
+                return Ok(());
+            }
+            ValueType::TupleGet => {
+                // N8a.2: use the variable's declared name (not its number).
+                let var = node.tupleget_var();
+                let idx = node.tupleget_idx();
+                let variables = &self.data.def(self.def_nr).variables;
+                let name = sanitize(variables.name(var));
+                let elem_is_text = match variables.tp(var) {
+                    Type::Tuple(elems) => elems
+                        .get(idx as usize)
+                        .is_some_and(|e| matches!(e, Type::Text(_))),
+                    _ => false,
+                };
+                let is_arg = variables.is_argument(var);
+                // P247 — a work-ref (`__ref_…`) tuple-text read must `.clone()`
+                // (returns owned String) instead of borrowing, else the borrow
+                // escapes the enclosing block (E0597).
+                let is_work_ref = variables.name(var).starts_with("__ref_");
+                if elem_is_text && !is_arg {
+                    if is_work_ref {
+                        return write!(w, "var_{name}.{idx}.clone()");
+                    }
+                    return write!(w, "&var_{name}.{idx}");
+                }
+                return write!(w, "var_{name}.{idx}");
+            }
+            ValueType::TuplePut => {
+                // N8a.2: emit the element assignment (TuplePut is a void stmt).
+                let var = node.tupleput_var();
+                let idx = node.tupleput_idx();
+                let name = sanitize(self.data.def(self.def_nr).variables.name(var));
+                write!(w, "var_{name}.{idx} = ")?;
+                return self.output_code_node(w, node.tupleput_inner());
+            }
+            _ => {}
+        }
+        // @PLAN54 G2/M4 — materialise-at-boundary for the residual arms
+        // (Block/Loop/Set/If/Call/Return/Keys/CallRef), which delegate to large
+        // `&Value`/`&Block` helpers (output_block/output_if/output_set/…).
+        // Native backing is zero-cost (`code = v`); a store-backed node
+        // materialises once here so output_code_node is fully store-capable
+        // without threading the handle through that whole helper cluster.
+        let owned_code;
+        let code = match node {
+            IrNode::Native(v) => v,
+            IrNode::Store(..) => {
+                owned_code = node.to_owned_value();
+                &owned_code
+            }
+        };
+        match code {
+            Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false)?,
             Value::Loop(lp) => {
                 self.loop_stack.push(lp.scope);
                 writeln!(w, "'l{}: loop {{ //{}_{}", lp.scope, lp.name, lp.scope)?;
@@ -123,52 +291,6 @@ impl Output<'_> {
                 self.loop_stack.pop();
             }
             Value::Set(var, to) => self.output_set(w, *var, to)?,
-            Value::Var(var) => {
-                let variables = &self.data.def(self.def_nr).variables;
-                let var_name = sanitize(variables.name(*var));
-                if self.coroutine_persistent_vars.contains(var) {
-                    // P224: read from the coroutine struct field.
-                    if matches!(variables.tp(*var), Type::Text(_)) {
-                        write!(w, "&self.var_{var_name}")?;
-                    } else {
-                        write!(w, "self.var_{var_name}")?;
-                    }
-                } else if variables.is_argument(*var) {
-                    if let Type::RefVar(inner) = variables.tp(*var) {
-                        // By-ref argument: variable holds &mut T — dereference to read value.
-                        if matches!(**inner, Type::Text(_)) {
-                            // Text RefVar: deref &mut String to &str via &*
-                            write!(w, "&*var_{var_name}")?;
-                        } else {
-                            write!(w, "*var_{var_name}")?;
-                        }
-                    } else if matches!(variables.tp(*var), Type::Text(_)) {
-                        // Text params are `&str` — already a reference, no prefix needed.
-                        write!(w, "var_{var_name}")?;
-                    } else {
-                        write!(w, "var_{var_name}")?;
-                    }
-                } else if matches!(variables.tp(*var), Type::Text(_)) {
-                    if self.tuple_text_to_string {
-                        // @P330 — inside a `(String, …)` tuple-return literal,
-                        // emitting `&var_x` followed by the surrounding tuple
-                        // wrap's `.to_string()` yields `&var_x.to_string()`
-                        // which Rust parses as `&(var_x.to_string())` =
-                        // `&String`, breaking the declared `String` slot
-                        // (E0308).  Emit the bare local name and let the
-                        // wrap turn into `var_x.to_string()` — `String`'s
-                        // `to_string()` clones, producing the owned `String`
-                        // the tuple slot expects.  Same family as the
-                        // `text_local_clone` shape in dispatch.rs:412.
-                        write!(w, "var_{var_name}")?;
-                    } else {
-                        // Text locals are `String` — add `&` to coerce to `&str`.
-                        write!(w, "&var_{var_name}")?;
-                    }
-                } else {
-                    write!(w, "var_{var_name}")?;
-                }
-            }
             Value::If(test, true_v, false_v) => self.output_if(w, test, true_v, false_v)?,
             Value::Call(def_nr, vals) => {
                 self.output_call(w, *def_nr, vals)?;
@@ -357,136 +479,35 @@ impl Output<'_> {
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            Value::Iter(..) => write!(w, "{code:?}")?,
-            Value::Tuple(elems) => {
-                write!(w, "(")?;
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        write!(w, ", ")?;
-                    }
-                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
-                    self.output_code_inner(w, e)?;
-                    // Wrap text-returning element with `.to_string()` so it
-                    // fits a `String`-typed tuple slot.  The outer
-                    // `tuple_text_to_string` flag is set by `set_var` when
-                    // the destination tuple has at least one Text element.
-                    // Argument-context tuples (function calls taking
-                    // `(&str, …)`) clear this flag, so they keep the
-                    // borrowed-string form.  Skip when the value is
-                    // already a `Value::Text` literal — its own emit
-                    // arm appends `.to_string()` directly via the same
-                    // flag, and we'd otherwise double-wrap.
-                    if elem_is_text && self.tuple_text_to_string && !matches!(e, Value::Text(_)) {
-                        write!(w, ".to_string()")?;
-                    }
-                }
-                write!(w, ")")?;
-            }
-            Value::TupleGet(var, idx) => {
-                // N8a.2: use the variable's declared name (like all other emitters),
-                // not its internal number.  Before this fix `var_0.0` was emitted even
-                // when the parameter was declared as `var_pair`.
-                let variables = &self.data.def(self.def_nr).variables;
-                let name = sanitize(variables.name(*var));
-                // For text-typed tuple elements of a Variable-context
-                // tuple, the field is `String`; consumers expecting
-                // `&str` need a borrow prefix.  Mirrors the plain text
-                // local case at line ~132 (`&var_name`).  Skip for
-                // arguments — the variable's tuple element types in
-                // Argument context emit as `&str` already.
-                let elem_is_text = match variables.tp(*var) {
-                    Type::Tuple(elems) => elems
-                        .get(*idx as usize)
-                        .is_some_and(|e| matches!(e, Type::Text(_))),
-                    _ => false,
-                };
-                let is_arg = variables.is_argument(*var);
-                // P247 — when `var` is a work-ref (`__ref_…`) declared
-                // inside a Block expression, a borrow `&var___ref_N.idx`
-                // escapes the block via the Block's tail expression
-                // and rustc rejects with E0597 (`var___ref_N.idx does
-                // not live long enough`).  For work-refs specifically
-                // emit `var___ref_N.idx.clone()` (returns an owned
-                // String — temporary lifetime extension keeps it
-                // alive across the enclosing statement) instead of the
-                // borrow.  Non-work-ref locals keep the borrow form
-                // since their declaration outlives the read.
-                let is_work_ref = variables.name(*var).starts_with("__ref_");
-                if elem_is_text && !is_arg {
-                    if is_work_ref {
-                        write!(w, "var_{name}.{idx}.clone()")?;
-                    } else {
-                        write!(w, "&var_{name}.{idx}")?;
-                    }
-                } else {
-                    write!(w, "var_{name}.{idx}")?;
-                }
-            }
-            Value::TuplePut(var, idx, val) => {
-                // N8a.2: emit the actual element assignment instead of the `= ...` stub.
-                // TuplePut is a void statement (assignment); is_void_value returns true for it
-                // so the block emitter adds `;` and does not treat it as the return value.
-                let variables = &self.data.def(self.def_nr).variables;
-                let name = sanitize(variables.name(*var));
-                write!(w, "var_{name}.{idx} = ")?;
-                self.output_code_inner(w, val)?;
-            }
-            Value::Yield(inner) => {
-                if self.yield_collect {
-                    // Inside a ForLoopBody factory: push to the collector instead.
-                    write!(w, "__values.push((")?;
-                    self.output_code_inner(w, inner)?;
-                    if self.yield_collect_text {
-                        write!(w, ").to_string())")?;
-                    } else {
-                        write!(w, ") as i64)")?;
-                    }
-                } else {
-                    write!(w, "yield ")?;
-                    self.output_code_inner(w, inner)?;
-                }
-            }
-            // C39/C47: FnRef emits a (u32, DbRef) tuple.
-            // If closure_var (w) is a real variable, pass its DbRef; otherwise null sentinel.
-            Value::FnRef(d_nr, closure_var, _) => {
-                let clos_name = if *closure_var == u16::MAX {
-                    None
-                } else {
-                    let variables = &self.data.def(self.def_nr).variables;
-                    Some(sanitize(variables.name(*closure_var)))
-                };
-                if let Some(name) = clos_name {
-                    write!(w, "({d_nr}_u32, var_{name})")?;
-                } else {
-                    write!(
-                        w,
-                        "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
-                }
-            }
-            Value::Parallel(_) => {
-                // Native codegen for parallel {} is not yet supported.
-                write!(w, "/* parallel {{}} — not supported in native codegen */")?;
-            }
-            Value::FnRefDnr(v_nr) => {
-                // P215: project the d_nr from a fn-ref var.  `var_<name>`
-                // is the (u32, DbRef) tuple in native rust_type;
-                // `.0 as i64` widens to match the integer ABI expected
-                // by `OpSetInt4`'s template.
-                let var_name = sanitize(self.data.def(self.def_nr).variables.name(*v_nr));
-                write!(w, "(var_{var_name}.0 as i64)")?;
-            }
-            // Plan-07 phase 1 — Span is transparent in native emit.
-            Value::Span(b) => self.output_code_inner(w, &b.1)?,
-            // Plan-06 spine step 3 — ParFor native codegen lands in
-            // step 3b.  Until then, emit a placeholder comment so the
-            // file at least compiles when it accidentally appears in
-            // a reachable definition.
-            Value::ParFor(_) => {
-                write!(
-                    w,
-                    "/* par_for(...) — native codegen lands in spine step 3b */"
-                )?;
+            // @PLAN54 G2/M4.1–M4.6 — these kinds are handled by the
+            // `match node.kind()` above, which `return`s before reaching here.
+            Value::Var(_)
+            | Value::Tuple(_)
+            | Value::TupleGet(_, _)
+            | Value::TuplePut(_, _, _)
+            | Value::RawExpr(_)
+            | Value::Text(_)
+            | Value::Long(_)
+            | Value::Int(_)
+            | Value::Enum(_, _)
+            | Value::Boolean(_)
+            | Value::Float(_)
+            | Value::Single(_)
+            | Value::Null
+            | Value::Line(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Drop(_)
+            | Value::BreakWith(_, _)
+            | Value::Insert(_)
+            | Value::Yield(_)
+            | Value::FnRef(_, _, _)
+            | Value::Parallel(_)
+            | Value::FnRefDnr(_)
+            | Value::Span(_)
+            | Value::Iter(_, _, _, _)
+            | Value::ParFor(_) => {
+                unreachable!("M4.1–M4.5-converted kind reached legacy match: {code:?}")
             }
         }
         Ok(())
@@ -782,33 +803,34 @@ impl Output<'_> {
     /// Use this to emit an `if/else` expression. Handles whether branches are bare
     /// blocks (no extra braces needed) or single expressions (braces required).
     /// Infer the result type of an expression for generating typed null defaults.
-    pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
-        match v {
-            // P243 fix (2026-05-11): unwrap `Value::Span` so callers
-            // querying the wrapped expression's type get the inner
-            // value's type instead of `None`.  Without this, a
-            // bound-method call wrapped in `Span(Call(...))` (e.g.
-            // the bound-generic `x.to_text()` site that
-            // `parser/operators.rs` Span-wraps for source-position
-            // tracking) returned `None` from infer_type — and the
-            // tuple-emit arm's `.to_string()` wrap (which keys off
-            // `Some(Type::Text(_))`) silently skipped, producing a
-            // `(Str, String)` tuple that rustc rejected with E0308.
-            Value::Span(b) => self.infer_type(&b.1),
-            Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
-            Value::Long(_) => Some(crate::data::I64.clone()),
-            Value::Float(_) => Some(Type::Float),
-            Value::Single(_) => Some(Type::Single),
-            Value::Boolean(_) => Some(Type::Boolean),
-            Value::Text(_) => Some(Type::Text(Vec::new())),
-            Value::Enum(_, tp) => Some(Type::Enum(u32::from(*tp), false, Vec::new())),
-            Value::Var(nr) => Some(self.data.def(self.def_nr).variables.tp(*nr).clone()),
-            Value::Call(d, _) => {
-                let ret = &self.data.def(*d).returned;
+    pub(super) fn infer_type(&self, node: IrNode) -> Option<Type> {
+        match node.kind() {
+            // P243 — see through `Span` so callers querying a wrapped
+            // expression's type get the inner value's type, not `None`.
+            ValueType::Span => self.infer_type(node.span_inner()),
+            ValueType::Int => Some(Type::Integer(IntegerSpec::signed32())),
+            ValueType::Long => Some(crate::data::I64.clone()),
+            ValueType::Float => Some(Type::Float),
+            ValueType::Single => Some(Type::Single),
+            ValueType::Boolean => Some(Type::Boolean),
+            ValueType::Text => Some(Type::Text(Vec::new())),
+            ValueType::Enum => Some(Type::Enum(u32::from(node.enum_pair().1), false, Vec::new())),
+            ValueType::Var => Some(
+                self.data
+                    .def(self.def_nr)
+                    .variables
+                    .tp(node.var_nr())
+                    .clone(),
+            ),
+            ValueType::Call => {
+                let ret = &self.data.def(node.call_to()).returned;
                 (*ret != Type::Void).then(|| ret.clone())
             }
-            Value::Block(bl) => (bl.result != Type::Void).then(|| bl.result.clone()),
-            Value::If(_, t, _) => self.infer_type(t),
+            ValueType::Block => {
+                let r = node.as_block().result();
+                (r != Type::Void).then_some(r)
+            }
+            ValueType::If => self.infer_type(node.if_then()),
             _ => None,
         }
     }
@@ -873,7 +895,7 @@ impl Output<'_> {
     /// 23 / 36 / 40 / 41 / 50.
     fn output_test_predicate(&mut self, w: &mut dyn Write, test: &Value) -> std::io::Result<()> {
         let heap_dbref = matches!(
-            self.infer_type(test),
+            self.infer_type(IrNode::Native(test)),
             Some(
                 Type::Reference(_, _)
                     | Type::Vector(_, _)
@@ -928,7 +950,7 @@ impl Output<'_> {
         let text_unify = !b_true
             && !b_false
             && !matches!(false_v, Value::Null)
-            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // @P386: a text-result if-expression where any branch is a Block
         // containing the `__ncc_*` skip_free pattern produces an OWNED
         // `String` for that branch (via the `_ret.to_string()` block-tail
@@ -944,7 +966,7 @@ impl Output<'_> {
         let text_string_unify = !text_unify
             && (matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
                 || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
-            && matches!(self.infer_type(true_v), Some(Type::Text(_)));
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
         // braces for if-arms regardless of inner expression form, so even if
@@ -986,7 +1008,7 @@ impl Output<'_> {
         // When the else branch is Null and the true branch returns a value,
         // emit a typed null sentinel instead of () to match the true branch type.
         if matches!(false_v, Value::Null)
-            && let Some(tp) = self.infer_type(true_v)
+            && let Some(tp) = self.infer_type(IrNode::Native(true_v))
         {
             Self::write_typed_null(w, &tp)?;
         } else {
@@ -1011,8 +1033,8 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         let mut t_vars: Vec<u16> = Vec::new();
         let mut f_vars: Vec<u16> = Vec::new();
-        Self::collect_set_vars(true_v, &mut t_vars);
-        Self::collect_set_vars(false_v, &mut f_vars);
+        Self::collect_set_vars(IrNode::Native(true_v), &mut t_vars);
+        Self::collect_set_vars(IrNode::Native(false_v), &mut f_vars);
         let variables = &self.data.def(self.def_nr).variables;
         for &v in &t_vars {
             if f_vars.contains(&v) && !self.declared.contains(&v) {
@@ -1027,37 +1049,42 @@ impl Output<'_> {
         Ok(())
     }
 
-    fn collect_set_vars(val: &Value, result: &mut Vec<u16>) {
-        match val {
-            Value::Set(v, inner) => {
-                if !result.contains(v) {
-                    result.push(*v);
+    fn collect_set_vars(node: IrNode, result: &mut Vec<u16>) {
+        match node.kind() {
+            ValueType::Set => {
+                let v = node.set_var();
+                if !result.contains(&v) {
+                    result.push(v);
                 }
-                Self::collect_set_vars(inner, result);
+                Self::collect_set_vars(node.set_inner(), result);
             }
-            Value::Block(bl) => {
-                for op in &bl.operators {
+            ValueType::Block => {
+                for op in node.as_block().operators().iter() {
                     Self::collect_set_vars(op, result);
                 }
             }
-            Value::If(c, t, f) => {
-                Self::collect_set_vars(c, result);
-                Self::collect_set_vars(t, result);
-                Self::collect_set_vars(f, result);
+            ValueType::If => {
+                Self::collect_set_vars(node.if_cond(), result);
+                Self::collect_set_vars(node.if_then(), result);
+                Self::collect_set_vars(node.if_else(), result);
             }
-            Value::Insert(ops) => {
-                for op in ops {
+            ValueType::Insert => {
+                for op in node.insert_items().iter() {
                     Self::collect_set_vars(op, result);
                 }
             }
-            Value::Call(_, args) | Value::CallRef(_, args) => {
-                for a in args {
+            ValueType::Call => {
+                for a in node.call_args().iter() {
                     Self::collect_set_vars(a, result);
                 }
             }
-            Value::Drop(inner) | Value::Return(inner) => {
-                Self::collect_set_vars(inner, result);
+            ValueType::CallRef => {
+                for a in node.callref_args().iter() {
+                    Self::collect_set_vars(a, result);
+                }
             }
+            ValueType::Drop => Self::collect_set_vars(node.drop_inner(), result),
+            ValueType::Return => Self::collect_set_vars(node.return_inner(), result),
             _ => {}
         }
     }
@@ -1098,9 +1125,21 @@ impl Output<'_> {
     pub(super) fn output_block(
         &mut self,
         w: &mut dyn Write,
-        bl: &Block,
+        block: IrBlock,
         wrap_text: bool,
     ) -> std::io::Result<()> {
+        // @PLAN54 G2/M4 — materialise-at-boundary: native is zero-cost; a
+        // store-backed block materialises once, then the intricate `&Block` body
+        // (which threads `bl` through patch_hoisted_returns /
+        // detect_ref_tail_capture / is_void_value) runs unchanged.
+        let owned_block;
+        let bl: &Block = match block {
+            IrBlock::Native(b) => b,
+            IrBlock::Store(..) => {
+                owned_block = block.to_owned_block();
+                &owned_block
+            }
+        };
         // Plan-06 phase 4d: fn-ref field read emits the (u32, DbRef)
         // native tuple form directly.  The block carries two ops —
         // `OpGetInt4(ref, fld)` (returns i64) and `OpNullRefSentinel()`

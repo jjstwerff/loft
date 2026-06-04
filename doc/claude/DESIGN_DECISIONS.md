@@ -826,6 +826,52 @@ doesn't churn the stdlib's hot paths or surprise the in-band-sentinel model.
 
 ---
 
+## C70 — No per-library IR snapshot / cache
+
+**Question.** @PLAN54 (Data-as-store) caches the compiler IR as mmap'able
+store records.  Should a **library** be able to ship (or the toolchain
+cache) *its own* IR snapshot independently, so a never-seen `use`
+combination doesn't pay a full parse on first run?
+
+**Evaluation.** Two independent reasons, both permanent:
+
+- **A library cannot cleanly write its own IR.**  The IR is global-index:
+  `def_nr` / `known_type` are absolute and parse-order-dependent (core and
+  every `use`d lib append into one global `Data.definitions`).  A library
+  snapshotted in isolation would have to be **relocated** by name into
+  whatever prefix it lands in — the single brittlest mechanism in the whole
+  caching design, and it optimizes only the least-common case (the first run
+  of a brand-new lib-set).
+- **The loft source is the better representation of a library's state.**  For
+  distributing / versioning / inspecting a library, the `.loft` source — not a
+  serialized IR image — is the right artifact.  And there is **no efficiency
+  case** for a serialized per-library form: @PLAN28 established by measurement
+  that JSON (de)serialization is **not** faster than parsing natural loft
+  source (both deserialize text into the same heap graph; ~15–24 ms load ≈
+  ~11–23 ms parse).  A per-library IR cache would be a worse, harder-to-relocate
+  stand-in for something the source already expresses well *and* parses just as
+  fast.
+
+The whole-bundle snapshot (core + a script's sorted lib-set, as one image with
+internally-consistent indices) sidesteps relocation entirely and captures the
+repeated-run win that actually matters for the dogfood consumers.
+
+**Decision.** **Closed — declined.**  @PLAN54 caches only **whole-prefix
+bundles** (core stdlib; core + per-script lib-set); never independent
+per-library IR.  Dated 2026-06-02 (first raised 2026-05-31).
+
+**Revisit when.** A measured workload shows first-run parse of a never-seen
+`use` combination is a real bottleneck (repeated runs already hit the bundle
+cache), AND a relocation scheme is prototyped that doesn't reintroduce the
+global-index brittleness — bring the parse-time profile and the relocation
+design together, not separately.
+
+Pointer from the source:
+[plans/future/54-data-as-store/](plans/future/54-data-as-store/README.md)
+§ What gets cached (per-library "dropped, not deferred").
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

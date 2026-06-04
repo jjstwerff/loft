@@ -13,8 +13,10 @@
 //! (control flow).
 
 use super::State;
-use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data_store::ValueType;
 use crate::database::Stores;
+use crate::ir_node::{IrBlock, IrNode, IrNodeList};
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
@@ -57,11 +59,32 @@ impl State {
     # Panics
     when code cannot be output.
     */
-    pub fn def_code(&mut self, def_nr: u32, data: &mut Data) {
-        let logging = !data.def(def_nr).position.file.starts_with("default/");
+    pub fn def_code(
+        &mut self,
+        def_nr: u32,
+        data: &mut Data,
+        program_store: Option<&(Stores, crate::keys::DbRef)>,
+    ) {
+        let logging = !data.def(def_nr).position().file.starts_with("default/");
         let console = false; //logging;
-        let mut stack = Stack::new(data.def(def_nr).variables.clone(), data, def_nr, logging);
-        if stack.data.def(def_nr).code == Value::Null {
+        let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
+        // @PLAN54 G2/M6 — read the body's SHAPE (null / empty-block) from the
+        // persistent store when present, so these last native body reads are
+        // also store-backed; else from the native graph.
+        let (body_is_null, body_is_empty_block) = if let Some((stores, root)) = program_store {
+            let b = IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, def_nr));
+            (
+                b.kind() == ValueType::Null,
+                b.kind() == ValueType::Block && b.as_block().operators().is_empty(),
+            )
+        } else {
+            let code = stack.data.def(def_nr).code();
+            (
+                *code == Value::Null,
+                matches!(code, Value::Block(bl) if bl.operators.is_empty()),
+            )
+        };
+        if body_is_null {
             // B7 (2026-04-13): set up the same frame layout the regular
             // path uses, so `add_return` emits a correct OpReturn.  For
             // native fns declared as `pub fn name(...) -> T;` (no body),
@@ -81,7 +104,7 @@ impl State {
             // occupies a STEPPED span in aligned mode (step is identity
             // when LOFT_ALIGN is off → V1 unchanged).
             let mut args_size: u16 = 0;
-            for attr in &stack.data.def(def_nr).attributes {
+            for attr in stack.data.def(def_nr).attributes() {
                 args_size += stack.step(size(&attr.typedef, &Context::Argument));
             }
             self.arguments = args_size;
@@ -92,8 +115,7 @@ impl State {
             data.definitions[def_nr as usize].code_length = self.code_pos - start;
             return;
         }
-        let is_empty_stub =
-            matches!(&stack.data.def(def_nr).code, Value::Block(bl) if bl.operators.is_empty());
+        let is_empty_stub = body_is_empty_block;
         // use arguments() instead of names map lookup — the names map may
         // redirect promoted text parameters to shadow locals.
         let args = stack.function.arguments();
@@ -133,18 +155,23 @@ impl State {
             stack.data.dump(def_nr);
         }
         let mut started = HashSet::new();
-        for a in stack.data.def(def_nr).variables.arguments() {
+        for a in stack.data.def(def_nr).variables().arguments() {
             started.insert(a);
         }
         // Optional IR dump: set LOFT_IR=<name-filter> (or LOFT_IR=* for all user fns).
         if let Ok(filter) = std::env::var("LOFT_IR") {
-            let fn_name = stack.data.def(def_nr).name.as_str();
+            let fn_name = stack.data.def(def_nr).name();
             let want_all = filter.is_empty() || filter == "*";
             let matches = want_all || filter == fn_name || fn_name.contains(&*filter);
             if matches && logging {
                 eprintln!("=== IR: {fn_name} ===");
                 #[cfg(debug_assertions)]
-                print_ir(&stack.data.def(def_nr).code, stack.data, &stack.function, 0);
+                print_ir(
+                    stack.data.def(def_nr).code(),
+                    stack.data,
+                    &stack.function,
+                    0,
+                );
                 #[cfg(not(debug_assertions))]
                 {
                     let mut w = Vec::new();
@@ -152,7 +179,7 @@ impl State {
                     let _ = stack.data.show_code(
                         &mut w,
                         &mut vars,
-                        &stack.data.def(def_nr).code,
+                        stack.data.def(def_nr).code(),
                         0,
                         true,
                     );
@@ -162,8 +189,19 @@ impl State {
                 eprintln!("===");
             }
         }
-        self.source = stack.data.def(def_nr).source;
-        self.generate(&stack.data.def(def_nr).code, &mut stack, true);
+        self.source = stack.data.def(def_nr).source();
+        // @PLAN54 G2/M2/M5 — store-backed lowering.  When `byte_code_from`
+        // supplied a persistent program store, read this function's body node
+        // directly from it (`def_body_node`) and lower it through
+        // `IrNode::Store`; `generate_inner` reads the body via the handle and the
+        // Definition table via `stack.data` (native), so the emitted bytecode is
+        // identical to the native path.  No store → the native lowering runs.
+        if let Some((stores, root)) = program_store {
+            let body = IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, def_nr));
+            self.generate_node(body, &mut stack, true);
+        } else {
+            self.generate(stack.data.def(def_nr).code(), &mut stack, true);
+        }
         let mut stack_pos = Vec::new();
         let mut skip_free_vars = Vec::new();
         for v_nr in 0..stack.function.next_var() {
@@ -210,54 +248,59 @@ impl State {
     # Panics
     On not implemented Value constructions
     */
+    /// The `&Value` recursion entry — wraps the native node in an [`IrNode`]
+    /// and delegates to [`Self::generate_node`].  Every existing caller keeps
+    /// this signature; @PLAN54 G2/M5's store-backed entry will call
+    /// `generate_node(IrNode::Store(…), …)` directly instead.
     pub(super) fn generate(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
+        self.generate_node(IrNode::Native(val), stack, top)
+    }
+
+    /// Handle-based recursion entry (@PLAN54 G2): depth-guard + dispatch on the
+    /// backing-agnostic [`IrNode`].
+    pub(super) fn generate_node(&mut self, node: IrNode, stack: &mut Stack, top: bool) -> Type {
         self.generate_depth += 1;
         assert!(
             self.generate_depth <= 1000,
             "expression nesting limit exceeded at depth {}",
             self.generate_depth
         );
-        let result = self.generate_inner(val, stack, top);
+        let result = self.generate_inner(node, stack, top);
         self.generate_depth -= 1;
         result
     }
 
+    /// @PLAN54 G2 — lower one IR node.  Dispatches entirely on `node.kind()`
+    /// and reads payloads through `IrNode` accessors, so the SAME codegen runs
+    /// once the backing flips from native to store-read (M5).  The remaining
+    /// `as_native()` calls (Block/Loop/TupleGet/TuplePut children and the
+    /// `&Value`-taking `gen_*` helpers) are the native-backed bridges M5 lifts.
     #[allow(clippy::too_many_lines)]
-    fn generate_inner(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
-        match val {
-            Value::Int(value) => {
+    fn generate_inner(&mut self, node: IrNode, stack: &mut Stack, top: bool) -> Type {
+        match node.kind() {
+            ValueType::Int => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i64::from(*value));
+                self.code_add(node.int_value());
                 I32.clone()
             }
-            Value::Enum(value, tp) => {
-                self.types.insert(self.code_pos, *tp);
-                stack.add_op("OpConstEnum", self);
-                self.code_add(*value);
-                Type::Enum(0, false, Vec::new())
-            }
-            Value::Long(value) => {
+            ValueType::Long => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(*value);
+                self.code_add(node.int_value());
                 crate::data::I64.clone()
             }
-            Value::Single(value) => {
+            ValueType::Single => {
                 stack.add_op("OpConstSingle", self);
-                self.code_add(*value);
+                self.code_add(node.single_value());
                 Type::Single
             }
-            Value::Float(value) => {
+            ValueType::Float => {
                 stack.add_op("OpConstFloat", self);
-                self.code_add(*value);
+                self.code_add(node.float_value());
                 Type::Float
             }
-            Value::Keys(_) => {
-                // Should be already part of the search request
-                Type::Null
-            }
-            Value::Boolean(value) => {
+            ValueType::Boolean => {
                 stack.add_op(
-                    if *value {
+                    if node.bool_value() {
                         "OpConstTrue"
                     } else {
                         "OpConstFalse"
@@ -266,79 +309,130 @@ impl State {
                 );
                 Type::Boolean
             }
-            Value::Text(value) => self.gen_text(value, stack),
-            Value::Var(v) => self.generate_var(stack, *v),
-            Value::Set(v, value) => {
-                self.generate_set(stack, *v, value);
-                Type::Void
+            ValueType::Enum => {
+                let (ord, tp) = node.enum_pair();
+                self.types.insert(self.code_pos, tp);
+                stack.add_op("OpConstEnum", self);
+                self.code_add(ord);
+                Type::Enum(0, false, Vec::new())
             }
-            Value::Loop(lp) => self.gen_loop(lp, stack),
-            Value::Insert(ops) => {
-                for op in ops {
-                    self.generate(op, stack, false);
-                }
-                Type::Void
-            }
-            Value::Break(loop_nr) => self.gen_break(*loop_nr, stack),
-            Value::BreakWith(loop_nr, val) => {
-                self.generate(val, stack, false);
-                self.gen_break(*loop_nr, stack)
-            }
-            Value::Continue(loop_nr) => self.gen_continue(*loop_nr, stack),
-            Value::If(test, t_val, f_val) => self.gen_if(test, t_val, f_val, stack),
-            Value::Return(v) => self.gen_return(v, stack),
-            Value::Block(bl) => self.generate_block(stack, bl, top),
-            Value::Call(op, parameters) => self.generate_call(stack, *op, parameters),
-            Value::CallRef(v_nr, args) => self.generate_call_ref(stack, *v_nr, args),
-            Value::Null => {
-                // Ignore, in use as the code on an else clause without code.
-                Type::Void
-            }
-            Value::Drop(val) => self.gen_drop(val, stack),
-            Value::Iter(_, _, _, _) => {
-                panic!("Should have rewritten {val:?}");
-            }
-            Value::Line(line) => {
-                self.line_numbers.insert(self.code_pos, *line);
+            ValueType::Text => self.gen_text(node.text(), stack),
+            ValueType::Var => self.generate_var(stack, node.var_nr()),
+            ValueType::Break => self.gen_break(node.break_nr(), stack),
+            ValueType::Continue => self.gen_continue(node.continue_nr(), stack),
+            // Keys: already part of the search request — nothing to emit.
+            ValueType::Keys => Type::Null,
+            // Null: e.g. an `else` clause without code.
+            ValueType::Null => Type::Void,
+            ValueType::Line => {
+                self.line_numbers.insert(self.code_pos, node.line_nr());
                 if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
                     stack.add_op("OpStaticCall", self);
                     self.code_add(lib_nr);
                 }
                 Type::Void
             }
-            Value::Tuple(elems) => {
+            // @PLAN54 G2 — single-child / compound delegating arms: dispatch +
+            // children flow through the handle to IrNode-taking helpers
+            // (generate_set materialises at its boundary).
+            ValueType::Set => {
+                self.generate_set(stack, node.set_var(), node.set_inner());
+                Type::Void
+            }
+            ValueType::Return => self.gen_return(node.return_inner(), stack),
+            ValueType::Drop => self.gen_drop(node.drop_inner(), stack),
+            ValueType::BreakWith => {
+                self.generate_node(node.breakwith_inner(), stack, false);
+                self.gen_break(node.breakwith_nr(), stack)
+            }
+            ValueType::If => self.gen_if(node.if_cond(), node.if_then(), node.if_else(), stack),
+            ValueType::Yield => {
+                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
+                let t = self.generate_node(node.yield_inner(), stack, false);
+                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
+                stack.add_op("OpCoroutineYield", self);
+                self.code_add(value_size);
+                // CO1.3d: the yield suspends and transfers the value to the
+                // caller; the eval stack is empty again on resume, so undo the
+                // push.  @PLAN53 S4: the yielded value occupied a stepped span.
+                stack.position -= stack.step(value_size);
+                Type::Void
+            }
+            // @PLAN54 G2 — list-child + scalar arms.  Insert/Tuple iterate the
+            // handle directly; Call/CallRef/Parallel pass an IrNodeList to their
+            // helpers (generate_call materialises its param list at the boundary).
+            ValueType::Insert => {
+                for op in node.insert_items().iter() {
+                    self.generate_node(op, stack, false);
+                }
+                Type::Void
+            }
+            ValueType::Call => self.generate_call(stack, node.call_to(), node.call_args()),
+            ValueType::CallRef => {
+                self.generate_call_ref(stack, node.callref_var(), node.callref_args())
+            }
+            ValueType::Tuple => {
                 // T1.4: generate each element onto contiguous stack slots.
                 let mut types = Vec::new();
-                for e in elems {
-                    let t = self.generate(e, stack, false);
-                    types.push(t);
+                for e in node.tuple_items().iter() {
+                    types.push(self.generate_node(e, stack, false));
                 }
                 Type::Tuple(types)
             }
-            Value::Parallel(arms) => {
-                self.gen_parallel(arms, stack);
+            ValueType::Parallel => {
+                self.gen_parallel(node.parallel_arms(), stack);
                 Type::Void
             }
-            // Plan-07 phase 1 step 1.20 — record the entry pc → source
-            // position before generating the wrapped inner.  Phase 3's
-            // runtime-error printer reads `state.source_spans` to surface
-            // `at file:line:col` for div-by-zero, OOB, null deref, panic.
-            Value::Span(b) => {
-                self.source_spans.insert(self.code_pos, b.0.clone());
-                self.generate_inner(&b.1, stack, top)
+            ValueType::FnRefDnr => {
+                // P215: project the d_nr (first 8B of the fn-ref slot) via
+                // OpVarInt — its dispatcher reads 8B regardless of declared type.
+                let v_pos = stack.var_pos(node.fnref_dnr_var());
+                stack.add_op("OpVarInt", self);
+                self.code_add(v_pos);
+                crate::data::I64.clone()
             }
-            // Plan-06 spine step 3 — codegen for ParFor lands in step 3b.
-            // The variant lands here only as a structural placeholder so
-            // walker arms compile.  Until step 3b emits the OpStaticCall
-            // to `n_parallel_discard` (or equivalent for other Stitch
-            // policies), reaching this arm at runtime is a codegen bug.
-            Value::ParFor(_) => {
-                panic!(
-                    "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
-                );
+            // @PLAN54 G2/M3.4 — Span passthrough + the two never-reachable
+            // rewrite placeholders.
+            ValueType::Span => {
+                // Plan-07 phase 1 step 1.20 — record the entry pc → source
+                // position so phase 3's runtime-error printer can surface
+                // `at file:line:col`, then lower the wrapped inner node.
+                self.source_spans.insert(self.code_pos, node.span_pos());
+                self.generate_inner(node.span_inner(), stack, top)
             }
-            Value::TupleGet(var_nr, elem_idx) => {
-                let tuple_tp = stack.function.tp(*var_nr).clone();
+            ValueType::Iter => {
+                panic!("Iter node should have been rewritten before codegen")
+            }
+            ValueType::ParFor => panic!(
+                "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
+            ),
+            // @PLAN54 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
+            // closure DbRef 12B).  add_op already advances stack.position.
+            ValueType::FnRef => {
+                stack.add_op("OpConstInt", self);
+                self.code_add(i64::from(node.fnref_dnr()));
+                let clos_var = node.fnref_clos_var();
+                // @P328 — a non-capturing closure has no closure variable; push
+                // a null DbRef sentinel instead (else `stack(u16::MAX)` panics).
+                if clos_var == u16::MAX {
+                    stack.add_op("OpNullRefSentinel", self);
+                } else {
+                    let clos_pos = stack.var_pos(clos_var);
+                    stack.add_op("OpVarRef", self);
+                    self.code_add(clos_pos);
+                }
+                node.fnref_type()
+            }
+            // @PLAN54 G2 — Block/Loop lower through the IrBlock handle; TupleGet/
+            // TuplePut read their fields via scalar/child accessors.  Every arm
+            // of generate_inner now reads only through the handle — it is fully
+            // store-capable (M5 just constructs IrNode::Store at the entry).
+            ValueType::Loop => self.gen_loop(node.as_block(), stack),
+            ValueType::Block => self.generate_block(stack, node.as_block(), top),
+            ValueType::TupleGet => {
+                let var_nr = node.tupleget_var();
+                let elem_idx = node.tupleget_idx();
+                let tuple_tp = stack.function.tp(var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef
                 // using the SAME OpGetInt / OpGetFloat / OpGet… opcodes
                 // that ordinary struct-field access uses.  The field
@@ -352,7 +446,7 @@ impl State {
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
-                    let idx = *elem_idx as usize;
+                    let idx = elem_idx as usize;
                     let elem_tp = elems[idx].clone();
                     // Look up the synthetic struct's field position via
                     // the LinkedFieldGroup, falling back to the legacy
@@ -361,7 +455,7 @@ impl State {
                     // tuple_def is normally called eagerly during parse).
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.var_pos(*var_nr);
+                    let var_pos = stack.var_pos(var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -381,13 +475,13 @@ impl State {
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TupleGet on non-tuple variable");
                 };
-                let idx = *elem_idx as usize;
+                let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
                 let offsets = crate::data::element_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // The element is at tuple_var_stack_pos + elem_offset.
                 // Compute distance from current stack top to that position.
-                let tuple_var_pos = stack.function.stack(*var_nr);
+                let tuple_var_pos = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_pos + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
@@ -424,7 +518,7 @@ impl State {
                     Type::Text(_) => stack.add_op("OpArgText", self),
                     Type::Reference(c, _) | Type::Enum(c, true, _) => {
                         self.types
-                            .insert(self.code_pos, stack.data.def(*c).known_type);
+                            .insert(self.code_pos, stack.data.def(*c).known_type());
                         stack.add_op("OpVarRef", self);
                     }
                     Type::Vector(_, _)
@@ -444,20 +538,11 @@ impl State {
                 self.code_add(var_pos);
                 self.insert_types(elem_tp.clone(), code_pos, stack)
             }
-            Value::Yield(inner) => {
-                // CO1.3c: emit the yielded expression, then OpCoroutineYield.
-                let t = self.generate(inner, stack, false);
-                let value_size = crate::variables::size(&t, &crate::data::Context::Argument);
-                stack.add_op("OpCoroutineYield", self);
-                self.code_add(value_size);
-                // CO1.3d: OpCoroutineYield suspends and transfers the value to the caller.
-                // The evaluation stack is empty again on resume, so undo the push.
-                // @PLAN53 S4: the yielded value occupied a stepped span.
-                stack.position -= stack.step(value_size);
-                Type::Void
-            }
-            Value::TuplePut(var_nr, elem_idx, value) => {
-                let tuple_tp = stack.function.tp(*var_nr).clone();
+            ValueType::TuplePut => {
+                let var_nr = node.tupleput_var();
+                let elem_idx = node.tupleput_idx();
+                let value = node.tupleput_inner();
+                let tuple_tp = stack.function.tp(var_nr).clone();
                 // T1.5: RefVar(Tuple) — write element through the DbRef using
                 // the SAME OpSetInt / OpSetFloat / OpSet… opcodes that
                 // ordinary struct-field assignment uses.  Field offset comes
@@ -468,14 +553,14 @@ impl State {
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
-                    let idx = *elem_idx as usize;
+                    let idx = elem_idx as usize;
                     let elem_tp = elems[idx].clone();
                     let elem_offset =
                         stored_tuple_field_offset(stack.data, &self.database, elems, idx);
-                    let var_pos = stack.var_pos(*var_nr);
+                    let var_pos = stack.var_pos(var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
-                    self.generate(value, stack, false);
+                    self.generate_node(value, stack, false);
                     match &elem_tp {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
@@ -491,14 +576,14 @@ impl State {
                 let Type::Tuple(ref elems) = tuple_tp else {
                     panic!("TuplePut on non-tuple variable");
                 };
-                let idx = *elem_idx as usize;
+                let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
                 let offsets = crate::data::element_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // Generate the value to write.
-                self.generate(value, stack, false);
+                self.generate_node(value, stack, false);
                 // Compute distance from stack top to the element's position.
-                let tuple_var_base = stack.function.stack(*var_nr);
+                let tuple_var_base = stack.function.stack(var_nr);
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 // P248 — when the destination element is itself a tuple
@@ -542,50 +627,16 @@ impl State {
                 self.code_add(var_pos);
                 Type::Void
             }
-            Value::FnRef(d_nr, clos_var, fn_type) => {
-                // Construct 16-byte fn-ref on stack: push d_nr (4B) then closure DbRef (12B).
-                // Uses existing OpConstInt + OpVarRef — no new opcode needed.
-                // add_op → operator() already advances stack.position; no manual +4/+12 needed.
-                stack.add_op("OpConstInt", self);
-                self.code_add(i64::from(*d_nr));
-                // @P328 — non-capturing closure has no closure variable;
-                // push a null DbRef sentinel instead.  Without this branch,
-                // `stack(u16::MAX)` panics with "index out of bounds".
-                // Triggered by the yield-rewrite at
-                // `parser/expressions.rs::yield` that wraps a bare
-                // `Value::Int(d_nr)` into `Value::FnRef(d_nr, u16::MAX, _)`
-                // so the yielded value is a full 20-byte fn-ref.
-                if *clos_var == u16::MAX {
-                    stack.add_op("OpNullRefSentinel", self);
-                } else {
-                    // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
-                    let clos_pos = stack.var_pos(*clos_var);
-                    stack.add_op("OpVarRef", self);
-                    self.code_add(clos_pos);
-                }
-                *fn_type.clone()
-            }
-            Value::FnRefDnr(v_nr) => {
-                // P215: project the d_nr (i64, first 8 bytes of the var
-                // slot) from a fn-ref Var.  `OpVarInt`'s dispatcher
-                // (`fill.rs::var_int`) reads 8B from the slot regardless
-                // of declared type — the fn-ref slot's first 8B is the
-                // i64 d_nr, so this works without a new opcode.  The
-                // closure DbRef component (next 12B) stays untouched in
-                // the slot.
-                let v_pos = stack.var_pos(*v_nr);
-                stack.add_op("OpVarInt", self);
-                self.code_add(v_pos);
-                crate::data::I64.clone()
-            }
-            // Phase 09 phase 00 step 0.7 — RawExpr is created only by
-            // native codegen (`src/generation/emit.rs` fn-ref dispatch);
-            // bytecode codegen never produces it.
-            Value::RawExpr(_) => {
-                panic!(
-                    "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
-                )
-            }
+            // Phase 09 phase 00 step 0.7 — RawExpr is created only by native
+            // codegen (`src/generation/emit.rs` fn-ref dispatch); bytecode
+            // codegen never produces it.
+            ValueType::RawExpr => panic!(
+                "Value::RawExpr is native-codegen-internal; not reachable from bytecode codegen"
+            ),
+            // The store-record discriminant is always one of the 34 known Node
+            // variants (the materializer writes only those); `Other` marks a
+            // corrupt/foreign record.
+            ValueType::Other(d) => unreachable!("unknown IR node discriminant {d}"),
         }
     }
 
@@ -606,11 +657,11 @@ impl State {
         Type::Text(Vec::new())
     }
 
-    pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
+    pub(super) fn gen_loop(&mut self, lp: IrBlock, stack: &mut Stack) -> Type {
         stack.add_loop(self.code_pos);
         let pos = self.code_pos;
-        for v in &lp.operators {
-            self.generate(v, stack, false);
+        for v in lp.operators().iter() {
+            self.generate_node(v, stack, false);
         }
         self.clear_stack(stack, 0);
         stack.add_op("OpGotoWord", self);
@@ -640,18 +691,18 @@ impl State {
 
     pub(super) fn gen_if(
         &mut self,
-        test: &Value,
-        t_val: &Value,
-        f_val: &Value,
+        test: IrNode,
+        t_val: IrNode,
+        f_val: IrNode,
         stack: &mut Stack,
     ) -> Type {
-        self.generate(test, stack, false);
+        self.generate_node(test, stack, false);
         stack.add_op("OpGotoFalseWord", self);
         let code_step = self.code_pos;
         self.code_add(0i16); // temp step
         let true_pos = self.code_pos;
         let stack_pos = stack.position;
-        let tp = self.generate(t_val, stack, false);
+        let tp = self.generate_node(t_val, stack, false);
         let true_stack = stack.position;
         // @P356: an EXPRESSION if whose true branch produces a value but whose
         // else is a bare `Value::Null` (e.g. the `expr ?? null` ncc lowering
@@ -662,10 +713,10 @@ impl State {
         // temp's `OpFreeText`) is wrong → frees an uninitialised slot → SIGSEGV.
         // The statement-style fast-path below (no value, or divergent true arm)
         // keeps the original skip-to-join behaviour.
-        let null_else_value = *f_val == Value::Null
+        let null_else_value = matches!(f_val.kind(), ValueType::Null)
             && !is_divergent(t_val)
             && !matches!(tp, Type::Void | Type::Never);
-        if *f_val == Value::Null && !null_else_value {
+        if matches!(f_val.kind(), ValueType::Null) && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
@@ -696,7 +747,7 @@ impl State {
             let false_pos = self.code_pos;
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             stack.position = stack_pos;
-            let fp = self.generate(f_val, stack, false);
+            let fp = self.generate_node(f_val, stack, false);
             let false_stack = stack.position;
             // B5: when both arms are non-divergent but exit at different stack
             // levels (e.g. match arms with different local allocations), the
@@ -711,7 +762,8 @@ impl State {
                     // Shrink the false arm's stack to match the true arm.
                     let excess = false_stack - target;
                     stack.add_op("OpFreeStack", self);
-                    let ret_size = size(&stack.data.def(stack.def_nr).returned, &Context::Argument);
+                    let ret_size =
+                        size(stack.data.def(stack.def_nr).returned(), &Context::Argument);
                     self.code_add(ret_size as u8);
                     self.code_add(excess + ret_size);
                     stack.position = target;
@@ -767,9 +819,9 @@ impl State {
         }
     }
 
-    pub(super) fn gen_return(&mut self, v: &Value, stack: &mut Stack) -> Type {
-        self.generate(v, stack, false);
-        let return_type = &stack.data.def(stack.def_nr).returned;
+    pub(super) fn gen_return(&mut self, v: IrNode, stack: &mut Stack) -> Type {
+        self.generate_node(v, stack, false);
+        let return_type = stack.data.def(stack.def_nr).returned();
         // CO1.3c: generator functions use OpCoroutineReturn instead of OpReturn.
         if matches!(return_type, Type::Iterator(_, _)) {
             // For generators, `return` means exhaust — push null of the yield type.
@@ -783,7 +835,7 @@ impl State {
         } else {
             if return_type != &Type::Void {
                 let ret_nr = stack.data.type_def_nr(return_type);
-                let known = stack.data.def(ret_nr).known_type;
+                let known = stack.data.def(ret_nr).known_type();
                 self.types.insert(self.code_pos, known);
             }
             stack.add_op("OpReturn", self);
@@ -794,12 +846,12 @@ impl State {
         Type::Void
     }
 
-    pub(super) fn gen_drop(&mut self, val: &Value, stack: &mut Stack) -> Type {
-        self.generate(val, stack, false);
+    pub(super) fn gen_drop(&mut self, node: IrNode, stack: &mut Stack) -> Type {
+        self.generate_node(node, stack, false);
         // get all variables of the current scope.
         // @PLAN53 cluster 2 / S4: the value occupies a stepped eval span;
         // the OpFreeStack discard + the position pop must both be stepped.
-        let size = stack.step(stack.size_code(val));
+        let size = stack.step(stack.size_code(node));
         if size > 0 {
             stack.add_op("OpFreeStack", self);
             self.code_add(0u8);
@@ -824,7 +876,7 @@ impl State {
     ///   [arm0 code] `OpReturn`
     ///   [arm1 code] `OpReturn`
     ///   [continue]
-    pub(super) fn gen_parallel(&mut self, arms: &[Value], stack: &mut Stack) {
+    pub(super) fn gen_parallel(&mut self, arms: IrNodeList, stack: &mut Stack) {
         let n = arms.len();
         stack.add_op("OpParallelBegin", self);
         self.code_add(n as u8);
@@ -1033,7 +1085,7 @@ impl State {
                 Type::Text(_) => stack.add_op("OpArgText", self),
                 Type::Reference(c, _) | Type::Enum(c, true, _) => {
                     self.types
-                        .insert(self.code_pos, stack.data.def(*c).known_type);
+                        .insert(self.code_pos, stack.data.def(*c).known_type());
                     stack.add_op("OpVarRef", self);
                 }
                 Type::Vector(_, _)
@@ -1264,19 +1316,19 @@ impl State {
         let tp = stack.function.tp(v).clone();
         let tp_nr = match &tp {
             Type::Sorted(td, key, _) => {
-                let c = stack.data.def(*td).known_type;
+                let c = stack.data.def(*td).known_type();
                 self.database.sorted(c, key)
             }
             Type::Hash(td, key, _) => {
-                let c = stack.data.def(*td).known_type;
+                let c = stack.data.def(*td).known_type();
                 self.database.hash(c, key)
             }
             Type::Index(td, key, _) => {
-                let c = stack.data.def(*td).known_type;
+                let c = stack.data.def(*td).known_type();
                 self.database.index(c, key)
             }
             Type::Spacial(td, key, _) => {
-                let c = stack.data.def(*td).known_type;
+                let c = stack.data.def(*td).known_type();
                 self.database.spacial(c, key)
             }
             _ => unreachable!("gen_keyed_null on non-keyed type"),
@@ -1337,7 +1389,17 @@ impl State {
     /// Case 1: pre-assigned above TOS → move down. Case 2: large type below TOS →
     /// override only if no child-scope overlap (A13 guard).
     #[allow(clippy::too_many_lines)]
-    pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
+    pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: IrNode) {
+        // @PLAN54 G2/M3.15 — materialise-at-boundary.  generate_set's body is an
+        // intricate store-ownership tracker (its comments flag use-after-free /
+        // S1-substitution-corruption hazards); rather than thread the handle
+        // through that hazardous logic and its gen_set_first_* / set_var family,
+        // materialise the assigned sub-value to a native `Value` once here (a
+        // compile-time clone for native; a `read_value` for store) and run the
+        // existing logic unchanged.  This makes the Set path store-capable; a
+        // zero-copy body rewrite is a later refinement.
+        let value_owned = value.to_owned_value();
+        let value = &value_owned;
         self.vars.insert(self.code_pos, v);
         // Zero-sized variables (null-typed) have no stack storage.
         if size(stack.function.tp(v), &Context::Variable) == 0 {
@@ -1416,7 +1478,7 @@ impl State {
             // the pre-Set free runs on `v`.  `s1_substituted` is the
             // already-computed check we need.
             let is_hidden_buf_arg = s1_substituted && stack.function.is_argument(v) && {
-                let attrs = &stack.data.def(stack.def_nr).attributes;
+                let attrs = &stack.data.def(stack.def_nr).attributes();
                 attrs
                     .iter()
                     .any(|a| a.hidden && stack.function.var(&a.name) == v)
@@ -1442,14 +1504,14 @@ impl State {
                 if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
                     && let Value::Call(fn_nr, _) = value.unspan()
-                    && stack.data.def(*fn_nr).name.starts_with("n_")
-                    && stack.data.def(*fn_nr).code != Value::Null
-                    && stack.data.def(*fn_nr).attributes.iter().any(|a| {
+                    && stack.data.def(*fn_nr).name().starts_with("n_")
+                    && *stack.data.def(*fn_nr).code() != Value::Null
+                    && stack.data.def(*fn_nr).attributes().iter().any(|a| {
                         !a.hidden
                             && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
                     })
                 {
-                    let tp_nr = stack.data.def(d_nr).known_type;
+                    let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
                     // at v's slot.  Old pattern emitted
                     // `emit_push_null_ref + OpDatabase(12, tp) + OpPutRef`
@@ -1482,11 +1544,11 @@ impl State {
                     // reset below to clear the caller's slot.
                     let is_borrowed_view = {
                         let def = stack.data.def(*fn_nr);
-                        let deps = def.returned.depend();
+                        let deps = def.returned().depend();
                         !deps.is_empty()
                             && deps.iter().any(|&a| {
-                                (a as usize) >= def.attributes.len()
-                                    || !def.attributes[a as usize].hidden
+                                (a as usize) >= def.attributes().len()
+                                    || !def.attributes()[a as usize].hidden
                             })
                     };
                     let tp_val = if is_borrowed_view {
@@ -1507,7 +1569,7 @@ impl State {
                     // path brackets the call with locks on ref-typed args;
                     // the reassignment path needs the same treatment.
                     let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
-                        let attrs = stack.data.def(*fn_nr).attributes.clone();
+                        let attrs = stack.data.def(*fn_nr).attributes().to_vec();
                         args.iter()
                             .enumerate()
                             .filter_map(|(i, arg)| {
@@ -1614,7 +1676,7 @@ impl State {
                  a Var({v}) self-reference — storage not yet allocated, will produce a \
                  garbage DbRef at runtime. This is a parser bug. value={value:?}",
                 stack.function.name(v),
-                stack.data.def(stack.def_nr).name,
+                stack.data.def(stack.def_nr).name(),
             );
             stack.function.set_stack_allocated(v);
             // Plan-04 Phase B.3 atomic bundle: under the single
@@ -1712,7 +1774,7 @@ impl State {
             self.gen_set_first_ref_null(stack, v);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Call(op_nr, _) = value.unspan()
-            && stack.data.def(*op_nr).name == "OpCopyRecord"
+            && stack.data.def(*op_nr).name() == "OpCopyRecord"
         {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
@@ -1733,14 +1795,14 @@ impl State {
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
-            && stack.data.def(*fn_nr).name.starts_with("n_")
-            && stack.data.def(*fn_nr).code != Value::Null
+            && stack.data.def(*fn_nr).name().starts_with("n_")
+            && *stack.data.def(*fn_nr).code() != Value::Null
         {
             // when the callee has no visible Reference params, the
             // caller and callee share __ref_N's store. No deep copy needed
             // since OpAppendVector in handle_field already deep-copies vector
             // field data into the struct's store during construction.
-            let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
+            let has_ref_params = stack.data.def(*fn_nr).attributes().iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
             if has_ref_params {
@@ -1871,7 +1933,7 @@ impl State {
             && !args.is_empty()
             && let Value::Call(inner_nr, _) = &args[0]
             && matches!(
-                stack.data.def(*inner_nr).returned,
+                stack.data.def(*inner_nr).returned(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             )
         {
@@ -1914,7 +1976,7 @@ impl State {
         self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
         self.code_add(slot_offset);
-        let tp_nr = stack.data.def(d_nr).known_type;
+        let tp_nr = stack.data.def(d_nr).known_type();
         self.code_add(tp_nr);
         self.generate(value, stack, false);
     }
@@ -1950,7 +2012,7 @@ impl State {
             self.code_add(var_pos);
             return;
         }
-        let tp_nr = stack.data.def(d_nr).known_type;
+        let tp_nr = stack.data.def(d_nr).known_type();
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         // Bump TOS so v's slot is fully below stack.position, then emit
         // positional init + allocator at slot_offset.
@@ -1987,7 +2049,7 @@ impl State {
         value: &Value,
         d_nr: u32,
     ) {
-        let tp_nr = stack.data.def(d_nr).known_type;
+        let tp_nr = stack.data.def(d_nr).known_type();
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
         let slot_end = stack.function.stack(v).saturating_add(ref_size);
         if stack.position < slot_end {
@@ -2024,7 +2086,7 @@ impl State {
     /// + a redundant-but-harmless unlock — `n_set_store_lock` doesn't
     ///   touch program-lifetime locked stores (rc >= u32::MAX/2).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
-        let tp_nr = stack.data.def(d_nr).known_type;
+        let tp_nr = stack.data.def(d_nr).known_type();
         // Plan-04 Phase B.3.e: slot-aware init + allocate.  The
         // subsequent `n_set_store_lock(…)` calls between the
         // allocator and the `OpCopyRecord` are void
@@ -2048,7 +2110,7 @@ impl State {
         // Collect ref-typed args of the call to bracket with lock/unlock
         // so OpCopyRecord's `0x8000` source-free skips them.
         let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
-            let attrs = stack.data.def(*fn_nr).attributes.clone();
+            let attrs = stack.data.def(*fn_nr).attributes().to_vec();
             args.iter()
                 .enumerate()
                 .filter_map(|(i, arg)| {
@@ -2107,10 +2169,11 @@ impl State {
         let tp_with_free = {
             let is_borrowed_view = if let Value::Call(fn_nr, _) = value.unspan() {
                 let def = stack.data.def(*fn_nr);
-                let deps = def.returned.depend();
+                let deps = def.returned().depend();
                 !deps.is_empty()
                     && deps.iter().any(|&a| {
-                        (a as usize) >= def.attributes.len() || !def.attributes[a as usize].hidden
+                        (a as usize) >= def.attributes().len()
+                            || !def.attributes()[a as usize].hidden
                     })
             } else {
                 false
@@ -2157,7 +2220,7 @@ impl State {
     /// Destination-passing for text-producing natives inside `OpAppendText`.
     /// Returns true if the optimisation was applied (caller should return Void).
     fn try_text_dest_pass(&mut self, stack: &mut Stack, op: u32, parameters: &[Value]) -> bool {
-        if stack.data.def(op).name != "OpAppendText" || parameters.len() < 2 {
+        if stack.data.def(op).name() != "OpAppendText" || parameters.len() < 2 {
             return false;
         }
         let (Value::Var(dest_var), Value::Call(inner_op, inner_args)) =
@@ -2165,7 +2228,7 @@ impl State {
         else {
             return false;
         };
-        let inner_name = stack.data.def(*inner_op).name.clone();
+        let inner_name = stack.data.def(*inner_op).name().to_owned();
         if !is_text_dest_native(&inner_name) {
             return false;
         }
@@ -2202,22 +2265,30 @@ impl State {
         &mut self,
         stack: &mut Stack,
         op: u32,
-        parameters: &[Value],
+        parameters: IrNodeList,
     ) -> Type {
+        // @PLAN54 G2/M3.15 — materialise-at-boundary (see generate_set).
+        // generate_call threads `parameters` through gather_key /
+        // try_text_dest_pass and inspects `parameters[0]` as a `Var`; rather
+        // than convert that whole &[Value] cluster, materialise the param list
+        // to native once (compile-time clones / store read_value) and run the
+        // existing body unchanged.  Makes the Call path store-capable.
+        let params_owned: Vec<Value> = parameters.iter().map(|p| p.to_owned_value()).collect();
+        let parameters = &params_owned[..];
         let mut tps = Vec::new();
         let mut last = 0;
         let mut was_stack = u16::MAX;
         assert!(
-            parameters.len() >= stack.data.def(op).attributes.len(),
+            parameters.len() >= stack.data.def(op).attributes().len(),
             "Too few parameters on {} (got {}, need {})",
-            stack.data.def(op).name,
+            stack.data.def(op).name(),
             parameters.len(),
-            stack.data.def(op).attributes.len(),
+            stack.data.def(op).attributes().len(),
         );
         // S34: suppress OpFreeRef for variables moved to a shared slot by Option A.
         // The outer variable at the same slot emits its own OpFreeRef; emitting a
         // second one would produce a double-free of the same database record.
-        if stack.data.def(op).name == "OpFreeRef"
+        if stack.data.def(op).name() == "OpFreeRef"
             && let Some(Value::Var(v)) = parameters.first()
             && stack.function.is_skip_free(*v)
         {
@@ -2228,7 +2299,7 @@ impl State {
         // is [d_nr 8B][closure DbRef 12B], so the closure is at var_pos - 8.
         // OpNullRefSentinel produces store_nr=u16::MAX; database.free() is a no-op
         // for that sentinel, so non-capturing lambdas are safe.
-        if stack.data.def(op).name == "OpFreeRef"
+        if stack.data.def(op).name() == "OpFreeRef"
             && let Some(Value::Var(v)) = parameters.first()
             && matches!(stack.function.tp(*v), Type::Function(_, _, _))
         {
@@ -2242,7 +2313,7 @@ impl State {
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;
         }
-        for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
+        for (a_nr, a) in stack.data.def(op).attributes().iter().enumerate() {
             if a.mutable {
                 let stack_before = stack.position;
                 // When a RefVar argument is passed directly to a matching RefVar parameter
@@ -2284,7 +2355,7 @@ impl State {
                         "generate_call [{caller}]: mutable arg {a_nr} ({arg_name}: {arg_tp:?}) \
                          expected {expected}B on stack but generate({val:?}) pushed {actual}B — \
                          Value::Null in a typed slot? Missing convert() call in the parser?",
-                        caller = stack.data.def(stack.def_nr).name,
+                        caller = stack.data.def(stack.def_nr).name(),
                         arg_name = a.name,
                         arg_tp = a.typedef,
                         val = &parameters[a_nr],
@@ -2295,22 +2366,22 @@ impl State {
         // push extra Call args beyond the declared parameter count.
         // Only for n_parallel_for / n_parallel_for_light / n_parallel_discard —
         // each forwards extra context args + n_extra count.
-        if stack.data.def(op).name == "n_parallel_for"
-            || stack.data.def(op).name == "n_parallel_for_light"
-            || stack.data.def(op).name == "n_parallel_discard"
-            || stack.data.def(op).name == "n_parallel_queue"
-            || stack.data.def(op).name == "n_parallel_queue_text"
-            || stack.data.def(op).name == "n_parallel_queue_ref"
-            || stack.data.def(op).name == "n_parallel_queue_narrow"
-            || stack.data.def(op).name == "n_parallel_queue_fn"
-            || stack.data.def(op).name == "n_parallel_fold"
+        if stack.data.def(op).name() == "n_parallel_for"
+            || stack.data.def(op).name() == "n_parallel_for_light"
+            || stack.data.def(op).name() == "n_parallel_discard"
+            || stack.data.def(op).name() == "n_parallel_queue"
+            || stack.data.def(op).name() == "n_parallel_queue_text"
+            || stack.data.def(op).name() == "n_parallel_queue_ref"
+            || stack.data.def(op).name() == "n_parallel_queue_narrow"
+            || stack.data.def(op).name() == "n_parallel_queue_fn"
+            || stack.data.def(op).name() == "n_parallel_fold"
         {
-            let n_declared = stack.data.def(op).attributes.len();
+            let n_declared = stack.data.def(op).attributes().len();
             for extra in parameters.iter().skip(n_declared) {
                 self.generate(extra, stack, false);
             }
         }
-        match &stack.data.def(op).name as &str {
+        match stack.data.def(op).name() {
             "OpGetRecord" => {
                 was_stack = stack.position;
                 self.gather_key(stack, &parameters, 2, &mut tps);
@@ -2345,7 +2416,7 @@ impl State {
         {
             last = n as u16;
         }
-        let name = stack.data.def(op).name.clone();
+        let name = stack.data.def(op).name().to_owned();
         // CO1.6a: OpCoroutineNext/OpCoroutineExhausted take a gen DbRef from the
         // stack at runtime, but their declarations have only const params.
         // Bypass the operator path and manually handle the stack adjustment.
@@ -2371,7 +2442,7 @@ impl State {
             };
             let byte_size = value_size & 0xFF;
             self.remember_stack(stack.position);
-            super::emit_op(stack.data.def(op).op_code, self);
+            super::emit_op(stack.data.def(op).op_code(), self);
             self.code_add(value_size);
             // Stack: -12 (DbRef consumed) + byte_size (yielded value pushed).
             // @PLAN53 S4: both occupy stepped spans.
@@ -2388,7 +2459,7 @@ impl State {
             // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
             self.generate(&parameters[0], stack, false);
             self.remember_stack(stack.position);
-            super::emit_op(stack.data.def(op).op_code, self);
+            super::emit_op(stack.data.def(op).op_code(), self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).
             // @PLAN53 S4: both occupy stepped spans.
             stack.position -= stack.step(super::size_ref() as u16);
@@ -2400,8 +2471,8 @@ impl State {
         // defined body.  A user function whose `n_<name>` collides with a native
         // stdlib name (e.g. user `to_json` vs native `n_to_json` for JsonValue)
         // must go through OpCall, not OpStaticCall.
-        let native_sym = stack.data.def(op).native.clone();
-        let has_user_body = stack.data.def(op).code != Value::Null;
+        let native_sym = stack.data.def(op).native().to_owned();
+        let has_user_body = *stack.data.def(op).code() != Value::Null;
         let lib_lookup: &str = if !native_sym.is_empty() {
             &native_sym
         } else if has_user_body {
@@ -2424,11 +2495,11 @@ impl State {
         // primitives.
         if name == "OpNullRefSentinel" {
             self.emit_push_sentinel(stack);
-            return stack.data.def(op).returned.clone();
+            return stack.data.def(op).returned().clone();
         }
         if name == "OpConvRefFromNull" {
             self.emit_push_null_ref(stack);
-            return stack.data.def(op).returned.clone();
+            return stack.data.def(op).returned().clone();
         }
         if name == "OpCreateStack" && !parameters.is_empty() {
             if let Value::Var(wv) = &parameters[0] {
@@ -2442,7 +2513,7 @@ impl State {
                 self.generate(&parameters[0], stack, false);
                 self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
             }
-            return stack.data.def(op).returned.clone();
+            return stack.data.def(op).returned().clone();
         }
         if stack.data.def(op).is_operator() {
             // B7: OpAppendCharacter on a RefVar(Text) target must use
@@ -2472,12 +2543,12 @@ impl State {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
-            super::emit_op(stack.data.def(actual_op).op_code, self);
+            super::emit_op(stack.data.def(actual_op).op_code(), self);
             stack.operator(actual_op);
             if was_stack != u16::MAX {
                 stack.position = was_stack;
             }
-            for (a_nr, a) in stack.data.def(op).attributes.iter().enumerate() {
+            for (a_nr, a) in stack.data.def(op).attributes().iter().enumerate() {
                 if a.mutable {
                     continue;
                 }
@@ -2499,21 +2570,21 @@ impl State {
             stack.add_op("OpStaticCall", self);
             self.code_add(lib_idx);
             // @PLAN53 cluster 2 / S4: args were pushed at stepped spans.
-            for a in &stack.data.def(op).attributes {
+            for a in stack.data.def(op).attributes() {
                 stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // also subtract the extra args pushed beyond declared params.
-            if stack.data.def(op).name == "n_parallel_for"
-                || stack.data.def(op).name == "n_parallel_for_light"
-                || stack.data.def(op).name == "n_parallel_discard"
-                || stack.data.def(op).name == "n_parallel_queue"
-                || stack.data.def(op).name == "n_parallel_queue_text"
-                || stack.data.def(op).name == "n_parallel_queue_ref"
-                || stack.data.def(op).name == "n_parallel_queue_narrow"
-                || stack.data.def(op).name == "n_parallel_queue_fn"
-                || stack.data.def(op).name == "n_parallel_fold"
+            if stack.data.def(op).name() == "n_parallel_for"
+                || stack.data.def(op).name() == "n_parallel_for_light"
+                || stack.data.def(op).name() == "n_parallel_discard"
+                || stack.data.def(op).name() == "n_parallel_queue"
+                || stack.data.def(op).name() == "n_parallel_queue_text"
+                || stack.data.def(op).name() == "n_parallel_queue_ref"
+                || stack.data.def(op).name() == "n_parallel_queue_narrow"
+                || stack.data.def(op).name() == "n_parallel_queue_fn"
+                || stack.data.def(op).name() == "n_parallel_fold"
             {
-                let n_declared = stack.data.def(op).attributes.len();
+                let n_declared = stack.data.def(op).attributes().len();
                 for extra in parameters.iter().skip(n_declared) {
                     // Extra args are always integer (8 bytes post-2c).
                     let _ = extra;
@@ -2521,12 +2592,12 @@ impl State {
                 }
             }
             // add the result to the stack
-            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
-            stack.data.def(op).returned.clone()
+            stack.position += stack.step(size(stack.data.def(op).returned(), &Context::Argument));
+            stack.data.def(op).returned().clone()
         } else {
             self.calls.entry(op).or_default().push(self.code_pos);
             // CO1.3c: emit OpCoroutineCreate for generator function calls.
-            let is_generator = matches!(stack.data.def(op).returned, Type::Iterator(_, _));
+            let is_generator = matches!(stack.data.def(op).returned(), Type::Iterator(_, _));
             if is_generator {
                 stack.add_op("OpCoroutineCreate", self);
             } else {
@@ -2546,12 +2617,12 @@ impl State {
             self.code_add(args_size);
             self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
-            for a in &stack.data.def(op).attributes {
+            for a in stack.data.def(op).attributes() {
                 stack.position -= stack.step(size(&a.typedef, &Context::Argument));
             }
             // add the result to the stack
-            stack.position += stack.step(size(&stack.data.def(op).returned, &Context::Argument));
-            stack.data.def(op).returned.clone()
+            stack.position += stack.step(size(stack.data.def(op).returned(), &Context::Argument));
+            stack.data.def(op).returned().clone()
         }
     }
 
@@ -2580,7 +2651,7 @@ impl State {
         code: u32,
         stack: &mut Stack,
     ) -> Type {
-        match &stack.data.def(op).name as &str {
+        match stack.data.def(op).name() {
             "OpDatabase" | "OpAppend" | "OpConvEnumFromNull" | "OpCastEnumFromInt"
             | "OpCastEnumFromText" | "OpGetField" => {
                 self.types.insert(code, last);
@@ -2623,16 +2694,16 @@ impl State {
             }
             _ => (),
         }
-        stack.data.def(op).returned.clone()
+        stack.data.def(op).returned().clone()
     }
 
     pub(super) fn insert_types(&mut self, tp: Type, code: u32, stack: &Stack) -> Type {
         match tp {
             Type::Enum(t, _, _) => {
-                self.types.insert(code, stack.data.def(t).known_type);
+                self.types.insert(code, stack.data.def(t).known_type());
             }
             Type::Reference(t, _) if t < u32::from(u16::MAX) => {
-                self.types.insert(code, stack.data.def(t).known_type);
+                self.types.insert(code, stack.data.def(t).known_type());
             }
             _ => (),
         }
@@ -2647,7 +2718,7 @@ impl State {
         &mut self,
         stack: &mut Stack,
         v_nr: u16,
-        args: &[Value],
+        args: IrNodeList,
     ) -> Type {
         let Type::Function(param_types, ret_type, _) = stack.function.tp(v_nr).clone() else {
             panic!("generate_call_ref: variable is not Type::Function");
@@ -2656,8 +2727,8 @@ impl State {
 
         // Generate all args: visible params, then work-buffer blocks (12B DbRefs each),
         // then closure arg (12B DbRef).  Blocks produce the correct type/size automatically.
-        for arg in args {
-            self.generate(arg, stack, false);
+        for arg in args.iter() {
+            self.generate_node(arg, stack, false);
         }
 
         // fn-ref variable is below all pushed arguments.
@@ -2690,7 +2761,7 @@ impl State {
             stack.function.name(variable),
             stack.function.stack(variable),
             stack.position,
-            stack.data.def(stack.def_nr).name
+            stack.data.def(stack.def_nr).name()
         );
         let var_pos = stack.var_pos(variable);
         let argument = stack.function.is_argument(variable);
@@ -2756,7 +2827,7 @@ impl State {
             }
             Type::Reference(c, _) | Type::Enum(c, true, _) => {
                 self.types
-                    .insert(self.code_pos, stack.data.def(*c).known_type);
+                    .insert(self.code_pos, stack.data.def(*c).known_type());
                 stack.add_op("OpVarRef", self);
             }
             // CO1.3c: iterator variables are DbRef-sized (coroutine frame reference).
@@ -2792,7 +2863,7 @@ impl State {
                         Type::Text(_) => stack.add_op("OpArgText", self),
                         Type::Reference(c, _) | Type::Enum(c, true, _) => {
                             self.types
-                                .insert(self.code_pos, stack.data.def(*c).known_type);
+                                .insert(self.code_pos, stack.data.def(*c).known_type());
                             stack.add_op("OpVarRef", self);
                         }
                         _ => panic!("Tuple var: unsupported element type {elem_tp:?}"),
@@ -2806,7 +2877,7 @@ impl State {
                 "Unknown var '{}' type {} at {}",
                 stack.function.name(variable),
                 stack.function.tp(variable).name(stack.data),
-                stack.data.def(stack.def_nr).position
+                stack.data.def(stack.def_nr).position()
             ),
         }
         self.code_add(var_pos);
@@ -2840,8 +2911,9 @@ impl State {
         self.insert_types(stack.function.tp(variable).clone(), code, stack)
     }
 
-    pub(super) fn generate_block(&mut self, stack: &mut Stack, block: &Block, top: bool) -> Type {
-        if block.operators.is_empty() {
+    pub(super) fn generate_block(&mut self, stack: &mut Stack, block: IrBlock, top: bool) -> Type {
+        let ops = block.operators();
+        if ops.is_empty() {
             return Type::Void;
         }
         let to = stack.position;
@@ -2856,13 +2928,13 @@ impl State {
         let mut tp = Type::Void;
         let mut return_expr = 0;
         let mut has_return = false;
-        for v in &block.operators {
+        for v in ops.iter() {
             let s_pos = self.stack_pos;
-            if let Value::Return(expr) = v {
+            if v.kind() == ValueType::Return {
                 has_return = true;
                 if return_expr == 0 {
                     return_expr = s_pos;
-                    self.generate(expr, stack, false);
+                    self.generate_node(v.return_inner(), stack, false);
                 }
                 self.add_return(stack, return_expr);
                 return_expr = 0;
@@ -2871,16 +2943,17 @@ impl State {
                 // Preserve return_expr across cleanup ops (FreeRef/FreeText)
                 // that don't produce a return value. These are inserted by
                 // scope analysis between the tail expression and Return(Null).
-                let is_cleanup = matches!(v, Value::Call(d, _)
-                    if stack.data.def(*d).name == "OpFreeRef"
-                    || stack.data.def(*d).name == "OpFreeText");
+                let is_cleanup = v.kind() == ValueType::Call && {
+                    let name = stack.data.def(v.call_to()).name();
+                    name == "OpFreeRef" || name == "OpFreeText"
+                };
                 if !is_cleanup {
                     has_return = false;
                     return_expr = 0;
                 }
-                tp = self.generate(v, stack, false);
+                tp = self.generate_node(v, stack, false);
             }
-            if self.stack_pos > s_pos && !matches!(v, Value::Set(_, _)) {
+            if self.stack_pos > s_pos && v.kind() != ValueType::Set {
                 // Normal expressions do not claim stack space (because of Value::Drop).
                 // So, if there is data left, it should be a return expression.
                 return_expr = s_pos;
@@ -2898,8 +2971,9 @@ impl State {
                 );
             }
         } else {
+            let result = block.result();
             // @PLAN53 S4: the block result occupies a stepped span.
-            let size = stack.step(size(&block.result, &Context::Argument));
+            let size = stack.step(size(&result, &Context::Argument));
             let after = to + size;
             // Plan-04 Phase B.3: under the per-block `OpReserveFrame`
             // that this atomic bundle deletes, a `drop <var>` tail
@@ -2909,17 +2983,20 @@ impl State {
             // `drop` leaves no explicit result on the eval stack.
             // Re-read the inner `Var` to produce the missing push
             // (safe: `Var` reads are idempotent).
-            if stack.position < after
-                && let Some(Value::Drop(inner)) = block.operators.last()
-                && matches!(**inner, Value::Var(_))
-            {
-                self.generate(inner, stack, false);
+            if stack.position < after && !ops.is_empty() {
+                let last = ops.get(ops.len() - 1);
+                if last.kind() == ValueType::Drop {
+                    let inner = last.drop_inner();
+                    if inner.kind() == ValueType::Var {
+                        self.generate_node(inner, stack, false);
+                    }
+                }
             }
             if stack.position > after {
                 stack.add_op("OpFreeStack", self);
                 self.code_add(size as u8);
                 self.code_add(stack.position - to);
-            } else if matches!(&block.result, Type::Function(_, _, _)) && stack.position < after {
+            } else if matches!(&result, Type::Function(_, _, _)) && stack.position < after {
                 // a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
                 // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
                 // a null-ref sentinel so both branches of an if-else reach the join point
@@ -2932,7 +3009,7 @@ impl State {
     }
 
     pub(super) fn add_return(&mut self, stack: &mut Stack, code: u32) {
-        let return_type = &stack.data.def(stack.def_nr).returned;
+        let return_type = stack.data.def(stack.def_nr).returned();
         // CO1.3c: generator functions use OpCoroutineReturn.
         if matches!(return_type, Type::Iterator(_, _)) {
             let yield_size = if let Type::Iterator(inner, _) = return_type {
@@ -2955,7 +3032,7 @@ impl State {
 
     pub(super) fn known_type(&self, tp: &Type, stack: &Stack) -> u16 {
         if let Some(c) = tp.heap_def_nr() {
-            stack.data.def(c).known_type
+            stack.data.def(c).known_type()
         } else {
             self.database.name(&tp.name(stack.data))
         }
@@ -3096,7 +3173,7 @@ impl State {
         if matches!(stack.function.tp(var), Type::Text(_))
             && let Value::Call(op, args) = value.unspan()
         {
-            let name = stack.data.def(*op).name.clone();
+            let name = stack.data.def(*op).name().to_owned();
             if is_text_dest_native(&name) {
                 let dest_name = name.clone() + "_dest";
                 if let Some(&lib_nr) = self.library_names.get(&dest_name) {
@@ -3183,7 +3260,7 @@ impl State {
                 "Unknown var {} type {} at {}",
                 stack.function.name(var),
                 stack.function.tp(var).name(stack.data),
-                stack.data.def(stack.def_nr).position
+                stack.data.def(stack.def_nr).position()
             ),
         }
         self.code_add(var_pos);
@@ -3229,14 +3306,20 @@ impl State {
 
 /// Check if a Value is a divergent expression (return/break/continue)
 /// that never produces a value at the join point.
-fn is_divergent(val: &Value) -> bool {
-    match val {
-        Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => true,
+fn is_divergent(node: IrNode) -> bool {
+    match node.kind() {
+        ValueType::Return | ValueType::Break | ValueType::BreakWith | ValueType::Continue => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.
-        Value::Insert(ops) => ops.last().is_some_and(is_divergent),
-        Value::Block(bl) => bl.operators.last().is_some_and(is_divergent),
+        ValueType::Insert => {
+            let ops = node.insert_items();
+            !ops.is_empty() && is_divergent(ops.get(ops.len() - 1))
+        }
+        ValueType::Block => {
+            let ops = node.as_block().operators();
+            !ops.is_empty() && is_divergent(ops.get(ops.len() - 1))
+        }
         _ => false,
     }
 }
@@ -3306,7 +3389,7 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
             eprint!(")");
         }
         Value::Call(d, args) => {
-            eprint!("{}(", data.def(*d).name);
+            eprint!("{}(", data.def(*d).name());
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     eprint!(", ");

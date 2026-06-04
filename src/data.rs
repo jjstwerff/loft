@@ -1398,7 +1398,7 @@ pub struct Attribute {
     /// This attribute is allowed to be null in the substructure.
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
-    primary: bool,
+    pub(crate) primary: bool,
     /// Hidden return-mechanism parameter added by `text_return` or `ref_return`.
     /// Not a user-declared parameter — should be excluded from dep propagation.
     pub hidden: bool,
@@ -1746,6 +1746,78 @@ pub struct Definition {
 }
 
 impl Definition {
+    // ─── @PLAN54 arc C — store-backed-field read seam ───────────────────────
+    //
+    // Read accessors for the `Definition` fields that live in the store schema
+    // (`src/ir_schema_gen.rs`).  Routing reads through these methods (rather than
+    // touching the `pub` fields directly) is the precondition for swapping the
+    // representation to store-backed per subsystem (§ Incremental migration):
+    // when the swap lands, the method body reads the store instead of `self`,
+    // and every call site is already correct.  Today they are thin field reads —
+    // no behaviour change.  The codegen-DERIVED fields (`code_position` /
+    // `code_length`) are intentionally NOT seamed: they are recomputed on load,
+    // never stored, so they stay native.
+
+    /// Definition name (`n_<fn>` / type name / …).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// `#native "symbol"` extern symbol, or empty.
+    #[must_use]
+    pub fn native(&self) -> &str {
+        &self.native
+    }
+
+    /// Source-file id this definition was parsed from.
+    #[must_use]
+    pub fn source(&self) -> u16 {
+        self.source
+    }
+
+    /// Source position where this definition is declared.
+    #[must_use]
+    pub fn position(&self) -> &Position {
+        &self.position
+    }
+
+    /// The definition's attributes (struct fields / function parameters).
+    #[must_use]
+    pub fn attributes(&self) -> &[Attribute] {
+        &self.attributes
+    }
+
+    /// The code body (function body / field default / …).
+    #[must_use]
+    pub fn code(&self) -> &Value {
+        &self.code
+    }
+
+    /// The related/return type.
+    #[must_use]
+    pub fn returned(&self) -> &Type {
+        &self.returned
+    }
+
+    /// Interpreter operator code.
+    #[must_use]
+    pub fn op_code(&self) -> u16 {
+        self.op_code
+    }
+
+    /// Index into the database's known-types schema.
+    #[must_use]
+    pub fn known_type(&self) -> u16 {
+        self.known_type
+    }
+
+    /// The per-function variable table.
+    #[must_use]
+    pub fn variables(&self) -> &Function {
+        &self.variables
+    }
+
     #[must_use]
     pub fn is_operator(&self) -> bool {
         matches!(self.def_type, DefType::Function)
@@ -1944,6 +2016,28 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
+    /// @PLAN54 arc D — serialize this `Data` to a file-backed IR store at
+    /// `path` (zero-copy-loadable via [`Data::open`]).  Thin wrapper over
+    /// [`crate::ir_store::save_data`].
+    ///
+    /// # Errors
+    /// Propagates file I/O errors from the store writer.
+    #[cfg(feature = "mmap")]
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        crate::ir_store::save_data(self, path)
+    }
+
+    /// @PLAN54 arc D — load a `Data` from a file-backed IR store written by
+    /// [`Data::save`], by `mmap`-ing the file and rebuilding the native graph —
+    /// no re-parse.  Thin wrapper over [`crate::ir_read::open_data`].
+    ///
+    /// # Errors
+    /// Returns `NotFound` if `path` does not exist (cache miss → caller parses).
+    #[cfg(feature = "mmap")]
+    pub fn open(path: &str) -> std::io::Result<Data> {
+        crate::ir_read::open_data(path)
+    }
+
     /// map a vector's content `Type` to a narrow
     /// database element type-nr when the content is a `Type::Integer`
     /// with a `forced_size` annotation that [`IntegerSpec::vector_narrow_width`]
@@ -2026,6 +2120,58 @@ impl Data {
         self.use_names.clear();
         self.source = 0;
         self.use_names.insert("std".to_string(), 0);
+    }
+
+    /// @PLAN28 Step 2 (C3) — rebuild the derived lookup indices from
+    /// `definitions` alone, for the startup-cache load path.
+    ///
+    /// These indices are pure functions of `definitions` and are never
+    /// stored in the JSON snapshot; after a decoder restores `definitions`
+    /// (and each `Definition.op_code`, serialised by the Definition codec)
+    /// this re-derives them so the loaded `Data` matches a fresh parse:
+    ///
+    /// * `def_names` — `(name, source) -> def_nr`, inserted in definition
+    ///   order so a duplicate `(name, source)` resolves last-wins, exactly
+    ///   as repeated `add_def` calls do during parsing.
+    /// * `operators` — `op_code -> def_nr`, and `op_codes` — the
+    ///   next-free counter (`max assigned op_code + 1`).  `op_code` values
+    ///   themselves are restored from each `Definition` (not recomputed).
+    /// * `possible` — operator overload sets, mirroring `add_op`'s fill
+    ///   (operator defs only, walked in definition order).
+    ///
+    /// `caller_index` is intentionally left as its lazy `OnceLock` — it
+    /// rebuilds on first `callers_of`.  Cross-source import bindings (the
+    /// `insert_or_replace_stub` path) are NOT reproduced here: a
+    /// whole-stdlib / whole-bundle snapshot is single-pass and uniform, so
+    /// the `add_def`-level inserts are sufficient.  Multi-library import
+    /// reconciliation is a later extension if per-library snapshots land.
+    pub(crate) fn rebuild_indices(&mut self) {
+        self.def_names.clear();
+        self.operators.clear();
+        self.possible.clear();
+        let mut max_op: i32 = -1;
+        for d_nr in 0..self.definitions.len() as u32 {
+            let def = &self.definitions[d_nr as usize];
+            self.def_names.insert((def.name.clone(), def.source), d_nr);
+            if def.is_operator() {
+                if def.op_code != u16::MAX {
+                    self.operators.insert(def.op_code, d_nr);
+                    max_op = max_op.max(i32::from(def.op_code));
+                }
+                for op in OPERATORS {
+                    if def.name.starts_with(op) {
+                        self.possible
+                            .entry((*op).to_string())
+                            .or_default()
+                            .push(d_nr);
+                    }
+                }
+            }
+        }
+        self.op_codes = (max_op + 1) as u16;
+        if self.use_names.is_empty() {
+            self.use_names.insert("std".to_string(), 0);
+        }
     }
 
     #[must_use]

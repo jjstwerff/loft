@@ -4,6 +4,8 @@
 #![allow(dead_code)]
 //! Fast interpreter for binary code.
 use crate::data::{Data, DefType, Type, Value};
+use crate::data_store::ValueType;
+use crate::ir_node::IrNode;
 use crate::keys::DbRef;
 use crate::log_config::LogConfig;
 use crate::native;
@@ -17,7 +19,18 @@ use std::io::{Error, Write};
 /// emits its bytecode into `state`, then materialises constant
 /// vectors into `CONST_STORE`.
 pub fn byte_code(state: &mut State, data: &mut Data) {
-    byte_code_from(state, data, 0);
+    byte_code_from(state, data, 0, None);
+}
+
+/// @PLAN54 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
+/// store (the mmap'd cache bundle), so codegen reads bodies straight from it via
+/// `def_body_node` — no per-run materialise and no `read_data` body rebuild.
+pub fn byte_code_with_store(
+    state: &mut State,
+    data: &mut Data,
+    program_store: Option<&(crate::database::Stores, crate::keys::DbRef)>,
+) {
+    byte_code_from(state, data, 0, program_store);
 }
 
 /// Incremental variant of [`byte_code`] — only emit bytecode for
@@ -36,28 +49,66 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
 /// `Codegen::gen_text` (which writes long string literals into
 /// `CONST_STORE` via `set_str`) tripped the assertion on the now-locked
 /// store.  Compiling only the new wrapper avoids the re-emission entirely.
-pub fn byte_code_from(state: &mut State, data: &mut Data, start_d_nr: u32) {
+pub fn byte_code_from(
+    state: &mut State,
+    data: &mut Data,
+    start_d_nr: u32,
+    warm_store: Option<&(crate::database::Stores, crate::keys::DbRef)>,
+) {
+    // Step 0 (startup-cache plan): env-gated phase timing.  No-op unless
+    // LOFT_TIMING is set.  Separates native::init from the codegen loop.
+    let timing = std::env::var("LOFT_TIMING").is_ok();
+    let t_init = std::time::Instant::now();
     if start_d_nr == 0 {
         native::init(state);
         register_native_stubs(state, data);
     }
+    let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
+    let t_codegen = std::time::Instant::now();
+    // @PLAN54 G2/M2/M6 — codegen body source:
+    //  * `warm_store` (M6): a pre-loaded mmap'd cache bundle — read bodies
+    //    straight from it (no materialise, no `read_data` body rebuild).
+    //  * else `LOFT_CODEGEN_STORE` (M2/M5 proof): materialise the whole `Data`
+    //    into a fresh store once.
+    //  * else None → native lowering (default, unchanged).
+    let cold_materialized;
+    let program_store: Option<&(crate::database::Stores, DbRef)> = if warm_store.is_some() {
+        warm_store
+    } else if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+        let mut stores = crate::database::Stores::new();
+        let root = crate::ir_store::materialize_data(&mut stores, data);
+        cold_materialized = (stores, root);
+        Some(&cold_materialized)
+    } else {
+        None
+    };
     for d_nr in start_d_nr..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
-        state.def_code(d_nr, data);
+        state.def_code(d_nr, data, program_store);
     }
     if start_d_nr == 0 {
-        build_const_vectors(state, data);
+        build_const_vectors(state, data, program_store);
         state.database.allocations[crate::database::CONST_STORE as usize]
             .lock_with_origin("compile.rs::compile (CONST_STORE init)");
+    }
+    if timing {
+        eprintln!(
+            "LOFT_TIMING byte_code_from start={start_d_nr} native_init={init_ms:.2}ms codegen={:.2}ms",
+            t_codegen.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }
 
 /// Extract literal values from vector constant Block IR and build
 /// the vectors in CONST_STORE. Populates `state.const_refs` and
 /// `data.definitions[d_nr].const_ref`.
-fn build_const_vectors(state: &mut State, data: &mut Data) {
+fn build_const_vectors(
+    state: &mut State,
+    data: &mut Data,
+    program_store: Option<&(crate::database::Stores, DbRef)>,
+) {
     // Ensure const_refs is large enough for all definitions.
     let null_ref = DbRef {
         store_nr: u16::MAX,
@@ -83,7 +134,15 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             continue;
         };
         let elem_tp = (**elem_tp).clone();
-        let values = extract_literal_values(&data.def(d_nr).code, data);
+        // @PLAN54 G2/M6 — read the const body from the persistent store when
+        // present (store-backed), else the native graph.
+        let body = match program_store {
+            Some((stores, root)) => {
+                IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, d_nr))
+            }
+            None => IrNode::Native(&data.def(d_nr).code),
+        };
+        let values = extract_literal_values(body, data);
         if values.is_empty() {
             continue;
         }
@@ -163,38 +222,42 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
 /// Returns an empty Vec if the IR contains non-literal expressions.
 /// Public wrapper for reuse by native codegen's init-emission.
 pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<Value> {
-    extract_literal_values(code, data)
+    extract_literal_values(IrNode::Native(code), data)
 }
 
-fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
-    let Value::Block(block) = code else {
+fn extract_literal_values(code: IrNode, data: &Data) -> Vec<Value> {
+    if code.kind() != ValueType::Block {
         return vec![];
-    };
+    }
+    let block = code.as_block();
     let mut values = Vec::new();
     // Look for patterns: Call(OpSetInt/Float/Single/Text, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
     let set_text_nr = data.def_nr("OpSetText");
-    for op in &block.operators {
-        let Value::Call(fn_nr, args) = op else {
+    for op in block.operators().iter() {
+        if op.kind() != ValueType::Call {
             continue;
-        };
+        }
+        let fn_nr = op.call_to();
+        let args = op.call_args();
         if args.len() < 3 {
             continue;
         }
-        if *fn_nr == set_int_nr
-            || *fn_nr == set_float_nr
-            || *fn_nr == set_single_nr
-            || *fn_nr == set_text_nr
+        if fn_nr == set_int_nr
+            || fn_nr == set_float_nr
+            || fn_nr == set_single_nr
+            || fn_nr == set_text_nr
         {
-            match &args[2] {
-                v @ (Value::Int(_)
-                | Value::Float(_)
-                | Value::Single(_)
-                | Value::Long(_)
-                | Value::Text(_)) => {
-                    values.push(v.clone());
+            let v = args.get(2);
+            match v.kind() {
+                ValueType::Int
+                | ValueType::Float
+                | ValueType::Single
+                | ValueType::Long
+                | ValueType::Text => {
+                    values.push(v.to_owned_value());
                 }
                 _ => return vec![], // non-literal value — can't pre-build
             }

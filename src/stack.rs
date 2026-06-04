@@ -8,7 +8,9 @@
 //! the position by the operator's net stack effect.  [`Loop`] records the
 //! stack depth at loop entry so `break`/`continue` can restore it.
 
-use crate::data::{Context, Data, Value};
+use crate::data::{Context, Data};
+use crate::data_store::ValueType;
+use crate::ir_node::IrNode;
 use crate::state::State;
 use crate::variables;
 use crate::variables::Function;
@@ -54,33 +56,34 @@ impl<'a> Stack<'a> {
     }
 
     /** Return the amount of space on stack is needed as calculated from code */
-    pub fn size_code(&self, val: &Value) -> u16 {
-        match val {
-            Value::Int(_) | Value::Single(_) => 4,
-            Value::Long(_) | Value::Float(_) => 8,
-            Value::Boolean(_) | Value::Enum(_, _) => 1,
-            Value::Block(bl) => {
-                let lp = &bl.operators;
-                if lp.is_empty() {
-                    0
-                } else {
-                    self.size_code(lp.last().unwrap())
-                }
-            }
-            Value::Call(d_nr, _) => {
-                variables::size(&self.data.def(*d_nr).returned, &Context::Argument)
-            }
-            Value::If(_, true_val, _) => self.size_code(true_val),
-            Value::Text(_) => size_of::<&str>() as u16,
-            Value::Var(v) => variables::size(self.function.tp(*v), &Context::Argument),
-            Value::Insert(ops) => {
+    pub fn size_code(&self, node: IrNode) -> u16 {
+        match node.kind() {
+            ValueType::Int | ValueType::Single => 4,
+            ValueType::Long | ValueType::Float => 8,
+            ValueType::Boolean | ValueType::Enum => 1,
+            ValueType::Block => {
+                let ops = node.as_block().operators();
                 if ops.is_empty() {
                     0
                 } else {
-                    self.size_code(ops.last().unwrap())
+                    self.size_code(ops.get(ops.len() - 1))
                 }
             }
-            Value::Span(b) => self.size_code(&b.1),
+            ValueType::Call => {
+                variables::size(&self.data.def(node.call_to()).returned, &Context::Argument)
+            }
+            ValueType::If => self.size_code(node.if_then()),
+            ValueType::Text => size_of::<&str>() as u16,
+            ValueType::Var => variables::size(self.function.tp(node.var_nr()), &Context::Argument),
+            ValueType::Insert => {
+                let ops = node.insert_items();
+                if ops.is_empty() {
+                    0
+                } else {
+                    self.size_code(ops.get(ops.len() - 1))
+                }
+            }
+            ValueType::Span => self.size_code(node.span_inner()),
             _ => 0,
         }
     }

@@ -103,6 +103,36 @@ struct Iterator {
     counter: u16, // variable number or MAX when it is not used
 }
 
+/// @PLAN28 C4 — borrowed view of the codegen-read fields of one `Variable`,
+/// produced by [`Function::snapshot_var`] for the snapshot encoder.
+#[allow(clippy::struct_excessive_bools)] // mirrors `Variable`'s codegen-read flags
+pub(crate) struct VarSnapshot<'a> {
+    pub name: &'a str,
+    pub type_def: &'a Type,
+    pub stack_pos: u16,
+    pub uses: u16,
+    pub argument: bool,
+    pub stack_allocated: bool,
+    pub skip_free: bool,
+    pub captured: bool,
+    pub caller_hidden_buf: bool,
+}
+
+/// @PLAN28 C4 — owned codegen-read fields of one `Variable`, consumed by
+/// [`Function::from_snapshot`] on the decode path.
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct RestoredVar {
+    pub name: String,
+    pub type_def: Type,
+    pub stack_pos: u16,
+    pub uses: u16,
+    pub argument: bool,
+    pub stack_allocated: bool,
+    pub skip_free: bool,
+    pub captured: bool,
+    pub caller_hidden_buf: bool,
+}
+
 // This is created for every variable instance, even if those are of the same name.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -246,6 +276,103 @@ impl Function {
             done: false,
             closure_var_map: HashMap::new(),
         }
+    }
+
+    // ─── @PLAN28 startup-cache snapshot seam (C4) ────────────────────────
+    //
+    // The variable table is stored in the snapshot as DEBUG SYMBOLS plus the
+    // FINAL `stack_pos`.  The codec lives in `src/ir_schema.rs`; these
+    // `pub(crate)` accessors give it field access without exposing the private
+    // struct internals project-wide.  Only the fields codegen READS are
+    // stored (`name`/`type_def`/`stack_pos`/`uses`/`argument`/
+    // `stack_allocated`/`skip_free`/`captured`/`caller_hidden_buf`, plus the
+    // `names` map and `inline_ref_vars` set).  Fields codegen never reads
+    // (`scope`, the slot scratch `pre_assigned_pos`/`first_def`/`last_use`,
+    // the parse-time `work_*` counters) are NOT stored — `scopes::check` is
+    // skipped on load (it ran before the snapshot, and re-running would
+    // double-insert the free-ops already in `code`).
+
+    /// Number of variables (snapshot encode helper).
+    #[must_use]
+    pub(crate) fn snapshot_len(&self) -> usize {
+        self.variables.len()
+    }
+
+    /// The nine codegen-read fields of variable `i`, for the snapshot encoder.
+    #[must_use]
+    pub(crate) fn snapshot_var(&self, i: usize) -> VarSnapshot<'_> {
+        let v = &self.variables[i];
+        VarSnapshot {
+            name: &v.name,
+            type_def: &v.type_def,
+            stack_pos: v.stack_pos,
+            uses: v.uses,
+            argument: v.argument,
+            stack_allocated: v.stack_allocated,
+            skip_free: v.skip_free,
+            captured: v.captured,
+            caller_hidden_buf: v.caller_hidden_buf,
+        }
+    }
+
+    /// The `names` map entries (name → var_nr), for the snapshot encoder.
+    #[must_use]
+    pub(crate) fn snapshot_names(&self) -> Vec<(&str, u16)> {
+        self.names.iter().map(|(k, &v)| (k.as_str(), v)).collect()
+    }
+
+    /// The `inline_ref_vars` set, for the snapshot encoder.
+    #[must_use]
+    pub(crate) fn snapshot_inline_refs(&self) -> Vec<u16> {
+        self.inline_ref_vars.iter().copied().collect()
+    }
+
+    /// Reconstruct a `Function` from a snapshot (C4 decode).  Every field
+    /// codegen does not read is filled with its post-parse default — harmless
+    /// because `scopes::check` is not re-run on the load path.
+    #[must_use]
+    pub(crate) fn from_snapshot(
+        name: &str,
+        file: &str,
+        vars: Vec<RestoredVar>,
+        names: Vec<(String, u16)>,
+        inline_refs: Vec<u16>,
+    ) -> Function {
+        let mut f = Function::new(name, file);
+        f.variables = vars
+            .into_iter()
+            .map(|r| Variable {
+                name: r.name,
+                type_def: r.type_def,
+                stack_pos: r.stack_pos,
+                uses: r.uses,
+                argument: r.argument,
+                stack_allocated: r.stack_allocated,
+                skip_free: r.skip_free,
+                captured: r.captured,
+                caller_hidden_buf: r.caller_hidden_buf,
+                // codegen-irrelevant post-parse defaults (not stored):
+                source: (0, 0),
+                scope: u16::MAX,
+                uses_at_write: 0,
+                write_source: (0, 0),
+                defined: false,
+                const_param: false,
+                first_def: u32::MAX,
+                last_use: 0,
+                pre_assigned_pos: u16::MAX,
+                promoted_from: u16::MAX,
+                was_loop_var: false,
+            })
+            .collect();
+        f.names = names.into_iter().collect();
+        f.inline_ref_vars = inline_refs.into_iter().collect();
+        // A snapshot is taken AFTER `scopes::check` ran (the stored `code`
+        // already carries its free-ops); mark the reconstructed function
+        // `done` so a load-path `scopes::check` skips it and does not
+        // double-insert those frees (@PLAN54 arc D / @PLAN28 C4 insight).
+        f.done = true;
+        f
     }
 
     pub fn append(&mut self, other: &mut Function) {

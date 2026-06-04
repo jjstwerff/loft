@@ -7,6 +7,7 @@ mod allocation;
 mod format;
 mod io;
 mod search;
+pub mod snapshot;
 mod structures;
 mod types;
 
@@ -108,6 +109,35 @@ pub struct Field {
     pub position: u16,
     pub default: Content,
     pub(self) other_indexes: Vec<u16>, // For now only fields on the same record
+}
+
+impl Field {
+    /// @PLAN54 D2a read seam — `other_indexes` is module-private; expose it
+    /// `pub(crate)` so the schema materializer (`crate::ir_store`) can cache it.
+    #[must_use]
+    pub(crate) fn other_indexes(&self) -> &[u16] {
+        &self.other_indexes
+    }
+
+    /// @PLAN54 D2a — reconstruct a `Field` from cached store fields (the
+    /// `pub(self)` `other_indexes` makes a direct literal impossible outside
+    /// this module).
+    #[must_use]
+    pub(crate) fn from_stored(
+        name: String,
+        content: u16,
+        position: u16,
+        default: Content,
+        other_indexes: Vec<u16>,
+    ) -> Field {
+        Field {
+            name,
+            content,
+            position,
+            default,
+            other_indexes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

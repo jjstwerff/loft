@@ -4083,28 +4083,66 @@ fn main() {
     // recoverable CLI fault (wrong `--path`, not a corrupt install), so
     // emit a clean actionable diagnostic and exit non-zero rather than
     // unwrapping the NotFound into a panic.
+    // Step 0 (startup-cache plan): env-gated parse timing (LOFT_TIMING).
+    let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
-    if let Err(e) = p.parse_dir(&default_dir.to_string_lossy(), true, false) {
-        eprintln!(
-            "loft: cannot load standard library from `{}`: {e}",
-            default_dir.display()
-        );
-        eprintln!(
-            "  the `default/` library directory was not found under the \
-             compiler path.\n  Pass `--path <dir>` pointing at the directory \
-             that contains `default/`,\n  or run `loft` from an installed \
-             location where the stdlib is bundled."
-        );
-        std::process::exit(1);
+    let default_str = default_dir.to_string_lossy().to_string();
+    // @PLAN54 arc E / D2b — opt-in startup caches (default off).  The
+    // whole-program cache (`LOFT_PROGRAM_CACHE`) mmaps the ENTIRE parsed program
+    // (stdlib + lazily-loaded libs + user file) on a repeated unchanged run,
+    // skipping all parsing; the narrower stdlib cache (`LOFT_STDLIB_CACHE`, D2b)
+    // caches `default/` only.  Unset → both are no-ops, behaviour unchanged.
+    let program_cache_on = std::env::var_os("LOFT_PROGRAM_CACHE").is_some_and(|v| !v.is_empty());
+    p.track_sources = program_cache_on;
+    // @PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
+    // as a SKELETON (def table only) and the mmap'd bundle store is returned
+    // here so codegen reads bodies straight from it (no read_data body rebuild).
+    let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
+    let program_warm = program_cache_on
+        && loft::startup_cache::warm_load_program(&mut p, &abs_file, &mut warm_store);
+    if !program_warm {
+        // When building a program cache, parse `default/` fresh so every stdlib
+        // file lands in the program's drift manifest; otherwise use the D2b
+        // stdlib cache.
+        let stdlib_warm =
+            !program_cache_on && loft::startup_cache::warm_load_stdlib(&mut p, &default_str);
+        if !stdlib_warm {
+            if let Err(e) = p.parse_dir(&default_str, true, false) {
+                eprintln!(
+                    "loft: cannot load standard library from `{}`: {e}",
+                    default_dir.display()
+                );
+                eprintln!(
+                    "  the `default/` library directory was not found under the \
+                     compiler path.\n  Pass `--path <dir>` pointing at the directory \
+                     that contains `default/`,\n  or run `loft` from an installed \
+                     location where the stdlib is bundled."
+                );
+                std::process::exit(1);
+            }
+            if !program_cache_on {
+                loft::startup_cache::save_stdlib_cache(&p, &default_str);
+            }
+        }
     }
     let start_def = p.data.definitions();
+    if std::env::var("LOFT_TIMING").is_ok() {
+        eprintln!(
+            "LOFT_TIMING parse_default={:.2}ms ({start_def} defs)",
+            t_parse_default.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     // `--show-types --trace`: enable per-expression type recording
     // BEFORE parsing the user file (parse_dir on default/* already
     // ran without tracing — those are stdlib internals).
     if introspect_mode && introspect_trace {
         p.trace_types = true;
     }
-    p.parse(&abs_file, false);
+    // @PLAN54 arc E — a whole-program warm load already holds every definition;
+    // skip parsing the user file (and its lib loads) entirely.
+    if !program_warm {
+        p.parse(&abs_file, false);
+    }
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's
@@ -4167,6 +4205,48 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
+    // the store-materialised IR is bit-for-bit identical to the native `Data`
+    // before any subsystem is rewired to read from the store.  Opt-in (default
+    // off): validates the store-mirror invariant on the *actual* program being
+    // run — user code + lazily-loaded libs — not just the stdlib round-trip tests.
+    if std::env::var_os("LOFT_IR_CHECK").is_some_and(|v| !v.is_empty()) {
+        if let Err(diff) = loft::ir_read::ir_roundtrip_check(&p.data) {
+            eprintln!("LOFT_IR_CHECK: store-backed IR diverges from native Data: {diff:?}");
+            std::process::exit(1);
+        }
+        if std::env::var_os("LOFT_TIMING").is_some() {
+            eprintln!(
+                "LOFT_IR_CHECK: store round-trip == native ({} defs)",
+                p.data.definitions()
+            );
+        }
+    }
+    // @PLAN54 arc E — on a cold run with the program cache enabled, write the
+    // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
+    // functions carry `done=true` and the baked free-ops).
+    if program_cache_on && !program_warm {
+        loft::startup_cache::save_program(&p, &abs_file);
+    }
+    // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
+    // write the parsed `Data` as the startup-cache JSON snapshot and exit.
+    // This is the manual validation path for the quick-loading work: dump the
+    // post-parse image, then (later) load it back and diff.  The JSON is the
+    // machine format (compact); format it externally if you need to eyeball.
+    // No effect unless the env var is set.
+    if let Ok(path) = std::env::var("LOFT_DUMP_SNAPSHOT") {
+        let json = loft::ir_schema::data_to_json(&p.data);
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("loft: failed to write snapshot to {path}: {e}");
+            std::process::exit(1);
+        }
+        eprintln!(
+            "loft: wrote startup-cache snapshot ({} bytes, {} defs) to {path}",
+            json.len(),
+            p.data.definitions()
+        );
+        std::process::exit(0);
+    }
     let mut state = State::new(p.database);
     // Set source_dir for the source_dir() built-in.
     state.database.source_dir = std::path::Path::new(&abs_file)
@@ -4175,7 +4255,8 @@ fn main() {
         .unwrap_or_default();
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
-    compile::byte_code(&mut state, &mut p.data);
+    // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+    compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);

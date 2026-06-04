@@ -328,6 +328,26 @@ impl Store {
         store
     }
 
+    /// @PLAN54 arc E — cheap validity pre-check for a store image file: it
+    /// exists, is large enough, and starts with the store [`SIGNATURE`].  Lets
+    /// the startup cache reject a corrupt / non-store / truncated bundle and
+    /// fall back to a cold parse instead of letting [`Store::open`] panic on a
+    /// bad signature.  (`SIGNATURE` is written native-endian; a cache is never
+    /// shared across architectures — it is keyed by target triple.)
+    #[cfg(feature = "mmap")]
+    #[must_use]
+    pub fn is_store_file(path: &str) -> bool {
+        use std::io::Read as _;
+        let Ok(mut f) = std::fs::File::open(path) else {
+            return false;
+        };
+        if f.metadata().map_or(0, |m| m.len()) < 16 {
+            return false;
+        }
+        let mut buf = [0u8; 4];
+        f.read_exact(&mut buf).is_ok() && u32::from_ne_bytes(buf) == SIGNATURE
+    }
+
     #[cfg(not(feature = "mmap"))]
     pub fn open(_path: &str) -> Store {
         panic!(
@@ -1479,6 +1499,22 @@ impl Store {
                 *self.addr::<i32>(rec, 0) as usize * 8 - 4,
             );
         }
+    }
+
+    /// Zero `len` bytes at byte offset `pos` within record `rec`.  `claim`
+    /// reuses freed blocks without clearing them, so a freshly-allocated vector
+    /// element (or struct record) carries garbage; callers materialising into
+    /// it must clear it first so unwritten vector-header sub-fields read as
+    /// empty (`vec_rec = 0`) instead of dereferencing a junk record id.
+    #[inline]
+    pub fn zero_range(&mut self, rec: u32, pos: u32, len: u32) {
+        if len == 0 {
+            return;
+        }
+        let ptr: *mut u8 = self.addr_mut::<u8>(rec, pos);
+        // SAFETY: callers pass a record/element's own `pos..pos+len`, which lies
+        // within its claimed allocation.
+        unsafe { std::ptr::write_bytes(ptr, 0, len as usize) }
     }
 
     #[inline]

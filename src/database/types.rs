@@ -34,6 +34,23 @@ fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
 }
 
 impl Stores {
+    /// @PLAN54 D2a — install a store-loaded type schema (`Vec<Type>` from
+    /// [`crate::ir_read::read_schema`]) into this `Stores`, replacing whatever
+    /// was there.  Rebuilds the `name → known_type` lookup from each type's
+    /// name (correct for a non-colliding schema such as the core stdlib; P379
+    /// library-qualified names would need the names map stored separately).
+    /// The derived `parents` back-references stay empty — only parse-time layout
+    /// validation + debug display read them, neither of which runs on the load
+    /// path.
+    pub(crate) fn install_schema(&mut self, types: Vec<Type>) {
+        self.names = types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.name.clone(), i as u16))
+            .collect();
+        self.types = types;
+    }
+
     /**
     To define the 7 base types of the language.
     */
@@ -1774,6 +1791,62 @@ pub struct Type {
 }
 
 impl Type {
+    // @PLAN54 D2a read seam — `complex`/`linked`/`size`/`align` are `pub(super)`
+    // (computed by `finish`); expose them `pub(crate)` so the schema
+    // materializer (`crate::ir_store`) can cache them.  `parents` stays private
+    // (a derived back-reference index, rebuilt on load, never serialized).
+    #[must_use]
+    pub(crate) fn is_complex(&self) -> bool {
+        self.complex
+    }
+    #[must_use]
+    pub(crate) fn is_linked_flag(&self) -> bool {
+        self.linked
+    }
+    #[must_use]
+    pub(crate) fn size_bytes(&self) -> u16 {
+        self.size
+    }
+    #[must_use]
+    pub(crate) fn align_bytes(&self) -> u8 {
+        self.align
+    }
+
+    /// @PLAN54 D2a — reconstruct a `Type` from cached store fields.  `parents`
+    /// (a derived back-reference index, read only by parse-time layout
+    /// validation + debug display, never by codegen/execution) is restored
+    /// empty; the load path skips the layout validation that consumes it.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_stored(
+        name: String,
+        parts: Parts,
+        keys: Vec<crate::keys::Key>,
+        complex: bool,
+        linked: bool,
+        size: u16,
+        align: u8,
+        field_groups: Vec<crate::data::LinkedFieldGroup>,
+    ) -> Type {
+        Type {
+            name,
+            parts,
+            keys,
+            parents: std::collections::BTreeSet::new(),
+            complex,
+            linked,
+            size,
+            align,
+            field_groups,
+        }
+    }
+
+    /// @PLAN54 D2a — drop the derived `parents` index (for comparing a
+    /// store-reloaded schema against a fresh parse, which carries `parents`).
+    pub(crate) fn clear_parents(&mut self) {
+        self.parents.clear();
+    }
+
     pub(super) fn new(name: &str, parts: Parts, size: u16) -> Type {
         Type {
             name: name.to_string(),
