@@ -198,6 +198,25 @@ same failure as a fix asserted without the matrix.)
 - **`deferred` / `rejected`** are the *decision* — made on the `need-approval` data, so
   that data must be present to defer or reject *informedly*, never by default.
 
+### Designing — the use-case matrix (served *and* broken)
+
+`needs-design` (an enhancement blocked on a scope/approach call before it can be
+costed; a bug whose fix needs a behaviour decision) reaches `designed` only when the
+design has enumerated **both halves of its use-case matrix**:
+
+1. **Use cases served** — what the design makes possible (the *want*).
+2. **Use cases broken or changed** — what existing, legitimate behaviour it affects.
+
+The second half is the one that does the work: it is the matrix discipline applied to
+*design*, and **the breaking cases reveal the real boundary** (the matched scope —
+*no wider*).  A design that lists only what it serves is the "no-wider" failure
+waiting to ship.  #255 is the worked example — "switch the path anchor from cwd to the
+program" looked decided until the breaking case (a CLI tool resolving the *user's*
+file) exposed **two kinds** of relative path, and the matched design became
+single-anchor + a one-line opt-in, not a global switch.  Until that pass is run the
+ticket stays `needs-design`; cost can't be assessed against a scope the breaking cases
+haven't bounded.
+
 ### The done-gate — `fixed` / `implemented` is earned, not declared
 
 Ripeness guards the way *in*; the **done-gate guards the way out**.  Before a ticket
