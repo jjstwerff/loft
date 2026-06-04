@@ -5,9 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan template
 
-Copy this file to `<NN>-<slug>/README.md` when opening a new
-plan.  Numbering is the next free integer in `plans/future/`
-or `lib_plans/future/` (independent counters).
+Copy this file to `<N>-<slug>/README.md` — **flat**, no `future/` subdir — when
+opening a new plan.  **`<N>` is the plan's
+[`loft-lang/plans`](https://github.com/loft-lang/plans/issues) issue number**
+(`@PLN<N>`), NOT the next local directory integer.  State lives on that issue, not the
+directory; there is **no ROADMAP row** (the overview is derived from the loft-lang
+issues).  Full procedure: the loft-plan-workflow skill (Procedure A — NEW MODEL).
 
 The sections below are the canonical shape.  Sections marked
 **(REQUIRED)** must be present in every plan; sections marked
@@ -48,9 +51,9 @@ and add the row.
 ## Status (REQUIRED)
 
 This is the **single source of truth** for what's shipped / open /
-deferred / blocked.  Other docs (ROADMAP, DEFERRED.md, downstream
-plans) carry the plan name + dependencies but not the per-phase
-status — readers who want the exact state come here.  No
+deferred / blocked.  Other docs (the loft-lang issue, DEFERRED.md,
+downstream plans) carry the plan name + dependencies but not the
+per-phase status — readers who want the exact state come here.  No
 duplication, no sync.
 
 One paragraph.  State of the world today + what this plan will
@@ -69,13 +72,14 @@ change.  Examples:
 ## Goal (REQUIRED)
 
 One sentence.  What this plan ships when complete.  Avoid
-strategy / advertising language; that lives in ROADMAP.md
-or RELEASE.md.
+strategy / advertising language; that lives on the loft-lang issue
+or in RELEASE.md.
 
 ## Effort + design (OPTIONAL — recommended)
 
-Echo the ROADMAP `E` and `Design` columns so plan readers
-don't bounce out to ROADMAP for sizing.
+State the `E` (effort) and `Design` here so readers get sizing without
+leaving the plan.  (The `loft-lang/plans` issue may mirror them, but this
+README is the source.)
 
 - **Effort:** XS / S / M / MH / H / VH
 - **Design:** ✓ (detailed) / ~ (partial) / — (needs design)
@@ -136,7 +140,8 @@ Helps the dependency graph stay visible.
 
 - Reference doc(s) that this plan implements / extends.
 - Sibling plans that cooperate or that block this one.
-- ROADMAP.md row(s) that schedule this plan's items.
+- The `loft-lang/plans` issue (`@PLN<N>`) that tracks this plan, and any source
+  bug/enhancement issue it was promoted from.
 
 ---
 
@@ -152,19 +157,15 @@ Sub-files for distinct concerns: `IMPL.md`, `DISCUSSION.md`,
 EVENT_LOOP / OPENGL / WEB_SERVICES precedent: each sub-file
 has a single concern.
 
-**On opening a new plan:**
-1. Copy this template to `plans/future/<NN>-<slug>/README.md`
-   (or `lib_plans/future/<NN>-<slug>/`).
-2. Fill in Status + Goal first.
-3. Add ROADMAP row(s) citing this plan + tag with value
-   category (S / R / G / F / U / C / Q / N).
-4. Add lib_plans/README.md or plans/README.md table row.
-5. **Do NOT add a CLAUDE.md doc index entry by default.**
-   Plans are discoverable via plans/README.md (which IS in
-   CLAUDE.md doc index).  Add a CLAUDE.md entry ONLY if the
-   plan introduces a NEW top-level reference concept that
-   would otherwise have no doc-root home — vanishingly rare
-   for plans (most plan content lives at a reference doc
-   that already has its own CLAUDE.md entry).
+**On opening a new plan** (new model — full procedure in the loft-plan-workflow skill):
+1. Create the plan's [`loft-lang/plans`](https://github.com/loft-lang/plans/issues)
+   issue — its number is `@PLN<N>`.  Copy this template to a **flat**
+   `plans/<N>-<slug>/README.md` (or `lib_plans/<N>-<slug>/`), `<N>` = that issue #.
+2. Fill in Status + Goal first; link the loft-lang issue + carry `@PLN<N>` in the body.
+3. **Label the loft-lang issue**: `plan` + `subject:*` (loft / libs / audience) +
+   `status:*` (future / active / finished).  **No ROADMAP row, no plans/README table
+   row** — tracking lives on the issue.
+4. **Do NOT add a CLAUDE.md doc index entry by default.**  Add ONLY if the plan
+   introduces a NEW top-level reference concept with no doc-root home (vanishingly rare).
 
 **On closing or deferring a plan:** see [`_LIFECYCLE.md`](_LIFECYCLE.md).
