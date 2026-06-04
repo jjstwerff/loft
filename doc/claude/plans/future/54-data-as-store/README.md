@@ -182,7 +182,7 @@ cache; and the cross-mode byte-identical equivalence harness.
 | **N0 — build fingerprint** ✅ | **Done.**  `cache::loft_build_fingerprint()` = the loft rlib's sha256 **content** hash (memoised) — the single seam.  **Audit finding:** the user-binary cache key (`native_cache_key`) was *already* content-hash (BUILD2) and **no** native key folds git-HEAD — nothing to migrate.  The real gap was that `auto_build_native` / `add_native_extern_flags` reused a cached package rlib / cdylib on **existence only**, so a loft change linked the *stale* one (the `make rebuild-native-cdylibs` hazard).  Fix = the "do both" **per-artifact backstop**: a `.loft-build-fp` sidecar stamps each built artifact with the fingerprint; reuse is gated on a match, so a loft change rebuilds it.  (The per-artifact gate subsumes the coarse startup nuke — a rebuild overwrites in place, so no orphans accumulate.)  Goal-A veil-lifter as designed. | `cache::native_artifact_fingerprint_sidecar_gate` (unit) + `tests/n0_fingerprint.rs` (stale sidecar → rebuild + re-stamp) + a real `loft --native` run stamps the fp; native suite green | ✅ | S — **done** |
 | **N1 — per-library native artifact cache** 🔄 | **Idle-TTL eviction model done + applied to the program cache.**  `cache::cache_ttl()` (`LOFT_CACHE_TTL_HOURS`, default 24 h) + `cache::touch_now()` (touch-on-use mtime bump) + `prune_dir` now evicts **idle-TTL first** (drop bundles unused past the TTL) with the size-cap as a runaway backstop; a warm program-cache hit `touch_now`s its bundle, so actively-run programs persist and one-offs age out.  (The "compile each library once, fingerprint-validated" half *is* N0's `auto_build_native` + sidecar.)  **Remaining — the idle-TTL on a *native-artifact* cache:** the default local build compiles libraries **in-tree** (`lib/<pkg>/native/target/`), which is the dev build, **not an evictable cache** — so the native-artifact idle-TTL needs the registry build-cache (`~/.loft/build-cache/`, feature-gated) or a new shared local native cache.  Deferred until that surface exists rather than shipping untested registry-gated GC (Goal-A "verify, don't assert"). | `prune_dir_idle_ttl_evicts_unused` (unit) + `arc_e_program_cache` warm-hit touch path; suites green | 🔄 | M — **model + program-cache done; native-cache application deferred** |
 | **N2 — native dispatch + lean interface load** *(all common types PROVEN, both directions)* | The headline: an interpreted script calling a compiled user library over the shared store.  **Scalar slice + store-touching across ALL common types (scalars, vectors, structs, text, plain+data enums — both directions) landed** — 13 green end-to-end tests in `tests/n2_cdylib.rs`.  **Scalar:** `generate_cdylib_lib_rs` + a `loft_<name>(scalars) -> ret` wrapper that is **ABI-identical to a hand-written scalar `#native` symbol**, so it reuses the existing dispatch wholesale (`OpStaticCall` → `load_all` → `wire_native_fns` dlsym) — `double(21) → 42`.  **Store-touching:** an auto-generated cdylib links libloft, so the bridge **shares the caller's `*mut Stores` by pointer** (zero-marshalling, *not* the `LoftStore` handle): `generate_shared_cdylib_lib_rs` + `LibArg` uniform slot + `shared_store_dispatch`/`wire_shared_native_fns` — `vec_sum([10,20,30]) → 60` (non-scalar arg, raw `DbRef` crosses unchanged) and `range_vec(4) → [0,1,2,3]→6` (vector **return** — native allocates in the shared store via the hidden `ref_return` destination the bridge wrapper allocates itself; the `DbRef` is valid back in the interpreter).  Structs/text/enums + keyed `sorted` cross too (`point_sum`, `make_point`, `str_len`, `shout`, `dir_code`/`dir_from`, `area`/`make_rect`, `sum_values`); **schema agreement is proven** — an identically-defined struct gets the same type id + field offsets in the separate library and script `Data`.  Fixed a latent `loft_register_v1` guard bug (per-library `uses_v1`, preserving #119).  **Lean interface DONE (source form):** `generate_interface` emits the library's type defs + `#native` decls as loft source; a script using only it dispatches (`lean_interface_drives_shared_dispatch`) — no manual redefinition.  **Remaining:** closures (`__closure` param); `generate_interface` aggregate type-name rendering (`sorted<Item[k]>`); the binary schema interface (D2a) as the robust successor to the source form; `hash`/`index`/`spacial` (same verified `DbRef` path, untested).  Auto-deriving the dispatch from `use <lib>` is N3 (core proven). | a script using a native lib dispatches to its compiled subgraph, interprets the rest; output byte-identical to the all-interpreted run (Goal D) | 🔄 (all common types + lean interface done) | M |
-| **N3 — native/interpret decision policy** *(core mechanism PROVEN)* | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag.  **Core landed (in-process):** `native_lib::mark_native_exports(data, candidates)` sets `def.native = "loft_shared_<name>"` on a *normal* library function's shared-store-dispatchable subset — so `byte_code` routes its calls through `OpStaticCall`, the stub registers, and `wire_shared_native_fns` wires the bridge after the auto-built cdylib loads; `output_native_library` emits the cdylib with **no `main` bootstrap** even when the consuming script's `n_main` shares the `Data`.  `auto_native_marks_and_dispatches_normal_library_fn`: `double(21) → 42` with **no `#native` decl anywhere** — the in-process shape of `use <lib>`.  **Phase A DONE (2026-06-04) — the headline works on the real binary:** `[library] compile = "native"` opt-in (`manifest.rs`) → `Parser::pending_native_compile` (`apply_manifest_side_effects`) → `main.rs` marks (`mark_library_native`) + builds (`build_shared_cdylib` into `<pkg>/native-auto/`) + loads + `wire_shared_native_fns`; `tests/n3_use_native.rs` runs `use mathnative;` through the binary and gets `42/7/120` from an auto-built cdylib.  **Remaining:** Phase B — make it automatic (default-native, dev-interpret-on-edit fallback, silent per-function fallback) so the opt-in + flag disappear.  See § Landing sequence. | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | 🔄 (Phase A done — `use` → native on the real binary) | M |
+| **N3 — native/interpret decision policy** *(core mechanism PROVEN)* | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag.  **Core landed (in-process):** `native_lib::mark_native_exports(data, candidates)` sets `def.native = "loft_shared_<name>"` on a *normal* library function's shared-store-dispatchable subset — so `byte_code` routes its calls through `OpStaticCall`, the stub registers, and `wire_shared_native_fns` wires the bridge after the auto-built cdylib loads; `output_native_library` emits the cdylib with **no `main` bootstrap** even when the consuming script's `n_main` shares the `Data`.  `auto_native_marks_and_dispatches_normal_library_fn`: `double(21) → 42` with **no `#native` decl anywhere** — the in-process shape of `use <lib>`.  **Phase A DONE (2026-06-04) — the headline works on the real binary:** `[library] compile = "native"` opt-in (`manifest.rs`) → `Parser::pending_native_compile` (`apply_manifest_side_effects`) → `main.rs` marks (`mark_library_native`) + builds (`build_shared_cdylib` into `<pkg>/native-auto/`) + loads + `wire_shared_native_fns`; `tests/n3_use_native.rs` runs `use mathnative;` through the binary and gets `42/7/120` from an auto-built cdylib.  **Partial Phase B landed:** the silent per-function gate-split (a `CallRef`/`parallel` function interprets while the rest dispatches native), the synthetic-exclusion fix (dispatch targets = top-level user-named public fns), and cdylib caching (rebuild only when the source changes or the loft-build fingerprint moves).  **Remaining (the converged critical path, re-derived via the rigor discipline):** **Step 1** parity instrument (the gate — prove native ≡ interpreted byte-for-byte) → **Step 2** decide native/interpret *before* `byte_code` so a build failure silently interprets → **Step 3** default-native (drop the opt-in/flag) → **Step 4** dev-interpret-on-edit.  See § Landing sequence. | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | 🔄 (Phase A + partial B done; the invisibility/parity steps remain) | M |
 | **N4 — compilability gate + silent interpret fallback** *(re-scoped 2026-06-04; gate analysis 🔄 done)* | **Gate analysis landed — `src/native_gate.rs::native_compilable(data) -> HashSet<u32>`**: the maximal native subgraph, computed by a transitive, **exhaustive** (no `_` arm — Goal-F-safe: an un-native-able construct can never silently slip through) `Value`-tree walk.  **Empirical finding (the de-risk made real):** the `--native` backend already emits *everything* — structs, enums, vectors, **generics, closures** — so the denylist is just the concurrency constructs `parallel{}` / `par_for` / `yield` (`emit.rs` writes a non-code comment for those; `NATIVE_SKIP`/`SCRIPTS_NATIVE_SKIP` are both empty).  The "generics/closures research problem" was a **phantom** — measured **461/461 stdlib functions native-compilable (100%)**.  The gate is transitive (native iff the fn *and all `Call` callees* are native) so the subgraph is **closed** → the boundary is only ever interpret→native (`OpStaticCall`); `CallRef` is conservatively excluded (dynamic callee unprovable).  Tests: `walk_classifies_leaves_and_denylist`, `walk_finds_nested_denylist_construct`, `stdlib_is_mostly_native_compilable`.  **Remaining:** the dispatch side (compile the subgraph to a cdylib + emit `OpStaticCall` for native callees, interpret the rest) — overlaps **N2**.  Making concurrency itself native is the *only* later optional item, and it is tiny. | gate: the native subgraph excludes exactly the concurrency users; library runs native where compilable, interprets where not, no user-visible error | 🔄 | gate **done** · dispatch (with N2) S–M |
 | **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ⬜ | M (continuous) |
 
@@ -214,25 +214,75 @@ working unit:
 - **A3 ✅ `main.rs` orchestration** — after `scopes::check`: `mark_library_native` marks each opted-in library's public shared-store-dispatchable functions native (file-prefix ownership ∩ the gate).  After `byte_code`: `build_shared_cdylib` builds each into `<pkg>/native-auto/`, loaded alongside the hand-written natives; then `wire_shared_native_fns`.  Auto-native programs bypass the program cache for now (warm load would lack the rebuilt cdylib — D1 persists this).  `find_loft_rlib` fixed to return the `<profile>/deps/` link-search dir in both the real-binary and test contexts.
 - **A4 ✅ Fixture + subprocess test** — `tests/lib/mathnative/` (plain loft `double`/`add`/`factorial`, `compile = "native"`); `tests/n3_use_native.rs` runs the real binary on `use mathnative;` and asserts `42/7/120` **and** that the cdylib was built.  *The ideal-state core, proven end-to-end.*
 
-**Phase B — make it automatic + invisible (Goal F)** [maps to N3 policy + N4 fallback]
-- **B1 ⬜ Default-native** — drop the A1 opt-in; a resolved library defaults to native.
-- **B2 ⬜ Dev-interpret fallback** — library under active edit (source newer than its cached `.so`) → interpret (fast loop); stable/installed dep → link the cached artifact.  *The "no flag" part.*
-- **B3 ⬜ Silent per-function fallback (N4)** — route the gate's excluded functions (`parallel{}`/`par_for`/`yield`) to the interpreter while the rest of the *same* library dispatches native; no user-visible error.
+**Already landed beyond Phase A (partial Phase B, 2026-06-04..05):**
+- **Silent per-function gate-split** ✅ — `mark_native_exports` marks only the
+  `shared_store_dispatchable` subset, so a `parallel{}`/`par_for`/`yield`/`CallRef`
+  function stays interpreted while the rest of the *same* library dispatches native;
+  proven end-to-end (`mixed_library_dispatches_native_and_interprets_rest`).
+- **Synthetic-exclusion fix** ✅ — *Invariant: a dispatch target is a top-level,
+  user-named, `pub` function the script can directly `Call`.*  A `pub fn`'s parse
+  sprays `pub_visible` over its nested lambda (`__lambda_N`), so `mark_library_native`
+  excludes `__`-synthetic names (the whole class, not the lambda instance).
+- **Cdylib caching (the rebuild half)** ✅ — `cached_or_build_shared_cdylib` reuses a
+  fresh cached `native-auto/<so>` (source-mtime unchanged **and** N0 build-fingerprint
+  matches), rebuilds otherwise.
 
-**Phase C — soundness + parity over the new boundary (N5, the floor it rests on)**
-- **C1 ⬜ Differential sweep** — every test program runs all-interp · all-native · **mixed**; assert byte-identical (D).
-- **C2 ⬜ Sanitizers on the mixed path** — Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment (A).
-- **C3 ⬜ `LOFT_STORE_GUARD`** silent on the mixed path (E).
+**The converged critical path (re-derived via the engineering-rigor discipline,
+2026-06-05).**  The naive order was "wire → make invisible → make sound."  Probing
+it (Design Protocol 1) inverted two things: **invisibility is only safe once parity
+is *proven*** (so the soundness sweep is the *gate*, not the trailer), and
+**default-native is an architecture change, not a flag** (a build failure must
+degrade to interpret, which the current build-after-`byte_code` ordering can't do).
+Each step is a *design* step — stated as its **invariant** + the **probe that
+falsifies it**:
 
-**Phase D — productization polish (fast · robust · complete)**
-- **D1 ⬜ Native-artifact cache** — idle-TTL eviction (✅ model, N1) on a shared `~/.loft/build-cache/`, fingerprint-gated (✅ N0).  *"Cache common library sets, clear after 24 h idle."*
-- **D2 ⬜ Binary schema interface (D2a)** — replace the source-form lean interface (✅) with a loaded schema so type ids agree without redefinition and **bodies are never re-parsed** (the real speed win).
-- **D3 ⬜ Coverage tails** — closures (`__closure`); `generate_interface` aggregate type-name rendering (`sorted<Item[k]>`).
-- **D4 ⬜ Library validation layer** *(deferred)* — fingerprint = content·target·features·loft-build·signature; load-bearing only when **daily builds** ship (see § Excluded).
+**Step 1 — Parity instrument** ⬜ *(the gate; subsumes the old Phase C / N5-D)*
+- *Invariant:* a function run native ≡ run interpreted, byte-for-byte.
+- *Falsifier:* a differential harness running each corpus program **all-interp ·
+  all-`--native` · mixed (`use` auto-native lib)** and diffing stdout; the first
+  divergence is a real bug caught before it ships invisibly.  Seed with
+  `mathnative`/`mathmixed`.
+- *Why first:* "invisible" is honest only once equivalence is proven across the
+  **class**, not spot-checked per test.  **N5 sanitizers** (Miri/ASan/
+  `stack_align_guard`, esp. macOS-ARM) + `LOFT_STORE_GUARD` on the mixed path land
+  alongside.
 
-**Critical path to the headline:** A1→A4 (one focused integration).  **Critical path to
-the *ideal* state:** A → B → C.  D is polish (fast + complete), not required for
-"invisible + sound."
+**Step 2 — Decide native/interpret *before* `byte_code`** ⬜ *(B1's prerequisite; real design depth)*
+- *Invariant:* a library that can't compile native (build failure, no `rustc`)
+  **silently interprets** — byte-identical, no `exit`, no user-facing error.
+- *Falsifier:* a fixture with a deliberate codegen-gap function → the program must
+  still run (interpreted), not crash.  Today it `exit(1)`s, because the build is
+  *after* `byte_code` already emitted `OpStaticCall`.
+- *Open design choice to probe:* build the cdylib from the type schema **before** the
+  full `byte_code` (only successfully-built libs get `OpStaticCall`) vs. a
+  re-`byte_code` fallback.
+
+**Step 3 — Default-native (B1)** ⬜ *(this is the "invisible" the goal names)*
+- *Invariant:* a `use`d library defaults to native; **no opt-in, no flag, no
+  `#native`** (drops the Phase-A `compile = "native"` manifest field).
+- *Falsifier:* a library with a non-compilable function still works (gate + Step 2);
+  a fresh `use` of any normal library dispatches native with no annotation.
+
+**Step 4 — Dev-interpret-on-edit (B2 policy)** ⬜ *(the "no `rustc` per save")*
+- *Invariant:* a library being edited interprets (instant loop); a stable/cached
+  library links its artifact.  Native *when stable*, interpreted *when fresh* — this
+  reconciles "library = always native" with "no rebuild while you iterate."
+- *Falsifier:* an edit-run-edit-run loop fires no `rustc`; stop editing → the next
+  run is native.
+
+**Polish — off the critical path** ⬜ *(fast · robust · complete)*
+- Idle-TTL artifact eviction on a shared `~/.loft/build-cache/` (N1, model ✅,
+  fingerprint-gate ✅ N0) · **binary schema interface (D2a)** so type ids agree
+  without redefinition and **bodies are never re-parsed** (replaces the source-form
+  lean interface ✅) · coverage tails (closures `__closure`; `generate_interface`
+  aggregate names `sorted<Item[k]>`) · the daily-builds **validation layer** (deferred,
+  see § Excluded).
+
+**Critical path to the *ideal* state: Step 1 → 2 → 3 → 4.**  Step 1 (parity) is the
+unlock — simultaneously the soundness floor *and* the instrument that turns the
+default-native flip (Step 3) from hopeful into proven.  Polish is not required for
+"invisible + sound."  *This sequence has been probed twice without a new correction —
+it has converged.*
 
 **Timeline (the interpret-fallback re-scope, 2026-06-04).**  Letting the
 un-native-able cases interpret (N4 above) drops the generics/closures **research off
