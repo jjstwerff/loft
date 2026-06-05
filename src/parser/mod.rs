@@ -5361,8 +5361,15 @@ impl Parser {
         // library into auto-compilation.  Record the package dir; the driver marks
         // + builds + loads after scope analysis (see `pending_native_compile`).
         // `native` (hand-written cdylib) takes precedence — don't double-compile.
+        //
+        // Step 3 instrument: `LOFT_DEFAULT_NATIVE=1` makes EVERY `use`d library a
+        // native candidate (the steady-state default), not just the opted-in ones —
+        // a reversible env gate so the full suite can be run under default-native to
+        // see which libraries are ready vs. which fall back to interpret (Step 2's
+        // safety net) BEFORE the chokepoint default is flipped for real.
+        let default_native = std::env::var_os("LOFT_DEFAULT_NATIVE").is_some();
         if m.native.is_none()
-            && m.compile.as_deref() == Some("native")
+            && (m.compile.as_deref() == Some("native") || default_native)
             && !self.pending_native_compile.iter().any(|d| d == pkg_dir)
         {
             self.pending_native_compile.push(pkg_dir.to_string());
