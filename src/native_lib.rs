@@ -680,7 +680,7 @@ pub fn build_shared_cdylib(
         .arg("-C")
         .arg("debuginfo=0")
         .arg("-C")
-        .arg("opt-level=0")
+        .arg("opt-level=2")
         .arg("--crate-type")
         .arg("cdylib")
         .arg("-o")

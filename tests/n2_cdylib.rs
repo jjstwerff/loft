@@ -881,3 +881,104 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// @PLAN54 F3 — does a **default-native-MARKED, BODY-BEARING** library function
+/// actually dispatch to its compiled cdylib bridge at runtime, or interpret its own
+/// loft body (correct output either way — the no-speedup mechanism)?
+///
+/// A usage sentinel on the bridge (`SHARED_DISPATCH_HITS`) with a positive control:
+///   - **Positive control:** a `#native`-declared, *no-body* shared dispatch — it has
+///     nothing to interpret, so a passing `vec_sum==60` means the bridge fired.  If
+///     the sentinel stays 0 here, the sentinel is broken — distrust its silence below.
+///   - **The question:** the SAME function, parsed *with its loft body* and marked
+///     native via `mark_exports` (exactly the default-native path), then run.  One
+///     axis varied (no-body → body-bearing); the bridge sentinel reports which path
+///     the call took.  Observation only (no outcome assert) — it decides the F3 root.
+#[test]
+fn f3_body_bearing_marked_fn_dispatch_vs_interpret() {
+    use loft::state::SHARED_DISPATCH_HITS;
+    use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    // ---- POSITIVE CONTROL: a no-body #native dispatch MUST fire the bridge ----
+    let Some((so_pc, tmp_pc)) = build_shared_lib_cdylib("loft_n2_f3pc", VEC_SUM_LIB, "vec_sum")
+    else {
+        return; // rustc unavailable
+    };
+    let native_decl = "pub fn vec_sum(data: vector<integer>) -> integer not null;\n\
+                       #native \"loft_shared_n_vec_sum\"\n";
+    let pc_src = "fn main() { d = [10, 20, 30]; assert(vec_sum(d) == 60, \"pc\") }";
+    SHARED_DISPATCH_HITS.store(0, Ordering::Relaxed);
+    run_shared_dispatch(&so_pc, native_decl, pc_src);
+    let pc_bridge = SHARED_DISPATCH_HITS.load(Ordering::Relaxed);
+    let _ = std::fs::remove_dir_all(&tmp_pc);
+    assert!(
+        pc_bridge > 0,
+        "POSITIVE CONTROL FAILED: the bridge sentinel never moved for a no-body \
+         #native dispatch — the sentinel is broken, so its silence below is meaningless"
+    );
+
+    // ---- THE QUESTION: same fn, but BODY-BEARING + default-native MARKED ----
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(VEC_SUM_LIB, "lib", false); // vec_sum WITH its loft body
+    p.parse_str(
+        "fn main() { d = [10, 20, 30]; assert(vec_sum(d) == 60, \"q\") }",
+        "main",
+        false,
+    );
+    assert!(
+        !p.diagnostics.lines().iter().any(|l| l.starts_with("Error")),
+        "parse: {:?}",
+        p.diagnostics.lines()
+    );
+    loft::scopes::check(&mut p.data);
+
+    let fn_nr = p.data.def_nr("n_vec_sum");
+    let export: HashSet<u32> = std::iter::once(fn_nr).collect();
+    let tmp = std::env::temp_dir().join(format!("loft_n2_f3q_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let so = match loft::native_lib::build_shared_cdylib(
+        &p.data,
+        &p.database,
+        &export,
+        &tmp,
+        "loft_auto_f3q",
+    ) {
+        Ok(so) => so,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&tmp);
+            panic!("build_shared_cdylib failed: {e}");
+        }
+    };
+    loft::native_lib::mark_exports(&mut p.data, &export); // the default-native mark
+
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    loft::extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    loft::extensions::wire_shared_native_fns(&mut state, &p.data);
+
+    SHARED_DISPATCH_HITS.store(0, Ordering::Relaxed);
+    state.execute_argv("main", &p.data, &[]); // inner assert == positive control the call ran
+    let q_bridge = SHARED_DISPATCH_HITS.load(Ordering::Relaxed);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    eprintln!("F3 SENTINEL  positive-control(no-body) bridge_hits={pc_bridge}");
+    eprintln!("F3 SENTINEL  question(body-bearing-marked) bridge_hits={q_bridge}");
+
+    // The liveness guard the arc was missing: parity tests assert OUTPUT (correct
+    // whether the call dispatches or interprets its body); this asserts the call
+    // actually REACHED the bridge.  A regression that silently reverts default-native
+    // to interpret-the-body would pass every parity test but trip here.
+    assert!(
+        q_bridge > 0,
+        "a body-bearing default-native-marked fn must DISPATCH to its cdylib bridge, \
+         not interpret its loft body — got bridge_hits={q_bridge} (output was still \
+         correct, which is exactly why output-parity tests can't catch this)"
+    );
+}

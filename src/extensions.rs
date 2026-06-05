@@ -525,6 +525,7 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
     use crate::keys::DbRef;
     use crate::native_lib::LibArg;
 
+    crate::state::SHARED_DISPATCH_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
     let (bridge_ptr, sig) = {
         let guard = SHARED_SIGS
