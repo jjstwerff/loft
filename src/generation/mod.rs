@@ -456,6 +456,27 @@ fn native_returns_owned_string(name: &str) -> bool {
     )
 }
 
+/// @PLN10 Phase A — a **USER** text-returning function with **no `RefVar(Text)`
+/// work buffer** ("nwb") returns an owned `String` rather than a buffer-backed
+/// `Str`.  Its wrapper signature is `-> String` and every text return emits
+/// `(val).to_string()` (the @PLN10 Phase B owned-String flip).  Two roots map
+/// here, both bufferless: `no_work_buffer` (@P205 generic monomorphs, excluded
+/// from `text_return` in `definitions.rs`) and any user text fn whose returns are
+/// all literal / computed / inner-call (no promoted-local buffer).  Adding **no**
+/// buffer means **no** two-pass signature change → it sidesteps Direction-B's
+/// instability.  Disjoint from `native_returns_owned_string` (that gates `#native`
+/// / `codegen_runtime` stubs; this gates `Block` bodies).
+pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
+    matches!(def.returned, Type::Text(_))
+        && def.rust.is_empty()
+        && def.native.is_empty()
+        && !def.name.starts_with("Op")
+        && !def
+            .attributes
+            .iter()
+            .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+}
+
 /// Use this to map a loft type to the Rust type used in generated code.
 /// The context controls whether the type appears as an owned value, argument, variable, or reference.
 ///
@@ -2148,14 +2169,18 @@ extern crate loft;"
         if def.returned != Type::Void {
             // @PLN10 — owned-`String` producers get a `-> String` wrapper
             // matching their converted body: the curated `codegen_runtime` set
-            // (`native_returns_owned_string`) AND every cdylib FFI text native
+            // (`native_returns_owned_string`), every cdylib FFI text native
             // (`!def.native.is_empty()`), whose `output_native_direct_call`
             // body returns the freshly-copied `LoftStr` bytes as an owned
-            // `String` (N2) instead of a scratch-backed `Str`.  All others keep
-            // `Str`.  The two signals are disjoint: the curated set has an empty
-            // `def.native`, so the `||` never double-gates.
+            // `String` (N2), AND every bufferless user text fn
+            // (`def_returns_owned_text`, Phase A — its returns emit
+            // `(val).to_string()`).  All others keep `Str`.  The three signals
+            // are disjoint (curated/cdylib have non-`Block` bodies; nwb is a
+            // user `Block`), so the `||` never double-gates.
             if matches!(def.returned, Type::Text(_))
-                && (native_returns_owned_string(&def.name) || !def.native.is_empty())
+                && (native_returns_owned_string(&def.name)
+                    || !def.native.is_empty()
+                    || def_returns_owned_text(def))
             {
                 write!(w, "-> String ")?;
             } else {

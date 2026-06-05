@@ -297,8 +297,19 @@ impl Output<'_> {
             }
             Value::Return(val) => {
                 let returned = &self.data.def(self.def_nr).returned;
+                // @PLN10 Phase A — a bufferless ("nwb") user text fn has a
+                // `-> String` wrapper, so every text return emits an owned
+                // `String`, never a buffer-backed `Str`.  Computed once here and
+                // checked first at each return shape below.
+                let outer_owned = super::def_returns_owned_text(self.data.def(self.def_nr));
                 if matches!(**val, Value::Null) && *returned != Type::Void {
-                    write!(w, "return {}", super::default_native_value(returned))?;
+                    if outer_owned {
+                        // String null: the content sentinel as an owned String
+                        // (matches the `-> String` wrapper, not `Str::new(...)`).
+                        write!(w, "return loft::state::STRING_NULL.to_string()")?;
+                    } else {
+                        write!(w, "return {}", super::default_native_value(returned))?;
+                    }
                 } else if let Value::If(test, true_v, false_v) = &**val {
                     self.pre_declare_branch_vars(w, true_v, false_v)?;
                     let returns_text = matches!(returned, Type::Text(_));
@@ -323,7 +334,9 @@ impl Output<'_> {
                         true_has_ncc || false_has_ncc
                     };
                     write!(w, "return ")?;
-                    if if_needs_scratch {
+                    if outer_owned {
+                        write!(w, "(")?;
+                    } else if if_needs_scratch {
                         write!(w, "{{ let _tmp = (")?;
                     } else if wrap_text {
                         write!(w, "Str::new(")?;
@@ -339,7 +352,9 @@ impl Output<'_> {
                     }
                     self.output_if_inner(w, test, true_v, false_v, true)?;
                     self.fn_ref_context = prev_fn_ref_ctx;
-                    if if_needs_scratch {
+                    if outer_owned {
+                        write!(w, ").to_string()")?;
+                    } else if if_needs_scratch {
                         write!(
                             w,
                             ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
@@ -352,6 +367,12 @@ impl Output<'_> {
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
+                    // A direct `return helper()` where `helper` is itself a
+                    // BUFFERED user text fn already yields a `Str` — no re-wrap.
+                    // @PLN10 Phase A: EXCLUDE nwb inner fns (they now return an
+                    // owned `String`, not `Str`); a `return nwb_helper()` must be
+                    // re-wrapped to this fn's return type instead (owned→owned for
+                    // an nwb outer, owned→buffer/scratch for a buffered outer).
                     let inner_already_str = matches!(
                         &**val,
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
@@ -359,6 +380,18 @@ impl Output<'_> {
                             && self.data.def(*d).rust.is_empty()
                             && self.data.def(*d).native.is_empty()
                             && !self.data.def(*d).name.starts_with("Op")
+                            && !super::def_returns_owned_text(self.data.def(*d))
+                    );
+                    // @PLN10 Phase A — `return nwb_helper()` in a BUFFERED outer:
+                    // the inner produces an owned `String` but this fn's wrapper is
+                    // `-> Str`, so route the String through the program-lifetime
+                    // backing (scratch here; buffer-write is the follow-up) and
+                    // hand back a `Str` pointing into it.  `Str::new(String)` would
+                    // fail E0308.
+                    let inner_is_nwb_call = matches!(
+                        &**val,
+                        Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
+                            && super::def_returns_owned_text(self.data.def(*d))
                     );
                     let wrap_text = returns_text && !inner_already_str;
                     // T1.8a's tuple-of-text return path was retired by
@@ -415,10 +448,18 @@ impl Output<'_> {
                         // reads from there.
                         let returns_ncc_block = matches!((**val).unspan(), Value::Block(b)
                             if self.block_contains_ncc_skip_free(b));
-                        no_work_buffer || returns_local_text || returns_ncc_block
+                        no_work_buffer
+                            || returns_local_text
+                            || returns_ncc_block
+                            || inner_is_nwb_call
                     };
                     write!(w, "return ")?;
-                    if needs_p205_scratch {
+                    if outer_owned {
+                        // @PLN10 Phase A — nwb fn: emit an owned `String`
+                        // (`(val).to_string()` coerces &str / String / Str / a
+                        // buffered-inner `Str` / an nwb-inner `String` alike).
+                        write!(w, "(")?;
+                    } else if needs_p205_scratch {
                         // Plan-07 phase 4 — pre-bind the body's text
                         // result into a local before calling
                         // `stores.scratch.push(...)` so the inner
@@ -471,7 +512,9 @@ impl Output<'_> {
                     self.output_code_inner(w, val)?;
                     self.fn_ref_context = prev_fn_ref_ctx;
                     self.tuple_text_to_string = prev_tuple_text;
-                    if needs_p205_scratch {
+                    if outer_owned {
+                        write!(w, ").to_string()")?;
+                    } else if needs_p205_scratch {
                         write!(
                             w,
                             ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
@@ -1473,8 +1516,17 @@ impl Output<'_> {
                                 || self.block_contains_ncc_skip_free(bl)
                             )
                         };
+                    // @PLN10 Phase A — a bufferless ("nwb") user text fn returns
+                    // an owned `String` (its wrapper is `-> String`), so its
+                    // body-tail emits `(tail).to_string()`, not a `Str` wrap.
+                    // Checked before `needs_p205_scratch` (which is also true for
+                    // nwb fns via the no-work-buffer arm).
+                    let tail_outer_owned =
+                        wrap_result && super::def_returns_owned_text(self.data.def(self.def_nr));
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
+                    } else if tail_outer_owned {
+                        write!(w, "(")?;
                     } else if needs_p205_scratch {
                         // Plan-07 phase 4 — pre-bind the body's text
                         // result into a local before calling
@@ -1499,7 +1551,9 @@ impl Output<'_> {
                     self.indent += 1;
                     self.output_code_with_subst(w, v, &pre_evals)?;
                     self.indent -= 1;
-                    if needs_p205_scratch {
+                    if tail_outer_owned {
+                        write!(w, ").to_string()")?;
+                    } else if needs_p205_scratch {
                         write!(
                             w,
                             ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
