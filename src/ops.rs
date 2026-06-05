@@ -116,6 +116,17 @@ pub fn to_char(val: i32) -> char {
 
 #[inline]
 pub fn format_text(s: &mut String, val: &str, width: i64, dir: i8, token: u8) {
+    // @PLN10 — render the text null sentinel ("\0") as `null`, mirroring
+    // `format_long`'s `i64::MIN → null`.  A loft text equal to `STRING_NULL`
+    // IS null (the content-based null model — `conv_bool_from_text`), so the
+    // substitution is consistent with `?? ` / `!`.  Both backends route text
+    // interpolation through this fn (interp `OpFormatText` + the native
+    // `generation/text.rs` emitter), so this one site fixes both.
+    let val = if val == crate::state::STRING_NULL {
+        "null"
+    } else {
+        val
+    };
     // dir=2 means "unset default"; text defaults to left-align (-1)
     let dir = if dir == 2 { -1 } else { dir };
     let mut tokens = width as usize;
