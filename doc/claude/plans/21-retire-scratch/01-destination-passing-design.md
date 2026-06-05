@@ -225,11 +225,27 @@ concat/loop), zero scratch; full suite green both backends; regression
 - **Interpreter producers** still on scratch: `i_parse_errors`,
   `n_struct_to_json` / `n_struct_to_json_pretty` (mechanical, same pattern);
   `n_as_text` needs a null-carrying dest design or stays scratch-backed.
-- **Native backend** (`codegen_runtime.rs`): its own scratch usage
-  (`i_parse_errors:480`, `i_json_errors:500`, `n_parallel_buf_get_text_native`,
-  plus the `emit.rs:2698` wrap) is a **separate mechanism** — the native backend
-  doesn't consult `is_text_dest_native`; it handles `Set(w, native())` in its own
-  codegen.  This must be addressed before the field deletes.
+- **Native backend** — a **separate mechanism**, and the gating item for field
+  deletion.  Mapped this session:
+  - The `#rust`-templated producers (`to_lowercase`, `to_uppercase`, `replace`,
+    `source_dir`) are **already scratch-free on native** — `output_call_template`
+    inlines the Rust expression (`@self.to_lowercase()` → `var_self.to_lowercase()`,
+    an owned `String`), no scratch.
+  - The complex producers without a template route to `codegen_runtime.rs`
+    functions that **return `Str` borrowed from `stores.scratch`**:
+    `t_9JsonValue_kind:2132`, `t_9JsonValue_to_json:2309`,
+    `t_9JsonValue_to_json_pretty:2319`, `t_9JsonValue_as_text:2097`,
+    `i_parse_errors:480`, `i_json_errors:500`, `n_parallel_buf_get_text_native:3474`.
+    The native binding copies the `Str` out via `.to_string()`, so the scratch
+    push is purely transient backing for that one conversion.
+  - The **cdylib FFI text wrap** (`generation/mod.rs:2698`, @P244): a foreign
+    `LoftStr` return is copied into `stores.scratch` then handed back as a `Str`.
+  - **The clean fix**: change those `codegen_runtime` producers (and the FFI wrap)
+    to return an **owned `String`** instead of a scratch-`Str`; the native binding
+    then takes the `String` directly.  **Risk**: the native text path is threaded
+    with ~15+ `Str`/`String`/`&str` deref special-cases (P262/P299/P304/P321/P386);
+    a return-type change ripples through them, so this wants a focused effort with
+    full native-suite validation — NOT a tail-end change.
 - **Phase B** (`emit.rs` generic-specialisation wraps) and **Phase A.5**
   (`extensions.rs` cdylib bridge).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
