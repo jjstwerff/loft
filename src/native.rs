@@ -381,9 +381,16 @@ fn put_owned_text_or_dest(stores: &mut Stores, stack: &mut DbRef, s: String) {
         }
         return;
     }
-    stores.scratch.push(s);
-    let st = crate::keys::Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, st);
+    // @PLN10 D/G2 — see `extensions::bridge_text_result`: no dest ⇒ an uncovered
+    // value position for this `#native` text producer.  Dead in the corpus;
+    // degrade to an empty `Str` instead of `stores.scratch`, loud in dev.
+    let _ = s;
+    debug_assert!(
+        false,
+        "wasm #native text return reached without a dest (uncovered value \
+         position) — @PLN10 N2b coverage gap"
+    );
+    stores.put(stack, crate::keys::Str::new(""));
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]

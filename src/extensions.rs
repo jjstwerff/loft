@@ -676,13 +676,18 @@ fn bridge_text_result(
         }
         return;
     }
-    if text.is_empty() {
-        stores.put(stack, Str::new(""));
-    } else {
-        stores.scratch.clear();
-        stores.scratch.push(text.to_string());
-        stores.put(stack, Str::new(&stores.scratch[0]));
-    }
+    // @PLN10 D/G2 — no dest set ⇒ this cdylib text call was NOT routed through
+    // `n_set_bridge_dest` (an uncovered value position).  Dest-passing covers
+    // every position in the corpus (whole-suite `=panic` == 0), so this is dead;
+    // degrade gracefully to an empty `Str` rather than re-introduce
+    // `stores.scratch` (the field is being retired), and flag the coverage gap
+    // loudly in dev builds.
+    debug_assert!(
+        false,
+        "cdylib text return reached the bridge without a dest (uncovered value \
+         position) — @PLN10 N2b coverage gap"
+    );
+    stores.put(stack, Str::new(""));
 }
 
 /// Wrap a returned `loft_ffi::LoftRef` (direct vector record) in the indirect
