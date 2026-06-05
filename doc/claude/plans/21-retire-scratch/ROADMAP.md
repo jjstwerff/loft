@@ -3,7 +3,8 @@ render_with_liquid: false
 ---
 # @PLN10 — Roadmap to delete `stores.scratch`
 
-The clear path from **today (34 `scratch.push` sites, both backends green)** to the
+The clear path from **today (32 `scratch.push` sites; native + node-wasm +
+wasmtime-wasm green — the keystone `W` is SOLVED)** to the
 **goal (the field deleted; Goal E for strings — no global text buffer)**, as a set
 of dependency-ordered issues.
 
@@ -56,7 +57,12 @@ cell-ABI producers.  `39 → 34`.
 
 ## The issues
 
-### W — curated owned-`String` wrapper-return gate *(keystone — ROOT CAUSE FOUND, de-risked)*
+### W — curated owned-`String` wrapper-return gate ✅ **DONE** *(keystone)*
+> **Solved** (commit). `native_returns_owned_string(name)` helper (`generation/mod.rs`)
+> gates the wrapper return type; validated on native + `wasm[node]` + `wasm[wasmtime]`.
+> The `tests/generated` "golden regen" was a non-issue (gitignored, written fresh).
+> ⚠ rebuild **both** wasm rlibs (`wasm32-unknown-unknown` AND `wasm32-wasip2`) after a
+> generation change — a stale wasip2 rlib masks the real state with `E0308`.
 - **Root cause (investigated this session):** on `wasm32-wasip2`, EVERY text native
   gets a generated *wrapper function* (the native backend inlines them).  A blanket
   `def.code → String` flip changes the wrapper *return type* but not the *bodies*,
@@ -76,13 +82,11 @@ cell-ABI producers.  `39 → 34`.
   wasm failure (a stale rlib panics "build panicked" before the real error).
 - **Label:** `area:wasm` `area:codegen`
 
-### N1 — internal text stubs return owned `String` *(needs W)*
-- **Scope:** condition `mod.rs:2134` on `def.code == Null && text → "String"`;
-  convert the introspector bodies (`i_parse_errors`, `i_json_errors` in
-  `codegen_runtime.rs`) — the two-family rule (owned-stub `String` vs user-fn
-  buffer-view `Str`).  Already proven on native; W makes it WASM-safe.
-- **Accept:** `scratch.push` −2; all three backends green.
-- **Effort/risk:** S / low (once W lands).  **Label:** `area:codegen`
+### N1 — internal text stubs return owned `String` ✅ **DONE** *(landed with W)*
+> `i_parse_errors` + `i_json_errors` (`codegen_runtime.rs`) now return owned
+> `String`, added to `native_returns_owned_string` in lockstep.  `scratch.push`
+> 34 → 32; all three backends green.  (The interpreter-side `n_json_errors` /
+> `i_parse_errors` in `native.rs` are still scratch-backed — that's I1's interp half.)
 
 ### N2 — cdylib FFI text wrap → owned `String` (Phase A.5) *(needs W, N1)*
 - **Scope:** the `needs_text_wrap` emitted body (`mod.rs:2698`) + the interpreter
@@ -147,7 +151,7 @@ cell-ABI producers.  `39 → 34`.
 
 | Milestone | Issues | Meaning |
 |---|---|---|
-| **M1 — keystone** | `W` | the WASM `Deref` fix; unblocks every native conversion |
+| **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
 | **M2 — producers converted** | `N1 N2 I1 A B` | every producer off scratch (fallbacks aside) |
 | **M3 — fallbacks gone** | `C F` | coverage proof + delete the dead non-`_dest` natives |
 | **M4 — GOAL** | `D` | field deleted |

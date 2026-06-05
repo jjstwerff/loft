@@ -30,8 +30,10 @@ that first; the session-1 note and §§1–8 below are kept for context but thei
 
 **The path to the goal is laid out as dependency-ordered issues in
 [`ROADMAP.md`](ROADMAP.md)** — keystone (`W`, the WASM `Deref` fix) → producer
-conversions → coverage proof → field delete.  Status today: **34 `scratch.push`,
-both backends green; interpreter chokepoint + native cell-ABI producers done.**
+conversions → coverage proof → field delete.  Status today: **32 `scratch.push`,
+all three backends green (native + node-wasm + wasmtime-wasm).  The keystone `W`
+(curated owned-`String` wrapper gate) is SOLVED + `N1` (introspectors) done;
+interpreter chokepoint + native cell-ABI producers done.**
 
 ## Session-1 progress + next pickup (2026-06-04, branch `strings`)
 

@@ -299,8 +299,14 @@ concat/loop), zero scratch; full suite green both backends; regression
     `wasm32-unknown-unknown` rlib (`cargo build --release --target
     wasm32-unknown-unknown --lib --no-default-features --features random`) — a
     stale wasm rlib panics with a misleading "build panicked" before the real
-    error (the native-rlib gotcha's WASM twin).  **Issue W is now de-risked:
-    scoped to the curated helper + golden regen, no `Deref`/bridge rewrite.**
+    error (the native-rlib gotcha's WASM twin).
+  - **✅ W + N1 SOLVED (committed).**  Added `native_returns_owned_string(name)`
+    (`generation/mod.rs`) gating the wrapper return type; converted `i_parse_errors`
+    + `i_json_errors` to owned `String` in lockstep.  The "golden regen" was a
+    non-issue (`tests/generated/*.rs` are gitignored, written fresh per run).  The
+    last red was a **stale `wasm32-wasip2` rlib** (a *third* rlib target beyond
+    native + `wasm32-unknown-unknown`) masking the real state with `E0308`; rebuilt,
+    `wasm_library_suite` passes node + wasmtime, native green, `scratch.push` 34 → 32.
 - **Phase B** (`emit.rs` generic-specialisation wraps).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
   + the `#[cfg(debug_assertions)]` assert-empty guard.
