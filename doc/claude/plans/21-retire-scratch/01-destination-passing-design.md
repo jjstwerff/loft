@@ -271,6 +271,22 @@ concat/loop), zero scratch; full suite green both backends; regression
     `def.code == Null && returns text → "String"` (owned-text stubs only), and
     convert each remaining stub body in the same change.  Contained, but genuinely
     per-category — not the free unification it looked like.
+  - **The refined `def.code` conditional ALSO breaks WASM (attempted + reverted).**
+    Conditioning `mod.rs:2134` on `def.code == Null && text → "String"` (even
+    narrowed to `def.native.is_empty()`, internal stubs only) compiles + passes on
+    **native** (`native_scripts` + `native_library_suite` green) but the **WASM
+    cdylib libraries** (`wasm_library_suite`: audience_crystal / html / markdown)
+    fail to compile — `E0599`/`E0609` then `E0308`.  The WASM cdylib text path
+    accesses `Str` fields/methods (`.ptr` / `.str()`) directly where the native
+    binding uses `Deref` (`.to_string()` / `&*`).  So the conditional needs the
+    **WASM-specific text-result access made `Deref`-based too** — a separate WASM
+    bridge change, not a native-only edit.  Reverted; the 2 introspector sites stay
+    scratch-backed.  ⚠ Env note: `wasm_library_suite` requires a fresh
+    `wasm32-unknown-unknown` rlib (`cargo build --release --target
+    wasm32-unknown-unknown --lib --no-default-features --features random`) — a
+    stale wasm rlib panics with a misleading "build panicked" before the real
+    error; rebuild it before trusting a WASM failure (the native-rlib gotcha's
+    WASM twin).
 - **Phase B** (`emit.rs` generic-specialisation wraps).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
   + the `#[cfg(debug_assertions)]` assert-empty guard.

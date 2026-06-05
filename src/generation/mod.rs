@@ -2688,6 +2688,10 @@ extern crate loft;"
         if needs_ret_cast {
             write!(w, ") }}) as i64")?;
         } else if needs_text_wrap {
+            // cdylib `#native` text return: still scratch-backed.  These keep the
+            // `-> Str` signature (excluded from the @PLN10 `def.native.is_empty()`
+            // String conversion) because the WASM cdylib path reads `Str` fields
+            // directly — converting it is Phase A.5 (needs the WASM bridge too).
             writeln!(w, ") }};")?;
             writeln!(
                 w,

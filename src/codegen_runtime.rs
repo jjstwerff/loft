@@ -476,17 +476,14 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
 
 /// Return the parse errors from the last `Type.parse()` call as a single
 /// newline-separated string.  Called by the `#errors` accessor.
-// @PLN10 — still scratch-backed: this introspector is emitted through a
-// hand-written wrapper (`generation/mod.rs:2257`) declared `-> Str`, so a
-// `String` return would break the generated wrapper.  Converting it needs the
-// wrapper's signature changed too — deferred with the other custom-wrapper
-// producers (see the design doc's native-backend section).
+// @PLN10 — still scratch-backed.  The `def.code == Null → String` conditional
+// (which would let this return owned `String`) works on native but breaks the
+// WASM cdylib text path (`Str`-field access); deferred until the WASM bridge is
+// handled — see the design doc's native-backend section.
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_parse_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    // @P354: do not clear scratch — earlier scratch Strings may still be
-    // referenced by live `Str` views (sibling call args).  Push + last().
     stores.scratch.push(msg);
     Str::new(stores.scratch.last().unwrap())
 }
@@ -501,13 +498,10 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
 /// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
 /// NOT clear the buffer — errors persist across `json_errors()` reads
 /// until the next successful parse implicitly clears them.
-// @PLN10 — still scratch-backed: emitted through the `n_json_errors`
-// hand-written wrapper (`generation/mod.rs:2272`) declared `-> Str`.  Deferred
-// with the other custom-wrapper producers (see the design doc).
+// @PLN10 — still scratch-backed (same WASM-cdylib deferral as `i_parse_errors`).
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_json_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_json_errors.join("|");
-    // @P354: do not clear scratch — see `i_parse_errors` above.
     stores.scratch.push(msg);
     Str::new(stores.scratch.last().unwrap())
 }
