@@ -55,28 +55,9 @@ path = "target/nextest/junit.xml"
 # example v2 server on the fixed port 7878.  Without a single-slot
 # group, two scenarios racing for bind() flake the suite.
 
-# @PLAN54 N3 — native-build serialisation.
-#
-# Tests that compile a native artifact (a `--native` fixture binary, an
-# auto-built shared cdylib for a `use`d library, or a recompiled cached
-# binary) all `rustc`-link against the SHARED `target/<profile>/deps/`.
-# When the loft binary runs in the source root and finds `src/` newer than
-# the unhashed `libloft.rlib`, it auto-fires `cargo build --lib` to refresh
-# it (src/native_utils.rs) — which rewrites `deps/` mid-run.  With many such
-# tests running as separate nextest processes, one process's rebuild deletes
-# a dep rlib (`libring-*.rlib`) just as another links against it → "cannot
-# open …rlib: No such file or directory".  Default-native (Step 3) made many
-# more subprocesses reach this path, surfacing the latent race.
-#
-# A single-slot group serialises the rustc links across the process boundary
-# the in-process locks (`native_suite_lock`) can't cross.  This ALSO fixes the
-# intra-binary fixture race in `n3_parity`: `datalib_store_touching_types_parity`
-# and `build_failure_silently_interprets` both touch
-# `tests/lib/datalib/native-auto` as separate nextest processes.
 [test-groups]
 html-wasm-serial      = { max-threads = 1 }
 multiplayer-v2-serial = { max-threads = 1 }
-native-build-serial   = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(html_wasm)'
@@ -86,10 +67,6 @@ test-group = 'html-wasm-serial'
 filter = 'binary(multiplayer_v2)'
 test-group = 'multiplayer-v2-serial'
 
-[[profile.default.overrides]]
-filter = 'binary(native) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning)'
-test-group = 'native-build-serial'
-
 [[profile.ci.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
@@ -97,7 +74,3 @@ test-group = 'html-wasm-serial'
 [[profile.ci.overrides]]
 filter = 'binary(multiplayer_v2)'
 test-group = 'multiplayer-v2-serial'
-
-[[profile.ci.overrides]]
-filter = 'binary(native) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning)'
-test-group = 'native-build-serial'
