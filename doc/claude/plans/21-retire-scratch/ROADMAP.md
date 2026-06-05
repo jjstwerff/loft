@@ -52,9 +52,9 @@ it is the design + the build evidence each issue below builds on.
 > | Region | Sites | Nature |
 > |---|---|---|
 > | ~~**Phase B** (`emit.rs`)~~ ✅ **DONE** | 0 | central `Value::Return`/`wrap_result` text wraps — Direction A: nwb→owned `String` + buffered local/ncc/ripple→work-buffer write.  Generated native corpus scratch-free (`80cab896`+`c4ea7824`). |
-> | **N2b** (`extensions.rs`) | 2 | the interpreter cdylib bridge (`bridge_push_str`/`push_loft_str`) — write into a dest instead of scratch (now known: plain dest-passing, "\0"/empty for null). |
-> | **wasm tail** (`native.rs` cfg(wasm)) | 2 | `pack_take` + `ws_client_message` — non-null; need a *wasm* positive control (`pack_take` testable, `ws` needs a host). |
-> | **D + F** | the dead fallbacks + the field | the `native.rs` non-`_dest` bodies are now ALL dead (corpus reads zero); delete them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops. |
+> | ~~**N2b** (`extensions.rs`)~~ ✅ **DONE** | 0 | the interpreter cdylib bridge — **was NOT dead-in-corpus**: the `loft-libs-net/server` cdylib returns text via `LoftStr`, so every HTTP/ws server program hit it.  `Stores::bridge_text_dest` + `n_set_bridge_dest` + `is_cdylib_text_call`/`gen_cdylib_text_dest_call` route it into a work buffer (`3e5312df`+`3c1b51bf`).  **No new opcode.** |
+> | **wasm tail** (`native.rs` cfg(wasm)) | 2 | `pack_take` + `ws_client_message` — non-null; need a *wasm* positive control (`pack_take` testable, `ws` needs a host).  The whole-suite `=panic` zero is **non-wasm only**; D must zero wasm too. |
+> | **D + F** | the dead fallbacks + the field | 🎉 **whole-suite (non-wasm) `=panic` = ZERO (2022/2022)** — every interp + cdylib-bridge producer is dest-passed; the `native.rs` non-`_dest` bodies + the bridge scratch fallback are now ALL dead.  Delete them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops (gate D once the wasm tail also zeros). |
 >
 > **Bugs surfaced (orthogonal, filed, NOT blockers):** #272 (native: stateful
 > producer in inline `"{x}" != literal`), #273 (native: par-text loop with a
@@ -248,18 +248,35 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 >   browser-compiled — imaging has none).  Regression
 >   `pln10_n2_cdylib_text_wrapper_returns_owned_string` (emit-only, not @P389-blocked).
 
-### N2b — cdylib FFI text wrap, interpreter bridge *(the harder half — independent)*
-- **Scope:** `extensions.rs:651,894` (`bridge_push_str` / `push_loft_str`).  These
-  materialise a foreign `LoftStr` onto the interp stack and need a backing buffer
-  for the `Str` ABI — currently `stores.scratch`.
-- **Why it's harder than N2a:** the runtime bridge has **no caller-provided
-  destination**.  Dynamically-produced value-position text in the interpreter
-  must dest-pass (write into a store text record the call site allocates, freed by
-  `OpFreeText`), but the chokepoint `wrap_value_text_dest` skips cdylib calls
-  (their names aren't in `is_text_dest_native`), so they fall to the scratch
-  bridge.  A real fix = give cdylib text natives dest-passing — a new mechanism.
-- **Accept:** `scratch.push` −2; cdylib libraries green on the interpreter.
-- **Effort/risk:** M / med-high.  **Label:** `area:codegen`
+### N2b — cdylib FFI text wrap, interpreter bridge ✅ **DONE** *(`3e5312df`+`3c1b51bf`)*
+- **The reframe that mattered: N2b was NOT dead-in-corpus.**  The `native_pkg`
+  test fixture returns only ints, which made it *look* like no text cdylib existed.
+  But the real consumer is `loft-libs-net/server` — a cdylib whose request/message
+  accessors (`n_tcp_path` / `n_tcp_method` / `n_tcp_body` / `n_ws_message`) return
+  `LoftStr`.  Every HTTP/ws server program (multiplayer tests + the markdown viewer)
+  routed those through the bridge → `push_loft_str` (`extensions.rs:894`) → scratch,
+  and after the I1 RefVar fix this was the **only** remaining live interp scratch.
+  So the server lib + its tests **are** the positive control — no fixture needed.
+- **Mechanism (no new opcode — op_codes are declaration-order-bound to the
+  `OPERATORS` table, so adding one is fragile):**
+  - `Stores::bridge_text_dest: Option<DbRef>` — destination for the NEXT cdylib text
+    return; set by the `n_set_bridge_dest` native, `take()`n by the bridge.
+  - `bridge_text_result` (shared by both bridge sites): dest set → write the
+    `LoftStr` into that work-buffer record + push NOTHING; else legacy scratch `Str`
+    (now a dead-in-corpus fallback).
+  - `is_cdylib_text_call(def)` = `!def.native.is_empty() && returned==Text` —
+    disjoint from `is_text_dest_native` (ZERO `default/` decls use `#native`;
+    `register_native` is integer-only → no false positives).  Used in the chokepoint
+    (`wrap_value_text_dest` / `descend_skip_direct`) + `set_var` (both `Text` and
+    return-dep `RefVar(Text)` branches).
+  - `gen_cdylib_text_dest_call`: args → dest → `OpStaticCall(n_set_bridge_dest)`
+    (pops dest) → `OpStaticCall(cdylib)` (pops args, bridge writes into dest, no
+    result pushed).  Frame accounting mirrors `gen_text_dest_call`.
+- **Validated:** v3 server under `=panic` no longer trips (was `extensions.rs:894`)
+  AND returns correct HTML; multiplayer v2/v3/v5 + viewer_markdown green under
+  `=panic`; whole non-wasm suite `=panic` = **2022/2022**.  No regression.
+- **Effort/risk:** was M/med-high; the dead-in-corpus de-risk + the no-new-opcode
+  design brought it in clean.  **Label:** `area:codegen`
 
 ### I1 — remaining interpreter producers → dest-passing *(= Phase 1; native half done via #rust/codegen_runtime)*
 - **Scope:** per producer, the proven Build-3 pattern — a `_dest` variant +
