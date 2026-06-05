@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status:** **Shipped 2026-05-13**.  Moved to `plans/finished/22-mutable-closures/`.
 Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit
 ([@PLAN32 § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
-+ @PLAN36 audience-demo server (loft code projected to the
++ @PLN6 audience-demo server (loft code projected to the
 audience as part of the "loft snippet highlights" beats —
 visible code structure is part of the spectacle).  Companion
 discussion (options surveyed, alternatives considered,
@@ -33,7 +33,7 @@ concrete consumers with a soft deadline:
   `tick_counter`).  Writable closures drop the `.inner`
   ceremony at every access — ~10% fewer characters and one
   fewer mental indirection.
-- **Plan-36 audience-generative-art demo** ([plans/36-audience-generative-art/](../../future/36-audience-generative-art/))
+- **Plan-36 audience-generative-art demo** ([plans/6-audience-generative-art/](../../future/6-audience-generative-art/))
   is the more time-pressured driver.  The talk frames itself as
   an "art show with loft footnotes" — small loft snippets
   projected to the audience.  Server code with `state.inner.X`
@@ -41,10 +41,10 @@ concrete consumers with a soft deadline:
   code earns its keep at the spectacle, not only in the
   codebase.
 
-**Non-blocking constraint**: TTT v6 + @PLAN36 must remain
+**Non-blocking constraint**: TTT v6 + @PLN6 must remain
 shippable without this plan's implementation.  If @PLAN22 lands
-before the talk, @PLAN36 server uses writable closures.  If it
-doesn't, @PLAN36 server uses `Reference<T>` exactly like v5.
+before the talk, @PLN6 server uses writable closures.  If it
+doesn't, @PLN6 server uses `Reference<T>` exactly like v5.
 Either way the demo functions; only the on-screen code-snippet
 elegance differs.
 
@@ -485,7 +485,7 @@ Each phase has its own design doc under `plans/finished/22-mutable-closures/`:
 | ~~[05 — `Mutable<T>` helper](05-mutable-helper.md)~~ | DEFER (cell + auto-Reference subsumes; revisit only if a concrete use case surfaces) | Phase 04 |
 | [06 — closeout](06-closeout.md) | Doc closeout — CHANGELOG_TECHNICAL, DESIGN_DECISIONS, CAVEATS, ROADMAP, move to finished/ | Phases 02-03 |
 
-**Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + @PLAN36 servers using writable closures.
+**Acceptance for the whole plan**: every Case A regression cell stays green; phase 02-05 cells run cross-mode under `tests/mut_closure_matrix.rs`; phase 04 case-D rejections pinned in `tests/parse_errors.rs`; phase 06 retrofit ships TTT v6 + @PLN6 servers using writable closures.
 
 @P257's parse-time-rejection pattern (closed 2026-05-12) is the
 template phase 04 uses for case-D diagnostics.  Plan-15

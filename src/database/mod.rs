@@ -112,14 +112,14 @@ pub struct Field {
 }
 
 impl Field {
-    /// @PLAN54 D2a read seam — `other_indexes` is module-private; expose it
+    /// @PLN11 D2a read seam — `other_indexes` is module-private; expose it
     /// `pub(crate)` so the schema materializer (`crate::ir_store`) can cache it.
     #[must_use]
     pub(crate) fn other_indexes(&self) -> &[u16] {
         &self.other_indexes
     }
 
-    /// @PLAN54 D2a — reconstruct a `Field` from cached store fields (the
+    /// @PLN11 D2a — reconstruct a `Field` from cached store fields (the
     /// `pub(self)` `other_indexes` makes a direct literal impossible outside
     /// this module).
     #[must_use]

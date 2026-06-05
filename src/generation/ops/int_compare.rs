@@ -47,7 +47,7 @@ pub struct IntCompareEmitter;
 
 impl OpEmitter for IntCompareEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        let op = match ctx.def_fn.name.as_str() {
+        let op = match ctx.def_fn.name() {
             "OpEqInt" => "==",
             "OpNeInt" => "!=",
             "OpLtInt" => "<",

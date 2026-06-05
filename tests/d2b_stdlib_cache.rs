@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 arc D / D2b — the opt-in stdlib startup cache, end-to-end.
+//! @PLN11 arc D / D2b — the opt-in stdlib startup cache, end-to-end.
 //!
 //! Runs a real program three ways through the `loft` binary: cache off
 //! (default), cache on cold (parses + writes the bundle), cache on warm (mmaps
@@ -86,7 +86,7 @@ fn stdlib_cache_off_cold_warm_match() {
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
 
-/// @PLAN54 arc E — a corrupt / non-store bundle at the cache path must be a
+/// @PLN11 arc E — a corrupt / non-store bundle at the cache path must be a
 /// clean cache miss (graceful reparse), never a crash.
 #[test]
 fn corrupt_bundle_falls_back_to_parse() {

@@ -32,6 +32,7 @@ deferred with a one-line reason.
 | **S6** | **Native-backend ASan** — instrument the `--native` codegen runtime under ASan (currently ASan instruments only the in-process interpreter; the `--native` path is uninstrumented). | At least one native-mode test corpus passes under ASan; any findings catalogued or fixed. | Medium |
 | **S7** | **Failure→issue notifier for the nightly** — a CI job that opens/updates a deduped GitHub issue when the nightly fails, reading per-*job* conclusions (not the overall run status, which `continue-on-error` holds green even when matrix legs are red). | Nightly failure automatically surfaces as a tracked GitHub issue within 24 h of the failing run. | Low |
 | **S8** | **MSan (MemorySanitizer) corpus-wide** — uninitialised-read detection beyond what Miri covers.  Painful setup (needs a fully instrumented std); lower priority. | MSan job passes the interpreter subset or deferred with a one-line setup-cost note. | Low |
+| **S9** | **Mixed-boundary (C71) cdylib ASan** — instrument the auto-built native-library cdylib *and* the interpreter host under ASan together, covering the [@PLN11](../../11-data-as-store/README.md) C71 mixed path: an interpreted script shares its `*mut Stores` with a compiled library cdylib by **raw pointer** (zero-marshalling) — the one cross-boundary surface no current sanitizer sees (ASan = interpreter targets only; the `stack_align_guard` sweep can't see spawned binaries; Miri can't `dlopen` a cdylib).  Propagate `-Zsanitizer=address` into `build_shared_cdylib` when the host is ASan-instrumented, + a nightly job.  **Routed in from @PLN11 N5** (mixed-boundary soundness — the D + E legs landed there, this A leg was tooling-blocked).  Shares the ASan-on-a-generated-build mechanism with **S6**. | the interp-script + native-lib mixed corpus (the `tests/n3_parity.rs` shapes) passes under ASan; a cross-boundary UAF/OOB on the shared store is caught, not silent. | Medium |
 
 ## Phase ordering
 
@@ -39,12 +40,13 @@ deferred with a one-line reason.
 2. **S2** — TSan is the standout new tool-class gap; independent of S1.
 3. **S3** — `LOFT_POISON` is high value-per-effort and unblocks @PLAN55 F4; implement early.
 4. **S4 + S5** — corpus hygiene; can proceed in parallel with S1-S3.
-5. **S6** — native-ASan requires coordinating with the `--native` build pipeline; after the above are stable.
+5. **S6 + S9** — ASan over a generated build (the `--native` binary for S6, the auto-built cdylib + host for the C71 mixed path in S9); both need the `-Zsanitizer` build-pipeline coordination, so do them together after the above are stable.
 6. **S7 + S8** — stretch items; S7 is a workflow change, S8 has heavy upstream setup cost.
 
 ## Cross-arc dependencies
 
 - **@PLAN55 F4** — blocked on S3 (`LOFT_POISON` keystone) landing.
+- **[@PLN11](../../11-data-as-store/README.md) N5** — S9 is the routed-in A-leg of @PLN11's mixed-boundary soundness work; the D (differential parity) + E (Goal-E store guard) legs already landed there, so S9 is the remaining (tooling-blocked) sanitizer leg.
 - **@PLAN53** (closed) — shipped the `fuzz/` crate, direct structure-fuzz targets, and the base CI stack this plan extends.
 
 ## See also

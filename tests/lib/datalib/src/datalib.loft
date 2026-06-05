@@ -1,0 +1,45 @@
+// @PLN11 Arc N / N3 Step 1 (parity) — a library whose public API exercises the
+// STORE-TOUCHING types crossing the interp↔native boundary (vector/struct/text/
+// enum, both as args and returns), where a shared-store ABI bug would hide.  The
+// parity harness asserts a program using this library produces byte-identical
+// output whether the library runs native or interpreted.
+
+pub struct Point { x: integer, y: integer }
+
+pub enum Shape { Circle { r: integer }, Rect { w: integer, h: integer } }
+
+pub fn vec_sum(v: vector<integer>) -> integer {
+    total = 0;
+    for x in v { total += x; }
+    total
+}
+
+pub fn range_vec(n: integer) -> vector<integer> {
+    v: vector<integer> = [];
+    for i in 0..n { v += [i]; }
+    v
+}
+
+pub fn make_point(a: integer, b: integer) -> Point {
+    Point { x: a, y: b }
+}
+
+pub fn point_sum(p: Point) -> integer {
+    p.x + p.y
+}
+
+pub fn shout(s: text) -> text {
+    s + "!"
+}
+
+pub fn area(s: Shape) -> integer {
+    match s { Circle { r } => r * r * 3, Rect { w, h } => w * h }
+}
+
+pub fn make_circle(r: integer) -> Shape {
+    Circle { r: r }
+}
+
+pub fn make_rect(w: integer, h: integer) -> Shape {
+    Rect { w: w, h: h }
+}

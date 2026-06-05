@@ -1,0 +1,10 @@
+[package]
+name = "plainlib"
+version = "0.1.0"
+loft = ">=0.8"
+
+[library]
+entry = "src/plainlib.loft"
+# NOTE: deliberately NO `compile = "native"` — this fixture is the control for the
+# Step 3 default-native env gate (`LOFT_DEFAULT_NATIVE`): an *un-opted-in* library
+# that must interpret by default but go native (byte-identically) under the gate.

@@ -71,7 +71,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let e_size = i32::from(self.database.size(self.data.def(enr).known_type));
+        let e_size = i32::from(self.database.size(self.data.def(enr).known_type()));
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
@@ -167,7 +167,7 @@ impl Parser {
                     let Type::Reference(struct_d, _) = &t else {
                         unreachable!("matches! above guards Reference shape");
                     };
-                    let known_tp = self.data.def(*struct_d).known_type;
+                    let known_tp = self.data.def(*struct_d).known_type();
                     let n_walker = if field == "to_json" {
                         self.data.def_nr("n_struct_to_json")
                     } else {
@@ -200,9 +200,9 @@ impl Parser {
             //
             // Pinned by `tests/issues.rs::plan19_method_on_enum_variant_via_dot`.
             if let Type::Reference(child_d, _) = &t {
-                let parent_d = self.data.def(*child_d).parent;
+                let parent_d = self.data.def(*child_d).parent();
                 if parent_d != u32::MAX && matches!(self.data.def_type(parent_d), DefType::Enum) {
-                    let parent_name = self.data.def(parent_d).name.clone();
+                    let parent_name = self.data.def(parent_d).name().to_string();
                     let stub_name = format!("t_{}{}_{}", parent_name.len(), parent_name, field);
                     let md_nr = self.data.def_nr(&stub_name);
                     // Only fire when `t_<Parent>_<field>` is the
@@ -216,7 +216,7 @@ impl Parser {
                     // "Unknown field Rect.area" error and silently
                     // dispatch through the warning-only stub.
                     if md_nr != u32::MAX
-                        && self.data.def(md_nr).synthetic.is_none()
+                        && self.data.def(md_nr).synthetic().is_none()
                         && matches!(
                             self.data.def_type(md_nr),
                             DefType::Function | DefType::Generic
@@ -278,28 +278,28 @@ impl Parser {
                     // vector.sum_of" without a hint.
                     let free_nr = self.data.def_nr(&format!("n_{field}"));
                     let has_free_hint = free_nr != u32::MAX
-                        && !self.data.def(free_nr).attributes.is_empty()
+                        && !self.data.def(free_nr).attributes().is_empty()
                         && self.data.attr_type(free_nr, 0).is_equal(&t);
                     if has_free_hint {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
                             "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? (stdlib declared `{field}` as free-only; see LOFT.md § Methods and function calls)",
-                            self.data.def(dnr).name
+                            self.data.def(dnr).name()
                         );
                     } else if let Some(s) = self.suggest_field_name(dnr, &field) {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
                             "Unknown field {}.{field} — did you mean '{s}'?",
-                            self.data.def(dnr).name
+                            self.data.def(dnr).name()
                         );
                     } else {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
                             "Unknown field {}.{field}",
-                            self.data.def(dnr).name
+                            self.data.def(dnr).name()
                         );
                     }
                 }
@@ -318,11 +318,11 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Expect call of method {}.{}",
-                    self.data.def(dnr).name,
+                    self.data.def(dnr).name(),
                     self.data.attr_name(dnr, fnr)
                 );
             }
-        } else if self.data.def(dnr).attributes[fnr].constant {
+        } else if self.data.def(dnr).attributes()[fnr].constant {
             let expr = self.data.attr_value(dnr, fnr);
             // B2-runtime (2026-04-13): `Sig.Idle` on a mixed struct-enum
             // parent resolves `expr` to a bare `Value::Enum(disc, _)` —
@@ -330,14 +330,15 @@ impl Parser {
             // the `OpDatabase` + `object_init` record-allocation sequence
             // used by `parse_constant_value` so `var_s: DbRef = …` gets a
             // proper DbRef, not a u8 byte.
-            let parent_is_mixed = matches!(self.data.def(dnr).returned, Type::Enum(_, true, _));
+            let parent_is_mixed = matches!(self.data.def(dnr).returned(), Type::Enum(_, true, _));
             if parent_is_mixed && !self.first_pass && matches!(expr, Value::Enum(_, _)) {
                 let variant_name = self.data.attr_name(dnr, fnr);
                 let variant_d_nr = self.data.def_nr(&variant_name);
-                if variant_d_nr != u32::MAX && self.data.def(variant_d_nr).known_type != u16::MAX {
-                    let ret = self.data.def(dnr).returned.clone();
+                if variant_d_nr != u32::MAX && self.data.def(variant_d_nr).known_type() != u16::MAX
+                {
+                    let ret = self.data.def(dnr).returned().clone();
                     let w = self.vars.work_refs(&ret, &mut self.lexer);
-                    let known_type = i32::from(self.data.def(variant_d_nr).known_type);
+                    let known_type = i32::from(self.data.def(variant_d_nr).known_type());
                     let mut list = Vec::new();
                     list.push(crate::data::v_set(w, Value::Null));
                     list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]));
@@ -388,8 +389,8 @@ impl Parser {
             if !self.first_pass
                 && !self.default
                 && fnr != usize::MAX
-                && fnr < self.data.def(dnr).attributes.len()
-                && self.data.def(dnr).attributes[fnr].nullable
+                && fnr < self.data.def(dnr).attributes().len()
+                && self.data.def(dnr).attributes()[fnr].nullable
             {
                 let key = (dnr, fnr as u32);
                 *self.field_read_counts.entry(key).or_insert(0) += 1;
@@ -609,7 +610,7 @@ impl Parser {
         | Type::Index(d_nr, _, _)
         | Type::Spacial(d_nr, _, _) = t
         {
-            let ret = self.data.def(*d_nr).returned.clone();
+            let ret = self.data.def(*d_nr).returned().clone();
             // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).
             // For collection element access we need Type::Reference(variant_def_nr, [])
             // so that field access and range-query for-loops resolve fields against the
@@ -651,7 +652,7 @@ impl Parser {
         let mut p = Value::Null;
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
-        let known = self.data.def(elm_td).known_type;
+        let known = self.data.def(elm_td).known_type();
         // honour narrow vector-element stride when the
         // content Type::Integer carries a forced_size AND Phase 2 would
         // register a direct-encoded narrow type (see

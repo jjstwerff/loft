@@ -22,6 +22,13 @@ pub struct Manifest {
     /// `None` for pure-loft packages.  The interpreter resolves this to the
     /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
     pub native: Option<String>,
+    /// @PLN11 Arc N / N3 — `[library] compile = "native"` opts a **normal** loft
+    /// library (no hand-written `#native` / Rust crate) into auto-compilation to a
+    /// shared-store cdylib: its native-compilable public functions are marked
+    /// native and dispatched (`use <lib>` then runs the library native, the script
+    /// interprets).  `None`/absent → the library is interpreted as before.  (B-phase
+    /// makes this automatic; today it is the explicit opt-in.)
+    pub compile: Option<String>,
     /// PKG.3: package dependencies from `[dependencies]` section.
     /// Key = package name, value = version requirement or path.
     pub dependencies: Vec<(String, String)>,
@@ -80,6 +87,7 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 ("package", "loft") => manifest.loft_version = Some(value.to_string()),
                 ("library", "entry") => manifest.entry = Some(value.to_string()),
                 ("library", "native") => manifest.native = Some(value.to_string()),
+                ("library", "compile") => manifest.compile = Some(value.to_string()),
                 ("dependencies", _) => {
                     manifest
                         .dependencies
@@ -251,6 +259,23 @@ mod tests {
         let p = write_temp("notrig", "[package]\nname = \"plain\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert!(!m.trigger_enabled, "no [triggers] section -> disabled");
+    }
+
+    #[test]
+    fn parses_compile_native() {
+        let p = write_temp(
+            "compile",
+            "[package]\nname = \"mathlib\"\n\n[library]\ncompile = \"native\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.compile.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn compile_absent_by_default() {
+        let p = write_temp("nocompile", "[package]\nname = \"plain\"\n");
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.compile, None);
     }
 
     #[test]

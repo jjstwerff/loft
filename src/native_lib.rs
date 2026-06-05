@@ -1,0 +1,962 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! @PLN11 Arc N / N2 — auto-generate a native cdylib from a library's functions.
+//!
+//! In the native-library execution model (C71) a stable library compiles to a
+//! cdylib and the interpreter dispatches calls to it (the stdlib `#native` path,
+//! `OpStaticCall` → dlsym).  This module generates that cdylib's `lib.rs`.  Two
+//! dispatch ABIs, by what crosses the boundary:
+//!
+//! **Scalar slice** (`generate_cdylib_lib_rs`, `scalar_dispatchable`): params +
+//! return are scalars, so no store reference crosses.  The export wrapper
+//! `loft_n_<name>(scalars) -> ret` stands up a **per-call** `UnsafeCell<Stores>` +
+//! `init()` and forwards — safe because a scalar-return body cannot leak a store
+//! ref out (any internal allocation is contained and dropped with the cell).  This
+//! is ABI-identical to a hand-written scalar `#native` symbol, so it reuses the
+//! existing dispatch wholesale.
+//!
+//! **Store-touching slice** (`generate_shared_cdylib_lib_rs`,
+//! `shared_store_dispatchable`): a non-scalar value (`vector`/`reference`) crosses
+//! the boundary.  Because an auto-generated cdylib **links libloft**, its `Stores`
+//! / `DbRef` are the *same Rust types* as the interpreter's — so the bridge
+//! **shares the caller's real `Stores` by pointer** (zero-marshalling, C71's
+//! promise) rather than going through the `LoftStore` FFI handle (that handle
+//! exists for hand-written cdylibs that don't link `Stores`).  The bridge wrapper
+//! `loft_shared_n_<name>(stores: *mut Stores, args, n, ret)` casts `*mut Stores` →
+//! `&UnsafeCell<Stores>` (`UnsafeCell` is `repr(transparent)`) and forwards — **no
+//! per-call cell, no `init`, no marshalling** (the caller's store is live; `DbRef`
+//! args are already valid in it).  Args/return are passed through the uniform
+//! [`LibArg`] slot.
+
+use crate::data::{Context, Data, DefType, Type};
+use crate::database::Stores;
+use crate::generation::{Output, rust_type};
+use std::collections::{BTreeSet, HashSet};
+
+/// @PLN11 Arc N / N2 (lean interface) — generate the loft-source **interface** a
+/// script adopts to call a native library: the public type definitions the
+/// exported functions reference (transitively) plus, per exported function, a
+/// `#native "loft_shared_…"` forward declaration.
+///
+/// This is the lean half of "an interpreted script calling a compiled library":
+/// the script parses only this interface (type layouts + signatures + dispatch
+/// symbols), **never the library bodies**, and gets the library's types defined
+/// in the library's own order — so type ids align by construction rather than by
+/// the caller redefining the types identically.  (A binary schema load — the D2a
+/// cache — is the robust successor that also covers non-public ordering; this
+/// source form covers the common case where the public types are the only ones.)
+#[must_use]
+pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
+    use std::fmt::Write as _;
+    // Referenced struct/enum defs, transitively, kept in definition order (BTreeSet
+    // on `d_nr`) so the script registers them in the library's order.
+    let mut types: BTreeSet<u32> = BTreeSet::new();
+    for &d in export_set {
+        let def = data.def(d);
+        for a in def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+        {
+            collect_type_defs(data, &a.typedef, &mut types);
+        }
+        collect_type_defs(data, def.returned(), &mut types);
+    }
+
+    let mut src = String::new();
+    for &t in &types {
+        emit_type_def(data, t, &mut src);
+        src.push('\n');
+    }
+    let mut fns: Vec<u32> = export_set.iter().copied().collect();
+    fns.sort_unstable();
+    for d in fns {
+        let def = data.def(d);
+        let name = def.name().strip_prefix("n_").unwrap_or(def.name());
+        let params: Vec<String> = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef) && !a.name.starts_with("__"))
+            .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
+            .collect();
+        let ret = def.returned();
+        let ret_clause = if matches!(ret, Type::Void | Type::Null) {
+            String::new()
+        } else {
+            format!(" -> {} not null", ret.name(data))
+        };
+        let _ = writeln!(src, "pub fn {name}({}){ret_clause};", params.join(", "));
+        let _ = writeln!(src, "#native \"loft_shared_{}\"", def.name());
+    }
+    src
+}
+
+/// @PLN11 Arc N / N3 — mark a library's functions for native dispatch.  Of the
+/// `candidates` (a library's functions — e.g. all functions from a `use`d
+/// library's source), the **shared-store-dispatchable** subset has its
+/// `def.native` set to the bridge symbol `loft_shared_<name>`.  Returns that
+/// subset (the cdylib export set).
+///
+/// This is the hook that turns a *normal* library function (a body, no
+/// hand-written `#native`) into a native-dispatched one: once `def.native` is set,
+/// `byte_code` routes every call to it through `OpStaticCall` (codegen.rs), the
+/// stub is registered by `register_native_stubs`, and `wire_shared_native_fns`
+/// wires the real bridge after the cdylib loads.  **Call before `byte_code`.**
+pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSet<u32> {
+    let exportable: HashSet<u32> = crate::native_gate::shared_store_dispatchable(data)
+        .intersection(candidates)
+        .copied()
+        .collect();
+    mark_exports(data, &exportable);
+    exportable
+}
+
+/// @PLN11 Arc N / N3 (Step 2) — set `def.native = "loft_shared_<name>"` on each
+/// function in `export` (which `byte_code` then routes through `OpStaticCall`).
+/// Split out from [`mark_native_exports`] so the **build-before-mark** flow can
+/// mark *only after* the cdylib compiles — a build failure simply never marks, so
+/// the library interprets (Step 2's invariant: a library that can't compile native
+/// silently interprets, no `exit`, no `OpStaticCall` to an unbuilt symbol).
+pub fn mark_exports(data: &mut Data, export: &HashSet<u32>) {
+    for &d in export {
+        let sym = format!("loft_shared_{}", data.def(d).name());
+        data.def_mut(d).native = sym;
+    }
+}
+
+/// @PLN11 Arc N / N3 (Step 2) — the cdylib **export set** for the library at
+/// `pkg_dir`, computed **without marking** (`&Data`, not `&mut`): the library's
+/// top-level, user-named, `pub` functions (the dispatch-target invariant — see
+/// [`mark_library_native`]) intersected with the shared-store-dispatchable gate.
+/// The build-before-mark flow builds the cdylib from this set, then calls
+/// [`mark_exports`] only on success.
+#[must_use]
+pub fn library_export_set(data: &Data, pkg_dir: &str) -> HashSet<u32> {
+    let candidates: HashSet<u32> = (0..data.definitions())
+        .filter(|&d| {
+            let def = data.def(d);
+            matches!(def.def_type(), DefType::Function)
+                && def.pub_visible
+                && !is_synthetic_name(def.name())
+                && def.position().file.starts_with(pkg_dir)
+        })
+        .collect();
+    crate::native_gate::shared_store_dispatchable(data)
+        .intersection(&candidates)
+        .copied()
+        .collect()
+}
+
+/// @PLN11 Arc N / N3 — mark a `use`d library's **public API** functions native.
+///
+/// **Invariant:** a dispatch target is a function the consuming script can directly
+/// *name and `Call`* — a top-level, user-named, `pub` function owned by the package
+/// at `pkg_dir` (by `def.position().file` prefix — the same ownership guard the
+/// manifest path uses).  [`mark_native_exports`] then marks the
+/// shared-store-dispatchable subset.
+///
+/// The candidate filter must exclude **synthetic** functions, not just lambdas: a
+/// `pub fn`'s parse sprays `pub_visible` over every def it creates (`parser/mod.rs`),
+/// so a nested lambda (`__lambda_N`) is also `pub_visible` — but it is a *fn-ref*
+/// target the script cannot name, never a direct-`Call` dispatch target.  The
+/// `__`-prefix is the codebase's synthetic-name convention (same marker
+/// `native_gate` uses for synthetic params), so excluding it covers the whole class
+/// of compiler-generated functions, not the lambda instance.  (Private helpers are
+/// already excluded by `pub_visible`; they ride into the cdylib as reachable deps.)
+pub fn mark_library_native(data: &mut Data, pkg_dir: &str) -> HashSet<u32> {
+    let export = library_export_set(data, pkg_dir);
+    mark_exports(data, &export);
+    export
+}
+
+/// Is `stored_name` (an `n_<name>` definition name) a compiler-generated
+/// (synthetic) function — i.e. its user-facing name starts with `__` (lambdas
+/// `__lambda_N`, and any future synthetic kind)?  Such functions are never a
+/// script-callable public API, so they are not auto-native dispatch targets.
+fn is_synthetic_name(stored_name: &str) -> bool {
+    stored_name
+        .strip_prefix("n_")
+        .unwrap_or(stored_name)
+        .starts_with("__")
+}
+
+/// Add to `types` (transitively, in definition order) the struct/enum defs that
+/// loft type `t` references.
+fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
+    // The struct/enum `def_nr` this type references, if any.  Reference / Enum /
+    // Sorted / Index / Hash / Spacial all carry a leading element-struct `def_nr`;
+    // a Vector recurses into its element type; everything else is a leaf.
+    let d = match t {
+        Type::Reference(d, _)
+        | Type::Enum(d, _, _)
+        | Type::Sorted(d, _, _)
+        | Type::Index(d, _, _)
+        | Type::Hash(d, _, _)
+        | Type::Spacial(d, _, _) => *d,
+        Type::Vector(elm, _) => {
+            collect_type_defs(data, elm, types);
+            return;
+        }
+        _ => return,
+    };
+    if !types.insert(d) {
+        return; // already collected (also breaks cycles)
+    }
+    let def = data.def(d);
+    for a in def.attributes() {
+        collect_type_defs(data, &a.typedef, types);
+    }
+    // enum variants carry their own fields (DefType::EnumValue children)
+    for v in data.children_of(d) {
+        for a in data.def(v).attributes() {
+            collect_type_defs(data, &a.typedef, types);
+        }
+    }
+}
+
+/// Emit the loft-source definition of struct/enum `d_nr` into `src`.
+fn emit_type_def(data: &Data, d_nr: u32, src: &mut String) {
+    use std::fmt::Write as _;
+    let def = data.def(d_nr);
+    match def.def_type() {
+        DefType::Struct => {
+            let _ = writeln!(src, "struct {} {{", def.name());
+            for a in def.attributes() {
+                let _ = writeln!(src, "    {}: {},", a.name, a.typedef.name(data));
+            }
+            src.push_str("}\n");
+        }
+        DefType::Enum => {
+            let variants: Vec<u32> = data.children_of(d_nr).collect();
+            let parts: Vec<String> = variants
+                .iter()
+                .map(|&v| {
+                    let vd = data.def(v);
+                    let vname = vd.name().rsplit('.').next().unwrap_or(vd.name());
+                    // Each variant carries an auto-added `enum` discriminant field
+                    // (definitions.rs) — skip it; emit only the user-declared fields.
+                    let fields: Vec<String> = vd
+                        .attributes()
+                        .iter()
+                        .filter(|a| a.name != "enum")
+                        .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
+                        .collect();
+                    if fields.is_empty() {
+                        vname.to_string()
+                    } else {
+                        format!("{vname} {{ {} }}", fields.join(", "))
+                    }
+                })
+                .collect();
+            let _ = writeln!(src, "enum {} {{ {} }}", def.name(), parts.join(", "));
+        }
+        _ => {}
+    }
+}
+
+/// @PLN11 Arc N — a uniform 16/24-byte argument/return slot for the
+/// **shared-store** native-library bridge ([`generate_shared_cdylib_lib_rs`]).
+///
+/// The bridge knows each slot's type from the function signature, so no tag is
+/// needed: a scalar reads/writes `.scalar` (an `i64`, or float bits, or `0/1` for
+/// bool), a `vector`/`reference` reads/writes `.dbref`.  `#[repr(C)]` so the
+/// interpreter and the generated cdylib — **both linking this exact type from
+/// libloft** — agree on layout with no marshalling.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LibArg {
+    /// Scalar payload: an `i64`, `f64::to_bits() as i64`, `f32::to_bits() as i64`,
+    /// or a boolean as `0/1`.  Junk for non-scalar slots.
+    pub scalar: i64,
+    /// Reference payload: the raw stack `DbRef` for a `vector`/`reference` slot
+    /// (passed through unchanged — the `--native` body expects the same indirect
+    /// form the interpreter holds).  Junk for non-ref slots.
+    pub dbref: crate::keys::DbRef,
+    /// Text payload pointer: for a `text` arg, the UTF-8 bytes (borrowed from the
+    /// caller's store for the call's duration — `--native` takes `&str`).  Null
+    /// for non-text slots.
+    pub text_ptr: *const u8,
+    /// Text payload length (bytes), paired with `text_ptr`.
+    pub text_len: usize,
+}
+
+impl LibArg {
+    /// All-zero slot — the spread base so each `LibArg` literal sets only the one
+    /// field its type uses (`LibArg { scalar: x, ..LibArg::ZERO }`, etc.).
+    pub const ZERO: LibArg = LibArg {
+        scalar: 0,
+        dbref: crate::keys::DbRef {
+            store_nr: 0,
+            rec: 0,
+            pos: 0,
+        },
+        text_ptr: std::ptr::null(),
+        text_len: 0,
+    };
+}
+
+/// Build the shared `--native` program (header + `init` + only the functions
+/// reachable from `entry` + their deps) for `data`.  Both cdylib generators
+/// append their export wrappers to this.
+fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut out = Output {
+            data,
+            stores,
+            counter: 0,
+            indent: 0,
+            def_nr: 0,
+            declared: HashSet::new(),
+            reachable: HashSet::new(),
+            loop_stack: Vec::new(),
+            next_format_count: 0,
+            yield_collect: false,
+            yield_collect_text: false,
+            fn_ref_context: false,
+            i32_literal_context: false,
+            tuple_text_to_string: false,
+            coroutine_persistent_vars: HashSet::new(),
+            call_stack_prefix: None,
+            wasm_browser: false,
+        };
+        // Only the exported functions + their transitive deps (header + init + the
+        // reachable subset) — exactly what a `--native` binary emits from `n_main`,
+        // so unreachable operator stubs never surface.
+        let _ = out.output_native_library(&mut buf, 0, data.definitions(), entry);
+    }
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// Generate the cdylib `lib.rs` source for `data`'s **scalar** export set: the
+/// `--native` program for the functions in `export_set` **and their transitive
+/// dependencies**, plus a `#[no_mangle] pub extern "C"` export wrapper for each
+/// `export_set` function (the symbols the interpreter will dispatch to).
+///
+/// `export_set` is the **library's own public, scalar-dispatchable functions** —
+/// the cdylib's exported API, not the whole stdlib.  It serves as both the
+/// reachability roots (so only those functions + their deps are emitted) and the
+/// set to wrap.  The caller computes it as `library_pub_fns ∩ scalar_dispatchable`
+/// (operator definitions and stdlib internals are deps, inlined/emitted as needed,
+/// never wrapped).
+#[must_use]
+pub fn generate_cdylib_lib_rs(data: &Data, stores: &Stores, export_set: &HashSet<u32>) -> String {
+    let entry: Vec<u32> = export_set.iter().copied().collect();
+    let mut src = emit_program(data, stores, &entry);
+    for &d in export_set {
+        src.push('\n');
+        src.push_str(&export_wrapper(data, d));
+    }
+    src
+}
+
+/// Generate the cdylib `lib.rs` source for `data`'s **shared-store** export set:
+/// the `--native` program for `export_set` + deps, plus a uniform shared-store
+/// bridge ([`LibArg`] ABI) per exported function.  Use this when a non-scalar
+/// value (`vector`/`reference`) crosses the boundary; `export_set` is computed as
+/// `library_pub_fns ∩ shared_store_dispatchable`.
+#[must_use]
+pub fn generate_shared_cdylib_lib_rs(
+    data: &Data,
+    stores: &Stores,
+    export_set: &HashSet<u32>,
+) -> String {
+    let entry: Vec<u32> = export_set.iter().copied().collect();
+    let mut src = emit_program(data, stores, &entry);
+    for &d in export_set {
+        src.push('\n');
+        src.push_str(&shared_bridge_wrapper(data, d));
+    }
+    src
+}
+
+/// The `#[no_mangle] pub extern "C"` **scalar** export wrapper for
+/// scalar-dispatchable function `d_nr` (inner `--native` fn = its name, e.g.
+/// `n_double`).  The export symbol is `loft_<name>` (distinct from the inner).
+fn export_wrapper(data: &Data, d_nr: u32) -> String {
+    let def = data.def(d_nr);
+    let inner = def.name(); // e.g. "n_double"
+    let ret = rust_type(def.returned(), &Context::Result);
+    // Positional params (`a0`, `a1`, …) so wrapper arg names never clash with
+    // anything; types match the inner function's argument-context signature.
+    let params: Vec<(String, String)> = def
+        .attributes()
+        .iter()
+        .filter(|a| !a.name.starts_with("__"))
+        .enumerate()
+        .map(|(i, a)| (format!("a{i}"), rust_type(&a.typedef, &Context::Argument)))
+        .collect();
+    let sig: Vec<String> = params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+    let mut fwd = String::new();
+    for (n, _) in &params {
+        fwd.push_str(", ");
+        fwd.push_str(n);
+    }
+    format!(
+        "#[unsafe(no_mangle)]\n\
+         pub extern \"C\" fn loft_{inner}({}) -> {ret} {{\n    \
+         let cell = std::cell::UnsafeCell::new(Stores::new());\n    \
+         init(&cell);\n    \
+         {inner}(&cell{fwd})\n\
+         }}\n",
+        sig.join(", "),
+    )
+}
+
+/// The `#[no_mangle] pub extern "C"` **shared-store** bridge for
+/// shared-store-dispatchable function `d_nr`.  The export symbol is
+/// `loft_shared_<name>`.  It casts the caller's `*mut Stores` to
+/// `&UnsafeCell<Stores>` (no per-call cell — the caller's store is live), then,
+/// in the inner fn's attribute order:
+/// - a **visible** parameter is read from the next [`LibArg`] slot by its type;
+/// - a **hidden** destination parameter (`Attribute::hidden`, appended by
+///   `ref_return` for a non-scalar return) is **allocated here** in the shared
+///   store (`null_named` + `OpDatabase(<type_id>)`), exactly as a `--native`
+///   caller would — so the caller-side dispatcher only ever passes the public args.
+///
+/// Finally it forwards to the inner `--native` fn and writes the return.
+fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
+    use std::fmt::Write as _;
+    let def = data.def(d_nr);
+    let inner = def.name(); // e.g. "n_vec_sum"
+
+    let mut body = String::new();
+    let mut fwd = String::new();
+    let mut slot = 0usize; // next public-arg LibArg slot
+    for (i, a) in def.attributes().iter().enumerate() {
+        let var = format!("p{i}");
+        if a.hidden {
+            // ref_return destination — allocate it in the SHARED store, mirroring
+            // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
+            let tid = hidden_dest_type_id(data, &a.typedef);
+            let _ = writeln!(
+                body,
+                "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+            );
+            let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+            let _ = write!(fwd, ", {var}");
+        } else if is_text_work_buffer(&a.typedef) {
+            // text_return work buffer (`&mut String`) — own a LOCAL String, pass
+            // `&mut`.  The returned `Str` points into it; the return handler copies
+            // the bytes into the shared store's scratch before this frame drops.
+            let _ = writeln!(body, "    let mut {var}: String = String::new();");
+            let _ = write!(fwd, ", &mut {var}");
+        } else {
+            let ty = rust_type(&a.typedef, &Context::Argument);
+            let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
+            let _ = writeln!(body, "    let {var}: {ty} = {read};");
+            slot += 1;
+            let _ = write!(fwd, ", {var}");
+        }
+    }
+
+    let call = format!("{inner}(cell{fwd})");
+    let ret_stmt = bridge_write_ret(def.returned(), &call);
+
+    format!(
+        "#[unsafe(no_mangle)]\n\
+         pub extern \"C\" fn loft_shared_{inner}(\n    \
+         stores: *mut Stores,\n    \
+         args: *const loft::native_lib::LibArg,\n    \
+         n: usize,\n    \
+         ret: *mut loft::native_lib::LibArg,\n\
+         ) {{\n    \
+         let cell = unsafe {{ &*(stores.cast::<std::cell::UnsafeCell<Stores>>()) }};\n    \
+         let a = unsafe {{ std::slice::from_raw_parts(args, n) }};\n    \
+         let _ = ({slot}, a);\n\
+         {body}    \
+         {ret_stmt}\n\
+         }}\n",
+    )
+}
+
+/// The schema type id for a hidden `ref_return` destination of loft type `t`,
+/// for the `OpDatabase(cell, ref, <id>)` allocation.  Vectors resolve via the
+/// `main_vector<elm>` schema name (the same key `--native`'s `output_alloc_heap`
+/// uses).  Other aggregates (struct `reference`, data-`enum`) need their own
+/// type id and are not yet handled (the gate excludes them).
+fn hidden_dest_type_id(data: &Data, t: &Type) -> u16 {
+    match t {
+        Type::Vector(elm, _) => {
+            let elm_name = elm.name(data);
+            data.name_type(&format!("main_vector<{elm_name}>"), 0)
+        }
+        _ => u16::MAX,
+    }
+}
+
+/// Rust expression reading an argument of loft type `t` out of `LibArg` slot
+/// `slot` (e.g. `"a[0]"`), at the inner fn's argument-context type.
+fn bridge_read(t: &Type, slot: &str) -> String {
+    match t {
+        Type::Integer(s) if s.forced_size.is_none() => format!("{slot}.scalar"),
+        Type::Integer(_) => format!("{slot}.scalar as {}", rust_type(t, &Context::Argument)),
+        Type::Character => format!("{slot}.scalar as i32"),
+        Type::Boolean => format!("{slot}.scalar != 0"),
+        Type::Float => format!("f64::from_bits({slot}.scalar as u64)"),
+        Type::Single => format!("f32::from_bits({slot}.scalar as u32)"),
+        // Text arg → `&str` borrowed from the slot's (store-backed) bytes.
+        Type::Text(_) => format!(
+            "unsafe {{ std::str::from_utf8_unchecked(std::slice::from_raw_parts({slot}.text_ptr, {slot}.text_len)) }}"
+        ),
+        // Plain (tag-only) enum → a `u8` tag riding in the scalar slot.
+        Type::Enum(_, false, _) => format!("{slot}.scalar as u8"),
+        Type::Vector(_, _)
+        | Type::Reference(_, _)
+        | Type::Enum(_, true, _)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _) => format!("{slot}.dbref"),
+        // Not bridge-able — the gate excludes these, so this is unreachable for a
+        // shared-store-dispatchable function; emit a clearly-wrong token so a gate
+        // bug surfaces as a compile error rather than silent corruption.
+        _ => "compile_error!(\"unsupported shared-store arg type\")".to_string(),
+    }
+}
+
+/// Rust statement writing the inner-fn result `expr` (of loft return type `t`)
+/// into the `ret` [`LibArg`] slot.
+fn bridge_write_ret(t: &Type, expr: &str) -> String {
+    match t {
+        Type::Void | Type::Null => format!("let _ = {expr};"),
+        // Plain (tag-only) enum returns a `u8` tag → widen into the scalar slot.
+        Type::Integer(_) | Type::Character | Type::Boolean | Type::Enum(_, false, _) => {
+            format!("unsafe {{ (*ret).scalar = ({expr}) as i64; }}")
+        }
+        Type::Float => format!("unsafe {{ (*ret).scalar = ({expr}).to_bits() as i64; }}"),
+        Type::Single => format!("unsafe {{ (*ret).scalar = ({expr}).to_bits() as i64; }}"),
+        Type::Vector(_, _)
+        | Type::Reference(_, _)
+        | Type::Enum(_, true, _)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _) => format!("unsafe {{ (*ret).dbref = ({expr}); }}"),
+        // Text return: the inner fn returns a `Str` pointing into a local work
+        // `String` (about to drop).  Copy the bytes into the shared store's scratch
+        // (stable, outlives this frame) and point `ret` at that — mirroring the
+        // legacy `bridge_push_str`.  The dispatcher reads ptr+len back onto the stack.
+        Type::Text(_) => format!(
+            "let __r = ({expr});\n    \
+             let __t = __r.str();\n    \
+             let __st: &mut Stores = unsafe {{ &mut *cell.get() }};\n    \
+             __st.scratch.clear();\n    \
+             __st.scratch.push(__t.to_string());\n    \
+             let __s = &__st.scratch[0];\n    \
+             unsafe {{ (*ret).text_ptr = __s.as_ptr(); (*ret).text_len = __s.len(); }}"
+        ),
+        _ => "compile_error!(\"unsupported shared-store return type\");".to_string(),
+    }
+}
+
+/// Is `t` a `text_return` work buffer — a `&mut String` the inner fn appends the
+/// result into (loft IR type `RefVar(Text)`)?  The bridge owns a local `String`
+/// for each and passes `&mut`.  Shared with `native_gate` (the gate admits exactly
+/// these as the one allowed `__`-prefixed param, and only for a text-returning fn).
+pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
+    matches!(t, Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
+}
+
+/// @PLN11 Arc N / N3 — locate the running build's `libloft.rlib` + its sibling
+/// `deps/` directory, for linking an auto-generated cdylib against the **same**
+/// libloft this process links (so `Stores`/`DbRef`/`LibArg` are ABI-identical).
+///
+/// Works in both contexts the cdylib must build in: a real `cargo run --bin loft`
+/// (an unhashed `target/<prof>/libloft.rlib`, or `deps/`) and an integration test
+/// (a hashed `libloft-<hash>.rlib` in the test binary's `deps/`).  Returns the
+/// chosen rlib path and the `deps/` dir to add to the link search path.
+#[must_use]
+pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // Dependency rlibs always live in `<target>/<profile>/deps/`.  In a real binary
+    // run `exe_dir` is `<target>/<profile>` (so `deps/` is its child); in an
+    // integration test `exe_dir` already *is* `.../deps`.  The link-search dir we
+    // return is that `deps/` either way, so feature-dep rlibs (random/png/…) resolve.
+    let deps = if exe_dir.file_name().is_some_and(|n| n == "deps") {
+        exe_dir.clone()
+    } else {
+        exe_dir.join("deps")
+    };
+    // Find `libloft.rlib` (unhashed, in `<profile>/`) or the newest hashed
+    // `libloft-<hash>.rlib` (in `deps/`); prefer the deps dir.
+    for dir in [&deps, &exe_dir] {
+        if !dir.is_dir() {
+            continue;
+        }
+        let exact = dir.join("libloft.rlib");
+        if exact.exists() {
+            return Some((exact, deps.clone()));
+        }
+        let hashed = std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with("libloft-") && has_rlib_ext(&n)
+            })
+            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+            .map(|e| e.path());
+        if let Some(rlib) = hashed {
+            return Some((rlib, deps.clone()));
+        }
+    }
+    None
+}
+
+/// Does filename `n` have a (case-insensitive) `.rlib` extension?
+fn has_rlib_ext(n: &str) -> bool {
+    std::path::Path::new(n)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("rlib"))
+}
+
+/// `--extern name=path` flags for the optional feature-dep rlibs (random/png/…) in
+/// `deps` that the generated stdlib code may reference — every `libX-<hash>.rlib`
+/// except `libloft*` (which is passed explicitly as `--extern loft=`).
+fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(deps) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("lib") || !has_rlib_ext(&n) || n.starts_with("libloft") {
+            continue;
+        }
+        if let Some(stem) = n
+            .strip_prefix("lib")
+            .and_then(|s| s.rsplit_once('-'))
+            .map(|x| x.0)
+        {
+            out.push((stem.to_string(), e.path()));
+        }
+    }
+    out
+}
+
+/// On Windows MSVC, the build-script output dirs holding native import libraries
+/// (e.g. `windows.0.48.5.lib` from `windows-sys`) must be passed to a hand-driven
+/// `rustc` as `-L` paths — cargo adds them via `cargo:rustc-link-search` but we
+/// don't, so the cdylib link fails `LNK1181: cannot open input file …`.  Mirrors
+/// the `--native` test runner's `find_native_lib_dirs`.  Empty (a no-op) off Windows.
+#[cfg(not(windows))]
+fn native_lib_search_dirs(_rlib: &std::path::Path) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn native_lib_search_dirs(rlib: &std::path::Path) -> Vec<std::path::PathBuf> {
+    // `rlib` is `target/<profile>/libloft.rlib` or `target/<profile>/deps/libloft-*.rlib`;
+    // walk up to the profile dir, then scan `build/<crate>-<hash>/`.
+    let Some(profile_dir) = rlib.parent().and_then(|p| {
+        if p.file_name().is_some_and(|n| n == "deps") {
+            p.parent()
+        } else {
+            Some(p)
+        }
+    }) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(profile_dir.join("build")) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let build_entry = entry.path();
+        // `out/` and its immediate subdirs (some crates emit into `out/<target>/`).
+        let out = build_entry.join("out");
+        if out.is_dir() {
+            dirs.push(out.clone());
+            if let Ok(subs) = std::fs::read_dir(&out) {
+                dirs.extend(
+                    subs.filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_dir()),
+                );
+            }
+        }
+        // `cargo:rustc-link-search` directives cached in `build/<crate>-<hash>/output`
+        // (e.g. `windows_x86_64_msvc` ships its `.lib` inside the registry package).
+        if let Ok(content) = std::fs::read_to_string(build_entry.join("output")) {
+            for line in content.lines() {
+                if let Some(p) = line
+                    .strip_prefix("cargo:rustc-link-search=native=")
+                    .or_else(|| line.strip_prefix("cargo:rustc-link-search="))
+                {
+                    let p = std::path::PathBuf::from(p);
+                    if p.is_dir() && !dirs.contains(&p) {
+                        dirs.push(p);
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Platform cdylib filename for `stem` (`lib<stem>.so` / `.dylib` / `<stem>.dll`).
+#[must_use]
+pub fn platform_cdylib_name(stem: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{stem}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{stem}.dylib")
+    } else {
+        format!("lib{stem}.so")
+    }
+}
+
+/// @PLN11 Arc N / N3 — generate **and compile** the shared-store cdylib for
+/// `export_set` into `out_dir`, returning the built cdylib path.  This is the
+/// production build step `use <lib>` runs after `byte_code`: it locates the
+/// running build's `libloft.rlib` ([`find_loft_rlib`]), writes `lib.rs`
+/// ([`generate_shared_cdylib_lib_rs`]), and invokes `rustc` with the `--native`
+/// flag set (cdylib, edition 2024, `--extern loft=` + feature-dep externs).
+///
+/// # Errors
+/// Returns a message if the rlib can't be found, the source can't be written,
+/// `rustc` can't be launched, or compilation fails (the message includes the
+/// `rustc` stderr tail and the kept `lib.rs` path for inspection).
+pub fn build_shared_cdylib(
+    data: &Data,
+    stores: &Stores,
+    export_set: &HashSet<u32>,
+    out_dir: &std::path::Path,
+    stem: &str,
+) -> Result<std::path::PathBuf, String> {
+    let (rlib, deps) = find_loft_rlib().ok_or("libloft.rlib not found for this build")?;
+    let src = generate_shared_cdylib_lib_rs(data, stores, export_set);
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
+    let rs = out_dir.join(format!("{stem}.rs"));
+    std::fs::write(&rs, &src).map_err(|e| format!("write {}: {e}", rs.display()))?;
+    let so = out_dir.join(platform_cdylib_name(stem));
+
+    // Pass rustc args via an `@argfile`: the `--extern <crate>=<path>` list + `-L`
+    // search paths routinely exceed Windows' ~32 KB `CreateProcessW` command-line
+    // limit (os error 206: "The filename or extension is too long"), and the
+    // argfile form is cross-platform — the same fix the `--native` test runner
+    // already uses (PLAN49).
+    let mut args: Vec<String> = vec![
+        "--edition=2024".to_string(),
+        "-C".to_string(),
+        "debuginfo=0".to_string(),
+        "-C".to_string(),
+        "opt-level=2".to_string(),
+        "--crate-type".to_string(),
+        "cdylib".to_string(),
+        "-o".to_string(),
+        so.display().to_string(),
+        rs.display().to_string(),
+        "--extern".to_string(),
+        format!("loft={}", rlib.display()),
+        "-L".to_string(),
+        deps.display().to_string(),
+    ];
+    for (name, path) in extra_externs(&deps) {
+        args.push("--extern".to_string());
+        args.push(format!("{name}={}", path.display()));
+    }
+    // Windows MSVC: add the build-script `-L` dirs holding native import libs
+    // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.
+    for dir in native_lib_search_dirs(&rlib) {
+        args.push("-L".to_string());
+        args.push(dir.display().to_string());
+    }
+    // One arg per line; quote any containing whitespace (rustc's argfile parser is
+    // whitespace-separated, newline-separated is a strict subset).
+    let argfile = out_dir.join(format!("{stem}.args"));
+    let contents = args
+        .iter()
+        .map(|s| {
+            if s.contains(char::is_whitespace) {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&argfile, contents).map_err(|e| format!("write {}: {e}", argfile.display()))?;
+    let output = std::process::Command::new("rustc")
+        .arg(format!("@{}", argfile.display()))
+        .output()
+        .map_err(|e| format!("launch rustc: {e} (is the Rust toolchain installed?)"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(30).collect();
+        let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!(
+            "cdylib compile failed (source kept at {}):\n{tail}",
+            rs.display()
+        ));
+    }
+    Ok(so)
+}
+
+/// @PLN11 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
+/// at `pkg_dir` should run this invocation, and build its cdylib only when warranted.
+///
+/// Returns:
+/// - `Ok(Some(so))` — dispatch native against the cdylib at `so` (fresh cached, or
+///   just built);
+/// - `Ok(None)` — **interpret this run** (the library is being actively edited);
+/// - `Err(_)` — a build was attempted and failed (the caller interprets + warns).
+///
+/// The policy reconciles "a library is always native" with "no `rustc` per save":
+/// 1. **Fresh artifact** (`.so` exists, fingerprint matches, source not newer) →
+///    native, no work.
+/// 2. **No artifact yet, or `loft` itself changed** (fingerprint mismatch) → **build
+///    eagerly** → native.  First use of a library, and a deployed/stable dep, pay the
+///    one-time build and run native from the start (this is also why the parity tests,
+///    which wipe `native-auto/` then run once, still dispatch native).
+/// 3. **Stale artifact** (an `.so` exists but the source is newer — the library was
+///    edited) → consult the last-run source hash:
+///    - *changed since the previous run* → the edit loop is live → **interpret this
+///      run** (`Ok(None)`); record the new hash.  No `rustc`.
+///    - *unchanged since the previous run* → editing has settled → **rebuild** → native.
+///
+/// So an edit-run-edit-run loop interprets each time (no `rustc`); the first run after
+/// you stop editing rebuilds and the library is native again.  (Polish: do that
+/// rebuild in the background so even the settling run never blocks — see the plan's
+/// Step 4 option 3.)
+///
+/// # Errors
+/// Propagates a build failure from [`build_shared_cdylib`].
+pub fn cached_or_build_shared_cdylib(
+    data: &Data,
+    stores: &Stores,
+    export_set: &HashSet<u32>,
+    pkg_dir: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let stem = format!(
+        "loft_auto_{}",
+        std::path::Path::new(pkg_dir)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("lib")
+    );
+    let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
+    let so = out_dir.join(platform_cdylib_name(&stem));
+    let fp = crate::cache::loft_build_fingerprint();
+
+    // 1. Fresh artifact → native, no hashing.
+    if so.exists()
+        && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
+        && !source_newer_than(pkg_dir, &so)
+    {
+        return Ok(Some(so));
+    }
+
+    let build = |out_dir: &std::path::Path| -> Result<Option<std::path::PathBuf>, String> {
+        let built = build_shared_cdylib(data, stores, export_set, out_dir, &stem)?;
+        crate::cache::write_native_artifact_fingerprint(out_dir, fp);
+        Ok(Some(built))
+    };
+
+    // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
+    if !so.exists() || !crate::cache::native_artifact_fingerprint_matches(&out_dir, fp) {
+        crate::cache::write_run_source_hash(&out_dir, source_content_hash(pkg_dir));
+        return build(&out_dir);
+    }
+
+    // 3. Stale artifact (the library was edited) → dev-interpret-on-edit.
+    let cur = source_content_hash(pkg_dir);
+    let stable = crate::cache::read_run_source_hash(&out_dir) == Some(cur);
+    crate::cache::write_run_source_hash(&out_dir, cur);
+    if stable {
+        build(&out_dir) // editing settled → rebuild, native again
+    } else {
+        Ok(None) // still being edited → interpret this run, no rustc
+    }
+}
+
+/// @PLN11 Arc N / N3 (Step 4) — a content hash of every `.loft` / `loft.toml` source
+/// under `pkg_dir` (build/artifact dirs skipped, files visited in sorted order for a
+/// stable digest).  Used to detect "did this library's source change since the last
+/// run?" — content-based, not mtime, so it is deterministic (testable) and a no-op
+/// touch doesn't trigger a rebuild.
+fn source_content_hash(pkg_dir: &str) -> u64 {
+    use sha2::{Digest, Sha256};
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name == "native-auto" || name == "native" || name == "target" {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let is_src = p
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+                || name == "loft.toml";
+            if is_src {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut h = Sha256::new();
+    for f in &files {
+        // The path relative to the package keeps the digest stable across machines
+        // while still reacting to renames; content reacts to edits.
+        let rel = f.strip_prefix(pkg_dir).unwrap_or(f);
+        h.update(rel.to_string_lossy().as_bytes());
+        if let Ok(bytes) = std::fs::read(f) {
+            h.update(&bytes);
+        }
+    }
+    let digest: [u8; 32] = h.finalize().into();
+    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
+}
+
+/// Is any `.loft` / `loft.toml` source under `pkg_dir` newer than the artifact at
+/// `artifact`?  (Build/artifact dirs are skipped.)  A missing/unreadable artifact
+/// mtime counts as stale.
+fn source_newer_than(pkg_dir: &str, artifact: &std::path::Path) -> bool {
+    let Ok(art_mtime) = artifact.metadata().and_then(|m| m.modified()) else {
+        return true;
+    };
+    let mut newest: Option<std::time::SystemTime> = None;
+    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name == "native-auto" || name == "native" || name == "target" {
+                continue; // build/artifact dirs
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let is_src = p
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+                || name == "loft.toml";
+            if is_src
+                && let Ok(mt) = e.metadata().and_then(|m| m.modified())
+                && newest.is_none_or(|n| mt > n)
+            {
+                newest = Some(mt);
+            }
+        }
+    }
+    newest.is_some_and(|src| src > art_mtime)
+}

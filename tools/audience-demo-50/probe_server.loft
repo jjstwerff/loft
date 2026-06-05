@@ -12,7 +12,7 @@
 // MVP scope: sight-range cutoff + EXIT signaling.  Rate-LOD bands and
 // projector unfiltered-broadcast are deferred to v2 of the probe.
 //
-// Wire format (text, per @PLAN36 framing convention "msg_id:payload"):
+// Wire format (text, per @PLN6 framing convention "msg_id:payload"):
 //   client → server   1:cid,x,y,z         INPUT (probe carries position)
 //   server → client   2:plane_id,seq,x,y,z  POSE
 //   server → client   3:plane_id          EXIT (peer left your sight)

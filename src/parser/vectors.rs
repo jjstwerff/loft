@@ -471,7 +471,7 @@ impl Parser {
         self.data.def_used(d_nr);
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
-        let ret_type = self.data.def(d_nr).returned.clone();
+        let ret_type = self.data.def(d_nr).returned().clone();
         Type::Function(arg_types, Box::new(ret_type), vec![])
     }
 
@@ -540,7 +540,7 @@ impl Parser {
         // The codegen (line 40-46) reads definition attributes to assign argument positions.
         let outer_closure_param = self.closure_param;
         if !self.first_pass {
-            let closure_rec = self.data.def(d_nr).closure_record;
+            let closure_rec = self.data.def(d_nr).closure_record();
             if closure_rec != u32::MAX {
                 let closure_tp = Type::Reference(closure_rec, vec![]);
                 // Add as definition attribute so codegen positions it on the stack.
@@ -615,7 +615,7 @@ impl Parser {
         // the second-pass closure injection also adds a hidden __closure attribute.
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
-        let ret_type = self.data.def(d_nr).returned.clone();
+        let ret_type = self.data.def(d_nr).returned().clone();
         // include the closure work var dep so that get_free_vars knows
         // a local ___clos_N variable owns the closure (and will free it).  Without
         // this dep, the Function arm in get_free_vars would emit a duplicate free.
@@ -850,7 +850,7 @@ impl Parser {
 
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
-        let ret_type = self.data.def(d_nr).returned.clone();
+        let ret_type = self.data.def(d_nr).returned().clone();
         // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
             vec![]
@@ -864,7 +864,7 @@ impl Parser {
     // lambdas, or an Insert block that allocates and populates the closure record.
     #[allow(clippy::similar_names)]
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
-        let closure_rec_d = self.data.def(d_nr).closure_record;
+        let closure_rec_d = self.data.def(d_nr).closure_record();
         if closure_rec_d != u32::MAX && !self.first_pass {
             // A5.6-1/2 (16-byte fn-ref + embedded closure):
             // Allocate and populate the closure record at lambda DEFINITION time.
@@ -887,7 +887,7 @@ impl Parser {
             self.vars.defined(w);
             // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
             self.vars.add_to_work_refs(w);
-            let tp_nr = i32::from(self.data.def(closure_rec_d).known_type);
+            let tp_nr = i32::from(self.data.def(closure_rec_d).known_type());
             // Build fn_type for fn_ref_var: visible params (excluding __closure) + ret.
             let n_all_attrs = self.data.attributes(d_nr);
             let has_closure_attr =
@@ -900,7 +900,7 @@ impl Parser {
             let visible_params: Vec<Type> = (0..n_visible)
                 .map(|aid| self.data.attr_type(d_nr, aid).clone())
                 .collect();
-            let ret_tp = self.data.def(d_nr).returned.clone();
+            let ret_tp = self.data.def(d_nr).returned().clone();
             // fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.
@@ -954,7 +954,7 @@ impl Parser {
             //    try_fn_ref_call at the call site creates the right number of
             //    work buffers.  Without this, cross-scope fn-ref calls to
             //    text-returning lambdas crash because the work buffer is missing.
-            if let Type::Function(ref params, _, _) = self.data.def(self.context).returned {
+            if let Type::Function(params, _, _) = self.data.def(self.context).returned() {
                 let params = params.clone();
                 self.data.definitions[self.context as usize].returned =
                     Type::Function(params, Box::new(ret_tp), vec![w]);
@@ -1010,7 +1010,7 @@ impl Parser {
             return;
         }
         let captures = self.captured_names.clone();
-        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures.clone();
+        let mutated: Vec<String> = self.data.def(lambda_d_nr).mutated_captures().to_vec();
         for (name, tp) in &captures {
             if !mutated.iter().any(|m| m == name) {
                 continue;
@@ -1089,8 +1089,8 @@ impl Parser {
         // flows through the existing void-return write-back
         // mechanism, which works for the b_d1 shape that
         // text-returning fns are most likely to use).
-        let parent_returns_text = matches!(self.data.def(self.context).returned, Type::Text(_));
-        let names = self.data.def(self.context).scalars_to_box.clone();
+        let parent_returns_text = matches!(self.data.def(self.context).returned(), Type::Text(_));
+        let names = self.data.def(self.context).scalars_to_box().to_vec();
         for name in &names {
             let v_nr = self.vars.var(name);
             if v_nr == u16::MAX {
@@ -1102,7 +1102,7 @@ impl Parser {
             let original_tp = self.vars.tp(v_nr).clone();
             // Skip if already flipped.
             if matches!(&original_tp, Type::Reference(d, _)
-                if self.data.def(*d).name.starts_with("__cell_"))
+                if self.data.def(*d).name().starts_with("__cell_"))
             {
                 continue;
             }
@@ -1662,7 +1662,7 @@ impl Parser {
         if !self.first_pass && !res.is_empty() && vec != u16::MAX {
             let ed_nr = self.data.type_def_nr(in_t);
             if ed_nr != u32::MAX {
-                let known = self.data.def(ed_nr).known_type;
+                let known = self.data.def(ed_nr).known_type();
                 if known != u16::MAX {
                     let elem_size = self.database.size(known);
                     if elem_size > 0 {
@@ -1841,8 +1841,8 @@ impl Parser {
         }
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
-                &self.data.def(*t_nr).returned,
-                &self.data.def(*in_nr).returned,
+                self.data.def(*t_nr).returned(),
+                self.data.def(*in_nr).returned(),
             )
             && *t_e == *in_e
         {
@@ -1908,7 +1908,7 @@ impl Parser {
                     // a Call whose return type is `fn()->T` indistinguishable by
                     // signature, IS detectable via that non-empty dep list.
                     Value::Call(d_nr, _) => matches!(
-                        &self.data.def(*d_nr).returned,
+                        self.data.def(*d_nr).returned(),
                         Type::Function(_, _, deps) if !deps.is_empty()
                     ),
                     _ => false,
@@ -1940,7 +1940,7 @@ impl Parser {
 
     pub(crate) fn new_record_field_op(&mut self, val: &Value, parent_tp: &Type, op: &str) -> Value {
         if let Value::Call(_, ps) = val.unspan() {
-            let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type;
+            let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type();
             let field_nr = if let Value::Int(pos) = ps[1] {
                 self.database.field_nr(parent, pos)
             } else {
@@ -2013,7 +2013,7 @@ impl Parser {
             let lhs_tp = self.vars.tp(vec).clone();
             match &lhs_tp {
                 Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     if c == u16::MAX {
                         None
                     } else {
@@ -2021,7 +2021,7 @@ impl Parser {
                     }
                 }
                 Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     if c == u16::MAX {
                         None
                     } else {
@@ -2029,7 +2029,7 @@ impl Parser {
                     }
                 }
                 Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     if c == u16::MAX {
                         None
                     } else {
@@ -2037,7 +2037,7 @@ impl Parser {
                     }
                 }
                 Type::Spacial(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     if c == u16::MAX {
                         None
                     } else {
@@ -2177,7 +2177,9 @@ impl Parser {
                         let elem_known = self.database.db_type(elem_tp, &self.data);
                         Value::Int(i32::from(self.database.vector(elem_known)) | free_source_bit)
                     } else {
-                        Value::Int(i32::from(self.data.def(inner_nr).known_type) | free_source_bit)
+                        Value::Int(
+                            i32::from(self.data.def(inner_nr).known_type()) | free_source_bit,
+                        )
                     };
                     // @P380 handle-zero is now hoisted above (after the element
                     // is created), covering this copy path AND the literal/`Insert`
@@ -2325,12 +2327,12 @@ impl Parser {
                 .vars
                 .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
             self.vars.depend(vec, db);
-            let tp = self.data.def(vec_def).known_type;
+            let tp = self.data.def(vec_def).known_type();
             debug_assert_ne!(
                 tp,
                 u16::MAX,
                 "Undefined type {} at {}",
-                self.data.def(vec_def).name,
+                self.data.def(vec_def).name(),
                 self.lexer.pos()
             );
             ls.push(self.cl("OpDatabase", &[Value::Var(db), Value::Int(i32::from(tp))]));
@@ -2365,7 +2367,7 @@ impl Parser {
             .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
         self.vars.depend(elm, db);
         self.vars.depend(vec, db);
-        let known = Value::Int(i32::from(self.data.def(vec_def).known_type));
+        let known = Value::Int(i32::from(self.data.def(vec_def).known_type()));
         ls.insert(0, self.cl("OpDatabase", &[Value::Var(db), known]));
         // Reference to the vector field.
         ls.insert(1, v_set(vec, self.get_field(vec_def, 0, Value::Var(db))));
@@ -2424,30 +2426,30 @@ impl Parser {
             // semantic difference (d_nr vs. integer) is recovered at
             // read-back time via fn-ref unbox.
             Type::Function(_, _, _) => self.database.int(0, false),
-            Type::Reference(r, _) | Type::Enum(r, _, _) => self.data.def(*r).known_type,
+            Type::Reference(r, _) | Type::Enum(r, _, _) => self.data.def(*r).known_type(),
             Type::Hash(tp, key, _) => {
-                let mut name = "hash<".to_string() + &self.data.def(*tp).name + "[";
+                let mut name = "hash<".to_string() + self.data.def(*tp).name() + "[";
                 self.database
-                    .field_name(self.data.def(*tp).known_type, key, &mut name);
+                    .field_name(self.data.def(*tp).known_type(), key, &mut name);
                 let r = self.database.name(&name);
                 if r != u16::MAX {
                     return r;
                 }
                 // P190 — local-var hash iteration: register on demand.
-                let c_tp = self.data.def(*tp).known_type;
+                let c_tp = self.data.def(*tp).known_type();
                 if c_tp == u16::MAX {
                     return u16::MAX;
                 }
                 self.database.hash(c_tp, key)
             }
             Type::Sorted(tp, key, _) => {
-                let mut name = "sorted<".to_string() + &self.data.def(*tp).name + "[";
+                let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
                 if r != u16::MAX {
                     return r;
                 }
-                let mut ordered = "ordered<".to_string() + &self.data.def(*tp).name + "[";
+                let mut ordered = "ordered<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut ordered);
                 let r = self.database.name(&ordered);
                 if r != u16::MAX {
@@ -2458,21 +2460,21 @@ impl Parser {
                 // fill_database (which only runs on struct fields).
                 // Register on demand here so OpIterate gets the right
                 // db type id and `fill_iter` produces all 6 args.
-                let c_tp = self.data.def(*tp).known_type;
+                let c_tp = self.data.def(*tp).known_type();
                 if c_tp == u16::MAX {
                     return u16::MAX;
                 }
                 self.database.sorted(c_tp, key)
             }
             Type::Index(tp, key, _) => {
-                let mut name = "index<".to_string() + &self.data.def(*tp).name + "[";
+                let mut name = "index<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
                 if r != u16::MAX {
                     return r;
                 }
                 // P190 — same on-demand registration for local-var index.
-                let c_tp = self.data.def(*tp).known_type;
+                let c_tp = self.data.def(*tp).known_type();
                 if c_tp == u16::MAX {
                     return u16::MAX;
                 }
@@ -2576,7 +2578,7 @@ pub(crate) fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<St
         Type::Character => Some("__cell_character".to_string()),
         Type::Text(_) => Some("__cell_text".to_string()),
         Type::Enum(d_nr, false, _) => {
-            let enum_name = &data.def(*d_nr).name;
+            let enum_name = data.def(*d_nr).name();
             Some(format!("__cell_enum_{enum_name}"))
         }
         _ => None,
@@ -2660,13 +2662,13 @@ fn box_captured_names_for_outer_scalars(
     if outer_context == u32::MAX || (outer_context as usize) >= data.definitions.len() {
         return;
     }
-    let scalars = data.def(outer_context).scalars_to_box.clone();
+    let scalars = data.def(outer_context).scalars_to_box().to_vec();
     // Plan-22 phase 02d-vii — symmetric guard with
     // `flip_scalars_to_box_types`: skip text when the parent
     // function returns text (avoid the "Write to locked
     // store" panic at closure-record init in text-returning
     // fns).
-    let parent_returns_text = matches!(data.def(outer_context).returned, Type::Text(_));
+    let parent_returns_text = matches!(data.def(outer_context).returned(), Type::Text(_));
     for (name, tp) in captured_names {
         if !scalars.iter().any(|s| s == name) {
             continue;
@@ -2695,7 +2697,7 @@ fn accumulate_scalars_to_box(
     if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
         return;
     }
-    let mutated = data.def(lambda_d_nr).mutated_captures.clone();
+    let mutated = data.def(lambda_d_nr).mutated_captures().to_vec();
     for name in &mutated {
         let Some((_, tp)) = captured_names.iter().find(|(n, _)| n == name) else {
             continue;
@@ -2756,8 +2758,8 @@ fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
     // Phase 01's existing API stays compatible: when synthesize has
     // already run, this function uses the closure record's
     // attributes (the original behaviour).
-    let closure_d_nr = data.def(lambda_d_nr).closure_record;
-    let variables = data.def(lambda_d_nr).variables.clone();
+    let closure_d_nr = data.def(lambda_d_nr).closure_record();
+    let variables = data.def(lambda_d_nr).variables().clone();
     let captured_names: Vec<String> = if closure_d_nr == u32::MAX {
         // Pre-synthesize call site — derive captured names from the
         // lambda's variable table.  Captured names are local
@@ -2787,7 +2789,7 @@ fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
     if captured_names.is_empty() {
         return;
     }
-    let body = data.def(lambda_d_nr).code.clone();
+    let body = data.def(lambda_d_nr).code().clone();
     // Resolve the closure-param's var slot — it's the `__closure`
     // argument added at lambda parse time (vectors.rs:417-421).
     // In the body's IR, captured-name reads are
@@ -2975,16 +2977,16 @@ mod plan22_phase01_mutation_detection_tests {
         p.parse_str(source, "phase01_test", false);
         for d_nr in 0..p.data.definitions() {
             let def = p.data.def(d_nr);
-            if def.closure_record != u32::MAX && !def.mutated_captures.is_empty() {
-                return def.mutated_captures.clone();
+            if def.closure_record() != u32::MAX && !def.mutated_captures().is_empty() {
+                return def.mutated_captures().to_vec();
             }
         }
         // Fall back to the first capturing lambda even when nothing
         // was detected — lets `assert_eq` show the actual empty vec.
         for d_nr in 0..p.data.definitions() {
             let def = p.data.def(d_nr);
-            if def.closure_record != u32::MAX {
-                return def.mutated_captures.clone();
+            if def.closure_record() != u32::MAX {
+                return def.mutated_captures().to_vec();
             }
         }
         Vec::new()
@@ -3112,7 +3114,7 @@ mod plan22_phase02d_i_scalars_to_box_tests {
         if test_d_nr == u32::MAX {
             return Vec::new();
         }
-        let mut names = p.data.def(test_d_nr).scalars_to_box.clone();
+        let mut names = p.data.def(test_d_nr).scalars_to_box().to_vec();
         names.sort();
         names
     }
@@ -3286,8 +3288,8 @@ mod plan22_phase02d_ii_cell_struct_synthesis_tests {
         let mut cells = Vec::new();
         for d_nr in 0..p.data.definitions() {
             let def = p.data.def(d_nr);
-            if def.name.starts_with("__cell_") {
-                cells.push((def.name.clone(), def.def_type.clone()));
+            if def.name().starts_with("__cell_") {
+                cells.push((def.name().to_string(), def.def_type().clone()));
             }
         }
         cells.sort_by(|a, b| a.0.cmp(&b.0));
@@ -3898,7 +3900,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
             false,
         );
         let test_d_nr = p.data.def_nr("n_test");
-        let vars = &p.data.def(test_d_nr).variables;
+        let vars = p.data.def(test_d_nr).variables();
         let mut found_n = false;
         for v_nr in 0..vars.next_var() {
             if vars.name(v_nr) == "n" {
@@ -3965,7 +3967,7 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
             .expect("expected rewrite IR");
         let op_db = p.data.def_nr("OpDatabase");
         let op_set = p.data.def_nr("OpSetInt");
-        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type());
         let Value::Insert(ops) = ir else {
             panic!("expected Insert");
         };
@@ -4202,7 +4204,7 @@ mod plan22_phase02d_iii_d_alloc_prepend_tests {
             vec![Value::Var(v_nr), Value::Int(0), Value::Int(42)],
         );
         let wrapped = p.maybe_prepend_cell_alloc(result.clone(), &lhs);
-        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type());
         let Value::Insert(ops) = wrapped else {
             panic!("expected Insert wrap; got non-Insert");
         };
@@ -4334,7 +4336,7 @@ mod plan22_phase02d_iii_d_alloc_prepend_tests {
             vec![Value::Var(v_nr), Value::Int(0), Value::Text("hi".into())],
         );
         let wrapped = p.maybe_prepend_cell_alloc(result, &lhs);
-        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type);
+        let cell_kt = i32::from(p.data.def(cell_d_nr).known_type());
         if let Value::Insert(ops) = wrapped
             && let Value::Call(_, args) = &ops[1]
         {

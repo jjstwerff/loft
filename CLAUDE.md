@@ -3,59 +3,34 @@
 
 ## What loft is
 
-**loft** is a tree-walking interpreter for the **loft** programming language, written in Rust.
-Loft is a statically typed, expression-oriented language with struct/enum support, a
-store-based heap, and a standard library loaded from `default/*.loft`.
+**loft** is a tree-walking interpreter (in Rust) for the **loft** language: statically typed,
+expression-oriented, with struct/enum support, a store-based heap, and a stdlib loaded from
+`default/*.loft`.
 
-### Where loft sits — the three-layer stack
+loft is the **language** layer of a three-layer stack:
 
-loft is the **language** layer of a larger project:
-
-- **lavition** — the **engine**: an editor with loft as its built-in scripting
-  language, positioned as a **rapid-prototyping game engine for indie game
-  developers and studios**.  This is the long-term destination, built out over
-  time, and is the engine's own name — **not** a former name for loft.  (The
-  language used the `.lav` extension while it lived inside the engine; the
-  2026-03-08 "move to the loft name" split gave the *language* its own identity
-  — `.lav` → `.loft` — distinct from the engine.)
-- **loft** — the **language** (this repo): the statically-typed scripting
-  language embedded in the engine.  The name was chosen for being **easy and
-  descriptive**, deliberately *not* a unique or trademarkable brand word — the
-  distinctive, ownable identity lives in *lavition*.  So it doesn't matter that
-  "loft" is a common word (and already taken on crates.io by an unrelated
-  project): the language ships under the lavition umbrella, never as a
-  standalone brand.
-- **moros** (RPG) and **dryopea** (sci-fi tower-defence) — **games built on the
-  lavition engine**, written in loft.  They are the canonical dogfood consumers
-  that drive language work (see the development cadence below).
+- **lavition** — the **engine**: an editor with loft as its built-in scripting language,
+  positioned as a rapid-prototyping game engine for indie devs/studios. The long-term
+  destination and the ownable brand. (History + naming rationale: [LAVITION.md](doc/claude/LAVITION.md).)
+- **loft** — the **language** (this repo): a deliberately generic, descriptive name; ships
+  under the lavition umbrella, never as a standalone brand.
+- **moros** (RPG) and **dryopea** (sci-fi tower-defence) — games built on lavition in loft;
+  the canonical dogfood consumers that drive language work.
 
 ---
 
 ## Development cadence — the dogfood loop
 
-The project's development model is:
+> **Build a real consumer → harvest the language lessons → fix the language → ship as a release.**
 
-> **Build a real consumer → harvest the language lessons → fix the language → ship the lessons as a release.**
+Not toy programs — real tools that have to work. The canonical consumers (branch-review viewer
+[@PLAN35](doc/claude/plans/finished/35-branch-review-viewer/README.md), tracker indexer
+[@PLAN37](doc/claude/plans/future/37-tracker-index/README.md), [`lib/markdown/`](lib/markdown/))
+each drove a wave of language work that landed BEFORE the next minor release.
 
-Not toy programs.  Not abstract design.  Real tools that have to work.
-The branch-review viewer ([@PLAN35](doc/claude/plans/finished/35-branch-review-viewer/README.md)),
-the tracker indexer ([@PLAN37](doc/claude/plans/future/37-tracker-index/README.md)),
-and [`lib/markdown/`](lib/markdown/) are the canonical consumers — each one
-drove a wave of language enhancements (closures, bounded generics, native codegen
-maturity, `lib/process`/`lib/fs_watch`/`lib/cache` plan slots, eight P-issues from
-the dogfood pass) that landed BEFORE the next minor release.
-
-When picking work, prefer the path that exercises the language against a real
-consumer over the path that doesn't.  When a feature slice surfaces a language
-gap, the workflow at
-[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)
-applies — fix it on the spot when XS/S, route to canonical home (P-issue,
-`## Open work` section, `lib_plans/future/` slot) when bigger.
-
-Releases bundle the harvest.  See [CHANGELOG.md](CHANGELOG.md) for the
-"language lessons → release" cadence in practice — every minor release
-since 0.8.3 (WebAssembly), 0.8.4 (Awesome Brick Buster), and 0.8.5 (Language
-Maturity, drafted) has been organised around the consumer that drove it.
+When picking work, prefer the path that exercises the language against a real consumer. When a
+feature slice surfaces a language gap, fix it on the spot when XS/S, else route to its canonical
+home — [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
 
 ---
 
@@ -71,79 +46,33 @@ make test                                     # clippy + test; output in result.
 ./scripts/find_problems.sh --peek             #   inspect mid-run
 ./scripts/find_problems.sh --wait             #   block for summary
 make index                                    # rebuild index/tags.json (plan-37)
-./scripts/idx tag:@P259                       # tracker-ref lookup (plan-37; prefer over grep -rn; --before/--after/--para flags for context)
-make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765; /tag/<bare> for tracker refs)
+./scripts/idx tag:@P259                       # tracker-ref lookup (plan-37; prefer over grep -rn)
+make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765)
 ```
 
-<!-- noindex region: phase-06 sed pass shouldn't migrate the
-     bare-name examples that explain the convention. -->
+<!-- noindex region: don't migrate the bare-name examples that explain the convention. -->
 ## Tracker tags (plan-37) <!--noindex-->
 
-Tracker references in docs use the `@`-prefixed form so that
-regex matches are unambiguous (the bare-name `P259` regex <!--noindex-->
-collides with `2P259`, `P2590`, prose like "the P259 fix <!--noindex-->
-forward"): <!--noindex-->
+Tracker refs use an `@`-prefix so regex matches are unambiguous (the bare-name `P259` <!--noindex-->
+regex collides with `2P259`, `P2590`, and prose):
 
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
 - **Plans (canonical)**: `@PLN3` = a [`loft-lang/plans`](https://github.com/loft-lang/plans)
   issue (the cross-ecosystem plan id = its issue number).
-- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`,
-  `@PLAN22-2d-iii.a` (sub-phases via `-` and `.`) — point at the design dir
-  (`plans/<NN>/`), per-tree.
+- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`, `@PLAN22-2d-iii.a` — point at
+  the design dir `plans/<NN>/`.
 
-Adoption is incremental — bare-name forms (`P259`, `plan-22 <!--noindex-->
-phase 03`) still work in prose; the indexer (`make index`)
-tracks both under separate `legacy:` keys for transition
-metering.
+Bare-name forms (`P259`, `plan-22 phase 03`) still work in prose; the indexer tracks both. <!--noindex-->
 
-### Looking up tracker references — use `./scripts/idx`
+**Looking up refs — use `./scripts/idx`** (faster than `grep -rn`, returns structured JSON, avoids
+pulling file content into context). Run `make index` first if `index/tags.json` is stale; run
+`./scripts/idx help` for the full query/flag set (`tag:`, `prefix:`, `file:`, `incoming:`, `broken`,
+`broken-links`, plus `--before/--after/--para/--max-bytes` excerpt flags).
 
-Default workflow for "where is X referenced?":
-
-```bash
-./scripts/idx tag:@P259               # exact @-prefixed tag
-./scripts/idx tag:legacy:P259         # bare-name (transition)
-./scripts/idx prefix:@PLAN22          # all PLAN22-* refs
-./scripts/idx file:doc/.../PROBLEMS.md  # tags in one file
-./scripts/idx incoming:doc/.../PROBLEMS.md  # backlinks (who links to me)
-./scripts/idx incoming:plans/finished/22-mutable-closures/  # trailing / → README.md
-./scripts/idx all | jq '.[:10]'       # top 10 by reference count
-./scripts/idx broken                  # broken @-refs
-./scripts/idx broken-links            # broken markdown links (phase 09)
-./scripts/idx help                    # usage block
-```
-
-For more than just one-line context, `tag:` queries accept
-excerpt flags:
-
-```bash
-./scripts/idx tag:legacy:P259 --before 2 --after 5
-./scripts/idx tag:legacy:P259 --before 1 --para 1
-./scripts/idx tag:legacy:P259 --max-bytes 1024
-```
-
-`--before` / `--after` are line counts; `--para N` extends
-forward until N consecutive empty lines (good for code
-comment blocks); `--max-bytes` caps each excerpt (default
-4096) so long PROBLEMS.md rows truncate gracefully instead
-of dumping kilobytes per ref.
-
-Prefer `./scripts/idx` over `grep -rn '@P259' …` — it's
-faster, returns structured JSON, and avoids pulling
-unnecessary file content into context.  Run `make index`
-first if `index/tags.json` is missing or stale (the
-pre-commit hook from phase 02 keeps it fresh on most
-workflows).
-
-For any refactor likely to surface multiple test failures, kick off
-`find_problems.sh --bg` before going back to editing.  It runs
-`cargo test --release --no-fail-fast` detached, tees the log to
-`/tmp/loft_test.log`, and writes a structured summary to
-`/tmp/loft_problems.txt` on completion (FAILED list, stdout blocks,
-SIGSEGV context, plus a wrap-suite `--nocapture` re-run when a
-crash masks a specific `.loft` filename).  See
-[TESTING.md](doc/claude/TESTING.md) § "Preferred shape —
-background + peek + wait" for the full rationale.
+For any refactor likely to surface multiple test failures, kick off `find_problems.sh --bg` before
+editing — it runs `cargo test --release --no-fail-fast` detached and writes a structured summary to
+`/tmp/loft_problems.txt`. See [TESTING.md](doc/claude/TESTING.md) § "Preferred shape — background +
+peek + wait".
 
 ---
 
@@ -173,7 +102,7 @@ src/main.rs              CLI entry; loads default/ then user file
        ├─ io.rs             File I/O, database record ops
        ├─ codegen.rs        Bytecode generation (generate, gen_* helpers)
        └─ debug.rs          Dump/trace helpers
-       └─ src/fill.rs       233 opcode implementations
+       └─ src/fill.rs       opcode implementations
 ```
 
 ---
@@ -199,7 +128,7 @@ src/main.rs              CLI entry; loads default/ then user file
 - Operators: `OpCamelCase` in loft source → `op_snake_case` in Rust (`fill.rs`).
 - `#rust "..."` annotations in `default/*.loft` supply the Rust body for code generation.
 - Full naming and null-sentinel rules: see [CODE.md](doc/claude/CODE.md).
-- Response shape (reporting to the user): lead with the ONE highest-leverage item in full — the decision + the minimum to act on it — then a one-line summary of the rest; don't dump long detailed lists. Full norm + the combined "work the queue" / "what's blocked on you" workflow: [ISSUE_TRACKING.md § The work queue](doc/claude/ISSUE_TRACKING.md).
+- Response shape (reporting to the user): lead with the ONE highest-leverage item in full — the decision + the minimum to act on it — then a one-line summary of the rest; don't dump long detailed lists. Full norm: [ISSUE_TRACKING.md § The work queue](doc/claude/ISSUE_TRACKING.md).
 
 ---
 
@@ -216,8 +145,8 @@ default/03_text.loft    — text utilities
 ## Loft language patterns
 
 For writing or reviewing `.loft` files see the **loft-write skill**
-(`.claude/skills/loft-write/SKILL.md`) — naming conventions, type reference, format
-strings, loop attributes, lambdas, known bugs and workarounds, pre-flight checklist.
+(`.claude/skills/loft-write/SKILL.md`) — naming conventions, type reference, format strings, loop
+attributes, lambdas, known bugs and workarounds, pre-flight checklist.
 
 Full language reference: [LOFT.md](doc/claude/LOFT.md) and [STDLIB.md](doc/claude/STDLIB.md).
 
@@ -225,167 +154,109 @@ Full language reference: [LOFT.md](doc/claude/LOFT.md) and [STDLIB.md](doc/claud
 
 ## Branch policy — MANDATORY
 
-**Direct commits to `main` are not allowed.**
+**Direct commits to `main` are prohibited.** `main` is the release branch — every commit on it
+must be releasable. All changes land on a feature branch and reach `main` only via a PR.
 
-All changes — features, bug fixes, refactors, documentation updates — must land on a
-feature branch and reach `main` only through a pull request.
-
-### Why
-
-`main` is the release branch. Every commit on `main` is expected to be releasable.
-Direct commits bypass code review, CI, and the structured commit sequence documented in
-[DEVELOPMENT.md](doc/claude/DEVELOPMENT.md). Feature branches keep `main` clean and
-give each item a traceable history.
-
-### Rules
-
-1. **Never `git commit` directly on `main`.** If you accidentally land on `main`, move
-   the change to a feature branch before anything else.
-2. **Pushing commits is OK by default — unless there's an open PR on the branch
-   that the push would disturb.**  For a long-lived working branch with no open
-   PR, push freely after each green-CI commit so the remote stays in sync (the
-   user wants commits visible without having to ask each time).  When the
-   branch has an open PR, do NOT push without an explicit user instruction —
-   force-pushes, rebases, or unexpected commits disrupt review-in-progress.
-   Check with `gh pr list --head <branch>` before pushing if uncertain.
-3. **Never create a branch or open a PR unless the user explicitly asks.**
-   Each pull request costs the user real review time — more than the code took to
-   write.  Default mode is: work on the current branch, commit locally (or push
-   per Rule 2), report what changed, and wait.  Only run `gh pr create` or
-   `git checkout -b` after the user explicitly says "create PR", "open a PR",
-   "merge", or "switch to a new branch".
-   - "fix X" or "implement Y" is *not* a PR instruction.  Commit locally and stop.
-   - A previous prompt that said "open a PR" does not authorise the next PR.
-     Ask each time, or infer from the exact current prompt.
-   - When in doubt about PR creation, summarise what is ready and ask.
-4. Create branches from the tip of `main`.  **Default to a GENERAL
-   name** (`quality-pass`, `cleanup`, `housekeeping`, `work`) so the
-   branch can host any theme and accumulate work across sessions —
-   each new branch eventually has to rebase against a moving `main`,
-   surfaces conflicts in unrelated files, and often fails CI on
-   patterns the new branch didn't author.  ONE long-lived working
-   branch with cross-theme commits is the cheaper failure mode.
-   ONLY a substantial plan (well-defined arc with its own design
-   doc — e.g. `plan-06-arc`, `lsp-server`) earns a specific branch
-   name.  Do not open a second branch unless the user
-   explicitly asks ("start a new branch", "fresh branch for X",
-   "switch to a new branch").
-5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
+1. **Never `git commit` on `main`.** If you land there by accident, move the change to a feature
+   branch first.
+2. **Pushing is OK by default — unless an open PR on the branch would be disturbed.** Push freely
+   after green CI on a long-lived branch with no open PR (the user wants commits visible without
+   asking). With an open PR, do NOT push without explicit instruction — force-pushes, rebases, or
+   surprise commits disrupt review. Check `gh pr list --head <branch>` if unsure.
+3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
+   PR", "merge", "switch to a new branch"). "fix X" / "implement Y" is NOT a PR instruction; a
+   prior "open a PR" does not authorise the next one. When in doubt, summarise what's ready and ask.
+4. Branch from the tip of `main` with a **GENERAL name** (`quality-pass`, `cleanup`, `work`) so one
+   long-lived branch hosts cross-theme work — new branches keep re-rebasing against a moving `main`
+   and failing CI on patterns they didn't author. Only a substantial plan with its own design doc
+   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name.
+5. Merge to `main` via a GitHub PR — never a local `git merge`.
 
 ---
 
 ## Debugging policy — MANDATORY
 
-### Never use `git bisect` or `git checkout HEAD -- <files>` to investigate bugs
+### Never use `git bisect` or `git checkout HEAD -- <file>` to investigate
 
-**`git bisect` is prohibited.**  Running bisect requires compiling and testing dozens of
-commits autonomously.  Claude cannot do this reliably: context windows are finite,
-intermediate states are inconsistent, and the process routinely requires reverting
-working-in-progress files — destroying multi-session work that is not yet committed.
+Both destroy uncommitted in-flight work: bisect needs autonomous compile/test across dozens of
+commits (unreliable in finite context, routinely reverts WIP files); `git checkout HEAD -- <file>`
+silently discards uncommitted changes and breaks cross-file invariants. Instead:
 
-**`git checkout HEAD -- <file>` to "reset and try again" is prohibited.**  This silently
-discards uncommitted changes on specific files.  When multiple files are in flight across
-a feature branch, resetting individual files breaks invariants between them and produces
-states that are harder to debug than the original problem.
-
-**Use these approaches instead:**
-
-- Read the failing test's dump file (`tests/dumps/*.txt`) — it contains the full IR,
-  bytecode, and execution trace.  The root cause is almost always visible there.
-- Add `LOFT_LOG=minimal` or `LOFT_LOG=crash_tail:50` to the failing test to narrow down
-  the execution step.
-- Read the relevant source files and reason about the code path.  A focused read of
-  3–5 files is faster and safer than any automated bisect.
-- If a regression appeared after a specific recent commit, use `git show <commit>` or
-  `git diff <commit>^ <commit>` to read that change — do not re-run old code.
+- Read the failing test's dump (`tests/dumps/*.txt`) — full IR + bytecode + trace; the root cause is
+  almost always visible there.
+- Add `LOFT_LOG=minimal` or `LOFT_LOG=crash_tail:50` to narrow the execution step.
+- Read the 3–5 relevant source files and reason about the code path.
+- For a recent regression, `git show <commit>` / `git diff <commit>^ <commit>` — read it, don't re-run.
 
 ### Before fixing a non-trivial bug: build the boundary matrix (matrix-first)
 
-The urge to apply a fix is the signal you have NOT earned it yet.  On any
-non-trivial bug — *especially* a crash or silent corruption — run this protocol
-before touching code.  It is the lightweight default (`/tmp` probes, no plan
-needed); inside an investigation plan it becomes the formal
+The urge to apply a fix is the signal you have NOT earned it yet. On any non-trivial bug —
+*especially* a crash or silent corruption — run this before touching code. Lightweight default
+(`/tmp` probes, no plan); inside an investigation plan it becomes the formal
 [`_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md) flow.
 
-1. **Don't fix on the first read.**  A coherent explanation is a *hypothesis*, not a
-   conclusion — most of all an elegant one-line fix (real bugs are complex-variant;
-   the clean story is usually the part of the picture you haven't looked at yet).
-2. **Build the boundary matrix** in throwaway `/tmp` probes — on `--interpret` only.
-   Vary ONE dimension per probe along the **composition axes**
-   ([plans/README § The composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies):
-   type-kind / construction-path / context / access / depth / null / backend — the
-   same list a feature's Stage A matrix uses).  Distinctive collision-resistant
-   values, every index/position — a weak probe (small values, only index `[0]`, no
-   length check) hides cases.  SEE on the interpreter: strides and types are IR operands it
-   surfaces in seconds, whereas `--native` pays a rustc compile *per probe* — that
-   cost belongs at the final verify (step 7), never in the seeing loop.
-3. **Map pass/fail; find the real boundary.**  Expect the filed/assumed scope to be
-   wrong — it usually is (#263 "into a collection" was actually *any runtime fn-ref
-   value*; #262 "3-deep copy" was actually *every single context*; cluster III was
-   three different mechanisms, two of them not even nesting).
-4. **The matrix is how you SEE the root.**  The shared mechanism behind a family of
-   "different" symptoms is visible *in the matrix* and invisible in any one repro.
-   Treat "I can't see the root yet" as "the matrix isn't finished," NEVER as license
-   to patch the one case in hand.
-5. **Fix at the chokepoint, enforcing exactly the invariant** the whole failing
-   region violates — no narrower (a per-case/per-type patch leaves siblings broken),
-   no wider (re-resolving the type drags blast radius).  An un-generalized remainder
-   is the same bug, unfinished.
-6. **If a multi-site fix regresses, bisect by SITE** — apply one site at a time and
-   re-run the matrix — after the FIRST regression, not the third.
-7. **Verify against the full matrix on BOTH backends** — this is where `--native`
-   earns its compile cost (interp-vs-native divergence is a real hazard).  During fix
-   iteration re-run only the targeted subset the change touches; run the full matrix
-   once, at the end.  Graduate the guarantee probes to `tests/scripts/`, keep the
-   rest as landmarks.
+1. **Don't fix on the first read.** A coherent (especially elegant one-line) explanation is a
+   *hypothesis* — real bugs are complex-variant; the clean story is usually the part you haven't
+   looked at yet.
+2. **Build the matrix** in throwaway `/tmp` probes, on `--interpret` only. Vary ONE dimension per
+   probe along the **composition axes**
+   ([plans/README § composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)):
+   type-kind / construction-path / context / access / depth / null / backend. Distinctive
+   collision-resistant values at every index/position — weak probes (small values, only `[0]`, no
+   length check) hide cases. SEE on the interpreter (strides/types surface in seconds); `--native`
+   pays a rustc compile per probe — that cost belongs at the final verify (step 7).
+3. **Map pass/fail; find the real boundary.** Expect the filed/assumed scope to be wrong — it
+   usually is (#263 was *any runtime fn-ref value*; #262 was *every context*; cluster III was three
+   different mechanisms).
+4. **The matrix is how you SEE the root** — the shared mechanism behind a family of "different"
+   symptoms is visible in the matrix and invisible in any one repro. "Can't see the root yet" =
+   "the matrix isn't finished," NEVER license to patch the one case in hand.
+5. **Fix at the chokepoint, enforcing exactly the invariant** the whole failing region violates —
+   no narrower (a per-case patch leaves siblings broken), no wider (re-resolving the type drags
+   blast radius). An un-generalized remainder is the same bug, unfinished.
+6. **If a multi-site fix regresses, bisect by SITE** — apply one site at a time and re-run the
+   matrix — after the FIRST regression, not the third.
+7. **Verify against the full matrix on BOTH backends** — interp-vs-native divergence is a real
+   hazard, and this is where `--native` earns its compile cost. During iteration re-run only the
+   touched subset; run the full matrix once at the end. Graduate guarantee probes to `tests/scripts/`.
 
 ---
 
 ## Bug-filing policy — MANDATORY
 
-**When you surface a bug, the default is to FIX it — not to file it.**
+**When you surface a bug, the default is to FIX it — not file it.** Bugs surfaced while
+diagnosing/fixing another are the cheapest you'll ever fix: code paths loaded, diagnostics warm,
+repro within reach — fix on the spot with a regression test. Filing only documents a bug for
+*later*, and "later" re-pays to re-derive the scope/repro/mechanism you have right now. Solving is
+the work; a backlog of filed-but-unfixed rows is not progress.
 
-While diagnosing or fixing a bug you will often surface *other* bugs — sibling
-shapes, latent issues flagged in code comments, symptoms unrelated to the active
-fix.  These are the **cheapest bugs you will ever fix**: the code paths are loaded
-into your head, the diagnostic infrastructure is warm, a reproducer is within
-reach.  That is an argument for *fixing* them on the spot (with a regression
-test) — **not** for filing them.  Filing only documents a bug *for later*, and
-"later" pays again to re-derive the scope, repro, and mechanism you have right
-now.  We are usually hunting and solving bugs with no deadline; solving is the
-work, and a backlog of filed-but-unfixed rows is not progress.
+**Origin is never worth recording** — which commit introduced a bug tells you nothing about making
+it correct. Scope (what triggers it — the edges) and root cause (the mechanism in the *present*
+code) are what you fix from.
 
-**Origin is never worth recording.**  Which commit introduced a bug, or its
-history, tells you nothing about making it correct.  Scope (what triggers it —
-the edges) and root cause (the mechanism in the *present* code) are what you fix
-from — never a `git bisect` / archaeology narrative.
+**File only when you are NOT fixing now:**
 
-**Filing documents a bug for the future, so file only when you are NOT fixing it
-now.**  Two cases:
+- **It blocks the task you're on** — file a bookmark + use a workaround, keep moving, come back.
+- **It's genuinely too big now** (M+ effort / needs design) — route to its canonical home
+  ([DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)).
 
-- **It blocks the task you're on.**  File a bookmark + use a workaround so you
-  can keep moving, then come back.  This is the clearest reason to file.
-- **It's genuinely too big to fix now** (M+ effort / needs design).  Route it to
-  its canonical home (see [DEVELOPMENT.md § Inserting Discovered
-  Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan)).
+When you DO file: **open a GitHub Issue** (`gh issue create`, the `bug_report` template) — NOT a
+PROBLEMS.md row (that's the closed/historical archive; see
+[ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md)). Include a minimal reproducer (expected vs
+observed on each backend), `sev:` + `area:` labels, and a **`wa:*` workaround label whose claim you
+VERIFIED on both backends** (a wrong workaround is worse than `wa:none`). Label meanings:
+[`.github/LABELS.md`](.github/LABELS.md). Save the repro to `/tmp/p_followups/` or add a
+`tests/scripts/` regression. Close with `Fixes #NNN` — but don't file at all for a bug you fix in
+the same change (the fix + its regression test ARE the record).
 
-When you DO file: **open a GitHub Issue** (`gh issue create`, the `bug_report`
-template) — NOT a PROBLEMS.md row (PROBLEMS.md is now the closed/historical
-archive; see [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md)).  Include a minimal
-reproducer (expected vs observed on each backend), a `sev:` + `area:` label, and a
-**`wa:*` workaround label whose claim you VERIFIED** (run it, both backends — a
-wrong workaround is worse than `wa:none`; see
-[ISSUE_TRACKING.md § Workarounds](doc/claude/ISSUE_TRACKING.md#workarounds--the-agents-can-you-keep-moving-signal)).
-Label meanings: [`.github/LABELS.md`](.github/LABELS.md).  Save the repro to
-`/tmp/p_followups/` or add a `tests/scripts/` regression if it deserves CI lock-in.
-When the bug is FIXED, reference the issue in the commit (`Fixes #NNN`) so GitHub
-closes it — but do **not** file at all for a bug you fix in the same change: the
-fix + its regression test ARE the record.
-
-**Inside an investigation plan, don't file at all** — the plan's probes + cluster
-docs already document every shape (see
+**Inside any plan, file a problem only when it reproduces *outside* the plan —
+already on `main`.**  A GitHub Issue is a claim about `main`: a pre-existing
+`main` bug you stumble on during plan work gets filed (and cross-linked to the
+plan), but a breakage the plan's own in-progress work caused is branch-internal —
+it lives in the plan's docs and is fixed on the branch, never filed.  Investigation
+plans are the strongest case of this rule: the probes + cluster docs already
+document every shape, so a separate P-issue would just double-document it (see
 [`plans/_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md)).
-A separate P-issue would double-document the same shape.
 
 This is **not** a license to scope-creep the active fix.  When you're focused on
 shipping fix X, an unrelated bug Y you can't fix without derailing X is exactly
@@ -394,24 +265,14 @@ next); don't bundle it into X's patch unless they share a single fix site.
 
 ### Inserting fixes vs filing — see DEVELOPMENT.md
 
-The rule above already defaults to **fixing**.  This section is the
-related *consumer-gap* case — a missing language/stdlib feature a real
-consumer needs.  When the gap is XS or S (under half a day) AND the
-consumer code that uses the workaround is fresh in working memory,
-prefer **inserting a step into the active plan that fixes the gap
-directly**, then resuming the feature work — the language / stdlib gets
-sturdier and the workaround never enters shipped code.
-
-Routing the discovered item to its canonical home (P-issue / `## Open
-work` row in STDLIB.md / NATIVE.md / COMPILER.md / new lib_plans slot)
-is what to do when an inline fix isn't appropriate (M+ effort, needs
-design, touches unrelated subsystems).
-
-Big deferred features get their own plan slot (`plans/future/<NN>/` or
-`lib_plans/future/<NN>/`) — never a row in a parallel catalog.
-
-Full procedure + decision tree: see
-[DEVELOPMENT.md § Inserting Discovered Enhancements Into the Active Plan](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
+The consumer-gap case: when a missing language/stdlib feature a real consumer needs is XS or S
+(under half a day) AND the consumer code is fresh in working memory, prefer **inserting a step into
+the active plan that fixes the gap directly**, then resume — so the language/stdlib gets sturdier
+and the workaround never enters shipped code. Route to a canonical home (P-issue / `## Open work`
+row in STDLIB/NATIVE/COMPILER / new lib_plans slot) when an inline fix isn't appropriate (M+, needs
+design, touches unrelated subsystems). Big deferred features get their own plan slot, never a row in
+a parallel catalog. Full decision tree:
+[DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
 
 ---
 
@@ -419,23 +280,12 @@ Full procedure + decision tree: see
 
 ### Never use `git stash pop` or `git pull` with uncommitted changes
 
-**`git stash` + `git stash pop` is prohibited.**  Stash pop applies changes as a
-merge, which routinely produces conflicts across dozens of files.  A failed pop
-leaves the working directory in an unrecoverable state — all uncommitted work is
-destroyed.  This has caused complete loss of multi-hour sessions.
+Both apply changes as a merge and routinely conflict across dozens of files; a failed `stash pop`
+leaves the working directory unrecoverable and has destroyed multi-hour sessions. Instead:
 
-**`git pull` with uncommitted changes is prohibited.**  Pull fetches and merges,
-which also conflicts with in-flight work.
-
-**Use these approaches instead:**
-
-- **To compare with main:** use `git diff main -- <file>` or
-  `git show origin/main:<file>` — no branch switch needed.
-- **To check if a bug is pre-existing:** commit current work first (even as WIP
-  on the feature branch), then compare.
-- **To update from remote:** commit first, then `git pull`, resolve if needed.
-- **To test on clean main:** commit, `git checkout main`, test, `git checkout -`
-  to return.
+- **Compare with main:** `git diff main -- <file>` or `git show origin/main:<file>` — no switch.
+- **Check if a bug is pre-existing:** commit current work first (even WIP), then compare.
+- **Update from remote / test on clean main:** commit first, then `git pull` / `git checkout main`.
 
 The rule: **always commit before any operation that changes the working tree.**
 
@@ -445,59 +295,59 @@ The rule: **always commit before any operation that changes the working tree.**
 
 | File | Topic |
 |---|---|
-| [LOFT.md](doc/claude/LOFT.md) | Loft language reference (syntax, types, operators, control flow) |
-| [STDLIB.md](doc/claude/STDLIB.md) | Standard library API (math, text, collections, file I/O, logging, parallel) |
+| [LOFT.md](doc/claude/LOFT.md) | Language reference (syntax, types, operators, control flow) |
+| [STDLIB.md](doc/claude/STDLIB.md) | Stdlib API (math, text, collections, file I/O, logging, parallel) |
 | [COMPILER.md](doc/claude/COMPILER.md) | Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode |
-| [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums in detail; 233 bytecode operators; State layout |
-| [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix implementations |
+| [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums; bytecode operators; State layout |
+| [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix |
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
-| [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par(...)`, `par_light(...)`, thread safety analysis, store isolation |
-| [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading, phase design |
-| [WASM.md](doc/claude/WASM.md) | Reference — WASM runtime architecture: wasm32-wasip2 target, VirtFS, layered FS, host bridges, feature gates, threading two-tier design, frame yield, PNG decoding, logging.  All major W1.x phases shipped (W1.15 CallRef, W1.16 file I/O, W1.17 store locks, W1.18-1..5 worker thread infrastructure, W1.19 random, W1.20 time, frame yield, etc.).  Lone open item: W1.18-6 (test enablement for `19-threading.loft` under Node.js Worker Threads — single small task, not plan-shaped).  The doc's "Implementation Plan" Steps 1-14 + FS-A..FS-F are HISTORICAL build records (all shipped). |
-| [WINDOWS.md](doc/claude/WINDOWS.md) | Windows support — honest verified state (`--interpret` ✅; `--native` multi-lib + server networking + `parallel{}` unverified/gated), known gaps G1–G4 with per-gap VM-validation runbook (the failures only repro on a real Windows host), and the close-a-gap loop |
-| [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md) | Session-prep checklist for when temporary Windows access arrives — priority-ordered investigations (v2 probe → G2 LNK1181 → G3 multi-lib rlib → G4 → opportunistic), time budget, pre-flight steps, what NOT to do.  Companion to WINDOWS.md (reference); this is the action plan |
-| [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
-| [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
-| [DOC.md](doc/claude/DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
-| [DESIGN.md](doc/claude/DESIGN.md) | Algorithm catalog with complexity analysis and enhancement priorities |
-| [CODE.md](doc/claude/CODE.md) | Code quality rules (naming, functions, doc comments, clippy, dependency policy) |
-| [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
-| [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
-| [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) | **Where bugs live: open bugs → GitHub Issues; investigations → files; closed → PROBLEMS.md archive.**  The convention (labels, `@GH###` refs, cross-repo), the workaround-as-signal rule, and the migration plan |
-| [.github/LABELS.md](.github/LABELS.md) | Issue-label glossary — what `sev:`/`wa:`/`area:` mean (e.g. `area:codegen`) WITHOUT reading the source |
-| [PROBLEMS.md](doc/claude/PROBLEMS.md) | **Closed/historical bug archive** (FIXED rows = regression record; the big `###` entries are design references).  OPEN bugs are now [GitHub Issues](https://github.com/jjstwerff/loft/issues) |
-| [QUALITY.md](doc/claude/QUALITY.md) | Reference + open work — open programmer-biting issues, active sprint (P54 JsonValue enum), active designs (Q1-Q4 JSON ecosystem, P54-U unified parser, Dep-inference for native fn returns), compiler blockers (B2-B7 struct-enum bugs), enhancement tiers, recommended landing order.  C54 (integer→i64) historical record kept as the canonical "LANDED via …" closure pattern.  See [§ Open work — actionable summary](doc/claude/QUALITY.md#open-work--actionable-summary) for the at-a-glance status table. |
-| [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
-| [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) | **Design Protocol 1 — A Design Is a Testable Hypothesis** (graduated from DESIGN_VERIFICATION C1; transferable — readable cold in any tree).  A design is a hypothesis about an invariant: name it, **count the re-assertion sites** (N>1 × silent-omission = brittle, known pre-code), **probe each load-bearing claim to falsify it** (the over-unification guard — your cleanest claim is the dangerous one), build/inspect, validate against the written prediction (the **alarm gates the decision**, doesn't log).  Evidence: @PLN9 control arm (saw-it-and-overrode) + @PLAN16 coroutine-codec with-arm (two claims falsified by probe, build absorbed 3 composite shapes zero-per-shape).  Keep-it-light: the *tell* ("longer than expected") is the cheap sensor; the full procedure fires only on load-bearing designs |
-| [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) | **Design verification list** — concerns to check a design against (ignorable by default; pull out when a design is load-bearing).  Append-only; the incubator from which verified concerns graduate into protocols.  C1: brittleness-over-bugs (**GRADUATED → [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md)**; entry stays as reference — name the invariant, consequence/cause ratio, one-home-per-fact, subtraction-not-a-guard) |
-| [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
-| [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
-| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Reference — performance analysis (benchmark results, root-cause analysis vs CPython / hand-written Rust, how the interpreter executes, wasm-vs-native gap analysis, design content for each planned optimization).  Open optimization follow-ups (P1-P3, N1-N3, W1) in `## Open work` section. |
-| [GOALS.md](doc/claude/GOALS.md) | **What loft is *for*, and the goals that serve it.**  Leads with the **Purpose**: loft is the *foundation*, the end is the library/infrastructure on top (lavition); *do the hard plumbing so it's fun to pick up* — **fun-on-pickup** is the acceptance test; built for its own sake, adoption a *consequence not a goal*.  Six **stack-wide** goals (A soundness / B release & legibility / C capability via dogfood / D parity / **E predictable memory** — source is the truth, *surpass Rust on safe-AND-predictable* / **F friction-free** — serve the programmer not the compiler), each with a runnable **Check**; the goals hold for the libraries too — they **don't meet them yet** (the coming shift).  Plus the two-engine (dogfood + sanitizer) model + the method-mirrors-the-goals section |
+| [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par`/`par_light`, thread safety, store isolation |
+| [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading |
+| [WASM.md](doc/claude/WASM.md) | WASM runtime (wasm32-wasip2, VirtFS, host bridges, threading, frame yield). Major W1.x shipped; lone open item W1.18-6 |
+| [WINDOWS.md](doc/claude/WINDOWS.md) | Windows support — verified state, gaps G1–G4 + per-gap VM runbook |
+| [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md) | Action checklist for when Windows access arrives (companion to WINDOWS.md) |
+| [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting) |
+| [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` presets, `LOFT_LOG`, suite files |
+| [DOC.md](doc/claude/DOC.md) | HTML doc generation (gendoc.rs + documentation.rs) |
+| [DESIGN.md](doc/claude/DESIGN.md) | Algorithm catalog with complexity analysis |
+| [CODE.md](doc/claude/CODE.md) | Code quality rules (naming, functions, doc comments, clippy, deps) |
+| [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Dev workflow — branching, WIP commit, rebase, CI |
+| [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostics |
+| [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) | Where bugs live: open → GitHub Issues; investigations → files; closed → PROBLEMS.md. Labels, `@GH###` refs, workaround-as-signal |
+| [.github/LABELS.md](.github/LABELS.md) | Issue-label glossary (`sev:`/`wa:`/`area:`) |
+| [PROBLEMS.md](doc/claude/PROBLEMS.md) | Closed/historical bug archive (FIXED rows = regression record; `###` entries = design refs) |
+| [QUALITY.md](doc/claude/QUALITY.md) | Open programmer-biting issues, active sprint, designs, compiler blockers, landing order. See § Open work table |
+| [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing declined features |
+| [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) | Design Protocol 1 — a design is a testable hypothesis: name the invariant, count re-assertion sites, probe each load-bearing claim to falsify, validate against the prediction (graduated from DESIGN_VERIFICATION C1; fires on load-bearing designs) |
+| [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) | Concerns to check a load-bearing design against (append-only; C1 brittleness-over-bugs — GRADUATED → DESIGN_PROTOCOL.md) |
+| [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design |
+| [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies |
+| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, root-cause vs CPython/Rust, wasm-vs-native gap, optimisation designs. Open follow-ups in § Open work |
+| [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
-| [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
-| [plans/README.md](doc/claude/plans/README.md) | Multi-phase **core-language** initiatives (current / future / deferred / finished) — compiler, runtime, validation matrices, codegen arcs, language features.  Max 2-3 active plans. |
-| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase **library** initiatives (current / future / deferred / finished) — `server`, `game_client`, graphics, regex, package format, asset pipeline, web examples, IDE.  Same `≤3 active` discipline as `plans/`; numbering independent. |
-| [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
+| [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives (≤2-3 active) |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (≤3 active; numbering independent) |
+| [BROADENING.md](doc/claude/BROADENING.md) | Using loft beyond games (CLI, server, data), sequenced unlocks |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
-| [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](doc/claude/NATIVE.md) | Reference — native code generation pipeline (`src/generation/`), architecture + `codegen_runtime`, per-Op dispatch, N1-N8 implementation history.  `--native` is shipped (CI-gated, 108/108 native tests pass).  Open follow-up work in `## Open work` section. |
-| [PACKAGES.md](doc/claude/PACKAGES.md) | Reference — package format spec (`loft.toml`), package layout, function binding model, build pipeline, target matrix (interpreter / native / WASM / `--html`), OpenGL case study, **library-owned wasm bridges** (`[wasm.bridge]` manifest section drives per-library `wasm/src/lib.rs` + `wasm/host.js` extensions; lib/imaging is the canonical example — see [lib_plans/finished/29-library-wasm-bridges](doc/claude/lib_plans/finished/29-library-wasm-bridges/README.md)), security model.  Format is SHIPPED: 14 `lib/*` packages already use it.  Open infrastructure work (registry MVP, lock file) in `## Open work` section; execution arc (per-library extraction from monorepo) in [lib_plans/12-library-extraction/](doc/claude/lib_plans/12-library-extraction/README.md). |
-| [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) | Draft — file-based registry MVP design.  `loft install <name>` against a static `registry.json` (GitHub-hosted) + tarballs in GitHub releases.  Migration to a real server later is a drop-in URL swap with **identical end-user behaviour** (§ The invariant).  Implementation phases R1-R9.  Unblocks lib_plans/12-library-extraction Phase 4+. |
-| [REGISTRY_BOOTSTRAP.md](doc/claude/REGISTRY_BOOTSTRAP.md) | One-time runbook for bringing `loft-lang/registry` online.  Generates Ed25519 keypair via `loft-keygen` binary, embeds public key in `src/registry_keys.rs`, ships CI templates from `doc/claude/registry_ci_template/`.  Includes § Step 1.5 trust-root storage guidance (3-2-1 backup rule applied to a 32-byte secret). |
-| [REGISTRY_RECOVERY.md](doc/claude/REGISTRY_RECOVERY.md) | Trust-root incident runbooks: Scenario A (laptop dead, backup intact — 30min drill, no user impact); Scenario B (laptop dead, backups also gone — multi-key rotation, 6mo transition window, no user impact); Scenario C (key COMPROMISED — same-day emergency distrust, CVE communication, audit window).  Plus annual recovery-drill checklist. |
-| [REGISTRY_SUBMIT.md](doc/claude/REGISTRY_SUBMIT.md) | Author-facing library-submission guide: prerequisites, 5-step submit flow (tag → `loft package` → `gh release create` → PR with version row → CI + maintainer review), subsequent releases, yanking, what NOT to ship, troubleshooting (sha256 mismatch, reproducible-build mismatch), mirror policy. |
-| [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) | End-to-end author narrative — `loft new <name>` → develop → `loft package` + `gh release create` → `loft publish` → registry PR → maintain (`loft yank`).  Ties the CLI commands shipped in @PLAN12 author UX sprint (6.16 / `loft new` / 6.7a) into one walkthrough.  Companion to [PACKAGES.md](doc/claude/PACKAGES.md) (format reference) + [REGISTRY_SUBMIT.md](doc/claude/REGISTRY_SUBMIT.md) (manual submit flow, pre-CLI). |
-| [LAVITION.md](doc/claude/LAVITION.md) | Brand + architecture + library model for [lavition](https://github.com/lavition) — the universal hex-world editor built on loft.  Two-tier brand split (loft = language ecosystem with descriptive symbol names; lavition = engine brand visible in metadata only).  Library model: data primitives stay in `loft-lang/loft-libs-*`; engine core + plugins in `lavition/`.  Discoverability strategy: "lavition + generic-term" search owns the docs, symbols stay bare.  Companion to [`lavition/lavition`](https://github.com/lavition/lavition) (design vision) + [`lib_plans/future/24-universal-editor/`](doc/claude/lib_plans/future/24-universal-editor/) (extraction plan, predates the lavition brand). |
+| [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()`, `StackFrame`, `ArgValue` |
+| [NATIVE.md](doc/claude/NATIVE.md) | Native codegen pipeline (`src/generation/`), per-Op dispatch. `--native` shipped (CI-gated). Open work in § Open work |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Package format (`loft.toml`), binding model, build pipeline, target matrix, library-owned wasm bridges. Shipped. Open work in § Open work |
+| [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) | File-based registry MVP — `loft install` against static `registry.json`. Phases R1-R9 |
+| [REGISTRY_BOOTSTRAP.md](doc/claude/REGISTRY_BOOTSTRAP.md) | One-time runbook to bring `loft-lang/registry` online (Ed25519 keypair, CI templates) |
+| [REGISTRY_RECOVERY.md](doc/claude/REGISTRY_RECOVERY.md) | Trust-root incident runbooks (A: backup intact; B: backups gone; C: key compromised) + annual drill |
+| [REGISTRY_SUBMIT.md](doc/claude/REGISTRY_SUBMIT.md) | Author-facing submission guide (5-step submit flow, releases, yanking, troubleshooting) |
+| [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) | End-to-end author narrative — `loft new` → develop → package → publish → maintain |
+| [LAVITION.md](doc/claude/LAVITION.md) | Brand + architecture + library model for lavition; two-tier brand split; loft naming history |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
-| [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail for contributors |
-| [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
+| [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail |
+| [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases + reproducers and test references |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
-| [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
-| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | Reference — `loft --html` pipeline: cdylib codegen, WebGL2 import bridge, frame-yield contract for browser game loops, `wasm-opt` integration, HTML assembly format.  Where each piece lives in the code today.  Closed @PLAN31 (build sequence + commits) at [`plans/finished/31-html-export/`](doc/claude/plans/finished/31-html-export/README.md). |
-| [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
+| [LIFETIME.md](doc/claude/LIFETIME.md) | Dep tracking + scope-based freeing — dep fields, Text vs Reference, closures |
+| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | `loft --html` pipeline: cdylib codegen, WebGL2 bridge, frame-yield contract |
+| [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices + when to use each prompt |
 
 ---
 
@@ -507,23 +357,23 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md` — run-it-down mechanics, native-env gotchas, the matrix-first route) → [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) (closed archive) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Add a native (Rust) standard library function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
+| Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md`) → [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
+| Add a native (Rust) stdlib function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
-| Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmarks, root-cause analysis, optimisation designs |
-| Implement a PLANNING.md item | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) — branching, commit order, CI |
+| Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
+| Implement a PLANNING.md item | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) |
 | Understand the parallel execution model | [THREADING.md](doc/claude/THREADING.md), then [INTERNALS.md](doc/claude/INTERNALS.md) § Parallel Execution |
 | Set up logging in a loft program | [STDLIB.md](doc/claude/STDLIB.md) § Logging, then [LOGGER.md](doc/claude/LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Find test coverage gaps | [TESTING.md](doc/claude/TESTING.md) § Test Coverage Gaps |
-| Fix a known bug | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list --label "wa:none"` for blockers) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
-| Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) — each entry has a reproducer and test reference |
+| Fix a known bug | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list --label "wa:none"`) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
+| Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) |
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |
-| Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
+| Implement a planned language feature | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [lib_plans/future/06-web-services/](doc/claude/lib_plans/future/06-web-services/) → [STDLIB.md](doc/claude/STDLIB.md) |
-| Implement `loft install <name>` registry | [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) (file-based MVP design, R1-R9 implementation phases) → [PACKAGES.md § Open work](doc/claude/PACKAGES.md#open-work) (sub-arc list) → [PACKAGES.md](doc/claude/PACKAGES.md) (format reference) |
+| Implement `loft install <name>` registry | [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) → [PACKAGES.md § Open work](doc/claude/PACKAGES.md#open-work) → [PACKAGES.md](doc/claude/PACKAGES.md) |
 | Build or understand the `server` library | [lib_plans/future/08-server/README.md](doc/claude/lib_plans/future/08-server/README.md) |
 | Build or understand the `game_client` library | [lib_plans/future/10-game-client/README.md](doc/claude/lib_plans/future/10-game-client/README.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |
@@ -549,13 +399,13 @@ Set before `cargo test` to control what appears in `tests/dumps/*.txt`:
 
 Full API: [TESTING.md](doc/claude/TESTING.md) § LogConfig and `src/log_config.rs`.
 
-Every opcode that produces or consumes a `DbRef` shows an inline struct/vector dump
-in the trace: `#3.1 { name: "x", inner: #2.1 { val: 42 } }`.  Tune with:
+Every opcode that produces or consumes a `DbRef` shows an inline struct/vector dump in the trace:
+`#3.1 { name: "x", inner: #2.1 { val: 42 } }`. Tune with:
 
 | Env var | Default | Effect |
 |---|---|---|
 | `LOFT_DUMP_DEPTH` | `2` | Max nesting depth before `{...}` / `[N items...]` |
 | `LOFT_DUMP_ELEMENTS` | `8` | Max vector elements before `...N more` |
 
-Also works with `cargo run --bin loft` when `LOFT_LOG` is set (writes to stderr).
-See [DEBUG.md](doc/claude/DEBUG.md) § Database / Struct Debug Dumps for details.
+Also works with `cargo run --bin loft` when `LOFT_LOG` is set (writes to stderr). See
+[DEBUG.md](doc/claude/DEBUG.md) § Database / Struct Debug Dumps.

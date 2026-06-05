@@ -21,6 +21,16 @@ use std::io::{Error, Write};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+/// @PLN11 N3 — a **usage sentinel** on the auto-native shared-store bridge
+/// (`extensions::shared_store_dispatch`): every C71 default-native library call that
+/// dispatches to its compiled cdylib increments this.  It backs the liveness
+/// regression guard (`tests/n2_cdylib.rs::f3_body_bearing_marked_fn_dispatch_vs_interpret`):
+/// output-parity tests can't tell a real dispatch from interpreting the body (both
+/// give correct output), so the guard asserts this counter *moved*.  Relaxed + a
+/// cold path (once per native-lib call, not per opcode) → negligible.
+pub static SHARED_DISPATCH_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Plan-07 phase 4g.3 — read once at first raise.  When set
 /// (env var `LOFT_DEV_SOFT_HALT=1` or CLI flag `--dev-soft-halt`
 /// which exports the env var), demote dev-mode raises to

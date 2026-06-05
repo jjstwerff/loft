@@ -65,11 +65,11 @@ struct ResolvedPkg {
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
-    /// @PLAN54 arc E — set by the driver (`main.rs`) only when the whole-program
+    /// @PLN11 arc E — set by the driver (`main.rs`) only when the whole-program
     /// startup cache is enabled; gates [`Parser::parsed_sources`] tracking so a
     /// normal (non-cache) run pays nothing.
     pub track_sources: bool,
-    /// @PLAN54 arc E — paths of every source file parsed (stdlib + lazily-loaded
+    /// @PLN11 arc E — paths of every source file parsed (stdlib + lazily-loaded
     /// libs + user file), in load order, recorded only when `track_sources`.
     /// Only the parser sees the dynamically-loaded lib set; the whole-program
     /// cache hashes these files' contents to key the bundle + detect drift.
@@ -97,6 +97,13 @@ pub struct Parser {
     /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
+    /// @PLN11 Arc N / N3 — package dirs of libraries that opted into
+    /// auto-compilation (`[library] compile = "native"`).  Recorded during `use`
+    /// processing; the driver (`main.rs`) marks each library's public
+    /// shared-store-dispatchable functions native (after `scopes::check`, before
+    /// `byte_code`) and builds + loads the cdylib (after `byte_code`).  A library's
+    /// functions are identified by `def.position().file.starts_with(pkg_dir)`.
+    pub pending_native_compile: Vec<String>,
     /// PKG.3: package dependencies discovered during manifest reading.
     /// Each entry is (name, dir) — sibling packages are searched in `dir`.
     pending_pkg_deps: Vec<(String, String)>,
@@ -114,6 +121,9 @@ pub struct Parser {
     /// resolve — i.e. a package the user has NOT declared as a dependency but
     /// that the registry says provides the method.  `None` until first miss;
     /// cached empty when the catalog is absent or the registry feature is off.
+    // Only read by the `#[cfg(feature = "registry")]` `catalog_trigger_map`; with
+    // the registry feature off the field is initialised but never consulted.
+    #[cfg_attr(not(feature = "registry"), allow(dead_code))]
     auto_use_catalog_map: Option<std::collections::HashMap<String, String>>,
     /// Is this the first pass on parsing:
     /// - Do not assume that all struct / enum types are already parsed.
@@ -398,6 +408,7 @@ impl Parser {
             line: 0,
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
+            pending_native_compile: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             auto_use_trigger_map: None,
@@ -445,7 +456,7 @@ impl Parser {
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
         }
-        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
         }
@@ -540,7 +551,7 @@ impl Parser {
             // Re-check `nullable` at emission time — definition
             // mutations between count + emit are unlikely but not
             // forbidden.
-            let attrs = &self.data.def(d_nr).attributes;
+            let attrs = self.data.def(d_nr).attributes();
             if attr_idx as usize >= attrs.len() {
                 continue;
             }
@@ -548,9 +559,9 @@ impl Parser {
             if !attr.nullable {
                 continue;
             }
-            let struct_name = self.data.def(d_nr).name.clone();
+            let struct_name = self.data.def(d_nr).name().to_string();
             let field_name = attr.name.clone();
-            let pos = self.data.def(d_nr).position.clone();
+            let pos = self.data.def(d_nr).position().clone();
             self.lexer.pos_diagnostic(
                 Level::Warning,
                 &pos,
@@ -621,9 +632,9 @@ impl Parser {
         //      the stored `Position`.
         let deferred = std::mem::take(&mut self.deferred_unknown);
         for (source, stub_nr, pos) in deferred {
-            let stub_name = self.data.def(stub_nr).name.clone();
+            let stub_name = self.data.def(stub_nr).name().to_string();
             // Case (a): stub upgraded in place
-            if !matches!(self.data.def(stub_nr).def_type, DefType::Unknown) {
+            if !matches!(self.data.def(stub_nr).def_type(), DefType::Unknown) {
                 self.data.rewrite_unknown_refs(stub_nr, stub_nr);
                 continue;
             }
@@ -631,7 +642,7 @@ impl Parser {
             let resolved_nr = self.data.source_nr(source, &stub_name);
             if resolved_nr != u32::MAX
                 && resolved_nr != stub_nr
-                && !matches!(self.data.def(resolved_nr).def_type, DefType::Unknown)
+                && !matches!(self.data.def(resolved_nr).def_type(), DefType::Unknown)
             {
                 self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
                 continue;
@@ -667,7 +678,7 @@ impl Parser {
         }
         let rust_crate = self.data.native_packages[0].0.replace('-', "_");
         for d_nr in 0..self.data.definitions() {
-            let sym = self.data.def(d_nr).native.clone();
+            let sym = self.data.def(d_nr).native().to_string();
             if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(&sym) {
                 self.data
                     .native_symbol_crates
@@ -680,7 +691,7 @@ impl Parser {
     /// Used by the WASM virtual-FS path to bypass real filesystem access.
     #[cfg(feature = "wasm")]
     fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
-        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
         }
@@ -759,13 +770,13 @@ impl Parser {
                 writeln!(w, "Type {tp}:{}", self.database.show_type(tp as u16, true))?;
             }
             for d_nr in from..self.data.definitions() {
-                if self.data.def(d_nr).code == Value::Null {
+                if *self.data.def(d_nr).code() == Value::Null {
                     continue;
                 }
                 write!(w, "{} ", self.data.def(d_nr).header(&self.data, d_nr))?;
-                let mut vars = Function::copy(&self.data.def(d_nr).variables);
+                let mut vars = Function::copy(self.data.def(d_nr).variables());
                 self.data
-                    .show_code(&mut w, &mut vars, &self.data.def(d_nr).code, 0, false)?;
+                    .show_code(&mut w, &mut vars, self.data.def(d_nr).code(), 0, false)?;
                 writeln!(w, "\n")?;
             }
         } else {
@@ -826,7 +837,7 @@ impl Parser {
         if c_nr == u32::MAX {
             return self.database.vector(u16::MAX);
         }
-        let c_tp = self.data.def(c_nr).known_type;
+        let c_tp = self.data.def(c_nr).known_type();
         // Known_type may be unset for forward references; fall back to
         // the default integer slot (0) so the vector type still
         // registers correctly.  The content's own fill pass will
@@ -958,8 +969,8 @@ impl Parser {
             }
         }
         if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
-            for a in &self.data.def(*enum_tp).attributes {
-                if a.name == self.data.def(*ref_tp).name {
+            for a in self.data.def(*enum_tp).attributes() {
+                if a.name == self.data.def(*ref_tp).name() {
                     return true;
                 }
             }
@@ -1064,9 +1075,9 @@ impl Parser {
             check_type = &e;
         }
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
-            if self.data.def(dnr).name.ends_with("FromNull") {
+            if self.data.def(dnr).name().ends_with("FromNull") {
                 if *is_type == Type::Null {
-                    if matches!(self.data.def(dnr).returned, Type::Reference(_, _))
+                    if matches!(self.data.def(dnr).returned(), Type::Reference(_, _))
                         && let Type::Reference(_, _) = *should
                     {
                         // Use the non-allocating sentinel instead of OpConvRefFromNull so that
@@ -1074,14 +1085,14 @@ impl Parser {
                         let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
                         *code = Value::Call(sentinel_nr, vec![]);
                         return true;
-                    } else if self.data.def(dnr).returned.is_equal(should) {
+                    } else if self.data.def(dnr).returned().is_equal(should) {
                         *code = Value::Call(dnr, vec![]);
                         return true;
                     }
                 }
             } else if self.data.attributes(dnr) > 0
                 && self.data.attr_type(dnr, 0).is_equal(check_type)
-                && self.data.def(dnr).returned.is_equal(should)
+                && self.data.def(dnr).returned().is_equal(should)
             {
                 *code = Value::Call(dnr, vec![code.clone()]);
                 return true;
@@ -1109,21 +1120,21 @@ impl Parser {
         let should_kt = if should_nr == u32::MAX {
             u16::MAX
         } else {
-            self.data.def(should_nr).known_type
+            self.data.def(should_nr).known_type()
         };
         let is_nr = self.data.type_def_nr(is_type);
         let is_kt = if is_nr == u32::MAX {
             u16::MAX
         } else {
-            self.data.def(is_nr).known_type
+            self.data.def(is_nr).known_type()
         };
         if let Type::Reference(tp, _) = should
-            && self.data.def(*tp).returned.is_equal(is_type)
+            && self.data.def(*tp).returned().is_equal(is_type)
             && matches!(is_type, Type::Enum(_, true, _))
         {
             let get_e = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
             let get = self.cl("OpConvIntFromEnum", &[get_e]);
-            if let Value::Enum(nr, _) = self.data.def(*tp).attributes[0].value {
+            if let Value::Enum(nr, _) = self.data.def(*tp).attributes()[0].value {
                 *code = v_if(
                     self.cl("OpEqInt", &[get, Value::Int(i32::from(nr))]),
                     code.clone(),
@@ -1144,14 +1155,14 @@ impl Parser {
         for &dnr in self.data.get_possible("OpCast", &self.lexer) {
             if self.data.attributes(dnr) == 1
                 && self.data.attr_type(dnr, 0).is_same(is_type)
-                && self.data.def(dnr).returned.is_same(should)
+                && self.data.def(dnr).returned().is_same(should)
             {
                 if let Type::Enum(tp, false, _) = should {
                     *code = Value::Call(
                         dnr,
                         vec![
                             code.clone(),
-                            Value::Int(i32::from(self.data.def(*tp).known_type)),
+                            Value::Int(i32::from(self.data.def(*tp).known_type())),
                         ],
                     );
                 } else {
@@ -1160,14 +1171,14 @@ impl Parser {
                 return true;
             } else if self.data.attributes(dnr) == 2
                 && self.data.attr_type(dnr, 0).is_same(is_type)
-                && self.data.def(dnr).returned.is_same(should)
+                && self.data.def(dnr).returned().is_same(should)
                 && should_kt != u16::MAX
             {
                 *code = Value::Call(dnr, vec![code.clone(), Value::Int(i32::from(should_kt))]);
                 return true;
             } else if self.data.attributes(dnr) == 2
                 && self.data.attr_type(dnr, 0).is_same(is_type)
-                && self.data.def(dnr).returned.is_same(should)
+                && self.data.def(dnr).returned().is_same(should)
                 && is_kt != u16::MAX
             {
                 *code = Value::Call(dnr, vec![code.clone(), Value::Int(i32::from(is_kt))]);
@@ -1186,7 +1197,7 @@ impl Parser {
                 return true;
             }
             if let (Type::Enum(_e, _, _), Type::Enum(o, _, _)) = (test_type, should)
-                && self.data.def(*o).name == "enumerate"
+                && self.data.def(*o).name() == "enumerate"
             {
                 return true;
             }
@@ -1293,7 +1304,7 @@ impl Parser {
         let bounds = &self.data.definitions[self.context as usize].bounds;
         for &iface_nr in bounds {
             for child_nr in self.data.children_of(iface_nr) {
-                let name = &self.data.def(child_nr).name;
+                let name = self.data.def(child_nr).name();
                 // Interface stubs use "__iface_{d_nr}_{method}" naming
                 if let Some(rest) = name.strip_prefix("__iface_")
                     && let Some((_, m)) = rest.split_once('_')
@@ -1344,12 +1355,12 @@ impl Parser {
             if d_nr == u32::MAX {
                 None
             } else {
-                Some(self.data.def(d_nr).def_type.clone())
+                Some(self.data.def(d_nr).def_type().clone())
             },
             self.first_pass,
         );
         // skip generic templates — they are not callable directly.
-        if d_nr != u32::MAX && self.data.def(d_nr).def_type == DefType::Generic {
+        if d_nr != u32::MAX && self.data.def(d_nr).def_type() == DefType::Generic {
             d_nr = u32::MAX;
         }
         // Plan-17 phase 01 (A) — propagate the substituted return type
@@ -1472,7 +1483,7 @@ impl Parser {
         let suffix = format!("_{name}");
         let mut receivers: Vec<String> = Vec::new();
         for d_nr in 0..self.data.definitions() {
-            let def_name = &self.data.def(d_nr).name;
+            let def_name = self.data.def(d_nr).name();
             let Some(rest) = def_name.strip_prefix("t_") else {
                 continue;
             };
@@ -1515,18 +1526,21 @@ impl Parser {
     fn predict_generic_return_type(&self, name: &str, types: &[Type]) -> Type {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
-        if g_nr == u32::MAX || self.data.def(g_nr).def_type != DefType::Generic {
+        if g_nr == u32::MAX || self.data.def(g_nr).def_type() != DefType::Generic {
             return Type::Unknown(0);
         }
         if types.is_empty() || types[0].is_unknown() {
             return Type::Unknown(0);
         }
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes[0].typedef);
+        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return Type::Unknown(0);
         }
-        let concrete =
-            Self::resolve_type_var(&self.data.def(g_nr).attributes[0].typedef, tv_nr, &types[0]);
+        let concrete = Self::resolve_type_var(
+            &self.data.def(g_nr).attributes()[0].typedef,
+            tv_nr,
+            &types[0],
+        );
         if concrete.is_unknown() {
             return Type::Unknown(0);
         }
@@ -1551,7 +1565,7 @@ impl Parser {
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
-        if g_nr == u32::MAX || self.data.def(g_nr).def_type != DefType::Generic {
+        if g_nr == u32::MAX || self.data.def(g_nr).def_type() != DefType::Generic {
             return u32::MAX;
         }
         if types.is_empty() || types[0].is_unknown() {
@@ -1568,12 +1582,15 @@ impl Parser {
             return u32::MAX;
         }
         // Find the type variable def_nr and resolve the concrete type T maps to.
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes[0].typedef);
+        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return u32::MAX;
         }
-        let concrete =
-            Self::resolve_type_var(&self.data.def(g_nr).attributes[0].typedef, tv_nr, &types[0]);
+        let concrete = Self::resolve_type_var(
+            &self.data.def(g_nr).attributes()[0].typedef,
+            tv_nr,
+            &types[0],
+        );
         if concrete.is_unknown() {
             if !self.first_pass {
                 diagnostic!(
@@ -1591,8 +1608,8 @@ impl Parser {
         } else {
             format!(
                 "t_{}{}_{name}",
-                self.data.def(type_nr).name.len(),
-                self.data.def(type_nr).name
+                self.data.def(type_nr).name().len(),
+                self.data.def(type_nr).name()
             )
         };
         // Return existing instantiation if already created.
@@ -1679,13 +1696,13 @@ impl Parser {
         if concrete_nr == u32::MAX {
             return true; // can't check without a concrete type def_nr
         }
-        let concrete_name = self.data.def(concrete_nr).name.clone();
+        let concrete_name = self.data.def(concrete_nr).name().to_string();
         let mut satisfied = true;
         for iface_nr in bounds {
-            let iface_name = self.data.def(iface_nr).name.clone();
+            let iface_name = self.data.def(iface_nr).name().to_string();
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
-                let child_name = self.data.def(child_nr).name.clone();
+                let child_name = self.data.def(child_nr).name().to_string();
                 // Extract method name from "__iface_{d_nr}_{method}" or legacy "t_4Self_{method}"
                 let self_prefix = format!("t_{}Self_", "Self".len());
                 let method_suffix = if let Some(rest) = child_name.strip_prefix("__iface_") {
@@ -1698,7 +1715,7 @@ impl Parser {
                 };
                 // I9-prim: use find_fn which checks both the method-style convention
                 // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
-                let concrete_type = self.data.def(concrete_nr).returned.clone();
+                let concrete_type = self.data.def(concrete_nr).returned().clone();
                 let found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
                 if found == u32::MAX {
                     let msg = crate::diagnostics::diagnostic_format(
@@ -1758,7 +1775,7 @@ impl Parser {
             return d_nr;
         }
         let def = &data.definitions[d_nr as usize];
-        if def.attributes.is_empty() {
+        if def.attributes().is_empty() {
             return d_nr;
         }
         // Check if any attribute's type references the type variable.
@@ -1773,22 +1790,22 @@ impl Parser {
         }
         // Resolve the concrete first-arg type by substituting tv_nr in the attribute type.
         let concrete_arg =
-            Self::substitute_type(def.attributes[0].typedef.clone(), tv_nr, concrete);
+            Self::substitute_type(def.attributes()[0].typedef.clone(), tv_nr, concrete);
         // Extract the user-facing function name from the mangled definition name.
         // Mangled names: "t_<LEN><Type>_<name>" or "n_<name>" or operator names.
-        let name = &def.name;
+        let name = def.name();
         let fn_name = if let Some(rest) = name.strip_prefix("t_") {
             // Skip the LEN digits and type name, extract name after the underscore.
             if let Some(idx) = rest.find('_') {
                 &rest[idx + 1..]
             } else {
-                name.as_str()
+                name
             }
         } else if let Some(rest) = name.strip_prefix("n_") {
             rest
         } else {
             // Operator name — use as-is for find_fn.
-            name.as_str()
+            name
         };
         let resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
         if resolved != u32::MAX && resolved != d_nr {
@@ -1861,8 +1878,8 @@ impl Parser {
                 // (r, size, idx) so the elm_size fixup logic is unchanged.
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
-                    && (data.def(new_d).name == "OpGetVector"
-                        || data.def(new_d).name == "OpGetVectorNullable")
+                    && (data.def(new_d).name() == "OpGetVector"
+                        || data.def(new_d).name() == "OpGetVectorNullable")
                     && new_args.len() == 3
                 {
                     let cur_size = if let Value::Int(n) = &new_args[1] {
@@ -1895,7 +1912,7 @@ impl Parser {
                 // what shape the value actually is.
                 if new_d != u32::MAX
                     && (new_d as usize) < data.definitions.len()
-                    && data.def(new_d).name == "OpConvBoolFromRef"
+                    && data.def(new_d).name() == "OpConvBoolFromRef"
                     && new_args.len() == 1
                 {
                     let conv_name = match concrete {
@@ -1920,7 +1937,7 @@ impl Parser {
                 // (for text-returning interface methods) but the concrete method
                 // doesn't, drop the trailing argument to match the concrete signature.
                 if new_d != d && new_d != u32::MAX && (new_d as usize) < data.definitions.len() {
-                    let concrete_params = data.def(new_d).attributes.len();
+                    let concrete_params = data.def(new_d).attributes().len();
                     if new_args.len() > concrete_params {
                         let mut trimmed = new_args;
                         trimmed.truncate(concrete_params);
@@ -2421,7 +2438,7 @@ impl Parser {
                 //      the correct record size.
                 if is_struct_target {
                     let known_tp = if (content_def_nr as usize) < data.definitions.len() {
-                        i32::from(data.def(content_def_nr).known_type)
+                        i32::from(data.def(content_def_nr).known_type())
                     } else {
                         i32::from(u16::MAX)
                     };
@@ -2560,10 +2577,10 @@ impl Parser {
             // Vector elements of struct type are stored inline, not as pointers.
             Type::Reference(d_nr, _) => {
                 if (*d_nr as usize) < data.definitions.len()
-                    && data.def(*d_nr).def_type == DefType::Struct
+                    && data.def(*d_nr).def_type() == DefType::Struct
                 {
                     let mut total = 0i32;
-                    for attr in &data.def(*d_nr).attributes {
+                    for attr in data.def(*d_nr).attributes() {
                         if attr.constant {
                             continue;
                         }
@@ -2719,14 +2736,15 @@ impl Parser {
             0
         } else {
             let nm = self.data.attr_name(d_nr, f_nr);
-            self.database.position(self.data.def(d_nr).known_type, &nm)
+            self.database
+                .position(self.data.def(d_nr).known_type(), &nm)
         };
         // Post-2c: pass the field's alias def_nr so `get_val` can honor
         // size(N) for integer subtypes (e.g. i32 → OpGetInt4).
         let alias = if f_nr == usize::MAX {
             u32::MAX
         } else {
-            self.data.def(d_nr).attributes[f_nr].alias_d_nr
+            self.data.def(d_nr).attributes()[f_nr].alias_d_nr
         };
         // P215: for fn-ref fields with the legacy 4B int layout
         // (`assigned_lambda_d_nr == u32::MAX`), the database has no
@@ -2736,7 +2754,7 @@ impl Parser {
         // a capturing lambda) keeps the existing dual-read path.
         if let Type::Function(_, _, _) = &tp
             && f_nr != usize::MAX
-            && self.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr == u32::MAX
+            && self.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr == u32::MAX
         {
             let read_dnr = self.cl("OpGetInt4", &[code, Value::Int(i32::from(pos))]);
             let read_clos = self.cl("OpNullRefSentinel", &[]);
@@ -2995,7 +3013,7 @@ impl Parser {
         } else {
             match val_code.unspan() {
                 Value::Call(d_nr, _) => {
-                    if let Type::Reference(d, _) = &self.data.def(*d_nr).returned
+                    if let Type::Reference(d, _) = self.data.def(*d_nr).returned()
                         && *d == tuple_d_nr
                     {
                         Some(tuple_d_nr)
@@ -3007,7 +3025,7 @@ impl Parser {
             }
         };
         if let Some(inner_d) = promoted_src_def {
-            let inner_kt = i32::from(self.data.def(inner_d).known_type);
+            let inner_kt = i32::from(self.data.def(inner_d).known_type());
             let field_ref = self.cl(
                 "OpGetField",
                 &[
@@ -3095,7 +3113,7 @@ impl Parser {
                 let type_nr = if self.first_pass {
                     Value::Int(i32::from(u16::MAX))
                 } else {
-                    Value::Int(i32::from(self.data.def(*inner_d_nr).known_type))
+                    Value::Int(i32::from(self.data.def(*inner_d_nr).known_type()))
                 };
                 let field_ref = self.cl(
                     "OpGetField",
@@ -3168,7 +3186,9 @@ impl Parser {
     ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
         let nm = self.data.attr_name(d_nr, f_nr);
-        let pos = self.database.position(self.data.def(d_nr).known_type, &nm);
+        let pos = self
+            .database
+            .position(self.data.def(d_nr).known_type(), &nm);
         let pos_val = Value::Int(if f_nr == usize::MAX {
             i32::from(d_pos)
         } else {
@@ -3197,7 +3217,7 @@ impl Parser {
                 let alias_nr = if f_nr == usize::MAX {
                     u32::MAX
                 } else {
-                    self.data.def(d_nr).attributes[f_nr].alias_d_nr
+                    self.data.def(d_nr).attributes()[f_nr].alias_d_nr
                 };
                 // narrow-vec path mirrors `get_val`.
                 // Reached by `insert(vector<u16>, ...)` where
@@ -3225,11 +3245,11 @@ impl Parser {
                     "set_field_check: unexpected integer field width \
                      s={s} for {}.{} (alias_d_nr={alias_nr}) — only \
                      1/2/4/8 are supported by the OpSet* family",
-                    self.data.def(d_nr).name,
+                    self.data.def(d_nr).name(),
                     if f_nr == usize::MAX {
                         "<unknown>".to_string()
                     } else {
-                        self.data.def(d_nr).attributes[f_nr].name.clone()
+                        self.data.def(d_nr).attributes()[f_nr].name.clone()
                     },
                 );
                 if s == 1 {
@@ -3323,7 +3343,7 @@ impl Parser {
                     && f_nr != usize::MAX
                 {
                     let lambda_d_u = lambda_d as u32;
-                    let prev = self.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr;
+                    let prev = self.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr;
                     if prev == u32::MAX {
                         self.data.definitions[d_nr as usize].attributes[f_nr]
                             .assigned_lambda_d_nr = lambda_d_u;
@@ -3364,7 +3384,7 @@ impl Parser {
                     let type_nr = if self.first_pass {
                         Value::Int(i32::from(u16::MAX))
                     } else {
-                        Value::Int(i32::from(self.data.def(inner_tp).known_type))
+                        Value::Int(i32::from(self.data.def(inner_tp).known_type()))
                     };
                     let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
                     // Note: the free-source high-bit for Issue #120 is set in
@@ -3389,7 +3409,7 @@ impl Parser {
                 &[
                     val_code,
                     ref_code,
-                    Value::Int(i32::from(self.data.def(nr).known_type)),
+                    Value::Int(i32::from(self.data.def(nr).known_type())),
                 ],
             ),
             Type::Boolean => {
@@ -3429,14 +3449,14 @@ impl Parser {
         let Some(ref_val) = ref_for_check else {
             return set_op;
         };
-        let check = self.data.def(d_nr).attributes[f_nr].check.clone();
+        let check = self.data.def(d_nr).attributes()[f_nr].check.clone();
         let bound = Self::replace_record_ref(check, &ref_val);
-        let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes[f_nr].check_message {
+        let msg = if let Value::Text(s) = &self.data.def(d_nr).attributes()[f_nr].check_message {
             Value::Text(s.clone())
         } else {
             Value::Text(format!(
                 "field constraint failed on {}.{field_name}",
-                self.data.def(d_nr).name
+                self.data.def(d_nr).name()
             ))
         };
         let assert_dnr = self.data.def_nr("n_assert");
@@ -3528,7 +3548,7 @@ impl Parser {
             for pos in possible {
                 // skip OpEqBool when comparing character with text —
                 // prevents 'a' == "b" from resolving as true == true.
-                if self.data.def(pos).name == "OpEqBool"
+                if self.data.def(pos).name() == "OpEqBool"
                     && types.len() >= 2
                     && ((matches!(types[0], Type::Character) && matches!(types[1], Type::Text(_)))
                         || (matches!(types[0], Type::Text(_))
@@ -3596,7 +3616,7 @@ impl Parser {
                         self.lexer,
                         Level::Error,
                         "Incorrect dynamic function {}",
-                        self.data.def(d_nr).name
+                        self.data.def(d_nr).name()
                     );
                     return Type::Void;
                 };
@@ -3608,7 +3628,7 @@ impl Parser {
                 self.lexer,
                 Level::Error,
                 "No matching function {}",
-                self.data.def(d_nr).name
+                self.data.def(d_nr).name()
             );
         } else if !matches!(self.data.def_type(d_nr), DefType::Function) {
             if report {
@@ -3616,7 +3636,7 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Unknown definition {}",
-                    self.data.def(d_nr).name
+                    self.data.def(d_nr).name()
                 );
             }
             return Type::Null;
@@ -3650,7 +3670,7 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Too many parameters for {}",
-                    self.data.def(d_nr).name
+                    self.data.def(d_nr).name()
                 );
             }
             return actual;
@@ -3730,12 +3750,12 @@ impl Parser {
 
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
-        let tp = self.data.def(d_nr).returned.clone();
+        let tp = self.data.def(d_nr).returned().clone();
         // for Reference returns (structs), filter out hidden return-mechanism
         // attributes from dep resolution. The struct owns its store independently —
         // hidden return-store buffers are implementation artifacts.
         // Text/Vector returns genuinely depend on their hidden work buffers.
-        let attrs = &self.data.def(d_nr).attributes;
+        let attrs = self.data.def(d_nr).attributes();
         let filter_hidden = |d: &[u16]| -> Vec<u16> {
             d.iter()
                 .copied()
@@ -3804,7 +3824,7 @@ impl Parser {
                 if actual[a_nr] != Value::Null {
                     continue;
                 }
-                let default = self.data.def(d_nr).attributes[a_nr].value.clone();
+                let default = self.data.def(d_nr).attributes()[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
                 if let Type::Vector(content, _) = &tp {
                     assert_eq!(
@@ -5145,6 +5165,17 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
+        // @PLN11 N3 Step 3 (default-native) / F2 — mirror `apply_manifest_side_effects`:
+        // a normal loft library reached via THIS direct-resolution / sibling-package /
+        // ancestor-walk path must ALSO be recorded as a native-compile candidate.
+        // Without it the two resolution paths diverge: a library pulled in transitively
+        // (or used directly *after* it was already loaded transitively, so the direct
+        // `use` dedups) is loaded here but never recorded — so it never builds its own
+        // cdylib and its direct calls interpret.  `native` (hand-written cdylib) takes
+        // precedence — don't double-compile.
+        if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
+            self.pending_native_compile.push(pkg_dir.clone());
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
@@ -5177,13 +5208,13 @@ impl Parser {
                 let candidates = [format!("n_{loft_name}"), loft_name.clone()];
                 for d_nr in 0..self.data.definitions() {
                     let def = self.data.def(d_nr);
-                    if !def.native.is_empty() {
+                    if !def.native().is_empty() {
                         continue;
                     }
-                    if !candidates.contains(&def.name) {
+                    if !candidates.iter().any(|c| c == def.name()) {
                         continue;
                     }
-                    if !def.position.file.starts_with(&pkg_dir) {
+                    if !def.position().file.starts_with(&pkg_dir) {
                         continue;
                     }
                     rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
@@ -5224,11 +5255,11 @@ impl Parser {
             // one package claim another's symbols.
             for d_nr in 0..self.data.definitions() {
                 let def = self.data.def(d_nr);
-                let sym = &def.native;
+                let sym = def.native();
                 if sym.is_empty() {
                     continue;
                 }
-                if !def.position.file.starts_with(&pkg_dir) {
+                if !def.position().file.starts_with(&pkg_dir) {
                     continue;
                 }
                 if self.data.native_symbol_crates.contains_key(sym) {
@@ -5236,7 +5267,7 @@ impl Parser {
                 }
                 self.data
                     .native_symbol_crates
-                    .insert(sym.clone(), rust_crate.clone());
+                    .insert(sym.to_string(), rust_crate.clone());
             }
         }
     }
@@ -5337,6 +5368,22 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
+        // @PLN11 Arc N / N3 Step 3 — **default-native**.  Every `use`d normal loft
+        // library is a native candidate: record the package dir; the driver marks +
+        // builds + loads after scope analysis (see `pending_native_compile`).  No
+        // opt-in, no flag — "libraries compile, scripts interpret" is the default.
+        //   - `native` (a hand-written cdylib via `[library] native = ...`) takes
+        //     precedence — don't double-compile.
+        //   - `LOFT_NO_NATIVE_LIBS=1` is the interpret escape (handled in the driver:
+        //     it clears `pending_native_compile`), used by the dev/edit loop + the
+        //     parity reference until Step 4 (dev-interpret-on-edit) lands.
+        //   - A build failure silently interprets (Step 2), so recording a library
+        //     that can't compile native is harmless.
+        // The legacy `[library] compile = "native"` opt-in is now redundant but still
+        // accepted (a no-op): default-native already records it.
+        if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == pkg_dir) {
+            self.pending_native_compile.push(pkg_dir.to_string());
+        }
         // PKG.4: register native function symbols and package crate info.
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
@@ -5375,13 +5422,13 @@ impl Parser {
                 let candidates = [format!("n_{loft_name}"), loft_name.clone()];
                 for d_nr in 0..self.data.definitions() {
                     let def = self.data.def(d_nr);
-                    if !def.native.is_empty() {
+                    if !def.native().is_empty() {
                         continue;
                     }
-                    if !candidates.contains(&def.name) {
+                    if !candidates.iter().any(|c| c == def.name()) {
                         continue;
                     }
-                    if !def.position.file.starts_with(pkg_dir) {
+                    if !def.position().file.starts_with(pkg_dir) {
                         continue;
                     }
                     rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
@@ -5401,11 +5448,11 @@ impl Parser {
             // call-order-driven.
             for d_nr in 0..self.data.definitions() {
                 let def = self.data.def(d_nr);
-                let sym = &def.native;
+                let sym = def.native();
                 if sym.is_empty() {
                     continue;
                 }
-                if !def.position.file.starts_with(pkg_dir) {
+                if !def.position().file.starts_with(pkg_dir) {
                     continue;
                 }
                 if self.data.native_symbol_crates.contains_key(sym) {
@@ -5413,7 +5460,7 @@ impl Parser {
                 }
                 self.data
                     .native_symbol_crates
-                    .insert(sym.clone(), rust_crate.clone());
+                    .insert(sym.to_string(), rust_crate.clone());
             }
         }
         // lib_plan-29 W1c (2026-05-29) — register WASM bridge crate +
@@ -5499,7 +5546,7 @@ impl Parser {
             .user_fn_d_nrs()
             .iter()
             .filter_map(|&d_nr| {
-                let n = &self.data.def(d_nr).name;
+                let n = self.data.def(d_nr).name();
                 if let Some(stripped) = n.strip_prefix("n_") {
                     // Skip synthetic lambda names — they're not user-typeable.
                     if stripped.starts_with("__lambda_") {
@@ -5581,7 +5628,7 @@ impl Parser {
         match val.unspan() {
             Value::Var(_) => true,
             Value::Call(d_nr, args) => {
-                let name = &data.def(*d_nr).name;
+                let name = data.def(*d_nr).name();
                 (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
                     && !args.is_empty()
                     && Self::is_addressable(&args[0], data)
@@ -5619,7 +5666,7 @@ impl Parser {
         if par_for_d_nr == u32::MAX || self.context == u32::MAX {
             return;
         }
-        let body = self.data.def(self.context).code.clone();
+        let body = self.data.def(self.context).code().clone();
         // Find each (var, par_call_pos) where `Set(var, Call(n_parallel_for, ...))`.
         let mut par_results: Vec<u16> = Vec::new();
         Self::collect_par_assignments(&body, par_for_d_nr, &mut par_results);
@@ -5829,7 +5876,7 @@ impl Parser {
     /// Also check for redundant `const` annotations on primitive parameters that are never
     /// written to — the `const` has no effect when the parameter is not modified.
     fn check_ref_mutations(&mut self, arguments: &[Argument]) {
-        let code = self.data.def(self.context).code.clone();
+        let code = self.data.def(self.context).code().clone();
         let mut written: HashSet<u16> = HashSet::new();
         // interprocedural param-write cache, local to this check.
         // Re-created per function-body check; small cost, avoids
@@ -5930,7 +5977,7 @@ impl Parser {
             }
             Type::Enum(tp, _, _) => self.cl(
                 "OpConvEnumFromNull",
-                &[Value::Int(i32::from(self.data.def(*tp).known_type))],
+                &[Value::Int(i32::from(self.data.def(*tp).known_type()))],
             ),
             Type::Float => self.cl("OpConvFloatFromNull", &[]),
             Type::Single => self.cl("OpConvSingleFromNull", &[]),
@@ -6042,9 +6089,9 @@ fn emit_fn_ref_field_write(
             // closure_rec field as a DbRef + the closure record's
             // known_type for `OpAppendVector`'s type parameter.
             if w_var != u16::MAX && f_nr != usize::MAX && !p.first_pass {
-                let closure_rec_d = p.data.def(lambda_d as u32).closure_record;
+                let closure_rec_d = p.data.def(lambda_d as u32).closure_record();
                 if closure_rec_d != u32::MAX {
-                    let closure_kt = p.data.def(closure_rec_d).known_type;
+                    let closure_kt = p.data.def(closure_rec_d).known_type();
                     let crec_pos = match &pos_val {
                         Value::Int(pi) => Value::Int(pi + 4),
                         _ => Value::Int(0),
@@ -6089,9 +6136,9 @@ fn emit_fn_ref_field_write(
             // when the captured lambda itself is non-capturing —
             // which is the canonical P215 reproducer.
             let target_is_4b = if (d_nr as usize) < p.data.definitions.len()
-                && f_nr < p.data.def(d_nr).attributes.len()
+                && f_nr < p.data.def(d_nr).attributes().len()
             {
-                p.data.def(d_nr).attributes[f_nr].assigned_lambda_d_nr == u32::MAX
+                p.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr == u32::MAX
             } else {
                 false
             };
@@ -6233,33 +6280,33 @@ fn find_written_vars(
         }
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);
-            let attrs = &def.attributes;
+            let attrs = def.attributes();
             // Operators whose FIRST argument is mutated (collection / field writes).
             // vector ops folded in here so `c.items += other_vec` (where `c.items`
             // is `OpGetField(Var(c), …)`) correctly marks `c` as written via
             // collect_vars_in.  Previously the OpAppend*/OpClear* family only checked for
             // a bare `Value::Var` arg, missing the field-access shape.
-            let first_arg_write = def.name.starts_with("OpSet")
-                || def.name.starts_with("OpAppendStack")
-                || def.name.starts_with("OpClearStack")
-                || def.name == "OpNewRecord"
-                || def.name == "OpAppendCopy"
-                || def.name == "OpAppendVector"
-                || def.name == "OpClearVector"
-                || def.name == "OpClearKeyed"
-                || def.name == "OpSetKeyed"
+            let first_arg_write = def.name().starts_with("OpSet")
+                || def.name().starts_with("OpAppendStack")
+                || def.name().starts_with("OpClearStack")
+                || def.name() == "OpNewRecord"
+                || def.name() == "OpAppendCopy"
+                || def.name() == "OpAppendVector"
+                || def.name() == "OpClearVector"
+                || def.name() == "OpClearKeyed"
+                || def.name() == "OpSetKeyed"
                 // @P320: keyed-remove `coll[key] = null` lowers to
                 // `OpHashRemove(coll, …)` (collections.rs::towards_set_hash_remove),
                 // so it mutates its first arg just like OpSetKeyed/OpClearKeyed.
                 // Without this a `&` param whose only mutation is a keyed remove
                 // was wrongly rejected as "never modified".
-                || def.name == "OpHashRemove"
-                || def.name == "OpInsertVector"
-                || def.name == "OpRemoveVector";
+                || def.name() == "OpHashRemove"
+                || def.name() == "OpInsertVector"
+                || def.name() == "OpRemoveVector";
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
-            let second_arg_write = def.name == "OpCopyRecord";
+            let second_arg_write = def.name() == "OpCopyRecord";
             for (i, arg) in args.iter().enumerate() {
                 if i < attrs.len()
                     && matches!(attrs[i].typedef, Type::RefVar(_))
@@ -6285,7 +6332,7 @@ fn find_written_vars(
             // wrapped sources (field access, `OpCreateStack(Var(_))` from
             // the hoisted-preamble path) still propagate the mutation to
             // their root var.
-            if def.code != Value::Null {
+            if *def.code() != Value::Null {
                 let callee_writes = callee_param_writes(*fn_nr, data, callee_cache);
                 for (i, arg) in args.iter().enumerate() {
                     if i < callee_writes.len() && callee_writes[i] {
@@ -6339,13 +6386,13 @@ fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<boo
         return v.clone();
     }
     let def = data.def(fn_nr);
-    let n = def.attributes.len();
+    let n = def.attributes().len();
     // Break recursion: insert a placeholder before walking the body.
     cache.insert(fn_nr, vec![false; n]);
-    if def.code == Value::Null || n == 0 {
+    if *def.code() == Value::Null || n == 0 {
         return vec![false; n];
     }
-    let body = def.code.clone();
+    let body = def.code().clone();
     let mut written: HashSet<u16> = HashSet::new();
     find_written_vars(&body, data, &mut written, cache);
     let result: Vec<bool> = (0..n).map(|i| written.contains(&(i as u16))).collect();
@@ -6369,20 +6416,20 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
     match code {
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);
-            let first_arg_write = def.name.starts_with("OpSet")
-                || def.name == "OpNewRecord"
-                || def.name == "OpAppendCopy"
-                || def.name == "OpAppendVector"
-                || def.name == "OpClearVector"
-                || def.name == "OpClearKeyed"
-                || def.name == "OpSetKeyed"
+            let first_arg_write = def.name().starts_with("OpSet")
+                || def.name() == "OpNewRecord"
+                || def.name() == "OpAppendCopy"
+                || def.name() == "OpAppendVector"
+                || def.name() == "OpClearVector"
+                || def.name() == "OpClearKeyed"
+                || def.name() == "OpSetKeyed"
                 // @P320: keyed-remove `coll[key] = null` → `OpHashRemove(coll, …)`;
                 // mirror the find_written_vars set so a keyed remove inside a
                 // `for … in &coll` loop also counts as a mutation.
-                || def.name == "OpHashRemove"
-                || def.name == "OpInsertVector"
-                || def.name == "OpRemoveVector";
-            let second_arg_write = def.name == "OpCopyRecord";
+                || def.name() == "OpHashRemove"
+                || def.name() == "OpInsertVector"
+                || def.name() == "OpRemoveVector";
+            let second_arg_write = def.name() == "OpCopyRecord";
             for (i, arg) in args.iter().enumerate() {
                 if i == 0 && first_arg_write {
                     collect_vars_in(arg, written);

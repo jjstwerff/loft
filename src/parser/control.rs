@@ -636,7 +636,7 @@ impl Parser {
                 && context == "return from block"
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(l[last].unspan())
-                && matches!(result, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
+                && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
                 && {
                     let synthetic_d_nr = if let Type::Reference(d, _) = result {
                         *d
@@ -1008,7 +1008,7 @@ impl Parser {
         //     whose typedef is heap-allocated (Reference / Vector / struct-Enum).
         let hidden_idx = {
             let def = self.data.def(fn_nr_val);
-            def.attributes.iter().enumerate().find_map(|(i, a)| {
+            def.attributes().iter().enumerate().find_map(|(i, a)| {
                 if !a.hidden {
                     return None;
                 }
@@ -1077,7 +1077,7 @@ impl Parser {
             let efn = *efn;
             let ehidden_idx = {
                 let def = self.data.def(efn);
-                def.attributes.iter().enumerate().find_map(|(i, a)| {
+                def.attributes().iter().enumerate().find_map(|(i, a)| {
                     if !a.hidden {
                         return None;
                     }
@@ -1137,7 +1137,7 @@ impl Parser {
         // `unify_if_branches_work_refs` for struct returns.
         let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
         let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
-        let known_type = self.data.def(synthetic_d_nr).known_type;
+        let known_type = self.data.def(synthetic_d_nr).known_type();
         self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
     }
 
@@ -1288,7 +1288,7 @@ impl Parser {
         let (e_nr, is_struct, valid_enum, is_plain_struct) = match &subject_type {
             Type::Enum(nr, s, _) => (*nr, *s, true, false),
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::EnumValue => {
-                let parent = self.data.def(*d_nr).parent;
+                let parent = self.data.def(*d_nr).parent();
                 (parent, true, true, false)
             }
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Enum => {
@@ -1410,12 +1410,12 @@ impl Parser {
             let mut variant_def_nr = self.data.def_nr(&pattern_name);
             if (variant_def_nr == u32::MAX
                 || self.data.def_type(variant_def_nr) != DefType::EnumValue
-                || self.data.def(variant_def_nr).parent != e_nr)
+                || self.data.def(variant_def_nr).parent() != e_nr)
                 && e_nr != u32::MAX
                 && let Some(child) = self
                     .data
                     .children_of(e_nr)
-                    .find(|&c| self.data.def(c).name == pattern_name)
+                    .find(|&c| self.data.def(c).name() == pattern_name)
             {
                 variant_def_nr = child;
             }
@@ -1429,7 +1429,7 @@ impl Parser {
                         Level::Error,
                         "'{}' does not match struct type {}",
                         pattern_name,
-                        self.data.def(e_nr).name
+                        self.data.def(e_nr).name()
                     );
                 }
                 let (arm, exhaustive) = self.parse_match_struct_arm(
@@ -1450,7 +1450,7 @@ impl Parser {
             let bad_variant = e_nr == u32::MAX
                 || variant_def_nr == u32::MAX
                 || self.data.def_type(variant_def_nr) != DefType::EnumValue
-                || self.data.def(variant_def_nr).parent != e_nr;
+                || self.data.def(variant_def_nr).parent() != e_nr;
             if bad_variant {
                 if !self.first_pass && valid_enum && variant_def_nr != u32::MAX {
                     diagnostic!(
@@ -1458,7 +1458,7 @@ impl Parser {
                         Level::Error,
                         "'{}' is not a variant of {}",
                         pattern_name,
-                        self.data.def(e_nr).name
+                        self.data.def(e_nr).name()
                     );
                 }
                 // Skip this arm gracefully.
@@ -1483,13 +1483,13 @@ impl Parser {
                 // parse_enum_variants).  Unit variants (`pub enum E { Null,
                 // Some { … } }`) carry no attributes of their own — fall
                 // back to the parent enum's attribute for this variant name.
-                let variant_attrs = &self.data.def(variant_def_nr).attributes;
+                let variant_attrs = self.data.def(variant_def_nr).attributes();
                 if let Some(first) = variant_attrs.first()
                     && let Value::Enum(nr, _) = first.value
                 {
                     i32::from(nr)
                 } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&pattern_name) {
-                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value {
                         i32::from(nr)
                     } else {
                         0
@@ -1500,7 +1500,7 @@ impl Parser {
             } else {
                 // Plain enum: discriminant is stored in the parent enum's attributes.
                 if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&pattern_name) {
-                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value {
                         i32::from(nr)
                     } else {
                         0
@@ -1535,39 +1535,40 @@ impl Parser {
                 let mut next_def_nr = self.data.def_nr(&next_name);
                 if (next_def_nr == u32::MAX
                     || self.data.def_type(next_def_nr) != DefType::EnumValue
-                    || self.data.def(next_def_nr).parent != e_nr)
+                    || self.data.def(next_def_nr).parent() != e_nr)
                     && e_nr != u32::MAX
                     && let Some(child) = self
                         .data
                         .children_of(e_nr)
-                        .find(|&c| self.data.def(c).name == next_name)
+                        .find(|&c| self.data.def(c).name() == next_name)
                 {
                     next_def_nr = child;
                 }
                 if !self.first_pass
                     && (next_def_nr == u32::MAX
                         || self.data.def_type(next_def_nr) != DefType::EnumValue
-                        || self.data.def(next_def_nr).parent != e_nr)
+                        || self.data.def(next_def_nr).parent() != e_nr)
                 {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
                         "'{}' is not a variant of {}",
                         next_name,
-                        self.data.def(e_nr).name
+                        self.data.def(e_nr).name()
                     );
                 } else {
                     let next_disc = if is_struct {
                         // B1-style guard (same shape as line 603): unit
                         // variants carry no attributes of their own; fall
                         // back to the parent enum's attr list.
-                        let next_variant_attrs = &self.data.def(next_def_nr).attributes;
+                        let next_variant_attrs = self.data.def(next_def_nr).attributes();
                         if let Some(first) = next_variant_attrs.first()
                             && let Value::Enum(nr, _) = first.value
                         {
                             i32::from(nr)
                         } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&next_name) {
-                            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value
+                            if let Value::Enum(nr, _) =
+                                self.data.def(e_nr).attributes()[*a_nr].value
                             {
                                 i32::from(nr)
                             } else {
@@ -1577,7 +1578,7 @@ impl Parser {
                             0
                         }
                     } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&next_name) {
-                        if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                        if let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value {
                             i32::from(nr)
                         } else {
                             0
@@ -1731,7 +1732,7 @@ impl Parser {
             if !missing.is_empty() {
                 let msg = format!(
                     "match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
-                    self.data.def(e_nr).name,
+                    self.data.def(e_nr).name(),
                     missing.join(", ")
                 );
                 self.lexer.pos_diagnostic(Level::Error, &match_pos, &msg);
@@ -1869,7 +1870,7 @@ impl Parser {
                             Level::Error,
                             "unknown field '{}' on struct {}",
                             field_name,
-                            self.data.def(e_nr).name
+                            self.data.def(e_nr).name()
                         );
                     }
                 }
@@ -2027,7 +2028,7 @@ impl Parser {
             }
             // Look up variant discriminant.
             let disc = if let Some(a_nr) = self.data.def(*e_nr).attr_names.get(&name) {
-                if let Value::Enum(nr, _) = self.data.def(*e_nr).attributes[*a_nr].value {
+                if let Value::Enum(nr, _) = self.data.def(*e_nr).attributes()[*a_nr].value {
                     i32::from(nr)
                 } else {
                     0
@@ -2039,7 +2040,7 @@ impl Parser {
                         Level::Error,
                         "'{}' is not a variant of {}",
                         name,
-                        self.data.def(*e_nr).name
+                        self.data.def(*e_nr).name()
                     );
                 }
                 return None;
@@ -2059,7 +2060,7 @@ impl Parser {
                     let next_disc = if let Some(a_nr) =
                         self.data.def(*e_nr).attr_names.get(&next_name)
                     {
-                        if let Value::Enum(nr, _) = self.data.def(*e_nr).attributes[*a_nr].value {
+                        if let Value::Enum(nr, _) = self.data.def(*e_nr).attributes()[*a_nr].value {
                             i32::from(nr)
                         } else {
                             0
@@ -2071,7 +2072,7 @@ impl Parser {
                                 Level::Error,
                                 "'{}' is not a variant of {}",
                                 next_name,
-                                self.data.def(*e_nr).name
+                                self.data.def(*e_nr).name()
                             );
                         }
                         0
@@ -2916,17 +2917,17 @@ impl Parser {
             Type::Reference(d_nr, _)
                 if self.data.def_type(*d_nr) == DefType::EnumValue
                     && matches!(
-                        self.data.def(self.data.def(*d_nr).parent).returned,
+                        self.data.def(self.data.def(*d_nr).parent).returned(),
                         Type::Enum(_, true, _)
                     ) =>
             {
-                (self.data.def(*d_nr).parent, true)
+                (self.data.def(*d_nr).parent(), true)
             }
             // Reference to an Enum itself (e.g. loop variable from
             // vector<Shape> iteration gets Type::Reference(Shape_nr, _)).
             Type::Reference(d_nr, _)
                 if self.data.def_type(*d_nr) == DefType::Enum
-                    && matches!(self.data.def(*d_nr).returned, Type::Enum(_, true, _)) =>
+                    && matches!(self.data.def(*d_nr).returned(), Type::Enum(_, true, _)) =>
             {
                 (*d_nr, true)
             }
@@ -2945,11 +2946,11 @@ impl Parser {
         let mut variant_def_nr = self.data.def_nr(variant_name);
         if (variant_def_nr == u32::MAX
             || self.data.def_type(variant_def_nr) != DefType::EnumValue
-            || self.data.def(variant_def_nr).parent != e_nr)
+            || self.data.def(variant_def_nr).parent() != e_nr)
             && e_nr != u32::MAX
         {
             for child in self.data.children_of(e_nr) {
-                if self.data.def(child).name == variant_name {
+                if self.data.def(child).name() == variant_name {
                     variant_def_nr = child;
                     break;
                 }
@@ -2962,19 +2963,19 @@ impl Parser {
                     Level::Error,
                     "'{}' is not a variant of {}",
                     variant_name,
-                    self.data.def(e_nr).name
+                    self.data.def(e_nr).name()
                 );
             }
             return Type::Boolean;
         }
         let disc: i32 = if is_struct {
-            let variant_attrs = &self.data.def(variant_def_nr).attributes;
+            let variant_attrs = self.data.def(variant_def_nr).attributes();
             if let Some(first) = variant_attrs.first()
                 && let Value::Enum(nr, _) = first.value
             {
                 i32::from(nr)
             } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
-                if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                if let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value {
                     i32::from(nr)
                 } else {
                     0
@@ -2983,7 +2984,7 @@ impl Parser {
                 0
             }
         } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
-            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value {
                 i32::from(nr)
             } else {
                 0
@@ -3063,7 +3064,7 @@ impl Parser {
                                 self.lexer,
                                 Level::Error,
                                 "variant {} has no field '{}'",
-                                self.data.def(variant_def_nr).name,
+                                self.data.def(variant_def_nr).name(),
                                 field_name
                             );
                         }
@@ -3136,7 +3137,7 @@ impl Parser {
             // I13: check for custom iterator protocol before falling back.
             let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
             if next_d_nr != u32::MAX {
-                return self.data.def(next_d_nr).returned.clone();
+                return self.data.def(next_d_nr).returned().clone();
             }
             in_type.clone()
         } else {
@@ -3225,9 +3226,13 @@ impl Parser {
             // pass; the second-pass `__closure` injection (if any)
             // happens later in parse_lambda so the trailing position is
             // preserved.
-            let is_lambda = self.data.def(self.context).name.starts_with("n___lambda_");
+            let is_lambda = self
+                .data
+                .def(self.context)
+                .name()
+                .starts_with("n___lambda_");
             let has_work_buf =
-                self.data.def(self.context).attributes.iter().any(
+                self.data.def(self.context).attributes().iter().any(
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
                 );
             if self.first_pass && is_lambda && !has_work_buf {
@@ -3257,7 +3262,7 @@ impl Parser {
         match val {
             Value::Call(d_nr, args) => {
                 let mut result = Vec::new();
-                let attrs = &data.def(*d_nr).attributes;
+                let attrs = data.def(*d_nr).attributes();
                 for (i, attr) in attrs.iter().enumerate() {
                     if attr.hidden
                         && matches!(attr.typedef, Type::Reference(_, _))
@@ -3410,7 +3415,7 @@ impl Parser {
     pub(crate) fn parse_return(&mut self, val: &mut Value) {
         // validate if there is a defined return value
         let mut v = Value::Null;
-        let r_type = self.data.def(self.context).returned.clone();
+        let r_type = self.data.def(self.context).returned().clone();
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             // T1.7: save the position of the first token in the return expression,
             // used to report `not null` violations at the tuple literal site.
@@ -3475,7 +3480,7 @@ impl Parser {
             let tuple_rewritten = !self.first_pass
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(v.unspan())
-                && matches!(&r_type, Type::Reference(d, _) if self.data.def(*d).name.starts_with("__tuple<"))
+                && matches!(&r_type, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
                 && {
                     let synthetic_d_nr = if let Type::Reference(d, _) = &r_type {
                         *d
@@ -4123,7 +4128,7 @@ impl Parser {
                 .any(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)));
             if was_captured
                 && self.closure_param != u16::MAX
-                && let closure_rec_d = self.data.def(self.context).closure_record
+                && let closure_rec_d = self.data.def(self.context).closure_record()
                 && closure_rec_d != u32::MAX
             {
                 let f_nr = self.data.attr(closure_rec_d, name);
@@ -4351,7 +4356,7 @@ impl Parser {
                         } else {
                             Value::Int(i32::from(
                                 self.database
-                                    .size(self.data.def(self.data.type_elm(&tp)).known_type),
+                                    .size(self.data.def(self.data.type_elm(&tp)).known_type()),
                             ))
                         };
                     }
@@ -4371,7 +4376,7 @@ impl Parser {
                     *val = self.cl("OpSizeofRef", &[drop]);
                 } else {
                     *val = Value::Int(i32::from(
-                        self.database.size(self.data.def(e_tp).known_type),
+                        self.database.size(self.data.def(e_tp).known_type()),
                     ));
                 }
             }
@@ -4572,7 +4577,7 @@ impl Parser {
             }
             // In-place / element / field mutation hides the host in args[0].
             Value::Call(d, args) => {
-                if is_mutating_op(&self.data.def(*d).name)
+                if is_mutating_op(self.data.def(*d).name())
                     && let Some(host) = args.first().and_then(base_host_var)
                 {
                     self.note_mutation(host, encl, out);

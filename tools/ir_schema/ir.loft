@@ -1,4 +1,4 @@
-// @PLAN54 arc A — the COMPLETE compiler IR transcribed as loft types, so
+// @PLN11 arc A — the COMPLETE compiler IR transcribed as loft types, so
 // `loft --native` generates the store schema + record accessors for the whole
 // thing.  The generated Rust IS arc A's schema (db.structure/enumerate/value/
 // vector/field registrations) plus the read/write record patterns.
@@ -218,7 +218,7 @@ struct Data {          // src/data.rs::Data (the stored core)
 }
 
 // ---- Database type schema (src/database) ------------------------------------
-// @PLAN54 arc D / D2a — the database's own type schema (`Stores.types`), so a
+// @PLN11 arc D / D2a — the database's own type schema (`Stores.types`), so a
 // cache-loaded `Data`'s baked `known_type`s stay valid without re-running the
 // parse-time `fill_all` (whose incremental known_type assignment defeats a
 // load).  Mirrors src/database/types.rs::Type + Parts + Field + keys::Content.

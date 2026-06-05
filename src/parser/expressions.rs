@@ -443,7 +443,7 @@ impl Parser {
         let result = if self.context == u32::MAX {
             Type::Void
         } else {
-            self.data.def(self.context).returned.clone()
+            self.data.def(self.context).returned().clone()
         };
         self.parse_block("return from block", &mut v, &result);
         // @PLN10 — synth a scope-bound work-text destination for every text-dest
@@ -611,7 +611,7 @@ impl Parser {
             {
                 let mut break_val = Value::Null;
                 let break_tp = self.expression(&mut break_val);
-                let ret_tp = self.data.def(self.context).returned.clone();
+                let ret_tp = self.data.def(self.context).returned().clone();
                 if !self.first_pass && matches!(ret_tp, Type::Void) {
                     diagnostic!(
                         self.lexer,
@@ -663,7 +663,7 @@ impl Parser {
                 }
                 return Type::Void;
             }
-            let r_type = self.data.def(self.context).returned.clone();
+            let r_type = self.data.def(self.context).returned().clone();
             if !matches!(r_type, Type::Iterator(_, _)) && !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -841,8 +841,8 @@ impl Parser {
         if !self.first_pass
             && self.vars.exists(v_nr)
             && let Type::Reference(d, _) = self.vars.tp(v_nr)
-            && self.data.def(*d).name.starts_with("__cell_")
-            && let Some(value_attr) = self.data.def(*d).attributes.first()
+            && self.data.def(*d).name().starts_with("__cell_")
+            && let Some(value_attr) = self.data.def(*d).attributes().first()
             && value_attr.name == "value"
             && (value_attr.typedef.is_equal(tp)
                 || (matches!(value_attr.typedef, Type::Integer(_))
@@ -903,7 +903,7 @@ use a separate collection or add after the loop"
         let Value::Call(lock_nr, lock_args) = to.unspan() else {
             return false;
         };
-        if self.data.def(*lock_nr).name != "n_get_store_lock" {
+        if self.data.def(*lock_nr).name() != "n_get_store_lock" {
             return false;
         }
         if !matches!(code, Value::Boolean(_)) {
@@ -1098,7 +1098,7 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &iter_tp, &Value::Var(tmp), &lhs_parent_tp, tmp, "=");
             // (2) clear the destination and append the temp's contents.
             let dn = self.data.type_def_nr(&elm_tp);
-            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type()));
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             let append = self.cl(
                 "OpAppendVector",
@@ -1144,7 +1144,7 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &iter_tp, &Value::Var(tmp), &lhs_parent_tp, tmp, op);
             // (3) emit clear + append on the destination field.
             let dn = self.data.type_def_nr(&elm_tp);
-            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+            let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type()));
             let clear = self.cl("OpClearVector", std::slice::from_ref(to));
             let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
             *code = Value::Insert(vec![code.clone(), clear, append]);
@@ -1255,7 +1255,9 @@ use a separate collection or add after the loop"
                         return None;
                     }
                     match self.vars.tp(v_nr) {
-                        Type::Reference(d, _) if self.data.def(*d).name.starts_with("__cell_") => {
+                        Type::Reference(d, _)
+                            if self.data.def(*d).name().starts_with("__cell_") =>
+                        {
                             Some(v_nr)
                         }
                         _ => None,
@@ -1406,15 +1408,15 @@ use a separate collection or add after the loop"
         {
             let kt = match &f_type {
                 Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.sorted(c, key))
                 }
                 Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.hash(c, key))
                 }
                 Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.index(c, key))
                 }
                 _ => None,
@@ -1512,15 +1514,15 @@ use a separate collection or add after the loop"
         let keyed_kt = if !self.first_pass && op == "=" && var_nr != u16::MAX {
             match &f_type {
                 Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.sorted(c, key))
                 }
                 Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.hash(c, key))
                 }
                 Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type;
+                    let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.index(c, key))
                 }
                 _ => None,
@@ -1832,19 +1834,20 @@ use a separate collection or add after the loop"
             let sd = *struct_dnr;
             let off = *field_offset;
             // Find the field by matching its database offset.
-            for a_nr in 0..self.data.def(sd).attributes.len() {
+            for a_nr in 0..self.data.def(sd).attributes().len() {
                 let nm = self.data.attr_name(sd, a_nr);
-                let fpos = self.database.position(self.data.def(sd).known_type, &nm);
-                if i32::from(fpos) == off && self.data.def(sd).attributes[a_nr].check != Value::Null
+                let fpos = self.database.position(self.data.def(sd).known_type(), &nm);
+                if i32::from(fpos) == off
+                    && self.data.def(sd).attributes()[a_nr].check != Value::Null
                 {
-                    let check = self.data.def(sd).attributes[a_nr].check.clone();
+                    let check = self.data.def(sd).attributes()[a_nr].check.clone();
                     let ref_val = to_args[0].clone();
                     let bound = Self::replace_record_ref(check, &ref_val);
-                    let msg = match &self.data.def(sd).attributes[a_nr].check_message {
+                    let msg = match &self.data.def(sd).attributes()[a_nr].check_message {
                         Value::Text(s) => Value::Text(s.clone()),
                         _ => Value::Text(format!(
                             "field constraint failed on {}.{nm}",
-                            self.data.def(sd).name
+                            self.data.def(sd).name()
                         )),
                     };
                     let assert_dnr = self.data.def_nr("n_assert");
@@ -1962,7 +1965,7 @@ use a separate collection or add after the loop"
             // the for-loop destructure in collections.rs:1289-1304).
             let (rhs_elems_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &rhs_type {
                 Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
-                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name().starts_with("__tuple<") => {
                     let elems: Vec<Type> = self
                         .data
                         .def(*d_nr)
@@ -2247,7 +2250,7 @@ use a separate collection or add after the loop"
         let Value::Call(op_d, args) = lhs.unspan() else {
             return None;
         };
-        let op_name = self.data.def(*op_d).name.as_str();
+        let op_name = self.data.def(*op_d).name();
         // Direct shape: Call(OpGet<T>, [Var(v_nr), Int(0)])
         if args.len() == 2
             && matches!(args[1].unspan(), Value::Int(0))
@@ -2261,7 +2264,7 @@ use a separate collection or add after the loop"
             && args.len() == 2
             && matches!(args[1].unspan(), Value::Int(1))
             && let Value::Call(inner_op, inner_args) = args[0].unspan()
-            && self.data.def(*inner_op).name == "OpGetByte"
+            && self.data.def(*inner_op).name() == "OpGetByte"
             && inner_args.len() == 3
             && matches!(inner_args[1].unspan(), Value::Int(0))
             && matches!(inner_args[2].unspan(), Value::Int(0))
@@ -2321,7 +2324,7 @@ use a separate collection or add after the loop"
         let Type::Reference(cell_d_nr, _) = &tp else {
             return result;
         };
-        if !self.data.def(*cell_d_nr).name.starts_with("__cell_") {
+        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
             return result;
         }
         if self.vars.is_defined(v_nr) {
@@ -2333,7 +2336,7 @@ use a separate collection or add after the loop"
         if op_db == u32::MAX {
             return result;
         }
-        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type);
+        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type());
         self.vars.defined(v_nr);
         Value::Insert(vec![
             v_set(v_nr, Value::Null),
@@ -2390,10 +2393,10 @@ use a separate collection or add after the loop"
         let Type::Reference(cell_d_nr, _) = &tp else {
             return None;
         };
-        if !self.data.def(*cell_d_nr).name.starts_with("__cell_") {
+        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
             return None;
         }
-        let value_attr = self.data.def(*cell_d_nr).attributes.first()?;
+        let value_attr = self.data.def(*cell_d_nr).attributes().first()?;
         if value_attr.name != "value" {
             return None;
         }
@@ -2416,7 +2419,7 @@ use a separate collection or add after the loop"
         if op_db_d_nr == u32::MAX {
             return None;
         }
-        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type);
+        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type());
         let pos = Value::Int(0);
         if self.vars.is_defined(var_nr) {
             // Subsequent: write value field of existing cell.
@@ -2518,18 +2521,19 @@ use a separate collection or add after the loop"
             let pos = *pos;
             let d_nr = self.data.type_def_nr(parent_tp);
             if d_nr != u32::MAX {
-                let known = self.data.def(d_nr).known_type;
+                let known = self.data.def(d_nr).known_type();
                 if known != u16::MAX
                     && let Parts::Struct(fields) = &self.database.types[known as usize].parts
                 {
                     for (f_nr, f) in fields.iter().enumerate() {
-                        if f.position == pos as u16 && !self.data.def(d_nr).attributes[f_nr].mutable
+                        if f.position == pos as u16
+                            && !self.data.def(d_nr).attributes()[f_nr].mutable
                         {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
                                 "Cannot write to key field {}.{} create a record instead",
-                                self.data.def(d_nr).name,
+                                self.data.def(d_nr).name(),
                                 f.name
                             );
                         }
@@ -2562,10 +2566,10 @@ use a separate collection or add after the loop"
             && matches!(*next, Value::Block(_))
         {
             let ed_nr = self.data.type_def_nr(&elm_tp);
-            let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type == u16::MAX {
+            let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type() == u16::MAX {
                 0
             } else {
-                self.database.vector(self.data.def(ed_nr).known_type)
+                self.database.vector(self.data.def(ed_nr).known_type())
             };
             let known = Value::Int(i32::from(known_db));
             let fld = Value::Int(i32::from(u16::MAX));

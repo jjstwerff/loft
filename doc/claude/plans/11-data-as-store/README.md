@@ -3,51 +3,149 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 54 — `Data` as a store (IR mirrors the `--native` data model)
+# @PLN11 — `Data` as a store (IR mirrors the `--native` data model)  ·  [loft-lang/plans#11](https://github.com/loft-lang/plans/issues/11)  ·  *(was `@PLAN54`)*
 
-## Status
+## Status — FINISHED (2026-06-05)
 
-**G2/M5 reached for BOTH backends (2026-06-03): the interpreter AND `--native` codegen run fully store-backed, proven byte-identical to native.**  Both lowering dispatches (`generate_inner` / `output_code_node`) read the IR through the `IrNode`/`IrNodeList`/`IrBlock` handles; the intricate native-`Value`/`&Block`-clone clusters materialise at their boundary (zero-cost for native).  `def_code` / `output_function` flip to `IrNode::Store` under `LOFT_CODEGEN_STORE`, lowering whole programs from a store with identical output across `tests/scripts/*.loft` (interpreter) + the full native suite + the M5 equivalence tests.  Built on G1 (cold-start cache shipped) + the M0 harness.  **Remaining:** M6 (drop the native graph for true zero-copy — needs M2/DefView so the bodies live in a *persistent* store-backed `Data`, plus converting the remaining IR readers: scopes/parser-passes/native helper files); M2/M1b/M1c (the `Definition` store-backing seams M6 builds on); M7 (parser emits store IR directly); E2 (locked-mmap mutability).  M5's per-function re-materialise is the proof harness; M6 is the architectural endpoint.
+**The C71 native-library execution model + the store-backed IR foundation shipped and are proven, the live tail is routed to its canonical homes, and the architectural endpoint is deferred — this plan is closed.**  An interpreted script that `use`s a library auto-compiles the library's native-compilable subgraph to a cdylib and dispatches over the **shared store** (interpreting the rest), byte-identical to the all-interpreted run and **63.6×** faster than interpreting the library; the program cache is **default-on** (3–3.6× startup, parse-skip); the IR is store-backed on both backends (G2/M5 — `generate_inner` / `output_code_node` read through the `IrNode` handle, proven byte-identical to native).  The decision is automatic and invisible (`use <lib>` is native; `LOFT_NO_NATIVE_LIBS` opts out) with a dev-interpret-on-edit fallback.
+
+The **closure ledger** (what shipped · routed-out · deferred) is the next section; everything below it is the dated **build/closure record** (historical) — kept as the how-it-was-built archive, not live work.
+
+### Closure ledger — shipped · routed-out · deferred (2026-06-05)
+
+The deliverable **shipped**: program cache default-on (3–3.6× startup,
+parse-skip) + the C71 native-library execution model live end-to-end
+(Arc N, Steps 1–4; 63.6× execution speedup measured & guarded) + the
+store-backed IR on both backends.  Where the rest went:
+
+1. **Merge (per finish-then-merge).**  The whole branch lands on `main`
+   as one finished unit — a coherent, all-opt-in (default-off) foundation
+   (the `IrNode` handle, the cross-backing equivalence harness,
+   store-backed codegen on both backends, the cache).  The only action
+   left for this plan.
+
+2. **F1 — nextest native-test reliability.**  CI-masked (green under
+   `make test` + the `ci` nextest profile's `retries = 1`) but flaky
+   under raw `cargo nextest` full-suite.
+   - **Mode A ✅ FIXED (2026-06-05)** — root cause was **not** a deps
+     race but **shared stem-keyed scratch output paths** in
+     `tests/native.rs`: `native_tuple_script`,
+     `native_tuple_return_script`, and `native_scripts` all compile
+     `50-tuples.loft`, and under nextest's process-per-test they
+     truncated each other's `loft_native_<stem>_bin` mid-link → SIGBUS.
+     Fixed by per-process temp output + atomic `rename(2)` publish (no
+     serial group; full parallelism kept).  Forced-collision 0/12,
+     broad cold 0/4, cache intact.
+   - **Mode B (open, lower urgency)** — `ring/rustls/webpki … not in
+     rlib format` from a test-profile dep-layout mismatch.  **Not
+     reproduced** in this env (consistent unhashed
+     `release/deps/libloft.rlib`).  Fix direction unchanged: resolve the
+     cdylib build against the rlib set nextest actually produces, or
+     build a consistent set first.
+   → § Discovered follow-ups F1.
+
+3. **Arc N dispatch completeness — ROUTED OUT to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71) (2026-06-05).**
+   The C71 core is shipped + live; the remaining items are *enhancements*
+   on a complete, graceful core (a construct that can't cross
+   **interprets** — not a bug): closures (`__closure`), `generate_interface`
+   aggregate names (`sorted<Item[k]>`), D2a binary schema interface,
+   `hash`/`index`/`spacial` coverage, gate-driven dispatch (N4 tail),
+   background build (N3 polish).  No longer this plan's scope.
+
+4. **N1 — native-artifact idle-TTL cache (deferred).**  The eviction
+   model + its application to the program cache are done; applying the
+   idle-TTL to a *native-artifact* cache waits on the registry
+   build-cache surface (`~/.loft/build-cache/`) or a new shared local
+   native cache — rather than shipping untested registry-gated GC
+   (Goal-A "verify, don't assert").  → § Arc N (N1 row).
+
+5. **Architectural endpoint — M6 / M7 / E2 (deprioritised for perf;
+   future fresh-context arc, NOT a branch extension).**  M6 (cold-path
+   native-graph drop / zero-copy reads — E2-gated), M7 (parser emits
+   store IR directly), E2 (locked-mmap writable store).  **E2's perf
+   rationale is superseded by C71** — in the native-library model the
+   library bodies + variable tables are never materialised at startup,
+   so the allocation cost E2 removes isn't incurred; there is also no
+   cheap `read_function` win (the cost is allocation-bound, measured).
+   E2's value is now purely architectural (self-hosting, store-backed
+   IR, mmap), worth it only if warm startup for large whole-program
+   bundles becomes a headline goal.  → § Recommendation #2–#3.
 
 ### Recommendation — where to go next (2026-06-04)
 
 The codegen migration (M2–M6.warm) is **done and proven**, but the session's
 measurements reframed the cost/benefit and point to a clear priority order:
 
-1. **Ship the win that already exists — make the program cache default-on.**
-   The **3–3.6× startup speedup** (G1, parse-skip) is built, proven, and robust
-   (atomic write, corrupt-bundle fallback, content-hash drift), but it is
-   **invisible to users** because it's gated behind `LOFT_PROGRAM_CACHE`.
-   **Correctness prerequisite DONE (2026-06-04, commit `0b9e69a`):** the program
-   manifest now pins a **build signature** (`cache::build_signature` →
-   format/version/build-id/target/features) as its first line, so a `loft`
-   upgrade invalidates stale bundles instead of warm-loading an incompatible
-   store (the previous gap: key/manifest had no binary identity, and
-   `Store::is_store_file`'s fixed magic can't catch a layout change).  Remaining
-   for the flip itself: an opt-*out* (`LOFT_NO_CACHE`), a call on the
-   first-run save cost (~tax on one-shot/CI runs) + unbounded cache growth
-   (one bundle per script, no eviction), **and a dev-safety gap that is a hard
-   prerequisite** — the build signature keys on the *committed* HEAD, not the
-   running binary, so it does NOT invalidate on an uncommitted compiler rebuild
-   (see § Debugging-iteration cost + the default-on dev-safety caveat below).
-   Near-zero code, highest ROI.
+1. ✅ **SHIPPED (2026-06-04) — the program cache is now default-on (track 1).**
+   The **3–3.6× startup speedup** (G1, parse-skip) was invisible because it sat
+   behind `LOFT_PROGRAM_CACHE`; it is now **on by default**
+   (`cache::program_cache_enabled`).  Delivered as four pieces:
+   - **Default-on with a kill switch** — `LOFT_NO_CACHE` opts out;
+     `LOFT_PROGRAM_CACHE` still force-enables (used by the cache's own tests).
+   - **Auto-off under Cargo** — when `CARGO_MANIFEST_DIR` is in the environment
+     (`cargo run` / `cargo test`) the cache disables itself, so the whole
+     integration-test suite and the compiler-debug loop neither write nor read
+     bundles **with zero per-test wiring** (verified: 20 `exit_codes` subprocess
+     tests wrote 0 bundles to an isolated cache dir).  This *is* the dev-safety
+     default the caveat below called for.
+   - **Dev-safety signature** — `build_signature` now also folds in the running
+     executable's **mtime** (`binary_signature_tag`), so an *uncommitted* rebuild
+     invalidates bundles too (git-HEAD `BUILD_ID` alone did not — see § caveat).
+     The release-upgrade build-signature (format/version/build-id/target/features)
+     landed earlier in commit `0b9e69a`.
+   - **Bounded growth** — `cache::prune_program_cache` evicts whole
+     `(.store + .manifest)` pairs oldest-first after each cold save, keeping the
+     dir under `LOFT_CACHE_MAX_MB` (default 512 MiB).
+   - **First-run save cost — decision:** *accepted.*  The one cold save (~7 MiB
+     bundle) per `(script, binary)` is the price of every future warm hit; it is
+     paid by real installed invocations only (dev/test/CI are auto-off or use
+     `LOFT_NO_CACHE`), bounded by eviction.
+   Tests: `cache_decision_precedence`, `prune_dir_evicts_oldest_over_budget`,
+   `build_signature_is_deterministic_and_carries_version` (lib) + the existing
+   `arc_e_program_cache` / `g2_m6_warm_store` / `p254_cache_poisoning` suites.
 
 2. **Do NOT chase E2 / the full native-graph drop for perf right now.**  The
-   key measured finding: **M6-warm gives only ~5%** because the **variable
-   tables (~2.2 ms), not the bodies (~0.6 ms), dominate `read_data`.**  The
-   *real* M6/E2 prize is bigger — skipping the **entire** `read_data`
-   reconstruction (~3 ms ≈ ~50% of warm startup) by reading the whole `Data`
-   from the mmap — but that needs **E2** (a writable store IR so `scopes` can
-   rewrite bodies), a multi-week, memory-safety-sensitive rewrite of the
-   compiler's largest mutating pass.  Worth it *eventually* if startup latency
-   is a headline goal, but as a **planned, fresh-context arc**, not a rushed
-   branch extension.
+   key measured finding: **M6-warm gives only ~5%** because it skips only the
+   *body* trees (20% of `read_data` — see #3's breakdown), not the def-fields +
+   variable tables (80%) that dominate.  The *real* M6/E2 prize is skipping the
+   **entire** `read_data` reconstruction — but on the stdlib that is only **~0.7 ms**
+   (it scales with def + variable count; a large whole-program bundle is more), and
+   it needs **E2** (a writable store IR so `scopes` can rewrite bodies), a multi-week,
+   memory-safety-sensitive rewrite of the compiler's largest mutating pass.  Worth it
+   *eventually* if startup latency is a headline goal, but as a **planned,
+   fresh-context arc**, not a rushed branch extension.
 
-3. **If you want more startup perf sooner, profile `read_function` first.**  The
-   actual warm-load bottleneck is the **variable-table reconstruction**
-   (~2.2 ms).  A targeted decode/encoding/lazy-load optimisation there is a
-   **smaller, lower-risk lever** that may beat the whole E2 migration — measure
-   before committing to E2.
+   **E2 deprioritised further (2026-06-04) — superseded-for-perf by the
+   native-library execution model** ([DESIGN_DECISIONS.md §
+   C71](../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model),
+   [BROADENING.md § Native-library execution
+   model](../../BROADENING.md#native-library-execution-model--the-steady-state-design)).
+   In the native-library model (stable/published libraries compile to native
+   artifacts; user scripts interpret) the library bodies + variable tables are
+   NEVER materialised at startup — the allocation cost E2 eliminates is simply
+   not incurred.  E2 therefore drops to low priority for performance.  Its
+   architectural value (self-hosting, store-backed IR, mmap) stands on its own;
+   the perf rationale no longer applies.  **The forward work is now § Arc N —
+   native-library execution model (C71 build-out)** below: the phased,
+   timeline-tracked plan for building that architecture (everything except the
+   deferred library validation layer).
+
+3. ✅ **PROFILED (2026-06-04) — there is no cheap `read_function` win; the cost is
+   allocation-bound, so E2 (zero-copy) is the only lever.**  `bench_read_data_breakdown`
+   (`ir_read.rs`, `--ignored`) splits the warm `read_data` on the real stdlib bundle:
+   **693 µs total = def-fields 453 µs (65%) + variable-tables 98 µs (14%) + bodies
+   142 µs (20%)**.  The variable-table decode is **~0.39 µs/variable** (98 µs / 251
+   vars) — so the plan's earlier "~2.2 ms variable tables" figure is a *whole-program*
+   bundle (a real consumer with ~5–6k vars), not the stdlib, and it scales **linearly
+   with allocation count**: each variable rebuilds a `String` name + a boxed `Type`
+   (`read_type_child`), each def rebuilds its attribute + return-type `Type` trees.
+   That cost **is** the native-graph materialisation — exactly what E2/zero-copy
+   skips wholesale — so a "targeted decode optimisation" cannot beat E2 (there is no
+   redundant work to shave; `collect()` already pre-sizes the `names` map from the
+   Vec size-hint).  **Conclusion:** drop the "optimise `read_function`" idea; if warm
+   startup ever becomes a headline goal for large programs, E2 is the lever, and its
+   prize is **the whole `read_data` (~0.7 ms stdlib, scaling with def+var count)**,
+   not the ~2.2 ms the variable-table framing implied.
 
 4. **Land this branch.**  ~54 green, all-opt-in (default-off) commits.  The
    `IrNode` handle, the cross-backing equivalence harness, store-backed codegen
@@ -58,8 +156,12 @@ measurements reframed the cost/benefit and point to a clear priority order:
 **Cost split that drives this (measured):** cold store-codegen = `materialize_data`
 **~5.5 ms** (the tax M6-warm avoids by using the mmap'd cache) + store reads
 **~0.8 ms** (vs 0.6 ms native — handle navigation is near-native).  Warm `read_data`
-= **~2.2 ms variable tables + ~0.6 ms bodies** (so skipping bodies alone is small;
-the whole-`read_data` skip is the E2-gated prize).
+on the **stdlib bundle = ~0.7 ms** — def-fields **65%** (attribute + return-type
+`Type` trees) + variable tables **14%** (~0.39 µs/var) + bodies **20%**
+(`bench_read_data_breakdown`).  So M6-warm (skip bodies only) trims ~20% of an
+already-sub-ms read; the whole-`read_data` skip is the E2-gated prize and the cost
+is **allocation-bound** — it scales with def + variable count and is exactly what
+zero-copy eliminates (see recommendation #3).
 
 ### Debugging-iteration cost + the default-on dev-safety caveat (2026-06-04)
 
@@ -104,16 +206,529 @@ fix silently no-ops until you commit (or edit a `.loft` source, which the drift
 manifest *does* hash).  `LOFT_STDLIB_CACHE` shares the blind spot with a smaller
 blast radius (only the `default/` parse).
 
-**Consequences:**
-   - **While debugging the compiler, keep both caches OFF.**  Opt-in today is
-     therefore correct; the ~10 ms saving is irrelevant next to rustc and the
-     stale-parse risk is real.  Inner loop: raw `loft script.loft` (no cache) +
-     `LOFT_LOG=minimal`/`crash_tail:N`.
-   - **Before the default-on flip, `build_signature()` needs a dev-safe input** —
-     mix in the running binary's own mtime or a self-hash so *any* rebuild
-     (committed or not) invalidates — and/or honour `LOFT_NO_CACHE`.  This is a
-     **separate, not-yet-done** prerequisite beyond the release-upgrade
-     invalidation already shipped in `0b9e69a`.
+**Consequences (✅ both resolved by track 1, 2026-06-04):**
+   - **While debugging the compiler, the caches are OFF automatically.**  The
+     default-on flip disables the cache whenever `CARGO_MANIFEST_DIR` is in the
+     environment — i.e. under `cargo run` and `cargo test` — so the compiler-debug
+     loop never warm-loads a stale parse, with no flag to remember.  `LOFT_NO_CACHE`
+     is the explicit kill switch for any other context.
+   - **`build_signature()` now folds in the running binary's mtime**
+     (`binary_signature_tag`), so *any* rebuild — committed or not — invalidates
+     bundles, closing the git-HEAD-`BUILD_ID` blind spot.  This was the
+     not-yet-done prerequisite beyond the release-upgrade invalidation
+     (`0b9e69a`); it is now done.
+
+---
+
+### Arc N — native-library execution model (C71 build-out)
+
+**The forward arc.**  Per [DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
+the steady state is **native libraries + interpreted scripts**; this arc builds
+that architecture.  It **supersedes the G2 zero-copy endgame for perf** (E2 /
+M6-cold / M7 are parked — see recommendation #2): native libraries are never
+materialised, so the allocation-bound `read_data` cost is *avoided*, not chased
+with a multi-week rewrite.  Scope = **the full interpreted+native architecture
+EXCEPT the library validation layer** (deferred, customer-facing — see § Excluded).
+Each phase lands as a **self-contained, default-safe increment in `main`** (the
+dispatch primitive + caches stay opt-in / behind the automatic policy until N3+N5
+make them safe-by-default).
+
+**Builds on (already landed):** the `OpStaticCall` → `library_names` →
+`extensions::wire_native_fns` → `try_dlsym` dispatch primitive (+ `native_packages`);
+BUILD2's memoised `libloft.rlib` content hash (`native_utils::native_cache_key`);
+the complete `Definition` read seam (M1a/M1b/M1c); the D2a database-type-schema
+cache; and the cross-mode byte-identical equivalence harness.
+
+| Phase | Deliverable | Validation (done-when) | Status | Effort |
+|---|---|---|---|---|
+| **N0 — build fingerprint** ✅ | **Done.**  `cache::loft_build_fingerprint()` = the loft rlib's sha256 **content** hash (memoised) — the single seam.  **Audit finding:** the user-binary cache key (`native_cache_key`) was *already* content-hash (BUILD2) and **no** native key folds git-HEAD — nothing to migrate.  The real gap was that `auto_build_native` / `add_native_extern_flags` reused a cached package rlib / cdylib on **existence only**, so a loft change linked the *stale* one (the `make rebuild-native-cdylibs` hazard).  Fix = the "do both" **per-artifact backstop**: a `.loft-build-fp` sidecar stamps each built artifact with the fingerprint; reuse is gated on a match, so a loft change rebuilds it.  (The per-artifact gate subsumes the coarse startup nuke — a rebuild overwrites in place, so no orphans accumulate.)  Goal-A veil-lifter as designed. | `cache::native_artifact_fingerprint_sidecar_gate` (unit) + `tests/n0_fingerprint.rs` (stale sidecar → rebuild + re-stamp) + a real `loft --native` run stamps the fp; native suite green | ✅ | S — **done** |
+| **N1 — per-library native artifact cache** 🔄 | **Idle-TTL eviction model done + applied to the program cache.**  `cache::cache_ttl()` (`LOFT_CACHE_TTL_HOURS`, default 24 h) + `cache::touch_now()` (touch-on-use mtime bump) + `prune_dir` now evicts **idle-TTL first** (drop bundles unused past the TTL) with the size-cap as a runaway backstop; a warm program-cache hit `touch_now`s its bundle, so actively-run programs persist and one-offs age out.  (The "compile each library once, fingerprint-validated" half *is* N0's `auto_build_native` + sidecar.)  **Remaining — the idle-TTL on a *native-artifact* cache:** the default local build compiles libraries **in-tree** (`lib/<pkg>/native/target/`), which is the dev build, **not an evictable cache** — so the native-artifact idle-TTL needs the registry build-cache (`~/.loft/build-cache/`, feature-gated) or a new shared local native cache.  Deferred until that surface exists rather than shipping untested registry-gated GC (Goal-A "verify, don't assert"). | `prune_dir_idle_ttl_evicts_unused` (unit) + `arc_e_program_cache` warm-hit touch path; suites green | 🔄 | M — **model + program-cache done; native-cache application deferred** |
+| **N2 — native dispatch + lean interface load** *(all common types PROVEN, both directions)* | The headline: an interpreted script calling a compiled user library over the shared store.  **Scalar slice + store-touching across ALL common types (scalars, vectors, structs, text, plain+data enums — both directions) landed** — 13 green end-to-end tests in `tests/n2_cdylib.rs`.  **Scalar:** `generate_cdylib_lib_rs` + a `loft_<name>(scalars) -> ret` wrapper that is **ABI-identical to a hand-written scalar `#native` symbol**, so it reuses the existing dispatch wholesale (`OpStaticCall` → `load_all` → `wire_native_fns` dlsym) — `double(21) → 42`.  **Store-touching:** an auto-generated cdylib links libloft, so the bridge **shares the caller's `*mut Stores` by pointer** (zero-marshalling, *not* the `LoftStore` handle): `generate_shared_cdylib_lib_rs` + `LibArg` uniform slot + `shared_store_dispatch`/`wire_shared_native_fns` — `vec_sum([10,20,30]) → 60` (non-scalar arg, raw `DbRef` crosses unchanged) and `range_vec(4) → [0,1,2,3]→6` (vector **return** — native allocates in the shared store via the hidden `ref_return` destination the bridge wrapper allocates itself; the `DbRef` is valid back in the interpreter).  Structs/text/enums + keyed `sorted` cross too (`point_sum`, `make_point`, `str_len`, `shout`, `dir_code`/`dir_from`, `area`/`make_rect`, `sum_values`); **schema agreement is proven** — an identically-defined struct gets the same type id + field offsets in the separate library and script `Data`.  Fixed a latent `loft_register_v1` guard bug (per-library `uses_v1`, preserving #119).  **Lean interface DONE (source form):** `generate_interface` emits the library's type defs + `#native` decls as loft source; a script using only it dispatches (`lean_interface_drives_shared_dispatch`) — no manual redefinition.  **Remaining → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71)** (closures `__closure`; `generate_interface` aggregate names `sorted<Item[k]>`; D2a binary schema interface; `hash`/`index`/`spacial` coverage — all enhancements on a graceful core).  Auto-deriving the dispatch from `use <lib>` is N3 (core proven). | a script using a native lib dispatches to its compiled subgraph, interprets the rest; output byte-identical to the all-interpreted run (Goal D) | 🔄 (all common types + lean interface done) | M |
+| **N3 — native/interpret decision policy** *(core mechanism PROVEN)* | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag.  **Core landed (in-process):** `native_lib::mark_native_exports(data, candidates)` sets `def.native = "loft_shared_<name>"` on a *normal* library function's shared-store-dispatchable subset — so `byte_code` routes its calls through `OpStaticCall`, the stub registers, and `wire_shared_native_fns` wires the bridge after the auto-built cdylib loads; `output_native_library` emits the cdylib with **no `main` bootstrap** even when the consuming script's `n_main` shares the `Data`.  `auto_native_marks_and_dispatches_normal_library_fn`: `double(21) → 42` with **no `#native` decl anywhere** — the in-process shape of `use <lib>`.  **Phase A DONE (2026-06-04) — the headline works on the real binary:** `[library] compile = "native"` opt-in (`manifest.rs`) → `Parser::pending_native_compile` (`apply_manifest_side_effects`) → `main.rs` marks (`mark_library_native`) + builds (`build_shared_cdylib` into `<pkg>/native-auto/`) + loads + `wire_shared_native_fns`; `tests/n3_use_native.rs` runs `use mathnative;` through the binary and gets `42/7/120` from an auto-built cdylib.  **Partial Phase B landed:** the silent per-function gate-split (a `CallRef`/`parallel` function interprets while the rest dispatches native), the synthetic-exclusion fix (dispatch targets = top-level user-named public fns), and cdylib caching (rebuild only when the source changes or the loft-build fingerprint moves).  **Critical path (re-derived via the rigor discipline) — COMPLETE:** ✅ **Step 1** parity instrument (the gate — native ≡ interpreted byte-for-byte; `tests/n3_parity.rs`, store-touching corpus) → ✅ **Step 2** decide native/interpret *before* `byte_code` so a build failure silently interprets (build-before-mark) → ✅ **Step 3** default-native (the opt-in is dropped; `use <lib>` is native, `LOFT_NO_NATIVE_LIBS` is the escape) → ✅ **Step 4** dev-interpret-on-edit (edit → interpret the new code with no `rustc`; settle → rebuild → native).  See § Landing sequence.  *Open: option-3 background build → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71); F1 nextest reliability (§ Discovered follow-ups; F2 interdependent-libs ✅ fixed).* | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | ✅ (Steps 1–4 done; the C71 model is live end-to-end) | M |
+| **N4 — compilability gate + silent interpret fallback** *(re-scoped 2026-06-04; gate analysis 🔄 done)* | **Gate analysis landed — `src/native_gate.rs::native_compilable(data) -> HashSet<u32>`**: the maximal native subgraph, computed by a transitive, **exhaustive** (no `_` arm — Goal-F-safe: an un-native-able construct can never silently slip through) `Value`-tree walk.  **Empirical finding (the de-risk made real):** the `--native` backend already emits *everything* — structs, enums, vectors, **generics, closures** — so the denylist is just the concurrency constructs `parallel{}` / `par_for` / `yield` (`emit.rs` writes a non-code comment for those; `NATIVE_SKIP`/`SCRIPTS_NATIVE_SKIP` are both empty).  The "generics/closures research problem" was a **phantom** — measured **461/461 stdlib functions native-compilable (100%)**.  The gate is transitive (native iff the fn *and all `Call` callees* are native) so the subgraph is **closed** → the boundary is only ever interpret→native (`OpStaticCall`); `CallRef` is conservatively excluded (dynamic callee unprovable).  Tests: `walk_classifies_leaves_and_denylist`, `walk_finds_nested_denylist_construct`, `stdlib_is_mostly_native_compilable`.  **Remaining → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71)** (gate-driven dispatch tail — select the subgraph from `native_compilable`; making concurrency itself native is the only later optional item, and it is tiny). | gate: the native subgraph excludes exactly the concurrency users; library runs native where compilable, interprets where not, no user-visible error | 🔄 | gate **done** · dispatch (with N2) S–M |
+| **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears.  **Landed (2026-06-05) — D + E legs on `tests/n3_parity.rs`:** `assert_three_mode_parity` now (a) runs a broadened store-touching corpus (BOTH `Shape` enum variants → enum-tag discrimination crosses the boundary, both directions) interp≡mixed≡native, **positively controlled** by the reference-output anchor (rules out "parity holds but all three wrong"); (b) arms `LOFT_STORE_GUARD` on all three runs so the confinement detector runs over the script AND the library's codegen-time scope analysis.  **A leg is sanitizer-blind by construction** — ASan sees interpreter targets only, the `stack_align_guard` sweep can't see spawned binaries (ci.yml `guard` job), Miri can't `dlopen` a cdylib at all; so the *only* runtime soundness signal the mixed path has is the differential parity (a cross-boundary corruption diverges), and the one real A-leg extension — **ASan-on-cdylib** (nightly, propagate `-Zsanitizer` into `build_shared_cdylib`) — is **routed out to the sanitizer plan [@PLAN56 § S9](../future/56-sanitizer-coverage-expansion/README.md) (2026-06-05)**, its canonical Goal-A home.  **E-leg is positively controlled:** arming `LOFT_STORE_GUARD` arms the live **Plan-57 Phase-4 guard** (`reclaim_unfreed_eligible == 0` assertion — the `[store-guard]` eprintln is superseded by it), which a fire trips into a panic caught by `r.success`.  Proven falsifiable by `watermark.rs::phase4_goal_e_guard_is_falsifiable` (a `LOFT_STORE_GUARD_INJECT` fault makes an 11× reassign program panic; silent without it) — so the corpus-silence is non-vacuous.  See § Discovered follow-ups F5. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ✅ in-plan (D + E landed; A-leg routed to @PLAN56 § S9) | M (continuous) |
+
+**Sequencing.**  N0 first (correctness + unblocks; small, dev-facing) → N1 + N2 are
+the core mechanism (cache + dispatch) → N3 makes it invisible (F).  **N5 is woven
+through each phase, not appended** — per C71's guardrail that the A/D detectors grow
+to the mixed boundary *as part of* the work, and per [GOALS.md](../../GOALS.md)
+"two floors," this arc is **gated on the soundness floor it extends** (it adds a new
+interp↔native surface to that floor rather than clearing it).
+
+### Landing sequence — the critical path to the C71 steady state
+
+The **acceptance test for the ideal state**: a developer writes a *normal* loft
+library, a script does `use mylib`, and — with **no annotations, no flags, no
+`#native`, no execution-mode declaration** — the library runs native and the script
+interprets, dispatch is invisible + zero-marshalling, output is **byte-identical to
+the all-interpreted run**, it is sound, and *editing the library re-runs instantly*
+(no `rustc` per save).
+
+The whole dispatch mechanism is ✅ **proven and green today** (all common types, both
+directions; the lean interface; `mark_native_exports` / `output_native_library` /
+`build_shared_cdylib` / `wire_shared_native_fns`).  What remains is integration, one
+policy decision, and the soundness sweep — **no research**.  Ordered, each a landable
+working unit:
+
+**Phase A — wire `use` → native dispatch (the headline, on the real binary)** ✅ **DONE (2026-06-04)** [N3 productization]
+- **A1 ✅ Manifest opt-in** — `[library] compile = "native"` field + parse + tests (`manifest.rs`).  Explicit for now; B drops it.
+- **A2 ✅ Parser hook** — `apply_manifest_side_effects` records the package dir in `Parser::pending_native_compile` when `compile == "native"` (hand-written `native` takes precedence).
+- **A3 ✅ `main.rs` orchestration** — after `scopes::check`: `mark_library_native` marks each opted-in library's public shared-store-dispatchable functions native (file-prefix ownership ∩ the gate).  After `byte_code`: `build_shared_cdylib` builds each into `<pkg>/native-auto/`, loaded alongside the hand-written natives; then `wire_shared_native_fns`.  Auto-native programs bypass the program cache for now (warm load would lack the rebuilt cdylib — D1 persists this).  `find_loft_rlib` fixed to return the `<profile>/deps/` link-search dir in both the real-binary and test contexts.
+- **A4 ✅ Fixture + subprocess test** — `tests/lib/mathnative/` (plain loft `double`/`add`/`factorial`, `compile = "native"`); `tests/n3_use_native.rs` runs the real binary on `use mathnative;` and asserts `42/7/120` **and** that the cdylib was built.  *The ideal-state core, proven end-to-end.*
+
+**Already landed beyond Phase A (partial Phase B, 2026-06-04..05):**
+- **Silent per-function gate-split** ✅ — `mark_native_exports` marks only the
+  `shared_store_dispatchable` subset, so a `parallel{}`/`par_for`/`yield`/`CallRef`
+  function stays interpreted while the rest of the *same* library dispatches native;
+  proven end-to-end (`mixed_library_dispatches_native_and_interprets_rest`).
+- **Synthetic-exclusion fix** ✅ — *Invariant: a dispatch target is a top-level,
+  user-named, `pub` function the script can directly `Call`.*  A `pub fn`'s parse
+  sprays `pub_visible` over its nested lambda (`__lambda_N`), so `mark_library_native`
+  excludes `__`-synthetic names (the whole class, not the lambda instance).
+- **Cdylib caching (the rebuild half)** ✅ — `cached_or_build_shared_cdylib` reuses a
+  fresh cached `native-auto/<so>` (source-mtime unchanged **and** N0 build-fingerprint
+  matches), rebuilds otherwise.
+
+**The converged critical path (re-derived via the engineering-rigor discipline,
+2026-06-05).**  The naive order was "wire → make invisible → make sound."  Probing
+it (Design Protocol 1) inverted two things: **invisibility is only safe once parity
+is *proven*** (so the soundness sweep is the *gate*, not the trailer), and
+**default-native is an architecture change, not a flag** (a build failure must
+degrade to interpret, which the current build-after-`byte_code` ordering can't do).
+Each step is a *design* step — stated as its **invariant** + the **probe that
+falsifies it**:
+
+**Step 1 — Parity instrument** ✅ *(core leg landed 2026-06-04; the gate; subsumes the old Phase C / N5-D)*
+- *Invariant:* a function run native ≡ run interpreted, byte-for-byte.
+- *Falsifier:* a differential harness running each corpus program **all-interp ·
+  all-`--native` · mixed (`use` auto-native lib)** and diffing stdout; the first
+  divergence is a real bug caught before it ships invisibly.  Seed with
+  `mathnative`/`mathmixed`.
+- *Why first:* "invisible" is honest only once equivalence is proven across the
+  **class**, not spot-checked per test.  **N5 sanitizers** (Miri/ASan/
+  `stack_align_guard`, esp. macOS-ARM) + `LOFT_STORE_GUARD` on the mixed path land
+  alongside.
+- **Landed:** `tests/n3_parity.rs` — `assert_three_mode_parity(prog)` runs a program
+  three ways (interp via `LOFT_NO_NATIVE_LIBS=1` · mixed default · `--native`) and
+  asserts byte-identical stdout.  `datalib_store_touching_types_parity` drives the
+  `datalib` fixture, which crosses **every store-touching type** (vector/struct/text/
+  enum) over the boundary in **both** directions (native factory return *and*
+  interpreter-constructed `pub` type passed in).  **Remaining (off the immediate
+  path):** the N5 sanitizer leg + broadening the corpus.
+
+**Step 2 — Decide native/interpret *before* `byte_code`** ✅ *(landed 2026-06-05; B1's prerequisite)*
+- *Invariant:* a library that can't compile native (build failure, no `rustc`)
+  **silently interprets** — byte-identical, no `exit`, no user-facing error.
+- *Falsifier:* a fixture with a deliberate codegen-gap function → the program must
+  still run (interpreted), not crash.  ~~Today it `exit(1)`s, because the build is
+  *after* `byte_code` already emitted `OpStaticCall`.~~ — fixed.
+- *Design choice, probed then taken:* **build the cdylib from the type schema before
+  `byte_code`** (the re-`byte_code` fallback was rejected).  A probe confirmed a
+  cdylib builds + dispatches from the post-parse schema (`p.database`, pre-`byte_code`);
+  `native_lib` now splits `library_export_set` (compute) from `mark_exports` (mark),
+  and `main.rs` builds first, marking **only on success** — a build failure warns to
+  stderr and leaves the library unmarked, so `byte_code` emits ordinary calls and it
+  interprets.  `LOFT_FORCE_NATIVE_BUILD_FAIL=1` is the falsifier hook; locked in by
+  `tests/n3_parity.rs::build_failure_silently_interprets` (forced failure → exit 0,
+  byte-identical to the interpreted reference, no cdylib built).
+
+**Step 3 — Default-native (B1)** ✅ *(landed 2026-06-05; the "invisible" the goal names)*
+- *Invariant:* a `use`d library defaults to native; **no opt-in, no flag, no
+  `#native`** (the Phase-A `compile = "native"` manifest field is now a redundant
+  no-op).
+- *Falsifier:* a library with a non-compilable function still works (gate + Step 2);
+  a fresh `use` of any normal library dispatches native with no annotation.
+- **Landed:** `apply_manifest_side_effects` records **every** `use`d non-`#native`
+  library into `pending_native_compile`; the driver builds + marks + dispatches it
+  (build-before-mark).  `LOFT_NO_NATIVE_LIBS=1` is the interpret escape.  Proven on a
+  real consumer first (instrument): `lib/markdown` — 900 lines, structs/vectors/
+  multi-arg text fns — auto-builds a cdylib + dispatches byte-identically (~1.4s cold,
+  ~0.27s warm).  `tests/n3_parity.rs::default_native_dispatches_unopted_library`
+  locks it in on the un-opted-in `plainlib` fixture (default → native + cdylib; escape
+  → interpret + no cdylib).
+- **Landing choice — gate dev/CI to interpret** *(user decision 2026-06-05)*: flip
+  now, accept that the bare edit loop pays cold builds until Step 4.  The flip is
+  correctness-clean across the whole suite (Step 2's silent fallback); the only
+  general subprocess test that auto-builds is the crystal GL gold test (gated to
+  `LOFT_NO_NATIVE_LIBS=1` — it validates pixels, not dispatch).  Everything else runs
+  in-process (no build loop), tests a library *as a program* (no `use` edge), or is a
+  dedicated native/parity test.
+
+**Step 4 — Dev-interpret-on-edit (B2 policy)** ✅ *(landed 2026-06-05 — the "no `rustc` per save")*
+- *Invariant:* a library being edited interprets (instant loop); a stable/cached
+  library links its artifact.  Native *when stable*, interpreted *when fresh* — this
+  reconciles "library = always native" with "no rebuild while you iterate."
+- *Falsifier:* an edit-run-edit-run loop fires no `rustc`; stop editing → the next
+  run is native.
+- **Landed (option 2, refined — hash-stability with an eager first build).**
+  `cached_or_build_shared_cdylib` → `Result<Option<PathBuf>, String>` (`Ok(Some)`
+  native · `Ok(None)` interpret-this-run · `Err` build-failed) decides per run:
+  (1) fresh artifact → native; (2) **no artifact yet / `loft` changed → build eagerly**
+  → native (first use + deployed deps run native from the start; also keeps the
+  parity tests' single-run-dispatches-native true); (3) stale artifact (edited) →
+  compare `source_content_hash` (sha256 over sorted `.loft`/`loft.toml`) to the
+  `.loft-run-hash` sidecar — *changed since last run* → interpret (`Ok(None)`, no
+  `rustc`), *unchanged* → rebuild → native.  `main.rs` also sets `any_dev_interpret`,
+  which gates `save_program` so a warm program-cache load can't pin the interpreted
+  image and skip the rebuild-when-stable check.  Guard:
+  `tests/n3_parity.rs::editing_a_library_interprets_then_rebuilds_when_stable`
+  (edit → cdylib mtime UNCHANGED + new code interpreted; settle → rebuild).
+- **Deferred to Polish (option 3 — background build).** The one wart of option 2: the
+  first run *after* you stop editing pays a foreground `rustc` (the "settling" run
+  builds, then native).  Option 3 — interpret-on-stale + a detached build (atomic
+  temp-then-rename + per-package lock), so even the settling run never blocks — is the
+  truly-instant-loop upgrade; `~/.loft/build-cache/` (Polish, N1) is its natural home.
+
+**Polish — off the critical path** ⬜ *(fast · robust · complete)*
+- **Routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71)** (2026-06-05) — background build (Step 4 option 3),
+  **D2a binary schema interface** (type ids agree without redefinition, bodies never
+  re-parsed; replaces the source-form lean interface ✅), and the coverage tails
+  (closures `__closure`; `generate_interface` aggregate names `sorted<Item[k]>`).
+- **Stays here (deferred-with-trigger):** idle-TTL artifact eviction on a shared
+  `~/.loft/build-cache/` (N1, model ✅, fingerprint-gate ✅ N0 — trigger: the
+  registry build-cache surface); the daily-builds **validation layer** (deferred,
+  see § Excluded).
+
+### Discovered follow-ups (surfaced landing Step 3, 2026-06-05)
+
+Neither blocks Step 4; both are real and worth a focused pass.  Recorded here so the
+scope isn't re-derived later.
+
+**F1 — nextest native-test reliability (test-infra, CI-masked).**  The flip is green
+under `cargo test` (the `make test` gate: n2_cdylib 16, native 6, n3_parity 3,
+n3_use_native 2, issues 684) and in CI (the `ci` nextest profile has `retries = 1`).
+It is **flaky under raw `cargo nextest` full-suite runs** (`find_problems.sh`, the
+`default` profile, no retries).  The failures **move between runs** and every failing
+test **passes in isolation** — so it is a harness interaction, not a flip-logic bug
+(`n2_cdylib`/`native` predate this arc; their build paths are unchanged).
+
+**✅ Mode A RESOLVED (2026-06-05) — root cause found by reproduction, and it was
+NOT a deps-read race.**  The matrix-first instrument falsified the long-assumed
+"concurrent links compete for `deps/*.rlib` reads" story: **160 concurrent
+`loft --native` builds reading the shared `release/deps/` dependency closure
+produced zero link errors** — because `loft --native` writes **PID-suffixed**
+scratch paths.  The real cause is in `tests/native.rs`: the native test harness
+wrote **stem-keyed** scratch output paths (`loft_native_<stem>_bin` +
+`.rs`/`.key`/`_args.txt`), and three tests compile the *same* stem —
+`native_tuple_script`, `native_tuple_return_script`, and `native_scripts` all
+build `50-tuples.loft`.  The in-process `native_suite_lock()` serialises them
+within ONE process, but **nextest runs each test in its own process**, so under
+nextest they ran concurrently and their rustc/lld processes wrote the **same**
+output binary, truncating each other's file in place mid-link → **SIGBUS in
+`rust-lld` / `linking with cc failed`** (the same shared-fixed-`/tmp`-path shape
+the `html_wasm` race already documents in `nextest.toml`).  Reproduced
+deterministically (wipe the `50-tuples` cache to force concurrent recompiles →
+1/6 fails); the `linking` symptom is Mode A's "momentarily unusable artifact"
+family — **not** a deps race, and **not** the loft-binary-fires-`cargo-build`
+mechanism the reverted commit guessed.  *Fix (`tests/native.rs`):* compile each
+job to a **per-process temp output** and **publish atomically via `rename(2)`** —
+`rename` swaps the directory entry, so a process executing/linking the old binary
+keeps its inode (no in-place truncation → no SIGBUS), and the BUILD2 cache path is
+always a complete artifact.  **No nextest serial group needed** (full parallelism
+kept); the previously-reverted `native-build-serial` idea is **moot** — it would
+only have masked the path collision.  *Verified:* forced-collision **0/12** (was
+1/6); broad cold `native + n2_cdylib + n3_parity + n3_use_native` set **0/4**, all
+30 pass (was ~1/3); cache intact (251 warm hits); `cargo test --test native` 6/6;
+fmt + clippy clean.
+- *Mode B — build-layout mismatch (`ring/rustls/webpki … not in rlib format`).*
+  **Not reproduced in this environment** and untouched by the Mode-A fix: here
+  `crate-type=["cdylib","rlib"]` yields a single consistent unhashed
+  `release/deps/libloft.rlib` whose transitive dep `.rlib`s all resolve, so the
+  `.rmeta`-only-SVH layout that triggers it never arose.  Remains **open** and
+  pre-existing — the original *fix direction* stands (resolve the cdylib build
+  against the rlib set nextest actually produces, or build a consistent set
+  first).  Lower urgency than believed: Mode A was the symptom `find_problems.sh`
+  actually hit.
+
+**F2 — interdependent libraries are fully native.** ✅ *(fixed 2026-06-05)*  When a
+library was *both* a transitive dep and directly `use`d (consumer uses `top`, `top`
+uses `base`, consumer also uses `base`), only `top`'s cdylib was built — `base`'s
+direct calls interpreted.  *Root cause:* the **direct-resolution / sibling-package**
+path (`register_native_manifest`) never got Step 3's default-native record — that
+landed only in `apply_manifest_side_effects` (the `lib_path_manifest` path); a
+transitively-loaded library (or one directly `use`d *after* being loaded
+transitively, so the direct `use` dedups) hit the diverged path and was never
+recorded.  *Fix:* `register_native_manifest` now mirrors the record (a normal loft
+library `m.native.is_none()` → `pending_native_compile`).  Both libraries build their
+own cdylib and dispatch native; output stays byte-identical.  Verified the main
+program's own package is NOT over-recorded (`library_suite` builds no `native-auto/`).
+Guard: `tests/n3_parity.rs::interdependent_libraries_are_fully_native` (the diamond).
+
+**F3 — ✅ the C71 speedup is REAL (63.6×): a measured value + a false alarm that taught the method.** *(2026-06-05 — gate ②, the first time anyone measured the C71 *execution* path)*
+
+**The value, measured right:** an interpreted script calling an auto-native library is
+**63.6× faster** than interpreting the library — `benchlib::compute` (200M-iter loop),
+`--interpret`, **runtime** arg, warm cdylib, min-of-5: interp-lib **25049 ms** vs
+auto-native-lib **394 ms**, with the bridge dispatch **confirmed live by a sentinel**
+(`SHARED_DISPATCH_HITS`).  Two real fixes fell out:
+- **opt-level (landed):** `build_shared_cdylib` was `-C opt-level=0`; the bridge calls
+  `ops::op_*` per arithmetic op, un-inlined when unoptimized.  opt-0 = 4706 ms (5.3×),
+  opt-2 = 394 ms (63.6×) — an **11.9× difference**.  Now opt-2 (builds run only when a
+  library is stable, Step 4, so the slower build is the right trade).
+- **liveness guard (landed):** output-parity asserts the RESULT (correct whether the
+  call dispatches or interprets its body), so it can't catch a silent revert to
+  interpret-the-body.  `tests/n2_cdylib.rs::f3_body_bearing_marked_fn_dispatch_vs_interpret`
+  asserts the bridge sentinel *moved*, with a no-body `#native` call as the positive
+  control.  This is the speed/liveness assertion the arc was missing.
+
+**The false alarm — and why it's worth recording (the method, not the bug).**  An
+earlier draft of this entry screamed "0× speedup / dispatch is dead / `static_call` is
+dead code."  All of it was **measurement artifact** from three compounding broken
+instruments — the canonical engineering-rigor failure (build the instrument *and verify
+it* before trusting it):
+1. **Wrong mode.** `loft <file>` defaults to whole-program `--native` (main.rs:101,
+   "native is default").  So both "interp" and "native" runs compiled the *same* whole
+   program → trivially 1.0×, and the interpreter (where the cdylib dispatch lives) never
+   ran.  The C71 path is `--interpret`; the benchmark never used it.
+2. **Const-fold.** The first benchmark passed a constant arg → interpreted at compile
+   time (a real user-facing surprise too: a constant-arg library call is const-folded).
+3. **Broken sensors.** CLI `eprintln`/counter probes read 0 because the interpreter
+   wasn't running at all — and the silence was read as "dead dispatch" instead of "wrong
+   sensor."  The fix was a **positive control**: an in-process harness (which *uses* the
+   interpreter) fired the bridge, and a Drop-guard sentinel showed `exec[argv=0]` for the
+   default CLI mode → "native is default" → the whole benchmark was the wrong mode.
+
+*Lesson folded back into the rigor skill:* the usage sentinel generalized beyond
+removal, plus the **silence-is-evidence-only-after-a-positive-control** clause.
+
+**F4 — the default-on program cache (track 1) broke `#cwd` (relative-path) programs.** ✅ *(fixed 2026-06-05; commit `65ae5f0`)*  Surfaced via `make index`: scan.loft (a `#cwd` cwd-relative repo-root scanner) produced a **partial scan on a warm cache hit** — 543 tags cold, **17 warm**, degrading toward 0 as the bad cached program kept being re-served.  *Root cause (matrix-first; isolated cleanly by cache-on = 17 vs `LOFT_NO_CACHE` = 543 vs warm + `LOFT_PATHS=cwd` = 543):* the `#cwd` directive sets `program_relative = false` at **parse time** (`parser/mod.rs`), but the whole-program cache skips parsing on a warm load and the manifest didn't persist the flag, so it reverted to the program-relative default → relative paths resolved against the script's own dir instead of cwd.  *Fix:* persist the mode in the cache manifest as a `prel <0|1>` header line (`save_program`) and restore `p.database.program_relative` on warm load (`warm_load_program` — `manifest_matches` → `manifest_program_relative`); `source_dir` needs no restore (`main.rs` sets it every run from the script path).  Verified on both backends (scan.loft `--native-release` warm 17 → 543; plain `make index` restored).  Guard: `tests/arc_e_program_cache.rs::cwd_directive_survives_warm_load` (`--interpret`).  *Class note:* `program_relative` is the only parse-time path-config flag the warm load lost; any future file-level directive that mutates runtime state would need the same manifest round-trip.
+
+---
+
+**Critical path to the *ideal* state: Step 1 → 2 → 3 → 4.**  Step 1 (parity) is the
+unlock — simultaneously the soundness floor *and* the instrument that turns the
+default-native flip (Step 3) from hopeful into proven.  Polish is not required for
+"invisible + sound."  *This sequence has been probed twice without a new correction —
+it has converged.*
+
+**Timeline (the interpret-fallback re-scope, 2026-06-04).**  Letting the
+un-native-able cases interpret (N4 above) drops the generics/closures **research off
+the critical path**, so the shippable mixed-mode is **N1-remainder + N2 (with the
+compilability gate) + N3 + N5 ≈ 2–2.5 months**, with the **headline at ~5–6 weeks**
+(an interpreted script calling a compiled user library over the shared store, for
+the native-compilable subgraph).  Native coverage of the hard cases is a *later,
+measured* optimization.  Effort is **front-loaded for value**: each of N1/N2/N3 and
+each new type pattern is independently shippable to `main`.  Skip an N4 "can we make
+generics native?" spike — the fallback makes that a non-blocker.  The two
+**non-negotiable, not-front-loaded** costs are N5 (mixed-boundary soundness, esp.
+macOS-ARM alignment) and the conservative-silent compilability detector in N2.
+*Caveat: a fallback function gets no native speedup — the win is bounded by how much
+of a library's hot path sits in the native subgraph, which is measurable per
+library, not guessed.*
+
+**Update (gate landed, 2026-06-04) — the de-risk is now *measured*, not estimated.**
+The compilability gate (`native_gate::native_compilable`, N4 row) shows the
+`--native` backend already compiles everything except the concurrency constructs:
+**461/461 stdlib functions are native-compilable (100%)**.  So the "fallback" is
+needed for almost nothing — the conservative-silent detector (flagged as a core
+risk above) turned out to be a small exhaustive `Value`-walk, and the fallback path
+fires only for `parallel{}`/`par_for`/`yield` users.  This collapses N4 to "wire the
+dispatch" and removes the last real uncertainty from the headline estimate.
+
+**Update (scalar dispatch landed, 2026-06-04) — the headline is half-proven.**  The
+N2 scalar slice is **end-to-end green**: an interpreted script calling an
+auto-generated, auto-compiled cdylib (`tests/n2_cdylib.rs`, `double(21) → 42`).  The
+decisive finding is that the auto-generated export wrapper is **ABI-identical to a
+hand-written scalar `#native` symbol**, so the entire dispatch path (`OpStaticCall`
+→ dlsym → auto-marshal) is **reused with zero new runtime code** — the cdylib
+*generation* (`native_lib::generate_cdylib_lib_rs`) was the only new piece.  The
+remaining headline work is the **store-touching slice** (the `&UnsafeCell<Stores>`
+↔ `LoftStore` FFI-handle bridge) + the `use`-driven decl auto-derivation (N3).
+
+**F5 — the Goal-E store guard is now falsifiable (the `[store-guard]` eprintln was a red herring; the live guard is the Phase-4 assertion).** ✅ *(resolved 2026-06-05)*  Implementing N5's E leg surfaced that `[store-guard]` (the `store_lifetime_guard` eprintln) **cannot fire from loft source** — tried branch-reassign, loop-rebind, nested-escape, the plan-57 probe corpus, plain and under `LOFT_CONF_RECOVER`, all silent — because post-plan-57 the cluster-I fix relocates its single-store entries and excludes multi-store cases, so its reported set is empty by construction.  *The resolution:* that eprintln is **superseded** (scopes.rs:312) by the **Plan-57 Phase-4 guard** — `scopes::check`'s `reclaim_unfreed_eligible == 0` `assert_eq!`, armed by `cfg(debug_assertions) || LOFT_STORE_GUARD`.  *That* is the live Goal-E enforcement (a panic, not a print), and it **is** falsifiable: a `LOFT_STORE_GUARD_INJECT` test-only fault skips the early-free while keeping the guard armed, so an 11× reassign program panics `plan-57 Phase 4: n_main left 9 reclaim-eligible store(s) live-but-dead past a later alloc`, and is silent without the fault (reclaim frees them).  *Positive + negative control:* `tests/watermark.rs::phase4_goal_e_guard_is_falsifiable` (subprocess so the env fault can't leak).  *Consequence for N5:* the E-leg arming `LOFT_STORE_GUARD` arms this live guard over the script AND the library's codegen-time scope analysis; a fire is caught by the harness's `r.success` check.  So Goal E's "silent corpus-wide" check is **non-vacuous** — the detector demonstrably fires on a reclaim regression.
+
+### N2 dispatch — implementation design (2026-06-04, post-investigation)
+
+**The dispatch *decision* already exists.**  The interpreter emits `OpStaticCall`
+for any function whose symbol is in `State.library_names`, resolved at runtime via
+`extensions::wire_native_fns` → dlsym.  So N2 does not build a new dispatch path —
+it registers the auto-compiled subgraph's symbols and reuses the stdlib's.
+
+**Strategy: auto-generate a native *package* crate from the native subgraph.**  A
+native package (`lib/<pkg>/native/`) is already a cdylib of `#native` exports that
+`auto_build_native` (N0) builds and the interpreter dispatches to.  N2 = generate
+that crate's `lib.rs` from the library's native-compilable functions (`--native`
+`output_function` for the bodies + the `#native` export wrappers), then reuse N0's
+build + the existing load/dispatch.
+
+**THE CRUX — REFRAMED (2026-06-04, post scalar-slice).**  The original framing —
+"bridge `&UnsafeCell<Stores>` ↔ the `LoftStore` FFI handle" — was **the wrong bridge
+for an auto-generated cdylib.**  `output_function` emits `fn n_<name>(_cell:
+&UnsafeCell<Stores>, args…) -> ret`, touching the heap through a Rust
+`&UnsafeCell<Stores>`.  The investigation of the dispatch internals
+(`extensions::make_loft_store`) showed the `LoftStore` handle exposes only **one
+store's raw buffer + alloc callbacks** — it exists for **hand-written** cdylibs that
+**don't link `loft::database::Stores`**.  But an **auto-generated** cdylib **does
+link libloft** (`--extern loft=libloft.rlib`; its body already calls
+`loft::database::Stores` / `loft::keys::DbRef`), so `Stores`/`DbRef`/`Store` are the
+**same Rust types with the same layout on both sides**.  ⇒ The store-touching wrapper
+**shares the real `Stores` by pointer** — `loft_n_<name>(stores: *mut Stores, args…)
+-> ret` casts `*mut Stores` → `&UnsafeCell<Stores>` (`UnsafeCell` is
+`repr(transparent)`) and forwards to the inner fn, **no per-call cell, no `init`, no
+marshalling** (the caller's `Stores` is live + initialised; `DbRef` args are already
+valid in the shared store).  **This is C71's zero-marshalling shared-store ABI
+literally** — and it's *simpler* than the FFI handle, not a multi-day bridge.
+
+**Schema agreement (the one real soundness dependency) is already proven.**  A
+store-touching `--native` body reads struct fields at offsets computed by
+`db.finish()`; the shared `Stores` must lay those fields out identically to what the
+interpreter built.  The **cross-mode byte-identical equivalence tests** (interp vs
+`--native` across the whole corpus) already require exactly this — identical type IDs
++ field offsets — so the shared-pointer read is sound for every type the corpus
+covers.  The scalar slice didn't exercise this; the store-touching slice rests on it.
+
+**Remaining ABI plumbing (the now-bounded store-touching work):** the scalar slice
+reused the existing `#native` dispatch (a *per-call* `Stores` cell, fine because no
+ref crosses).  Store-touching needs a **shared-pointer dispatch arm** that passes
+`stores as *mut Stores` + the raw stack args (scalars by value, `DbRef` by its 12
+bytes), distinct from the `LoftValue`/`LoftStore` marshalling.  Start with
+`vector<integer>` (schema-*independent* generic inline layout) to isolate the ABI
+from the type-schema concern, then struct/`Text`/`Reference` signatures.
+
+**Sequencing (scalar-first — the store bridge is deferred, not skipped):**
+1. **Scalar-only functions** — ✅ **DONE (proven end-to-end, 2026-06-04).**  The
+   export wrapper is trivial: `loft_<name>(scalars) -> ret` stands up a per-call
+   `UnsafeCell<Stores>` + `init()` and forwards to the `--native` inner fn.  Safe
+   because a scalar-return function cannot leak a store ref out, so any internal
+   store use is contained and dropped with the cell — **no store-free body walk was
+   needed** (the original plan's gate refinement turned out unnecessary; the
+   per-call cell handles a store-touching-but-scalar-signature body too).
+   `native_lib::generate_cdylib_lib_rs` is the crate generator (`scalar_dispatchable`
+   from `native_gate` selects the export set; `output_native_reachable` emits only
+   the export set + its transitive deps, so no unreachable operator stubs surface).
+   The end-to-end proof is `tests/n2_cdylib.rs` — `double(21) → 42` over a real
+   auto-built cdylib, dispatched from an interpreted script.  **The decisive
+   realisation:** the wrapper ABI **equals** a hand-written scalar `#native` symbol,
+   so registration + dispatch is the *existing* path (`def.native` → `OpStaticCall`
+   → `load_all`/`wire_native_fns` → dlsym auto-marshal) — zero new runtime code.
+2. **Store-touching functions** — ✅ **non-scalar args + vector returns DONE
+   (2026-06-04).**  Reframed (see THE CRUX above): an auto-generated cdylib links
+   libloft, so the bridge **shares the caller's real `*mut Stores` by pointer**
+   (zero-marshalling) — *not* the `LoftStore` FFI handle.  Built:
+   - `native_lib::LibArg` — a `#[repr(C)]` uniform arg/return slot (`{ scalar:
+     i64, dbref: DbRef }`), linked from libloft by both sides so they agree on
+     layout with no marshalling.
+   - `generate_shared_cdylib_lib_rs` + `shared_bridge_wrapper` — emit
+     `loft_shared_<name>(stores: *mut Stores, args: *const LibArg, n, ret)` that
+     casts `*mut Stores` → `&UnsafeCell<Stores>` (no per-call cell — caller's store
+     is live), reads visible params from `LibArg` slots, **allocates each hidden
+     `ref_return` destination** (`Attribute::hidden`) itself via `null_named` +
+     `OpDatabase(<type_id>)`, forwards, writes the return.
+   - `native_gate::shared_store_dispatchable` — the gate (params: any bridge type;
+     returns: scalar / void / **vector**).
+   - `extensions::shared_store_dispatch` + `wire_shared_native_fns` — pack stack
+     args into `LibArg` (the **raw** `DbRef`, no deref — `--native` consumes the
+     indirect-header form), pass `*mut Stores` directly, call the bridge, write the
+     return.  `wire_native_fns` skips `loft_shared_*` (disjoint ABI).
+   - **Ground-truth finding:** `--native` passes a vector arg as the indirect-header
+     `DbRef` (interpreter agrees → no translation), and returns a vector via a
+     hidden destination param the caller pre-allocates.
+   - End-to-end proofs (`tests/n2_cdylib.rs`): `vec_sum([10,20,30]) → 60` (non-scalar
+     arg), `range_vec(4) → [0,1,2,3]` summed to `6` (vector **return** — native
+     allocates in the shared store, the `DbRef` is valid back in the interpreter).
+   - **Drive-by product fix:** the `loft_register_v1` guard keyed on a global
+     "registry non-empty" proxy → false-positived a *second* zero-registration
+     cdylib; now keyed per-library (`LOADED_LIBS` tracks `uses_v1`), preserving
+     issue #119.
+   - **Schema-agreement PROVEN for structs (the de-risk made real):** a struct
+     `reference` **arg** crosses correctly — `point_sum(Point{x:3,y:4}) → 7`
+     (`dispatches_struct_arg_into_shared_cdylib`).  The library cdylib and the
+     interpreter, built from **separate `Data`**, assign an *identically-defined*
+     `Point` the **same type id + field offsets** (identical stdlib prefix +
+     identical struct def → same definition index → same `db.finish()` layout), so
+     the shared `DbRef` reads `p.x`/`p.y` correctly.  This validates the
+     zero-marshalling shared-store ABI for schema-dependent types; the *lean
+     interface* would formalise "the script adopts the library's exact schema"
+     rather than relying on identical redefinition.
+   - **Struct returns also DONE** — `make_point(3,4) → Point` read as `34`
+     (`dispatches_struct_return_from_shared_cdylib`).  Unlike a vector return, a
+     struct `reference` return uses **no** hidden destination (`--native` emits
+     `n_make_point(cell, a, b) -> DbRef` — the body allocates the record fresh and
+     returns its `DbRef`), so the gate just admits `reference` returns; the native
+     allocation is valid back in the interpreter via the shared store.
+   - **Text DONE (both directions)** — `str_len("hello") → 5` (arg: `--native`
+     takes `&str` = ptr+len, *not* a `DbRef`; the bridge borrows the store-backed
+     bytes) and `shout("hi") → "hi!"` (return: `--native` uses `text_return`'s
+     `&mut String` work buffer — a hidden param the bridge owns as a local
+     `String`, then copies the result into the shared store's `scratch` so it
+     survives, mirroring the legacy `bridge_push_str`).  `LibArg` gained
+     `text_ptr`/`text_len`.
+   - **Enums DONE (both directions)** — a plain (tag-only) enum is a `u8` tag in
+     the scalar slot (`dir_code(South) → 2`, `dir_from(1) → East`); a data enum is
+     a `DbRef` like a struct, allocated fresh on return (`area(Circle{r:2}) → 12`,
+     `make_rect(3,4)` → 12).
+   - **N2 store-touching now covers ALL the common types — scalars, vectors,
+     structs, text, and enums (plain + data) — both directions** (14 green tests in
+     `tests/n2_cdylib.rs`).
+   - **Lean interface (source form) DONE** — `native_lib::generate_interface(data,
+     export_set)` emits the library's public type defs + `#native "loft_shared_…"`
+     forward-decls as **loft source** (types in the library's definition order via
+     `Type::name` + `children_of`, skipping the auto-added `enum` discriminant
+     field).  `lean_interface_drives_shared_dispatch`: a script whose *only*
+     declaration is the generated interface dispatches `make_rect → area == 12` —
+     **no hand-written type redefinition, no hand-written `#native` decl**.  The
+     script parses only the interface (layouts + signatures + symbols), never the
+     library bodies, and adopts the library's exact types in order, so the schema
+     agrees **by construction**.  (A binary schema load — the D2a cache — is the
+     robust successor covering non-public type ordering; this source form covers
+     the common case where the public types are the only ones.)
+   - **Keyed aggregates route too** — `sum_values(sorted<Item[k]>) → 30`
+     (`dispatches_sorted_arg_into_shared_cdylib`): a `sorted` collection crosses as
+     a `DbRef` (same ABI as a vector/struct), and the native body walks it through
+     the shared store.  `hash`/`index`/`spacial` use the identical code path.
+   - **Remaining:** closures (`__closure` param); `generate_interface` rendering of
+     aggregate type names (`Type::name` debug-formats the key — `sorted<Item,[("k",
+     true)]>` not `sorted<Item[k]>` — so a `sorted`-typed public fn needs a
+     hand-written decl until the renderer reconstructs `[key]`); auto-deriving the
+     whole flow (compile cdylib + interface) from `use <lib>` (N3 policy /
+     productization).
+3. **N5 soundness** of the boundary, woven through both.
+
+The acceptance gate for each slice is **end-to-end** (an interpreted script calls an
+auto-compiled lib function and gets the right answer), not a per-step check — so it
+lands as one working unit, never a half-built cdylib in the tree.
+
+### N3 productization design (the `use`-flow wiring, 2026-06-04)
+
+The N3 **core** is proven in-process (`auto_native_marks_and_dispatches_normal_library_fn`):
+mark → build → load → dispatch, with no `#native` decl.  Productization wires it into
+`use <lib>` on the real binary.  The pieces and where they hook (per the
+`use`/native-package flow in `parser/mod.rs` + `main.rs`):
+
+1. **Opt-in (manifest).**  A library's `loft.toml` declares it wants native
+   compilation — e.g. `[library] compile = "native"` (a new field beside the
+   existing `native = "<stem>"` hand-written-cdylib field).  N4's gate already says
+   *which* functions compile; this says *whether* the library does.  The eventual
+   policy (N3 proper) makes it automatic: a stable/installed dep → native, a library
+   under active edit (mtime newer than its cached artifact) → interpret.
+2. **Mark at parse.**  When `use foo` resolves such a library (`lib_path` →
+   `lexer.switch` parses it into the `Data`), record `(lib_source, pkg_dir)`.  After
+   parsing, before `byte_code`: `candidates = {d | data.def(d).source() == lib_source}`,
+   then `mark_native_exports(data, candidates)`.
+3. **Build after `byte_code`.**  ✅ **Production helper landed:**
+   `native_lib::build_shared_cdylib(data, stores, export_set, out_dir, stem)` does
+   it all — `find_loft_rlib()` (locates this build's `libloft.rlib` + `deps/`,
+   **handling both contexts**: a real `cargo run` unhashed `target/<prof>/libloft.rlib`
+   *and* a test's hashed `libloft-<hash>.rlib` in `deps/` — the cross-context risk,
+   resolved) → `generate_shared_cdylib_lib_rs` → `output_native_library` (no main
+   bootstrap) → write `lib.rs` → rustc (`--crate-type cdylib`, edition 2024,
+   `--extern loft=` + feature-dep externs).  Proven in the test context by
+   `auto_native_marks_and_dispatches_normal_library_fn`.  **Remaining for `main.rs`:**
+   call it after `byte_code`, cache the `.so` (N0's `.loft-build-fp` sidecar gates
+   staleness; N1's idle-TTL evicts), push to `pending_native_libs`.
+4. **Load + wire.**  `main.rs` already calls `load_all(pending_native_libs)` +
+   `wire_native_fns`; add `wire_shared_native_fns(&mut state, &p.data)` alongside it.
+
+This is mostly *connecting proven pieces*; the real risk is the cross-context
+rlib-location (step 3) which only the real `cargo run` path exercises — so it lands
+with a real on-disk fixture library + an `exit_codes`-style subprocess test, not just
+an in-process one.
+
+**Excluded — the library validation layer (deferred, customer-facing).**  The
+fingerprint's eventual owner: an artifact's validity = content · target · features ·
+loft-build-fingerprint · signature, plus registry distribution of per-target
+artifacts.  Becomes load-bearing when **daily builds** ship (C71's
+developer-vs-customer framing).  Tracked as a future arc, **not here**.
 
 ---
 
@@ -143,7 +758,22 @@ The store↔native representation is proven lossless; arc C's remaining work is 
 
 Slice 1 landed: added read-accessor methods on `Definition` for the **store-backed** fields `state/` reads — `name()` / `native()` / `source()` / `position()` / `attributes()` / `code()` / `returned()` / `op_code()` / `known_type()` / `variables()` — returning the shapes a future store swap can produce (`&str` / `&[Attribute]` / `&Type` / `&Value` / `&Position` / `&Function` / Copy scalars).  Converted every `data.def(d).FIELD` and local `def.FIELD` read in `state/{mod,debug,codegen}.rs` (~120 sites) to the methods.  The codegen-**derived** fields `code_position` / `code_length` are deliberately **not** seamed — they are recomputed on load, never stored, so they stay native field reads.  Pure refactor, **no behaviour change**; the full integration suite passes.  fmt-clean, clippy-0.
 
-**Next slices (open):** `state/codegen.rs`'s `Value`/`Type` walk (handle-based dispatch — the 451 matches); then `generation/`, then `parser/`; then the per-subsystem representation swap (dual-backed `Data` + equivalence assertion).
+**Slice 2 — `generation/` `Definition` seam (M1b, done 2026-06-04):** the same
+pure-refactor pattern applied to the native backend — ~345 `Definition`
+field-reads across all 14 `generation/*.rs` + `ops/*.rs` files routed through the
+accessors (`name`/`variables`/`known_type`/`returned`/`attributes`/`position`/
+`native`/`code` + two new ones `def_type()`/`rust()`).  `const_ref` (derived) and
+`tuple_group()` (already a method) stay direct.  No behaviour change; full suite
+2024/2024 green.
+
+**Slice 3 — `parser/`+`compile.rs` `Definition` seam (M1c, done 2026-06-04):** the
+read-site seam completed across the last subsystem — ~430 reads routed through the
+accessors (reads only; the parser builds Definitions by construction, so writes stay
+direct).  Added `parent`/`closure_record`/`mutated_captures`/`scalars_to_box`/`synthetic`
+accessors.  With this, **the whole-codebase `Definition` read seam is complete**
+(`state/` + `generation/` + `parser/`).
+
+**Next slices (open):** `state/codegen.rs`'s `Value`/`Type` walk (handle-based dispatch — the 451 matches); then the per-subsystem representation swap (dual-backed `Data` + equivalence assertion).
 
 ### Arc D probe — the mmap load loop works end-to-end (~12× faster than parse)
 
@@ -154,7 +784,7 @@ Slice 1 landed: added read-accessor methods on `Definition` for the **store-back
 Still open in arc D: wiring this into the real startup path — the bundle cache key + drift detection (Q4), the locked-mmap mutability split (Q1), and the `caller_index` rebuild (Q3).
 
 Original note: This is the **mmap end-goal** that
-[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
 named but deferred: rework the compiler's in-memory IR (`Data` and the
 `Value` / `Type` / `Definition` / `Function` graph) so it lives in a
 `Stores` instance addressed by `DbRef` — **the same representation
@@ -285,7 +915,7 @@ libs on demand.  Two reasons, both permanent:
 
 Caching the **whole bundle** (core + the script's sorted lib-set) sidesteps both
 — every index inside one image is internally consistent, no relocation anywhere.
-Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
+Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
 
 **Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
 **whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
@@ -534,7 +1164,7 @@ seam).  The two compose; neither alone is the deliverable.
 | **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (cursor `a07ed8d`, superseded by the typed handle layer `src/data_store.rs` in commit `9d860c5`); see § Arc A0 — handle layer |
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
 | **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one.  Reuses `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (JSON sink → `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  **Write path COMPLETE:** `src/ir_store.rs` materializes the **entire** native `Data` — all 34 Node + 24 TypeT variants, every struct (`Attribute`/`Variable`/`Function`/`Definition`/`Block`/`LinkedFieldGroup`/`Data`), via the generic `Record`/`RecVector` layer — through `materialize_data(&Data) -> DbRef`, exercised on the real stdlib (`materialize_whole_stdlib_smoke`).  All offsets/strides guard-pinned; `Store::zero_range` clears reused element memory.  **Remaining (→ arc C):** a store→native read path for bit-for-bit `compare_data` validation (smoke test currently validates structure: names + per-def attribute/variable counts). | Write path done — whole `Data` materializes on real stdlib; `compare_data` equivalence needs the arc C read path |
-| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` handle layer) + the full **store→native reader** (`src/ir_read.rs` — `read_value`/`read_type`/`read_data` over all 34 Node + 24 TypeT variants + every struct) landed, and the schema grew to hold `Function.names`/`inline_refs` so the whole real stdlib round-trips **fully bit-for-bit** (`compare_data` green).  Bulk read-site migration started: **slice 1** = `state/`'s `Definition` field-accessor seam (~120 sites, store-backed fields only; `Value`/`Type` matches deferred).  Remainder: `state/codegen.rs` `Value`/`Type` walk, then `generation/` / `parser/`, then per-subsystem representation swap. | In-progress — lossless reader done; bulk migration started (`state/` Definition seam, slice 1) |
+| **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` handle layer) + the full **store→native reader** (`src/ir_read.rs` — `read_value`/`read_type`/`read_data` over all 34 Node + 24 TypeT variants + every struct) landed, and the schema grew to hold `Function.names`/`inline_refs` so the whole real stdlib round-trips **fully bit-for-bit** (`compare_data` green).  Bulk read-site migration: the **whole-codebase `Definition` read seam is complete** — `state/` (~120 sites, M1a) + `generation/` (~345, M1b) + `parser/`+`compile.rs` (~430, M1c).  Remainder: `state/codegen.rs` `Value`/`Type` walk (handle dispatch — the 451 matches), then per-subsystem representation swap. | In-progress — lossless reader done; `Definition` read seam complete (M1a+M1b+M1c) |
 | **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | **Cold-start cache (G1) shipped, opt-in.**  Probe (~12× vs `parse_dir`) + **D1** (`save`/`open`) + **D2a** (schema cached via the `Bundle` root — @PLAN28 schema-rebuild wall resolved) + **D2b** (`main.rs` env-gated `LOFT_STDLIB_CACHE` wiring; cold saves the keyed `.store` bundle, warm mmaps it & skips parsing `default/`; off/cold/warm output byte-identical via `tests/d2b_stdlib_cache.rs`) all landed.  Remaining (arc E): per-bundle key for `use`d libs + drift Q4, mutability Q1 (locked mmap), `caller_index` Q3. |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | **Whole-program cache landed (opt-in).**  Robustness ✅ (atomic temp+rename write; `Store::is_store_file` pre-check + graceful reparse on a corrupt/foreign file).  **Whole-program cache ✅** — `LOFT_PROGRAM_CACHE` caches the *entire* parsed program (stdlib + lazily-loaded libs + user file) keyed on the script path, validated by a **drift manifest** of every parsed source's content hash; a warm run mmaps it and **skips ALL parsing** (589 defs in ~2.8 ms).  The lazy-auto-`use` boundary is sidestepped by caching the whole program rather than core+libs.  `tests/arc_e_program_cache.rs`: off/cold/warm identical, edit→drift→reparse.  Open: E2 mutability Q1 (locked mmap — only needed for the zero-copy G2 path) / `caller_index` Q3. |
 
@@ -764,8 +1394,8 @@ behind the accessor seam, validated by a **dual-backing equivalence harness**
 |---|---|---|---|
 | **M0** ✅ | Equivalence harness landed — `ir_read::ir_roundtrip_check(&Data)` materialises into a store, reads back, and asserts bit-for-bit equality (`compare_data`); wired into the run path behind `LOFT_IR_CHECK` so it validates the store-mirror invariant on **any real program** (user code + lazily-loaded libs), not just the stdlib round-trip tests.  Additive; nothing switches yet.  *(Scope note: this is the whole-`Data` oracle — the strongest mirror check.  Per-accessor `DefView` dual-backing is folded into M2/M5, where a subsystem actually reads from the store and the swap is verified store-vs-native.)* | `ir_roundtrip_check_stdlib_ok` (lib) + `ir_check_passes_on_real_program` (integration, struct+fn+for) | M — **done** |
 | **M1a** ✅ | `state/` `Definition` field-accessor seam (done). | suite green | — |
-| **M1b** | `generation/` `Definition` field-read seam. | suite green | S |
-| **M1c** | `parser/` + `compile.rs` `Definition` read-site seam (read sites only). | suite green | S–M |
+| **M1b** ✅ | `generation/` `Definition` field-read seam (done).  ~345 reads across all 14 `generation/*.rs` + `ops/*.rs` files routed through the `Definition` accessors; added `def_type()` (owned — a store read decodes the discriminant) + `rust()` to the seam.  Derived `const_ref` and the `tuple_group()` method stay direct.  Pure refactor, no behaviour change — native 6/6, codegen_emitter 19/19, full suite 2024/2024 green. | suite green | S — **done** |
+| **M1c** ✅ | `parser/` + `compile.rs` `Definition` **read-site** seam (done).  ~430 reads across all `parser/*.rs` + `compile.rs` routed through the accessors — reads only: the parser builds Definitions by construction (`.def_mut(` used once, zero `def.FIELD =` writes), so immutable `.def(…)` access is safe to seam while writes stay direct.  Added five accessors for fields the parser reads that `state/`/`generation/` did not: `parent()`/`closure_record()` (u32), `mutated_captures()`/`scalars_to_box()` (`&[String]`), `synthetic()` (`Option<&'static str>`).  Derived `attr_names`/`const_ref` and the `original_name()`/`header()`/`is_operator()` methods stay direct.  No behaviour change — parse_errors 137, issues 684, expressions 127, imports 5, format 11, full suite green. | suite green | S–M — **done** |
 | **M2** ✅ | **Persistent program store landed.**  Rather than a `DefView` wrapper, the simpler form proven: `byte_code_from` (interpreter) / `output_functions` (native) materialise the **whole `Data` into a persistent store once** (under `LOFT_CODEGEN_STORE`) and read each function's body node from it via `ir_read::def_body_node` (root → `definitions` → `def[d_nr]` → `code`), lowering through `IrNode::Store`.  Replaces M5's per-function re-materialise.  Proven: issues (684) + expressions (127) + native suite all green from the persistent store, byte-identical to native.  *The codegen side reads the IR from the store, not the native graph.* | suites green | **done (proven)** |
 | **M3.0** ✅ | Node-walk handle landed (`src/ir_node.rs`).  **Key discovery:** the *store* half already exists — `data_store::Value` answers `value_type() -> ValueType` + has field accessors (`read_value` proves it).  So M3.0 built the **native mirror under one backing-agnostic `IrNode<'a>` enum** (`Native(&Value)` \| `Store(&Stores, Node)`): `kind()` (full native dispatch + store delegate), an accessor spread proving every category (scalar, string, child, child-list `IrNodeList`, compound `If`, `Span` passthrough via `unspan`), `native()` bridge for the M3.1→M4 recursion, and `IrType::kind()`.  Accessors fill **just-in-time** per M3.1 group (never dead).  Bedrock guard: a **cross-backing equivalence test** — `IrNode::Native` and `IrNode::Store` of the same node must agree on `kind()` + every accessor.  *(Chose an enum over a `trait NodeView` so codegen's deep `&mut State` recursion stays non-generic — rationale in the module doc.)* | `cross_backing_accessors_agree` / `cross_backing_unspan_agrees` / `native_kind_is_total` | S — **done** |
 | **M3.1** ✅ | First codegen group converted: `generate_inner`'s **scalar/leaf arms** (13 — Int, Long, Single, Float, Boolean, Enum, Text, Var, Break, Continue, Null, Keys, Line) now dispatch on `node.kind()` and read payloads via `IrNode` accessors (native backing).  Pattern: a `match node.kind()` block whose arms `return`, ahead of the remaining `match val` (un-converted variants); the converted kinds are listed as `unreachable!` in `match val` so the compiler proves coverage.  Added accessors `single_value`/`float_value`/`bool_value` + extended the cross-backing oracle to cover them.  Behaviour identical — issues (684) / expressions (127) / wrap (50) / leak / threading all green. | suites green | S — **done** |
@@ -880,7 +1510,7 @@ the dominant cost and is deliberately the most finely sliced.
 
 ## Cross-arc dependencies
 
-- **[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
+- **[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
   — direct predecessor.  @PLAN28's rebuild-on-load snapshot delivers the
   cold-start win first; this plan removes the rebuild.  @PLAN28 shipped a
   **JSON** snapshot (native-side), **not** the store struct-enum format — so
@@ -918,7 +1548,7 @@ next; enter self-hosting through this keyhole, not head-on:
 | Rung | Effort | Permanent contribution to self-hosting |
 |---|---|---|
 | @PLAN28 JSON stop-gap | days | proves loft data *can* hold the IR; ships the whole-bundle cold-start win (per-library JSON considered + deferred as too brittle) |
-| **plan-54 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
+| **@PLN11 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
 | full loft-in-loft | multi-quarter | the destination |
 
 **This plan removes a self-hosting blocker.**  Self-hosting makes the
@@ -941,12 +1571,12 @@ rewrite — it only makes the eventual decision cheaper and better-informed.
 
 ## See also
 
-- [NATIVE.md](../../../NATIVE.md) — how `--native` represents data as
+- [NATIVE.md](../../NATIVE.md) — how `--native` represents data as
   `Stores` records (the model this plan mirrors); § Architecture,
   § `output_init`.
-- [DATABASE.md](../../../DATABASE.md) — `Stores`, `Store`, `DbRef`,
+- [DATABASE.md](../../DATABASE.md) — `Stores`, `Store`, `DbRef`,
   word-addressed records, CONST_STORE.
-- [@PLAN28 STARTUP_CACHE_PLAN.md](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+- [@PLAN28 STARTUP_CACHE_PLAN.md](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
   — the cold-start cache; its "Architecture C — Data *is* the store" is
   this plan's seed.
 - `src/store.rs::Store::open` — the mmap entry point this plan loads

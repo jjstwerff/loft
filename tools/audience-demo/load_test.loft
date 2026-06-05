@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 sub-task 1.8 — multi-client load test for the audience
+// @PLN6 sub-task 1.8 — multi-client load test for the audience
 // single-port server.  A single driver process opens N real WebSocket
 // connections, has each paint a disjoint column of cells, drains the
 // broadcast fan-out so the server's per-socket send buffers keep

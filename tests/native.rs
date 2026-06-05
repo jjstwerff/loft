@@ -29,15 +29,18 @@ use common::cached_default;
 ///
 /// Each test already parallelises internally via `thread::scope` over
 /// `available_parallelism()` rustc workers — running two such pools
-/// concurrently saturates the CPU twice over AND has the workers
-/// compete for reads of `target/release/deps/*.rlib`, which produces
-/// flaky `rust-lld: cannot open … Operation not permitted` and
-/// `crate <X> required to be available in rlib format` link errors.
+/// concurrently saturates the CPU twice over, so within ONE process
+/// this lock keeps that 2× over-subscription (and the ~140 s→~14 s
+/// blowup) away.
 ///
-/// Serialising the high-level tests removes the race without losing
-/// parallelism (the inner `thread::scope` still uses every core).
-/// Measured cost: parallel-with-races ~140 s + flake; serial-with-
-/// inner-parallelism ~14 s clean.
+/// It does NOT, by itself, fix the flaky link failures that once looked
+/// like a deps-read race: the real cause was concurrent compiles of the
+/// SAME script stem writing the SAME `loft_native_<stem>_bin` output
+/// (`50-tuples.loft` is built by three tests), truncating each other's
+/// binary mid-link.  Across PROCESSES — nextest runs each test in its
+/// own — this in-process lock can't help; correctness there comes from
+/// `compile_native_job` compiling to a per-process temp and publishing
+/// via atomic `rename(2)`.  See @PLN11 § Discovered follow-ups F1.
 fn native_suite_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -446,7 +449,13 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     let tmp_rs = scratch.join(format!("loft_native_{stem}.rs"));
     let existing = std::fs::read(&tmp_rs).unwrap_or_default();
     if existing != buf {
-        std::fs::write(&tmp_rs, &buf)?;
+        // Atomic publish: write to a per-process temp then rename into place,
+        // so a concurrent process (nextest runs each test in its own process)
+        // compiling the same stem never reads a half-written source.  See the
+        // shared-output collision note in `compile_native_job`.
+        let tmp = scratch.join(format!("loft_native_{stem}_{}.rs.tmp", std::process::id()));
+        std::fs::write(&tmp, &buf)?;
+        std::fs::rename(&tmp, &tmp_rs)?;
     }
 
     let binary = scratch.join(format!("loft_native_{stem}_bin"));
@@ -516,6 +525,18 @@ fn compile_native_job(
         );
         return Ok(false);
     }
+    // nextest runs each test in its own process, so the native tests that share
+    // a stem — `native_tuple_script`, `native_tuple_return_script`, and
+    // `native_scripts` all compile `50-tuples.loft` — would otherwise have
+    // their rustc/lld processes write the SAME `loft_native_<stem>_bin` output
+    // concurrently, truncating each other's binary mid-link (observed as a
+    // SIGBUS in `rust-lld` / `linking with cc failed`).  The in-process
+    // `native_suite_lock()` only serialises them WITHIN one process.  Compile
+    // to a per-process temp and publish atomically (rename) below, so concurrent
+    // processes never share a mutable output file — keeping full parallelism
+    // without a nextest serial group.
+    let pid = std::process::id();
+    let binary_tmp = scratch.join(format!("loft_native_{}_{pid}_bin", job.stem));
     // PLAN49 follow-up — build the rustc args into a file passed via
     // `rustc @argfile` instead of as a long command line.  Windows
     // `CreateProcessW` enforces a 32 KB command-line limit; on CI runners
@@ -548,7 +569,7 @@ fn compile_native_job(
         args.push("codegen-backend=cranelift".to_string());
     }
     args.push("-o".to_string());
-    args.push(job.binary.display().to_string());
+    args.push(binary_tmp.display().to_string());
     args.push(job.tmp_rs.display().to_string());
     if let Some((rlib, deps_dir)) = rlib_info {
         args.push("--extern".to_string());
@@ -573,7 +594,7 @@ fn compile_native_job(
     // separated; newline-separated is a strict subset and is what
     // every other tool (clang, gcc) accepts too.  Paths containing
     // whitespace get quoted defensively.
-    let argfile_path = scratch.join(format!("loft_native_{}_args.txt", job.stem));
+    let argfile_path = scratch.join(format!("loft_native_{}_{pid}_args.txt", job.stem));
     let argfile_contents = args
         .iter()
         .map(|s| {
@@ -605,14 +626,26 @@ fn compile_native_job(
     if !compile_out.status.success() {
         let stderr = String::from_utf8_lossy(&compile_out.stderr);
         eprintln!("rustc failed for {}:\n{stderr}", job.stem);
+        let _ = std::fs::remove_file(&binary_tmp);
         let _ = std::fs::remove_file(&job.binary);
         let _ = std::fs::remove_file(&job.key_file);
         return Err(Error::from(std::io::ErrorKind::Other));
     }
-    // Write the cache key so future runs can skip recompilation when nothing changed.
+    // Publish the freshly-linked binary atomically: rename the per-process temp
+    // over the shared cache path.  rename(2) swaps the directory entry, so a
+    // concurrent process executing or linking the old binary keeps its inode
+    // (no in-place truncation → no SIGBUS) and the cache path is always a
+    // complete binary.
+    std::fs::rename(&binary_tmp, &job.binary)?;
+    // Write the cache key so future runs can skip recompilation when nothing
+    // changed — also via temp + rename so a concurrent `binary_cache_valid`
+    // reader never sees a half-written key.
     let rs_content = std::fs::read(&job.tmp_rs).unwrap_or_default();
     let key = cache_key(&rs_content, rlib_info);
-    let _ = std::fs::write(&job.key_file, format!("{key:016x}"));
+    let key_tmp = scratch.join(format!("loft_native_{}_{pid}_bin.key.tmp", job.stem));
+    if std::fs::write(&key_tmp, format!("{key:016x}")).is_ok() {
+        let _ = std::fs::rename(&key_tmp, &job.key_file);
+    }
     Ok(true)
 }
 

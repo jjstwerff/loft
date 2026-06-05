@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 phase 3 MVP — pure-OpenGL projector view (basis for the beamer).
+// @PLN6 phase 3 MVP — pure-OpenGL projector view (basis for the beamer).
 //
 // Connects as a WebSocket client to the multi-client audience server
 // (tools/audience-demo/server.loft, ws://127.0.0.1:18083/), receives
@@ -94,7 +94,7 @@ fn parse_xyc(payload: text) -> (integer, integer, integer) {
 
 // ── 3D rendering — step 1: hex ground in 3D space ──────────────────────────
 //
-// Phase 3 of @PLAN36 — the 3D crystal mesh.  Step 1 swaps the 2D ortho
+// Phase 3 of @PLN6 — the 3D crystal mesh.  Step 1 swaps the 2D ortho
 // painter for a real 3D perspective pipeline so the camera (pos +
 // rotation + tilt) becomes a literal FPS-style eye in world space.
 // Visuals stay close to the 2D version for now: flat hex tiles
@@ -442,7 +442,7 @@ fn bake_crystal_group(cm: SegMesh, births: vector<single>) -> vector<single> {
     w = side_w;
     if cm.kinds[bcg_i] == KIND_MAIN { w = main_w; }
     own = cm.cell_ix[bcg_i];
-    // @PLAN36 two-phase growth: a MAIN anchors at its SRC (= the existing
+    // @PLN6 two-phase growth: a MAIN anchors at its SRC (= the existing
     // crystal's centre) and grows from BIRTH; a SIDE branch's birth is delayed
     // by GROWTH_FRAMES so the hex only FILLS after the connection has landed.
     seg_birth = births[own];
@@ -743,9 +743,9 @@ fn main() {
   // native resolution; otherwise a 1280x800 window.
   fullscreen = env_variable("LOFT_PROJ_FULLSCREEN") != "";
   ok = if fullscreen {
-    graphics::gl_create_fullscreen_window("Audience Projector — @PLAN36")
+    graphics::gl_create_fullscreen_window("Audience Projector — @PLN6")
   } else {
-    graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLAN36")
+    graphics::gl_create_window(WIN_W, WIN_H, "Audience Projector — @PLN6")
   };
   if !ok {
     println("projector: FAILED to create OpenGL window");

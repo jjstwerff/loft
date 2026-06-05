@@ -1746,7 +1746,7 @@ pub struct Definition {
 }
 
 impl Definition {
-    // ─── @PLAN54 arc C — store-backed-field read seam ───────────────────────
+    // ─── @PLN11 arc C — store-backed-field read seam ───────────────────────
     //
     // Read accessors for the `Definition` fields that live in the store schema
     // (`src/ir_schema_gen.rs`).  Routing reads through these methods (rather than
@@ -1816,6 +1816,50 @@ impl Definition {
     #[must_use]
     pub fn variables(&self) -> &Function {
         &self.variables
+    }
+
+    /// The kind of definition (function / struct field / enum value / …).
+    /// Returned by value (cheap — a unit-variant enum): a store read decodes an
+    /// integer discriminant into a fresh `DefType`, never a borrow.
+    #[must_use]
+    pub fn def_type(&self) -> DefType {
+        self.def_type.clone()
+    }
+
+    /// Inline Rust body (`#rust "…"`), or empty for a non-native definition.
+    #[must_use]
+    pub fn rust(&self) -> &str {
+        &self.rust
+    }
+
+    /// Parent definition (`EnumValue` / `StructPart`), or `u32::MAX` if none.
+    #[must_use]
+    pub fn parent(&self) -> u32 {
+        self.parent
+    }
+
+    /// Closure-record def_nr for a capturing lambda, or `u32::MAX`.
+    #[must_use]
+    pub fn closure_record(&self) -> u32 {
+        self.closure_record
+    }
+
+    /// @PLAN22 — names of captured bindings mutated inside this lambda body.
+    #[must_use]
+    pub fn mutated_captures(&self) -> &[String] {
+        &self.mutated_captures
+    }
+
+    /// @PLAN22 — local scalar bindings captured-and-mutated by an inner lambda.
+    #[must_use]
+    pub fn scalars_to_box(&self) -> &[String] {
+        &self.scalars_to_box
+    }
+
+    /// Synthesis origin tag for compiler-generated defs; `None` for user code.
+    #[must_use]
+    pub fn synthetic(&self) -> Option<&'static str> {
+        self.synthetic
     }
 
     #[must_use]
@@ -2016,7 +2060,7 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
-    /// @PLAN54 arc D — serialize this `Data` to a file-backed IR store at
+    /// @PLN11 arc D — serialize this `Data` to a file-backed IR store at
     /// `path` (zero-copy-loadable via [`Data::open`]).  Thin wrapper over
     /// [`crate::ir_store::save_data`].
     ///
@@ -2027,7 +2071,7 @@ impl Data {
         crate::ir_store::save_data(self, path)
     }
 
-    /// @PLAN54 arc D — load a `Data` from a file-backed IR store written by
+    /// @PLN11 arc D — load a `Data` from a file-backed IR store written by
     /// [`Data::save`], by `mmap`-ing the file and rebuilding the native graph —
     /// no re-parse.  Thin wrapper over [`crate::ir_read::open_data`].
     ///

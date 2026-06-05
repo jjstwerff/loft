@@ -740,9 +740,9 @@ that the consumer's own loop drives via `next_nonblocking()` + per-client
 `try_recv()`, single-threaded from loft's view.  That is fine for
 turn-based games but does not scale to a connect storm.
 
-**Concrete driver — @PLAN36 audience-demo load test.**  The 1.8 load test
-([`plans/36-audience-generative-art/01-server-state.md` § Load-test
-findings](../../../plans/36-audience-generative-art/01-server-state.md#load-test-findings-18))
+**Concrete driver — @PLN6 audience-demo load test.**  The 1.8 load test
+([`plans/6-audience-generative-art/01-server-state.md` § Load-test
+findings](../../../plans/6-audience-generative-art/01-server-state.md#load-test-findings-18))
 measured the polled-only server at 3/12/30 concurrent clients: broadcast
 fan-out stayed **100 %**, but per-client **connect latency degraded
 super-linearly** (0.6 → 2.8 → 7.3 s/client; ~220 s for 30 clients)

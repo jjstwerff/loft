@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 G2 / M0 — the read-site migration's equivalence harness, end-to-end.
+//! @PLN11 G2 / M0 — the read-site migration's equivalence harness, end-to-end.
 //!
 //! `LOFT_IR_CHECK` materialises the parsed program into a store, reads it back,
 //! and asserts the round-trip is bit-for-bit identical to the native `Data`

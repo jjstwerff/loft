@@ -38,6 +38,76 @@ excluded cell (a text element's `&str` repr needs a store intern).  @PLAN16 clos
 → `finished/`; the build was the *with-arm* that graduated DESIGN_VERIFICATION C1
 into [Design Protocol 1](DESIGN_PROTOCOL.md).  (PR #269.)
 
+### @PLN11 G2 Track 1 — program cache default-on + binary-mtime invalidation (2026-06-04)
+
+`src/cache.rs`.  `cache::program_cache_enabled()` now returns **true by
+default** for real (non-Cargo) invocations — the whole-program startup cache
+(~3–3.6× warm-run speedup) is no longer hidden behind `LOFT_PROGRAM_CACHE`.
+
+Precedence order (first match wins):
+1. `LOFT_NO_CACHE` set → off.
+2. `LOFT_PROGRAM_CACHE` set → on (explicit force; cache tests use it).
+3. `CARGO_MANIFEST_DIR` present → off (inside `cargo run` / `cargo test`).
+4. else → **on**.
+
+`build_signature()` now folds `binary_signature_tag()` — the running exe's
+mtime — so an uncommitted compiler rebuild invalidates bundles.  `BUILD_ID`
+(git HEAD) alone did not change across uncommitted edits.
+
+`cache::prune_program_cache()` evicts the oldest `(.store + .manifest)` pairs
+after each cold save to keep the cache dir under `LOFT_CACHE_MAX_MB` (default
+512 MiB).
+
+Full design + E1/E2/E3 arc: `doc/claude/plans/11-data-as-store/README.md`.
+Benchmark detail: `doc/claude/PERFORMANCE.md § Startup cache`.  Commit `77da481`.
+
+### @PLN11 G2 — `read_data` breakdown: allocation-bound, E2 is the only lever (2026-06-04)
+
+`src/ir_read.rs`.  `bench_read_data_breakdown` (`#[ignore]`; run with
+`cargo test --release --lib bench_read_data_breakdown -- --ignored --nocapture`)
+profiles `read_data` on the real stdlib bundle.
+
+Results:
+
+| Component | Time | Share |
+|---|---|---|
+| def-fields (attribute + return-type `Type` trees) | 453 µs | 65% |
+| body trees | 142 µs | 20% |
+| variable tables | 98 µs | 14% |
+| **total** | **693 µs** | — |
+
+Variable-table cost is **~0.39 µs/variable** — linear in allocation count, not
+in variable count alone.  The hot work is native-graph materialisation (each
+variable = a `String` + a boxed `Type`; each def = its attribute/return `Type`
+trees).  No targeted `read_function` optimisation can beat this: the cost IS
+the allocation.  E2 (zero-copy store-backed reads) is the only structural lever.
+
+Corrects the earlier "~2.2 ms variable tables" figure, which measured a
+whole-program bundle (~5–6 k vars) rather than the stdlib slice (~251 vars).
+E2 startup prize sized at **~0.7 ms on the stdlib** (scales with def + var
+count).  Commit `41835b2`.
+
+### @PLN11 G2 M1 — `Definition` read-accessor seam completed codebase-wide (2026-06-04)
+
+`src/data.rs`, `src/state/`, `src/generation/`, `src/parser/`, `src/compile.rs`.
+All immutable `Definition` field reads across the four subsystems now go through
+accessor methods (`name()`, `native()`, `source()`, `position()`, `attributes()`,
+`code()`, `returned()`, `op_code()`, `known_type()`, `variables()`, `def_type()`,
+`rust()`, `parent()`, `closure_record()`, `mutated_captures()`,
+`scalars_to_box()`, `synthetic()`) instead of touching public fields directly.
+
+The three milestones:
+- M1a — `state/` — landed earlier in the arc.
+- M1b — `generation/` — commit `c2741e2`.
+- M1c — `parser/` + `compile.rs` — commit `69f0c6e`.
+
+Derived fields (`attr_names`, `const_ref`, `code_position`, `code_length`)
+stay as direct reads — they are cheap computed values, not layout-sensitive.
+
+Pure refactor; no behaviour change, no test delta.  The seam is the
+precondition for swapping the `Definition` backing representation to
+store-based reads per subsystem (E2 arc in @PLN11).
+
 ### Nested-vector layout — four corruption/crash clusters fixed (plan-58) (2026-06-03)
 
 Closed the `vector<vector<…>>` stability class across depth × element-type ×

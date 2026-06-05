@@ -56,21 +56,28 @@ path = "target/nextest/junit.xml"
 # group, two scenarios racing for bind() flake the suite.
 
 [test-groups]
-html-wasm-serial      = { max-threads = 1 }
-multiplayer-v2-serial = { max-threads = 1 }
+html-wasm-serial = { max-threads = 1 }
+# Serialise the CPU-heavy native-build tests (each spawns many concurrent rustc)
+# TOGETHER WITH the timing-sensitive networked tests (multiplayer websocket
+# games), so a native rustc storm never runs alongside — and starves into an
+# empty response / timeout — a server test.  Only one test from this group runs
+# at a time; everything else stays fully parallel.  Subsumes the old
+# `multiplayer-v2-serial`.  (The markdown viewer smoke test runs in its own
+# isolated advisory job instead — see ci.yml.)
+heavy-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.default.overrides]]
-filter = 'binary(multiplayer_v2)'
-test-group = 'multiplayer-v2-serial'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
+test-group = 'heavy-serial'
 
 [[profile.ci.overrides]]
 filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.ci.overrides]]
-filter = 'binary(multiplayer_v2)'
-test-group = 'multiplayer-v2-serial'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
+test-group = 'heavy-serial'

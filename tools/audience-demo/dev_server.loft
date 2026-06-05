@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 — single-port dev server for the audience demo.
+// @PLN6 — single-port dev server for the audience demo.
 //
 // Serves both:
 //   GET /              → doc/audience-demo/index.html (the phone client)

@@ -31,7 +31,7 @@ engine and the loft library ecosystem.
 - TTT v5 (`game_protocol/examples/v5_*`) — the canonical multiplayer
   smoke test reuses `Cell` for X/O marks.
 - The audience-generative-art demo
-  ([plans/future/36](https://github.com/jjstwerff/loft/tree/main/doc/claude/plans/future/36-audience-generative-art))
+  ([plans/future/36](https://github.com/jjstwerff/loft/tree/main/doc/claude/plans/future/6-audience-generative-art))
   — projector + phone clients share the same chunked binary surface.
 - Future hex_walls / hex_terrain / hex_items packages — they place
   features *within* the hex_world addressing space.
