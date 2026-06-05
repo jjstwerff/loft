@@ -3196,6 +3196,26 @@ impl State {
                     self.code_add(var_pos);
                     return;
                 }
+                // @PLN10 — destination-passing into a `RefVar(Text)` work buffer.
+                // When the value is a text-dest native (`is_text_dest_native`), the
+                // native writes its result DIRECTLY into the deref'd buffer (clear
+                // it first, then the `_dest` native `push_str`s into the empty
+                // record), avoiding `stores.scratch`.  This is the return-dep-local
+                // case: `text_return` promotes `k = json.kind()` 's `k` to this
+                // `&text` return slot, so the `Type::Text` dest-pass below never
+                // fires and the call fell back to the scratch producer (`n_kind`).
+                if let Value::Call(op, args) = value.unspan() {
+                    let name = stack.data.def(*op).name().to_owned();
+                    if is_text_dest_native(&name)
+                        && let Some(&lib_nr) = self.library_names.get(&(name + "_dest"))
+                    {
+                        let var_pos = stack.var_pos(var);
+                        stack.add_op("OpClearStackText", self);
+                        self.code_add(var_pos);
+                        self.gen_text_dest_call(stack, var, *op, args, lib_nr);
+                        return;
+                    }
+                }
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
                 {
@@ -3346,8 +3366,22 @@ impl State {
         for arg_val in args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.var_pos(var);
-        self.emit_push_create_stack(stack, dep_offset);
+        // The destination DbRef the `_dest` native writes into.  For a plain
+        // `Text` var that is the create-stack address of the var's String slot.
+        // @PLN10 — for a `RefVar(Text)` var (a `&mut String` work buffer, e.g. a
+        // return-dep local promoted by `text_return`) the dest is the RAW DbRef
+        // the RefVar holds — pushed via `OpVarRef` (returns `reference`, so
+        // `add_op` self-accounts the stepped DbRef, matching `emit_push_create_stack`).
+        // The caller (`set_var`) has already cleared the buffer, so the native's
+        // `push_str` appends into an empty record.
+        if matches!(stack.function.tp(var), Type::RefVar(_)) {
+            let var_pos = stack.var_pos(var);
+            stack.add_op("OpVarRef", self);
+            self.code_add(var_pos);
+        } else {
+            let dep_offset = stack.var_pos(var);
+            self.emit_push_create_stack(stack, dep_offset);
+        }
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
         // @PLAN53 cluster 2 / S4: the args + the create-stack dest DbRef each
