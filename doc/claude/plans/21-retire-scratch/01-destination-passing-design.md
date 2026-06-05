@@ -240,13 +240,25 @@ concat/loop), zero scratch; full suite green both backends; regression
     push is purely transient backing for that one conversion.
   - The **cdylib FFI text wrap** (`generation/mod.rs:2698`, @P244): a foreign
     `LoftStr` return is copied into `stores.scratch` then handed back as a `Str`.
-  - **The clean fix**: change those `codegen_runtime` producers (and the FFI wrap)
-    to return an **owned `String`** instead of a scratch-`Str`; the native binding
-    then takes the `String` directly.  **Risk**: the native text path is threaded
-    with ~15+ `Str`/`String`/`&str` deref special-cases (P262/P299/P304/P321/P386);
-    a return-type change ripples through them, so this wants a focused effort with
-    full native-suite validation — NOT a tail-end change.
-- **Phase B** (`emit.rs` generic-specialisation wraps) and **Phase A.5**
-  (`extensions.rs` cdylib bridge).
+  - **The fix landed for the cell-ABI producers (Build 4, committed)**: changed
+    `t_9JsonValue_kind`, `t_9JsonValue_to_json`, `t_9JsonValue_to_json_pretty`,
+    `n_struct_to_json`, `n_struct_to_json_pretty` to return an **owned `String`**.
+    The native binding (`output_set` → `(...).to_string()`, args → `&*`) bridges
+    `String` via `Deref<Target=str>` (the @P304 path already handled
+    String-returning `#rust` natives), so it was transparent and the dreaded
+    ripple did **not** materialise — the full suite stayed green.  Strictly
+    better: the owned `String` is freed instead of leaked.  **`scratch.push`
+    39 → 34.**
+  - **Still scratch-backed (each a distinct wrinkle, deferred):**
+    - `i_parse_errors`, `i_json_errors` — emitted through **hand-written wrappers**
+      (`generation/mod.rs:2257/2272`) declared `-> Str`, so a `String` return
+      breaks the wrapper (caught by the code-quality hook).  Needs the wrapper
+      signature changed too.
+    - `t_9JsonValue_as_text` — returns **null** for a non-string value; a `String`
+      can't carry null (same block as the interpreter exclusion).
+    - `n_parallel_buf_get_text_native` — clones from the per-call parallel buffer.
+    - the **cdylib FFI text wrap** (`generation/mod.rs:2698`) — emitted code;
+      change the generated wrapper to return owned `String`.
+- **Phase B** (`emit.rs` generic-specialisation wraps).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
   + the `#[cfg(debug_assertions)]` assert-empty guard.
