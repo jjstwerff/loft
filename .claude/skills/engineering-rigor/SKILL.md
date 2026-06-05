@@ -5,9 +5,9 @@ description: >-
   designing/refactoring a load-bearing algorithm. A coherent explanation is a
   hypothesis, not a conclusion; acting on the first one ships fragility you
   couldn't see. Before acting, build the instrument that makes the whole CLASS
-  visible (a boundary matrix for a bug, falsification probes for a design), find
-  the ONE invariant, enforce it at the chokepoint (no narrower, no wider), and
-  verify against what you wrote down. USE THIS whenever you are about to fix a
+  visible (a boundary matrix for a bug, falsification probes for a design, a usage
+  sentinel for a removal), find the ONE invariant, enforce it at the chokepoint (no
+  narrower, no wider), and verify against what you wrote down. USE THIS whenever you are about to fix a
   non-trivial bug (especially a crash, silent corruption, or wrong result),
   design or refactor a load-bearing algorithm (core representation, runtime,
   memory, codegen, a public contract or data format), or whenever a change feels
@@ -86,6 +86,27 @@ one level apart** — learn the column you're in, but know it's one method.
    compiler), each path, because cross-mode divergence is real. Design: compare
    the built thing to the **written prediction**. An external commitment is what
    makes the check honest — without it you grade your own homework.
+
+## A third instrument: the usage sentinel (when the change is a *removal*)
+
+The matrix and the falsification probe each make a *class of behavior* visible.
+When the change is **subtraction** — retire a field, a buffer, a code path, a
+global — the class you must see is different: the set of *live consumers* of the
+thing you want to delete. And the obvious instrument lies. A **static count**
+(`grep` the call sites) **over-counts**: it sees dead and live uses with the same
+eyes and cannot tell which still fire — so it can't answer "is this safe to
+remove?"
+
+The instrument that *can* is a **usage sentinel**: route every use through one
+observable chokepoint and make it loud — count it and locate the caller (a
+caller-tracking attribute), or trip/panic under a flag. One run turns "which sites
+are live?" from a guess into a runtime fact: dead fallbacks never fire; live ones
+name themselves. And running it across the **whole suite** is the binary acceptance
+gate the deletion needs — **zero hits → nothing depends on it → safe to remove**,
+which is exactly step 5's "verify against the written prediction" (the prediction
+being *X is unused*). It is the chokepoint rule (step 4) and *make omission loud*
+aimed at subtraction instead of addition — and usually cheaper to build than the
+matrix it stands in for.
 
 ## The two ways to fail (symmetric — both modes share them)
 
