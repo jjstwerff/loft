@@ -675,26 +675,48 @@ pub fn build_shared_cdylib(
     std::fs::write(&rs, &src).map_err(|e| format!("write {}: {e}", rs.display()))?;
     let so = out_dir.join(platform_cdylib_name(stem));
 
-    let mut cmd = std::process::Command::new("rustc");
-    cmd.arg("--edition=2024")
-        .arg("-C")
-        .arg("debuginfo=0")
-        .arg("-C")
-        .arg("opt-level=2")
-        .arg("--crate-type")
-        .arg("cdylib")
-        .arg("-o")
-        .arg(&so)
-        .arg(&rs)
-        .arg("--extern")
-        .arg(format!("loft={}", rlib.display()))
-        .arg("-L")
-        .arg(&deps);
+    // Pass rustc args via an `@argfile`: the `--extern <crate>=<path>` list + `-L`
+    // search paths routinely exceed Windows' ~32 KB `CreateProcessW` command-line
+    // limit (os error 206: "The filename or extension is too long"), and the
+    // argfile form is cross-platform — the same fix the `--native` test runner
+    // already uses (PLAN49).
+    let mut args: Vec<String> = vec![
+        "--edition=2024".to_string(),
+        "-C".to_string(),
+        "debuginfo=0".to_string(),
+        "-C".to_string(),
+        "opt-level=2".to_string(),
+        "--crate-type".to_string(),
+        "cdylib".to_string(),
+        "-o".to_string(),
+        so.display().to_string(),
+        rs.display().to_string(),
+        "--extern".to_string(),
+        format!("loft={}", rlib.display()),
+        "-L".to_string(),
+        deps.display().to_string(),
+    ];
     for (name, path) in extra_externs(&deps) {
-        cmd.arg("--extern")
-            .arg(format!("{name}={}", path.display()));
+        args.push("--extern".to_string());
+        args.push(format!("{name}={}", path.display()));
     }
-    let output = cmd
+    // One arg per line; quote any containing whitespace (rustc's argfile parser is
+    // whitespace-separated, newline-separated is a strict subset).
+    let argfile = out_dir.join(format!("{stem}.args"));
+    let contents = args
+        .iter()
+        .map(|s| {
+            if s.contains(char::is_whitespace) {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&argfile, contents).map_err(|e| format!("write {}: {e}", argfile.display()))?;
+    let output = std::process::Command::new("rustc")
+        .arg(format!("@{}", argfile.display()))
         .output()
         .map_err(|e| format!("launch rustc: {e} (is the Rust toolchain installed?)"))?;
     if !output.status.success() {

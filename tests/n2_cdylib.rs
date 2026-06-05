@@ -107,8 +107,24 @@ fn compile_cdylib(src: &str, stem: &str, tmp: &Path, rlib: &Path, deps: &Path) -
         args.push("--extern".into());
         args.push(format!("{name}={}", path.display()));
     }
+    // Pass args via an `@argfile`: the `--extern`/`-L` list exceeds Windows'
+    // ~32 KB CreateProcessW command-line limit (os error 206); argfile is
+    // cross-platform (mirrors `build_shared_cdylib` + the --native test runner).
+    let argfile = tmp.join(format!("{stem}.args"));
+    let contents = args
+        .iter()
+        .map(|s| {
+            if s.contains(char::is_whitespace) {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&argfile, contents).unwrap();
     let out = Command::new("rustc")
-        .args(&args)
+        .arg(format!("@{}", argfile.display()))
         .output()
         .expect("invoke rustc");
     assert!(
