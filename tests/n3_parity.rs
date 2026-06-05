@@ -97,18 +97,17 @@ fn write_lib(libdir: &Path, name: &str, dep: Option<&str>, body: &str) -> std::p
 ///   in-process sanitizers are blind to the spawned cdylib: ASan sees interpreter
 ///   targets only, the `stack_align_guard` sweep can't see spawned binaries, and
 ///   Miri can't `dlopen` a cdylib at all).
-/// - **E (predictable memory)** — every run arms `LOFT_STORE_GUARD`, so the
-///   store-confinement detector runs over BOTH the interpreted script and the
-///   library's codegen-time scope analysis, and must stay **silent on the mixed
-///   path too**: a native library whose codegen reintroduces a block-confined store
-///   that frees at function exit would print `[store-guard] …` to stderr.  This is a
-///   standing **regression tripwire**, NOT a proven gate: post-plan-57 the detector
-///   is silent corpus-wide by construction (the cluster-I fix relocates every
-///   single-store confined local; multi-store cases are excluded), so a from-source
-///   positive control could not be built — see @PLN11 § Discovered follow-ups F5.
-///   The positively-controlled mixed-boundary soundness signal is the D leg above
-///   (the reference-output anchor in `datalib_store_touching_types_parity` rules out
-///   "parity holds but all three are wrong").
+/// - **E (predictable memory)** — every run arms `LOFT_STORE_GUARD`, which arms the
+///   live **Plan-57 Phase-4 Goal-E guard** (`scopes::check`'s
+///   `reclaim_unfreed_eligible == 0` assertion) over BOTH the interpreted script and
+///   the library's codegen-time scope analysis.  If a native library's codegen left a
+///   reclaim-eligible store live-but-dead past a later alloc, the guard PANICS —
+///   caught here by the `r.success` check above.  This guard is **positively
+///   controlled** (falsifiable): `watermark.rs::phase4_goal_e_guard_is_falsifiable`
+///   proves it fires on an injected reclaim regression (`LOFT_STORE_GUARD_INJECT`) and
+///   is silent otherwise.  (The older `[store-guard]` *eprintln* asserted below is
+///   superseded by that assertion and silent by construction — a cheap secondary, not
+///   the real gate.)
 fn assert_three_mode_parity(prog: &Path) -> String {
     let guard = ("LOFT_STORE_GUARD", "1");
     let interp = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1"), guard], prog);

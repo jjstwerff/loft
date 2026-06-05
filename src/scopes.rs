@@ -264,6 +264,13 @@ pub fn check(data: &mut Data) {
     // debug builds always, and in release on demand via `LOFT_STORE_GUARD`.
     let reclaim_off = std::env::var("LASTUSE_RECLAIM_OFF").is_ok();
     let reclaim_guard = cfg!(debug_assertions) || std::env::var("LOFT_STORE_GUARD").is_ok();
+    // Positive-control fault injection (test-only, never set in production): skip the
+    // early-free insertion below while STILL running the Phase-4 guard, so a program
+    // with reclaim-eligible stores trips the assertion.  This makes the Goal-E guard
+    // *falsifiable* — proving it fires on a real reclaim regression, so its silence on
+    // the corpus is evidence.  Differs from `LASTUSE_RECLAIM_OFF` (which also disables
+    // the guard); correctness is preserved either way by the scope-exit `OpFreeRef`.
+    let inject_unfreed = reclaim_guard && std::env::var("LOFT_STORE_GUARD_INJECT").is_ok();
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).variables.done {
             continue;
@@ -307,8 +314,10 @@ pub fn check(data: &mut Data) {
         if !reclaim_off {
             let db_nr = data.def_nr("OpDatabase");
             let gf_nr = data.def_nr("OpGetField");
-            let d = &mut data.definitions[d_nr as usize];
-            lastuse_reclaim(&mut d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+            if !inject_unfreed {
+                let d = &mut data.definitions[d_nr as usize];
+                lastuse_reclaim(&mut d.code, &d.variables, db_nr, gf_nr, free_ref_nr);
+            }
             // Plan-57 Phase 4 — Goal-E enforcement (THE watermark guard, supersedes
             // the scope-exit `store_lifetime_guard`).  Every store the model says is
             // dead and reclaim claimed (its `intent`) must now be freed before its
