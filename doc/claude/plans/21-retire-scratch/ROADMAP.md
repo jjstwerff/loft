@@ -3,8 +3,8 @@ render_with_liquid: false
 ---
 # @PLN10 — Roadmap to delete `stores.scratch`
 
-The clear path from **today (32 `scratch.push` sites; native + node-wasm +
-wasmtime-wasm green — the keystone `W` is SOLVED)** to the
+The clear path from **today (30 `scratch.push` sites; native + node-wasm +
+wasmtime-wasm green — keystone `W` SOLVED, `codegen_runtime` now scratch-free)** to the
 **goal (the field deleted; Goal E for strings — no global text buffer)**, as a set
 of dependency-ordered issues.
 
@@ -106,14 +106,15 @@ cell-ABI producers.  `39 → 34`.
   **Split** the interp side (ship now) from the native side (gate on W).
   **Label:** `area:codegen`
 
-### A — `as_text` null-carrying return *(design)*
-- **Problem:** `as_text` returns **null** for a non-string `JsonValue`; an owned
-  `String` / a dest buffer can't carry null (empty buffer == `""`, not null).
-- **Scope:** decide the null representation (native text already has a sentinel —
-  `STRING_NULL`); convert `n_as_text` (interp) + `t_9JsonValue_as_text` (native)
-  under it, or formally keep it scratch-backed + document why.
-- **Accept:** `j.as_text() ?? x` semantics preserved on all backends.
-- **Effort/risk:** S-M / med (it's a small design).  **Label:** `area:codegen`
+### A — `as_text` null-carrying return ✅ **DONE (native)** *(the "blocker" wasn't one)*
+> The premise was wrong: **native text-null IS an owned `String` value** — the
+> `STRING_NULL` sentinel (`"\0"`), already returned owned by the coroutine text
+> path (`STRING_NULL.to_string()`).  So `t_9JsonValue_as_text` returns owned
+> `String` (the string for `JString`, `STRING_NULL.to_string()` otherwise),
+> preserving `?? x` / `!x`.  This was the **last `codegen_runtime` scratch
+> producer → that file is now ZERO `scratch.push`.**  `scratch.push` 31 → 30;
+> regression `tests/scripts/195`.  (Interp `n_as_text` + `os_variable` fold into
+> the interp-side cleanup with the other fallbacks, at `D`.)
 
 ### B — generic-specialisation text wraps (Phase B) *(independent)*
 - **Scope:** the 8 `emit.rs` `stores.scratch.push(...); Str::new(...)` emissions for
