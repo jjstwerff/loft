@@ -79,6 +79,17 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
     )
 }
 
+/// @PLN10 N2b — a **cdylib FFI** text call: an EXTERNAL `#native "symbol"`
+/// function returning text.  Built-in text natives are `#pure` / `#rust` (empty
+/// `def.native`); only loaded cdylib functions carry a non-empty native symbol,
+/// so this is disjoint from `is_text_dest_native` (no `default/` decl uses
+/// `#native`).  Such calls dispatch through the runtime bridge, which is
+/// dest-passed via `n_set_bridge_dest` + `gen_cdylib_text_dest_call` instead of
+/// `stores.scratch`.
+pub(crate) fn is_cdylib_text_call(def: &crate::data::Definition) -> bool {
+    !def.native().is_empty() && matches!(def.returned(), Type::Text(_))
+}
+
 impl State {
     /**
     Define byte code for a function.
@@ -3259,6 +3270,17 @@ impl State {
                     return;
                 }
             }
+            // @PLN10 N2b — cdylib FFI text call (an external `#native` text fn;
+            // built-ins are `#pure`/`#rust` with empty `def.native`).  Dest-pass
+            // through the bridge: write into `var` instead of `stores.scratch`.
+            let native_sym = stack.data.def(*op).native().to_owned();
+            if !native_sym.is_empty()
+                && matches!(stack.data.def(*op).returned(), Type::Text(_))
+                && let Some(&cdylib_lib) = self.library_names.get(&native_sym)
+            {
+                self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
+                return;
+            }
         }
         // Plan-06 spine 8c hardening: catch IR shapes where `value`'s
         // stack-push width disagrees with `var`'s slot width before we
@@ -3393,6 +3415,59 @@ impl State {
             stack.position -= stack.step(size(attr_type, &Context::Argument));
         }
         stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
+    }
+
+    /// @PLN10 N2b — destination-passing for a **cdylib FFI** text call.  Unlike a
+    /// built-in `_dest` native (one `OpStaticCall`), the foreign function has no
+    /// `_dest` variant, so this emits TWO calls: `n_set_bridge_dest` (pops the
+    /// work-buffer DbRef and stashes it on `stores`), then the cdylib itself —
+    /// whose bridge (`bridge_text_result`) writes the `LoftStr` into that record
+    /// and pushes NOTHING (dest-mode), bypassing `stores.scratch`.  Stack order
+    /// mirrors `gen_text_dest_call`: args, then the dest on top.
+    fn gen_cdylib_text_dest_call(
+        &mut self,
+        stack: &mut Stack,
+        var: u16,
+        op: u32,
+        args: &[Value],
+        cdylib_lib: u16,
+    ) {
+        let set_dest_lib = *self
+            .library_names
+            .get("n_set_bridge_dest")
+            .expect("n_set_bridge_dest registered in native FUNCTIONS");
+        let attr_types: Vec<Type> = stack
+            .data
+            .def(op)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect();
+        for arg_val in args {
+            self.generate(arg_val, stack, false);
+        }
+        // Push the destination DbRef (top) — the raw RefVar DbRef for a promoted
+        // return buffer, else the create-stack address of the plain text slot
+        // (same dest forms as `gen_text_dest_call`).
+        if matches!(stack.function.tp(var), Type::RefVar(_)) {
+            let var_pos = stack.var_pos(var);
+            stack.add_op("OpVarRef", self);
+            self.code_add(var_pos);
+        } else {
+            let dep_offset = stack.var_pos(var);
+            self.emit_push_create_stack(stack, dep_offset);
+        }
+        // n_set_bridge_dest pops the dest DbRef off the top and stashes it.
+        stack.add_op("OpStaticCall", self);
+        self.code_add(set_dest_lib);
+        stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
+        // The cdylib dispatch pops its args; the bridge writes into the stashed
+        // dest and pushes nothing — so subtract the args but DON'T add a result.
+        stack.add_op("OpStaticCall", self);
+        self.code_add(cdylib_lib);
+        for attr_type in &attr_types {
+            stack.position -= stack.step(size(attr_type, &Context::Argument));
+        }
     }
 }
 

@@ -643,15 +643,45 @@ fn bridge_push_str(
     stack: &mut crate::keys::DbRef,
     s: loft_ffi::LoftStr,
 ) {
+    bridge_text_result(stores, stack, s.ptr, s.len);
+}
+
+/// Materialise a foreign `LoftStr` text return into the interpreter.
+///
+/// @PLN10 N2b — when `stores.bridge_text_dest` is set (by `n_set_bridge_dest`,
+/// emitted immediately before this cdylib call by `gen_cdylib_text_dest_call`),
+/// write the bytes into that caller-owned work-buffer record and push NOTHING —
+/// the record IS the result (read by the chokepoint's `Var(w)`), so the
+/// never-cleared `stores.scratch` is bypassed.  Otherwise fall back to the legacy
+/// scratch-backed `Str` (the value-position case the chokepoint hasn't wrapped).
+#[cfg(feature = "native-extensions")]
+fn bridge_text_result(
+    stores: &mut crate::database::Stores,
+    stack: &mut crate::keys::DbRef,
+    ptr: *const u8,
+    len: usize,
+) {
     use crate::keys::Str;
-    if !s.ptr.is_null() && s.len > 0 {
-        let text =
-            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(s.ptr, s.len)) };
+    let text: &str = if !ptr.is_null() && len > 0 {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }
+    } else {
+        ""
+    };
+    if let Some(dest) = stores.bridge_text_dest.take() {
+        if !text.is_empty() {
+            stores
+                .store_mut(&dest)
+                .addr_mut::<String>(dest.rec, dest.pos)
+                .push_str(text);
+        }
+        return;
+    }
+    if text.is_empty() {
+        stores.put(stack, Str::new(""));
+    } else {
         stores.scratch.clear();
         stores.scratch.push(text.to_string());
         stores.put(stack, Str::new(&stores.scratch[0]));
-    } else {
-        stores.put(stack, Str::new(""));
     }
 }
 
@@ -802,8 +832,6 @@ fn dispatch_call(
     params: &[ArgT],
     ret: Option<ArgT>,
 ) {
-    use crate::keys::Str;
-
     // Normalize Vec → Ref for dispatch matching. The vector dereference
     // already happened during argument extraction, so Vec and Ref have
     // identical calling conventions at this point.
@@ -887,15 +915,8 @@ fn dispatch_call(
         stack: &mut crate::keys::DbRef,
         s: LoftStr,
     ) {
-        if !s.ptr.is_null() && s.len > 0 {
-            let text =
-                unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(s.ptr, s.len)) };
-            stores.scratch.clear();
-            stores.scratch.push(text.to_string());
-            stores.put(stack, Str::new(&stores.scratch[0]));
-        } else {
-            stores.put(stack, Str::new(""));
-        }
+        // @PLN10 N2b — shares the bridge dest-passing path (see `bridge_text_result`).
+        bridge_text_result(stores, stack, s.ptr, s.len);
     }
 
     // Helper: widen an i32 native return to i64, preserving the null

@@ -127,6 +127,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // producers; key is the loft def name + `_dest` (the lookup in
     // `gen_text_dest_call` / `try_text_dest_pass`).  Added to
     // `is_text_dest_native` so the Build-2 chokepoint routes them.
+    // @PLN10 N2b — sets the destination for the NEXT cdylib FFI text return
+    // (emitted right before a dest-passed cdylib text call; see
+    // `gen_cdylib_text_dest_call`).  Not a text producer — a setter.
+    ("n_set_bridge_dest", n_set_bridge_dest),
     ("n_source_dir_dest", n_source_dir_dest),
     ("n_json_errors_dest", n_json_errors_dest),
     ("t_9JsonValue_kind_dest", n_kind_dest),
@@ -937,6 +941,17 @@ fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&v);
+}
+
+/// @PLN10 N2b — set the destination record for the NEXT cdylib FFI text return.
+/// `gen_cdylib_text_dest_call` emits an `OpStaticCall` to this immediately before
+/// the cdylib's own `OpStaticCall`; it pops the work-buffer `DbRef` off the stack
+/// and stashes it on `stores` so the bridge text path (`bridge_push_str` /
+/// `push_loft_str`) writes the foreign `LoftStr` into that record instead of the
+/// never-cleared `stores.scratch`.  Pushes nothing.
+fn n_set_bridge_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    stores.bridge_text_dest = Some(dest);
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.

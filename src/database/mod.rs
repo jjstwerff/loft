@@ -297,6 +297,14 @@ pub struct Stores {
     /// [`Scratch`] so @PLN10's `LOFT_SCRATCH_TRIP` sentinel can locate every
     /// live `push` while the buffer is being retired.
     pub scratch: Scratch,
+    /// @PLN10 N2b — destination for the NEXT cdylib FFI text return.  Set by
+    /// `n_set_bridge_dest` (emitted right before a dest-passed cdylib text call)
+    /// and `take()`n by the bridge's text path (`bridge_push_str` /
+    /// `push_loft_str`): when `Some`, the foreign `LoftStr` bytes are written
+    /// into that store record instead of the never-cleared `scratch`, and the
+    /// bridge pushes nothing (the record IS the result).  Transient — lives only
+    /// across the two adjacent `OpStaticCall`s.
+    pub bridge_text_dest: Option<crate::keys::DbRef>,
     /// per-definition DbRef into the CONST_STORE for vector
     /// constants (e.g. `pub HEIGHT_STEP_LABELS: vector<text> = […]`).
     /// Indexed by `d_nr`; a null DbRef (store_nr = u16::MAX) means
@@ -536,6 +544,7 @@ impl Clone for Stores {
             peak: 0,
             free_bits: Vec::new(),
             scratch: Scratch::default(),
+            bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
@@ -1005,6 +1014,7 @@ impl Stores {
             peak: 0,
             free_bits: Vec::new(),
             scratch: Scratch::default(),
+            bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),

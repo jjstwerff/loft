@@ -346,6 +346,7 @@ impl Parser {
         let wrap_here = matches!(
             &*v,
             Value::Call(op, _) if crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
+                || crate::state::codegen::is_cdylib_text_call(self.data.def(*op))
         );
         if wrap_here {
             if let Value::Call(_, args) = v {
@@ -422,7 +423,8 @@ impl Parser {
     /// (nested natives still need a temp).  Any other shape walks normally.
     fn descend_skip_direct(&mut self, v: &mut Value) {
         if let Value::Call(op, args) = v.unspan_mut() {
-            let is_dest = crate::state::codegen::is_text_dest_native(self.data.def(*op).name());
+            let is_dest = crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
+                || crate::state::codegen::is_cdylib_text_call(self.data.def(*op));
             if is_dest {
                 for a in args.iter_mut() {
                     self.wrap_value_text_dest(a);
