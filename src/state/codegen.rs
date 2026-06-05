@@ -74,6 +74,8 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             | "n_parallel_buf_get_text"
             // @PLN10 Phase 2 — as_text (null carried as the "\0" sentinel content).
             | "t_9JsonValue_as_text"
+            // @PLN10 Phase 2 — env_variable (non-null; os_variable owns its String).
+            | "n_env_variable"
     )
 }
 

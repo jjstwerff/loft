@@ -313,36 +313,29 @@ impl Stores {
     }
 
     /**
-    Get the value of an environment variable.
+    Get the value of an environment variable as an owned `String` ("" if unset).
 
-    P232: takes `&mut self` and pushes the resolved value into
-    `self.scratch`, returning a `Str` that borrows from the buffer
-    rather than a local `OsString`.  The previous static form
-    (`fn os_variable(name: &str) -> Str`) constructed a `Str` over
-    `v.to_str().unwrap()` where `v` was a local `OsString` — the
-    `Str`'s pointer dangled the moment the function returned.
-    Callers were `n_env_variable` (interp) and the
-    `#rust"stores.os_variable(@name)"` template (native).
+    @PLN10 (Phase 2): returns owned `String` instead of a scratch-backed `Str`.
+    The interpreter caller (`n_env_variable`) and its dest-passing variant own the
+    String (push to a dest / scratch fallback); the native `#rust` template
+    bridges `String` → `Str` via `Deref` (the @P304 path, like `to_lowercase`).
+    Always non-null (empty for an unset variable).
     */
     #[cfg(not(feature = "wasm"))]
-    pub fn os_variable(&mut self, name: &str) -> crate::keys::Str {
-        let value = std::env::var_os(name)
+    #[must_use]
+    pub fn os_variable(&mut self, name: &str) -> String {
+        std::env::var_os(name)
             .and_then(|s| s.into_string().ok())
-            .unwrap_or_default();
-        let idx = self.scratch.len();
-        self.scratch.push(value);
-        crate::keys::Str::new(&self.scratch[idx])
+            .unwrap_or_default()
     }
 
     /**
     Get the value of an environment variable (WASM stub — always returns empty).
     */
     #[cfg(feature = "wasm")]
-    pub fn os_variable(&mut self, name: &str) -> crate::keys::Str {
-        let val = crate::wasm::host_env_variable(name);
-        let idx = self.scratch.len();
-        self.scratch.push(val);
-        crate::keys::Str::new(&self.scratch[idx])
+    #[must_use]
+    pub fn os_variable(&mut self, name: &str) -> String {
+        crate::wasm::host_env_variable(name)
     }
 
     /**

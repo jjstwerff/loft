@@ -106,6 +106,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4File_write", t_4File_write),
     ("n_env_variables", n_env_variables),
     ("n_env_variable", n_env_variable),
+    // @PLN10 Phase 2 — env_variable dest-passing (os_variable now owns its String).
+    ("n_env_variable_dest", n_env_variable_dest),
     ("t_4text_byte_at", t_4text_byte_at),
     ("t_4text_starts_with", t_4text_starts_with),
     ("t_4text_ends_with", t_4text_ends_with),
@@ -613,8 +615,21 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
 
 fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
     let v_name = *stores.get::<Str>(stack);
-    let new_value = { stores.os_variable(v_name.str()) };
-    stores.put(stack, new_value);
+    let value = stores.os_variable(v_name.str());
+    stores.scratch.push(value);
+    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+}
+
+// @PLN10 Phase 2 — destination-passing variant of `n_env_variable`.
+// Always-non-null (the env value, "" if unset).  Routed by `is_text_dest_native`.
+fn n_env_variable_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_name = *stores.get::<Str>(stack);
+    let value = stores.os_variable(v_name.str());
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&value);
 }
 
 fn t_4text_byte_at(stores: &mut Stores, stack: &mut DbRef) {
