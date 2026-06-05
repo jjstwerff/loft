@@ -638,6 +638,66 @@ fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     out
 }
 
+/// On Windows MSVC, the build-script output dirs holding native import libraries
+/// (e.g. `windows.0.48.5.lib` from `windows-sys`) must be passed to a hand-driven
+/// `rustc` as `-L` paths — cargo adds them via `cargo:rustc-link-search` but we
+/// don't, so the cdylib link fails `LNK1181: cannot open input file …`.  Mirrors
+/// the `--native` test runner's `find_native_lib_dirs`.  Empty (a no-op) off Windows.
+#[cfg(not(windows))]
+fn native_lib_search_dirs(_rlib: &std::path::Path) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn native_lib_search_dirs(rlib: &std::path::Path) -> Vec<std::path::PathBuf> {
+    // `rlib` is `target/<profile>/libloft.rlib` or `target/<profile>/deps/libloft-*.rlib`;
+    // walk up to the profile dir, then scan `build/<crate>-<hash>/`.
+    let Some(profile_dir) = rlib.parent().and_then(|p| {
+        if p.file_name().is_some_and(|n| n == "deps") {
+            p.parent()
+        } else {
+            Some(p)
+        }
+    }) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(profile_dir.join("build")) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let build_entry = entry.path();
+        // `out/` and its immediate subdirs (some crates emit into `out/<target>/`).
+        let out = build_entry.join("out");
+        if out.is_dir() {
+            dirs.push(out.clone());
+            if let Ok(subs) = std::fs::read_dir(&out) {
+                dirs.extend(
+                    subs.filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_dir()),
+                );
+            }
+        }
+        // `cargo:rustc-link-search` directives cached in `build/<crate>-<hash>/output`
+        // (e.g. `windows_x86_64_msvc` ships its `.lib` inside the registry package).
+        if let Ok(content) = std::fs::read_to_string(build_entry.join("output")) {
+            for line in content.lines() {
+                if let Some(p) = line
+                    .strip_prefix("cargo:rustc-link-search=native=")
+                    .or_else(|| line.strip_prefix("cargo:rustc-link-search="))
+                {
+                    let p = std::path::PathBuf::from(p);
+                    if p.is_dir() && !dirs.contains(&p) {
+                        dirs.push(p);
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
 /// Platform cdylib filename for `stem` (`lib<stem>.so` / `.dylib` / `<stem>.dll`).
 #[must_use]
 pub fn platform_cdylib_name(stem: &str) -> String {
@@ -699,6 +759,12 @@ pub fn build_shared_cdylib(
     for (name, path) in extra_externs(&deps) {
         args.push("--extern".to_string());
         args.push(format!("{name}={}", path.display()));
+    }
+    // Windows MSVC: add the build-script `-L` dirs holding native import libs
+    // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.
+    for dir in native_lib_search_dirs(&rlib) {
+        args.push("-L".to_string());
+        args.push(dir.display().to_string());
     }
     // One arg per line; quote any containing whitespace (rustc's argfile parser is
     // whitespace-separated, newline-separated is a strict subset).
