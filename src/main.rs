@@ -4227,6 +4227,7 @@ fn main() {
         std::mem::take(&mut p.pending_native_compile)
     };
     let mut auto_native_libs: Vec<String> = Vec::new();
+    let mut any_dev_interpret = false;
     for pkg_dir in &pending_native {
         let export = loft::native_lib::library_export_set(&p.data, pkg_dir);
         if export.is_empty() {
@@ -4238,9 +4239,17 @@ fn main() {
             loft::native_lib::cached_or_build_shared_cdylib(&p.data, &p.database, &export, pkg_dir)
         };
         match built {
-            Ok(so) => {
+            Ok(Some(so)) => {
                 loft::native_lib::mark_exports(&mut p.data, &export);
                 auto_native_libs.push(so.to_string_lossy().into_owned());
+            }
+            Ok(None) => {
+                // Dev-interpret-on-edit (Step 4): the library is being actively
+                // edited, so it interprets this run — instant loop, no `rustc`, no
+                // marking, no warning (this is the intended fast path while you iterate).
+                // Do NOT cache the program: a warm load would replay this interpreted
+                // image and the "rebuild once editing settles" check would never fire.
+                any_dev_interpret = true;
             }
             Err(e) => {
                 // Silent interpret-fallback (Step 2 invariant): warn, do NOT mark,
@@ -4275,7 +4284,10 @@ fn main() {
     // Skip the program cache for auto-native programs: the warm-load path restores
     // the parsed `Data` without re-running manifest detection, so it would have the
     // `def.native` markings but no rebuilt cdylib to wire (Phase D persists this).
-    if program_cache_on && !program_warm && !has_auto_native {
+    // Also skip when a library took the dev-interpret-on-edit path (Step 4): caching
+    // the interpreted image would pin it, so the "rebuild once editing settles" check
+    // would never run on a warm load.
+    if program_cache_on && !program_warm && !has_auto_native && !any_dev_interpret {
         loft::startup_cache::save_program(&p, &abs_file);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,

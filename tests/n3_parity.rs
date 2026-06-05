@@ -232,3 +232,110 @@ fn default_native_dispatches_unopted_library() {
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(native_auto);
 }
+
+/// The single auto-built cdylib under a package's `native-auto/`, if any.
+fn single_cdylib(native_auto: &Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(native_auto)
+        .ok()?
+        .flatten()
+        .find_map(|e| {
+            let p = e.path();
+            let is_lib = p
+                .extension()
+                .is_some_and(|x| x == "so" || x == "dylib" || x == "dll");
+            is_lib.then_some(p)
+        })
+}
+
+/// @PLAN54 N3 Step 4 — **dev-interpret-on-edit**.
+///
+/// *Invariant:* a library's first use builds eagerly (native), but **editing** it
+/// makes the next run **interpret** the new code with **no `rustc`** (instant loop);
+/// once editing settles, a run rebuilds and it is native again.
+///
+/// Proven on a writable copy of a library across three runs:
+/// 1. first run eager-builds the cdylib and dispatches native (`v1`);
+/// 2. after an edit, the next run prints the NEW code (`v2`) — so it interpreted,
+///    not dispatched the stale cdylib — and the cdylib file is **untouched** (no
+///    rebuild, no `rustc`);
+/// 3. with the source now unchanged since run 2, the next run **rebuilds** (the
+///    cdylib mtime changes) and is native again.
+#[test]
+fn editing_a_library_interprets_then_rebuilds_when_stable() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (Step 4 needs the native build)");
+        return;
+    }
+
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_n3_edit_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("lib");
+    let pkg = libdir.join("edlib");
+    std::fs::create_dir_all(pkg.join("src")).unwrap();
+    std::fs::write(
+        pkg.join("loft.toml"),
+        "[package]\nname = \"edlib\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+         [library]\nentry = \"src/edlib.loft\"\n",
+    )
+    .unwrap();
+    let src = pkg.join("src").join("edlib.loft");
+    std::fs::write(&src, "pub fn greet() -> text { \"v1\" }\n").unwrap();
+    let prog = root.join("main.loft");
+    std::fs::write(&prog, "use edlib;\nfn main() { println(greet()); }\n").unwrap();
+    let native_auto = pkg.join("native-auto");
+
+    // Run the binary against this editable lib dir (no `tests/lib`).
+    let run_edit = || -> Run {
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("spawn loft binary");
+        Run {
+            success: out.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    };
+
+    // 1. First use → eager build → native.
+    let r1 = run_edit();
+    assert!(r1.success, "run 1 failed:\n{}", r1.stderr);
+    assert_eq!(r1.stdout.trim(), "v1");
+    let so = single_cdylib(&native_auto).expect("run 1 must eager-build the cdylib");
+    let mtime1 = std::fs::metadata(&so).unwrap().modified().unwrap();
+
+    // Edit the library (sleep first so the new source mtime is unambiguously newer
+    // than the just-built cdylib, even on a coarse-granularity filesystem).
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&src, "pub fn greet() -> text { \"v2\" }\n").unwrap();
+
+    // 2. Edit run → interpret the NEW code, NO rebuild.
+    let r2 = run_edit();
+    assert!(r2.success, "run 2 failed:\n{}", r2.stderr);
+    assert_eq!(
+        r2.stdout.trim(),
+        "v2",
+        "an edit must take effect immediately — interpreted, not the stale cdylib"
+    );
+    let mtime2 = std::fs::metadata(&so).unwrap().modified().unwrap();
+    assert_eq!(
+        mtime1, mtime2,
+        "the edit run must NOT rebuild the cdylib (no `rustc` per save)"
+    );
+
+    // 3. Source unchanged since run 2 → rebuild → native again.
+    let r3 = run_edit();
+    assert!(r3.success, "run 3 failed:\n{}", r3.stderr);
+    assert_eq!(r3.stdout.trim(), "v2");
+    let mtime3 = std::fs::metadata(&so).unwrap().modified().unwrap();
+    assert_ne!(
+        mtime2, mtime3,
+        "once editing settles, the next run rebuilds the cdylib → native"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

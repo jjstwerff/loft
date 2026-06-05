@@ -709,13 +709,32 @@ pub fn build_shared_cdylib(
     Ok(so)
 }
 
-/// @PLAN54 Arc N / N3 (B2) — return the auto-native cdylib for the library at
-/// `pkg_dir`, **building it only when stale**: a cached `native-auto/<stem>.so` is
-/// reused when it exists, the library's source hasn't changed since it was built,
-/// and the loft-build fingerprint still matches (N0 — so a `loft` rebuild that
-/// could change the generated Rust forces a fresh cdylib).  Otherwise it builds
-/// and stamps the fingerprint.  This is the "no `rustc` per run for an unchanged
-/// library / a stable dep links its cached artifact" half of N3's policy.
+/// @PLAN54 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
+/// at `pkg_dir` should run this invocation, and build its cdylib only when warranted.
+///
+/// Returns:
+/// - `Ok(Some(so))` — dispatch native against the cdylib at `so` (fresh cached, or
+///   just built);
+/// - `Ok(None)` — **interpret this run** (the library is being actively edited);
+/// - `Err(_)` — a build was attempted and failed (the caller interprets + warns).
+///
+/// The policy reconciles "a library is always native" with "no `rustc` per save":
+/// 1. **Fresh artifact** (`.so` exists, fingerprint matches, source not newer) →
+///    native, no work.
+/// 2. **No artifact yet, or `loft` itself changed** (fingerprint mismatch) → **build
+///    eagerly** → native.  First use of a library, and a deployed/stable dep, pay the
+///    one-time build and run native from the start (this is also why the parity tests,
+///    which wipe `native-auto/` then run once, still dispatch native).
+/// 3. **Stale artifact** (an `.so` exists but the source is newer — the library was
+///    edited) → consult the last-run source hash:
+///    - *changed since the previous run* → the edit loop is live → **interpret this
+///      run** (`Ok(None)`); record the new hash.  No `rustc`.
+///    - *unchanged since the previous run* → editing has settled → **rebuild** → native.
+///
+/// So an edit-run-edit-run loop interprets each time (no `rustc`); the first run after
+/// you stop editing rebuilds and the library is native again.  (Polish: do that
+/// rebuild in the background so even the settling run never blocks — see the plan's
+/// Step 4 option 3.)
 ///
 /// # Errors
 /// Propagates a build failure from [`build_shared_cdylib`].
@@ -724,7 +743,7 @@ pub fn cached_or_build_shared_cdylib(
     stores: &Stores,
     export_set: &HashSet<u32>,
     pkg_dir: &str,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<Option<std::path::PathBuf>, String> {
     let stem = format!(
         "loft_auto_{}",
         std::path::Path::new(pkg_dir)
@@ -736,16 +755,83 @@ pub fn cached_or_build_shared_cdylib(
     let so = out_dir.join(platform_cdylib_name(&stem));
     let fp = crate::cache::loft_build_fingerprint();
 
+    // 1. Fresh artifact → native, no hashing.
     if so.exists()
         && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
         && !source_newer_than(pkg_dir, &so)
     {
-        return Ok(so); // fresh cached artifact — no rebuild
+        return Ok(Some(so));
     }
 
-    let built = build_shared_cdylib(data, stores, export_set, &out_dir, &stem)?;
-    crate::cache::write_native_artifact_fingerprint(&out_dir, fp);
-    Ok(built)
+    let build = |out_dir: &std::path::Path| -> Result<Option<std::path::PathBuf>, String> {
+        let built = build_shared_cdylib(data, stores, export_set, out_dir, &stem)?;
+        crate::cache::write_native_artifact_fingerprint(out_dir, fp);
+        Ok(Some(built))
+    };
+
+    // 2. No artifact yet, or `loft` changed → build eagerly (native from the start).
+    if !so.exists() || !crate::cache::native_artifact_fingerprint_matches(&out_dir, fp) {
+        crate::cache::write_run_source_hash(&out_dir, source_content_hash(pkg_dir));
+        return build(&out_dir);
+    }
+
+    // 3. Stale artifact (the library was edited) → dev-interpret-on-edit.
+    let cur = source_content_hash(pkg_dir);
+    let stable = crate::cache::read_run_source_hash(&out_dir) == Some(cur);
+    crate::cache::write_run_source_hash(&out_dir, cur);
+    if stable {
+        build(&out_dir) // editing settled → rebuild, native again
+    } else {
+        Ok(None) // still being edited → interpret this run, no rustc
+    }
+}
+
+/// @PLAN54 Arc N / N3 (Step 4) — a content hash of every `.loft` / `loft.toml` source
+/// under `pkg_dir` (build/artifact dirs skipped, files visited in sorted order for a
+/// stable digest).  Used to detect "did this library's source change since the last
+/// run?" — content-based, not mtime, so it is deterministic (testable) and a no-op
+/// touch doesn't trigger a rebuild.
+fn source_content_hash(pkg_dir: &str) -> u64 {
+    use sha2::{Digest, Sha256};
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(pkg_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name == "native-auto" || name == "native" || name == "target" {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let is_src = p
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+                || name == "loft.toml";
+            if is_src {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut h = Sha256::new();
+    for f in &files {
+        // The path relative to the package keeps the digest stable across machines
+        // while still reacting to renames; content reacts to edits.
+        let rel = f.strip_prefix(pkg_dir).unwrap_or(f);
+        h.update(rel.to_string_lossy().as_bytes());
+        if let Ok(bytes) = std::fs::read(f) {
+            h.update(&bytes);
+        }
+    }
+    let digest: [u8; 32] = h.finalize().into();
+    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
 }
 
 /// Is any `.loft` / `loft.toml` source under `pkg_dir` newer than the artifact at

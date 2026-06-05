@@ -373,6 +373,30 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     }
 }
 
+/// @PLAN54 Arc N / N3 (Step 4) — path of a library's *last-run source-hash* sidecar.
+/// Dev-interpret-on-edit compares this run's source hash against the one recorded
+/// here to decide "still being edited (changed since last run → interpret)" vs
+/// "stable (unchanged → build the cdylib)".
+fn run_hash_sidecar(profile_dir: &std::path::Path) -> std::path::PathBuf {
+    profile_dir.join(".loft-run-hash")
+}
+
+/// Read the source hash recorded on the previous run (None if absent/unreadable).
+#[must_use]
+pub fn read_run_source_hash(profile_dir: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(run_hash_sidecar(profile_dir))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// Record `hash` as this run's library source hash (creates `profile_dir` if
+/// needed, since a library that has only ever interpreted has no artifact dir yet).
+/// Best-effort.
+pub fn write_run_source_hash(profile_dir: &std::path::Path, hash: u64) {
+    let _ = std::fs::create_dir_all(profile_dir);
+    let _ = std::fs::write(run_hash_sidecar(profile_dir), hash.to_string());
+}
+
 /// @PLAN54 arc E — the `(bundle, manifest)` paths for the whole-program cache of
 /// the script at `script_abspath`.  Keyed on the script's path so each script
 /// gets a stable slot; the manifest (every parsed source + its content hash)
