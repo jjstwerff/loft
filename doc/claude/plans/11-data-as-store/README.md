@@ -9,6 +9,69 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **G2/M5 reached for BOTH backends (2026-06-03): the interpreter AND `--native` codegen run fully store-backed, proven byte-identical to native.**  Both lowering dispatches (`generate_inner` / `output_code_node`) read the IR through the `IrNode`/`IrNodeList`/`IrBlock` handles; the intricate native-`Value`/`&Block`-clone clusters materialise at their boundary (zero-cost for native).  `def_code` / `output_function` flip to `IrNode::Store` under `LOFT_CODEGEN_STORE`, lowering whole programs from a store with identical output across `tests/scripts/*.loft` (interpreter) + the full native suite + the M5 equivalence tests.  Built on G1 (cold-start cache shipped) + the M0 harness.  **Remaining:** M6 (drop the native graph for true zero-copy — needs M2/DefView so the bodies live in a *persistent* store-backed `Data`, plus converting the remaining IR readers: scopes/parser-passes/native helper files); the `Definition` read-seam is now complete across all subsystems (M1a `state/` + M1b `generation/` + M1c `parser/`+`compile.rs`); M7 (parser emits store IR directly); E2 (locked-mmap mutability).  M5's per-function re-materialise is the proof harness; M6 is the architectural endpoint.
 
+### Remaining work — consolidated (relevant order, 2026-06-05)
+
+The headline is **shipped**: program cache default-on (3–3.6× startup,
+parse-skip) + the C71 native-library execution model live end-to-end
+(Arc N, Steps 1–4; 63.6× execution speedup measured & guarded).  What
+is left, in the order it's worth doing — detail lives in the linked
+sections below, this is the index:
+
+1. **Land the branch.**  ~54 green, all-opt-in (default-off) commits;
+   a coherent, safe-to-merge foundation (the `IrNode` handle, the
+   cross-backing equivalence harness, store-backed codegen on both
+   backends, the cache).  The longer it diverges from `main`, the more
+   the rebase costs.  → § Recommendation #4.
+
+2. **F1 — nextest native-test reliability.**  CI-masked (green under
+   `make test` + the `ci` nextest profile's `retries = 1`) but flaky
+   under raw `cargo nextest` full-suite.  Two modes, do not conflate:
+   - **Mode B (higher-value, pre-existing) first** — the cdylib build
+     resolves transitive deps against `target/<profile>/deps/`, but a
+     raw nextest test-profile build doesn't lay out standalone dep
+     rlibs the same way (`ring/rustls/webpki … not in rlib format`).
+     Fix: make the cdylib build resolve against the rlibs nextest
+     actually produces (hashed `libloft-<hash>.rlib` + matching dep
+     set), or have the harness build a consistent rlib set first.
+   - **Mode A (unconfirmed)** — a concurrent native-link race vs a
+     `deps/` rewrite.  The serial-group fix was **tried and reverted**
+     (`56132ae`/`8599a2c`); needs a controlled A/B (group vs no-group,
+     several runs) before re-landing or dropping it.
+   → § Discovered follow-ups F1.
+
+3. **Arc N dispatch completion (the live forward work — C71 build-out).**
+   - **N4 dispatch side + N2** — compile the native subgraph to a
+     cdylib and emit `OpStaticCall` for native callees, interpret the
+     rest.  The gate analysis (`native_gate.rs`, 461/461 stdlib fns
+     native-compilable) is done; this is the remaining mechanism.
+   - **N2 type-coverage leftovers** — closures (`__closure` param),
+     `generate_interface` aggregate type-name rendering
+     (`sorted<Item[k]>`), and `hash`/`index`/`spacial` cross
+     (untested, same proven `DbRef` path).
+   - **D2a** — the binary schema interface as the robust successor to
+     the source-form `generate_interface`.
+   - **N3 polish** — option-3 background build.
+   → § Arc N (N2/N3/N4 rows).
+
+4. **N1 — native-artifact idle-TTL cache (deferred).**  The eviction
+   model + its application to the program cache are done; applying the
+   idle-TTL to a *native-artifact* cache waits on the registry
+   build-cache surface (`~/.loft/build-cache/`) or a new shared local
+   native cache — rather than shipping untested registry-gated GC
+   (Goal-A "verify, don't assert").  → § Arc N (N1 row).
+
+5. **Architectural endpoint — M6 / M7 / E2 (deprioritised for perf;
+   future fresh-context arc, NOT a branch extension).**  M6 (cold-path
+   native-graph drop / zero-copy reads — E2-gated), M7 (parser emits
+   store IR directly), E2 (locked-mmap writable store).  **E2's perf
+   rationale is superseded by C71** — in the native-library model the
+   library bodies + variable tables are never materialised at startup,
+   so the allocation cost E2 removes isn't incurred; there is also no
+   cheap `read_function` win (the cost is allocation-bound, measured).
+   E2's value is now purely architectural (self-hosting, store-backed
+   IR, mmap), worth it only if warm startup for large whole-program
+   bundles becomes a headline goal.  → § Recommendation #2–#3.
+
 ### Recommendation — where to go next (2026-06-04)
 
 The codegen migration (M2–M6.warm) is **done and proven**, but the session's
