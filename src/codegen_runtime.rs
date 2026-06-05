@@ -476,6 +476,11 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
 
 /// Return the parse errors from the last `Type.parse()` call as a single
 /// newline-separated string.  Called by the `#errors` accessor.
+// @PLN10 — still scratch-backed: this introspector is emitted through a
+// hand-written wrapper (`generation/mod.rs:2257`) declared `-> Str`, so a
+// `String` return would break the generated wrapper.  Converting it needs the
+// wrapper's signature changed too — deferred with the other custom-wrapper
+// producers (see the design doc's native-backend section).
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_parse_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_parse_errors.join("\n");
@@ -496,6 +501,9 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
 /// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
 /// NOT clear the buffer — errors persist across `json_errors()` reads
 /// until the next successful parse implicitly clears them.
+// @PLN10 — still scratch-backed: emitted through the `n_json_errors`
+// hand-written wrapper (`generation/mod.rs:2272`) declared `-> Str`.  Deferred
+// with the other custom-wrapper producers (see the design doc).
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_json_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_json_errors.join("|");
@@ -2128,8 +2136,12 @@ pub fn t_9JsonValue_as_long(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i
 /// P268 — JsonValue.kind() native wrapper.  Returns the variant
 /// name as a Str: "JNull" / "JBool" / "JNumber" / "JString" /
 /// "JArray" / "JObject".
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+// @PLN10 — return an owned `String` instead of a `Str` borrowed from the
+// never-cleared `stores.scratch`.  The native binding wraps text-var assignments
+// in `(...).to_string()` and argument sites in `&*` (both work on `String` via
+// `Deref<Target=str>`), so this is transparent and strictly better — the owned
+// String is freed instead of leaked.
+pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
     let s = match discr {
@@ -2141,8 +2153,7 @@ pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str 
         x if x == crate::native::JV_DISCR_OBJECT => "JObject",
         _ => "JNull",
     };
-    stores.scratch.push(s.to_string());
-    Str::new(stores.scratch.last().unwrap())
+    s.to_string()
 }
 
 // ─── Remaining JSON natives (P54 / P268 follow-up) ─────────────
@@ -2305,22 +2316,19 @@ pub fn t_9JsonValue_fields(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Db
 
 /// JsonValue.to_json() — canonical RFC 8259 serialiser.  Delegates
 /// to the shared `crate::native::json_to_text` (used by interp + native).
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn t_9JsonValue_to_json(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+// @PLN10 — owned `String` instead of a scratch-`Str` (same path as `kind`:
+// the native binding bridges via `.to_string()` / `&*`).
+pub fn t_9JsonValue_to_json(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let out = crate::native::json_to_text(stores, &v, false);
-    stores.scratch.push(out);
-    Str::new(stores.scratch.last().unwrap())
+    crate::native::json_to_text(stores, &v, false)
 }
 
 /// JsonValue.to_json_pretty() — 2-space-indent serialiser.  Same
 /// shared helper as `to_json`, with the `pretty` flag set.
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn t_9JsonValue_to_json_pretty(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+// @PLN10 — owned `String` instead of a scratch-`Str` (same path as `kind`).
+pub fn t_9JsonValue_to_json_pretty(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let out = crate::native::json_to_text(stores, &v, true);
-    stores.scratch.push(out);
-    Str::new(stores.scratch.last().unwrap())
+    crate::native::json_to_text(stores, &v, true)
 }
 
 /// json_null() — allocate a JsonValue set to the JNull variant.
