@@ -149,7 +149,7 @@ for the corrected design doc (also historical).
 > by being *planned*; filing our own decomposition would just pollute the tracker
 > with rows nobody outside this plan needs.  Promote one to a real Issue only if it
 > escapes the plan (blocks unrelated work / handed off).  See
-> [ISSUE_TRACKING.md § The split](../../ISSUE_TRACKING.md#the-split--what-lives-where).
+> [ISSUE_TRACKING.md § The split](../../../ISSUE_TRACKING.md#the-split--what-lives-where).
 
 ---
 
