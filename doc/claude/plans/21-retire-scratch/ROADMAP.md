@@ -3,33 +3,52 @@ render_with_liquid: false
 ---
 # @PLN10 — Roadmap to delete `stores.scratch`
 
-The clear path from **today (30 `scratch.push` sites; native + node-wasm +
-wasmtime-wasm green — keystone `W` SOLVED, `codegen_runtime` now scratch-free)** to the
-**goal (the field deleted; Goal E for strings — no global text buffer)**, as a set
-of dependency-ordered issues.
+The clear path from **today (29 `scratch.push` sites; native + node-wasm +
+wasmtime-wasm green — keystone `W` SOLVED, `codegen_runtime` now scratch-free,
+the cdylib FFI codegen wrap now owned-`String`)** to the **goal (the field
+deleted; Goal E for strings — no global text buffer)**, as a set of
+dependency-ordered issues.
 
 Read [`01-destination-passing-design.md`](01-destination-passing-design.md) first —
 it is the design + the build evidence each issue below builds on.
 
 > ## ▶ Next session — start here
 > **Done (✅):** the interpreter chokepoint, every native `codegen_runtime`
-> producer (that file is now ZERO `scratch.push`), the keystone `W`, and the
-> coverage proof `C`.  **39 → 30**, all three backends green, 22 commits, tree
-> clean.
+> producer (that file is now ZERO `scratch.push`), the keystone `W`, the
+> coverage proof `C`, and **the N2 cdylib FFI codegen wrap** (the @P244
+> `output_native_direct_call` text path now returns owned `String`, not a
+> scratch-backed `Str`).  **39 → 29**, all three backends green, 23 commits.
 >
-> **Two site-droppers remain — both intricate codegen (do one, validate, commit):**
-> 1. **Phase B** (`emit.rs` + `pre_eval.rs`, 9 sites) — @P205 generic-spec text
->    wraps: thread a `RefVar(Text)` work buffer through generic specialisation
->    (the `text_return` machinery) instead of the scratch wrap.
-> 2. **N2** (`mod.rs` FFI wrap + `extensions.rs` bridge, 3 sites) — the cdylib
->    text path; the wasip2 variant of the `W` fix (this path gave the original
->    `E0599`, so probe wasip2 carefully).
+> **Three site-droppers remain (do one, validate, commit):**
+> 1. **Phase B** (`emit.rs`, 8 sites) — the central `Value::Return` /
+>    `wrap_result` text wrap.  ⚠ **Bigger than the README framed.**  The scratch
+>    wrap serves THREE roots, not just generic-spec: `no_work_buffer` (@P205
+>    generic monomorphisation — generics are excluded from `text_return` at
+>    `definitions.rs:811`), `returns_local_text` (@P321e), and `returns_ncc_block`
+>    (@PLAN52 `??` value-block).  To **zero the grep** all three must stop
+>    emitting `scratch.push`.  The clean direction is owned-`String` returns (the
+>    W/N2 pattern), BUT this touches the central Return path for *every* native
+>    text fn, where the **wrapper/body consistency hazard** (the W trap) bites: a
+>    fn with MIXED returns (some buffer-view `Str::new(work_buf)`, some owned
+>    local) can't be cleanly one signature.  Build a matrix of return-shapes
+>    first.
+> 2. **N2 interpreter bridge** (`extensions.rs:651,894` — `bridge_push_str` /
+>    `push_loft_str`, 2 sites) — the **harder** half of N2.  The runtime bridge
+>    has NO caller-provided destination, and the interp `Str` ABI needs a backing
+>    buffer for dynamically-produced text.  Removing scratch here needs cdylib
+>    text natives to **dest-pass**: the chokepoint (`wrap_value_text_dest`) skips
+>    them today (cdylib names aren't in `is_text_dest_native`), so they fall to
+>    the scratch bridge.  Genuinely a new mechanism, not a mechanical conversion.
+> 3. **F fallbacks** (`native.rs`, 16 sites + `format.rs` 2 helpers) — dead per
+>    `C`; deleted **at D**, not standalone (the interp `Str`-on-stack ABI needs a
+>    backing buffer, so a release stub would silently corrupt if `C` regressed).
 >
 > **Then `D` (the goal):** delete `Stores::scratch` + dead `clear_scratch` /
-> `OpClearScratch`, **folding in `F`** — delete the 18 coverage-proven-dead interp
-> fallbacks (`native.rs` + `format.rs`) + their `FUNCTIONS` registration (the loft
-> *def* stays for the IR `Call`; a `library_names` miss then loudly catches any
-> residual emit).
+> `OpClearScratch`, **folding in `F`** — delete the 16+2 coverage-proven-dead
+> interp fallbacks (`native.rs` + `format.rs`) + their `FUNCTIONS` registration
+> (the loft *def* stays for the IR `Call`; a `library_names` miss then loudly
+> catches any residual emit).  `D` waits on Phase B + N2-interp-bridge reaching
+> zero.
 >
 > ⚠ **Env:** after ANY `src/generation/` or `codegen_runtime.rs` change, rebuild
 > **all three** rlibs before trusting a backend, or a stale one fakes failures:
@@ -118,11 +137,35 @@ cell-ABI producers.  `39 → 34`.
 > 34 → 32; all three backends green.  (The interpreter-side `n_json_errors` /
 > `i_parse_errors` in `native.rs` are still scratch-backed — that's I1's interp half.)
 
-### N2 — cdylib FFI text wrap → owned `String` (Phase A.5) *(needs W, N1)*
-- **Scope:** the `needs_text_wrap` emitted body (`mod.rs:2698`) + the interpreter
-  cdylib bridge (`extensions.rs:651,894` — `bridge_push_str` / `push_loft_str`).
-- **Accept:** `scratch.push` −3; cdylib libraries green on native + wasm.
-- **Effort/risk:** M / med.  **Label:** `area:codegen` `area:wasm`
+### N2a — cdylib FFI text wrap → owned `String` (codegen half) ✅ **DONE**
+> **Solved** (commit `f4e18da6`).  `output_native_direct_call`'s `needs_text_wrap`
+> body now returns `String::from_utf8_unchecked(_bytes)` (owned), the wrapper
+> signature flips to `-> String`, and the `--html` graceful stub returns
+> `String::new()` — all gated on the structural `!def.native.is_empty()` signal
+> (disjoint from the curated `native_returns_owned_string` name set).  The caller
+> bridges `String` → `Str` via `Deref` (@P304).  **`scratch.push` 30 → 29.**
+> - **Why it was clean (vs Phase B):** cdylib text natives UNIFORMLY produce
+>   owned `String` (the FFI always returns a freshly-copied `LoftStr`), so there
+>   is no mixed buffer-view/owned hazard — the W trap doesn't apply.
+> - **Validated:** the real 2-cdylib consumer (lib/server + lib/web, 7 text
+>   natives) compiles `--native`, links, runs to exit 0 on this box (@P389's
+>   cross-package link is masked locally by cached deps).  Native suites green
+>   serially; `--html` path unexercised (no text-returning cdylib native is
+>   browser-compiled — imaging has none).  Regression
+>   `pln10_n2_cdylib_text_wrapper_returns_owned_string` (emit-only, not @P389-blocked).
+
+### N2b — cdylib FFI text wrap, interpreter bridge *(the harder half — independent)*
+- **Scope:** `extensions.rs:651,894` (`bridge_push_str` / `push_loft_str`).  These
+  materialise a foreign `LoftStr` onto the interp stack and need a backing buffer
+  for the `Str` ABI — currently `stores.scratch`.
+- **Why it's harder than N2a:** the runtime bridge has **no caller-provided
+  destination**.  Dynamically-produced value-position text in the interpreter
+  must dest-pass (write into a store text record the call site allocates, freed by
+  `OpFreeText`), but the chokepoint `wrap_value_text_dest` skips cdylib calls
+  (their names aren't in `is_text_dest_native`), so they fall to the scratch
+  bridge.  A real fix = give cdylib text natives dest-passing — a new mechanism.
+- **Accept:** `scratch.push` −2; cdylib libraries green on the interpreter.
+- **Effort/risk:** M / med-high.  **Label:** `area:codegen`
 
 ### I1 — remaining interpreter producers → dest-passing *(independent; native half needs W)*
 - **Scope:** per producer, the proven Build-3 pattern — a `_dest` variant +
@@ -146,13 +189,32 @@ cell-ABI producers.  `39 → 34`.
 > regression `tests/scripts/195`.  (Interp `n_as_text` + `os_variable` fold into
 > the interp-side cleanup with the other fallbacks, at `D`.)
 
-### B — generic-specialisation text wraps (Phase B) *(independent)*
-- **Scope:** the 8 `emit.rs` `stores.scratch.push(...); Str::new(...)` emissions for
-  bounded-generic text returns (the @P205 family).  Thread a `RefVar(Text)` work
-  buffer through generic specialisation instead (the `text_return` machinery).
-- **Accept:** `scratch.push` −8 (emit.rs); the `p205_no_str_new_of_local_in_corpus`
-  test updates to the new shape.
-- **Effort/risk:** M / med.  **Label:** `area:codegen`
+### B — central `Value::Return` / `wrap_result` text wraps (Phase B) *(independent)*
+- **Scope (corrected — bigger than first framed):** the 8 `emit.rs`
+  `stores.scratch.push((expr).to_string()); Str::new(...)` emissions.  They serve
+  **THREE distinct roots**, all "the function body produced an owned `String` but
+  the wrapper return type is `Str`, so `Str::new(local)` would dangle":
+  1. `no_work_buffer` — @P205 bounded-generic monomorphisation (generics are
+     excluded from `text_return` at `definitions.rs:811`, so the concrete copy
+     never gets the `RefVar(Text)` work buffer).
+  2. `returns_local_text` — @P321e (a work buffer exists but the fn returns a
+     *different* local `String`, e.g. a `match` result `.to_string()`'d).
+  3. `returns_ncc_block` — @PLAN52 (`??` value-block lowering materialises an
+     owned `String` via the `__ncc_*` skip-free pattern).
+  To **zero the grep** ALL THREE must stop emitting `scratch.push` — fixing only
+  the generic root leaves the emit lines in source (they're string literals — the
+  grep counts them even when no program triggers them).
+- **The direction + the hazard:** owned-`String` returns (the W/N2 pattern) is the
+  clean fix — these roots all produce owned `String`, so returning it directly (no
+  `Str::new` wrap, wrapper sig `-> String`) is correct *per return*.  **But** the
+  signature is per-FUNCTION while the root-detection is per-`Return`: a fn with
+  MIXED returns (one branch a buffer-view `Str::new(work_buf)`, another an owned
+  local) can't be a single clean signature — exactly the wrapper/body consistency
+  trap `W` hit on wasip2.  **Build a return-shape matrix first** (does any text fn
+  mix buffer-view and owned returns?) before committing to the owned-String flip.
+- **Accept:** `scratch.push` −8 (emit.rs); `p205_no_str_new_of_local_in_corpus`
+  updates to the new shape; all three backends green.
+- **Effort/risk:** M-L / med-high (central path, mixed-return hazard).  **Label:** `area:codegen`
 
 ### C — chokepoint coverage proof ✅ **DONE (empirically)** *(for the converted producers)*
 > **Established this session** by three independent results: (1) **zero** non-`_dest`
@@ -192,16 +254,20 @@ cell-ABI producers.  `39 → 34`.
 | Milestone | Issues | Meaning |
 |---|---|---|
 | **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
-| **M2 — producers converted** | `N1 N2 I1 A B` | every producer off scratch (fallbacks aside) |
+| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ · `N2b` `I1` `B` | every producer off scratch (fallbacks aside) |
 | **M3 — fallbacks gone** | `C`✅ `F` | coverage proof DONE (fallbacks are dead code); `F` deletes them, folded into `D` |
 | **M4 — GOAL** | `D` | field deleted |
 
-**Longest chain (critical path):** `W → N1 → N2 → D` on the native side, and
-`I1 → C → F → D` on the interpreter side — these two run in parallel; `D` waits on
-the slower.  `A` and `B` are independent and can land any time before `D`.
+**Longest chain (critical path):** `W → N1 → N2a`✅ on the native codegen side
+(done); the field still waits on `B` (Phase B) + `N2b` (interp bridge) + `I1`
+reaching zero, then `C → F → D`.  `A`, `B`, `N2b` are independent and can land any
+time before `D`.
 
-**Recommended order:** `W` first (it's the keystone and the only high-risk
-investigation) → then `N1`+`I1` in parallel → `N2`+`A`+`B` → `C` → `F` → `D`.
+**Recommended order (remaining):** **`B` or `N2b`** next — both intricate; do one,
+validate on all three backends, commit.  `B` is independent of the cdylib path but
+touches the central Return emit (mixed-return hazard — matrix first).  `N2b` is the
+interp cdylib bridge (needs dest-passing — a new mechanism).  Then `I1` (remaining
+interp producers) → `C`✅ → `F` → `D`.
 
 **If `W` proves too costly:** the interpreter chain (`I1 → C → F`) is fully
 independent of it.  Banking the interpreter side (its fallbacks removed) is a
