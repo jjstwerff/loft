@@ -476,15 +476,13 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
 
 /// Return the parse errors from the last `Type.parse()` call as a single
 /// newline-separated string.  Called by the `#errors` accessor.
-// @PLN10 — still scratch-backed; converting it to owned `String` needs the
-// curated `native_returns_owned_string` wrapper-return gate (issue W) + a
-// golden-file regen.  See the design doc's native-backend section.
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn i_parse_errors(stores: &mut Stores) -> Str {
+// @PLN10 — owned `String` (no scratch).  In lockstep with
+// `generation::native_returns_owned_string`, which makes the generated `n_*`
+// wrapper `-> String` so wrapper and body agree on every backend (incl. wasip2).
+pub fn i_parse_errors(stores: &mut Stores) -> String {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    stores.scratch.push(msg);
-    Str::new(stores.scratch.last().unwrap())
+    msg
 }
 
 /// Push a constraint-check error to the parse error list.
@@ -497,12 +495,9 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
 /// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
 /// NOT clear the buffer — errors persist across `json_errors()` reads
 /// until the next successful parse implicitly clears them.
-// @PLN10 — still scratch-backed (same gate as `i_parse_errors`).
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn i_json_errors(stores: &mut Stores) -> Str {
-    let msg = stores.last_json_errors.join("|");
-    stores.scratch.push(msg);
-    Str::new(stores.scratch.last().unwrap())
+// @PLN10 — owned `String` (no scratch); same gate as `i_parse_errors`.
+pub fn i_json_errors(stores: &mut Stores) -> String {
+    stores.last_json_errors.join("|")
 }
 
 /// Deep-copy a database record: copies the raw bytes and duplicates

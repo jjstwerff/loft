@@ -441,6 +441,18 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     }
 }
 
+/// @PLN10 — text-returning natives whose generated **wrapper** body returns an
+/// owned `String` (their `codegen_runtime` impl was converted off the
+/// never-cleared `stores.scratch`).  The wrapper return type (the `-> …` at the
+/// function header below) keys on this so wrapper and body never disagree — a
+/// blanket "all text wrappers return `String`" flip breaks `#rust` natives
+/// (whose bodies stay `Str`-wrapped), `as_text` (null), and cdylib `#native`
+/// fns.  Curate this in **lockstep** with the body conversions in
+/// `codegen_runtime.rs`.  Sibling of `state::codegen::is_text_dest_native`.
+fn native_returns_owned_string(name: &str) -> bool {
+    matches!(name, "i_parse_errors" | "n_json_errors")
+}
+
 /// Use this to map a loft type to the Rust type used in generated code.
 /// The context controls whether the type appears as an owned value, argument, variable, or reference.
 ///
@@ -2131,7 +2143,13 @@ extern crate loft;"
         }
         write!(w, ") ")?;
         if def.returned != Type::Void {
-            write!(w, "-> {} ", rust_type(&def.returned, &Context::Result))?;
+            // @PLN10 — owned-`String` producers (curated) get a `-> String`
+            // wrapper matching their converted body; all others keep `Str`.
+            if matches!(def.returned, Type::Text(_)) && native_returns_owned_string(&def.name) {
+                write!(w, "-> String ")?;
+            } else {
+                write!(w, "-> {} ", rust_type(&def.returned, &Context::Result))?;
+            }
         }
         // Mark argument variables as already declared so Set won't re-declare them.
         for arg_nr in def.variables.arguments() {
