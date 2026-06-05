@@ -339,10 +339,35 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
     `ncc` lambda gets the same treatment (write into its `__work_ret`).  Parser /
     specialisation change, but uniform and ripple-free.  This is the roadmap's
     original framing, now matrix-justified.
-- **Accept:** the three `emit.rs` `scratch.push` emission sites deleted; the
-  generated native corpus has zero `scratch.push`; `p205_*` + native + wasm green.
-- **Effort/risk:** M / med (the matrix removed the within-fn hazard; B avoids the
-  ripple).  **Label:** `area:codegen`
+- **B PROTOTYPED (then reverted — partial success + one regression):**
+  - **The emit reframe works.** Replace `needs_p205_scratch` with `wrap_text &&
+    !is_bufview` (is the return the `RefVar(Text)` buffer var?) and emit the
+    non-bufview case as `{ let _tmp = (val).to_string(); *var_<wb> = _tmp;
+    Str::new(&*var_<wb>) }` (write into the buffer).  Combined with extending the
+    P227 force-add from lambdas to **all** text fns (`control.rs` — drop the
+    `is_lambda` guard), the corpus went **1313 → 8** `scratch.push` emissions
+    (codegen-only count), native + interp smoke green, generated `nwb` fns now take
+    `var___work_ret` and write into it.  Everything stays `-> Str` → **no ripple**,
+    confirming B's central claim.
+  - **The 8 residual:** 6 are generic monomorphs (`text_return` is skipped for
+    generic templates → no buffer → scratch fallback; these need the force-add
+    threaded through specialisation) + 2 in `05-enums`/`159` (the other two emit
+    sites — the `Value::If`-Return at `emit.rs:~318` and the `wrap_result` block-tail
+    at `~1452` — still use the old logic; apply the same `!is_bufview` reframe).
+  - **The regression (why it reverted):** the broad force-add breaks **call-site
+    adaptation** for some patterns — `n_rewrite_link` (lib/markdown) "Too few
+    parameters (got 5, need 6)" at runtime: a call resolved with 5 args before the
+    buffer was force-added onto the def (likely a recursive / forward / fn-ref call
+    the second-pass `re_resolve_call` doesn't re-fix).  Plus `introspect_show_types`
+    asserts the OLD dep shape `text["a"]` (now `text["__work_ret","a"]` — just
+    update the test).
+  - **Next-session plan:** (1) fix the force-add call-site adaptation — ensure
+    EVERY call to a force-added fn gets the buffer arg (force-add earlier, before
+    the body's calls resolve, OR re-resolve all callers); (2) reframe the other two
+    emit sites; (3) force-add for generic monomorphs at specialisation; (4) update
+    `introspect_show_types`; (5) full 3-rlib (incl. wasip2) + native + wasm.
+- **Effort/risk:** M / med — the mechanism is proven (1313→8); the remaining work is
+  the call-site-adaptation fix + 2 emit sites + generic monomorphs.  **Label:** `area:codegen`
 
 ### C — chokepoint coverage proof ✅ **DONE (empirically)** *(for the converted producers)*
 > **Established this session** by three independent results: (1) **zero** non-`_dest`
