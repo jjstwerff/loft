@@ -15,40 +15,67 @@ it is the design + the build evidence each issue below builds on.
 > ## ▶ Next session — start here
 > **Done (✅):** the interpreter chokepoint, every native `codegen_runtime`
 > producer (that file is now ZERO `scratch.push`), the keystone `W`, the
-> coverage proof `C`, and **the N2 cdylib FFI codegen wrap** (the @P244
+> coverage proof `C`, and **N2a** — the cdylib FFI **codegen** wrap (the @P244
 > `output_native_direct_call` text path now returns owned `String`, not a
-> scratch-backed `Str`).  **39 → 29**, all three backends green, 23 commits.
+> scratch-backed `Str`).  **39 → 29** grep hits (**28 real** statements — one
+> `pre_eval.rs:556` hit is a comment); native + interp green.
 >
-> **Three site-droppers remain (do one, validate, commit):**
-> 1. **Phase B** (`emit.rs`, 8 sites) — the central `Value::Return` /
->    `wrap_result` text wrap.  ⚠ **Bigger than the README framed.**  The scratch
->    wrap serves THREE roots, not just generic-spec: `no_work_buffer` (@P205
->    generic monomorphisation — generics are excluded from `text_return` at
->    `definitions.rs:811`), `returns_local_text` (@P321e), and `returns_ncc_block`
->    (@PLAN52 `??` value-block).  To **zero the grep** all three must stop
->    emitting `scratch.push`.  The clean direction is owned-`String` returns (the
->    W/N2 pattern), BUT this touches the central Return path for *every* native
->    text fn, where the **wrapper/body consistency hazard** (the W trap) bites: a
->    fn with MIXED returns (some buffer-view `Str::new(work_buf)`, some owned
->    local) can't be cleanly one signature.  Build a matrix of return-shapes
->    first.
-> 2. **N2 interpreter bridge** (`extensions.rs:651,894` — `bridge_push_str` /
->    `push_loft_str`, 2 sites) — the **harder** half of N2.  The runtime bridge
->    has NO caller-provided destination, and the interp `Str` ABI needs a backing
->    buffer for dynamically-produced text.  Removing scratch here needs cdylib
->    text natives to **dest-pass**: the chokepoint (`wrap_value_text_dest`) skips
->    them today (cdylib names aren't in `is_text_dest_native`), so they fall to
->    the scratch bridge.  Genuinely a new mechanism, not a mechanical conversion.
-> 3. **F fallbacks** (`native.rs`, 16 sites + `format.rs` 2 helpers) — dead per
->    `C`; deleted **at D**, not standalone (the interp `Str`-on-stack ABI needs a
->    backing buffer, so a release stub would silently corrupt if `C` regressed).
+> ### How far from zero — the count only drops at three steps
+> The hard infrastructure is built; the rest is proven-pattern application, **one**
+> genuinely-new mechanism, and a mechanical delete.  Crucially, **I1 (converting
+> the live interp producers) drops the count by ZERO** — it adds `_dest` variants
+> but leaves the old bodies in place; its job is to make D's final delete *safe*.
 >
-> **Then `D` (the goal):** delete `Stores::scratch` + dead `clear_scratch` /
-> `OpClearScratch`, **folding in `F`** — delete the 16+2 coverage-proven-dead
-> interp fallbacks (`native.rs` + `format.rs`) + their `FUNCTIONS` registration
-> (the loft *def* stays for the IR `Call`; a `library_names` miss then loudly
-> catches any residual emit).  `D` waits on Phase B + N2-interp-bridge reaching
-> zero.
+> | Step | Removes | Count | Nature |
+> |---|---|---|---|
+> | **now** | — | **28** | emit 8 / native 16 (5 dead + 11 live) / format 2 / extensions 2 |
+> | **Phase B** | emit.rs −8 | 20 | central Return conversion, direction-proven (matrix-gated) |
+> | **N2b** | extensions.rs −2 | 18 | needs the new null-aware interp primitive |
+> | **D + F** | native −16, format −2 | **0** | mechanical delete + field gone |
+>
+> ### The cleanest ordering (sequence by MECHANISM, not by issue-label)
+> Phase B, I1, N2b are mutually **independent** and all gate D, so order is driven
+> by risk + subsystem coherence.  Each phase drives a coherent backend region to
+> zero; difficulty rises across phases:
+>
+> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)*: give the non-null
+>    live producers (`ymd_days_ago`, `store_memory`, `struct_to_json`,
+>    `parallel_buf`, `pack_take`…) a `_dest` variant + `is_text_dest_native` entry
+>    — exactly the Build-3 template the 5 already-converted producers use.  Per
+>    producer: convert + matrix + commit.  Unlocks (part of) D's final delete.
+> 2. **Phase 2 — the null-aware interp primitive → I1-null + N2b** *(THE one novel
+>    piece)*: a single mechanism — "materialise possibly-null dynamically-produced
+>    text on the interp stack without scratch" — feeds THREE consumers that all
+>    share it: the null-carrying producers (`os_variable`), interp `as_text`, and
+>    the cdylib bridge (`extensions.rs` `bridge_push_str`/`push_loft_str`, which
+>    can return null too).  A dest buffer can't carry null (the `as_text`
+>    exclusion); the native side already proved the escape hatch (the `STRING_NULL`
+>    sentinel as an owned value — see `A`), so the interp equivalent is *unbuilt,
+>    not impossible*.  Design it ONCE.  Reaches **interp scratch = 0** (−2, and
+>    every `native.rs` body now provably dead).
+> 3. **Phase 3 — Phase B** *(central, highest blast radius)*: the 8 `emit.rs`
+>    `Value::Return`/`wrap_result` wraps → owned `String`.  ⚠ Serves THREE roots —
+>    `no_work_buffer` (@P205 generic monomorph, excluded from `text_return` at
+>    `definitions.rs:811`), `returns_local_text` (@P321e), `returns_ncc_block`
+>    (@PLAN52 `??`) — all must stop emitting `scratch.push` to zero the grep.
+>    Owned-`String` is the direction, but it touches every native text fn, where
+>    the **wrapper/body consistency hazard** (the W trap) bites: a fn with MIXED
+>    returns (one buffer-view `Str::new(work_buf)`, one owned local) can't be one
+>    clean signature.  **Build a return-shape matrix first.**  Do it last before D
+>    so a thorny Phase B doesn't block the banked interp wins (−8).
+> 4. **Phase 4 — D + F** *(mechanical payoff)*: delete `Stores::scratch` + the 16
+>    `native.rs` dead bodies + 2 `format.rs` helpers + dead `clear_scratch` /
+>    `OpClearScratch` + the `state/codegen.rs:329` emission (and reword the
+>    `pre_eval.rs:556` comment).  The loft *def* stays for the IR `Call`; a
+>    `library_names` miss then loudly catches any residual emit.  Gated on 1–3
+>    reaching zero.
+>
+> **The single insight:** I1-null and N2b *look* like separate issues but share one
+> missing primitive (null-carrying owned-text on the interp stack) — fusing them
+> into Phase 2 designs it once and surfaces the null wrinkle before it bites two
+> places.  Isolating the two genuinely-hard pieces (Phase 2's null primitive,
+> Phase 3's mixed-return) into their own matrix-gated phases keeps Phase 1
+> (proven-mechanical) and Phase 4 (the payoff) low-risk.
 >
 > ⚠ **Env:** after ANY `src/generation/` or `codegen_runtime.rs` change, rebuild
 > **all three** rlibs before trusting a backend, or a stale one fakes failures:
@@ -78,29 +105,31 @@ it is the design + the build evidence each issue below builds on.
 and the dead per-`Line` emission (`state/codegen.rs:329`).
 
 **Acceptance:** `grep -rn 'scratch.push' src/` = **0**, then the field deletes and
-its absence is the compile-time guard.  `tests/scripts/192`–`194` stay green on
+its absence is the compile-time guard.  `tests/scripts/192`–`195` stay green on
 **all three backends** (interpreter / native / wasm) throughout.
 
-**Done so far** (13 commits): the interpreter synth-temp chokepoint + the native
-cell-ABI producers.  `39 → 34`.
+**Done so far:** the interpreter synth-temp chokepoint, all native `codegen_runtime`
+cell-ABI producers, the keystone `W`/`N1`, the coverage proof `C`, `A` (native
+`as_text` null), and `N2a` (cdylib FFI codegen wrap).  `39 → 28` real statements.
 
 ---
 
 ## The dependency graph
 
 ```
-            ┌─────────────────────────────────────────────┐
-   W (keystone) ──► N1 ──► N2 ─┐                            │
-            │                  │                            ▼
-   I1 (interp) ────────────────┼──► C ──► F ──────────────► D  (GOAL)
-            │                  │                            ▲
-   A (null) ──────────────────┼────────────────────────────┤
-            │                  │                            │
-   B (Phase B) ───────────────┴────────────────────────────┘
+   W (keystone)✅ ─► N1✅ ─► N2a✅ ─────────────────────────┐
+                                                            ▼
+   A (null)✅ ──────────────────────────────────► C✅ ─► F ─► D  (GOAL)
+                                                    ▲
+   ── remaining (each gates D, mutually independent) ──
+   Phase 1: I1-nonnull ────────────────────────────┤   (count-neutral; makes
+   Phase 2: null primitive → I1-null + N2b ─────────┤    D's delete safe / −2)
+   Phase 3: B (central Return emit) ────────────────┘   (−8)
 ```
 
-`W` is the **keystone** — it unblocks every native `Str→String` conversion.
-`D` (field delete) needs **all** of `N1 N2 I1 A B F` at zero.
+`W` was the **keystone** — it unblocked every native `Str→String` conversion (done).
+`D` (field delete) needs **Phase B + N2b + I1** at zero, then deletes the dead
+bodies (`F`) + the field.  Order them by mechanism — see § the cleanest ordering.
 
 ---
 
@@ -263,13 +292,18 @@ cell-ABI producers.  `39 → 34`.
 reaching zero, then `C → F → D`.  `A`, `B`, `N2b` are independent and can land any
 time before `D`.
 
-**Recommended order (remaining):** **`B` or `N2b`** next — both intricate; do one,
-validate on all three backends, commit.  `B` is independent of the cdylib path but
-touches the central Return emit (mixed-return hazard — matrix first).  `N2b` is the
-interp cdylib bridge (needs dest-passing — a new mechanism).  Then `I1` (remaining
-interp producers) → `C`✅ → `F` → `D`.
+**Recommended order (remaining) — by mechanism, not label** (full rationale in
+§ the cleanest ordering at the top):
+1. **Phase 1 — `I1`-nonnull**: the non-null live producers (proven Build-3 template
+   ×N; count-neutral but unlocks D's delete).  Per producer: convert + matrix + commit.
+2. **Phase 2 — the null-aware interp primitive → `I1`-null + `N2b`**: the ONE novel
+   mechanism (possibly-null owned text on the interp stack), shared by `os_variable`,
+   interp `as_text`, and the cdylib bridge.  Reaches **interp scratch = 0** (−2).
+3. **Phase 3 — `B`**: central Return emit → owned `String` (matrix-first; mixed-return
+   hazard).  Last before D so a thorny `B` doesn't block the interp wins (−8).
+4. **Phase 4 — `D` + `F`**: delete the field + the 18 dead bodies (gated on 1–3 = 0).
 
-**If `W` proves too costly:** the interpreter chain (`I1 → C → F`) is fully
-independent of it.  Banking the interpreter side (its fallbacks removed) is a
-clean partial — the field can't delete, but interpreter scratch traffic reaches
-zero, which is most of the Goal-E memory win for the reference backend.
+**Banking the interpreter side is a clean partial:** Phases 1+2 reach `interp
+scratch = 0` independently of Phase B.  The field can't delete until Phase B too,
+but interpreter scratch traffic reaching zero is most of the Goal-E memory win for
+the reference backend.
