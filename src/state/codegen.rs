@@ -49,7 +49,17 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
 pub(crate) fn is_text_dest_native(name: &str) -> bool {
     matches!(
         name,
-        "t_4text_replace" | "t_4text_to_lowercase" | "t_4text_to_uppercase"
+        "t_4text_replace"
+            | "t_4text_to_lowercase"
+            | "t_4text_to_uppercase"
+            // @PLN10 — always-non-null text producers with `_dest` variants
+            // (registered in `native.rs FUNCTIONS`).  `as_text` is excluded:
+            // it can return null, which a destination buffer can't represent.
+            | "n_source_dir"
+            | "n_json_errors"
+            | "t_9JsonValue_kind"
+            | "t_9JsonValue_to_json"
+            | "t_9JsonValue_to_json_pretty"
     )
 }
 

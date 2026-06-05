@@ -121,6 +121,15 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4text_to_lowercase_dest", t_4text_to_lowercase_dest),
     ("t_4text_to_uppercase", t_4text_to_uppercase),
     ("t_4text_to_uppercase_dest", t_4text_to_uppercase_dest),
+    // @PLN10 — destination-passing variants for the always-non-null text
+    // producers; key is the loft def name + `_dest` (the lookup in
+    // `gen_text_dest_call` / `try_text_dest_pass`).  Added to
+    // `is_text_dest_native` so the Build-2 chokepoint routes them.
+    ("n_source_dir_dest", n_source_dir_dest),
+    ("n_json_errors_dest", n_json_errors_dest),
+    ("t_9JsonValue_kind_dest", n_kind_dest),
+    ("t_9JsonValue_to_json_dest", n_to_json_dest),
+    ("t_9JsonValue_to_json_pretty_dest", n_to_json_pretty_dest),
     ("t_9character_is_lowercase", t_9character_is_lowercase),
     ("t_9character_is_uppercase", t_9character_is_uppercase),
     ("t_9character_is_numeric", t_9character_is_numeric),
@@ -866,6 +875,17 @@ fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
     // live `Str` views of sibling call args; push + `last()` instead.
     stores.scratch.push(stores.source_dir.clone());
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+}
+
+// @PLN10 — destination-passing variant: write straight into the caller's
+// buffer instead of `stores.scratch`.  Routed by `is_text_dest_native`.
+fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = stores.source_dir.clone();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -2487,6 +2507,16 @@ fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
+// @PLN10 — destination-passing variant of `n_json_errors`.
+fn n_json_errors_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let msg = stores.last_json_errors.join("|");
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&msg);
+}
+
 fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
@@ -3505,6 +3535,26 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
+// @PLN10 — destination-passing variant of `n_kind`.
+fn n_kind_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    let name = match discr {
+        JV_DISCR_NULL => "JNull",
+        JV_DISCR_BOOL => "JBool",
+        JV_DISCR_NUMBER => "JNumber",
+        JV_DISCR_STRING => "JString",
+        JV_DISCR_ARRAY => "JArray",
+        JV_DISCR_OBJECT => "JObject",
+        _ => "JUnknown",
+    };
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(name);
+}
+
 /// Render a JsonValue to RFC 8259 JSON text.  The `pretty` flag
 /// controls indent emission in container arms: when `true`,
 /// non-empty `JArray` / `JObject` emit `\n` + 2-space indent per
@@ -3686,6 +3736,17 @@ fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
+// @PLN10 — destination-passing variant of `n_to_json`.
+fn n_to_json_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = *stores.get::<DbRef>(stack);
+    let out = json_to_text(stores, &v, false);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&out);
+}
+
 /// Q3 primitive-slice — `to_json_pretty(self: JsonValue) -> text`
 /// mirrors `to_json` today because primitive variants carry no
 /// nested structure — canonical and pretty output are
@@ -3699,4 +3760,15 @@ fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
     // @P354: do not clear scratch — see `n_as_text`.
     stores.scratch.push(out);
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+}
+
+// @PLN10 — destination-passing variant of `n_to_json_pretty`.
+fn n_to_json_pretty_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = *stores.get::<DbRef>(stack);
+    let out = json_to_text(stores, &v, true);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&out);
 }
