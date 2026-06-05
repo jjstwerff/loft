@@ -5,23 +5,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN11 — `Data` as a store (IR mirrors the `--native` data model)  ·  [loft-lang/plans#11](https://github.com/loft-lang/plans/issues/11)  ·  *(was `@PLAN54`)*
 
-## Status
+## Status — FINISHED (2026-06-05)
 
-**G2/M5 reached for BOTH backends (2026-06-03): the interpreter AND `--native` codegen run fully store-backed, proven byte-identical to native.**  Both lowering dispatches (`generate_inner` / `output_code_node`) read the IR through the `IrNode`/`IrNodeList`/`IrBlock` handles; the intricate native-`Value`/`&Block`-clone clusters materialise at their boundary (zero-cost for native).  `def_code` / `output_function` flip to `IrNode::Store` under `LOFT_CODEGEN_STORE`, lowering whole programs from a store with identical output across `tests/scripts/*.loft` (interpreter) + the full native suite + the M5 equivalence tests.  Built on G1 (cold-start cache shipped) + the M0 harness.  **Remaining:** M6 (drop the native graph for true zero-copy — needs M2/DefView so the bodies live in a *persistent* store-backed `Data`, plus converting the remaining IR readers: scopes/parser-passes/native helper files); the `Definition` read-seam is now complete across all subsystems (M1a `state/` + M1b `generation/` + M1c `parser/`+`compile.rs`); M7 (parser emits store IR directly); E2 (locked-mmap mutability).  M5's per-function re-materialise is the proof harness; M6 is the architectural endpoint.
+**The C71 native-library execution model + the store-backed IR foundation shipped and are proven, the live tail is routed to its canonical homes, and the architectural endpoint is deferred — this plan is closed.**  An interpreted script that `use`s a library auto-compiles the library's native-compilable subgraph to a cdylib and dispatches over the **shared store** (interpreting the rest), byte-identical to the all-interpreted run and **63.6×** faster than interpreting the library; the program cache is **default-on** (3–3.6× startup, parse-skip); the IR is store-backed on both backends (G2/M5 — `generate_inner` / `output_code_node` read through the `IrNode` handle, proven byte-identical to native).  The decision is automatic and invisible (`use <lib>` is native; `LOFT_NO_NATIVE_LIBS` opts out) with a dev-interpret-on-edit fallback.
 
-### Remaining work — consolidated (relevant order, 2026-06-05)
+The **closure ledger** (what shipped · routed-out · deferred) is the next section; everything below it is the dated **build/closure record** (historical) — kept as the how-it-was-built archive, not live work.
 
-The headline is **shipped**: program cache default-on (3–3.6× startup,
+### Closure ledger — shipped · routed-out · deferred (2026-06-05)
+
+The deliverable **shipped**: program cache default-on (3–3.6× startup,
 parse-skip) + the C71 native-library execution model live end-to-end
-(Arc N, Steps 1–4; 63.6× execution speedup measured & guarded).  What
-is left, in the order it's worth doing — detail lives in the linked
-sections below, this is the index:
+(Arc N, Steps 1–4; 63.6× execution speedup measured & guarded) + the
+store-backed IR on both backends.  Where the rest went:
 
-1. **Land the branch.**  ~54 green, all-opt-in (default-off) commits;
-   a coherent, safe-to-merge foundation (the `IrNode` handle, the
-   cross-backing equivalence harness, store-backed codegen on both
-   backends, the cache).  The longer it diverges from `main`, the more
-   the rebase costs.  → § Recommendation #4.
+1. **Merge (per finish-then-merge).**  The whole branch lands on `main`
+   as one finished unit — a coherent, all-opt-in (default-off) foundation
+   (the `IrNode` handle, the cross-backing equivalence harness,
+   store-backed codegen on both backends, the cache).  The only action
+   left for this plan.
 
 2. **F1 — nextest native-test reliability.**  CI-masked (green under
    `make test` + the `ci` nextest profile's `retries = 1`) but flaky
