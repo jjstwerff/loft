@@ -579,6 +579,14 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
     }
     args.reverse();
 
+    // @PLN10 — dest-mode detection: the interpreter caller routes a text-returning
+    // auto-native call through `gen_cdylib_text_dest_call`, which set a per-call
+    // `bridge_text_dest` before this dispatch.  The bridge consumes it (writes the
+    // result into that caller-owned record) and signals dest-mode by leaving `ret`
+    // text null — so we must push NOTHING here, matching the codegen's dest-mode
+    // stack accounting.  Captured before the call because the bridge `take()`s it.
+    let text_dest_mode = stores.bridge_text_dest.is_some();
+
     let mut ret = LibArg::ZERO;
     let stores_ptr: *mut crate::database::Stores = stores;
     // SAFETY: `bridge_ptr` is a `loft_shared_…` export of an auto-generated cdylib
@@ -607,14 +615,20 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         Some(ArgT::F32) => stores.put::<f64>(stack, f64::from(f32::from_bits(ret.scalar as u32))),
         Some(ArgT::Bool) => stores.put(stack, ret.scalar != 0),
         Some(ArgT::Ref | ArgT::Vec) => stores.put::<DbRef>(stack, ret.dbref),
-        // The bridge already copied the result text into `stores.scratch[0]`
-        // (stable); point the stack `Str` at it (mirrors `bridge_push_str`).
+        // @PLN10 — dest-passing: in dest-mode the bridge wrote the result into the
+        // caller-owned `bridge_text_dest` record and left `ret` text null; the value
+        // lives in its destination, so push NOTHING (matches the dest-mode codegen).
+        // The non-dest branch is an uncovered value position (whole-suite `=panic`
+        // == 0 proved it dead) — degrade to an empty `Str` rather than re-introduce
+        // `stores.scratch`, and flag it loudly in dev.
+        Some(ArgT::Text) if text_dest_mode => {}
         Some(ArgT::Text) => {
-            let s = crate::keys::Str {
-                ptr: ret.text_ptr,
-                len: ret.text_len as u32,
-            };
-            stores.put(stack, s);
+            debug_assert!(
+                ret.text_ptr.is_null(),
+                "auto-native text return reached the dispatcher without a dest \
+                 (uncovered value position) — @PLN10 dest-passing coverage gap"
+            );
+            stores.put(stack, crate::keys::Str::new(""));
         }
     }
 }

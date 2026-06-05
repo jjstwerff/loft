@@ -31,7 +31,7 @@
 
 use crate::data::{Context, Data, DefType, Type};
 use crate::database::Stores;
-use crate::generation::{Output, rust_type};
+use crate::generation::{Output, returns_owned_string, rust_type};
 use std::collections::{BTreeSet, HashSet};
 
 /// @PLN11 Arc N / N2 (lean interface) — generate the loft-source **interface** a
@@ -452,7 +452,7 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
     }
 
     let call = format!("{inner}(cell{fwd})");
-    let ret_stmt = bridge_write_ret(def.returned(), &call);
+    let ret_stmt = bridge_write_ret(def.returned(), &call, returns_owned_string(def));
 
     format!(
         "#[unsafe(no_mangle)]\n\
@@ -517,8 +517,11 @@ fn bridge_read(t: &Type, slot: &str) -> String {
 }
 
 /// Rust statement writing the inner-fn result `expr` (of loft return type `t`)
-/// into the `ret` [`LibArg`] slot.
-fn bridge_write_ret(t: &Type, expr: &str) -> String {
+/// into the `ret` [`LibArg`] slot.  `inner_owned` is [`returns_owned_string`] for
+/// the inner fn: text producers split into those returning an owned `String`
+/// (nwb / FFI-direct / curated) and those returning a buffer-backed `Str`, and the
+/// bridge must borrow `&str` from the right one (`String` has no `.str()`).
+fn bridge_write_ret(t: &Type, expr: &str, inner_owned: bool) -> String {
     match t {
         Type::Void | Type::Null => format!("let _ = {expr};"),
         // Plain (tag-only) enum returns a `u8` tag → widen into the scalar slot.
@@ -535,18 +538,33 @@ fn bridge_write_ret(t: &Type, expr: &str) -> String {
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _) => format!("unsafe {{ (*ret).dbref = ({expr}); }}"),
         // Text return: the inner fn returns a `Str` pointing into a local work
-        // `String` (about to drop).  Copy the bytes into the shared store's scratch
-        // (stable, outlives this frame) and point `ret` at that — mirroring the
-        // legacy `bridge_push_str`.  The dispatcher reads ptr+len back onto the stack.
-        Type::Text(_) => format!(
-            "let __r = ({expr});\n    \
-             let __t = __r.str();\n    \
-             let __st: &mut Stores = unsafe {{ &mut *cell.get() }};\n    \
-             __st.scratch.clear();\n    \
-             __st.scratch.push(__t.to_string());\n    \
-             let __s = &__st.scratch[0];\n    \
-             unsafe {{ (*ret).text_ptr = __s.as_ptr(); (*ret).text_len = __s.len(); }}"
-        ),
+        // `String` (about to drop).  @PLN10 — destination-passing, not `scratch`:
+        // the interpreter caller routes this call through `gen_cdylib_text_dest_call`
+        // (`is_cdylib_text_call` ⇒ true for an auto-native text fn), which stashed a
+        // per-call `bridge_text_dest` on the shared store.  Write the bytes into that
+        // caller-owned record (line-lifetime, distinct per call — no re-entrancy,
+        // no never-cleared global buffer) and signal dest-mode by leaving `ret` text
+        // null so the dispatcher pushes nothing (mirrors the cdylib `bridge_text_result`).
+        Type::Text(_) => {
+            // Borrow `&str` from the inner result: an owned `String` (nwb /
+            // FFI-direct) vs a buffer-backed `Str` (which has `.str()`).
+            let borrow = if inner_owned {
+                "let __t: &str = __r.as_str();"
+            } else {
+                "let __t = __r.str();"
+            };
+            format!(
+                "let __r = ({expr});\n    \
+                 {borrow}\n    \
+                 let __st: &mut Stores = unsafe {{ &mut *cell.get() }};\n    \
+                 if let Some(__d) = __st.bridge_text_dest.take() {{\n    \
+                     if !__t.is_empty() {{\n    \
+                         __st.store_mut(&__d).addr_mut::<String>(__d.rec, __d.pos).push_str(__t);\n    \
+                     }}\n    \
+                 }}\n    \
+                 unsafe {{ (*ret).text_ptr = std::ptr::null(); (*ret).text_len = 0; }}"
+            )
+        }
         _ => "compile_error!(\"unsupported shared-store return type\");".to_string(),
     }
 }

@@ -359,7 +359,10 @@ impl Output<'_> {
                         // caller-owned work buffer (`!nwb` here ⇒ a buffer exists),
                         // not the never-cleared `stores.scratch`.
                         if let Some(buf) = self.return_buffer_name() {
-                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                            write!(
+                                w,
+                                ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}"
+                            )?;
                         } else {
                             // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
                             // means a non-nwb text return (nwb is handled by the
@@ -532,7 +535,10 @@ impl Output<'_> {
                     } else if needs_p205_scratch {
                         // @PLN10 Phase B — buffer-write (see If-Return path).
                         if let Some(buf) = self.return_buffer_name() {
-                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                            write!(
+                                w,
+                                ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}"
+                            )?;
                         } else {
                             // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
                             // means a non-nwb text return (nwb is handled by the
@@ -1603,7 +1609,10 @@ impl Output<'_> {
                     } else if needs_p205_scratch {
                         // @PLN10 Phase B — buffer-write (see If-Return path).
                         if let Some(buf) = self.return_buffer_name() {
-                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                            write!(
+                                w,
+                                ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}"
+                            )?;
                         } else {
                             // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
                             // means a non-nwb text return (nwb is handled by the

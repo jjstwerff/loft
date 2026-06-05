@@ -467,14 +467,40 @@ fn native_returns_owned_string(name: &str) -> bool {
 /// instability.  Disjoint from `native_returns_owned_string` (that gates `#native`
 /// / `codegen_runtime` stubs; this gates `Block` bodies).
 pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
-    matches!(def.returned, Type::Text(_))
-        && def.rust.is_empty()
-        && def.native.is_empty()
-        && !def.name.starts_with("Op")
+    // nwb = a real loft **Block** body that returns text WITHOUT a `RefVar(Text)`
+    // work buffer.  The discriminator is the Block body itself, NOT
+    // `rust()/native()` emptiness: an auto-native library fn inlined into a
+    // consumer build (main's C71) has a Block body AND `native()` set, yet is
+    // still an ordinary user text fn whose buffered-vs-bufferless shape is
+    // decided solely by the presence of the work-buffer attribute.  emit.rs only
+    // ever runs this on Block bodies, so a non-Block (FFI-direct / `#rust` / Null)
+    // body is correctly excluded here and handled by the other owned-String signals.
+    matches!(def.returned(), Type::Text(_))
+        && matches!(def.code(), Value::Block(_))
+        && !def.name().starts_with("Op")
         && !def
-            .attributes
+            .attributes()
             .iter()
             .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+}
+
+/// @PLN10 — does this function's generated `--native` wrapper return an owned
+/// `String` (rather than a buffer-backed `Str`)?  The single source of truth for
+/// both the wrapper signature (`output_function`) and any caller that must adapt
+/// to it (the shared-store bridge in `native_lib::bridge_write_ret`).  Three
+/// disjoint owned-`String` producers:
+/// - the curated `codegen_runtime` set (`native_returns_owned_string`);
+/// - an FFI-direct text native — `output_native_direct_call` returns the copied
+///   `LoftStr` bytes as an owned `String` (N2).  This path is taken ONLY when the
+///   body is `Null` (no inlined `Block`), so gate on `code() == Null` to stay
+///   aligned with the body selector — an inlined native-lib fn (`Block` body AND
+///   `native()` set, main's C71 consumer build) returns `Str`, not `String`;
+/// - a bufferless ("nwb") user text fn (`def_returns_owned_text`).
+pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
+    matches!(def.returned(), Type::Text(_))
+        && (native_returns_owned_string(def.name())
+            || (*def.code() == Value::Null && !def.native().is_empty())
+            || def_returns_owned_text(def))
 }
 
 /// Use this to map a loft type to the Rust type used in generated code.
@@ -2198,21 +2224,10 @@ extern crate loft;"
         }
         write!(w, ") ")?;
         if *def.returned() != Type::Void {
-            // @PLN10 — owned-`String` producers get a `-> String` wrapper
-            // matching their converted body: the curated `codegen_runtime` set
-            // (`native_returns_owned_string`), every cdylib FFI text native
-            // (`!def.native().is_empty()`), whose `output_native_direct_call`
-            // body returns the freshly-copied `LoftStr` bytes as an owned
-            // `String` (N2), AND every bufferless user text fn
-            // (`def_returns_owned_text`, Phase A — its returns emit
-            // `(val).to_string()`).  All others keep `Str`.  The three signals
-            // are disjoint (curated/cdylib have non-`Block` bodies; nwb is a
-            // user `Block`), so the `||` never double-gates.
-            if matches!(def.returned(), Type::Text(_))
-                && (native_returns_owned_string(def.name())
-                    || !def.native().is_empty()
-                    || def_returns_owned_text(def))
-            {
+            // @PLN10 — owned-`String` vs buffer-backed `Str` wrapper: the single
+            // decision lives in `returns_owned_string` (shared with the
+            // shared-store bridge), so the signature and the body never disagree.
+            if returns_owned_string(def) {
                 write!(w, "-> String ")?;
             } else {
                 write!(w, "-> {} ", rust_type(def.returned(), &Context::Result))?;
