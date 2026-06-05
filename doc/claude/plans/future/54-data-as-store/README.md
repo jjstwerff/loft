@@ -298,6 +298,28 @@ falsifies it**:
   reconciles "library = always native" with "no rebuild while you iterate."
 - *Falsifier:* an edit-run-edit-run loop fires no `rustc`; stop editing → the next
   run is native.
+- *The slot (located 2026-06-05):* `native_lib::cached_or_build_shared_cdylib` today
+  **blocks on `rustc`** whenever `source_newer_than(pkg_dir, &so)` is true — i.e. on
+  every edit.  Step 4 turns that one branch into "interpret this run" while editing,
+  and only builds when the source is *stable*.  The fresh-artifact path (`so.exists()
+  && fingerprint matches && !source_newer_than`) already returns native — keep it.
+- *Design fork to decide before coding (probe each against the falsifier):*
+  1. **mtime-age threshold** — interpret if the newest source mtime is within *T*
+     seconds (you just saved); build (foreground) once it ages out.  Simplest (no
+     sidecar, no child process) but an arbitrary *T* and a foreground build-wait the
+     first run after you stop typing.
+  2. **hash-stability across runs** — a sidecar of the last-run source hash; build
+     only when the hash is *unchanged since the previous run* (editing stopped).
+     Threshold-free; satisfies "edit-run-edit-run fires no `rustc`" exactly, but the
+     first stable run still pays a foreground build.
+  3. **always-interpret-on-stale + background build** — never block on `rustc` in the
+     foreground; if the artifact is stale/missing, interpret this run *and* spawn a
+     detached build (atomic temp-then-rename + a per-package lock to dedupe). A later
+     run finds the fresh artifact → native.  The only option that gives a *truly*
+     instant loop (Goal F), at the cost of background-process plumbing.
+  - *Lean:* option 3 best serves the fun-on-pickup goal; options 1–2 are the cheap
+    interim if the background-build plumbing is deferred.  `~/.loft/build-cache/`
+    (Polish, N1) is the natural home for a shared/atomic artifact.
 
 **Polish — off the critical path** ⬜ *(fast · robust · complete)*
 - Idle-TTL artifact eviction on a shared `~/.loft/build-cache/` (N1, model ✅,
@@ -306,6 +328,54 @@ falsifies it**:
   lean interface ✅) · coverage tails (closures `__closure`; `generate_interface`
   aggregate names `sorted<Item[k]>`) · the daily-builds **validation layer** (deferred,
   see § Excluded).
+
+### Discovered follow-ups (surfaced landing Step 3, 2026-06-05)
+
+Neither blocks Step 4; both are real and worth a focused pass.  Recorded here so the
+scope isn't re-derived later.
+
+**F1 — nextest native-test reliability (test-infra, CI-masked).**  The flip is green
+under `cargo test` (the `make test` gate: n2_cdylib 16, native 6, n3_parity 3,
+n3_use_native 2, issues 684) and in CI (the `ci` nextest profile has `retries = 1`).
+It is **flaky under raw `cargo nextest` full-suite runs** (`find_problems.sh`, the
+`default` profile, no retries).  The failures **move between runs** and every failing
+test **passes in isolation** — so it is a harness interaction, not a flip-logic bug
+(`n2_cdylib`/`native` predate this arc; their build paths are unchanged).  There are
+**two distinct modes**, and they must not be conflated (a session-long mis-step —
+see the honesty note below):
+- *Mode A — concurrent native-link race.*  Two native links racing a `deps/` rewrite
+  → a dep rlib momentarily missing (`libring-… No such file`).  A nextest
+  single-slot `native-build-serial` group would be the precedent-consistent fix
+  (cf. `html-wasm-serial`).  **Tried and reverted** (commits `e648e64`+`a085ce8`,
+  reverted by `56132ae`+`8599a2c`): the commit's stated mechanism (the loft binary
+  auto-firing `cargo build --lib`) was **wrong** — that eprintln fired 0× in the
+  logs.  Whether serialising actually reduces Mode-A flakiness is **still unknown**:
+  the one supporting data point (6→2 failures after adding the group) was confounded
+  with a same-run rlib refresh.  *Next step:* a controlled A/B (same concurrency,
+  group vs no-group, several runs) before re-landing or dropping the group.
+- *Mode B — build-layout mismatch (the real reliability problem).*  The loft native
+  cdylib build resolves transitive deps against `target/<profile>/deps/`, but a raw
+  `cargo nextest` test-profile build doesn't lay out the standalone dep rlibs the
+  same way `cargo build --lib` does → `ring/rustls/webpki … not in rlib format`.
+  Serialisation does **nothing** for this (it fails single-threaded too).  *Fix
+  direction:* make the cdylib build resolve against the rlibs nextest actually
+  produces (the hashed test-profile `libloft-<hash>.rlib` + matching dep set), or
+  have the harness build a consistent rlib set first.  This is the higher-value of
+  the two and is **pre-existing**.
+
+**F2 — diamond-folding: a doubly-referenced library isn't maximally native.**  When a
+library is *both* a transitive dep and directly `use`d (consumer uses `top`, `top`
+uses `base`, consumer also uses `base`), only `top`'s cdylib is built — `base`'s
+functions are compiled *into* `top`'s cdylib, and `base_double` called *directly* by
+the consumer **interprets** (no own cdylib for `base`).  **Correct** — output is
+byte-identical across interp/default-native/`--native` in chain, diamond, and
+base-alone shapes — and **safe**, because Step 2's build-before-mark marks a function
+native only if its cdylib actually built (so never "marked symbol → missing `.so` →
+crash").  It is an **optimization gap**, not a correctness bug: that library's direct
+calls miss the native speedup.  The real `moros_*` graph (`moros_sim` → `moros_map` +
+`moros_editor` + `moros_render`) is the canonical consumer to validate a fix against.
+
+---
 
 **Critical path to the *ideal* state: Step 1 → 2 → 3 → 4.**  Step 1 (parity) is the
 unlock — simultaneously the soundness floor *and* the instrument that turns the
