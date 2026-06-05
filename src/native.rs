@@ -105,7 +105,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_log_fatal", n_log_fatal),
     ("t_4File_write", t_4File_write),
     ("n_env_variables", n_env_variables),
-    ("n_env_variable", n_env_variable),
     // @PLN10 Phase 2 — env_variable dest-passing (os_variable now owns its String).
     ("n_env_variable_dest", n_env_variable_dest),
     ("t_4text_byte_at", t_4text_byte_at),
@@ -117,11 +116,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4text_find", t_4text_find),
     ("t_4text_rfind", t_4text_rfind),
     ("t_4text_contains", t_4text_contains),
-    ("t_4text_replace", t_4text_replace),
     ("t_4text_replace_dest", t_4text_replace_dest),
-    ("t_4text_to_lowercase", t_4text_to_lowercase),
     ("t_4text_to_lowercase_dest", t_4text_to_lowercase_dest),
-    ("t_4text_to_uppercase", t_4text_to_uppercase),
     ("t_4text_to_uppercase_dest", t_4text_to_uppercase_dest),
     // @PLN10 — destination-passing variants for the always-non-null text
     // producers; key is the loft def name + `_dest` (the lookup in
@@ -153,7 +149,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9character_is_whitespace", t_9character_is_whitespace),
     ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
-    ("n_ymd_days_ago", n_ymd_days_ago),
     ("n_mtime", n_mtime),
     #[cfg(feature = "mmap")]
     ("n_store_durable_check", n_store_durable_check),
@@ -165,7 +160,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
-    ("n_source_dir", n_source_dir),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
     ("n_protect_store_frees", n_protect_store_frees),
@@ -188,7 +182,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "threading")]
     ("n_parallel_queue_text", n_parallel_queue_text),
     #[cfg(feature = "threading")]
-    ("n_parallel_buf_get_text", n_parallel_buf_get_text),
     // @PLN10 Phase 1 — dest-passing variant (interp scratch retirement).
     #[cfg(feature = "threading")]
     ("n_parallel_buf_get_text_dest", n_parallel_buf_get_text_dest),
@@ -218,11 +211,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
-    ("n_store_memory", n_store_memory),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
-    ("i_parse_errors", i_parse_errors),
     ("n_hash_sorted", n_hash_sorted),
     // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
     // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
@@ -231,20 +222,15 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // via `extensions::wire_native_fns` from the loaded `loft_crypto`
     // crate (lib/crypto/loft.toml declares `native = "loft_crypto"`).
     ("n_json_parse", n_json_parse),
-    ("n_json_errors", n_json_errors),
     ("n_json_null", n_json_null),
     ("n_json_bool", n_json_bool),
     ("n_json_number", n_json_number),
     ("n_json_string", n_json_string),
     ("n_json_array", n_json_array),
     ("n_json_object", n_json_object),
-    ("n_kind", n_kind),
     ("n_keys", n_keys),
     ("n_fields", n_fields),
     ("n_has_field", n_has_field),
-    ("n_to_json", n_to_json),
-    ("n_to_json_pretty", n_to_json_pretty),
-    ("n_as_text", n_as_text),
     ("n_as_number", n_as_number),
     ("n_as_long", n_as_long),
     ("n_as_bool", n_as_bool),
@@ -252,27 +238,21 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_item", n_item),
     ("n_len", n_len),
     ("n_struct_from_jsonvalue", n_struct_from_jsonvalue),
-    ("n_struct_to_json", n_struct_to_json),
-    ("n_struct_to_json_pretty", n_struct_to_json_pretty),
     // B7 (2026-04-13): when called with method syntax (`v.len()`),
     // the dispatcher resolves to `t_9JsonValue_<method>`.  Register
     // these aliases pointing at the same Rust impls so the call goes
     // through `OpStaticCall` instead of falling back to the empty-body
     // bytecode stub (which, prior to the def_code fix, double-freed
     // the JsonValue store via incorrect frame-unwind on return).
-    ("t_9JsonValue_as_text", n_as_text),
     ("t_9JsonValue_as_number", n_as_number),
     ("t_9JsonValue_as_long", n_as_long),
     ("t_9JsonValue_as_bool", n_as_bool),
     ("t_9JsonValue_field", n_field),
     ("t_9JsonValue_item", n_item),
     ("t_9JsonValue_len", n_len),
-    ("t_9JsonValue_kind", n_kind),
     ("t_9JsonValue_keys", n_keys),
     ("t_9JsonValue_fields", n_fields),
     ("t_9JsonValue_has_field", n_has_field),
-    ("t_9JsonValue_to_json", n_to_json),
-    ("t_9JsonValue_to_json_pretty", n_to_json_pretty),
 ];
 
 // ── lib/web natives — wasm-pack build only (TTT v3.5) ────────────────────
@@ -643,12 +623,6 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, new_value);
 }
 
-fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
-    let v_name = *stores.get::<Str>(stack);
-    let value = stores.os_variable(v_name.str());
-    put_dead_text(stores, stack, value);
-}
-
 // @PLN10 Phase 2 — destination-passing variant of `n_env_variable`.
 // Always-non-null (the env value, "" if unset).  Routed by `is_text_dest_native`.
 fn n_env_variable_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -733,14 +707,6 @@ fn t_4text_contains(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, new_value);
 }
 
-fn t_4text_replace(stores: &mut Stores, stack: &mut DbRef) {
-    let v_with = *stores.get::<Str>(stack);
-    let v_value = *stores.get::<Str>(stack);
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = v_self.str().replace(v_value.str(), v_with.str());
-    put_dead_text(stores, stack, new_value);
-}
-
 fn t_4text_replace_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     let v_with = *stores.get::<Str>(stack);
@@ -753,12 +719,6 @@ fn t_4text_replace_dest(stores: &mut Stores, stack: &mut DbRef) {
         .push_str(&new_value);
 }
 
-fn t_4text_to_lowercase(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = v_self.str().to_lowercase();
-    put_dead_text(stores, stack, new_value);
-}
-
 fn t_4text_to_lowercase_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     let v_self = *stores.get::<Str>(stack);
@@ -767,12 +727,6 @@ fn t_4text_to_lowercase_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&new_value);
-}
-
-fn t_4text_to_uppercase(stores: &mut Stores, stack: &mut DbRef) {
-    let v_self = *stores.get::<Str>(stack);
-    let new_value = v_self.str().to_uppercase();
-    put_dead_text(stores, stack, new_value);
 }
 
 fn t_4text_to_uppercase_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -825,17 +779,6 @@ fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, new_value);
 }
 
-/// Return `YYYY-MM-DD` of today minus `days` days, UTC.  Wraps the
-/// `days_to_ymd` algorithm in `src/logger.rs`.  Exposed to loft as
-/// `ymd_days_ago(days)` so cutoff-date computation for time-window
-/// filters (recent-closed P-issues / recently-finished plans) can
-/// happen without a bash `date -u -d '30 days ago'` invocation.
-/// Negative `days` clamps to today (no future dates).
-fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
-    let v_days = *stores.get::<i64>(stack);
-    put_dead_text(stores, stack, Stores::ymd_days_ago_native(v_days));
-}
-
 // @PLN10 Phase 1 — destination-passing variant of `n_ymd_days_ago`.
 // Always-non-null (a date string), so the result writes straight into the
 // caller's buffer instead of `stores.scratch`.  Routed by `is_text_dest_native`.
@@ -847,14 +790,6 @@ fn n_ymd_days_ago_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&s);
-}
-
-/// Return a multi-line memory-utilisation report over all live stores
-/// (see `Stores::memory_report`).  Loft: `store_memory() -> text`.
-/// Takes no arguments — pushes the report string as the return value.
-fn n_store_memory(stores: &mut Stores, stack: &mut DbRef) {
-    let report = stores.memory_report();
-    put_dead_text(stores, stack, report);
 }
 
 // @PLN10 Phase 1 — destination-passing variant of `n_store_memory`.
@@ -939,11 +874,6 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, new_value);
 }
 
-/// Return the directory of the main source file being executed.
-fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
-    put_dead_text(stores, stack, stores.source_dir.clone());
-}
-
 // @PLN10 — destination-passing variant: write straight into the caller's
 // buffer instead of `stores.scratch`.  Routed by `is_text_dest_native`.
 fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -964,22 +894,6 @@ fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn n_set_bridge_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     stores.bridge_text_dest = Some(dest);
-}
-
-/// @PLN10 D/G3 — output for a non-destination-passing text native that is DEAD:
-/// every covered call position routes through its `_dest` variant (whole-suite
-/// `LOFT_SCRATCH_TRIP` == 0 proves the base never executes).  The base fn stays
-/// registered — `p54` doc-hygiene requires the `"n_<name>"` string, and codegen's
-/// general dispatch resolves the base name — but produces an empty `Str` instead
-/// of `stores.scratch` (the field is being retired), with a dev assert if an
-/// uncovered position ever reaches it.
-fn put_dead_text(stores: &mut Stores, stack: &mut DbRef, _result: String) {
-    debug_assert!(
-        false,
-        "non-dest text native reached at runtime — covered positions route to its \
-         _dest variant; this is dead (@PLN10 D/G3)"
-    );
-    stores.put(stack, crate::keys::Str::new(""));
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -1557,28 +1471,6 @@ fn n_parallel_queue_text(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(feature = "threading")]
-/// Plan-06 spine step 8c — read one element from the active par
-/// text buffer.  Pops `idx` (i64), clones `par_text_buffer_stack
-/// .last()[idx]` into `stores.scratch`, and pushes a `Str` slot
-/// pointing at the new scratch entry.  Mirrors the convention every
-/// text-returning native fn uses (see `t_4text_replace`,
-/// `t_4text_to_lowercase`, etc.).
-///
-/// Panics if `par_text_buffer_stack` is empty (no active queue) or
-/// if `idx` is out of range — both indicate a parser-side bug.
-fn n_parallel_buf_get_text(stores: &mut Stores, stack: &mut DbRef) {
-    let idx = *stores.get::<i64>(stack);
-    let s_owned = {
-        let buf = stores
-            .par_text_buffer_stack
-            .last()
-            .expect("parallel_buf_get_text: par_text_buffer_stack is empty");
-        buf[idx as usize].clone()
-    };
-    put_dead_text(stores, stack, s_owned);
-}
-
-#[cfg(feature = "threading")]
 /// @PLN10 Phase 1 — destination-passing variant of `n_parallel_buf_get_text`.
 /// Always-non-null (clones an owned `String` from the par text buffer).
 /// Routed by `is_text_dest_native`.
@@ -2150,12 +2042,6 @@ fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
     stores.last_parse_errors.push(msg.str().to_owned());
 }
 
-fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
-    let msg = stores.last_parse_errors.join("\n");
-    stores.last_parse_errors.clear();
-    put_dead_text(stores, stack, msg);
-}
-
 // @PLN10 Phase 1 — destination-passing variant of `i_parse_errors`.
 // Always-non-null (the joined error text, possibly empty); no stack args.
 // Routed by `is_text_dest_native`.
@@ -2623,11 +2509,6 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
     result
 }
 
-fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
-    let msg = stores.last_json_errors.join("|");
-    put_dead_text(stores, stack, msg);
-}
-
 // @PLN10 — destination-passing variant of `n_json_errors`.
 fn n_json_errors_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
@@ -2636,29 +2517,6 @@ fn n_json_errors_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&msg);
-}
-
-fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<DbRef>(stack);
-    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    if discr == JV_DISCR_STRING {
-        let str_tp = stores.name("JString");
-        let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
-        let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
-        let s = stores.store(&v).get_str(s_rec).to_string();
-        // @P354: must NOT clear scratch — earlier scratch Strings may
-        // still be referenced by live `Str` views sitting on the stack
-        // as pending sibling call arguments (e.g.
-        // `f(o.as_text(), g.as_text())`).  Clearing here drops those
-        // Strings; the freed heap buffers get reused by the next push,
-        // so all sibling args collapse to the last value.  Push + return
-        // `last()` is the canonical pattern (matches `to_lowercase`,
-        // `t_9JsonValue_as_text` native, etc.); `OpClearScratch` reclaims
-        // the buffer at the next source-line boundary.
-        put_dead_text(stores, stack, s);
-    } else {
-        stores.put(stack, Str::new(crate::state::STRING_NULL));
-    }
 }
 
 // @PLN10 Phase 2 — destination-passing variant of `n_as_text`.  text-null is
@@ -3313,23 +3171,6 @@ fn populate_vector_from_jarray(
 // `Parts::Vector` / etc. and produces canonical JSON when its
 // `json: true` flag is set.
 
-fn n_struct_to_json(stores: &mut Stores, stack: &mut DbRef) {
-    struct_to_json_dispatch(stores, stack, false);
-}
-
-fn n_struct_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
-    struct_to_json_dispatch(stores, stack, true);
-}
-
-fn struct_to_json_dispatch(stores: &mut Stores, stack: &mut DbRef, pretty: bool) {
-    let struct_kt_arg = *stores.get::<i64>(stack) as i32;
-    let src = *stores.get::<DbRef>(stack);
-    let struct_kt = struct_kt_arg as u16;
-    let mut out = String::new();
-    stores.show_json(&mut out, &src, struct_kt, pretty);
-    put_dead_text(stores, stack, out);
-}
-
 // @PLN10 Phase 1 — destination-passing variants of `n_struct_to_json` /
 // `n_struct_to_json_pretty`.  Always-non-null (canonical JSON text).
 // Routed by `is_text_dest_native`.
@@ -3673,31 +3514,6 @@ fn n_fields(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, vec);
 }
 
-/// Q2 — `kind(self: JsonValue) -> text` reads the discriminant byte
-/// at offset 0 of the JsonValue record and returns the variant name
-/// as text.  Cheap: one memory read + a literal map, no arena walk.
-/// Useful for free-form introspection (logs, conditional branches)
-/// without committing to a particular variant via pattern match.
-///
-/// Unknown / uninitialised bytes map to `"JUnknown"` rather than
-/// panicking, so the function is safe to call on any DbRef that
-/// parses as a JsonValue — defensive posture for the period when
-/// step 4's arena may write intermediate states.
-fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<DbRef>(stack);
-    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    let name = match discr {
-        JV_DISCR_NULL => "JNull",
-        JV_DISCR_BOOL => "JBool",
-        JV_DISCR_NUMBER => "JNumber",
-        JV_DISCR_STRING => "JString",
-        JV_DISCR_ARRAY => "JArray",
-        JV_DISCR_OBJECT => "JObject",
-        _ => "JUnknown",
-    };
-    put_dead_text(stores, stack, name.to_string());
-}
-
 // @PLN10 — destination-passing variant of `n_kind`.
 fn n_kind_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
@@ -3879,24 +3695,6 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
     }
 }
 
-/// Q3 primitive-slice — `to_json(self: JsonValue) -> text`
-/// serialises a JsonValue to canonical RFC 8259 JSON text.  Covers
-/// the four primitive variants today; JArray / JObject return a
-/// `"<pending step 4>"` placeholder rather than panicking, so
-/// callers can already use `to_json(v)` on mixed trees without
-/// crashing — the stub visibly marks the frontier.
-///
-/// Strings escape `"`, `\\`, and the control bytes `<0x20`; UTF-8
-/// bytes pass through verbatim (RFC 8259 allows both; shortest
-/// wins).  Numbers use Rust's default `f64::Display`, which
-/// already emits shortest-round-trip.  Booleans render as `true`
-/// / `false`; null renders as `null`.
-fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<DbRef>(stack);
-    let out = json_to_text(stores, &v, false);
-    put_dead_text(stores, stack, out);
-}
-
 // @PLN10 — destination-passing variant of `n_to_json`.
 fn n_to_json_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
@@ -3906,19 +3704,6 @@ fn n_to_json_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&out);
-}
-
-/// Q3 primitive-slice — `to_json_pretty(self: JsonValue) -> text`
-/// mirrors `to_json` today because primitive variants carry no
-/// nested structure — canonical and pretty output are
-/// byte-identical.  Retained as a separate entry point so the
-/// surface is forward-compatible: once `JArray` / `JObject` are
-/// arena-materialised, this path will branch into 2-space indent +
-/// one-element-per-line layout at the same site.
-fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
-    let v = *stores.get::<DbRef>(stack);
-    let out = json_to_text(stores, &v, true);
-    put_dead_text(stores, stack, out);
 }
 
 // @PLN10 — destination-passing variant of `n_to_json_pretty`.

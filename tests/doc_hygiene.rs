@@ -286,15 +286,20 @@ fn p54_json_natives_registered_for_every_declaration() {
         if !rest.trim_end().ends_with(';') {
             continue;
         }
+        // @PLN10 F — a JSON declaration is satisfied by EITHER its base native
+        // (`"n_foo"`) OR a destination-passing variant (`…foo_dest"`).  The base
+        // text producers were deleted once codegen routed every call position
+        // through `_dest` (synth-dest); the `_dest` impl is now the real binding.
         let needle = format!("\"n_{name}\"");
-        if !native.contains(&needle) {
+        let dest_needle = format!("{name}_dest\"");
+        if !native.contains(&needle) && !native.contains(&dest_needle) {
             missing.push(name.to_string());
         }
     }
     assert!(
         missing.is_empty(),
         "default/06_json.loft declares {} pure-native fn(s) without a matching NATIVE_FNS entry in src/native.rs:\n  {}\n\
-         For each missing name `foo`, add `(\"n_foo\", n_foo)` to NATIVE_FNS and implement `fn n_foo(...)`.  See QUALITY.md § P54 for the JSON native surface.",
+         For each missing name `foo`, add `(\"n_foo\", n_foo)` (or a `…foo_dest` variant) to NATIVE_FNS and implement it.  See QUALITY.md § P54 for the JSON native surface.",
         missing.len(),
         missing.join("\n  ")
     );

@@ -438,8 +438,9 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
             let _ = write!(fwd, ", {var}");
         } else if is_text_work_buffer(&a.typedef) {
             // text_return work buffer (`&mut String`) — own a LOCAL String, pass
-            // `&mut`.  The returned `Str` points into it; the return handler copies
-            // the bytes into the shared store's scratch before this frame drops.
+            // `&mut`.  The returned `Str` points into it; `bridge_write_ret` copies
+            // the bytes into the caller-owned `bridge_text_dest` record (@PLN10
+            // dest-passing) before this frame drops.
             let _ = writeln!(body, "    let mut {var}: String = String::new();");
             let _ = write!(fwd, ", &mut {var}");
         } else {
