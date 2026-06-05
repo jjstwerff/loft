@@ -60,6 +60,9 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             | "t_9JsonValue_kind"
             | "t_9JsonValue_to_json"
             | "t_9JsonValue_to_json_pretty"
+            // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
+            | "n_ymd_days_ago"
+            | "n_store_memory"
     )
 }
 

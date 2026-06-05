@@ -130,6 +130,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9JsonValue_kind_dest", n_kind_dest),
     ("t_9JsonValue_to_json_dest", n_to_json_dest),
     ("t_9JsonValue_to_json_pretty_dest", n_to_json_pretty_dest),
+    // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
+    ("n_ymd_days_ago_dest", n_ymd_days_ago_dest),
+    ("n_store_memory_dest", n_store_memory_dest),
     ("t_9character_is_lowercase", t_9character_is_lowercase),
     ("t_9character_is_uppercase", t_9character_is_uppercase),
     ("t_9character_is_numeric", t_9character_is_numeric),
@@ -788,6 +791,19 @@ fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, s);
 }
 
+// @PLN10 Phase 1 — destination-passing variant of `n_ymd_days_ago`.
+// Always-non-null (a date string), so the result writes straight into the
+// caller's buffer instead of `stores.scratch`.  Routed by `is_text_dest_native`.
+fn n_ymd_days_ago_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_days = *stores.get::<i64>(stack);
+    let s = Stores::ymd_days_ago_native(v_days);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&s);
+}
+
 /// Return a multi-line memory-utilisation report over all live stores
 /// (see `Stores::memory_report`).  Loft: `store_memory() -> text`.
 /// Takes no arguments — pushes the report string as the return value.
@@ -796,6 +812,17 @@ fn n_store_memory(stores: &mut Stores, stack: &mut DbRef) {
     stores.scratch.push(report);
     let s = crate::keys::Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+// @PLN10 Phase 1 — destination-passing variant of `n_store_memory`.
+// Always-non-null (a report string).  Routed by `is_text_dest_native`.
+fn n_store_memory_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let report = stores.memory_report();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&report);
 }
 
 fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
