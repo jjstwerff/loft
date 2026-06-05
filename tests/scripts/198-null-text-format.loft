@@ -23,5 +23,13 @@ fn main() {
   d = "x={jx.as_text()}y";
   assert(d == "x=nully", "embedded null, got '{d}'");
 
+  // float null: NaN (not a JSON value) renders "null"; inf is a real value
+  js2 = json_parse("\"hi\"");
+  e = "{js2.as_number()}";       // as_number on a non-number → NaN (null)
+  assert(e == "null", "NaN float → 'null', got '{e}'");
+  jr = json_parse("3.5");
+  f = "{jr.as_number()}";
+  assert(f == "3.5", "real float unchanged, got '{f}'");
+
   println("null-text format: ok");
 }
