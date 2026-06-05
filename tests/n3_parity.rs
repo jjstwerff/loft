@@ -88,16 +88,44 @@ fn write_lib(libdir: &Path, name: &str, dep: Option<&str>, body: &str) -> std::p
 
 /// Assert the three modes all succeed and produce byte-identical stdout, against
 /// the interpreted reference.  Returns the (shared) stdout for value checks.
+///
+/// @PLN11 Arc N / N5 — mixed-boundary soundness + parity.  Two soundness legs ride
+/// on the same three runs (no extra cdylib builds):
+/// - **D (parity)** — `mixed`/`native` stdout must equal the interpreted reference;
+///   a shared-store-ABI corruption across the interp↔native boundary surfaces as a
+///   divergence (the only *runtime* soundness signal the mixed path has — the
+///   in-process sanitizers are blind to the spawned cdylib: ASan sees interpreter
+///   targets only, the `stack_align_guard` sweep can't see spawned binaries, and
+///   Miri can't `dlopen` a cdylib at all).
+/// - **E (predictable memory)** — every run arms `LOFT_STORE_GUARD`, so the
+///   store-confinement detector runs over BOTH the interpreted script and the
+///   library's codegen-time scope analysis, and must stay **silent on the mixed
+///   path too**: a native library whose codegen reintroduces a block-confined store
+///   that frees at function exit would print `[store-guard] …` to stderr.  This is a
+///   standing **regression tripwire**, NOT a proven gate: post-plan-57 the detector
+///   is silent corpus-wide by construction (the cluster-I fix relocates every
+///   single-store confined local; multi-store cases are excluded), so a from-source
+///   positive control could not be built — see @PLN11 § Discovered follow-ups F5.
+///   The positively-controlled mixed-boundary soundness signal is the D leg above
+///   (the reference-output anchor in `datalib_store_touching_types_parity` rules out
+///   "parity holds but all three are wrong").
 fn assert_three_mode_parity(prog: &Path) -> String {
-    let interp = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1")], prog);
-    let mixed = run(&[], &[], prog);
-    let native = run(&["--native"], &[], prog);
+    let guard = ("LOFT_STORE_GUARD", "1");
+    let interp = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1"), guard], prog);
+    let mixed = run(&[], &[guard], prog);
+    let native = run(&["--native"], &[guard], prog);
 
     for (name, r) in [("interp", &interp), ("mixed", &mixed), ("native", &native)] {
         assert!(
             r.success,
             "{name} mode failed.\nstdout:\n{}\nstderr:\n{}",
             r.stdout, r.stderr
+        );
+        assert!(
+            !r.stderr.contains("[store-guard]"),
+            "STORE-GUARD FIRED on the {name} path (Goal E — predictable memory): a \
+             store-backed value frees later than the source confines it.\nstderr:\n{}",
+            r.stderr
         );
     }
     assert_eq!(
@@ -131,6 +159,10 @@ const DATALIB_PROG: &str = "use datalib;\n\
      \x20   println(\"{area(c)}\");\n\
      \x20   cd = Circle { r: 3 };\n\
      \x20   println(\"{area(cd)}\");\n\
+     \x20   r = make_rect(2, 5);\n\
+     \x20   println(\"{area(r)}\");\n\
+     \x20   rd = Rect { w: 3, h: 4 };\n\
+     \x20   println(\"{area(rd)}\");\n\
      }\n";
 
 #[test]
@@ -154,7 +186,10 @@ fn datalib_store_touching_types_parity() {
     let stdout = assert_three_mode_parity(&prog);
     // Sanity-anchor the reference so a "parity holds but all three are wrong"
     // regression is also caught.
-    assert_eq!(stdout, "60\n6\n7\n15\nhi!\n12\n27\n", "reference output");
+    assert_eq!(
+        stdout, "60\n6\n7\n15\nhi!\n12\n27\n10\n12\n",
+        "reference output"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(native_auto);
