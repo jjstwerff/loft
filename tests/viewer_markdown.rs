@@ -80,12 +80,20 @@ impl Drop for ViewerGuard {
 }
 
 fn http_get(path: &str, port: u16) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to viewer");
-    let req = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",);
     use std::io::Write;
-    stream.write_all(req.as_bytes()).expect("write request");
+    // Return an empty body on any transient error so the caller's retry loop can
+    // re-fetch (under heavy CI load the viewer may briefly refuse/drop a request).
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return String::new();
+    };
+    let req = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",);
+    if stream.write_all(req.as_bytes()).is_err() {
+        return String::new();
+    }
     let mut buf = String::new();
-    stream.read_to_string(&mut buf).expect("read response");
+    if stream.read_to_string(&mut buf).is_err() {
+        return String::new();
+    }
     // Strip headers — return body only.
     if let Some(idx) = buf.find("\r\n\r\n") {
         buf[idx + 4..].to_string()
@@ -112,10 +120,21 @@ fn markdown_renderer_pins_high_impact_features() {
     if !_guard.wait_listening(port) {
         panic!("viewer did not start listening on {port} within 15s");
     }
-    // Give the viewer a moment to fully initialise after binding.
-    thread::sleep(Duration::from_millis(200));
-
-    let body = http_get("/file/tests/fixtures/md_features_test.md", port);
+    // Under a loaded CI host (many parallel native-build tests spawning rustc),
+    // the interpreted viewer can accept the TCP connection before it is ready to
+    // serve, returning an empty body on the first request.  Retry the fetch until
+    // the rendered page arrives (or a deadline), so the smoke test is robust to
+    // that startup race instead of racing a single 200ms sleep.
+    let md_path = "/file/tests/fixtures/md_features_test.md";
+    let body = {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut b = http_get(md_path, port);
+        while !b.contains("<h1 id=") && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(200));
+            b = http_get(md_path, port);
+        }
+        b
+    };
 
     // Each assertion captures one feature so the failure message
     // names exactly which markdown construct broke.
