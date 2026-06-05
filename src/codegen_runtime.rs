@@ -3466,17 +3466,15 @@ pub fn n_parallel_buf_drop_narrow_native(cell: &std::cell::UnsafeCell<Stores>) {
 /// # Panics
 /// Panics if `par_text_buffer_stack` is empty (no active text queue)
 /// or if `idx` is out of range — both indicate a parser-side bug.
-pub fn n_parallel_buf_get_text_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> Str {
+// @PLN10 — owned `String` (no scratch); in lockstep with
+// `generation::native_returns_owned_string` (`n_parallel_buf_get_text`).
+pub fn n_parallel_buf_get_text_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    let s_owned = {
-        let buf = stores
-            .par_text_buffer_stack
-            .last()
-            .expect("n_parallel_buf_get_text_native: par_text_buffer_stack is empty");
-        buf[idx as usize].clone()
-    };
-    stores.scratch.push(s_owned);
-    Str::new(stores.scratch.last().unwrap())
+    let buf = stores
+        .par_text_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_text_native: par_text_buffer_stack is empty");
+    buf[idx as usize].clone()
 }
 
 /// Read a row from the active ref par-buffer.  Returns the per-row

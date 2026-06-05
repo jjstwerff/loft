@@ -450,7 +450,10 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
 /// fns.  Curate this in **lockstep** with the body conversions in
 /// `codegen_runtime.rs`.  Sibling of `state::codegen::is_text_dest_native`.
 fn native_returns_owned_string(name: &str) -> bool {
-    matches!(name, "i_parse_errors" | "n_json_errors")
+    matches!(
+        name,
+        "i_parse_errors" | "n_json_errors" | "n_parallel_buf_get_text"
+    )
 }
 
 /// Use this to map a loft type to the Rust type used in generated code.
