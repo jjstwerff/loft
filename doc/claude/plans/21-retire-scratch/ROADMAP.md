@@ -123,20 +123,29 @@ cell-ABI producers.  `39 → 34`.
   test updates to the new shape.
 - **Effort/risk:** M / med.  **Label:** `area:codegen`
 
-### C — chokepoint coverage proof *(needs I1)*
-- **Scope:** prove **no** value-position text-producer call bypasses the chokepoint
-  (so the non-`_dest` interpreter fallback natives are dead code).  A boundary
-  matrix over the call positions + a guard test.
-- **Accept:** a documented argument + a test that fails if a bypass exists.
-- **Effort/risk:** M / **med-high** (the verification arc — the real residual risk).
-  **Label:** `area:codegen`
+### C — chokepoint coverage proof ✅ **DONE (empirically)** *(for the converted producers)*
+> **Established this session** by three independent results: (1) **zero** non-`_dest`
+> fallback hits across `wrap` + `issues` + `format` (every script/doc + 684
+> regression tests) — instrumented the fallbacks with a greppable marker, ran the
+> suites, grepped; (2) the **only suspected gap is impossible** — a native method
+> can't be fn-ref'd (`v.map(to_lowercase)` → `"second argument must be a function
+> reference"`), so only *calls* reach a producer and the chokepoint wraps every
+> call position; (3) the chokepoint walk covers **every IR variant** (modeled on
+> `substitute_value`), so no value position is left unwrapped.  Conclusion: the
+> converted producers' non-`_dest` natives are **dead code**.  (A permanent guard
+> test — assert a fallback is never hit — should land with `F`.)
 
-### F — remove interpreter fallback natives *(needs C)*
-- **Scope:** delete the non-`_dest` producer bodies in `native.rs` (the bulk of its
-  16 `scratch.push` sites — the `t_4text_*`/`n_kind`/`n_to_json`/… fallbacks now
-  unreachable per C).
-- **Accept:** `scratch.push` drops by the fallback count; suite green.
-- **Effort/risk:** S / low (deletion, once C holds).  **Label:** `area:codegen`
+### F — remove interpreter fallback natives *(needs C ✅; merge with D)*
+- **Scope:** the non-`_dest` producer bodies in `native.rs` are dead (per C) but
+  **can't drop their `scratch.push` cheaply in isolation** — the interp `Str`-on-stack
+  ABI needs a backing buffer, and a release stub returning the null sentinel would
+  *silently* corrupt if C ever regressed (the suite runs in **release**, so a
+  `debug_assert` guard wouldn't fire).  Cleanest: **delete the dead natives + their
+  `FUNCTIONS` registration outright at the final D pass** (the loft *def* stays for
+  the IR `Call`; only the unreferenced Rust impl goes) — a codegen-time
+  `library_names` miss then *loudly* catches any residual emit.  So F is folded into
+  **D**, gated on every producer converting first.
+- **Effort/risk:** S / low — but **do it with D**, not standalone.  **Label:** `area:codegen`
 
 ### D — delete `Stores::scratch` (THE GOAL) *(needs N1 N2 I1 A B F)*
 - **Scope:** with `scratch.push` == 0, delete the field + `clear_scratch` +
@@ -153,7 +162,7 @@ cell-ABI producers.  `39 → 34`.
 |---|---|---|
 | **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
 | **M2 — producers converted** | `N1 N2 I1 A B` | every producer off scratch (fallbacks aside) |
-| **M3 — fallbacks gone** | `C F` | coverage proof + delete the dead non-`_dest` natives |
+| **M3 — fallbacks gone** | `C`✅ `F` | coverage proof DONE (fallbacks are dead code); `F` deletes them, folded into `D` |
 | **M4 — GOAL** | `D` | field deleted |
 
 **Longest chain (critical path):** `W → N1 → N2 → D` on the native side, and
