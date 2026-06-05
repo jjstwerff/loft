@@ -1022,6 +1022,79 @@ N5 right after for `integer`) so the analysis lives in one place.
 
 ---
 
+## Design: N6 — Skip the rustc toolchain probe on a native cache hit
+
+**Affected workload:** Native **startup latency** of any short-lived
+program — a CLI tool, a test harness, a script invoked repeatedly.
+Not a throughput benchmark; it is a fixed per-invocation tax that
+dominates wall-clock when the program itself runs in microseconds.
+**Expected gain:** Removes a `rustc --version` probe (~18 ms measured,
+Linux x86-64) from every warm run.  Drops native warm startup of a
+trivial program from ~26 ms to ~7 ms (≈3.7×).
+**Cost:** Small — move one `if`-block in `src/main.rs`.
+
+### Background — measured decomposition
+
+`--native` is the **default** backend (`src/main.rs:101,106`).  A
+trivial `fn main() { print("hello"); }` measured on this box:
+
+| Path | Startup |
+|---|---:|
+| `loft --interpret` | 2.15 ms |
+| `python3 -S` | 3.57 ms |
+| `python3` | 5.84 ms |
+| `loft` (native, default, **warm**) | **25.73 ms** |
+| `loft` native **cold** (one rustc compile) | 313 ms |
+
+The 25.73 ms warm path decomposes as:
+
+```
+~18.6 ms  rustc --version probe   (main.rs:4866–4881)
+ ~6.6 ms  parse + codegen + emit + source_hash + cache check
+ 0.46 ms  exec the cached binary  (main.rs:5092)
+```
+
+`strace -f -e execve` confirms the probe fires on every warm run; the
+cached binary run directly (no loft wrapper) starts in 0.46 ms — so the
+generated machine code already has excellent startup and the entire
+tax is launcher overhead.
+
+### Why the probe is skippable
+
+The probe exists only to **fall back to the interpreter when rustc is
+absent**.  But it runs *unconditionally* at `main.rs:4866` — before the
+cache lookup at `main.rs:5080`.  On a cache hit (`main.rs:5092`) the
+cached binary is executed and **rustc is never invoked**.  The
+fallback-to-interpreter behaviour is therefore only relevant on a cache
+*miss*, where a compile actually happens.
+
+### Design
+
+Move the `rustc --version` probe (`main.rs:4866–4881`) from before the
+codegen pipeline into the **cache-miss `else` branch** (`main.rs:5094`),
+just before the compile at `main.rs:5114`.  On a hit the probe is
+skipped entirely; on a miss the fallback fires exactly as today.
+
+**Verify:** a genuine cache miss with rustc removed from `PATH` still
+falls back to the interpreter with the existing warning, and a cache
+hit with rustc absent now succeeds (it previously failed the probe and
+fell back even though it never needed rustc).
+
+### Ceiling — what this does NOT remove
+
+The cache is keyed on the **generated Rust source**
+(`main.rs:5022`, `source_bytes = read(emit_path)`), so parse + codegen +
+emit + hash still run on every invocation — the residual ~6.6 ms.
+Reaching the ~1 ms floor (bare cached-binary cost) needs a **second,
+larger** change: key the cache on the `.loft` source + stdlib/rlib
+identity so a hit short-circuits parse+codegen and jumps straight to
+exec.  The source-level cache machinery already exists
+(`src/startup_cache.rs`); wiring the native-run path to it is the
+follow-up.  Ship N6 first (the cheap, safe ~18 ms win), then the
+source-keyed cache as its own change.
+
+---
+
 ## Design: W1 — wasm string representation
 
 **Affected benchmark:** 07 (2.06× wasm vs native)
@@ -1073,8 +1146,9 @@ modes.
 | 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
 | 6 | N5 — Integer sentinel in codegen | scanners, parsers, any indexed loop | parallel to N3 for `integer` | Low (folds into N3) |
 | 7 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops with tiny `#pure` helpers (scan.loft) | measurable share of `-O` baseline on per-byte loops | Small |
-| 8 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 9 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+| 8 | N6 — Skip rustc probe on native cache hit | native warm startup (any short-lived program) | ~18 ms / ≈3.7× off warm startup | Small |
+| 9 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
+| 10 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
 Items 1–3 should be scheduled after the 0.8.3 language-syntax milestone. P1 is the
 highest-impact single change because it benefits every tight loop in the interpreter
