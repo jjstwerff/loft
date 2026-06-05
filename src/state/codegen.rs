@@ -3226,6 +3226,20 @@ impl State {
                         self.gen_text_dest_call(stack, var, *op, args, lib_nr);
                         return;
                     }
+                    // @PLN10 N2b — a cdylib FFI text call assigned to a return-dep
+                    // `RefVar(Text)` buffer (e.g. `p = req.path(); … return p`).
+                    // `gen_cdylib_text_dest_call` pushes the RefVar's raw DbRef as
+                    // the dest, so clear it first (the bridge `push_str`s in).
+                    if is_cdylib_text_call(stack.data.def(*op)) {
+                        let native_sym = stack.data.def(*op).native().to_owned();
+                        if let Some(&cdylib_lib) = self.library_names.get(&native_sym) {
+                            let var_pos = stack.var_pos(var);
+                            stack.add_op("OpClearStackText", self);
+                            self.code_add(var_pos);
+                            self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
+                            return;
+                        }
+                    }
                 }
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
@@ -3273,13 +3287,12 @@ impl State {
             // @PLN10 N2b — cdylib FFI text call (an external `#native` text fn;
             // built-ins are `#pure`/`#rust` with empty `def.native`).  Dest-pass
             // through the bridge: write into `var` instead of `stores.scratch`.
-            let native_sym = stack.data.def(*op).native().to_owned();
-            if !native_sym.is_empty()
-                && matches!(stack.data.def(*op).returned(), Type::Text(_))
-                && let Some(&cdylib_lib) = self.library_names.get(&native_sym)
-            {
-                self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
-                return;
+            if is_cdylib_text_call(stack.data.def(*op)) {
+                let native_sym = stack.data.def(*op).native().to_owned();
+                if let Some(&cdylib_lib) = self.library_names.get(&native_sym) {
+                    self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
+                    return;
+                }
             }
         }
         // Plan-06 spine 8c hardening: catch IR shapes where `value`'s
