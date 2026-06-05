@@ -14,8 +14,10 @@ it is the design + the build evidence each issue below builds on.
 > producer (that file is ZERO scratch), the keystone `W`, the coverage proof `C`,
 > **N2a** (the cdylib FFI codegen wrap now returns owned `String`), the
 > **`LOFT_SCRATCH_TRIP` sentinel** (live-vs-dead is now a runtime fact, not a
-> grep guess), and **Phase 1 batches 1+2** (`ymd_days_ago`, `store_memory`,
-> `struct_to_json`(+`_pretty`), `i_parse_errors` dest-pass).  Native + interp green.
+> grep guess), and **Phase 1 (native-host) COMPLETE** — `ymd_days_ago`,
+> `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`, `parallel_buf`
+> all dest-pass (each sentinel-proven via the positive→negative control pair).
+> Native + interp green.  The only **native-host** scratch left is Phase 2 (null).
 >
 > ### The metric is now the sentinel, not the grep
 > `LOFT_SCRATCH_TRIP=1` makes every *live* `scratch.push` print its `file:line`
@@ -31,15 +33,24 @@ it is the design + the build evidence each issue below builds on.
 >
 > ### What the sentinel found — the corpus-live set (the real targets)
 > Enumerated across all `tests/scripts/*.loft` + `tests/docs/*.loft` (interpret).
-> After batches 1+2, **three** sites fire (was four — `i_parse_errors` now silent).
-> Static-live producers `pack_take` / `ws_client_message` aren't exercised at all.
+> After Phase 1, **two** native-host sites fire — **both Phase 2 (null)**.  Every
+> non-null native-host producer is now converted (silent).
 >
 > | Trips | Site | Producer | Class |
 > |---|---|---|---|
 > | 7 | `native.rs` | `n_as_text` | **Phase 2** (returns null) |
-> | 6 | `native.rs` | `n_parallel_buf_get_text` | **audit** (last Phase-1 candidate; parallel-specific) |
 > | 5 | `format.rs:333` | `os_variable` (`push_scratch` helper) | **Phase 2** (null if unset) |
 >
+> **The Phase-1 wasm tail (deferred):** `n_ws_client_message` + `n_pack_take` are
+> non-null but **`#[cfg(wasm)]`-only** — the native-host sentinel can't see them,
+> and `ws_client_message` needs a live WS host to exercise.  They need a *wasm*
+> positive control (`pack_take` is wasm-testable; `ws` needs a host), so they wait
+> for the wasm-validation pass rather than ship unvalidated.
+>
+> **Bugs surfaced (orthogonal, filed):** #272 (native: stateful producer in inline
+> `"{x}" != literal`), #273 (native: par-text loop with a literal-returning worker
+> → E0061).  Both pre-existing, both with verified workarounds; neither blocks the
+> interp conversions.
 > ### How far from zero — the count drops at three steps; I1 is the enabler
 > The hard infrastructure is built; the rest is proven-pattern application, **one**
 > genuinely-new mechanism, and a mechanical delete.  **I1 drops the count by ZERO**
@@ -58,15 +69,17 @@ it is the design + the build evidence each issue below builds on.
 > by risk + subsystem coherence.  Each phase drives a coherent backend region to
 > zero; difficulty rises across phases:
 >
-> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)* — **batches 1+2 DONE**
->    (`ymd_days_ago`, `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`
->    — 13 producers now in `is_text_dest_native`, each sentinel-proven via the
->    positive→negative control pair).  **Remaining:** **audit**
->    `parallel_buf` / `pack_take` / `ws_client_message` for null — any that can
->    return null fall to Phase 2; `parallel_buf` is the last corpus-live Phase-1
->    candidate.  Per producer: convert + `LOFT_SCRATCH_TRIP` control pair + commit.
->    (Batch 2 surfaced pre-existing native bug #272 — a stateful producer in an
->    inline `"{x}" != literal` — orthogonal, filed with a verified workaround.)
+> 1. **Phase 1 — I1-nonnull** — **NATIVE-HOST COMPLETE.**  `ymd_days_ago`,
+>    `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`, `parallel_buf`
+>    all dest-pass (14 producers in `is_text_dest_native`, each via the
+>    positive→negative control pair).  Audit done — none null on the native-host;
+>    the two null producers (`as_text`, `os_variable`) were already Phase 2.
+>    **Remaining: the wasm tail** — `pack_take` + `ws_client_message`
+>    (`#[cfg(wasm)]`-only, non-null) — deferred to the **wasm-validation pass**
+>    (the native-host sentinel can't see them; `ws` needs a live host, so they
+>    need a *wasm* positive control rather than shipping unvalidated).  Surfaced
+>    orthogonal pre-existing native bugs #272 + #273 (filed, verified workarounds,
+>    not blockers — see § below).
 > 2. **Phase 2 — the null-aware interp primitive → I1-null + N2b** *(THE one novel
 >    piece)*: a single mechanism — "materialise possibly-null dynamically-produced
 >    text on the interp stack without scratch" — feeds THREE consumers that all
@@ -267,9 +280,14 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
     (non-null; full positive→negative control pair).  Surfaced orthogonal native
     bug #272 (stateful producer in inline `"{x}" != literal`) — filed, not a
     regression of this conversion.
-  - **audit (the only Phase-1 work left):** `n_parallel_buf_get_text` (corpus-live,
-    parallel-specific), `n_pack_take`, `n_ws_client_message` (neither
-    corpus-exercised) — any that can return null → Phase 2.
+  - ✅ **parallel_buf DONE** — `n_parallel_buf_get_text` (non-null; interp
+    control-pair).  Native par-text is blocked by #273 (separate, in the worker
+    closure — not this read-side conversion), so native runtime-validation waits
+    on #273; the conversion is native-transparent by construction.
+    **→ native-host Phase 1 COMPLETE.**
+  - **wasm tail (deferred to the wasm-validation pass):** `n_pack_take`,
+    `n_ws_client_message` — `#[cfg(wasm)]`-only, non-null.  Need a *wasm* positive
+    control (`pack_take` wasm-testable; `ws` needs a host).
   - **→ Phase 2 (null, sentinel-located):** `os_variable` (`format.rs:333`),
     interp `n_as_text` (`native.rs`).
 - **Accept:** each producer **zero-trip** under `LOFT_SCRATCH_TRIP` in value
@@ -351,7 +369,7 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 | Milestone | Issues | Meaning |
 |---|---|---|
 | **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
-| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ `I1`-batch1✅ `I1`-batch2✅ · `I1`-audit `N2b` `B` | every producer off scratch (sentinel reads zero) |
+| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ `I1`(native-host)✅ · `I1`-wasm-tail `N2b` `B` | native-host producers off scratch (sentinel reads only Phase-2 null) |
 | **M3 — fallbacks gone** | `C`✅ `F` | coverage proof DONE (fallbacks are dead code); `F` deletes them, folded into `D` |
 | **M4 — GOAL** | `D` | field deleted |
 
