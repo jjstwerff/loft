@@ -47,6 +47,45 @@ fn run(args: &[&str], env: &[(&str, &str)], prog: &Path) -> Run {
     }
 }
 
+/// Run the loft binary on `prog` against an explicit (usually tmp, writable) `libdir`
+/// — for tests that own their fixtures so they never race on a shared `native-auto/`.
+fn run_against(libdir: &Path, prog: &Path, env: &[(&str, &str)]) -> Run {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("--lib")
+        .arg(libdir)
+        .arg(prog)
+        .env("LOFT_NO_CACHE", "1");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn loft binary");
+    Run {
+        success: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// Write a minimal library package (`<libdir>/<name>/{loft.toml,src/<name>.loft}`),
+/// returning its `native-auto` dir.  `dep` optionally adds a `[dependencies]` path edge.
+fn write_lib(libdir: &Path, name: &str, dep: Option<&str>, body: &str) -> std::path::PathBuf {
+    let pkg = libdir.join(name);
+    std::fs::create_dir_all(pkg.join("src")).unwrap();
+    let deps = dep.map_or(String::new(), |d| {
+        format!("[dependencies]\n{d} = {{ path = \"../{d}\" }}\n")
+    });
+    std::fs::write(
+        pkg.join("loft.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+             [library]\nentry = \"src/{name}.loft\"\n{deps}"
+        ),
+    )
+    .unwrap();
+    std::fs::write(pkg.join("src").join(format!("{name}.loft")), body).unwrap();
+    pkg.join("native-auto")
+}
+
 /// Assert the three modes all succeed and produce byte-identical stdout, against
 /// the interpreted reference.  Returns the (shared) stdout for value checks.
 fn assert_three_mode_parity(prog: &Path) -> String {
@@ -134,16 +173,32 @@ fn datalib_store_touching_types_parity() {
 #[test]
 fn build_failure_silently_interprets() {
     let pid = std::process::id();
-    let tmp = std::env::temp_dir().join(format!("loft_n3_failparity_{pid}"));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    let prog = tmp.join("main.loft");
-    std::fs::write(&prog, DATALIB_PROG).unwrap();
-    let native_auto = std::path::Path::new("tests/lib/datalib/native-auto");
-    let _ = std::fs::remove_dir_all(native_auto);
+    let root = std::env::temp_dir().join(format!("loft_n3_fail_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("lib");
+    // Own the fixture (tmp) so the `no cdylib built` assertion can never race a
+    // concurrent test building the same package's `native-auto/`.
+    let native_auto = write_lib(
+        &libdir,
+        "fblib",
+        None,
+        "pub fn shout(s: text) -> text { s + \"!\" }\n\
+         pub fn doubled(v: vector<integer>) -> vector<integer> {\n\
+         \x20   out: vector<integer> = [];\n\
+         \x20   for x in v { out += [x * 2]; }\n\
+         \x20   out\n}\n",
+    );
+    let prog = root.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use fblib;\nfn main() {\n\
+         \x20   println(shout(\"hi\"));\n\
+         \x20   println(\"{doubled([1, 2, 3])}\");\n}\n",
+    )
+    .unwrap();
 
-    let interp = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1")], &prog);
-    let forced = run(&[], &[("LOFT_FORCE_NATIVE_BUILD_FAIL", "1")], &prog);
+    let interp = run_against(&libdir, &prog, &[("LOFT_NO_NATIVE_LIBS", "1")]);
+    let forced = run_against(&libdir, &prog, &[("LOFT_FORCE_NATIVE_BUILD_FAIL", "1")]);
 
     assert!(
         forced.success,
@@ -159,8 +214,7 @@ fn build_failure_silently_interprets() {
         "no cdylib should have been built when the build is forced to fail"
     );
 
-    let _ = std::fs::remove_dir_all(&tmp);
-    let _ = std::fs::remove_dir_all(native_auto);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A consumer of `plainlib` — a library that does **not** opt into
@@ -335,6 +389,83 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     assert_ne!(
         mtime2, mtime3,
         "once editing settles, the next run rebuilds the cdylib → native"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// @PLAN54 N3 F2 — interdependent libraries are **fully native**.
+///
+/// *Invariant:* when a consumer uses both a library (`top`) and the library it
+/// depends on (`base`) directly, BOTH get their own cdylib — so `base`'s functions
+/// dispatch native even when called directly, not just when reached through `top`.
+///
+/// Regression for the diverged-resolution bug: a library pulled in transitively (or
+/// used directly after being loaded transitively, so the direct `use` dedups) was
+/// resolved via the direct/sibling path, which — unlike `apply_manifest_side_effects`
+/// — never recorded it as a native candidate, so it had no cdylib and its direct
+/// calls interpreted.  Now both build, and the result matches interpreting.
+#[test]
+fn interdependent_libraries_are_fully_native() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (F2 needs the native build)");
+        return;
+    }
+
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_n3_diamond_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("lib");
+    let base_auto = write_lib(
+        &libdir,
+        "dbase",
+        None,
+        "pub fn base_double(v: vector<integer>) -> vector<integer> {\n\
+         \x20   out: vector<integer> = [];\n\
+         \x20   for x in v { out += [x * 2]; }\n\
+         \x20   out\n}\n",
+    );
+    let top_auto = write_lib(
+        &libdir,
+        "dtop",
+        Some("dbase"),
+        "use dbase;\n\
+         pub fn top_sum(v: vector<integer>) -> integer {\n\
+         \x20   d = base_double(v);\n\
+         \x20   t = 0;\n\
+         \x20   for x in d { t += x; }\n\
+         \x20   t\n}\n",
+    );
+    let prog = root.join("main.loft");
+    // Diamond: consumer uses BOTH `dtop` and its dependency `dbase` directly.
+    std::fs::write(
+        &prog,
+        "use dtop;\nuse dbase;\nfn main() {\n\
+         \x20   println(\"{top_sum([1, 2, 3])}\");\n\
+         \x20   println(\"{base_double([5, 6])}\");\n}\n",
+    )
+    .unwrap();
+
+    let interp = run_against(&libdir, &prog, &[("LOFT_NO_NATIVE_LIBS", "1")]);
+    let native = run_against(&libdir, &prog, &[]);
+
+    assert!(
+        native.success,
+        "default-native run failed:\n{}",
+        native.stderr
+    );
+    assert_eq!(
+        native.stdout, interp.stdout,
+        "PARITY DIVERGENCE: interdependent libs (default-native) != interpreted"
+    );
+    assert_eq!(interp.stdout, "12\n[10,12]\n", "reference output");
+    assert!(
+        single_cdylib(&top_auto).is_some(),
+        "the dependent library `dtop` must build its cdylib"
+    );
+    assert!(
+        single_cdylib(&base_auto).is_some(),
+        "the dependency `dbase`, used directly, must ALSO build its OWN cdylib (F2)"
     );
 
     let _ = std::fs::remove_dir_all(&root);

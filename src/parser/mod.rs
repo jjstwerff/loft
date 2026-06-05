@@ -5165,6 +5165,17 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
+        // @PLAN54 N3 Step 3 (default-native) / F2 — mirror `apply_manifest_side_effects`:
+        // a normal loft library reached via THIS direct-resolution / sibling-package /
+        // ancestor-walk path must ALSO be recorded as a native-compile candidate.
+        // Without it the two resolution paths diverge: a library pulled in transitively
+        // (or used directly *after* it was already loaded transitively, so the direct
+        // `use` dedups) is loaded here but never recorded — so it never builds its own
+        // cdylib and its direct calls interpret.  `native` (hand-written cdylib) takes
+        // precedence — don't double-compile.
+        if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == &pkg_dir) {
+            self.pending_native_compile.push(pkg_dir.clone());
+        }
         if let Some(ref crate_name) = m.native_crate {
             let rust_crate = crate_name.replace('-', "_");
             if !self
