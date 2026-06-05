@@ -10,59 +10,56 @@ Read [`01-destination-passing-design.md`](01-destination-passing-design.md) firs
 it is the design + the build evidence each issue below builds on.
 
 > ## ▶ Next session — start here
-> **Done (✅):** the interpreter chokepoint, every native `codegen_runtime`
-> producer (that file is ZERO scratch), the keystone `W`, the coverage proof `C`,
-> **N2a** (the cdylib FFI codegen wrap now returns owned `String`), the
-> **`LOFT_SCRATCH_TRIP` sentinel** (live-vs-dead is now a runtime fact, not a
-> grep guess), and **Phase 1 (native-host) COMPLETE** — `ymd_days_ago`,
-> `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`, `parallel_buf`
-> all dest-pass (each sentinel-proven via the positive→negative control pair).
-> Native + interp green.  The only **native-host** scratch left is Phase 2 (null).
+> ### 🎉 Milestone — the interpreter generates ZERO scratch traffic
+> `LOFT_SCRATCH_TRIP=1` now reads **zero trips across the entire `tests/scripts` +
+> `tests/docs` corpus**.  Every native-host text producer dest-passes; no real
+> program produces scratch on the interpreter.  This is most of the Goal-E win for
+> the reference backend — banked.
 >
-> ### The metric is now the sentinel, not the grep
-> `LOFT_SCRATCH_TRIP=1` makes every *live* `scratch.push` print its `file:line`
-> (`=panic` trips a backtrace).  This **supersedes the bare `grep scratch.push`**,
-> which is now polluted by the sentinel's own doc/output strings AND has always
-> over-counted (it sees dead fallbacks and live sites alike).  Static proxy:
-> `grep -rn 'scratch\.push(' src/` = **28** (one is the `pre_eval.rs:556`
-> comment → **27 real**), **unchanged by Phase 1** — converting a producer adds a
-> `_dest` variant but leaves the old body for `D`, so I1 is **count-neutral by
-> design**.  The real acceptance gate: a **whole-suite `LOFT_SCRATCH_TRIP` run
-> with zero trips** → nothing depends on scratch → the field deletes (its absence
-> is then the compile-time guard).
+> **Done (✅):** the interpreter chokepoint; every `codegen_runtime` producer; the
+> keystone `W`; the coverage proof `C`; **N2a** (cdylib FFI codegen wrap → owned
+> `String`); the **`LOFT_SCRATCH_TRIP` sentinel**; **Phase 1 native-host**
+> (`ymd_days_ago`, `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`,
+> `parallel_buf`); and **Phase 2 native-host** (`as_text`, `env_variable`).  Each
+> sentinel-proven via the positive→negative control pair.  Native + interp green.
 >
-> ### What the sentinel found — the corpus-live set (the real targets)
-> Enumerated across all `tests/scripts/*.loft` + `tests/docs/*.loft` (interpret).
-> After Phase 1, **two** native-host sites fire — **both Phase 2 (null)**.  Every
-> non-null native-host producer is now converted (silent).
+> ### Phase 2 was a phantom — it collapsed into plain dest-passing
+> The roadmap's central Phase-2 claim — *"a dest buffer can't represent null, so
+> Phase 2 needs a genuinely-novel null-aware interp primitive"* — was **probe-
+> falsified on both backends**.  Text-null is **content-based** (`STRING_NULL` =
+> "\0"; `conv_bool_from_text`), so a dest text record carries null by holding the
+> "\0" bytes — `?? ` / `!` / `len` / compare / siblings / format read it
+> identically to the old sentinel.  So `as_text` dest-passes by writing "\0" for
+> null; `os_variable`/`env_variable` is non-null (empty for unset) and dest-passes
+> plainly.  **No novel mechanism existed to build.**  (Bonus: per-call dests retire
+> the @P354 sibling-aliasing scratch hazard for free.)
 >
-> | Trips | Site | Producer | Class |
-> |---|---|---|---|
-> | 7 | `native.rs` | `n_as_text` | **Phase 2** (returns null) |
-> | 5 | `format.rs:333` | `os_variable` (`push_scratch` helper) | **Phase 2** (null if unset) |
+> ### Surfaced + fixed: a family of null-OUTPUT bugs
+> Probing the null model exposed that format interpolation rendered null sentinels
+> raw instead of `null`.  Fixed (both backends, one site each in `ops.rs`): text
+> "\0" → `null`, float `NaN` → `null` (NaN isn't JSON-standard and `?? `/`!` treat
+> it as null).  Integer was already correct.  `inf` is a real non-null value and
+> stays `inf`.  Regression `tests/scripts/198`.
 >
-> **The Phase-1 wasm tail (deferred):** `n_ws_client_message` + `n_pack_take` are
-> non-null but **`#[cfg(wasm)]`-only** — the native-host sentinel can't see them,
-> and `ws_client_message` needs a live WS host to exercise.  They need a *wasm*
-> positive control (`pack_take` is wasm-testable; `ws` needs a host), so they wait
-> for the wasm-validation pass rather than ship unvalidated.
+> ### The metric is the sentinel, not the grep
+> The acceptance gate is a **whole-suite `LOFT_SCRATCH_TRIP` zero** (now true for
+> the corpus) → the field deletes, its absence the compile-time guard.  Static
+> proxy `grep -rn 'scratch\.push(' src/` = **27**, but it over-counts (dead
+> fallbacks + the `pre_eval.rs:556` comment + the emitted-code strings) — the
+> sentinel is the truth.
 >
-> **Bugs surfaced (orthogonal, filed):** #272 (native: stateful producer in inline
-> `"{x}" != literal`), #273 (native: par-text loop with a literal-returning worker
-> → E0061).  Both pre-existing, both with verified workarounds; neither blocks the
-> interp conversions.
-> ### How far from zero — the count drops at three steps; I1 is the enabler
-> The hard infrastructure is built; the rest is proven-pattern application, **one**
-> genuinely-new mechanism, and a mechanical delete.  **I1 drops the count by ZERO**
-> — it adds `_dest` variants but leaves the old bodies for `D`; its job is to make
-> D's delete *safe* (every live producer must have a `_dest` first, or D's deletion
-> breaks it).  After batch 1, `native.rs` is **10 dead fallbacks + 6 live**.
->
-> | Step | Removes (real statements) | Nature |
+> ### What's left to delete the field
+> | Region | Sites | Nature |
 > |---|---|---|
-> | **Phase B** | emit.rs ~7 | central Return conversion, direction-proven (matrix-gated) |
-> | **N2b** | extensions.rs 2 | needs the new null-aware interp primitive |
-> | **D + F** | native 16 + format 2 | mechanical delete + field gone (gated on the sentinel reading zero) |
+> | **Phase B** (`emit.rs`) | 7 | central `Value::Return`/`wrap_result` text wraps — *emitted* `scratch.push` in generated native code; the mixed-return / W-trap hazard (matrix-gated). |
+> | **N2b** (`extensions.rs`) | 2 | the interpreter cdylib bridge (`bridge_push_str`/`push_loft_str`) — write into a dest instead of scratch (now known: plain dest-passing, "\0"/empty for null). |
+> | **wasm tail** (`native.rs` cfg(wasm)) | 2 | `pack_take` + `ws_client_message` — non-null; need a *wasm* positive control (`pack_take` testable, `ws` needs a host). |
+> | **D + F** | the dead fallbacks + the field | the `native.rs` non-`_dest` bodies are now ALL dead (corpus reads zero); delete them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops. |
+>
+> **Bugs surfaced (orthogonal, filed, NOT blockers):** #272 (native: stateful
+> producer in inline `"{x}" != literal`), #273 (native: par-text loop with a
+> literal-returning worker → E0061).  Both pre-existing, both with verified
+> workarounds.
 >
 > ### The cleanest ordering (sequence by MECHANISM, not by issue-label)
 > Phase B, I1, N2b are mutually **independent** and all gate D, so order is driven
@@ -80,16 +77,13 @@ it is the design + the build evidence each issue below builds on.
 >    need a *wasm* positive control rather than shipping unvalidated).  Surfaced
 >    orthogonal pre-existing native bugs #272 + #273 (filed, verified workarounds,
 >    not blockers — see § below).
-> 2. **Phase 2 — the null-aware interp primitive → I1-null + N2b** *(THE one novel
->    piece)*: a single mechanism — "materialise possibly-null dynamically-produced
->    text on the interp stack without scratch" — feeds THREE consumers that all
->    share it: the null-carrying producers (`os_variable`), interp `as_text`, and
->    the cdylib bridge (`extensions.rs` `bridge_push_str`/`push_loft_str`, which
->    can return null too).  A dest buffer can't carry null (the `as_text`
->    exclusion); the native side already proved the escape hatch (the `STRING_NULL`
->    sentinel as an owned value — see `A`), so the interp equivalent is *unbuilt,
->    not impossible*.  Design it ONCE.  Reaches **interp scratch = 0** (−2, and
->    every `native.rs` body now provably dead).
+> 2. **Phase 2 — null producers → plain dest-passing** ✅ **DONE (native-host).**
+>    The "novel primitive" was a phantom (premise probe-falsified): text-null is
+>    content-based ("\0"), so a dest carries it.  `as_text` (write "\0" for null)
+>    and `env_variable` (non-null, `os_variable` now owns its `String`) dest-pass
+>    plainly.  `format.rs` is scratch-free.  **Corpus reads zero.**  N2b (the
+>    cdylib bridge) is the same plain dest-passing, just on the FFI bridge — moved
+>    to Phase 3.
 > 3. **Phase 3 — Phase B** *(central, highest blast radius)*: the 8 `emit.rs`
 >    `Value::Return`/`wrap_result` wraps → owned `String`.  ⚠ Serves THREE roots —
 >    `no_work_buffer` (@P205 generic monomorph, excluded from `text_return` at
@@ -109,12 +103,12 @@ it is the design + the build evidence each issue below builds on.
 >    `library_names` miss then loudly catches any residual emit.  Gated on 1–3
 >    reaching zero.
 >
-> **The single insight:** I1-null and N2b *look* like separate issues but share one
-> missing primitive (null-carrying owned-text on the interp stack) — fusing them
-> into Phase 2 designs it once and surfaces the null wrinkle before it bites two
-> places.  Isolating the two genuinely-hard pieces (Phase 2's null primitive,
-> Phase 3's mixed-return) into their own matrix-gated phases keeps Phase 1
-> (proven-mechanical) and Phase 4 (the payoff) low-risk.
+> **The single insight (revised by the build):** the design feared a novel
+> null-aware primitive; **probing the load-bearing claim dissolved it** — text-null
+> is content-based, so null rides plain dest-passing.  The only genuinely-hard
+> piece left is **Phase B's mixed-return / W-trap hazard** (matrix-gated); N2b is
+> now plain dest-passing on the cdylib bridge; Phase 4 (D) is the mechanical
+> payoff, gated on the sentinel reading zero.
 >
 > 🔧 **The sentinel — your live-vs-dead oracle (use it every batch):**
 > ```
