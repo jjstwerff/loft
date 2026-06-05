@@ -544,10 +544,13 @@ fn p200_int_compare_emitter_registered() {
 // Post-Stage B both packages live in `~/.loft/build-cache/`
 // and the link fails.
 //
-// The actual @P244 regression target (the LoftStr→Str wrapper
+// The actual @P244 regression target (the LoftStr→String wrapper
 // in `src/generation/mod.rs::output_native_direct_call`) is
-// not at risk from @P389 — wrapper codegen happens before link
-// and the wrapper output is unchanged.  When @P389 is fixed
+// not at risk from @P389 — wrapper codegen happens before link.
+// (@PLN10 N2 changed that wrapper from a scratch-backed `Str` to
+// an owned `String`; the emit-only shape is pinned by
+// `pln10_n2_cdylib_text_wrapper_returns_owned_string` below, which
+// runs even where @P389 blocks the link.)  When @P389 is fixed
 // (per its plan-12 Tier 3 entry), un-ignore this test.
 #[test]
 #[ignore = "blocked by @P389 — cross-package native link on Linux CI"]
@@ -562,8 +565,62 @@ fn p244_text_native_wrapper_compiles_under_native() {
     assert!(
         status.success(),
         "P244: lib/server smoke test failed under default --native — \
-         the LoftStr→Str wrapper fix in src/generation/mod.rs \
+         the LoftStr→String wrapper fix in src/generation/mod.rs \
          (output_native_direct_call::needs_text_wrap branch) regressed."
+    );
+}
+
+/// @PLN10 N2 regression — a cdylib `#native` text-returning function's
+/// generated wrapper returns an OWNED `String` (no `stores.scratch`).
+///
+/// Pre-N2 `output_native_direct_call`'s `needs_text_wrap` branch pushed the
+/// foreign `LoftStr` bytes into the never-cleared `stores.scratch` buffer and
+/// handed back a borrowed `Str` (a program-lifetime leak).  N2 returns the
+/// bytes as an owned `String`, bridged to the caller via `Deref` (@P304), and
+/// flips the wrapper signature to `-> String` (gated by `!def.native.is_empty()`).
+///
+/// Emit-only (`--native-emit`): wrapper codegen runs before any link, so this
+/// pins the shape even though @P389 blocks the full cross-package build of the
+/// `server` smoke (the only in-repo consumer with text-returning cdylib natives).
+/// Skips gracefully when the `server` package isn't resolvable on this box.
+#[test]
+fn pln10_n2_cdylib_text_wrapper_returns_owned_string() {
+    let out_rs = std::env::temp_dir().join(format!("loft_pln10_n2_{}.rs", std::process::id()));
+    let status = std::process::Command::new(loft_binary())
+        .arg("--native-emit")
+        .arg(&out_rs)
+        .arg("tests/integration/p244_smoke.loft")
+        .current_dir(project_root())
+        .status()
+        .expect("run --native-emit on the server smoke");
+    if !status.success() {
+        eprintln!(
+            "skipping pln10_n2_cdylib_text_wrapper_returns_owned_string — \
+             `server` package not resolvable (--native-emit exited non-zero)"
+        );
+        return;
+    }
+    let emitted = std::fs::read_to_string(&out_rs).expect("read emitted native source");
+    let _ = std::fs::remove_file(&out_rs);
+
+    // n_tcp_path is a representative text-returning cdylib native
+    // (server-0.1.1/src/server.loft:46 → loft_server::n_tcp_path).
+    let after = &emitted[emitted
+        .find("fn n_tcp_path(")
+        .expect("generated source must contain the n_tcp_path wrapper")..];
+    let body = &after[..after.find("\n}").map_or(after.len(), |e| e + 2)];
+    assert!(
+        body.contains("-> String"),
+        "N2: cdylib text-native wrapper must return owned `String`, got:\n{body}"
+    );
+    assert!(
+        !body.contains("scratch"),
+        "N2: cdylib text-native wrapper must NOT touch `stores.scratch`, got:\n{body}"
+    );
+    assert!(
+        body.contains("String::from_utf8_unchecked"),
+        "N2: cdylib text-native wrapper must materialise the bytes as an owned \
+         `String`, got:\n{body}"
     );
 }
 
