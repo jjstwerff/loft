@@ -107,6 +107,13 @@ fn compile_cdylib(src: &str, stem: &str, tmp: &Path, rlib: &Path, deps: &Path) -
         args.push("--extern".into());
         args.push(format!("{name}={}", path.display()));
     }
+    // Windows MSVC: add the build-script `-L` dirs holding native import libs
+    // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.
+    // (`build_shared_cdylib` does the same for the production path.)
+    for dir in common::native_lib_search_dirs(rlib) {
+        args.push("-L".into());
+        args.push(dir.display().to_string());
+    }
     // Pass args via an `@argfile`: the `--extern`/`-L` list exceeds Windows'
     // ~32 KB CreateProcessW command-line limit (os error 206); argfile is
     // cross-platform (mirrors `build_shared_cdylib` + the --native test runner).

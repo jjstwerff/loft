@@ -1,0 +1,66 @@
+# Fast, manually-triggered Windows-only pass for the native-cdylib link path.
+#
+# WHY THIS EXISTS: the full `CI / Test (windows-latest)` job builds everything
+# and runs the entire ~2000-test nextest suite (~15 min on top of the rest of
+# the PR matrix) just to surface a handful of cdylib link failures (e.g.
+# `LNK1181: cannot open input file 'windows.0.48.5.lib'`).  When iterating on a
+# Windows-specific cdylib/link fix, that round-trip is far too slow.
+#
+# This workflow runs ONLY on `workflow_dispatch` (never on push/PR, so it adds
+# zero load to the normal matrix), on Windows only, and runs ONLY the
+# cdylib/native test binaries.  It restores the same cargo cache the main CI
+# job populates, so the build is incremental.
+name: Win cdylib (manual)
+
+on:
+  # Runs on every push to this iteration branch so the lean Windows pass gives
+  # fast feedback on the cdylib link fix — without invoking the full 3-OS PR
+  # matrix.  Remove the `push:` block (leaving `workflow_dispatch`) once the fix
+  # is confirmed and the work has merged.
+  push:
+    branches: [scripting]
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "nextest filter expression for the subset to run"
+        required: false
+        default: "binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)"
+
+jobs:
+  win-cdylib:
+    name: Win cdylib subset
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Reuse the cache key the main CI `test` job writes, so this incremental
+      # build starts warm.  restore-keys lets it fall back to any recent
+      # Windows cargo cache when the exact Cargo.lock hash hasn't been seen yet.
+      - name: Restore cargo registry and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The cdylib tests link a hand-driven rustc against the canonical
+      # `target/debug/libloft.rlib`; `--all-targets` builds it plus every test
+      # binary.  `CARGO_BIN_EXE_loft` (used by n3_use_native) comes from the
+      # nextest build below.
+      - name: Build test targets
+        run: cargo build --all-targets
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # On push events `inputs.filter` is empty; fall back to the default subset.
+      - name: Run cdylib / native subset
+        env:
+          FILTER: ${{ github.event.inputs.filter || 'binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)' }}
+        run: cargo nextest run --profile ci -E "$FILTER"
