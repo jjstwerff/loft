@@ -1582,29 +1582,55 @@ counter; // still 0 — outer variable unchanged
 ### Variable scoping: shared name table per file
 
 All functions in a `.loft` file share one variable name table.  In practice this
-works transparently — the compiler tracks which function each variable belongs to.
-Collisions only occur in specific codegen edge cases:
+works transparently — the compiler tracks which function each variable belongs to,
+so reusing the same parameter or local-variable name across functions (including
+recursive functions with `const vector<T>` parameters and `for` loops) works
+correctly.
 
-- A function with `const vector<T>` parameters that calls itself recursively AND
-  contains a `for` loop may panic with "Too few parameters" (PROBLEMS.md #84).
-- Workaround: use function-prefixed loop variable names in library code
-  (e.g. `wu_x` for Wu line algorithm, `bz_t` for Bezier).
-
-Regular parameter and local variable reuse across functions works correctly.
-
-### Hash collections: struct fields only, no iteration
-
-Hash collections cannot be standalone local variables — wrap in a struct.
-Lookup and mutation work; iteration does not:
+The one rule to know: **loop variables are not block-scoped.**  A `for` loop
+variable lives in the function's scope, so naming it the same as an existing local
+in that function is a *compile-time error*, not a silent shadow:
 
 ```loft
-struct Table { data: hash<Entry[name]> }
-t = Table { data: [] };
-t.data += [Entry { name: "x", value: 1 }];
-e = t.data["x"];         // lookup — works
-t.data["x"] = null;      // remove — works
-for kv in t.data { }     // iteration — NOT supported
+fn f() {
+  x = 0;
+  for x in 0..3 { }   // error: loop variable 'x' shadows a local named 'x'
+}                      //        — rename the loop variable (e.g. loop_x)
 ```
+
+Rename the loop variable (the message suggests `loop_x`) or drop the dead outer
+local.  The compiler reports this up front with a fix hint; there is no codegen
+panic or hidden workaround to remember.
+
+### Hash collections: name the key (local or struct field)
+
+A hash (and `sorted` / `index`) needs its key spelled out, because a bare `[]`
+literal is ambiguous — it could be a vector or a keyed collection.  Give the key
+either way and lookup, mutation, removal, and **iteration** all work, on both the
+interpreter and `--native`:
+
+```loft
+struct Entry { name: text, value: integer }
+
+fn main() {
+  // As a local variable — the type annotation supplies the key:
+  h: hash<Entry[name]> = [];
+  h += [Entry { name: "x", value: 1 }];
+  e = h["x"];                 // lookup — works
+  h["x"] = null;              // remove — works
+  for kv in h { }             // iteration — works
+
+  // Equivalently, as a struct field (the field declaration supplies the key):
+  t = Table { data: [] };
+  t.data += [Entry { name: "y", value: 2 }];
+}
+
+struct Table { data: hash<Entry[name]> }
+```
+
+The one unsupported form is a **generic-constructor expression**
+(`h = hash<Entry[name]>()`) or a bare untyped `h = []` — neither names the key.
+Use the annotation (`h: hash<Entry[name]> = []`) or a field declaration instead.
 
 ### Generics: single type variable
 
