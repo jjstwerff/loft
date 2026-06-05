@@ -18,7 +18,7 @@
 #![allow(non_snake_case)]
 
 use crate::database::{ShowDb, Stores};
-use crate::keys::{Content, DbRef, Key, Str};
+use crate::keys::{Content, DbRef, Key};
 use crate::ops;
 use crate::tree;
 
@@ -2090,18 +2090,21 @@ pub fn t_9JsonValue_len(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i64 {
 /// payload, or the empty-string null sentinel for any other variant.
 /// Mirrors interp `n_as_text`.
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
-pub fn t_9JsonValue_as_text(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Str {
+// @PLN10 — owned `String` (no scratch).  Null is carried as
+// `STRING_NULL.to_string()` (the `"\0"` sentinel) — native text-null IS an owned
+// `String` value, so `j.as_text() ?? x` / `if !j.as_text()` semantics are
+// preserved.  Inline (matching name + cell ABI), so no `native_returns_owned_string`
+// entry is needed (cf. `kind` / `to_json`).
+pub fn t_9JsonValue_as_text(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
     if discr == crate::native::JV_DISCR_STRING {
         let str_tp = stores.name("JString");
         let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
         let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
-        let s = stores.store(&v).get_str(s_rec).to_string();
-        stores.scratch.push(s);
-        Str::new(stores.scratch.last().unwrap())
+        stores.store(&v).get_str(s_rec).to_string()
     } else {
-        Str::new(crate::state::STRING_NULL)
+        crate::state::STRING_NULL.to_string()
     }
 }
 
