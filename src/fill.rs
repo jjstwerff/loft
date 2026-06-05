@@ -2049,7 +2049,7 @@ fn mkdir_all(s: &mut State) {
 }
 
 fn clear_scratch(s: &mut State) {
-    s.database.scratch.clear();
+    let _ = s.database.allocations.len();
 }
 
 fn reverse_vector(s: &mut State) {

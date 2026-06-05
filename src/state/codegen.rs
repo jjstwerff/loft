@@ -363,10 +363,10 @@ impl State {
             ValueType::Null => Type::Void,
             ValueType::Line => {
                 self.line_numbers.insert(self.code_pos, node.line_nr());
-                if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
-                    stack.add_op("OpStaticCall", self);
-                    self.code_add(lib_nr);
-                }
+                // @PLN10 D/G4 — the former `OpClearScratch` emission here never
+                // fired (`library_names` never resolved the opcode name), which is
+                // why `scratch` was never cleared.  The field is retired (G5), so
+                // the dead emit is removed.
                 Type::Void
             }
             // @PLAN54 G2 — single-child / compound delegating arms: dispatch +
