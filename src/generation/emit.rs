@@ -361,10 +361,18 @@ impl Output<'_> {
                         if let Some(buf) = self.return_buffer_name() {
                             write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
                         } else {
-                            write!(
-                                w,
-                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                            )?;
+                            // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
+                            // means a non-nwb text return (nwb is handled by the
+                            // `outer_owned` arm above), and a non-nwb text fn ALWAYS
+                            // has a `RefVar(Text)` work buffer, so `return_buffer_name`
+                            // is never `None`.  Panic loudly rather than emit
+                            // `stores.scratch` into generated code (the field is being
+                            // retired).  Whole-suite `=panic` = zero proves this is
+                            // unreached.
+                            unreachable!(
+                                "non-nwb text return without a work buffer \
+                                 (return_buffer_name() == None) — @PLN10 invariant violated"
+                            );
                         }
                     } else if wrap_text {
                         write!(w, ")")?;
@@ -526,10 +534,18 @@ impl Output<'_> {
                         if let Some(buf) = self.return_buffer_name() {
                             write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
                         } else {
-                            write!(
-                                w,
-                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                            )?;
+                            // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
+                            // means a non-nwb text return (nwb is handled by the
+                            // `outer_owned` arm above), and a non-nwb text fn ALWAYS
+                            // has a `RefVar(Text)` work buffer, so `return_buffer_name`
+                            // is never `None`.  Panic loudly rather than emit
+                            // `stores.scratch` into generated code (the field is being
+                            // retired).  Whole-suite `=panic` = zero proves this is
+                            // unreached.
+                            unreachable!(
+                                "non-nwb text return without a work buffer \
+                                 (return_buffer_name() == None) — @PLN10 invariant violated"
+                            );
                         }
                     } else if wrap_text {
                         write!(w, ")")?;
@@ -1586,10 +1602,18 @@ impl Output<'_> {
                         if let Some(buf) = self.return_buffer_name() {
                             write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
                         } else {
-                            write!(
-                                w,
-                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                            )?;
+                            // @PLN10 D/G1 — dead branch: `needs_p205_scratch` here
+                            // means a non-nwb text return (nwb is handled by the
+                            // `outer_owned` arm above), and a non-nwb text fn ALWAYS
+                            // has a `RefVar(Text)` work buffer, so `return_buffer_name`
+                            // is never `None`.  Panic loudly rather than emit
+                            // `stores.scratch` into generated code (the field is being
+                            // retired).  Whole-suite `=panic` = zero proves this is
+                            // unreached.
+                            unreachable!(
+                                "non-nwb text return without a work buffer \
+                                 (return_buffer_name() == None) — @PLN10 invariant violated"
+                            );
                         }
                     } else if wrap_result {
                         write!(w, ")")?;
