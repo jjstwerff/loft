@@ -375,6 +375,41 @@ own cdylib and dispatch native; output stays byte-identical.  Verified the main
 program's own package is NOT over-recorded (`library_suite` builds no `native-auto/`).
 Guard: `tests/n3_parity.rs::interdependent_libraries_are_fully_native` (the diamond).
 
+**F3 — ⛔ THE BIG ONE: auto-native dispatch never executes → 0× speedup (the whole arc's value is currently unrealized).** 🔴 *(found 2026-06-05 via gate ② — the first time anyone measured the C71 *execution* path, vs. the plan's load-side numbers)*
+- *Symptom (measured, not guessed):* an interpreted script calling a default-native
+  library function runs at **interpreter speed — 1.0×** (compute body: 25.0 ns/iter
+  native vs 25.5 ns/iter interp, fixed-overhead-subtracted, 200M iters).  The
+  `--native` whole-program path is 10–40× (PERFORMANCE.md) — so the **codegen is
+  fast**; the C71 **dispatch** is the dead link.
+- *Why it was invisible:* every test asserts `interp == native` *output*.  Native
+  silently interprets → `interp == interp == correct` → **all parity / n2 / n3 tests
+  pass while the native path is a no-op at runtime.**  Parity is necessary but **not
+  sufficient** — the arc needs a *speed* assertion (a `use`d-library bench row).
+- *Diagnosis so far (all confirmed):* the function is marked (`def.native =
+  loft_shared_…`), the cdylib builds + exports the bridge symbol, `byte_code` emits
+  `OpStaticCall(loft_shared_n_compute)` into `n_main` (disassembly-verified), and
+  `wire_shared_native_fns` wires it (dlsym + `compute_sig` + `library_names` index all
+  succeed).  **Yet at runtime the bridge (`shared_store_dispatch`) never fires and the
+  body interprets.**  The wired path (`State::static_call` → `library[idx]` → bridge,
+  mod.rs:436) is **dead code** (call-count 0).  So the `OpStaticCall` opcode mis-routes
+  to a handler that interprets instead of dispatching.
+- *Where the investigation stalled (and the right instrument):* pinning the exact
+  mis-route via **CLI probing failed** — a normal `loft <file>` run doesn't fire probes
+  in `execute_argv` / the dispatch loop / `static_call`; the interpreter has ~11
+  dispatch-loop variants + several `execute_*` entries and the live path wasn't located
+  from main.rs.  **Next step: a focused Rust integration test** that builds `State`+`Data`,
+  parses a minimal interp-script-calls-native-lib case, `byte_code`s + executes it, and
+  steps the dispatch directly — deterministic, bypasses main.rs branching, and becomes
+  the regression guard.  Pin: `OpStaticCall`'s op_code (assigned sequentially,
+  `data.rs:2423`) vs the `OPERATORS` array index of `static_call` (fill.rs) — suspected
+  drift, OR a user-bodied marked fn preferring its body over the static dispatch.
+- *Two secondary fixes that matter once dispatch works:* the cdylib builds at
+  **`-C opt-level=0`** (unoptimized — `native_lib.rs::build_shared_cdylib`); and a
+  library call with a **constant argument is const-folded** (interpreted at compile
+  time), bypassing dispatch — a real user-facing surprise + a benchmark trap.
+- *Priority:* this is **above F1/F2 and above N5** — N5 guards a boundary that isn't
+  crossed at runtime today.  Until F3 lands, default-native is a correctly-plumbed no-op.
+
 ---
 
 **Critical path to the *ideal* state: Step 1 → 2 → 3 → 4.**  Step 1 (parity) is the
