@@ -238,6 +238,13 @@ jobs:
           restore-keys: ubuntu-hygiene-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
+      - name: Build host loft binary (required by `make index`)
+        # The index_hygiene test shells out to `make index`, whose
+        # Makefile guard (`if [ ! -x target/release/loft ]`) demands a
+        # pre-built release binary — nextest only compiles the test
+        # binary, not `target/release/loft`.  Without this step the test
+        # panics with `make index exited 2 / host loft binary missing`.
+        run: cargo build --release --bin loft
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
 
