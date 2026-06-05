@@ -203,6 +203,71 @@ impl Debug for Content {
     }
 }
 
+/// `LOFT_SCRATCH_TRIP` → 0 (off) / 1 (warn) / 2 (panic), read once.
+fn scratch_trip_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("LOFT_SCRATCH_TRIP").as_deref() {
+        Ok("panic") => 2,
+        Ok(v) if !v.is_empty() => 1,
+        _ => 0,
+    })
+}
+
+/// The append-only buffer of temporary `String`s produced by text-returning
+/// native functions, wrapped so every `push` routes through one observable
+/// chokepoint.  @PLN10 is retiring this buffer; the wrapper makes the
+/// retirement's acceptance gate *runnable* — the usage-sentinel instrument
+/// (see the `engineering-rigor` skill § "A third instrument").  Set
+/// `LOFT_SCRATCH_TRIP=1` and any surviving `scratch.push` names itself at
+/// runtime (`file:line`); dead fallbacks stay silent, live consumers print.
+/// `=panic` turns the first hit into a backtrace.  A whole-suite run with
+/// zero hits is the binary "safe to delete" proof.  Reads
+/// (`last`/`clear`/`len`/indexing) go through `Deref`; only `push` — the op
+/// being retired — is instrumented.
+#[derive(Default)]
+pub struct Scratch(Vec<String>);
+
+impl Scratch {
+    /// Push a temporary string.  `#[track_caller]` so the sentinel reports the
+    /// real `scratch.push` call site, not this method.
+    ///
+    /// # Panics
+    /// Under `LOFT_SCRATCH_TRIP=panic` the first `push` panics with its call
+    /// site — the deliberate "trip" mode of the usage sentinel.  Off by default.
+    #[track_caller]
+    pub fn push(&mut self, s: String) {
+        let mode = scratch_trip_mode();
+        if mode != 0 {
+            let loc = std::panic::Location::caller();
+            eprintln!(
+                "LOFT_SCRATCH_TRIP scratch.push @ {}:{}",
+                loc.file(),
+                loc.line()
+            );
+            assert!(
+                mode != 2,
+                "scratch.push hit under LOFT_SCRATCH_TRIP=panic @ {}:{}",
+                loc.file(),
+                loc.line()
+            );
+        }
+        self.0.push(s);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Vec<String>;
+    fn deref(&self) -> &Vec<String> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Scratch {
+    fn deref_mut(&mut self) -> &mut Vec<String> {
+        &mut self.0
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Stores {
     pub types: Vec<Type>,
@@ -228,8 +293,10 @@ pub struct Stores {
     /// requirement on `free()` that the old cascade-based scan imposed.
     pub free_bits: Vec<u64>,
     /// Temporary strings produced by text-returning native functions.
-    /// Cleared by `OpClearScratch` at statement boundaries.
-    pub scratch: Vec<String>,
+    /// Cleared by `OpClearScratch` at statement boundaries.  Wrapped in
+    /// [`Scratch`] so @PLN10's `LOFT_SCRATCH_TRIP` sentinel can locate every
+    /// live `push` while the buffer is being retired.
+    pub scratch: Scratch,
     /// per-definition DbRef into the CONST_STORE for vector
     /// constants (e.g. `pub HEIGHT_STEP_LABELS: vector<text> = […]`).
     /// Indexed by `d_nr`; a null DbRef (store_nr = u16::MAX) means
@@ -468,7 +535,7 @@ impl Clone for Stores {
             max: self.max,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Vec::new(),
+            scratch: Scratch::default(),
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
@@ -937,7 +1004,7 @@ impl Stores {
             max: 0,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Vec::new(),
+            scratch: Scratch::default(),
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),

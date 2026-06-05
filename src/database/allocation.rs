@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Memory/store allocation helpers and claim management.
 
-use crate::database::{Parts, Stores, WorkerStores};
+use crate::database::{Parts, Scratch, Stores, WorkerStores};
 use crate::hash;
 use crate::keys::DbRef;
 use crate::store::Store;
@@ -679,7 +679,7 @@ impl Stores {
             max: self.max,
             peak: self.max,
             free_bits,
-            scratch: Vec::new(),
+            scratch: Scratch::default(),
             const_refs: self.const_refs.clone(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
@@ -764,7 +764,7 @@ impl Stores {
             max: self.allocations.len() as u16 + pool_slice.len() as u16,
             peak: self.allocations.len() as u16 + pool_slice.len() as u16,
             free_bits,
-            scratch: Vec::new(),
+            scratch: Scratch::default(),
             const_refs: self.const_refs.clone(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
