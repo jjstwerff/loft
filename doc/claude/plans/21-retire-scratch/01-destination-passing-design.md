@@ -259,6 +259,18 @@ concat/loop), zero scratch; full suite green both backends; regression
     - `n_parallel_buf_get_text_native` — clones from the per-call parallel buffer.
     - the **cdylib FFI text wrap** (`generation/mod.rs:2698`) — emitted code;
       change the generated wrapper to return owned `String`.
+  - **Over-reach falsified (Design Protocol 1, build-probed):** the tempting
+    "one clean finish" — flip `rust_type(Type::Text, Context::Result)` from `"Str"`
+    to `"String"` (`mod.rs:482`) so *every* text-native wrapper returns owned
+    `String` — is **wrong**.  User text-returning functions (`def.code == Block`)
+    return a `Str` **viewing the caller's `text_return` work-buffer**, not an owned
+    String; the global flip makes every one `E0308: expected String, found Str`
+    (confirmed by building it).  Owned-text **native stubs** and buffer-view **user
+    fns** are genuinely two families — no single ABI invariant covers both.  The
+    refined (narrower) move, if pursued: condition the `mod.rs:2134` return type on
+    `def.code == Null && returns text → "String"` (owned-text stubs only), and
+    convert each remaining stub body in the same change.  Contained, but genuinely
+    per-category — not the free unification it looked like.
 - **Phase B** (`emit.rs` generic-specialisation wraps).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
   + the `#[cfg(debug_assertions)]` assert-empty guard.
