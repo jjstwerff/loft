@@ -52,9 +52,11 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
         "t_4text_replace"
             | "t_4text_to_lowercase"
             | "t_4text_to_uppercase"
-            // @PLN10 — always-non-null text producers with `_dest` variants
-            // (registered in `native.rs FUNCTIONS`).  `as_text` is excluded:
-            // it can return null, which a destination buffer can't represent.
+            // @PLN10 — text producers with `_dest` variants (registered in
+            // `native.rs FUNCTIONS`).  `as_text` is INCLUDED (Phase 2): text-null
+            // is content-based ("\0"), so a dest record carries it — the premise
+            // that "a dest can't represent null" was probe-falsified on both
+            // backends.
             | "n_source_dir"
             | "n_json_errors"
             | "t_9JsonValue_kind"
@@ -70,6 +72,8 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // @PLN10 Phase 1 — par-text buffer reader (interp; native is owned
             // String already, native par-text loops are blocked by #273).
             | "n_parallel_buf_get_text"
+            // @PLN10 Phase 2 — as_text (null carried as the "\0" sentinel content).
+            | "t_9JsonValue_as_text"
     )
 }
 

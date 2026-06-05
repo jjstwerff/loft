@@ -130,6 +130,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9JsonValue_kind_dest", n_kind_dest),
     ("t_9JsonValue_to_json_dest", n_to_json_dest),
     ("t_9JsonValue_to_json_pretty_dest", n_to_json_pretty_dest),
+    // @PLN10 Phase 2 — as_text dest-passing (null carried as the "\0" sentinel).
+    ("t_9JsonValue_as_text_dest", n_as_text_dest),
     // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
     ("n_ymd_days_ago_dest", n_ymd_days_ago_dest),
     ("n_store_memory_dest", n_store_memory_dest),
@@ -2606,6 +2608,30 @@ fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
     } else {
         stores.put(stack, Str::new(crate::state::STRING_NULL));
     }
+}
+
+// @PLN10 Phase 2 — destination-passing variant of `n_as_text`.  text-null is
+// CONTENT-based (`conv_bool_from_text`: content == "\0"), so the dest carries
+// null by holding the `STRING_NULL` ("\0") bytes — `?? ` / `!` / format all read
+// it identically to the old sentinel (probed on both backends).  So `as_text`
+// dest-passes like any other producer; no "null-aware primitive" is needed.
+// Bonus: per-call dests retire the @P354 sibling-aliasing scratch hazard.
+fn n_as_text_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    let out: String = if discr == JV_DISCR_STRING {
+        let str_tp = stores.name("JString");
+        let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
+        let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
+        stores.store(&v).get_str(s_rec).to_string()
+    } else {
+        crate::state::STRING_NULL.to_string()
+    };
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&out);
 }
 
 fn n_as_number(stores: &mut Stores, stack: &mut DbRef) {
