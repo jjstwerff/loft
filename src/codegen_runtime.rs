@@ -2505,34 +2505,33 @@ pub fn n_struct_from_jsonvalue(
 
 /// struct_to_json(self_ref, struct_kt) — serialise any user struct
 /// to canonical JSON.  Mirrors interp `n_struct_to_json`.
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
+// @PLN10 — owned `String` instead of a scratch-`Str` (cell-ABI path, bridged
+// by the native binding's `.to_string()` / `&*`).
 pub fn n_struct_to_json(
     cell: &std::cell::UnsafeCell<Stores>,
     self_ref: DbRef,
     struct_kt: i64,
-) -> Str {
+) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let struct_kt = (struct_kt as i32) as u16;
     let mut out = String::new();
     stores.show_json(&mut out, &self_ref, struct_kt, false);
-    stores.scratch.push(out);
-    Str::new(stores.scratch.last().unwrap())
+    out
 }
 
 /// struct_to_json_pretty(self_ref, struct_kt) — pretty serialiser.
 /// Mirrors interp `n_struct_to_json_pretty`.
-#[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
+// @PLN10 — owned `String` instead of a scratch-`Str`.
 pub fn n_struct_to_json_pretty(
     cell: &std::cell::UnsafeCell<Stores>,
     self_ref: DbRef,
     struct_kt: i64,
-) -> Str {
+) -> String {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let struct_kt = (struct_kt as i32) as u16;
     let mut out = String::new();
     stores.show_json(&mut out, &self_ref, struct_kt, true);
-    stores.scratch.push(out);
-    Str::new(stores.scratch.last().unwrap())
+    out
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
