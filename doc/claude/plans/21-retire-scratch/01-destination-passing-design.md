@@ -207,6 +207,30 @@ Regression: `tests/scripts/193-text-dest-synth-temp.loft` (interp + native + was
 The `scratch.push` *site* count is unchanged (the non-`_dest` natives still exist
 for any future non-`is_text_dest_native` producer) — but runtime scratch traffic
 for `to_lowercase` / `to_uppercase` / `replace` is now **zero** in every position.
-Remaining toward the 39→0 acceptance bar: add `_dest` variants for the other
-producers (`to_json`, `sha256`, …) so they ride the same chokepoint, then delete
-the field + the dead `clear_scratch` / `OpClearScratch`.
+
+**Build 3 — five more producers onto the chokepoint (committed).**  Gave the
+always-non-null text producers `_dest` variants + added their def names to
+`is_text_dest_native`, so the Build-2 chokepoint routes them too:
+`source_dir`, `json_errors`, `JsonValue.kind`, `JsonValue.to_json`,
+`JsonValue.to_json_pretty`.  Each `_dest` mirrors the proven template; the JSON
+methods key as `t_9JsonValue_*_dest` (the loft def name + `_dest`, per the
+`gen_text_dest_call` lookup), not `n_*_dest`.  **`n_as_text` is deliberately
+EXCLUDED** — it returns null for a non-string `JsonValue`, and a destination
+buffer can't represent null (empty buffer == `""`), so converting it would change
+`j.as_text() ?? x` semantics.  Validated value-position (arg/compare/format/
+concat/loop), zero scratch; full suite green both backends; regression
+`tests/scripts/194-text-producer-dest.loft`.
+
+**Remaining toward the 39→0 acceptance bar + field deletion:**
+- **Interpreter producers** still on scratch: `i_parse_errors`,
+  `n_struct_to_json` / `n_struct_to_json_pretty` (mechanical, same pattern);
+  `n_as_text` needs a null-carrying dest design or stays scratch-backed.
+- **Native backend** (`codegen_runtime.rs`): its own scratch usage
+  (`i_parse_errors:480`, `i_json_errors:500`, `n_parallel_buf_get_text_native`,
+  plus the `emit.rs:2698` wrap) is a **separate mechanism** — the native backend
+  doesn't consult `is_text_dest_native`; it handles `Set(w, native())` in its own
+  codegen.  This must be addressed before the field deletes.
+- **Phase B** (`emit.rs` generic-specialisation wraps) and **Phase A.5**
+  (`extensions.rs` cdylib bridge).
+- **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
+  + the `#[cfg(debug_assertions)]` assert-empty guard.
