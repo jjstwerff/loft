@@ -54,6 +54,17 @@ consistent — not to invent new structure.
    heading numbers in PROBLEMS.md; `**Status:** open | in-progress
    | done` heads phase plan files; `✅ done — commit <hash>` in
    phase tables.
+7. **Readability bar — see `doc/claude/DOC_QUALITY.md`.**  For
+   user-facing / on-ramp docs (README, onboarding, first-program,
+   library-usage), write for entry-level and non-native-English
+   readers: common words over fancy ones, short one-idea sentences,
+   no idioms or metaphors, explain a term on first use.
+   Maintainer-facing design docs (most of `doc/claude/`) may be
+   denser.  NOTE: DOC_QUALITY's plan-tag/date and "no change-history"
+   rules are *code-comment* rules — they do NOT override your doc
+   conventions.  Docs legitimately carry fix dates, plan refs, and
+   change records (a PROBLEMS "Root cause / Fix" entry, a CHANGELOG
+   note); keep those.
 
 ## What you do NOT do
 

@@ -82,7 +82,7 @@ fix-from-one-repro.
 blinds you downstream and can make broken things look fine (a `--native`
 `parallel{}` no-op once made test-80/81 *pass*).  Clearing bugs is the
 precondition for verifying the model holds anywhere — see
-[GOALS.md § Bugs are veils](../GOALS.md#bugs-are-veils--clearing-them-is-a-precondition-for-goal-e-not-a-sibling).
+[GOALS.md § Bugs hide things](../GOALS.md#bugs-hide-things--clear-them-before-trusting-the-model).
 
 **Inside an investigation plan this stops being the lightweight default and
 becomes a hard RULE — and it adds a code-only investigation-agent step** (the
@@ -193,7 +193,7 @@ discovery note stays in the investigation's log (faithful record of what the
 probing found); the *case* and the *fix* live in their own scope.
 
 This whole discipline is not a separate process rule — it is
-[Goal E](../GOALS.md#the-method-mirrors-the-goal) applied to our own reasoning:
+[Goal E](../GOALS.md#the-method-mirrors-the-goals) applied to our own reasoning:
 the stated model (the investigation's thesis, a bug's verdict) must match the
 verified reality, and a divergence is fixed by removing the gloss, not asserting
 past it.  We hold our own claims to the exceptionless-transparency standard loft
