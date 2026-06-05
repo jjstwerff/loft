@@ -120,6 +120,15 @@ Per gap, decide which it is — the fixes are different:
    A green board is false confidence. Keep the affect judgment *outside* the checks.
 4. **Developmentally-correct baseline** — not a defect, just where you are on the
    arc (a competent first pass / a symbolic stage). Don't pathologise it.
+5. **Uncanny — realistic-but-*wrong*.** Specific to the realism arc: once some channels
+   go realistic (modelled form, catchlit eyes), leftover **regularity** in the others
+   reads as unsettling rather than unfinished — mirror-symmetric features, a dead-centre
+   gaze, one textured region beside flat ones. Adding *more* realism **deepens** it. The
+   escape is to pick a side: retreat to **confident stylization** (break the symmetry,
+   off-axis the gaze, simplify or exaggerate so it reads as deliberate art) or push
+   **through** to higher realism — which usually means **growing the tool first** (e.g.
+   colored strokes for hair before you can texture a beard). Don't hover in the middle
+   adding half-measures. 3D hits this hardest — it's the classic uncanny-valley medium.
 
 ## Earned rules (general; medium-specific lists are in the references)
 
@@ -132,6 +141,16 @@ Per gap, decide which it is — the fixes are different:
 - A **composition/notan critic that tracks dark mass misses the bright focal
   point** — in a light-on-dark scene the focal is the *bright* region; judge that by
   eye.
+- **The late detail pass adds *recognition* cues, not subdivision.** Once the massing
+  converges, one pass of small **diagnostic** marks pays off — a catchlight (eye →
+  alive), lattice on the sails (crossed sticks → windmill), the band that completes a
+  plaid. The test per mark: does it make the thing read as *more itself* (keep), or
+  just subdivide an interior a viewer won't credit (a doorknob — skip)?
+- **Realism is a consistent texture-*level*, not maximum detail anywhere.** Texturing
+  one region doesn't resolve a smooth/flat mismatch — it **relocates** it to the next
+  boundary (a textured beard then fights smooth skin, then a flat hat). Raise the whole
+  image's texture level together, or keep it uniformly low; one hyper-detailed island
+  looks wronger than none. (3D: the same for material and poly-density across a scene.)
 
 ## Pick your medium
 

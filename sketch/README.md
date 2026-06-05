@@ -45,9 +45,9 @@ size WxH
 Background top=A bottom=B               grayscale sky gradient (A top, B bottom; L in 0..1)
 Background topc=R,G,B botc=R,G,B         colour sky gradient
 name <element>                          tag following marks (so they can be measured)
-Line (x1,y1) - (x2,y2) [w=N]
-Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [<fill>]              round (aspect-corrected)
-Poly (x1,y1) (x2,y2) ... [w=N] [<fill>]                       stroke, or filled
+Line (x1,y1) - (x2,y2) [w=N] [stroke=R,G,B]
+Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [<fill> | stroke=R,G,B] round (aspect-corrected)
+Poly (x1,y1) (x2,y2)[~] ... [w=N] [<fill> | stroke=R,G,B]     stroke, or filled
   <fill> = fill=L | rgb=R,G,B                                solid (gray / colour)
          | grad=R,G,B>R,G,B [dir=ax,ay,bx,by]                linear gradient (c1->c2)
          | radial=R,G,B>R,G,B [at=cx,cy,r]                   radial gradient (centre->edge)
@@ -67,6 +67,14 @@ check <prop> <op> <term> [tol T]        op: ~ < > <= == ; arithmetic on the RHS 
   computed small, resized, and supersampled, so the transition is smooth — use them
   for *form*: a rounded face (radial, lit centre → shadowed edge), a soft cloud
   belly, a glow, a lit-to-shadow plane. This is what turns a flat fill into modelling.
+- **Smooth points (`~`).** A `~` after a `Poly` point makes it a smooth curve
+  (Catmull-Rom); no `~` = a corner. Mix them on one outline — smooth the organic edges
+  (a jaw, a hill, a cloud), corner the structural (a roof ridge). Faceted polygons
+  become hand-drawn curves without subdividing by hand.
+- **Coloured strokes (`stroke=R,G,B`).** A stroke (a shape with no `<fill>`) is dark
+  ink by default; `stroke=` tints it. This is the *texture* channel — light + shadow
+  strokes fanning along a growth direction make hair / beard / fur / grass; curve them
+  with `~` so they read grown, not combed.
 - **Each measurable thing should get its own `name`** — tagging a sub-part (a chimney,
   a light-spill) under a parent bloats the parent's bbox and breaks its checks.
 

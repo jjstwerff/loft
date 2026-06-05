@@ -58,7 +58,9 @@ CIRCLE = re.compile(r"Circle\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*r=([-\d.]+)
                     r"(?:\s+n=(\d+))?(?:\s+flat=([-\d.]+))?", re.I)
 BG = re.compile(r"Background\s+top\s*=\s*([\d.]+)\s+bot(?:tom)?\s*=\s*([\d.]+)", re.I)
 PT = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)")
+PTF = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(~?)")
 WOPT = re.compile(r"\bw\s*=\s*(\d+)", re.I)
+SCOL = re.compile(r"\bstroke\s*=\s*\(?(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)?", re.I)
 FILL = re.compile(r"\bfill\s*=\s*([\d.]+)", re.I)
 RGB = re.compile(r"\brgb\s*=\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?", re.I)
 GRAD = re.compile(r"\bgrad\s*=\s*\(?(\d+),(\d+),(\d+)\)?\s*>\s*\(?(\d+),(\d+),(\d+)\)?", re.I)
@@ -97,6 +99,14 @@ def _paint(s):
     if m:
         return ("solid", gray(float(m[1])))
     return None
+
+
+def _stroke_color(s):
+    """Stroke colour from `stroke=R,G,B`, or None => the default dark ink.
+       Lets a stroke carry colour (light hair strands, tinted lines) without
+       becoming a fill — `rgb=` still means fill, `stroke=` means line colour."""
+    m = SCOL.search(s)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
 
 
 def _make_gradient(kind, c1, c2, spec, bbox, size):
@@ -147,6 +157,37 @@ def circle_pts(cx, cy, r, n, flat, W, H):
     ary = r * (W / H) * (1 - flat)
     return [(cx + r*math.cos(2*math.pi*i/n), cy + ary*math.sin(2*math.pi*i/n))
             for i in range(n + 1)]
+
+
+def _smooth_pts(pts, flags, closed, samples=10):
+    """Expand control points to a dense polyline. A point flagged smooth (~) curves
+    (Catmull-Rom tangent = half the neighbour chord); a corner uses the segment chord
+    => straight. So a segment between two corners is exactly straight, and any segment
+    touching a smooth point curves — mixed linear/smooth in one outline. No-op (returns
+    pts) if nothing is smooth, so plain Poly is unchanged."""
+    n = len(pts)
+    if n < 3 or not any(flags):
+        return pts
+
+    def P(i):
+        return pts[i % n] if closed else pts[max(0, min(n-1, i))]
+
+    def half(i):
+        a, b = P(i-1), P(i+1)
+        return ((b[0]-a[0]) * 0.5, (b[1]-a[1]) * 0.5)
+
+    out = [pts[0]]
+    for i in range(n if closed else n-1):
+        a, b = pts[i % n], pts[(i+1) % n]
+        chord = (b[0]-a[0], b[1]-a[1])
+        ta = half(i % n) if flags[i % n] else chord
+        tb = half((i+1) % n) if flags[(i+1) % n] else chord
+        for s in range(1, samples+1):
+            t = s/samples; t2 = t*t; t3 = t2*t
+            h00, h10, h01, h11 = 2*t3-3*t2+1, t3-2*t2+t, -2*t3+3*t2, t3-t2
+            out.append((h00*a[0]+h10*ta[0]+h01*b[0]+h11*tb[0],
+                        h00*a[1]+h10*ta[1]+h01*b[1]+h11*tb[1]))
+    return out
 
 
 def parse(text):
@@ -210,24 +251,27 @@ def parse(text):
                 ops.append(("fill", pts, paint))
             else:
                 wm = WOPT.search(s)
-                ops.append(("stroke", pts, int(wm[1]) if wm else 3))
+                ops.append(("stroke", pts, int(wm[1]) if wm else 3, _stroke_color(s)))
             continue
         if low.startswith("poly"):
-            pts = [(float(a), float(b)) for a, b in PT.findall(s)]
-            accpts(pts)
+            raw = PTF.findall(s)
+            pts = [(float(a), float(b)) for a, b, _ in raw]
+            flags = [t == "~" for _, _, t in raw]
             paint = _paint(s)
+            pts = _smooth_pts(pts, flags, closed=paint is not None)
+            accpts(pts)
             if paint is not None:
                 ops.append(("fill", pts, paint))
             else:
                 wm = WOPT.search(s)
-                ops.append(("stroke", pts, int(wm[1]) if wm else 3))
+                ops.append(("stroke", pts, int(wm[1]) if wm else 3, _stroke_color(s)))
             continue
         m = LINE.search(s)
         if m:
             w = int(m[5]) if m[5] else 3
             p = [(float(m[1]), float(m[2])), (float(m[3]), float(m[4]))]
             accpts(p)
-            ops.append(("stroke", p, w))
+            ops.append(("stroke", p, w, _stroke_color(s)))
     return W, H, ops, elems, landmarks, checks
 
 
@@ -441,9 +485,10 @@ def render():
             _, pts, paint = op
             _paint_polygon(img, pts, paint, BW, BH)
         elif op[0] == "stroke":
-            _, pts, w = op
+            _, pts, w, col = op
+            color = col if col else (38, 32, 36)
             for p, q in zip(pts, pts[1:]):
-                d.line([(p[0]*BW, p[1]*BH), (q[0]*BW, q[1]*BH)], fill=(38, 32, 36), width=max(1, w*S))
+                d.line([(p[0]*BW, p[1]*BH), (q[0]*BW, q[1]*BH)], fill=color, width=max(1, w*S))
     img = img.resize((W, H), Image.LANCZOS)
     img.save(OUT)
     ph = max(1, round(PREVIEW_W * H / W))
