@@ -376,39 +376,49 @@ program's own package is NOT over-recorded (`library_suite` builds no `native-au
 Guard: `tests/n3_parity.rs::interdependent_libraries_are_fully_native` (the diamond).
 
 **F3 — ⛔ THE BIG ONE: auto-native dispatch never executes → 0× speedup (the whole arc's value is currently unrealized).** 🔴 *(found 2026-06-05 via gate ② — the first time anyone measured the C71 *execution* path, vs. the plan's load-side numbers)*
-- *Symptom (measured, not guessed):* an interpreted script calling a default-native
-  library function runs at **interpreter speed — 1.0×** (compute body: 25.0 ns/iter
-  native vs 25.5 ns/iter interp, fixed-overhead-subtracted, 200M iters).  The
-  `--native` whole-program path is 10–40× (PERFORMANCE.md) — so the **codegen is
-  fast**; the C71 **dispatch** is the dead link.
-- *Why it was invisible:* every test asserts `interp == native` *output*.  Native
-  silently interprets → `interp == interp == correct` → **all parity / n2 / n3 tests
-  pass while the native path is a no-op at runtime.**  Parity is necessary but **not
-  sufficient** — the arc needs a *speed* assertion (a `use`d-library bench row).
-- *Diagnosis so far (all confirmed):* the function is marked (`def.native =
-  loft_shared_…`), the cdylib builds + exports the bridge symbol, `byte_code` emits
-  `OpStaticCall(loft_shared_n_compute)` into `n_main` (disassembly-verified), and
-  `wire_shared_native_fns` wires it (dlsym + `compute_sig` + `library_names` index all
-  succeed).  **Yet at runtime the bridge (`shared_store_dispatch`) never fires and the
-  body interprets.**  The wired path (`State::static_call` → `library[idx]` → bridge,
-  mod.rs:436) is **dead code** (call-count 0).  So the `OpStaticCall` opcode mis-routes
-  to a handler that interprets instead of dispatching.
-- *Where the investigation stalled (and the right instrument):* pinning the exact
-  mis-route via **CLI probing failed** — a normal `loft <file>` run doesn't fire probes
-  in `execute_argv` / the dispatch loop / `static_call`; the interpreter has ~11
-  dispatch-loop variants + several `execute_*` entries and the live path wasn't located
-  from main.rs.  **Next step: a focused Rust integration test** that builds `State`+`Data`,
-  parses a minimal interp-script-calls-native-lib case, `byte_code`s + executes it, and
-  steps the dispatch directly — deterministic, bypasses main.rs branching, and becomes
-  the regression guard.  Pin: `OpStaticCall`'s op_code (assigned sequentially,
-  `data.rs:2423`) vs the `OPERATORS` array index of `static_call` (fill.rs) — suspected
-  drift, OR a user-bodied marked fn preferring its body over the static dispatch.
-- *Two secondary fixes that matter once dispatch works:* the cdylib builds at
-  **`-C opt-level=0`** (unoptimized — `native_lib.rs::build_shared_cdylib`); and a
-  library call with a **constant argument is const-folded** (interpreted at compile
-  time), bypassing dispatch — a real user-facing surprise + a benchmark trap.
-- *Priority:* this is **above F1/F2 and above N5** — N5 guards a boundary that isn't
-  crossed at runtime today.  Until F3 lands, default-native is a correctly-plumbed no-op.
+**SOLID (direct measurement) — the impact:** an interpreted script calling a
+default-native library does NOT speed up.  Measured on `benchlib::compute` (a 200M-iter
+integer loop) with a **runtime argument** (`env_variable` — so NOT const-folded; the
+earlier constant-arg run measured const-folding, an instrument bug since corrected):
+**interp 5229 ms vs native 5206 ms = 1.0×**, warm cdylib, min-of-5.  Hand-written Rust /
+`--native` whole-program is 10–40× (PERFORMANCE.md), so the **codegen is fast** — the
+gap is specific to the C71 interp-script→native-lib path.  *Why parity masked it:* every
+test asserts `interp == native` **output**, never **speed**; native running at interp
+speed (whatever the cause) is `interp == interp == correct`, so all parity/n2/n3 tests
+pass.  **The arc needs a speed assertion (a `use`d-library bench row).**
+
+**CONFIRMED (probes that fired in the setup phase, + disassembly):** the function is
+marked (`def.native = loft_shared_…`), the cdylib builds + exports the bridge symbol,
+`byte_code` emits `OpStaticCall(loft_shared_n_compute)` into `n_main` (seen in a
+`dump_code` dump), and `wire_shared_native_fns` wires it (dlsym + `compute_sig` +
+`library_names` index all succeed).  So setup is end-to-end correct up to the call site.
+
+**NOT EARNED — retracted mechanism claims (instrument was broken):** an earlier draft
+asserted "the bridge never fires / `State::static_call` is dead code / `OpStaticCall`
+mis-routes."  Those came from CLI `eprintln` probes that **did not fire even in
+`execute_argv` — which must run to execute `main`** (a sensor that's silent in code that
+definitely runs is broken, not evidence).  So **why** native runs at interp speed is
+currently **unknown**: the call could be interpreting its body, or dispatching to a
+bridge that itself re-enters the interpreter, or something else.  Do not trust the
+"dead code / mis-route" story until a working instrument confirms it.
+
+**The right instrument (the one to build first next time):** an **in-process** harness —
+construct `State`+`Data`, parse a minimal interp-script-calls-native-lib case,
+`byte_code` + execute it directly, and step the dispatch — deterministic and immune to
+main.rs's ~11 dispatch-loop variants / multiple `execute_*` entries that defeated
+outside-in CLI probing.  It doubles as the regression guard.  Candidate hypotheses to
+*falsify* with it (not assume): `OpStaticCall`'s op_code (assigned sequentially,
+`data.rs:2423`) vs the `OPERATORS` index of `static_call` (fill.rs) drift; a user-bodied
+marked fn preferring its body; or the bridge being reached but slow.
+
+**Secondary, independently real:** the cdylib builds at **`-C opt-level=0`** (unoptimized,
+`native_lib.rs::build_shared_cdylib`); and a library call with a **constant argument is
+const-folded** (interpreted at compile time), bypassing dispatch — a user-facing surprise
+and the benchmark trap that contaminated the first measurement.
+
+*Priority:* the **impact** (no speedup) is above F1/F2/N5 — N5 guards a boundary whose
+runtime payoff is currently 1.0×.  But the **fix** is gated on first building the
+in-process instrument and *confirming* the mechanism — no code change until then.
 
 ---
 
