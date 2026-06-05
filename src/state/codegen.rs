@@ -63,6 +63,10 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
             | "n_ymd_days_ago"
             | "n_store_memory"
+            // @PLN10 Phase 1 batch 2 — always-non-null codegen_runtime producers.
+            | "i_parse_errors"
+            | "n_struct_to_json"
+            | "n_struct_to_json_pretty"
     )
 }
 

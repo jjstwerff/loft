@@ -133,6 +133,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
     ("n_ymd_days_ago_dest", n_ymd_days_ago_dest),
     ("n_store_memory_dest", n_store_memory_dest),
+    // @PLN10 Phase 1 batch 2 — always-non-null codegen_runtime producers.
+    ("i_parse_errors_dest", i_parse_errors_dest),
+    ("n_struct_to_json_dest", n_struct_to_json_dest),
+    ("n_struct_to_json_pretty_dest", n_struct_to_json_pretty_dest),
     ("t_9character_is_lowercase", t_9character_is_lowercase),
     ("t_9character_is_uppercase", t_9character_is_uppercase),
     ("t_9character_is_numeric", t_9character_is_numeric),
@@ -2073,6 +2077,19 @@ fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, Str::new(stores.scratch.last().unwrap()));
 }
 
+// @PLN10 Phase 1 — destination-passing variant of `i_parse_errors`.
+// Always-non-null (the joined error text, possibly empty); no stack args.
+// Routed by `is_text_dest_native`.
+fn i_parse_errors_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let msg = stores.last_parse_errors.join("\n");
+    stores.last_parse_errors.clear();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&msg);
+}
+
 // HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
 // The cdylib stores the response body in a thread-local, returned via LoftStr.
 
@@ -3214,6 +3231,30 @@ fn struct_to_json_dispatch(stores: &mut Stores, stack: &mut DbRef, pretty: bool)
     stores.scratch.push(out);
     let s = Str::new(&stores.scratch[idx]);
     stores.put(stack, s);
+}
+
+// @PLN10 Phase 1 — destination-passing variants of `n_struct_to_json` /
+// `n_struct_to_json_pretty`.  Always-non-null (canonical JSON text).
+// Routed by `is_text_dest_native`.
+fn n_struct_to_json_dest(stores: &mut Stores, stack: &mut DbRef) {
+    struct_to_json_dispatch_dest(stores, stack, false);
+}
+
+fn n_struct_to_json_pretty_dest(stores: &mut Stores, stack: &mut DbRef) {
+    struct_to_json_dispatch_dest(stores, stack, true);
+}
+
+fn struct_to_json_dispatch_dest(stores: &mut Stores, stack: &mut DbRef, pretty: bool) {
+    let dest = *stores.get::<DbRef>(stack);
+    let struct_kt_arg = *stores.get::<i64>(stack) as i32;
+    let src = *stores.get::<DbRef>(stack);
+    let struct_kt = struct_kt_arg as u16;
+    let mut out = String::new();
+    stores.show_json(&mut out, &src, struct_kt, pretty);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&out);
 }
 
 /// Allocate a JsonValue set to the `JNull` variant and return a
