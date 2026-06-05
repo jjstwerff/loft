@@ -1,0 +1,93 @@
+# OLD WOMAN at dusk — COLOUR + soft (anti-aliased) edges.
+# Dusk = warm light vs cool dark: warm afterglow band + warm lamplit window,
+# cool blue-grey cloud/sky/land, warm LIT skin (alive, not grey). Same composition.
+size 1000x700
+
+# --- DUSK SKY: deep blue above -> dusky violet toward the horizon ---
+Background topc=30,36,64 botc=92,80,104
+
+# dark, cool, looming cloud
+name cloud
+Poly (0.00,0.16) (0.18,0.08) (0.45,0.05) (0.72,0.07) (0.92,0.12) (1.00,0.18) (0.86,0.24) (0.62,0.21) (0.40,0.25) (0.20,0.21) (0.00,0.16) rgb=40,44,62
+# warm last-light band (the afterglow) at the horizon
+name glow
+Poly (0.00,0.555) (1.00,0.55) (1.00,0.625) (0.00,0.63) rgb=243,176,104
+# dark, cool land
+name land
+Poly (0.00,0.62) (0.45,0.61) (1.00,0.62) (1.00,1.00) (0.00,1.00) rgb=34,36,48
+# HOUSE — her home, dark against the glow; warm lamplit window
+name house
+Poly (0.66,0.625) (0.66,0.52) (0.648,0.52) (0.735,0.465) (0.822,0.52) (0.81,0.52) (0.81,0.625) (0.66,0.625) rgb=22,22,34
+name window
+Poly (0.700,0.555) (0.722,0.555) (0.722,0.578) (0.700,0.578) rgb=255,224,150
+# path catching the warm light, leading toward the house
+name road
+Poly (0.40,0.99) (0.55,0.99) (0.78,0.625) (0.74,0.625) rgb=150,118,104
+
+# --- BENCH ---
+name bench
+Line (0.06,0.585) - (0.92,0.585) w=2
+Line (0.06,0.61) - (0.92,0.61) w=2
+Line (0.05,0.70) - (0.93,0.70) w=2
+Line (0.09,0.585) - (0.09,0.74) w=2
+Line (0.90,0.585) - (0.90,0.74) w=2
+Line (0.49,0.61) - (0.49,0.70) w=2
+
+# --- THE WOMAN (left third; cool near-silhouette; warm LIT face turned right) ---
+name shawl
+Poly (0.34,0.50) (0.22,0.55) (0.14,0.66) (0.12,1.00) (0.52,1.00) (0.50,0.62) (0.42,0.53) (0.34,0.50) rgb=54,54,70
+Line (0.315,0.515) - (0.305,0.56) w=2
+Line (0.372,0.515) - (0.382,0.56) w=2
+name hair
+Poly (0.235,0.40) (0.22,0.27) (0.265,0.18) (0.34,0.15) (0.415,0.18) (0.46,0.27) (0.445,0.40) (0.42,0.27) (0.385,0.195) (0.34,0.18) (0.295,0.195) (0.26,0.27) (0.235,0.40) rgb=150,146,150
+Circle (0.34,0.145) r=0.040 rgb=150,146,150
+name head
+Poly (0.34,0.18) (0.29,0.185) (0.25,0.215) (0.235,0.27) (0.232,0.33) (0.24,0.39) (0.258,0.45) (0.29,0.50) (0.34,0.52) (0.385,0.495) (0.415,0.45) (0.43,0.39) (0.437,0.33) (0.43,0.265) (0.41,0.21) (0.37,0.183) (0.34,0.18) rgb=224,178,150
+# shadow side / form (cooler, darker skin): far cheek, under nose, under chin
+Poly (0.235,0.30) (0.248,0.40) (0.27,0.46) (0.252,0.40) (0.238,0.32) rgb=176,132,124
+Poly (0.325,0.425) (0.352,0.425) (0.344,0.448) (0.334,0.448) rgb=176,132,124
+Poly (0.29,0.505) (0.385,0.505) (0.36,0.53) (0.315,0.53) rgb=168,124,120
+# forehead lines
+Line (0.252,0.258) - (0.34,0.251) w=1
+Line (0.34,0.251) - (0.425,0.258) w=1
+Line (0.262,0.288) - (0.34,0.282) w=1
+Line (0.34,0.282) - (0.418,0.288) w=1
+# brows
+Line (0.248,0.330) - (0.310,0.326) w=2
+Line (0.368,0.326) - (0.428,0.331) w=2
+# EYES (hooded), pupils shifted RIGHT (toward the house)
+name eyes
+Poly (0.258,0.350) (0.283,0.342) (0.310,0.350) w=2
+Poly (0.258,0.354) (0.283,0.358) (0.310,0.355) w=1
+Poly (0.366,0.350) (0.392,0.342) (0.418,0.350) w=2
+Poly (0.366,0.355) (0.392,0.358) (0.418,0.354) w=1
+Circle (0.300,0.351) r=0.009 rgb=40,30,34
+Circle (0.410,0.351) r=0.009 rgb=40,30,34
+# hoods + bags
+Line (0.256,0.338) - (0.312,0.334) w=1
+Line (0.366,0.334) - (0.422,0.338) w=1
+Line (0.262,0.367) - (0.308,0.368) w=1
+Line (0.370,0.368) - (0.418,0.367) w=1
+Line (0.258,0.350) - (0.244,0.346) w=1
+Line (0.258,0.354) - (0.244,0.357) w=1
+# NOSE
+name nose
+Line (0.342,0.350) - (0.336,0.420) w=1
+Line (0.336,0.420) - (0.326,0.428) w=1
+Line (0.326,0.428) - (0.348,0.432) w=1
+Line (0.348,0.432) - (0.366,0.425) w=1
+# NASOLABIAL FOLDS
+Line (0.330,0.426) - (0.312,0.486) w=2
+Line (0.362,0.426) - (0.380,0.486) w=2
+# MOUTH
+name mouth
+Poly (0.314,0.458) (0.330,0.464) (0.346,0.465) (0.362,0.464) (0.378,0.458) w=2
+Line (0.330,0.452) - (0.362,0.452) w=1
+# jowl
+Line (0.410,0.435) - (0.398,0.488) w=1
+
+# --- CHECKS ---
+check head.cx ~ 0.333 tol 0.04
+check eyes.cy ~ head.cy tol 0.04
+check mouth.cy > nose.cy
+check house.cx > head.cx
