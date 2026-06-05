@@ -108,11 +108,44 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
         .intersection(candidates)
         .copied()
         .collect();
-    for &d in &exportable {
+    mark_exports(data, &exportable);
+    exportable
+}
+
+/// @PLAN54 Arc N / N3 (Step 2) — set `def.native = "loft_shared_<name>"` on each
+/// function in `export` (which `byte_code` then routes through `OpStaticCall`).
+/// Split out from [`mark_native_exports`] so the **build-before-mark** flow can
+/// mark *only after* the cdylib compiles — a build failure simply never marks, so
+/// the library interprets (Step 2's invariant: a library that can't compile native
+/// silently interprets, no `exit`, no `OpStaticCall` to an unbuilt symbol).
+pub fn mark_exports(data: &mut Data, export: &HashSet<u32>) {
+    for &d in export {
         let sym = format!("loft_shared_{}", data.def(d).name());
         data.def_mut(d).native = sym;
     }
-    exportable
+}
+
+/// @PLAN54 Arc N / N3 (Step 2) — the cdylib **export set** for the library at
+/// `pkg_dir`, computed **without marking** (`&Data`, not `&mut`): the library's
+/// top-level, user-named, `pub` functions (the dispatch-target invariant — see
+/// [`mark_library_native`]) intersected with the shared-store-dispatchable gate.
+/// The build-before-mark flow builds the cdylib from this set, then calls
+/// [`mark_exports`] only on success.
+#[must_use]
+pub fn library_export_set(data: &Data, pkg_dir: &str) -> HashSet<u32> {
+    let candidates: HashSet<u32> = (0..data.definitions())
+        .filter(|&d| {
+            let def = data.def(d);
+            matches!(def.def_type(), DefType::Function)
+                && def.pub_visible
+                && !is_synthetic_name(def.name())
+                && def.position().file.starts_with(pkg_dir)
+        })
+        .collect();
+    crate::native_gate::shared_store_dispatchable(data)
+        .intersection(&candidates)
+        .copied()
+        .collect()
 }
 
 /// @PLAN54 Arc N / N3 — mark a `use`d library's **public API** functions native.
@@ -132,16 +165,9 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
 /// of compiler-generated functions, not the lambda instance.  (Private helpers are
 /// already excluded by `pub_visible`; they ride into the cdylib as reachable deps.)
 pub fn mark_library_native(data: &mut Data, pkg_dir: &str) -> HashSet<u32> {
-    let candidates: HashSet<u32> = (0..data.definitions())
-        .filter(|&d| {
-            let def = data.def(d);
-            matches!(def.def_type(), DefType::Function)
-                && def.pub_visible
-                && !is_synthetic_name(def.name())
-                && def.position().file.starts_with(pkg_dir)
-        })
-        .collect();
-    mark_native_exports(data, &candidates)
+    let export = library_export_set(data, pkg_dir);
+    mark_exports(data, &export);
+    export
 }
 
 /// Is `stored_name` (an `n_<name>` definition name) a compiler-generated

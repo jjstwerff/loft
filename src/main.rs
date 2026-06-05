@@ -4208,30 +4208,50 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
-    // @PLAN54 Arc N / N3 — auto-compile `use`d libraries that opted in via
-    // `[library] compile = "native"`.  Mark each library's public
-    // shared-store-dispatchable functions native BEFORE `byte_code` (so calls
-    // route through `OpStaticCall`); the cdylib is built + loaded after.  A program
-    // using an auto-native library bypasses the program cache for now (the
-    // mark/build runs every cold run; artifact caching is N1/Phase D).
-    // `LOFT_NO_NATIVE_LIBS=1` forces every `use`d library to interpret (skip the
-    // mark/build/dispatch).  This is the **parity reference**: the same program run
-    // with and without it must produce byte-identical output (Step 1's invariant —
-    // a library run native ≡ run interpreted); it is also the manual escape hatch.
+    // @PLAN54 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
+    // `[library] compile = "native"`, **build-before-mark**: build each library's
+    // cdylib from the post-parse type schema FIRST, then mark its functions native
+    // (so `byte_code` emits `OpStaticCall`) ONLY on success.  A build failure (or
+    // `LOFT_FORCE_NATIVE_BUILD_FAIL`) leaves the library unmarked → it **silently
+    // interprets** — byte-identical, no `exit`, no dispatch to an unbuilt symbol.
+    // An auto-native program bypasses the program cache for now (artifact caching is
+    // N1/Phase D).
+    // `LOFT_NO_NATIVE_LIBS=1` forces ALL `use`d libraries to interpret — the parity
+    // reference (a library run native ≡ run interpreted) and a manual escape hatch.
     let native_libs_off = std::env::var_os("LOFT_NO_NATIVE_LIBS").is_some();
-    let auto_native_exports: Vec<(String, std::collections::HashSet<u32>)> = if native_libs_off {
+    let force_build_fail = std::env::var_os("LOFT_FORCE_NATIVE_BUILD_FAIL").is_some();
+    let pending_native = if native_libs_off {
         p.pending_native_compile.clear();
         Vec::new()
     } else {
         std::mem::take(&mut p.pending_native_compile)
-            .into_iter()
-            .map(|pkg_dir| {
-                let export = loft::native_lib::mark_library_native(&mut p.data, &pkg_dir);
-                (pkg_dir, export)
-            })
-            .collect()
     };
-    let has_auto_native = auto_native_exports.iter().any(|(_, e)| !e.is_empty());
+    let mut auto_native_libs: Vec<String> = Vec::new();
+    for pkg_dir in &pending_native {
+        let export = loft::native_lib::library_export_set(&p.data, pkg_dir);
+        if export.is_empty() {
+            continue;
+        }
+        let built = if force_build_fail {
+            Err("LOFT_FORCE_NATIVE_BUILD_FAIL".to_string())
+        } else {
+            loft::native_lib::cached_or_build_shared_cdylib(&p.data, &p.database, &export, pkg_dir)
+        };
+        match built {
+            Ok(so) => {
+                loft::native_lib::mark_exports(&mut p.data, &export);
+                auto_native_libs.push(so.to_string_lossy().into_owned());
+            }
+            Err(e) => {
+                // Silent interpret-fallback (Step 2 invariant): warn, do NOT mark,
+                // do NOT exit — the library's calls stay ordinary interpreted calls.
+                eprintln!(
+                    "loft: library '{pkg_dir}' could not compile native ({e}); interpreting it"
+                );
+            }
+        }
+    }
+    let has_auto_native = !auto_native_libs.is_empty();
     // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
     // before any subsystem is rewired to read from the store.  Opt-in (default
@@ -4292,29 +4312,10 @@ fn main() {
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
     // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+    // (The auto-native cdylibs were already built + their symbols marked above,
+    // build-before-mark, so `byte_code` has emitted `OpStaticCall` only for the
+    // libraries that compiled.)
     compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
-    // @PLAN54 Arc N / N3 — build (or reuse a fresh cached) cdylib for each
-    // auto-native library now — needs the post-`byte_code` type schema in
-    // `state.database`.  `cached_or_build_shared_cdylib` skips the rebuild when the
-    // library is unchanged and the loft-build fingerprint matches (B2).
-    let mut auto_native_libs: Vec<String> = Vec::new();
-    for (pkg_dir, export) in &auto_native_exports {
-        if export.is_empty() {
-            continue;
-        }
-        match loft::native_lib::cached_or_build_shared_cdylib(
-            &p.data,
-            &state.database,
-            export,
-            pkg_dir,
-        ) {
-            Ok(so) => auto_native_libs.push(so.to_string_lossy().into_owned()),
-            Err(e) => {
-                eprintln!("loft: auto-native build for '{pkg_dir}' failed:\n{e}");
-                std::process::exit(1);
-            }
-        }
-    }
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
