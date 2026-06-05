@@ -354,18 +354,29 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
     threaded through specialisation) + 2 in `05-enums`/`159` (the other two emit
     sites — the `Value::If`-Return at `emit.rs:~318` and the `wrap_result` block-tail
     at `~1452` — still use the old logic; apply the same `!is_bufview` reframe).
-  - **The regression (why it reverted):** the broad force-add breaks **call-site
-    adaptation** for some patterns — `n_rewrite_link` (lib/markdown) "Too few
-    parameters (got 5, need 6)" at runtime: a call resolved with 5 args before the
-    buffer was force-added onto the def (likely a recursive / forward / fn-ref call
-    the second-pass `re_resolve_call` doesn't re-fix).  Plus `introspect_show_types`
-    asserts the OLD dep shape `text["a"]` (now `text["__work_ret","a"]` — just
-    update the test).
-  - **Next-session plan:** (1) fix the force-add call-site adaptation — ensure
-    EVERY call to a force-added fn gets the buffer arg (force-add earlier, before
-    the body's calls resolve, OR re-resolve all callers); (2) reframe the other two
-    emit sites; (3) force-add for generic monomorphs at specialisation; (4) update
-    `introspect_show_types`; (5) full 3-rlib (incl. wasip2) + native + wasm.
+  - **The regression ROOT-CAUSED (2nd session, instrumented `rewrite_link`'s
+    `text_return` per pass) — B IS BLOCKED.**  The broad force-add **destabilises
+    the two-pass signature** of complex multi-return functions.  `rewrite_link`
+    (returns `url` arg + two format tails): pass-1 ends at **5 attrs**, pass-2 grows
+    to **6 attrs** — the buffer set ACCUMULATES across passes (a pass-dependent
+    local-promotion the force-added `__work_ret` perturbs).  The caller (`:763`,
+    *before* the def `:821`) resolves the call in pass-2 against the pass-1
+    signature (5) while the def finishes pass-2 at 6 → "got 5, need 6".  This is
+    NOT a call-site tweak; it's a deep two-pass instability.  (A dep-persist fix was
+    tried and did NOT resolve it — the attrs themselves grow, not just the dep.)
+- **→ THE DIAGNOSIS INVERTS THE RECOMMENDATION: do Direction A.**  A (owned-`String`
+  flip) **adds no buffer → no signature change → no instability** — it sidesteps B's
+  blocker entirely.  And the W-trap fear is reduced: the matrix proved `nwb` fns are
+  *uniformly* owned (no buffer-view return), so their `-> String` wrapper is
+  internally consistent (unlike the blanket flip that broke wasip2 in `W`).
+  - **A plan:** (1) `mod.rs:2151` — `def.code==Block && Text && no_work_buffer →
+    -> String`; (2) emit the `nwb` return as `(val).to_string()` (owned); (3) handle
+    the **cross-fn ripple** — a non-`nwb` fn (has buffer, `-> Str`) that
+    tail-returns an `nwb` call (`inner_already_str`, `emit.rs:355`) → write the inner
+    `String` into the outer's buffer (rare: only the mixed-outer shape; a pure
+    `return helper()` fn is itself `nwb` → also `String` → consistent); (4) `local`/
+    `ncc` (have buffers) → write into their buffer (the proven reframe, no
+    instability since no new buffer); (5) full 3-rlib (incl. wasip2) + native + wasm.
 - **Effort/risk:** M / med — the mechanism is proven (1313→8); the remaining work is
   the call-site-adaptation fix + 2 emit sites + generic monomorphs.  **Label:** `area:codegen`
 
