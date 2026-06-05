@@ -355,10 +355,17 @@ impl Output<'_> {
                     if outer_owned {
                         write!(w, ").to_string()")?;
                     } else if if_needs_scratch {
-                        write!(
-                            w,
-                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                        )?;
+                        // @PLN10 Phase B — write the materialised String into the
+                        // caller-owned work buffer (`!nwb` here ⇒ a buffer exists),
+                        // not the never-cleared `stores.scratch`.
+                        if let Some(buf) = self.return_buffer_name() {
+                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                        } else {
+                            write!(
+                                w,
+                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
+                            )?;
+                        }
                     } else if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
@@ -515,10 +522,15 @@ impl Output<'_> {
                     if outer_owned {
                         write!(w, ").to_string()")?;
                     } else if needs_p205_scratch {
-                        write!(
-                            w,
-                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                        )?;
+                        // @PLN10 Phase B — buffer-write (see If-Return path).
+                        if let Some(buf) = self.return_buffer_name() {
+                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                        } else {
+                            write!(
+                                w,
+                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
+                            )?;
+                        }
                     } else if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
@@ -1161,6 +1173,22 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
+    // @PLN10 Phase B — the sanitized `var_…` name of this function's first
+    // `RefVar(Text)` work buffer (a `&mut String` arg the caller owns), if any.
+    // A buffered (`!nwb`) text fn returning a LOCAL / `??`-block / nwb-inner value
+    // writes that owned `String` into this buffer and hands back a `Str` pointing
+    // into it — caller-lifetime backing, no `stores.scratch`.  `None` only for an
+    // nwb fn (handled by the owned-`String` path), so the scratch fallback below
+    // is dead-but-safe.
+    pub(super) fn return_buffer_name(&self) -> Option<String> {
+        self.data
+            .def(self.def_nr)
+            .attributes
+            .iter()
+            .find(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+            .map(|a| sanitize(&a.name))
+    }
+
     // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
     // into nested Block / If / Match values) and report whether any
     // `Set(v, _)` exists where `v`'s name starts with `__ncc_` and the
@@ -1554,10 +1582,15 @@ impl Output<'_> {
                     if tail_outer_owned {
                         write!(w, ").to_string()")?;
                     } else if needs_p205_scratch {
-                        write!(
-                            w,
-                            ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
-                        )?;
+                        // @PLN10 Phase B — buffer-write (see If-Return path).
+                        if let Some(buf) = self.return_buffer_name() {
+                            write!(w, ").to_string(); *var_{buf} = _tmp; Str::new(&*var_{buf}) }}")?;
+                        } else {
+                            write!(
+                                w,
+                                ").to_string(); stores.scratch.push(_tmp); Str::new(stores.scratch.last().unwrap()) }}"
+                            )?;
+                        }
                     } else if wrap_result {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow_cast {
