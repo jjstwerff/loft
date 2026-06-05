@@ -68,11 +68,14 @@ path = "target/nextest/junit.xml"
 # open …rlib: No such file or directory".  Default-native (Step 3) made many
 # more subprocesses reach this path, surfacing the latent race.
 #
-# A single-slot group serialises the rustc links across the process boundary
-# the in-process locks (`native_suite_lock`) can't cross.  This ALSO fixes the
-# intra-binary fixture race in `n3_parity`: `datalib_store_touching_types_parity`
-# and `build_failure_silently_interprets` both touch
-# `tests/lib/datalib/native-auto` as separate nextest processes.
+# A single-slot group binding every native-building binary (the `--native`
+# fixture suite, the cdylib builders `n2_cdylib`/`n3_*`, the loader/fingerprint
+# tests, p254's recompile) serialises the rustc links across the process boundary
+# the in-process locks (`native_suite_lock`) can't cross — only one native link
+# runs at a time, so no concurrent rebuild can delete a dep rlib out from under
+# another.  This ALSO fixes the intra-binary fixture race in `n3_parity`:
+# `datalib_store_touching_types_parity` and `build_failure_silently_interprets`
+# both touch `tests/lib/datalib/native-auto` as separate nextest processes.
 [test-groups]
 html-wasm-serial      = { max-threads = 1 }
 multiplayer-v2-serial = { max-threads = 1 }
@@ -87,7 +90,7 @@ filter = 'binary(multiplayer_v2)'
 test-group = 'multiplayer-v2-serial'
 
 [[profile.default.overrides]]
-filter = 'binary(native) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning)'
+filter = 'binary(native) | binary(n2_cdylib) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning) | binary(native_loader) | binary(n0_fingerprint)'
 test-group = 'native-build-serial'
 
 [[profile.ci.overrides]]
@@ -99,5 +102,5 @@ filter = 'binary(multiplayer_v2)'
 test-group = 'multiplayer-v2-serial'
 
 [[profile.ci.overrides]]
-filter = 'binary(native) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning)'
+filter = 'binary(native) | binary(n2_cdylib) | binary(n3_parity) | binary(n3_use_native) | binary(p254_cache_poisoning) | binary(native_loader) | binary(n0_fingerprint)'
 test-group = 'native-build-serial'
