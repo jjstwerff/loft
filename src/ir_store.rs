@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 arc B — native IR → store materializer (the write path).
+//! @PLN11 arc B — native IR → store materializer (the write path).
 //!
 //! Walks a native [`crate::data::Value`] tree and writes it into store `Node`
 //! records through the [`crate::data_store`] handle layer.  This is the
 //! @PLAN28 `ir_schema::data_to_json` walk with its JSON sink swapped for a
 //! store-writer sink — exactly the convergence the plan describes
-//! (`plans/future/54-data-as-store` § arc B).
+//! (`plans/11-data-as-store` § arc B).
 //!
 //! Coverage: every `Node` variant whose fields are scalars + `vector<Node>`
 //! children + the inlined `Block` (30 of 34 variants).  The four that reach
@@ -426,7 +426,7 @@ pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
 /// Same as [`materialize_data`] but writes into an already-claimed `root`
 /// (16-word `Data` record) instead of allocating a fresh in-memory store —
 /// e.g. a record claimed in a **file-backed** store (`Store::open`), so the
-/// materialised IR lands directly on disk for the mmap load path (@PLAN54 arc
+/// materialised IR lands directly on disk for the mmap load path (@PLN11 arc
 /// D).  The whole IR (records, inline vectors, and interned strings) lives in
 /// `root`'s store, so persisting/mmapping that one store captures everything.
 pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
@@ -445,7 +445,7 @@ pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
 // ─── Database type schema materializer (D2a) ─────────────────────────────────
 
 /// Materialize the database type schema (`Stores.types`) into the
-/// `vector<DbType>` field at `off` of `parent` (@PLAN54 arc D / D2a) so a
+/// `vector<DbType>` field at `off` of `parent` (@PLN11 arc D / D2a) so a
 /// cache-loaded `Data`'s baked `known_type`s stay valid with no parse-time
 /// `fill_all` rebuild.  `Type.parents` is a derived back-reference index
 /// (rebuilt on load) and is **not** written.
@@ -602,7 +602,7 @@ fn write_key_fields(stores: &mut Stores, parent: &Record, off: u32, keys: &[(u16
     }
 }
 
-/// Serialize `data` to a file-backed IR store at `path` (@PLAN54 arc D).
+/// Serialize `data` to a file-backed IR store at `path` (@PLN11 arc D).
 ///
 /// Materializes the whole `Data` into a fresh file-backed store (`Store::open`),
 /// with the root claimed as record [`ds::IR_ROOT_REC`] so [`crate::ir_read::open_data`]
@@ -645,7 +645,7 @@ pub fn save_data(data: &Data, path: &str) -> std::io::Result<()> {
 
 /// Materialize a whole **bundle** — the IR `data` plus its database type
 /// `schema` (`Stores.types`) — into a caller-provided `Bundle` root record
-/// (@PLAN54 D2a step 4).  `Data` is inlined at `BUNDLE_DATA` (offset 0, so the
+/// (@PLN11 D2a step 4).  `Data` is inlined at `BUNDLE_DATA` (offset 0, so the
 /// `Data` writer's offsets land correctly); the schema vector goes at
 /// `BUNDLE_TYPES`.  The 16-byte zero in `materialize_data_at` also clears the
 /// schema vector's header.
@@ -659,11 +659,11 @@ pub fn materialize_bundle(stores: &mut Stores, root: DbRef, data: &Data, schema:
 }
 
 /// Serialize a bundle (`data` + database type `schema`) to a file-backed store
-/// at `path` (@PLAN54 D2a step 4) — the cacheable artifact a warm startup loads
+/// at `path` (@PLN11 D2a step 4) — the cacheable artifact a warm startup loads
 /// via [`crate::ir_read::open_bundle`].  Same fresh-store / well-known-root
 /// discipline as [`save_data`].
 ///
-/// Written **atomically** (@PLAN54 arc E): materialized into a `<path>.<pid>.tmp`
+/// Written **atomically** (@PLN11 arc E): materialized into a `<path>.<pid>.tmp`
 /// file-backed store, then `rename`d onto `path`, so a process killed mid-write
 /// can never leave a half-written bundle at `path` for the next run to load.
 ///
@@ -1530,7 +1530,7 @@ mod tests {
         assert!(saw_vars, "some stdlib def should have variables");
     }
 
-    /// @PLAN54 D2a step 2 — materialize the real stdlib's database type schema
+    /// @PLN11 D2a step 2 — materialize the real stdlib's database type schema
     /// (`Stores.types`) into a `vector<DbType>` and verify it structurally:
     /// the type count round-trips, every `DbType` name matches, and each
     /// `Parts::Struct`'s field count survives.  (Full field-equivalence is the

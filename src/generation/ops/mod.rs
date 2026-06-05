@@ -185,7 +185,7 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
 
     // Keyed-WRITE family — migrated out of dispatch.rs::output_call_inner to
     // keep that match under the `dispatch_op_arm_budget` ratchet (added as arms
-    // during the @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed,
+    // during the @PLN6 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed,
     // OpReplaceKeyed).  Pure pass-throughs to their runtime helpers.
     r.insert("OpReplaceKeyed", Box::new(key_ops::OpReplaceKeyedEmitter));
     r.insert("OpSetKeyed", Box::new(key_ops::OpSetKeyedEmitter));

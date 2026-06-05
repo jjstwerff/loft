@@ -20,7 +20,7 @@ plus `tests/leak.rs::p15_phase0[345]_*_no_leak` (5 leak guards).
 | 03 | C2 (text capture) × D1/D2/D3 | 3 cells + 2 leak guards | Disposed LIFETIME.md "NOT YET HANDLED" claim — no leak; documentation drift, not a runtime bug. |
 | 04 | C3 (Reference capture) × D1/D2/D3 | 3 cells + 2 leak guards | No DbRef-in-closure-record leak; no read-after-free. |
 | 05 | C6 (nested closures) × D1/D2/D3 | 3 cells + 1 leak guard | D3 included (matrix's "deferred" was conservative); nested non-capturing inner pattern works on both backends. |
-| 06 | Doc closeout | — | LIFETIME.md "Implementation path" trimmed; ROADMAP.md / USER_FACING.md / 36-audience-generative-art cross-refs updated; plan moved to `finished/`. |
+| 06 | Doc closeout | — | LIFETIME.md "Implementation path" trimmed; ROADMAP.md / USER_FACING.md / 6-audience-generative-art cross-refs updated; plan moved to `finished/`. |
 
 **Bug yield**: 0 new P-issues filed.  All gaps the plan was
 designed to surface (closure-DbRef leak, move-vs-copy semantics

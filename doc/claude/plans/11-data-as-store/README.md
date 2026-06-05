@@ -55,9 +55,9 @@ measurements reframed the cost/benefit and point to a clear priority order:
 
    **E2 deprioritised further (2026-06-04) — superseded-for-perf by the
    native-library execution model** ([DESIGN_DECISIONS.md §
-   C71](../../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model),
+   C71](../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model),
    [BROADENING.md § Native-library execution
-   model](../../../BROADENING.md#native-library-execution-model--the-steady-state-design)).
+   model](../../BROADENING.md#native-library-execution-model--the-steady-state-design)).
    In the native-library model (stable/published libraries compile to native
    artifacts; user scripts interpret) the library bodies + variable tables are
    NEVER materialised at startup — the allocation cost E2 eliminates is simply
@@ -160,7 +160,7 @@ blast radius (only the `default/` parse).
 
 ### Arc N — native-library execution model (C71 build-out)
 
-**The forward arc.**  Per [DESIGN_DECISIONS § C71](../../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
+**The forward arc.**  Per [DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
 the steady state is **native libraries + interpreted scripts**; this arc builds
 that architecture.  It **supersedes the G2 zero-copy endgame for perf** (E2 /
 M6-cold / M7 are parked — see recommendation #2): native libraries are never
@@ -189,7 +189,7 @@ cache; and the cross-mode byte-identical equivalence harness.
 **Sequencing.**  N0 first (correctness + unblocks; small, dev-facing) → N1 + N2 are
 the core mechanism (cache + dispatch) → N3 makes it invisible (F).  **N5 is woven
 through each phase, not appended** — per C71's guardrail that the A/D detectors grow
-to the mixed boundary *as part of* the work, and per [GOALS.md](../../../GOALS.md)
+to the mixed boundary *as part of* the work, and per [GOALS.md](../../GOALS.md)
 "two floors," this arc is **gated on the soundness floor it extends** (it adds a new
 interp↔native surface to that floor rather than clearing it).
 
@@ -701,7 +701,7 @@ accessors.  With this, **the whole-codebase `Definition` read seam is complete**
 Still open in arc D: wiring this into the real startup path — the bundle cache key + drift detection (Q4), the locked-mmap mutability split (Q1), and the `caller_index` rebuild (Q3).
 
 Original note: This is the **mmap end-goal** that
-[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
 named but deferred: rework the compiler's in-memory IR (`Data` and the
 `Value` / `Type` / `Definition` / `Function` graph) so it lives in a
 `Stores` instance addressed by `DbRef` — **the same representation
@@ -832,7 +832,7 @@ libs on demand.  Two reasons, both permanent:
 
 Caching the **whole bundle** (core + the script's sorted lib-set) sidesteps both
 — every index inside one image is internally consistent, no relocation anywhere.
-Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
+Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
 
 **Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
 **whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
@@ -1427,7 +1427,7 @@ the dominant cost and is deliberately the most finely sliced.
 
 ## Cross-arc dependencies
 
-- **[@PLAN28 startup-cache](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
+- **[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
   — direct predecessor.  @PLAN28's rebuild-on-load snapshot delivers the
   cold-start win first; this plan removes the rebuild.  @PLAN28 shipped a
   **JSON** snapshot (native-side), **not** the store struct-enum format — so
@@ -1488,12 +1488,12 @@ rewrite — it only makes the eventual decision cheaper and better-informed.
 
 ## See also
 
-- [NATIVE.md](../../../NATIVE.md) — how `--native` represents data as
+- [NATIVE.md](../../NATIVE.md) — how `--native` represents data as
   `Stores` records (the model this plan mirrors); § Architecture,
   § `output_init`.
-- [DATABASE.md](../../../DATABASE.md) — `Stores`, `Store`, `DbRef`,
+- [DATABASE.md](../../DATABASE.md) — `Stores`, `Store`, `DbRef`,
   word-addressed records, CONST_STORE.
-- [@PLAN28 STARTUP_CACHE_PLAN.md](../../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+- [@PLAN28 STARTUP_CACHE_PLAN.md](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
   — the cold-start cache; its "Architecture C — Data *is* the store" is
   this plan's seed.
 - `src/store.rs::Store::open` — the mmap entry point this plan loads

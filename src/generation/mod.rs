@@ -904,7 +904,7 @@ extern crate loft;"
         Ok(())
     }
 
-    /// @PLAN54 Arc N — emit the reachable native program as a **library** cdylib:
+    /// @PLN11 Arc N — emit the reachable native program as a **library** cdylib:
     /// header + `init` + only the reachable functions, with **no `fn main()` /
     /// `loft_start` bootstrap** even if an `n_main` exists in `data` (it belongs to
     /// the consuming script, not the library, and isn't reachable from the
@@ -1752,7 +1752,7 @@ extern crate loft;"
         till: u32,
         reachable: Option<&HashSet<u32>>,
     ) -> std::io::Result<()> {
-        // @PLAN54 G2/M2 — persistent program store (mirrors the interpreter's
+        // @PLN11 G2/M2 — persistent program store (mirrors the interpreter's
         // byte_code_from): materialise the whole Data once and read each body
         // node from it; default off → IrBlock::Native.
         let program_store = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
@@ -2180,7 +2180,7 @@ extern crate loft;"
             // but the function signature may still declare a non-void return type.
             // Rust requires an explicit return value in that case, so emit a null default.
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
-            // @PLAN54 G2/M2/M5 — store-backed body emission.  When
+            // @PLN11 G2/M2/M5 — store-backed body emission.  When
             // output_functions supplied a persistent program store, read this
             // body's node from it (def_body_node) and emit through IrBlock::Store
             // (output_block materialises at its boundary); the generated Rust is

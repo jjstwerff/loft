@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-//! The store schema for the compiler IR (@PLAN54 arc A): registers every
+//! The store schema for the compiler IR (@PLN11 arc A): registers every
 //! IR struct/enum as `Stores` type records so the IR can live in a store and
 //! the schema-driven inspection layer (`Stores::show_json`) can walk it.
 #![allow(

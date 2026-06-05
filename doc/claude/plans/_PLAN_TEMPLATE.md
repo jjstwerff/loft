@@ -16,7 +16,7 @@ earns an `@PLAN<NN>` number + this directory when it activates.  Type is `bug` v
 [`ISSUE_TRACKING.md` § Two kinds of item](../ISSUE_TRACKING.md).
 
 Live exemplars to read alongside this:
-- loft — `48-integer-width-discipline` (active feature) · `57-vector-store-watermark` (investigation)
+- loft — `1-integer-width-discipline` (active feature) · `57-vector-store-watermark` (investigation)
 - libs — `lib_plans/12-library-extraction` (active arc) · `lib_plans/08-server` (future feature)
 
 For a probe-driven **investigation** plan (bug *classes*, cluster catalogues),

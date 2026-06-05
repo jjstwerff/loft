@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 arc C — store → native IR reader (the read path).
+//! @PLN11 arc C — store → native IR reader (the read path).
 //!
 //! The inverse of [`crate::ir_store`]: walks store `Node` / `TypeT` records
 //! through the [`crate::data_store`] handle layer and rebuilds the native
@@ -379,7 +379,7 @@ pub fn read_data(stores: &Stores, root: DbRef) -> Data {
     read_data_with(stores, root, true)
 }
 
-/// @PLAN54 G2/M6 — like [`read_data`] but leaves each function body in the store
+/// @PLN11 G2/M6 — like [`read_data`] but leaves each function body in the store
 /// (`Definition.code = Null`), for warm-cache store-backed codegen which reads
 /// bodies via [`def_body_node`] instead of reconstructing them.  Skipping the
 /// body `Value` trees (the bulk of the IR) is the warm-load performance win.
@@ -401,7 +401,7 @@ fn read_data_with(stores: &Stores, root: DbRef, bodies: bool) -> Data {
     data
 }
 
-/// @PLAN54 G2 / M2 — navigate a **persistent program store** (a whole `Data`
+/// @PLN11 G2 / M2 — navigate a **persistent program store** (a whole `Data`
 /// materialised once via [`crate::ir_store::materialize_data`]) to the body node
 /// of definition `d_nr`: root → `definitions` vector → `def[d_nr]` → `code`
 /// box-of-one.  Lets store-backed codegen read each function body directly from
@@ -414,7 +414,7 @@ pub fn def_body_node(stores: &Stores, root: DbRef, d_nr: u32) -> Node {
     def_rec.field_vec(ds::DEF_CODE).get(0, stores)
 }
 
-/// @PLAN54 G2 / M0 — the read-site migration's equivalence harness.
+/// @PLN11 G2 / M0 — the read-site migration's equivalence harness.
 ///
 /// Materialise `data` into a fresh in-memory store, read it straight back, and
 /// assert the round-trip is bit-for-bit identical with the IR's own
@@ -440,7 +440,7 @@ pub fn ir_roundtrip_check(data: &Data) -> Result<(), crate::ir_schema::DataDiff>
 }
 
 /// Load a native [`Data`] from a file-backed IR store written by
-/// [`crate::ir_store::save_data`] (@PLAN54 arc D): mmap the file
+/// [`crate::ir_store::save_data`] (@PLN11 arc D): mmap the file
 /// (`Store::open`) and rebuild the native `Data` from the well-known root
 /// record ([`ds::IR_ROOT_REC`]) — no re-parse, no schema registration.
 ///
@@ -467,7 +467,7 @@ pub fn open_data(path: &str) -> std::io::Result<Data> {
     Ok(read_data(&stores, root))
 }
 
-/// Load a whole **bundle** written by [`crate::ir_store::save_bundle`] (@PLAN54
+/// Load a whole **bundle** written by [`crate::ir_store::save_bundle`] (@PLN11
 /// D2a step 4): mmap the file and rebuild both the native [`Data`] and its
 /// database type `schema` (`Vec<database::Type>`) — so a warm startup gets a
 /// `Data` *and* a valid type schema with no re-parse.  Install the schema into
@@ -477,7 +477,7 @@ pub fn open_data(path: &str) -> std::io::Result<Data> {
 /// Returns `NotFound` if `path` does not exist (a cache miss).
 #[cfg(feature = "mmap")]
 pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
-    // @PLAN54 arc E — reject a missing / non-store / truncated / corrupt bundle
+    // @PLN11 arc E — reject a missing / non-store / truncated / corrupt bundle
     // up front so a bad file is a clean cache miss (cold parse), not a panic
     // inside `Store::open`'s signature assertion.
     if !crate::store::Store::is_store_file(path) {
@@ -503,7 +503,7 @@ pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
     Ok((data, schema))
 }
 
-/// @PLAN54 G2/M6 — warm-cache store-backed load.  Mmap the bundle into a
+/// @PLN11 G2/M6 — warm-cache store-backed load.  Mmap the bundle into a
 /// standalone [`Stores`], reconstruct only the def **table**
 /// ([`read_data_skeleton`] — bodies stay in the store), and return the store +
 /// the `definitions`-vector root so codegen reads each body via
@@ -540,7 +540,7 @@ pub fn open_program_store(path: &str) -> std::io::Result<(Stores, DbRef, Data, V
 
 /// Load a bundle (see [`open_bundle`]) and install its database type schema
 /// into `database`, returning the native `Data`.  The `pub` entry point the
-/// startup cache (`main.rs`, @PLAN54 D2b) uses, since `Stores::install_schema`
+/// startup cache (`main.rs`, @PLN11 D2b) uses, since `Stores::install_schema`
 /// is `pub(crate)` and the binary crate cannot call it directly.
 ///
 /// # Errors
@@ -591,7 +591,7 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         source: r.field_int(stores, ds::DEF_SOURCE) as u16,
         def_type: def_type_from_code(r.field_int(stores, ds::DEF_DEF_TYPE)),
         parent: r.field_int(stores, ds::DEF_PARENT) as u32,
-        // @PLAN54 G2/M6 — `bodies=false` leaves the body in the store
+        // @PLN11 G2/M6 — `bodies=false` leaves the body in the store
         // (`Value::Null` marker); warm-cache store-backed codegen reads it via
         // `def_body_node` instead of reconstructing it here.
         code: if bodies {
@@ -1184,7 +1184,7 @@ mod tests {
         }
     }
 
-    /// @PLAN54 G2 / M0 — the equivalence harness wrapper (`ir_roundtrip_check`)
+    /// @PLN11 G2 / M0 — the equivalence harness wrapper (`ir_roundtrip_check`)
     /// the run path invokes under `LOFT_IR_CHECK`.  It materialises + reads back
     /// without registering the IR schema (baked offsets) and returns `Ok` when
     /// the whole stdlib round-trips bit-for-bit.
@@ -1225,7 +1225,7 @@ mod tests {
         assert!(checked > 20, "expected many function defs, got {checked}");
     }
 
-    /// @PLAN54 arc D probe — the full mmap loop end-to-end: materialize the
+    /// @PLN11 arc D probe — the full mmap loop end-to-end: materialize the
     /// real stdlib `Data` into a **file-backed** store, drop it (flush to
     /// disk), reopen the file via mmap, and reconstruct native `Data` with
     /// `read_data` — **no re-parse, no schema registration** (the reader walks
@@ -1283,7 +1283,7 @@ mod tests {
         }
     }
 
-    /// @PLAN54 arc D step D1 — the public `Data::save` / `Data::open` API:
+    /// @PLN11 arc D step D1 — the public `Data::save` / `Data::open` API:
     /// save the stdlib to a `.store` file, load it back (mmap, no re-parse),
     /// and confirm bit-for-bit equality.  Also checks that opening a missing
     /// file is a clean `NotFound` (the cache-miss path the caller falls back on).
@@ -1317,7 +1317,7 @@ mod tests {
         );
     }
 
-    /// @PLAN54 arc D micro-bench — wall-clock of producing the native stdlib
+    /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib
     /// `Data` two ways: a fresh `parse_dir` (today's cold-start path) vs
     /// `Store::open` + `read_data` (mmap the precompiled store, rebuild native).
     /// Run with: `cargo test --release --lib bench_stdlib_load -- --ignored --nocapture`.
@@ -1401,7 +1401,7 @@ mod tests {
         );
     }
 
-    /// @PLAN54 G2 — warm-load cost breakdown: full `read_data` vs
+    /// @PLN11 G2 — warm-load cost breakdown: full `read_data` vs
     /// `read_data_skeleton` (def table + variable tables, bodies left in the
     /// store).  The difference is the body-tree reconstruction cost; the skeleton
     /// is the variable-table-dominated cost the plan flags as the warm-load
@@ -1506,7 +1506,7 @@ mod tests {
         );
     }
 
-    /// @PLAN54 D2a step 3 — `read_schema` is the inverse of `materialize_schema`:
+    /// @PLN11 D2a step 3 — `read_schema` is the inverse of `materialize_schema`:
     /// materialize the real stdlib's database type schema into a store, read it
     /// back, and assert the reconstructed `Vec<database::Type>` equals the
     /// original (with the derived `parents` index cleared on both — it is not
@@ -1532,7 +1532,7 @@ mod tests {
         assert_eq!(loaded, cold, "database type schema round-trip mismatch");
     }
 
-    /// @PLAN54 D2a step 5 (capstone) — the warm-load bundle round-trip: save the
+    /// @PLN11 D2a step 5 (capstone) — the warm-load bundle round-trip: save the
     /// real stdlib's `Data` **and** its database type schema to one file via
     /// `save_bundle`, load both back via `open_bundle` (mmap, no re-parse), and
     /// assert: (1) `compare_data` bit-for-bit on the `Data`, (2) the schema

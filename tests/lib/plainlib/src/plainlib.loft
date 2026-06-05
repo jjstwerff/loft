@@ -1,4 +1,4 @@
-// @PLAN54 Arc N / N3 Step 3 — control fixture for the default-native env gate.
+// @PLN11 Arc N / N3 Step 3 — control fixture for the default-native env gate.
 // A normal loft library that does NOT opt into `compile = "native"`.  Store-touching
 // public API (text + vector) so a shared-store-ABI bug under default-native shows up.
 

@@ -149,7 +149,7 @@ fn crystal_editor_gl_matches_gold() {
             "WINIT_UNIX_BACKEND=x11",
             "LIBGL_ALWAYS_SOFTWARE=1",
             "GALLIUM_DRIVER=llvmpipe",
-            // @PLAN54 N3 Step 3 — default-native is now on, so a `use`d library
+            // @PLN11 N3 Step 3 — default-native is now on, so a `use`d library
             // (here `audience_crystal`) would auto-build a cdylib.  This is a
             // dev/CI gold-image test, not a native-dispatch test, and native↔interp
             // is parity-guaranteed; interpret the library to keep the run fast and

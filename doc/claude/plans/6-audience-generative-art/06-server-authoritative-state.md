@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLAN36 sub-arc 6 — Server-authoritative crystal state + deterministic multi-client rendering
+# @PLN6 sub-arc 6 — Server-authoritative crystal state + deterministic multi-client rendering
 
 ## Status
 

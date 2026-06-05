@@ -9,7 +9,7 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
-### @PLAN54 G2 Track 1 — program cache default-on + binary-mtime invalidation (2026-06-04)
+### @PLN11 G2 Track 1 — program cache default-on + binary-mtime invalidation (2026-06-04)
 
 `src/cache.rs`.  `cache::program_cache_enabled()` now returns **true by
 default** for real (non-Cargo) invocations — the whole-program startup cache
@@ -29,10 +29,10 @@ mtime — so an uncommitted compiler rebuild invalidates bundles.  `BUILD_ID`
 after each cold save to keep the cache dir under `LOFT_CACHE_MAX_MB` (default
 512 MiB).
 
-Full design + E1/E2/E3 arc: `doc/claude/plans/future/54-data-as-store/README.md`.
+Full design + E1/E2/E3 arc: `doc/claude/plans/11-data-as-store/README.md`.
 Benchmark detail: `doc/claude/PERFORMANCE.md § Startup cache`.  Commit `77da481`.
 
-### @PLAN54 G2 — `read_data` breakdown: allocation-bound, E2 is the only lever (2026-06-04)
+### @PLN11 G2 — `read_data` breakdown: allocation-bound, E2 is the only lever (2026-06-04)
 
 `src/ir_read.rs`.  `bench_read_data_breakdown` (`#[ignore]`; run with
 `cargo test --release --lib bench_read_data_breakdown -- --ignored --nocapture`)
@@ -58,7 +58,7 @@ whole-program bundle (~5–6 k vars) rather than the stdlib slice (~251 vars).
 E2 startup prize sized at **~0.7 ms on the stdlib** (scales with def + var
 count).  Commit `41835b2`.
 
-### @PLAN54 G2 M1 — `Definition` read-accessor seam completed codebase-wide (2026-06-04)
+### @PLN11 G2 M1 — `Definition` read-accessor seam completed codebase-wide (2026-06-04)
 
 `src/data.rs`, `src/state/`, `src/generation/`, `src/parser/`, `src/compile.rs`.
 All immutable `Definition` field reads across the four subsystems now go through
@@ -77,7 +77,7 @@ stay as direct reads — they are cheap computed values, not layout-sensitive.
 
 Pure refactor; no behaviour change, no test delta.  The seam is the
 precondition for swapping the `Definition` backing representation to
-store-based reads per subsystem (E2 arc in @PLAN54).
+store-based reads per subsystem (E2 arc in @PLN11).
 
 ### Nested-vector layout — four corruption/crash clusters fixed (plan-58) (2026-06-03)
 

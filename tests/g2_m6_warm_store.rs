@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 G2/M6 — warm-cache store-backed codegen, end-to-end.
+//! @PLN11 G2/M6 — warm-cache store-backed codegen, end-to-end.
 //!
 //! With `LOFT_PROGRAM_CACHE` + `LOFT_CODEGEN_STORE`, a warm cache hit loads the
 //! bundle as a *skeleton* (def table only — `open_program_store` /

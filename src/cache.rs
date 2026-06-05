@@ -78,7 +78,7 @@ pub fn feature_signature() -> String {
     feats.join(",")
 }
 
-/// @PLAN54 G2/M6 — a stable string identifying THIS binary build, for the
+/// @PLN11 G2/M6 — a stable string identifying THIS binary build, for the
 /// whole-program cache **manifest**.  Mirrors the version inputs of
 /// [`stdlib_cache_key`] (format / version / rebuild-id / target / features) so a
 /// binary upgrade invalidates a stale program bundle: a bundle written by one
@@ -125,7 +125,7 @@ fn binary_signature_tag() -> String {
     }
 }
 
-/// @PLAN54 G2 / track 1 — whether the whole-program startup cache is active for
+/// @PLN11 G2 / track 1 — whether the whole-program startup cache is active for
 /// this run.  **Default ON** (the 3–3.6× warm-start win, no longer hidden behind
 /// an opt-in flag), with three overrides; see [`cache_decision`] for the policy.
 #[must_use]
@@ -249,7 +249,7 @@ pub fn collect_stdlib_sources(default_dir: &str) -> Vec<(String, String)> {
     out
 }
 
-/// The on-disk path for the stdlib bundle keyed by `key` (@PLAN54 D2b — the
+/// The on-disk path for the stdlib bundle keyed by `key` (@PLN11 D2b — the
 /// store-format `.store` bundle written by `ir_store::save_bundle`).
 ///
 /// Uses `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`), falling back to
@@ -283,7 +283,7 @@ fn hex32(key: &[u8; 32]) -> String {
     hex
 }
 
-/// @PLAN54 arc E — SHA-256 of a file's bytes, or `None` if unreadable.  Used to
+/// @PLN11 arc E — SHA-256 of a file's bytes, or `None` if unreadable.  Used to
 /// hash every parsed source for the whole-program bundle's drift manifest.
 #[must_use]
 pub fn file_hash(path: &str) -> Option<[u8; 32]> {
@@ -293,7 +293,7 @@ pub fn file_hash(path: &str) -> Option<[u8; 32]> {
     Some(h.finalize().into())
 }
 
-/// @PLAN54 Arc N / N0 — locate `libloft.rlib` for THIS build (dev `target/<prof>/`,
+/// @PLN11 Arc N / N0 — locate `libloft.rlib` for THIS build (dev `target/<prof>/`,
 /// its `deps/`, or an installed `<prefix>/share/loft/`).
 fn loft_rlib_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -319,7 +319,7 @@ fn loft_rlib_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// @PLAN54 Arc N / N0 — the canonical fingerprint of THIS loft build, for
+/// @PLN11 Arc N / N0 — the canonical fingerprint of THIS loft build, for
 /// native-artifact validity (C71 "build fingerprint").  A native artifact links
 /// `libloft.rlib`, so it is valid only against the loft build whose rlib it links:
 /// this is the rlib's **content** hash (sha256 → `u64`), memoised per process.  A
@@ -343,12 +343,12 @@ pub fn loft_build_fingerprint() -> u64 {
     })
 }
 
-/// @PLAN54 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
+/// @PLN11 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
 fn fp_sidecar(profile_dir: &std::path::Path) -> std::path::PathBuf {
     profile_dir.join(".loft-build-fp")
 }
 
-/// @PLAN54 Arc N / N0 — true iff `profile_dir` carries a build-fingerprint sidecar
+/// @PLN11 Arc N / N0 — true iff `profile_dir` carries a build-fingerprint sidecar
 /// equal to `fp`.  A missing / stale / unreadable sidecar returns `false`, so the
 /// caller rebuilds — this is what makes a loft change (new fingerprint) invalidate
 /// an already-built package rlib / cdylib instead of silently linking the stale
@@ -365,7 +365,7 @@ pub fn native_artifact_fingerprint_matches(profile_dir: &std::path::Path, fp: u6
         .is_some_and(|stored| stored == fp)
 }
 
-/// @PLAN54 Arc N / N0 — stamp `profile_dir` with `fp` after building an artifact
+/// @PLN11 Arc N / N0 — stamp `profile_dir` with `fp` after building an artifact
 /// there (best-effort; no-op when `fp == 0`).
 pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64) {
     if fp != 0 {
@@ -373,7 +373,7 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     }
 }
 
-/// @PLAN54 Arc N / N3 (Step 4) — path of a library's *last-run source-hash* sidecar.
+/// @PLN11 Arc N / N3 (Step 4) — path of a library's *last-run source-hash* sidecar.
 /// Dev-interpret-on-edit compares this run's source hash against the one recorded
 /// here to decide "still being edited (changed since last run → interpret)" vs
 /// "stable (unchanged → build the cdylib)".
@@ -397,7 +397,7 @@ pub fn write_run_source_hash(profile_dir: &std::path::Path, hash: u64) {
     let _ = std::fs::write(run_hash_sidecar(profile_dir), hash.to_string());
 }
 
-/// @PLAN54 arc E — the `(bundle, manifest)` paths for the whole-program cache of
+/// @PLN11 arc E — the `(bundle, manifest)` paths for the whole-program cache of
 /// the script at `script_abspath`.  Keyed on the script's path so each script
 /// gets a stable slot; the manifest (every parsed source + its content hash)
 /// detects drift in any input — stdlib, lazily-loaded libs, or the script.
@@ -414,7 +414,7 @@ pub fn program_cache_paths(script_abspath: &str) -> (std::path::PathBuf, std::pa
     )
 }
 
-/// @PLAN54 G2 / track 1 — default budget (MiB) for the program-cache directory
+/// @PLN11 G2 / track 1 — default budget (MiB) for the program-cache directory
 /// before eviction kicks in.  ~512 MiB ≈ 70 bundles at the measured ~7 MiB each;
 /// overridable via `LOFT_CACHE_MAX_MB`.
 const DEFAULT_CACHE_MAX_MB: u64 = 512;
@@ -430,7 +430,7 @@ fn program_cache_budget_bytes() -> u64 {
         .saturating_mul(1024 * 1024)
 }
 
-/// @PLAN54 Arc N / N1 — the idle-TTL after which an *unused* cached artifact is
+/// @PLN11 Arc N / N1 — the idle-TTL after which an *unused* cached artifact is
 /// evicted (`LOFT_CACHE_TTL_HOURS`, default 24 h).  A re-use ([`touch_now`]) or a
 /// re-save refreshes the entry's mtime, so an actively-used "library set" persists
 /// indefinitely while a one-off ages out — "store common sets longer, clear when
@@ -444,7 +444,7 @@ fn cache_ttl() -> std::time::Duration {
     std::time::Duration::from_secs(hours.saturating_mul(3600))
 }
 
-/// @PLAN54 Arc N / N1 — mark a cached file as used *now* (touch-on-use): bumps its
+/// @PLN11 Arc N / N1 — mark a cached file as used *now* (touch-on-use): bumps its
 /// modification time so the idle-TTL GC keeps it.  Best-effort (no-op if the file
 /// is missing / unopenable).
 pub fn touch_now(path: &std::path::Path) {
@@ -453,7 +453,7 @@ pub fn touch_now(path: &std::path::Path) {
     }
 }
 
-/// @PLAN54 G2 / track 1 + Arc N / N1 — bound cache growth.  With the cache
+/// @PLN11 G2 / track 1 + Arc N / N1 — bound cache growth.  With the cache
 /// default-on each distinct script gets its own `program-<hash>.store` bundle
 /// (~7 MiB) and nothing removes them.  Eviction is **idle-TTL primary**
 /// ([`cache_ttl`]) — drop any bundle not used within the TTL — with the size-cap

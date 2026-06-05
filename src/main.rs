@@ -4087,7 +4087,7 @@ fn main() {
     let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
     let default_str = default_dir.to_string_lossy().to_string();
-    // @PLAN54 arc E / D2b / track 1 — the whole-program startup cache mmaps the
+    // @PLN11 arc E / D2b / track 1 — the whole-program startup cache mmaps the
     // ENTIRE parsed program (stdlib + lazily-loaded libs + user file) on a
     // repeated unchanged run, skipping all parsing (~3–3.6× faster).  It is now
     // **default-on** (`cache::program_cache_enabled`): off only under
@@ -4097,7 +4097,7 @@ fn main() {
     // just when the program cache is off.
     let program_cache_on = loft::cache::program_cache_enabled();
     p.track_sources = program_cache_on;
-    // @PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
+    // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
     // here so codegen reads bodies straight from it (no read_data body rebuild).
     let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
@@ -4141,7 +4141,7 @@ fn main() {
     if introspect_mode && introspect_trace {
         p.trace_types = true;
     }
-    // @PLAN54 arc E — a whole-program warm load already holds every definition;
+    // @PLN11 arc E — a whole-program warm load already holds every definition;
     // skip parsing the user file (and its lib loads) entirely.
     if !program_warm {
         p.parse(&abs_file, false);
@@ -4208,7 +4208,7 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
-    // @PLAN54 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
+    // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
     // `[library] compile = "native"`, **build-before-mark**: build each library's
     // cdylib from the post-parse type schema FIRST, then mark its functions native
     // (so `byte_code` emits `OpStaticCall`) ONLY on success.  A build failure (or
@@ -4261,7 +4261,7 @@ fn main() {
         }
     }
     let has_auto_native = !auto_native_libs.is_empty();
-    // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
+    // @PLN11 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
     // before any subsystem is rewired to read from the store.  Opt-in (default
     // off): validates the store-mirror invariant on the *actual* program being
@@ -4278,7 +4278,7 @@ fn main() {
             );
         }
     }
-    // @PLAN54 arc E — on a cold run with the program cache enabled, write the
+    // @PLN11 arc E — on a cold run with the program cache enabled, write the
     // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
     // functions carry `done=true` and the baked free-ops).
     // Skip the program cache for auto-native programs: the warm-load path restores
@@ -4323,7 +4323,7 @@ fn main() {
     }
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
-    // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+    // @PLN11 G2/M6 — lower from the warm-loaded mmap store when present.
     // (The auto-native cdylibs were already built + their symbols marked above,
     // build-before-mark, so `byte_code` has emitted `OpStaticCall` only for the
     // libraries that compiled.)
@@ -4340,7 +4340,7 @@ fn main() {
     extensions::load_all(&mut state, all_native_libs.clone());
     // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
     extensions::wire_native_fns(&mut state, &p.data);
-    // @PLAN54 Arc N / N3 — wire the shared-store bridge dispatchers for the
+    // @PLN11 Arc N / N3 — wire the shared-store bridge dispatchers for the
     // auto-native libraries (the `loft_shared_*` symbols), a disjoint set from the
     // hand-written `#native` symbols `wire_native_fns` handles.
     extensions::wire_shared_native_fns(&mut state, &p.data);

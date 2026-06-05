@@ -96,7 +96,7 @@ design constraint, not an afterthought — and a deliberate strength:
 - **Pace a base to a target sitting.** Tune wave count / build time so a base
   resolves (win, scramble, or loss) within a bounded window. Treat "how long
   is a base" as a **tunable pacing parameter**, not an emergent accident —
-  echoing @PLAN36's "sluggish by design" pacing principle (bounded tempo as a
+  echoing @PLN6's "sluggish by design" pacing principle (bounded tempo as a
   first-class lever).
 
 ## The editor / game split (architectural spine)
@@ -282,7 +282,7 @@ vision opens it onto a whole planet:
   bases without reaching inside them.
 - **Multiplayer reuses loft's shipped stack** — `lib/server` (multi-client
   WebSocket) + `lib/web` (WS client), the same infrastructure validated by
-  @PLAN36 (audience) and the tic-tac-toe plans. The expansion is strategic
+  @PLN6 (audience) and the tic-tac-toe plans. The expansion is strategic
   game logic + a planet meta-map on top of proven netcode, not new transport.
 - The **enemy economy as a wave SOURCE** generalises the D3 spawn model: waves
   stop being authored set-pieces and become *output of* the economy state
@@ -304,7 +304,7 @@ vision opens it onto a whole planet:
   separate override layer" boundary note).
 - [lib-plan 19 gridmesh](../../../lib_plans/19-gridmesh/README.md) — per-chunk
   meshing + dirty re-mesh dryopea renders with.
-- [@PLAN36 audience-generative-art](../../36-audience-generative-art/README.md)
+- [@PLN6 audience-generative-art](../../6-audience-generative-art/README.md)
   — sibling app-plan; the projector's 3rd-person GL camera + GPU mesh pipeline
   are reference material.
 - `lib/moros_*` — terrain editor, map, render, sim packages.

@@ -10,7 +10,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 `d494edc`).  Phase 01b (loft-callable binding) is actionable
 now on branch `store-durable-phase1b` to unblock the
 training-port consumer.  Phases 02-06 stay in `future/` until
-their driver consumers (TTT v5 / @PLAN36 audience demo) need
+their driver consumers (TTT v5 / @PLN6 audience demo) need
 them.  Full promotion to active (`plans/38-…`) deferred until
 phase 02 begins.
 
@@ -28,7 +28,7 @@ its data's value:
   turn-based game state (TTT v5 sessions).
 - **Tier 3 — WAL**: write-ahead log + `fsync` per record +
   periodic checkpoints.  Zero-loss for committed writes.
-  Ideal for real-time game state (@PLAN36 audience demo).
+  Ideal for real-time game state (@PLN6 audience demo).
 
 ## Drivers
 
@@ -55,7 +55,7 @@ failure mode with very different stakes:
    @PLAN37 lands.
 
 3. **Future game servers** (TTT v5 in `plans/future/32-…`,
-   @PLAN36 audience-generative-art) — hold session state,
+   @PLN6 audience-generative-art) — hold session state,
    world state, decay timers, audience contributions that
    ARE the source of truth.  An OS-kill mid-game means
    players lose their moves; an audience-demo crash means
@@ -217,7 +217,7 @@ bounded.
 | 2 | [Tier 2: double-buffered snapshots](02-tier-2-snapshots.md) | M | `lib/store_durable/` package; `SnapshotEvery(interval)` mode with two-file atomic rotation + `msync` discipline |
 | 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches |
 | 4 | [Stress test — `kill -9` × 1000 across all tiers](04-stress-test.md) | S | `tests/store_durable_kill.rs` runs an injection harness that spawns a daemon, kills it mid-write, validates recovery semantics per tier |
-| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLAN36 audience demo design doc references Tier 3 |
+| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLN6 audience demo design doc references Tier 3 |
 | 6 | [Closeout — DESIGN_DECISIONS + STDLIB.md + finished/](06-closeout.md) | XS | "C-… durability tier choice" decision recorded; STDLIB.md `Store::open_durable` doc; plan moves to `finished/` |
 
 Total estimated effort: **H** (sum of per-phase letters above).
@@ -254,7 +254,7 @@ landing 01 needs 00 underneath.  Combined effort is ~S+
 **Out of scope for this PR** (deferred to later slices):
 
 - Tier 2 (snapshots) — phase 02, waits for TTT v5.
-- Tier 3 (WAL) — phase 03, waits for @PLAN36 audience demo.
+- Tier 3 (WAL) — phase 03, waits for @PLN6 audience demo.
 - `kill -9` stress harness — phase 04, runs across all tiers.
 - Indexer phase-08 opt-in — phase 05, waits for @PLAN37 to
   reach its consumer phase.  (The training port, on its own
@@ -286,7 +286,7 @@ landing 01 needs 00 underneath.  Combined effort is ~S+
 Phases 00 + 01 land with `**Status:** Landed in <PR#>`; the
 directory promotes to `plans/38-loft-store-durable/` only when
 phase 02 (Tier 2 snapshots) starts.  Active-plan cap stays at
-2 (16-coroutine-validation, 36-audience-generative-art).
+2 (16-coroutine-validation, 6-audience-generative-art).
 
 ## Acceptance — full plan
 
@@ -306,7 +306,7 @@ phase 02 (Tier 2 snapshots) starts.  Active-plan cap stays at
   from cached Strava/Garmin/OSM JSON.  (Phase 01 acceptance.)
 - The indexer (@PLAN37 phase 08), when landed, opts into Tier 1;
   full-rescan-on-corruption succeeds in ≤ 2 sec.
-- TTT v5 design doc + @PLAN36 audience demo design doc cite
+- TTT v5 design doc + @PLN6 audience demo design doc cite
   Tier 2 / Tier 3 as their persistence layer.
 - All 7 phases close → plan moves to
   `plans/finished/38-loft-store-durable/`.
@@ -349,7 +349,7 @@ phase 02 (Tier 2 snapshots) starts.  Active-plan cap stays at
   — phase that opts into Tier 1.
 - [`plans/future/32-tic-tac-toe/`](../32-tic-tac-toe/) — TTT v5
   multiplayer; Tier 2 consumer.
-- [`plans/36-audience-generative-art/`](../36-audience-generative-art/)
+- [`plans/6-audience-generative-art/`](../6-audience-generative-art/)
   — audience demo; Tier 3 consumer.
 - [`lib/server/src/server.loft`](../../../../lib/server/src/server.loft)
   — the server pattern these durability tiers complement.

@@ -828,7 +828,7 @@ doesn't churn the stdlib's hot paths or surprise the in-band-sentinel model.
 
 ## C70 — No per-library IR snapshot / cache
 
-**Question.** @PLAN54 (Data-as-store) caches the compiler IR as mmap'able
+**Question.** @PLN11 (Data-as-store) caches the compiler IR as mmap'able
 store records.  Should a **library** be able to ship (or the toolchain
 cache) *its own* IR snapshot independently, so a never-seen `use`
 combination doesn't pay a full parse on first run?
@@ -856,7 +856,7 @@ The whole-bundle snapshot (core + a script's sorted lib-set, as one image with
 internally-consistent indices) sidesteps relocation entirely and captures the
 repeated-run win that actually matters for the dogfood consumers.
 
-**Decision.** **Closed — declined.**  @PLAN54 caches only **whole-prefix
+**Decision.** **Closed — declined.**  @PLN11 caches only **whole-prefix
 bundles** (core stdlib; core + per-script lib-set); never independent
 per-library IR.  Dated 2026-06-02 (first raised 2026-05-31).
 
@@ -867,7 +867,7 @@ global-index brittleness — bring the parse-time profile and the relocation
 design together, not separately.
 
 Pointer from the source:
-[plans/future/54-data-as-store/](plans/future/54-data-as-store/README.md)
+[plans/11-data-as-store/](plans/11-data-as-store/README.md)
 § What gets cached (per-library "dropped, not deferred").
 
 ---
@@ -899,7 +899,7 @@ user's active script — has a decisive set of advantages in loft's specific con
   interpreted bytecode calls compiled Rust via the same `#native` / `#rust`
   mechanism the stdlib uses.  This is not a new idea — it IS the current stdlib
   design, extended to user libraries.
-- **The native backend's cross-mode byte-identical equivalence** (the @PLAN54
+- **The native backend's cross-mode byte-identical equivalence** (the @PLN11
   harness) guarantees a library behaves identically whether run interpreted
   (during development) or native (shipped).
 
@@ -1057,7 +1057,7 @@ interpreted script calling an auto-generated, auto-compiled cdylib over the shar
 (scalars, vectors, structs, text, plain+data enums, keyed `sorted`), plus the
 source-form lean interface and the `use`-shaped core (`mark_native_exports` →
 `build_shared_cdylib` → `wire_shared_native_fns`, a normal library fn dispatched
-with no `#native`).  See [plan-54 Arc N](plans/future/54-data-as-store/README.md#arc-n--native-library-execution-model-c71-build-out)
+with no `#native`).  See [@PLN11 Arc N](plans/11-data-as-store/README.md#arc-n--native-library-execution-model-c71-build-out)
 and its **§ Landing sequence** for the ordered, landable path from here to the
 steady state (A: wire `use`; B: make it invisible; C: soundness sweep; D: polish).
 

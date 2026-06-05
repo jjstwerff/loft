@@ -113,13 +113,13 @@ Two scratch scripts from the development session:
 These aren't checked in as Rust tests yet because the headless harness
 needs polishing (it caught @P286 — the Sec-WebSocket-Accept GUID
 transposition — but is brittle around tab attach timing).  A cleaner
-end-to-end test is filed under @PLAN36 phase 1.8 (multi-client load
+end-to-end test is filed under @PLN6 phase 1.8 (multi-client load
 test).
 
 ## Related
 
 - [`doc/audience-demo/`](../../doc/audience-demo/) — the deployable
   client (this is what GitHub Pages serves)
-- [`doc/claude/plans/36-audience-generative-art/`](../../doc/claude/plans/36-audience-generative-art/)
+- [`doc/claude/plans/6-audience-generative-art/`](../../doc/claude/plans/6-audience-generative-art/)
   — full development plan
 - [`lib/server/`](../../lib/server/) — the WebSocket library

@@ -16,7 +16,7 @@ truncation.  Zero-data-loss for committed writes.
 
 Tier 3 is the right choice for any data where each write
 matters and rebuild from another source is impossible.
-First consumer: @PLAN36 audience-generative-art demo (every
+First consumer: @PLN6 audience-generative-art demo (every
 audience contribution must persist; on stage, a crashed
 projector recovering with lost contributions is the worst-
 possible failure mode).
@@ -194,4 +194,4 @@ busy server amortises fsync cost across the burst.
 
 - [Phase 02 — Tier 2 snapshots](02-tier-2-snapshots.md) — checkpoint mechanism reused here
 - [Phase 04 — stress test](04-stress-test.md) — validates Tier 3 zero-loss claim
-- [Plan-36 audience demo](../36-audience-generative-art/) — first Tier 3 consumer
+- [Plan-36 audience demo](../6-audience-generative-art/) — first Tier 3 consumer

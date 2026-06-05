@@ -177,7 +177,7 @@ the `#native` / `#rust` mechanism the stdlib uses.  The stdlib's native function
 are already this model — interpreted user scripts calling compiled Rust.  Extending
 it to user libraries is the straight-line path.
 
-The native backend's cross-mode byte-identical equivalence (the @PLAN54 harness)
+The native backend's cross-mode byte-identical equivalence (the @PLN11 harness)
 guarantees a library behaves the same whether run interpreted (during development)
 or native (shipped).
 
@@ -197,7 +197,7 @@ E2 (zero-copy `read_data`) therefore drops from "startup-perf endgame" to
 store-IR foundation, the `IrNode` handle, and the completed `Definition` read seam
 keep their architectural and self-hosting value — now serving the interface load
 and the shared ABI — not zero-copy interpretation of library bodies.  See
-[plans/future/54-data-as-store/README.md § Recommendation](plans/future/54-data-as-store/README.md).
+[plans/11-data-as-store/README.md § Recommendation](plans/11-data-as-store/README.md).
 
 ### The build fingerprint — correctness crux
 

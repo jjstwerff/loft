@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N3 Phase A — `use <lib>` auto-compiles a normal loft library
+//! @PLN11 Arc N / N3 Phase A — `use <lib>` auto-compiles a normal loft library
 //! to a native cdylib and dispatches to it, on the **real binary**.
 //!
 //! The fixture `tests/lib/mathnative/` is a NORMAL loft library (no `#native`, no
@@ -88,7 +88,7 @@ fn use_compile_native_library_dispatches_on_real_binary() {
     let _ = std::fs::remove_dir_all(native_auto);
 }
 
-/// @PLAN54 Arc N / N3 (B3) — silent per-function fallback: a library where one
+/// @PLN11 Arc N / N3 (B3) — silent per-function fallback: a library where one
 /// public function is shared-store-dispatchable (`triple`) and another is not
 /// (`apply_inc` calls through a function reference — a `CallRef` the gate
 /// conservatively excludes).  The gate splits the library silently — `triple`

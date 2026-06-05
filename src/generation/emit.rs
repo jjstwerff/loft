@@ -13,7 +13,7 @@ use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
     /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
-    /// [`Self::output_code_node`].  @PLAN54 G2/M4 (cf. interpreter `generate`):
+    /// [`Self::output_code_node`].  @PLN11 G2/M4 (cf. interpreter `generate`):
     /// every existing caller keeps this signature; M5's store-backed entry calls
     /// `output_code_node(IrNode::Store(…))`.
     pub(super) fn output_code_inner(
@@ -25,7 +25,7 @@ impl Output<'_> {
     }
 
     /// Central recursive dispatch from an IR node to its Rust representation
-    /// (@PLAN54 G2/M4).  Dispatches on `node.kind()` and reads payloads through
+    /// (@PLN11 G2/M4).  Dispatches on `node.kind()` and reads payloads through
     /// the `IrNode` handle; arms not yet converted fall to the `match
     /// node.as_native()` below (native-backed bridge, lifted as they convert).
     #[allow(clippy::too_many_lines)]
@@ -68,7 +68,7 @@ impl Output<'_> {
             ValueType::Float => return write!(w, "{}_f64", node.float_value()),
             ValueType::Single => return write!(w, "{}_f32", node.single_value()),
             ValueType::Null => return write!(w, "()"),
-            // @PLAN54 G2/M4.2 — scalar arms (no Value child).
+            // @PLN11 G2/M4.2 — scalar arms (no Value child).
             ValueType::Line => {
                 // P198 / DX-source-map: a `// loft:<file>:<line>` comment so
                 // rustc errors trace back to the loft source line.
@@ -91,7 +91,7 @@ impl Output<'_> {
                 let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
                 return write!(w, "continue 'l{}", self.loop_stack[idx]);
             }
-            // @PLAN54 G2/M4.4 — single/list-child arms recurse via output_code_node.
+            // @PLN11 G2/M4.4 — single/list-child arms recurse via output_code_node.
             ValueType::Drop => return self.output_code_node(w, node.drop_inner()),
             ValueType::BreakWith => {
                 let n = node.breakwith_nr();
@@ -119,7 +119,7 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
-            // @PLAN54 G2/M4.5 — self-contained arms (no &Value-helper delegation).
+            // @PLN11 G2/M4.5 — self-contained arms (no &Value-helper delegation).
             ValueType::Yield => {
                 if self.yield_collect {
                     // Inside a ForLoopBody factory: push to the collector.
@@ -178,7 +178,7 @@ impl Output<'_> {
                     "/* par_for(...) — native codegen lands in spine step 3b */"
                 );
             }
-            // @PLAN54 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
+            // @PLN11 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
             // keeps a native bridge as it is a &Value-only predicate).
             ValueType::Var => {
                 let var = node.var_nr();
@@ -260,7 +260,7 @@ impl Output<'_> {
             }
             _ => {}
         }
-        // @PLAN54 G2/M4 — materialise-at-boundary for the residual arms
+        // @PLN11 G2/M4 — materialise-at-boundary for the residual arms
         // (Block/Loop/Set/If/Call/Return/Keys/CallRef), which delegate to large
         // `&Value`/`&Block` helpers (output_block/output_if/output_set/…).
         // Native backing is zero-cost (`code = v`); a store-backed node
@@ -500,7 +500,7 @@ impl Output<'_> {
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            // @PLAN54 G2/M4.1–M4.6 — these kinds are handled by the
+            // @PLN11 G2/M4.1–M4.6 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here.
             Value::Var(_)
             | Value::Tuple(_)
@@ -1152,7 +1152,7 @@ impl Output<'_> {
         block: IrBlock,
         wrap_text: bool,
     ) -> std::io::Result<()> {
-        // @PLAN54 G2/M4 — materialise-at-boundary: native is zero-cost; a
+        // @PLN11 G2/M4 — materialise-at-boundary: native is zero-cost; a
         // store-backed block materialises once, then the intricate `&Block` body
         // (which threads `bl` through patch_hoisted_returns /
         // detect_ref_tail_capture / is_void_value) runs unchanged.

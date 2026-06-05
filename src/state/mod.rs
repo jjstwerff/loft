@@ -21,7 +21,7 @@ use std::io::{Error, Write};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-/// @PLAN54 N3 — a **usage sentinel** on the auto-native shared-store bridge
+/// @PLN11 N3 — a **usage sentinel** on the auto-native shared-store bridge
 /// (`extensions::shared_store_dispatch`): every C71 default-native library call that
 /// dispatches to its compiled cdylib increments this.  It backs the liveness
 /// regression guard (`tests/n2_cdylib.rs::f3_body_bearing_marked_fn_dispatch_vs_interpret`):

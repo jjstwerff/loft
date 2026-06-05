@@ -65,11 +65,11 @@ struct ResolvedPkg {
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
-    /// @PLAN54 arc E — set by the driver (`main.rs`) only when the whole-program
+    /// @PLN11 arc E — set by the driver (`main.rs`) only when the whole-program
     /// startup cache is enabled; gates [`Parser::parsed_sources`] tracking so a
     /// normal (non-cache) run pays nothing.
     pub track_sources: bool,
-    /// @PLAN54 arc E — paths of every source file parsed (stdlib + lazily-loaded
+    /// @PLN11 arc E — paths of every source file parsed (stdlib + lazily-loaded
     /// libs + user file), in load order, recorded only when `track_sources`.
     /// Only the parser sees the dynamically-loaded lib set; the whole-program
     /// cache hashes these files' contents to key the bundle + detect drift.
@@ -97,7 +97,7 @@ pub struct Parser {
     /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
-    /// @PLAN54 Arc N / N3 — package dirs of libraries that opted into
+    /// @PLN11 Arc N / N3 — package dirs of libraries that opted into
     /// auto-compilation (`[library] compile = "native"`).  Recorded during `use`
     /// processing; the driver (`main.rs`) marks each library's public
     /// shared-store-dispatchable functions native (after `scopes::check`, before
@@ -456,7 +456,7 @@ impl Parser {
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
         }
-        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
         }
@@ -691,7 +691,7 @@ impl Parser {
     /// Used by the WASM virtual-FS path to bypass real filesystem access.
     #[cfg(feature = "wasm")]
     fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
-        // @PLAN54 arc E — record the input file for the whole-program cache key.
+        // @PLN11 arc E — record the input file for the whole-program cache key.
         if self.track_sources {
             self.parsed_sources.push(filename.to_string());
         }
@@ -5165,7 +5165,7 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
-        // @PLAN54 N3 Step 3 (default-native) / F2 — mirror `apply_manifest_side_effects`:
+        // @PLN11 N3 Step 3 (default-native) / F2 — mirror `apply_manifest_side_effects`:
         // a normal loft library reached via THIS direct-resolution / sibling-package /
         // ancestor-walk path must ALSO be recorded as a native-compile candidate.
         // Without it the two resolution paths diverge: a library pulled in transitively
@@ -5368,7 +5368,7 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
-        // @PLAN54 Arc N / N3 Step 3 — **default-native**.  Every `use`d normal loft
+        // @PLN11 Arc N / N3 Step 3 — **default-native**.  Every `use`d normal loft
         // library is a native candidate: record the package dir; the driver marks +
         // builds + loads after scope analysis (see `pending_native_compile`).  No
         // opt-in, no flag — "libraries compile, scripts interpret" is the default.

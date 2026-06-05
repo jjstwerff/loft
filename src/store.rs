@@ -328,7 +328,7 @@ impl Store {
         store
     }
 
-    /// @PLAN54 arc E — cheap validity pre-check for a store image file: it
+    /// @PLN11 arc E — cheap validity pre-check for a store image file: it
     /// exists, is large enough, and starts with the store [`SIGNATURE`].  Lets
     /// the startup cache reject a corrupt / non-store / truncated bundle and
     /// fall back to a cold parse instead of letting [`Store::open`] panic on a

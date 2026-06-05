@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N2 — the **native-compilability gate**.
+//! @PLN11 Arc N / N2 — the **native-compilability gate**.
 //!
 //! In the native-library execution model (C71) a stable library compiles to
 //! native code while the user script interprets, and calls dispatch across the
@@ -29,7 +29,7 @@
 use crate::data::{Data, DefType, Type, Value};
 use std::collections::HashSet;
 
-/// @PLAN54 Arc N / N2 — the set of function `def_nr`s that can be `--native`-
+/// @PLN11 Arc N / N2 — the set of function `def_nr`s that can be `--native`-
 /// compiled (the maximal native subgraph).  Everything not in the set runs
 /// interpreted.  See the module docs for the gate's denylist + transitivity.
 #[must_use]
@@ -42,7 +42,7 @@ pub fn native_compilable(data: &Data) -> HashSet<u32> {
         .collect()
 }
 
-/// @PLAN54 Arc N / N2 — the **scalar-dispatchable** subset: native-compilable
+/// @PLN11 Arc N / N2 — the **scalar-dispatchable** subset: native-compilable
 /// functions whose parameters and return type are all scalars
 /// (`integer`/`boolean`/`float`/`single`/`character`).  These are the **first
 /// dispatch slice**: no store reference crosses the interpreter↔native boundary,
@@ -78,7 +78,7 @@ fn is_scalar_type(t: &Type) -> bool {
     )
 }
 
-/// @PLAN54 Arc N / N2 — the **shared-store-dispatchable** subset: native-compilable
+/// @PLN11 Arc N / N2 — the **shared-store-dispatchable** subset: native-compilable
 /// functions that dispatch over the **shared `*mut Stores` bridge**
 /// (`generate_shared_cdylib_lib_rs`): the caller's store is shared by pointer (no
 /// `LoftStore` handle, no marshalling), so a non-scalar value can cross the

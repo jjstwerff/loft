@@ -147,7 +147,7 @@ store = store_durable::open(
 `IntegrityOnly` is @PLAN38's Tier 1 — appropriate for the
 indexer because the filesystem is the source of truth and a
 corrupted store rebuilds in <2 sec.  Game servers (TTT v5,
-@PLAN36) opt into Tier 2 / Tier 3 of the same API.
+@PLN6) opt into Tier 2 / Tier 3 of the same API.
 
 #### Why loft's Store primitive is the right fit
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N2 — the auto-generated native-library cdylib must COMPILE
+//! @PLN11 Arc N / N2 — the auto-generated native-library cdylib must COMPILE
 //! and be DISPATCHABLE from an interpreted script.
 //!
 //! `native_lib::generate_cdylib_lib_rs` produces a cdylib `lib.rs` from a
@@ -882,7 +882,7 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// @PLAN54 F3 — does a **default-native-MARKED, BODY-BEARING** library function
+/// @PLN11 F3 — does a **default-native-MARKED, BODY-BEARING** library function
 /// actually dispatch to its compiled cdylib bridge at runtime, or interpret its own
 /// loft body (correct output either way — the no-speedup mechanism)?
 ///

@@ -22,7 +22,7 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
     byte_code_from(state, data, 0, None);
 }
 
-/// @PLAN54 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
+/// @PLN11 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
 /// store (the mmap'd cache bundle), so codegen reads bodies straight from it via
 /// `def_body_node` — no per-run materialise and no `read_data` body rebuild.
 pub fn byte_code_with_store(
@@ -65,7 +65,7 @@ pub fn byte_code_from(
     }
     let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
     let t_codegen = std::time::Instant::now();
-    // @PLAN54 G2/M2/M6 — codegen body source:
+    // @PLN11 G2/M2/M6 — codegen body source:
     //  * `warm_store` (M6): a pre-loaded mmap'd cache bundle — read bodies
     //    straight from it (no materialise, no `read_data` body rebuild).
     //  * else `LOFT_CODEGEN_STORE` (M2/M5 proof): materialise the whole `Data`
@@ -134,7 +134,7 @@ fn build_const_vectors(
             continue;
         };
         let elem_tp = (**elem_tp).clone();
-        // @PLAN54 G2/M6 — read the const body from the persistent store when
+        // @PLN11 G2/M6 — read the const body from the persistent store when
         // present (store-backed), else the native graph.
         let body = match program_store {
             Some((stores, root)) => {

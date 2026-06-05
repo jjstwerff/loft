@@ -62,7 +62,7 @@ Three tiers are planned; phase 01 (the first PR slice on the
 |---|---|---|---|---|
 | 1 | `IntegrityOnly` | None (only msync on clean drop) | Everything since last clean drop | `personal/training` port (initial), `@PLAN37` indexer (when phase 08 lands) |
 | 2 | `SnapshotEvery(interval)` (planned, phase 02) | One msync per interval | One interval | TTT v5 multiplayer (`plans/future/32-…`) |
-| 3 | `WAL` (planned, phase 03) | fsync per record, amortised by group-commit window | Zero for committed writes | @PLAN36 audience demo |
+| 3 | `WAL` (planned, phase 03) | fsync per record, amortised by group-commit window | Zero for committed writes | @PLN6 audience demo |
 
 API surface:
 

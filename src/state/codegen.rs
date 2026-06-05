@@ -68,7 +68,7 @@ impl State {
         let logging = !data.def(def_nr).position().file.starts_with("default/");
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
-        // @PLAN54 G2/M6 — read the body's SHAPE (null / empty-block) from the
+        // @PLN11 G2/M6 — read the body's SHAPE (null / empty-block) from the
         // persistent store when present, so these last native body reads are
         // also store-backed; else from the native graph.
         let (body_is_null, body_is_empty_block) = if let Some((stores, root)) = program_store {
@@ -190,7 +190,7 @@ impl State {
             }
         }
         self.source = stack.data.def(def_nr).source();
-        // @PLAN54 G2/M2/M5 — store-backed lowering.  When `byte_code_from`
+        // @PLN11 G2/M2/M5 — store-backed lowering.  When `byte_code_from`
         // supplied a persistent program store, read this function's body node
         // directly from it (`def_body_node`) and lower it through
         // `IrNode::Store`; `generate_inner` reads the body via the handle and the
@@ -250,13 +250,13 @@ impl State {
     */
     /// The `&Value` recursion entry — wraps the native node in an [`IrNode`]
     /// and delegates to [`Self::generate_node`].  Every existing caller keeps
-    /// this signature; @PLAN54 G2/M5's store-backed entry will call
+    /// this signature; @PLN11 G2/M5's store-backed entry will call
     /// `generate_node(IrNode::Store(…), …)` directly instead.
     pub(super) fn generate(&mut self, val: &Value, stack: &mut Stack, top: bool) -> Type {
         self.generate_node(IrNode::Native(val), stack, top)
     }
 
-    /// Handle-based recursion entry (@PLAN54 G2): depth-guard + dispatch on the
+    /// Handle-based recursion entry (@PLN11 G2): depth-guard + dispatch on the
     /// backing-agnostic [`IrNode`].
     pub(super) fn generate_node(&mut self, node: IrNode, stack: &mut Stack, top: bool) -> Type {
         self.generate_depth += 1;
@@ -270,7 +270,7 @@ impl State {
         result
     }
 
-    /// @PLAN54 G2 — lower one IR node.  Dispatches entirely on `node.kind()`
+    /// @PLN11 G2 — lower one IR node.  Dispatches entirely on `node.kind()`
     /// and reads payloads through `IrNode` accessors, so the SAME codegen runs
     /// once the backing flips from native to store-read (M5).  The remaining
     /// `as_native()` calls (Block/Loop/TupleGet/TuplePut children and the
@@ -332,7 +332,7 @@ impl State {
                 }
                 Type::Void
             }
-            // @PLAN54 G2 — single-child / compound delegating arms: dispatch +
+            // @PLN11 G2 — single-child / compound delegating arms: dispatch +
             // children flow through the handle to IrNode-taking helpers
             // (generate_set materialises at its boundary).
             ValueType::Set => {
@@ -358,7 +358,7 @@ impl State {
                 stack.position -= stack.step(value_size);
                 Type::Void
             }
-            // @PLAN54 G2 — list-child + scalar arms.  Insert/Tuple iterate the
+            // @PLN11 G2 — list-child + scalar arms.  Insert/Tuple iterate the
             // handle directly; Call/CallRef/Parallel pass an IrNodeList to their
             // helpers (generate_call materialises its param list at the boundary).
             ValueType::Insert => {
@@ -391,7 +391,7 @@ impl State {
                 self.code_add(v_pos);
                 crate::data::I64.clone()
             }
-            // @PLAN54 G2/M3.4 — Span passthrough + the two never-reachable
+            // @PLN11 G2/M3.4 — Span passthrough + the two never-reachable
             // rewrite placeholders.
             ValueType::Span => {
                 // Plan-07 phase 1 step 1.20 — record the entry pc → source
@@ -406,7 +406,7 @@ impl State {
             ValueType::ParFor => panic!(
                 "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
             ),
-            // @PLAN54 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
+            // @PLN11 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
             // closure DbRef 12B).  add_op already advances stack.position.
             ValueType::FnRef => {
                 stack.add_op("OpConstInt", self);
@@ -423,7 +423,7 @@ impl State {
                 }
                 node.fnref_type()
             }
-            // @PLAN54 G2 — Block/Loop lower through the IrBlock handle; TupleGet/
+            // @PLN11 G2 — Block/Loop lower through the IrBlock handle; TupleGet/
             // TuplePut read their fields via scalar/child accessors.  Every arm
             // of generate_inner now reads only through the handle — it is fully
             // store-capable (M5 just constructs IrNode::Store at the entry).
@@ -1415,7 +1415,7 @@ impl State {
     /// override only if no child-scope overlap (A13 guard).
     #[allow(clippy::too_many_lines)]
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: IrNode) {
-        // @PLAN54 G2/M3.15 — materialise-at-boundary.  generate_set's body is an
+        // @PLN11 G2/M3.15 — materialise-at-boundary.  generate_set's body is an
         // intricate store-ownership tracker (its comments flag use-after-free /
         // S1-substitution-corruption hazards); rather than thread the handle
         // through that hazardous logic and its gen_set_first_* / set_var family,
@@ -2292,7 +2292,7 @@ impl State {
         op: u32,
         parameters: IrNodeList,
     ) -> Type {
-        // @PLAN54 G2/M3.15 — materialise-at-boundary (see generate_set).
+        // @PLN11 G2/M3.15 — materialise-at-boundary (see generate_set).
         // generate_call threads `parameters` through gather_key /
         // try_text_dest_pass and inspects `parameters[0]` as a `Var`; rather
         // than convert that whole &[Value] cluster, materialise the param list

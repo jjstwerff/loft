@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 0a — Network throughput probe
 
 **Goal:** Validate that the existing `lib/server` Tier-A′ pump
-(shipped at @PLAN36 phase 1.9, commit `a72ad22` in PR #214)
+(shipped at @PLN6 phase 1.9, commit `a72ad22` in PR #214)
 sustains the **30 Hz × N** input + broadcast load that PLAN50's
 per-frame pose sync demands, at the player counts the design
 targets (12 / 20 / 30 simultaneous players).
@@ -19,7 +19,7 @@ server-authoritative dead-reckoning + delta updates before phase
 0 — a non-trivial scope bump that is *much* cheaper to discover
 at probe-stage than after a full phone client is in flight.
 
-## What's already proven from @PLAN36
+## What's already proven from @PLN6
 
 PLAN36's `load_test.loft` (in
 [`tools/audience-demo/`](../../../../tools/audience-demo/))
@@ -182,7 +182,7 @@ adjusted.  No new library work, no new language features.
 
 - [`tools/audience-demo/load_test.loft`](../../../../tools/audience-demo/load_test.loft)
   — the existing harness this adapts.
-- [@PLAN36 phase 1.9](../../36-audience-generative-art/01-server-state.md)
+- [@PLN6 phase 1.9](../../6-audience-generative-art/01-server-state.md)
   — what's already validated about the underlying pump.
 - [README.md § Risks](README.md) — the risk this probe closes.
 - [NUMBERS.md § Networking](NUMBERS.md) — the parameters this

@@ -37,7 +37,7 @@ up after the gating plans land.
 | **v3.5** loft-WASM client | designed, not started | Replace the JS client with a real loft client running in the browser via the loft interpreter WASM (already shipped on the GitHub Pages site).  Reuses `doc/pkg/loft.js` + `doc/pkg/loft_bg.wasm` + `doc/loft-rt.js` 100%; adds WS host imports + a small bootstrap HTML + a `client.loft`.  Design + sequencing in [`v3.5-loft-wasm-browser-client.md`](v3.5-loft-wasm-browser-client.md).  **Also the mechanism for distributing the laptop client** for any loft program |
 | v4 | after v3.5 | Client-uploaded scripts → server-side compile → hot WASM swap (the in-browser game-dev workflow) |
 | v5 | ✓ shipped | Binary world stream + N clients + catch-up + sluggish tempo (5/5 `multiplayer_v5` tests green) |
-| v6 | gated on @PLAN22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on @PLAN36's critical path |
+| v6 | gated on @PLAN22 | Drop `Reference<T>` ceremony in the v5 server using writable closures.  Pure ergonomic cleanup; not on @PLN6's critical path |
 
 The protocol mechanics for v3 / v4 are **planned and will be
 built**, but **the visual side of tic-tac-toe is deferred
@@ -1023,7 +1023,7 @@ eventual target.
 ## Tic-tac-toe v5 — binary world stream + many clients + reconnect catch-up + sluggish tempo
 
 **Status:** scoped 2026-05-10 to validate the wire-protocol
-primitives [`plans/36-audience-generative-art/`](../36-audience-generative-art/)
+primitives [`plans/6-audience-generative-art/`](../6-audience-generative-art/)
 needs.  Builds **before v4** in the practical sequence — v4
 also depends on binary WS frames; v5 lands them and v4
 inherits.
@@ -1035,17 +1035,17 @@ validation-only framing); the test program for v5 is a
 multi-client world-bytes streamer that proves the primitives
 work on the wire.
 
-### Shared world data model — TTT board mirrors @PLAN36
+### Shared world data model — TTT board mirrors @PLN6
 
 The v5 test programs use the **same `World` / `Chunk` / `Cell`
-structures as @PLAN36's audience-generative-art demo**.  TTT's
+structures as @PLN6's audience-generative-art demo**.  TTT's
 3×3 board sits at **origin (0, 0) of chunk (0, 0)** — cells
 (0, 0) through (2, 2) of the world; resolved 2026-05-10 for
 test-program simplicity.  Per-cell payload is the same 4 bytes
 (1 byte colour + 1 byte height + 2 bytes age).  Colour values
 are reinterpreted for TTT semantics:
 
-| Colour byte | TTT meaning | @PLAN36 meaning |
+| Colour byte | TTT meaning | @PLN6 meaning |
 |---|---|---|
 | 0 | empty cell | empty hex |
 | 1 | X | red |
@@ -1056,7 +1056,7 @@ are reinterpreted for TTT semantics:
 leave them at default (0) — the binary serialiser still writes
 them, the binary deserialiser still reads them, the wire format
 is byte-identical.  This means primitives developed against the
-TTT test programs **translate to @PLAN36 with zero protocol
+TTT test programs **translate to @PLN6 with zero protocol
 glue**: same struct definitions, same chunk addressing
 (`chunk_idx_32` / `hex_idx_32`), same blob-pack/unpack code,
 same session-tag header, same catch-up event shape.
@@ -1146,7 +1146,7 @@ protocol verification.
 
 ### What v5 validates
 
-- **The complete wire-protocol surface @PLAN36 needs.**  Plan-36
+- **The complete wire-protocol surface @PLN6 needs.**  Plan-36
   (audience-generative-art demo) becomes a straightforward
   consumer of proven primitives.  No protocol research happens
   on the demo's critical path.
@@ -1163,12 +1163,12 @@ protocol verification.
 ### Out of scope for v5
 
 - Any 3D rendering.  v5 ships text-mode tests; the demo's
-  renderer is @PLAN36's phase 3 work, layered on top of v5's
+  renderer is @PLN6's phase 3 work, layered on top of v5's
   wire primitives.
 - Edge / line classification, frost mesh, ridge-and-crevice
-  tops — all renderer-side, all in @PLAN36's scope.
+  tops — all renderer-side, all in @PLN6's scope.
 - Visual UX (palette, movement zones, jump-to-active) —
-  @PLAN36's phase 0.
+  @PLN6's phase 0.
 - HTTP asset serving — that stays v3's concern.
 - Hot WASM swap — that stays v4's concern.
 
@@ -1193,7 +1193,7 @@ v5 surfaced (and deferred to a sibling plan):
   worked around (most visibly t4's inline `n_ws_send_binary`
   declaration because `srv.send_to` is text-only).  Captured in
   [@PLAN34](../34-server-hardening/README.md) — the natural
-  prereq layer for @PLAN36 phase 1.  Independent of v6's
+  prereq layer for @PLN6 phase 1.  Independent of v6's
   closure-retrofit work; either plan can land first.
 
 ### Build order recommendation
@@ -1209,7 +1209,7 @@ protocol or runtime capability.  Depends on
 [@PLAN22 (mutable closures)](../../finished/22-mutable-closures/README.md)
 landing in the language.  **Explicitly NOT on the audience-
 demo's critical path** — if @PLAN22 has not shipped by the
-meetup talk, @PLAN36 server uses `Reference<T>` exactly like
+meetup talk, @PLN6 server uses `Reference<T>` exactly like
 v5 does today, and the demo functions identically.
 
 ### What v6 adds
@@ -1229,7 +1229,7 @@ coverage.  v6 is a **diff** against v5's server code:
 
 ### Why v6 (and not just "we'll clean up later")
 
-The audience-generative-art demo (@PLAN36) projects loft code
+The audience-generative-art demo (@PLN6) projects loft code
 on screen during the "loft snippet highlights" beats.  Visible
 code structure is part of the talk's value proposition (art
 show with loft footnotes) — `state.inner.X` clutter on the
@@ -1256,14 +1256,14 @@ v6 depends on:
   See `plans/finished/22-mutable-closures/`.
 
 v6 unblocks:
-- @PLAN36 server gets the same retrofit applied automatically
+- @PLN6 server gets the same retrofit applied automatically
   (the two servers share the captured-state pattern, so the v6
-  diff translates 1:1 to @PLAN36 phase 1).
+  diff translates 1:1 to @PLN6 phase 1).
 
 ### Out of scope for v6
 
 - Any new protocol capability (those land in v5 or future vN).
-- Mutable-closure work in @PLAN36's *renderer* (the projector
+- Mutable-closure work in @PLN6's *renderer* (the projector
   + desktop client renderers are stateless per frame; the
   capture pattern doesn't apply there).
 - Mutable-closure work in any earlier vN's reference code (v2's

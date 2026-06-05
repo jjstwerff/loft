@@ -62,12 +62,12 @@ over an 800 KB serialized tree.  This is the **same ~0 ms null result** the
 plan opened by rejecting for lib-extraction.  The cold-start goal is
 **unreachable by any serialization format**; it requires **not deserializing at
 all** — mmap a pre-laid-out binary image used zero-copy in place.  That is
-**plan-54** (Data-as-store / mmap), now the sole path to the goal.
+**@PLN11** (Data-as-store / mmap), now the sole path to the goal.
 
 **What this plan leaves behind (genuinely useful, committed & green):** the
 full lossless JSON codec for `Data` + the database schema, `compare_data`, and
 `LOFT_DUMP_SNAPSHOT`.  This is exactly the serialization + validation machinery
-plan-54 needs (and a standalone debug/inspection tool).  The JSON-stopgap
+@PLN11 needs (and a standalone debug/inspection tool).  The JSON-stopgap
 *idea* is closed by measurement; its *foundation* is the on-ramp to mmap.
 
 See [Step 3 § Implementation status](#step-3--stdlib-prefix-cache-strategy-2-the-universal-win)
@@ -369,10 +369,10 @@ follows under it.
 > helper, not doing the serialization" note further down — the
 > show_json route was aspirational; the codec is the reality.  The
 > store-record schema (`register_ir_schema`, the S1 shells) still exists
-> and remains the plan-54 foundation, but it is **not** on the JSON
+> and remains the @PLN11 foundation, but it is **not** on the JSON
 > encode/decode path today.  Rung descriptions below are updated to the
 > codec route; the `show_json` / `populate_struct_from_jsonvalue` wording
-> is retained only as the plan-54 successor path.
+> is retained only as the @PLN11 successor path.
 
 **PR / review boundary (user, 2026-05-31): the reviewable PR is "we can
 write the JSON for the stdlib".**  The first observable artifact is a
@@ -482,10 +482,10 @@ shape — it includes `State`'s bytecode + debug maps + the slot fields of
 `known_type`) are fine to store as-is: this snapshot is a **whole image**
 (the stdlib prefix, or core+libs as one bundle), so its internal indices
 are mutually consistent by construction — no relocation is needed on
-load, and none is needed by plan-54's mmap successor either (the mmap is
+load, and none is needed by @PLN11's mmap successor either (the mmap is
 the full bundle mapped as one unit, so the baked offsets stay valid).
 Relocation would only arise for an *independent per-library* mmap, which
-is explicitly out of scope (plan-54 § What gets cached).
+is explicitly out of scope (@PLN11 § What gets cached).
 
 **Equivalence gate (S3) adjusts accordingly:** instead of "recompute
 bytecode and assert byte-identical", S3 asserts the **loaded** bytecode
@@ -529,7 +529,7 @@ So the writer is a hand-rolled walk over the native `Value` (34
 variants) / `Type` (24) / `Definition` graph that emits JSON text,
 reusing only `write_json_escaped` (`src/database/format.rs:1215`) for
 string fields.  The database is lending one escape helper, not doing the
-serialization.  (When plan-54 moves the IR into store records, *that*
+serialization.  (When @PLN11 moves the IR into store records, *that*
 encode becomes the database path; until then it is a native-IR walk.)
 
 #### Per-library JSON — DEFERRED, probably not worth it (user, 2026-05-31)
@@ -560,7 +560,7 @@ have.
 (absolute indices, verbatim, no relocation).  Per-library JSON stays
 documented as a deferred idea, not a build target.  The "first-landing"
 gap it would have closed is accepted as a known limitation of the
-stop-gap (and is moot once plan-54's bundle mmap lands).
+stop-gap (and is moot once @PLN11's bundle mmap lands).
 
 **The relocation map — DEFERRED reference for per-library JSON only.**
 Not part of the S1–S4 build (per-library JSON is deferred, above).  Kept
@@ -593,10 +593,10 @@ top, only when per-library build-time deliverables are wired.  S1–S4
 target the whole-stdlib image; per-library relocation is a follow-on.
 
 It is **superseded for the bundle/stdlib path by**
-[plan-54 `Data` as a store](../../future/54-data-as-store/README.md),
+[@PLN11 `Data` as a store](../../11-data-as-store/README.md),
 which replaces JSON with the store struct-enum format and turns those
 loads into zero-copy mmap.  Build the JSON stop-gap so its call-sites
-(snapshot key, write, load+rebuild) are **format-agnostic** — plan-54
+(snapshot key, write, load+rebuild) are **format-agnostic** — @PLN11
 swaps the encoder/decoder underneath without touching the startup
 wiring.  (The relocatable per-library JSON deliverable may outlive the
 stop-gap as the cross-arch / first-landing fallback even after mmap
@@ -680,11 +680,11 @@ flag to revert.
 >
 > **CONCLUSION:** a JSON snapshot cannot beat the parser — both are
 > text-deserialization into the same heap graph.  The cold-start goal is
-> unreachable by any serialization format and needs **plan-54** (mmap a
+> unreachable by any serialization format and needs **@PLN11** (mmap a
 > pre-laid-out image, zero-copy).  The committed JSON codec + schema codec +
 > `compare_data` + `LOFT_DUMP_SNAPSHOT` are the reusable foundation for that.
 >
-> `variables::from_snapshot` carries a real fix worth porting to plan-54: set
+> `variables::from_snapshot` carries a real fix worth porting to @PLN11: set
 > `Function.done = true` so a later `scopes::check` over the user delta skips
 > the restored defs (else it double-inserts the free-ops already in `code`).
 >
@@ -831,4 +831,4 @@ status for the diagnosed root cause and the two ways forward).
 is complete and proven; the cold-start performance win is not yet delivered
 because rebuilding the derived `Stores` schema from a restored `Data` is
 unsolved.  Either build a resolved-`Data` schema-rebuild path, or fold the
-`Stores` serialization into plan-54's store-format work.
+`Stores` serialization into @PLN11's store-format work.

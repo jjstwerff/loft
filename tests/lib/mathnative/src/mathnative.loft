@@ -1,4 +1,4 @@
-// @PLAN54 Arc N / N3 — a NORMAL loft library (no #native), opted into
+// @PLN11 Arc N / N3 — a NORMAL loft library (no #native), opted into
 // auto-compilation via `[library] compile = "native"` in loft.toml.  `use
 // mathnative` compiles it to a shared-store cdylib and dispatches these calls
 // native while the consuming script interprets.

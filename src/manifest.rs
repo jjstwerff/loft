@@ -22,7 +22,7 @@ pub struct Manifest {
     /// `None` for pure-loft packages.  The interpreter resolves this to the
     /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
     pub native: Option<String>,
-    /// @PLAN54 Arc N / N3 — `[library] compile = "native"` opts a **normal** loft
+    /// @PLN11 Arc N / N3 — `[library] compile = "native"` opts a **normal** loft
     /// library (no hand-written `#native` / Rust crate) into auto-compilation to a
     /// shared-store cdylib: its native-compilable public functions are marked
     /// native and dispatched (`use <lib>` then runs the library native, the script

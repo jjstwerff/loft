@@ -1746,7 +1746,7 @@ pub struct Definition {
 }
 
 impl Definition {
-    // ─── @PLAN54 arc C — store-backed-field read seam ───────────────────────
+    // ─── @PLN11 arc C — store-backed-field read seam ───────────────────────
     //
     // Read accessors for the `Definition` fields that live in the store schema
     // (`src/ir_schema_gen.rs`).  Routing reads through these methods (rather than
@@ -2060,7 +2060,7 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
-    /// @PLAN54 arc D — serialize this `Data` to a file-backed IR store at
+    /// @PLN11 arc D — serialize this `Data` to a file-backed IR store at
     /// `path` (zero-copy-loadable via [`Data::open`]).  Thin wrapper over
     /// [`crate::ir_store::save_data`].
     ///
@@ -2071,7 +2071,7 @@ impl Data {
         crate::ir_store::save_data(self, path)
     }
 
-    /// @PLAN54 arc D — load a `Data` from a file-backed IR store written by
+    /// @PLN11 arc D — load a `Data` from a file-backed IR store written by
     /// [`Data::save`], by `mmap`-ing the file and rebuilding the native graph —
     /// no re-parse.  Thin wrapper over [`crate::ir_read::open_data`].
     ///

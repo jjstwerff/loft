@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N0 — the loft-build-fingerprint gate on native artifacts.
+//! @PLN11 Arc N / N0 — the loft-build-fingerprint gate on native artifacts.
 //!
 //! A native package crate is valid only against the loft build whose rlib it
 //! links.  `auto_build_native` stamps a `.loft-build-fp` sidecar with the current

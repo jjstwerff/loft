@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N2 — auto-generate a native cdylib from a library's functions.
+//! @PLN11 Arc N / N2 — auto-generate a native cdylib from a library's functions.
 //!
 //! In the native-library execution model (C71) a stable library compiles to a
 //! cdylib and the interpreter dispatches calls to it (the stdlib `#native` path,
@@ -34,7 +34,7 @@ use crate::database::Stores;
 use crate::generation::{Output, rust_type};
 use std::collections::{BTreeSet, HashSet};
 
-/// @PLAN54 Arc N / N2 (lean interface) — generate the loft-source **interface** a
+/// @PLN11 Arc N / N2 (lean interface) — generate the loft-source **interface** a
 /// script adopts to call a native library: the public type definitions the
 /// exported functions reference (transitively) plus, per exported function, a
 /// `#native "loft_shared_…"` forward declaration.
@@ -92,7 +92,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
     src
 }
 
-/// @PLAN54 Arc N / N3 — mark a library's functions for native dispatch.  Of the
+/// @PLN11 Arc N / N3 — mark a library's functions for native dispatch.  Of the
 /// `candidates` (a library's functions — e.g. all functions from a `use`d
 /// library's source), the **shared-store-dispatchable** subset has its
 /// `def.native` set to the bridge symbol `loft_shared_<name>`.  Returns that
@@ -112,7 +112,7 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
     exportable
 }
 
-/// @PLAN54 Arc N / N3 (Step 2) — set `def.native = "loft_shared_<name>"` on each
+/// @PLN11 Arc N / N3 (Step 2) — set `def.native = "loft_shared_<name>"` on each
 /// function in `export` (which `byte_code` then routes through `OpStaticCall`).
 /// Split out from [`mark_native_exports`] so the **build-before-mark** flow can
 /// mark *only after* the cdylib compiles — a build failure simply never marks, so
@@ -125,7 +125,7 @@ pub fn mark_exports(data: &mut Data, export: &HashSet<u32>) {
     }
 }
 
-/// @PLAN54 Arc N / N3 (Step 2) — the cdylib **export set** for the library at
+/// @PLN11 Arc N / N3 (Step 2) — the cdylib **export set** for the library at
 /// `pkg_dir`, computed **without marking** (`&Data`, not `&mut`): the library's
 /// top-level, user-named, `pub` functions (the dispatch-target invariant — see
 /// [`mark_library_native`]) intersected with the shared-store-dispatchable gate.
@@ -148,7 +148,7 @@ pub fn library_export_set(data: &Data, pkg_dir: &str) -> HashSet<u32> {
         .collect()
 }
 
-/// @PLAN54 Arc N / N3 — mark a `use`d library's **public API** functions native.
+/// @PLN11 Arc N / N3 — mark a `use`d library's **public API** functions native.
 ///
 /// **Invariant:** a dispatch target is a function the consuming script can directly
 /// *name and `Call`* — a top-level, user-named, `pub` function owned by the package
@@ -255,7 +255,7 @@ fn emit_type_def(data: &Data, d_nr: u32, src: &mut String) {
     }
 }
 
-/// @PLAN54 Arc N — a uniform 16/24-byte argument/return slot for the
+/// @PLN11 Arc N — a uniform 16/24-byte argument/return slot for the
 /// **shared-store** native-library bridge ([`generate_shared_cdylib_lib_rs`]).
 ///
 /// The bridge knows each slot's type from the function signature, so no tag is
@@ -559,7 +559,7 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
     matches!(t, Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
 }
 
-/// @PLAN54 Arc N / N3 — locate the running build's `libloft.rlib` + its sibling
+/// @PLN11 Arc N / N3 — locate the running build's `libloft.rlib` + its sibling
 /// `deps/` directory, for linking an auto-generated cdylib against the **same**
 /// libloft this process links (so `Stores`/`DbRef`/`LibArg` are ABI-identical).
 ///
@@ -650,7 +650,7 @@ pub fn platform_cdylib_name(stem: &str) -> String {
     }
 }
 
-/// @PLAN54 Arc N / N3 — generate **and compile** the shared-store cdylib for
+/// @PLN11 Arc N / N3 — generate **and compile** the shared-store cdylib for
 /// `export_set` into `out_dir`, returning the built cdylib path.  This is the
 /// production build step `use <lib>` runs after `byte_code`: it locates the
 /// running build's `libloft.rlib` ([`find_loft_rlib`]), writes `lib.rs`
@@ -709,7 +709,7 @@ pub fn build_shared_cdylib(
     Ok(so)
 }
 
-/// @PLAN54 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
+/// @PLN11 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
 /// at `pkg_dir` should run this invocation, and build its cdylib only when warranted.
 ///
 /// Returns:
@@ -786,7 +786,7 @@ pub fn cached_or_build_shared_cdylib(
     }
 }
 
-/// @PLAN54 Arc N / N3 (Step 4) — a content hash of every `.loft` / `loft.toml` source
+/// @PLN11 Arc N / N3 (Step 4) — a content hash of every `.loft` / `loft.toml` source
 /// under `pkg_dir` (build/artifact dirs skipped, files visited in sorted order for a
 /// stable digest).  Used to detect "did this library's source change since the last
 /// run?" — content-based, not mtime, so it is deterministic (testable) and a no-op

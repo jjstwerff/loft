@@ -1,4 +1,4 @@
-// @PLAN54 Arc N / N3 Step 1 (parity) — a library whose public API exercises the
+// @PLN11 Arc N / N3 Step 1 (parity) — a library whose public API exercises the
 // STORE-TOUCHING types crossing the interp↔native boundary (vector/struct/text/
 // enum, both as args and returns), where a shared-store ABI bug would hide.  The
 // parity harness asserts a program using this library produces byte-identical

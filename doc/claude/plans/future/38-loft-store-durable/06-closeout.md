@@ -164,7 +164,7 @@ Update intra-plan + sibling-plan link paths per the
 
 | Risk | Mitigation |
 |---|---|
-| Closeout lands while consumers (TTT v5, @PLAN36) haven't actually shipped their persistent-state arcs | Closeout DOES NOT depend on consumer implementation — the API + tests + design contracts are enough.  Consumer integration is verified by the smoke test in phase 05. |
+| Closeout lands while consumers (TTT v5, @PLN6) haven't actually shipped their persistent-state arcs | Closeout DOES NOT depend on consumer implementation — the API + tests + design contracts are enough.  Consumer integration is verified by the smoke test in phase 05. |
 | Documentation drift between this plan's docs and the consumer plans | Cross-reference paths checked by doc_hygiene.  If TTT v5's design doc cites a Tier 2 API surface that drifts, the link breaks at PR time. |
 | C-NN decision number collides with another in-flight plan | Pick the next free number at closeout time; DESIGN_DECISIONS.md has a chronological order, not strict numbering |
 

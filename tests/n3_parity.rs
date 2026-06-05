@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 Arc N / N3 Step 1 — the **parity instrument** (the gate for making the
+//! @PLN11 Arc N / N3 Step 1 — the **parity instrument** (the gate for making the
 //! native/interpret choice invisible).
 //!
 //! *Invariant:* a library run native is **byte-identical** to run interpreted.
@@ -160,7 +160,7 @@ fn datalib_store_touching_types_parity() {
     let _ = std::fs::remove_dir_all(native_auto);
 }
 
-/// @PLAN54 Arc N / N3 Step 2 — the build-failure fallback.
+/// @PLN11 Arc N / N3 Step 2 — the build-failure fallback.
 ///
 /// *Invariant:* a library that can't compile native **silently interprets** —
 /// byte-identical, no `exit`, no `OpStaticCall` to an unbuilt symbol.
@@ -226,7 +226,7 @@ const PLAINLIB_PROG: &str = "use plainlib;\n\
      \x20   println(\"{doubled([1, 2, 3])}\");\n\
      }\n";
 
-/// @PLAN54 Arc N / N3 Step 3 — **default-native**, proven on a library that never
+/// @PLN11 Arc N / N3 Step 3 — **default-native**, proven on a library that never
 /// opted in.
 ///
 /// *Invariant:* with no annotation and no flag, a `use`d library is a native
@@ -301,7 +301,7 @@ fn single_cdylib(native_auto: &Path) -> Option<std::path::PathBuf> {
         })
 }
 
-/// @PLAN54 N3 Step 4 — **dev-interpret-on-edit**.
+/// @PLN11 N3 Step 4 — **dev-interpret-on-edit**.
 ///
 /// *Invariant:* a library's first use builds eagerly (native), but **editing** it
 /// makes the next run **interpret** the new code with **no `rustc`** (instant loop);
@@ -394,7 +394,7 @@ fn editing_a_library_interprets_then_rebuilds_when_stable() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// @PLAN54 N3 F2 — interdependent libraries are **fully native**.
+/// @PLN11 N3 F2 — interdependent libraries are **fully native**.
 ///
 /// *Invariant:* when a consumer uses both a library (`top`) and the library it
 /// depends on (`base`) directly, BOTH get their own cdylib — so `base`'s functions

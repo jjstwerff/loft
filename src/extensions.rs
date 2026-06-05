@@ -251,7 +251,7 @@ struct NativeSig {
 #[cfg(feature = "native-extensions")]
 static NATIVE_SIGS: Mutex<Option<HashMap<u16, (String, NativeSig)>>> = Mutex::new(None);
 
-/// @PLAN54 Arc N — side table for the **shared-store** bridge
+/// @PLN11 Arc N — side table for the **shared-store** bridge
 /// (`native_lib::generate_shared_cdylib_lib_rs`): library index → (bridge fn ptr,
 /// signature).  Populated by `wire_shared_native_fns`, read by
 /// `shared_store_dispatch`.  Separate from `NATIVE_SIGS` because the ABI differs
@@ -359,7 +359,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
                 continue;
             }
             let sym = &def.native;
-            // @PLAN54 Arc N: shared-store bridges are wired by
+            // @PLN11 Arc N: shared-store bridges are wired by
             // `wire_shared_native_fns` (a different ABI) — skip them here.
             if sym.starts_with("loft_shared_") {
                 continue;
@@ -427,7 +427,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
         let sym = &def.native;
 
-        // @PLAN54 Arc N: shared-store bridges use a different dispatcher — skip.
+        // @PLN11 Arc N: shared-store bridges use a different dispatcher — skip.
         if sym.starts_with("loft_shared_") {
             continue;
         }
@@ -466,7 +466,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 #[cfg(not(feature = "native-extensions"))]
 pub fn wire_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
 
-/// @PLAN54 Arc N — wire the **shared-store** bridge dispatchers.  For every
+/// @PLN11 Arc N — wire the **shared-store** bridge dispatchers.  For every
 /// `#native "loft_shared_…"` definition (the marker for an auto-generated
 /// shared-store bridge), resolve the bridge symbol from the loaded cdylibs via
 /// dlsym, record `(bridge_ptr, signature)` in `SHARED_SIGS`, and replace the stub
@@ -513,7 +513,7 @@ pub fn wire_shared_native_fns(state: &mut crate::state::State, data: &crate::dat
 #[cfg(not(feature = "native-extensions"))]
 pub fn wire_shared_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
 
-/// @PLAN54 Arc N — the shared-store bridge dispatcher.  Invoked via `OpStaticCall`
+/// @PLN11 Arc N — the shared-store bridge dispatcher.  Invoked via `OpStaticCall`
 /// for a function whose `#native` symbol is an auto-generated `loft_shared_…`
 /// bridge.  Reads the call's args off the interpreter stack into `LibArg` slots
 /// (scalars by value; `vector`/`reference` as the **raw** stack `DbRef`, no
@@ -2110,7 +2110,7 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
-    // @PLAN54 Arc N / N0 — reuse a cached artifact only if it was built by THIS
+    // @PLN11 Arc N / N0 — reuse a cached artifact only if it was built by THIS
     // loft build (its fingerprint sidecar matches).  A loft rebuild flips the
     // fingerprint, so a stale package rlib / cdylib is rebuilt instead of being
     // silently linked against a changed loft ABI — the automatic replacement for
@@ -2182,7 +2182,7 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let status = cmd.status();
     match status {
         Ok(s) if s.success() => {
-            // @PLAN54 Arc N / N0 — stamp the build fingerprint on ANY successful
+            // @PLN11 Arc N / N0 — stamp the build fingerprint on ANY successful
             // cargo build: the rlib is produced even for rlib-only packages whose
             // cdylib `built_path` is absent, so a later loft change still
             // invalidates it (see `find_existing` / `add_native_extern_flags`).
