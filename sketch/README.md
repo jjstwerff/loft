@@ -45,9 +45,9 @@ size WxH
 Background top=A bottom=B               grayscale sky gradient (A top, B bottom; L in 0..1)
 Background topc=R,G,B botc=R,G,B         colour sky gradient
 name <element>                          tag following marks (so they can be measured)
-Line (x1,y1) - (x2,y2) [w=N] [stroke=R,G,B]
+Line (x1,y1)[@N] - (x2,y2)[@N] [w=N] [stroke=R,G,B]
 Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [<fill> | stroke=R,G,B] round (aspect-corrected)
-Poly (x1,y1) (x2,y2)[~] ... [w=N] [<fill> | stroke=R,G,B]     stroke, or filled
+Poly (x1,y1)[~][@N] (x2,y2)[~][@N] ... [w=N] [<fill> | stroke=R,G,B] stroke, or filled
   <fill> = fill=L | rgb=R,G,B                                solid (gray / colour)
          | grad=R,G,B>R,G,B [dir=ax,ay,bx,by]                linear gradient (c1->c2)
          | radial=R,G,B>R,G,B [at=cx,cy,r]                   radial gradient (centre->edge)
@@ -75,6 +75,11 @@ check <prop> <op> <term> [tol T]        op: ~ < > <= == ; arithmetic on the RHS 
   ink by default; `stroke=` tints it. This is the *texture* channel — light + shadow
   strokes fanning along a growth direction make hair / beard / fur / grass; curve them
   with `~` so they read grown, not combed.
+- **Per-point width (`@N`).** An `@N` after a point sets the pen width *at that point*
+  (strokes only); width tapers linearly between points, drawn as a filled ribbon. A
+  strand thick at the root (`@6`) thinning to a tip (`@0.5`) reads as a real hair — a
+  uniform line reads as wire. Combine with `~` for a curved, tapering strand. `w=N` is
+  the default for points without `@`.
 - **Each measurable thing should get its own `name`** — tagging a sub-part (a chimney,
   a light-spill) under a parent bloats the parent's bbox and breaks its checks.
 

@@ -51,14 +51,14 @@ PREVIEW_W = 320
 GRID_COLS, GRID_ROWS = 40, 18
 RAMP = " .:-=+*#%@"
 
-LINE = re.compile(r"Line\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*-\s*"
-                  r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(?:w\s*=\s*(\d+))?", re.I)
+LINE = re.compile(r"Line\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(?:@\s*([-\d.]+))?\s*-\s*"
+                  r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(?:@\s*([-\d.]+))?\s*(?:w\s*=\s*(\d+))?", re.I)
 SIZE = re.compile(r"size\s+(\d+)\s*x\s*(\d+)", re.I)
 CIRCLE = re.compile(r"Circle\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*r=([-\d.]+)"
                     r"(?:\s+n=(\d+))?(?:\s+flat=([-\d.]+))?", re.I)
 BG = re.compile(r"Background\s+top\s*=\s*([\d.]+)\s+bot(?:tom)?\s*=\s*([\d.]+)", re.I)
 PT = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)")
-PTF = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(~?)")
+PTF = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*(~?)\s*(?:@\s*([-\d.]+))?")
 WOPT = re.compile(r"\bw\s*=\s*(\d+)", re.I)
 SCOL = re.compile(r"\bstroke\s*=\s*\(?(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)?", re.I)
 FILL = re.compile(r"\bfill\s*=\s*([\d.]+)", re.I)
@@ -159,15 +159,18 @@ def circle_pts(cx, cy, r, n, flat, W, H):
             for i in range(n + 1)]
 
 
-def _smooth_pts(pts, flags, closed, samples=10):
+def _smooth_pts(pts, flags, closed, samples=10, vals=None):
     """Expand control points to a dense polyline. A point flagged smooth (~) curves
     (Catmull-Rom tangent = half the neighbour chord); a corner uses the segment chord
     => straight. So a segment between two corners is exactly straight, and any segment
     touching a smooth point curves — mixed linear/smooth in one outline. No-op (returns
-    pts) if nothing is smooth, so plain Poly is unchanged."""
+    pts) if nothing is smooth, so plain Poly is unchanged.
+
+    With `vals` (a per-control-point scalar list, e.g. per-point widths) it returns
+    (pts, vals) and linearly interpolates the scalars across the same expansion."""
     n = len(pts)
     if n < 3 or not any(flags):
-        return pts
+        return (pts, vals) if vals is not None else pts
 
     def P(i):
         return pts[i % n] if closed else pts[max(0, min(n-1, i))]
@@ -187,7 +190,38 @@ def _smooth_pts(pts, flags, closed, samples=10):
             h00, h10, h01, h11 = 2*t3-3*t2+1, t3-2*t2+t, -2*t3+3*t2, t3-t2
             out.append((h00*a[0]+h10*ta[0]+h01*b[0]+h11*tb[0],
                         h00*a[1]+h10*ta[1]+h01*b[1]+h11*tb[1]))
+    if vals is not None:
+        vout = [vals[0]]
+        for i in range(n if closed else n-1):
+            va, vb = vals[i % n], vals[(i+1) % n]
+            for s in range(1, samples+1):
+                vout.append(va + (vb-va) * (s/samples))
+        return out, vout
     return out
+
+
+def _ribbon(d, pts, widths, color, BW, BH, S):
+    """A stroke as a filled ribbon, so the pen width can vary per point (taper).
+       Offsets each point along the local normal by half its width on both sides
+       and fills the band — a hair strand thick at the root, thin at the tip."""
+    P = [(x*BW, y*BH) for x, y in pts]
+    if len(P) < 2:
+        return
+    hw = [max(0.5, w*S/2.0) for w in widths]
+    n = len(P)
+    left, right = [], []
+    for i in range(n):
+        if i == 0:
+            tx, ty = P[1][0]-P[0][0], P[1][1]-P[0][1]
+        elif i == n-1:
+            tx, ty = P[i][0]-P[i-1][0], P[i][1]-P[i-1][1]
+        else:
+            tx, ty = P[i+1][0]-P[i-1][0], P[i+1][1]-P[i-1][1]
+        L = math.hypot(tx, ty) or 1.0
+        nx, ny = -ty/L, tx/L
+        left.append((P[i][0]+nx*hw[i], P[i][1]+ny*hw[i]))
+        right.append((P[i][0]-nx*hw[i], P[i][1]-ny*hw[i]))
+    d.polygon(left + right[::-1], fill=color)
 
 
 def parse(text):
@@ -255,23 +289,38 @@ def parse(text):
             continue
         if low.startswith("poly"):
             raw = PTF.findall(s)
-            pts = [(float(a), float(b)) for a, b, _ in raw]
-            flags = [t == "~" for _, _, t in raw]
+            pts = [(float(a), float(b)) for a, b, _, _ in raw]
+            flags = [t == "~" for _, _, t, _ in raw]
+            wraw = [w for _, _, _, w in raw]
             paint = _paint(s)
-            pts = _smooth_pts(pts, flags, closed=paint is not None)
-            accpts(pts)
             if paint is not None:
+                pts = _smooth_pts(pts, flags, closed=True)
+                accpts(pts)
                 ops.append(("fill", pts, paint))
             else:
                 wm = WOPT.search(s)
-                ops.append(("stroke", pts, int(wm[1]) if wm else 3, _stroke_color(s)))
+                base = int(wm[1]) if wm else 3
+                if any(wraw):
+                    widths = [float(w) if w else base for w in wraw]
+                    pts, widths = _smooth_pts(pts, flags, closed=False, vals=widths)
+                    accpts(pts)
+                    ops.append(("stroke", pts, widths, _stroke_color(s)))
+                else:
+                    pts = _smooth_pts(pts, flags, closed=False)
+                    accpts(pts)
+                    ops.append(("stroke", pts, base, _stroke_color(s)))
             continue
         m = LINE.search(s)
         if m:
-            w = int(m[5]) if m[5] else 3
-            p = [(float(m[1]), float(m[2])), (float(m[3]), float(m[4]))]
+            base = int(m[7]) if m[7] else 3
+            p = [(float(m[1]), float(m[2])), (float(m[4]), float(m[5]))]
             accpts(p)
-            ops.append(("stroke", p, w, _stroke_color(s)))
+            if m[3] or m[6]:
+                w1 = float(m[3]) if m[3] else base
+                w2 = float(m[6]) if m[6] else base
+                ops.append(("stroke", p, [w1, w2], _stroke_color(s)))
+            else:
+                ops.append(("stroke", p, base, _stroke_color(s)))
     return W, H, ops, elems, landmarks, checks
 
 
@@ -487,8 +536,11 @@ def render():
         elif op[0] == "stroke":
             _, pts, w, col = op
             color = col if col else (38, 32, 36)
-            for p, q in zip(pts, pts[1:]):
-                d.line([(p[0]*BW, p[1]*BH), (q[0]*BW, q[1]*BH)], fill=color, width=max(1, w*S))
+            if isinstance(w, list):
+                _ribbon(d, pts, w, color, BW, BH, S)
+            else:
+                for p, q in zip(pts, pts[1:]):
+                    d.line([(p[0]*BW, p[1]*BH), (q[0]*BW, q[1]*BH)], fill=color, width=max(1, w*S))
     img = img.resize((W, H), Image.LANCZOS)
     img.save(OUT)
     ph = max(1, round(PREVIEW_W * H / W))
