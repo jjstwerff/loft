@@ -313,17 +313,36 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
   To **zero the grep** ALL THREE must stop emitting `scratch.push` — fixing only
   the generic root leaves the emit lines in source (they're string literals — the
   grep counts them even when no program triggers them).
-- **The direction + the hazard:** owned-`String` returns (the W/N2 pattern) is the
-  clean fix — these roots all produce owned `String`, so returning it directly (no
-  `Str::new` wrap, wrapper sig `-> String`) is correct *per return*.  **But** the
-  signature is per-FUNCTION while the root-detection is per-`Return`: a fn with
-  MIXED returns (one branch a buffer-view `Str::new(work_buf)`, another an owned
-  local) can't be a single clean signature — exactly the wrapper/body consistency
-  trap `W` hit on wasip2.  **Build a return-shape matrix first** (does any text fn
-  mix buffer-view and owned returns?) before committing to the owned-String flip.
-- **Accept:** `scratch.push` −8 (emit.rs); `p205_no_str_new_of_local_in_corpus`
-  updates to the new shape; all three backends green.
-- **Effort/risk:** M-L / med-high (central path, mixed-return hazard).  **Label:** `area:codegen`
+- **MATRIX BUILT (codegen-only, whole corpus — instrumented the emission sites,
+  ran `--native-emit` over `tests/scripts` + `tests/docs`):**
+  - 4913 text-return emissions: **3600 `bufview`** (work-buffer view, no scratch),
+    **1312 `nwb`** (36 distinct fns, all `wb=false`), **1 `ncc`** (one lambda,
+    `wb=true`), **0 `local`** (@P321e is dead in the corpus).
+  - **The within-function mixed-return hazard is a PHANTOM** — *no* function mixes
+    `bufview` with a scratch kind.  And it's impossible for `nwb`: `nwb` ⟺ no work
+    buffer ⟺ no `bufview` return.  So the W-trap (one fn, two return families)
+    cannot occur.
+- **BUT the matrix surfaced a different hazard — a CROSS-function ripple.**  Flip
+  `nwb` fns to `-> String` and a *non*-`nwb` fn (work buffer, `-> Str`) that
+  *tail-returns* an `nwb` call (the `inner_already_str` path, `emit.rs:355`) sees
+  `String` where it emits `return <call>` expecting `Str` → E0308.  So Direction A
+  (owned-`String` flip) is **not** a clean drop-in; it needs the tail-return sites
+  bridged (write the inner `String` into the outer's work buffer).
+- **Two directions:**
+  - **A (owned-`String` flip):** mod.rs `Block && Text && no_work_buffer → String`
+    + emit `(val).to_string()`; handle the cross-fn tail-return ripple.  Localized
+    to codegen, but the ripple needs care + full 3-rlib (incl. wasip2) validation.
+  - **B (work-buffer threading) — RECOMMENDED:** give the `nwb` (generic-monomorph)
+    fns a `RefVar(Text)` work buffer (run `text_return` on the concrete copy;
+    `definitions.rs:758-771` already does this for I9 interface methods).  Then
+    every text return is `bufview` — **no type flips, no ripple, no W-trap.**  The
+    `ncc` lambda gets the same treatment (write into its `__work_ret`).  Parser /
+    specialisation change, but uniform and ripple-free.  This is the roadmap's
+    original framing, now matrix-justified.
+- **Accept:** the three `emit.rs` `scratch.push` emission sites deleted; the
+  generated native corpus has zero `scratch.push`; `p205_*` + native + wasm green.
+- **Effort/risk:** M / med (the matrix removed the within-fn hazard; B avoids the
+  ripple).  **Label:** `area:codegen`
 
 ### C — chokepoint coverage proof ✅ **DONE (empirically)** *(for the converted producers)*
 > **Established this session** by three independent results: (1) **zero** non-`_dest`
