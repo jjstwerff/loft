@@ -60,7 +60,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       # On push events `inputs.filter` is empty; fall back to the default subset.
+      # `shell: bash` — Windows runners default to PowerShell, where `$FILTER`
+      # is not an env-var reference, so nextest would get an empty `-E ""`.
       - name: Run cdylib / native subset
+        shell: bash
         env:
           FILTER: ${{ github.event.inputs.filter || 'binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)' }}
         run: cargo nextest run --profile ci -E "$FILTER"
