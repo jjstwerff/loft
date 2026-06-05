@@ -1,13 +1,13 @@
 ---
 render_with_liquid: false
 ---
-# Destination-passing — the chokepoint that retires `scratch`
+# Destination-passing — the chokepoint that retires `scratch` — HISTORICAL RECORD
 
-**Design Protocol 1 artifact (the written prediction).**  Session-2 on branch
-`strings`, 2026-06-05.  The README's session-1 handoff named the wrong next
-slice; a boundary matrix on `--interpret` overturned its premise.  This doc is
-the corrected design, with every load-bearing claim probed.  It is a
-*hypothesis to validate by building*, not a committed plan.
+**Design Protocol 1 artifact (the written prediction) — shipped.**  Session-2 on
+branch `strings`, 2026-06-05.  The README's session-1 handoff named the wrong next
+slice; a boundary matrix on `--interpret` overturned its premise.  This doc is the
+corrected design with every load-bearing claim probed, and the build log showing
+how the prediction was validated.  The design fully shipped in PR #277.
 
 ---
 

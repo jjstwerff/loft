@@ -235,7 +235,6 @@ Performance, refactor, internal cleanup with clear payoff.
 |---|---|---|---|---|
 | (cross) | Native codegen follow-ups (yield-from + generic text-return + fill.rs auto-gen) | XS-M per item | ✓ | NATIVE.md § Open work |
 | (cross) | Performance follow-ups (P1-P3 interpreter / N1-N3 native / W1 wasm) | S-MH per item | ✓ | PERFORMANCE.md § Open work |
-| (cross) | Retire `stores.scratch` lifetime hazard | M | ✓ | plans/21-retire-scratch/README.md |
 | O4 | Native: direct-emit local collections | M | ✓ | PERFORMANCE.md § Open work (N1) |
 | O5 | Native: omit `stores` from pure functions | M | ✓ | PERFORMANCE.md § Open work (N2) |
 | A12 | Lazy work-variable initialization | M | ✓ | PLANNING.md (no PERFORMANCE.md design yet) |
@@ -384,7 +383,6 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/21-retire-scratch/`](plans/21-retire-scratch/) | M | cooperates with NATIVE § Open work N8c.x + PERFORMANCE § Open work N1 | Eliminate `stores.scratch` lifetime hazard |
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/future/41-doc-hygiene-autofix/`](plans/future/41-doc-hygiene-autofix/) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
@@ -425,7 +423,6 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **plans/future/23-event-loop → lib_plans/future/10-game-client** (protocol abstraction → client library)
 - **plans/future/23-event-loop → plans/future/24-multiplayer-editor** (depends transitively via plans/future/32-tic-tac-toe v2 ground layer)
 - **(cross-mode harness shipped by closed @PLAN14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
-- **NATIVE.md § Open work N8c.x + PERFORMANCE.md § Open work N1 → plans/21-retire-scratch** (scratch consumers must close before scratch itself can retire)
 - **plans/future/56-sanitizer-coverage-expansion S3 (`LOFT_POISON`) → plans/future/55-program-level-fuzzing F4** (arena poison-on-free keystone prerequisite for meaningful store-internal UAF fuzzing)
 - **C57 / I13 (in plans/future/29-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 

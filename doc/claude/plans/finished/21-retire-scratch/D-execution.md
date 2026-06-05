@@ -1,4 +1,6 @@
-# @PLN10 — D (delete `Stores::scratch`) in small verifiable steps
+# @PLN10 — D (delete `Stores::scratch`) in small verifiable steps — HISTORICAL RECORD
+
+**All steps G1–G5 shipped in PR #277.  This file is a historical record only.**
 
 The goal step (delete the field + `Scratch` newtype + sentinel + dead fallbacks).
 Earlier this was attempted "delete the field first, fix the fallout" — that creates

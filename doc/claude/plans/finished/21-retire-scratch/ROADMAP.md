@@ -1,15 +1,15 @@
 ---
 render_with_liquid: false
 ---
-# @PLN10 — Roadmap to delete `stores.scratch`
+# @PLN10 — Roadmap to delete `stores.scratch` — HISTORICAL RECORD
 
-The clear path from **today** to the **goal (the field deleted; Goal E for
-strings — no global text buffer)**, as a set of dependency-ordered issues.
+**All issues below shipped in PR #277.  This file is a historical record only.**
 
-Read [`01-destination-passing-design.md`](01-destination-passing-design.md) first —
-it is the design + the build evidence each issue below builds on.
+The dependency-ordered issues that drove completion, with the build evidence each one
+built on.  See [`01-destination-passing-design.md`](01-destination-passing-design.md)
+for the corrected design doc (also historical).
 
-> ## ▶ Next session — start here
+> ## Final milestone status (all DONE)
 > ### 🎉 Milestone — the interpreter generates ZERO scratch traffic
 > `LOFT_SCRATCH_TRIP=1` now reads **zero trips across the entire `tests/scripts` +
 > `tests/docs` corpus**.  Every native-host text producer dest-passes; no real
@@ -54,7 +54,7 @@ it is the design + the build evidence each issue below builds on.
 > | ~~**Phase B** (`emit.rs`)~~ ✅ **DONE** | 0 | central `Value::Return`/`wrap_result` text wraps — Direction A: nwb→owned `String` + buffered local/ncc/ripple→work-buffer write.  Generated native corpus scratch-free (`80cab896`+`c4ea7824`). |
 > | ~~**N2b** (`extensions.rs`)~~ ✅ **DONE** | 0 | the interpreter cdylib bridge — **was NOT dead-in-corpus**: the `loft-libs-net/server` cdylib returns text via `LoftStr`, so every HTTP/ws server program hit it.  `Stores::bridge_text_dest` + `n_set_bridge_dest` + `is_cdylib_text_call`/`gen_cdylib_text_dest_call` route it into a work buffer (`3e5312df`+`3c1b51bf`).  **No new opcode.** |
 > | ~~**wasm tail** (`native.rs` cfg(wasm))~~ ✅ **DONE** | 0 | `pack_take` + `ws_client_message` — REQUIRED by N2b, not optional: their `loft.toml` `[native.functions]` binding sets `def.native`, so N2b routes them through `n_set_bridge_dest` in wasm too.  Both now `put_owned_text_or_dest` (mirrors `bridge_text_result`) (`8ffe1e3f`).  Validated by construction + non-wasm server equivalence; no in-repo wasm-interp harness (the "ws needs a host" gap). |
-> | **D + F** ◀ **NEXT (the goal — small-step checklist: [D-execution.md](D-execution.md))** | the dead fallbacks + the field | 🎉 **whole-suite (non-wasm) `=panic` = ZERO (2022/2022)**; the wasm tail is routed too.  EVERY producer is dest-passed — the remaining `scratch.push` are all dead fallbacks (`native.rs` non-`_dest` bodies, `bridge_text_result`'s else, `put_owned_text_or_dest`'s else, the emit.rs Phase-B impossible case).  D deletes them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops (`clear_scratch`/`OpClearScratch`).  Residual: the wasm fallback is dead-*by-construction* (no harness), so D removes it on the same evidence as the other dead fallbacks. |
+> | **D + F** ✅ **DONE (the goal — small-step checklist: [D-execution.md](D-execution.md))** | the dead fallbacks + the field | 🎉 **whole-suite (non-wasm) `=panic` = ZERO (2022/2022)**; the wasm tail is routed too.  EVERY producer is dest-passed — the remaining `scratch.push` are all dead fallbacks (`native.rs` non-`_dest` bodies, `bridge_text_result`'s else, `put_owned_text_or_dest`'s else, the emit.rs Phase-B impossible case).  D deletes them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops (`clear_scratch`/`OpClearScratch`).  Residual: the wasm fallback is dead-*by-construction* (no harness), so D removes it on the same evidence as the other dead fallbacks. |
 >
 > **Bugs surfaced (orthogonal, filed, NOT blockers):** #272 (native: stateful
 > producer in inline `"{x}" != literal`), #273 (native: par-text loop with a
@@ -476,8 +476,8 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 reaching zero, then `C → F → D`.  `A`, `B`, `N2b` are independent and can land any
 time before `D`.
 
-**Recommended order (remaining) — by mechanism, not label** (full rationale in
-§ the cleanest ordering at the top):
+**Recommended order (completed — all shipped) — by mechanism, not label** (full
+rationale in § the cleanest ordering at the top):
 1. **Phase 1 — `I1`-nonnull**: the non-null live producers (proven Build-3 template
    ×N; count-neutral but unlocks D's delete).  Per producer: convert + matrix + commit.
 2. **Phase 2 — the null-aware interp primitive → `I1`-null + `N2b`**: the ONE novel
