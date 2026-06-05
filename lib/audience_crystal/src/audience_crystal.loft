@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // audience_crystal — shared crystal-pattern logic for the
-// @PLAN36 audience-generative-art demo.  Used by:
+// @PLN6 audience-generative-art demo.  Used by:
 //   - tools/audience-demo/projector.loft  — 3D OpenGL renderer
 //   - tools/audience-demo/crystal_render.loft — 2D PNG test harness
 //
@@ -74,7 +74,7 @@ pub BRANCH_SPACING = 0.30;
 // unit the caller chooses.
 pub GROWTH_TICKS = 3600;
 
-// @PLAN36 two-phase growth — ticks for a main to EXTEND from the existing
+// @PLN6 two-phase growth — ticks for a main to EXTEND from the existing
 // crystal toward a new point (the CONNECTION phase) before that point grows
 // its own side branches outward (the FILL phase).  Reverses the old "mains
 // snap to full length instantly" behaviour so growth reads as the existing
@@ -231,7 +231,7 @@ pub fn age_factor(birth: integer, tick: integer) -> float {
   age as float / GROWTH_TICKS as float
 }
 
-// @PLAN36 two-phase growth — CONNECTION phase: 0.0 (just born) → 1.0 over
+// @PLN6 two-phase growth — CONNECTION phase: 0.0 (just born) → 1.0 over
 // CONNECT_TICKS, used to extend a main from the existing crystal toward the
 // new point.  A missing birth record (caller not driving the animation)
 // renders as fully connected.
@@ -243,7 +243,7 @@ pub fn connect_factor(birth: integer, tick: integer) -> float {
   conn_age as float / CONNECT_TICKS as float
 }
 
-// @PLAN36 two-phase growth — FILL phase: 0.0 until the connection has landed
+// @PLN6 two-phase growth — FILL phase: 0.0 until the connection has landed
 // (CONNECT_TICKS after birth), then 0.0 → 1.0 over GROWTH_TICKS as the point's
 // side branches grow outward.  A missing birth record renders at DEFAULT_AGE.
 pub fn fill_factor(birth: integer, tick: integer) -> float {
@@ -698,7 +698,7 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     rdx = tip_x - src_x;
     rdz = tip_z - src_z;
     dy = tip_y - src_y;
-    // @PLAN36 two-phase growth: the main first EXTENDS from the existing
+    // @PLN6 two-phase growth: the main first EXTENDS from the existing
     // crystal (src) toward the new point (tip) over CONNECT_TICKS; the side
     // branches (below) stay at zero length until that connection lands, so a
     // point only blooms outward AFTER the crystal has reached it.

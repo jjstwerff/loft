@@ -835,7 +835,7 @@ that need a background worker today have to either:
   filesystem (heavy for a single demo binary).
 
 Long-running background workers are a language gap; not
-in @PLAN36's scope to fix.  Capture it as an open ask under
+in @PLN6's scope to fix.  Capture it as an open ask under
 THREADING.md when next prioritised.
 
 ### Fallback if blockers don't unblock

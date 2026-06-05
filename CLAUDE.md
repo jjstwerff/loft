@@ -249,12 +249,19 @@ VERIFIED on both backends** (a wrong workaround is worse than `wa:none`). Label 
 `tests/scripts/` regression. Close with `Fixes #NNN` — but don't file at all for a bug you fix in
 the same change (the fix + its regression test ARE the record).
 
-**Inside an investigation plan, don't file** — the plan's probes + cluster docs already document
-every shape; a separate P-issue would double-document it.
+**Inside any plan, file a problem only when it reproduces *outside* the plan —
+already on `main`.**  A GitHub Issue is a claim about `main`: a pre-existing
+`main` bug you stumble on during plan work gets filed (and cross-linked to the
+plan), but a breakage the plan's own in-progress work caused is branch-internal —
+it lives in the plan's docs and is fixed on the branch, never filed.  Investigation
+plans are the strongest case of this rule: the probes + cluster docs already
+document every shape, so a separate P-issue would just double-document it (see
+[`plans/_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md)).
 
-This is **not** license to scope-creep the active fix: an unrelated bug you can't fix without
-derailing X is the "not fixing now" case — file it or pick it up next; don't bundle it into X's
-patch unless they share a single fix site.
+This is **not** a license to scope-creep the active fix.  When you're focused on
+shipping fix X, an unrelated bug Y you can't fix without derailing X is exactly
+the "not fixing it now" case — file Y (or pick it up as its own focused change
+next); don't bundle it into X's patch unless they share a single fix site.
 
 ### Inserting fixes vs filing — see DEVELOPMENT.md
 

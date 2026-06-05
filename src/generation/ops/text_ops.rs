@@ -20,13 +20,13 @@ pub struct TextDispatchEmitter;
 
 impl OpEmitter for TextDispatchEmitter {
     fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
-        let name = ctx.def_fn.name.clone();
+        let name = ctx.def_fn.name().to_string();
         // @P283 — mirror src/state/codegen.rs: a first arg that is a Var of type
         // RefVar(Text) (a `&mut String` work-buffer) rewrites the op to its
         // `Stack` variant for case selection.
         let refvar_text_first = matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if {
             matches!(
-                ctx.output.data.def(ctx.output.def_nr).variables.tp(*v),
+                ctx.output.data.def(ctx.output.def_nr).variables().tp(*v),
                 Type::RefVar(inner) if matches!(**inner, Type::Text(_))
             )
         });
@@ -68,7 +68,7 @@ impl OpEmitter for TextDispatchEmitter {
                     // work_val is Var(nr) — strip the leading & that emit() adds.
                     if let Value::Var(nr) = work_val {
                         let nm = super::super::sanitize(
-                            ctx.output.data.def(ctx.output.def_nr).variables.name(*nr),
+                            ctx.output.data.def(ctx.output.def_nr).variables().name(*nr),
                         );
                         write!(ctx.w, "var_{nm}")?;
                     } else {

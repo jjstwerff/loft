@@ -1183,6 +1183,55 @@ a `String` move.
 
 ---
 
+## N9 — native-library shared-store dispatch (C71)
+
+**Shipped + live end-to-end.**  An interpreted script that `use`s a library
+auto-compiles the library's native-compilable subgraph to a cdylib and dispatches
+to it over the **shared store** (`*mut Stores` by pointer, the `LibArg` uniform
+slot), interpreting the rest — byte-identical to the all-interpreted run.  The
+decision is automatic and invisible (`use <lib>` is native; `LOFT_NO_NATIVE_LIBS`
+opts out), with a dev-interpret-on-edit fallback so an actively-edited library never
+pays `rustc` per save.  Full build record + design:
+[@PLN11 Arc N](plans/11-data-as-store/README.md#arc-n--native-library-execution-model-c71-build-out).
+
+Shipped pieces: `generate_shared_cdylib_lib_rs` + `shared_bridge_wrapper` (the
+per-export `LibArg` bridge); `wire_shared_native_fns` (post-load dlsym wiring);
+`native_gate::native_compilable` (the maximal native subgraph — transitive,
+exhaustive, denylist = concurrency constructs only); `mark_library_native` +
+`build_shared_cdylib` (the `use`-flow build); the source-form `generate_interface`
+(a consumer dispatches without redefinition); per-artifact fingerprint cache.
+Soundness: the mixed interp+native boundary is parity-checked (`tests/n3_parity.rs`,
+interp≡mixed≡native) and arms the Goal-E store guard; the one open soundness leg
+(ASan on the cdylib) is tracked in the sanitizer plan, not here.
+
+### Open completeness items
+
+All are *enhancements* on a complete, graceful core: a construct the dispatch can't
+yet cross silently **interprets** (correct, just not native-accelerated), so none is
+a correctness gap.
+
+- **Closures across the boundary** (`__closure` param).  A native-library fn taking
+  or returning a closure interprets today (the `CallRef`/closure path is
+  conservatively excluded from `native_compilable`).  Crossing it native needs the
+  `__closure` record to marshal over the `LibArg` bridge.
+- **`generate_interface` aggregate type-name rendering** (`sorted<Item[k]>`).  The
+  source-form interface renders scalar/struct/enum/vector type names but not keyed
+  aggregate type names; a consumer of a library exposing `sorted<…>` in a public
+  signature falls back to redefinition.
+- **D2a — binary schema interface.**  The robust successor to the source-form
+  `generate_interface`: a binary type-schema blob so type ids agree without
+  re-parsing the library's loft source (the source form re-parses).  Most valuable
+  once libraries are distributed (ties to the registry / package format).
+- **`hash` / `index` / `spacial` cross.**  Same verified `DbRef`-over-shared-store
+  path as vectors/structs, **untested** — add coverage; no new mechanism expected.
+- **Gate-driven dispatch (N4 tail).**  Select the subgraph from `native_compilable`
+  directly (currently the simpler per-fn `CallRef`/`parallel` split).  Widens which
+  fns go native; user-facing behaviour unchanged.  Making concurrency constructs
+  themselves native is the only later optional item and is tiny.
+- **Background build (N3 polish).**  The first run after editing settles does a
+  foreground `rustc` rebuild; move it to the background so even the settling run
+  never blocks.
+
 ## See also
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and detailed designs for O4 (direct collection emit), O5 (pure function `stores` omission), O6 (`long` sentinel removal) — the native-codegen performance items
 - [COMPILER.md](COMPILER.md) — Compiler pipeline: lexer, parser, IR, bytecode
@@ -1208,6 +1257,7 @@ shipped state.  Each row links to its design content above.
 | **N8c.2** — Fix generic text-return | [§ N8c](#n8c--generic-function-instantiation) | Same overlap.  N8c.1 audit determines whether N8c.2 is needed. |
 | **N20a** — Add `ops` import to generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — trivial single-line add in `src/create.rs::generate_code()`. |
 | **N20b** — Run `cargo fmt` on generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — runs `rustfmt` on the generated file so formatting matches the hand-maintained version. |
+| **N9 (C71)** — native-dispatch completeness | [§ N9](#n9--native-library-shared-store-dispatch-c71) | Open *enhancements* on a complete, graceful core (a construct that can't cross **interprets** — not a bug): closures (`__closure`) · `generate_interface` aggregate names (`sorted<Item[k]>`) · D2a binary schema interface (no source re-parse; ties to the registry) · `hash`/`index`/`spacial` coverage · gate-driven dispatch (N4 tail) · background build (N3 polish).  Detail in § N9.  Routed here from @PLN11 Arc N (2026-06-05). |
 | **N10 prune** | [§ N10 below](#current-state-2026-04-07) | **Stale.**  Says "6 fail, 34 skip of 85 files"; current state is 108/108 pass.  Sub-steps are diagnostic recipes for failures that no longer exist.  Action: prune § N10 + N20 to historical pointers when N8b.3 + N8c.x close. |
 
 Suggested order: N8c.1 audit (fastest) → N20a + N20b (trivial pair)

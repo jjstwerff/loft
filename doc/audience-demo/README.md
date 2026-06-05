@@ -10,8 +10,8 @@ browser.  Renders a 9×7 hex world, lets the user tap to paint, sends
 each paint event over WebSocket to a shared loft server.  Every other
 connected client sees the paint appear in their hex grid in real time.
 
-Part of the @PLAN36 audience-driven generative-art demo
-(see [`doc/claude/plans/36-audience-generative-art/`](../claude/plans/36-audience-generative-art/)
+Part of the @PLN6 audience-driven generative-art demo
+(see [`doc/claude/plans/6-audience-generative-art/`](../claude/plans/6-audience-generative-art/)
 for the development plan).
 
 ## Try it (static-only — no server)
@@ -79,7 +79,7 @@ directions:
 | 4 | server → client | `q,r,color` | Cell changed; color 0 = now empty |
 | 5 | server → client | `q,r` | Jump-to-active hint (another player painted here) |
 
-The full demo plan ([§ Wire format](../claude/plans/36-audience-generative-art/01-server-state.md#wire-format--json-events--binary-world-blobs))
+The full demo plan ([§ Wire format](../claude/plans/6-audience-generative-art/01-server-state.md#wire-format--json-events--binary-world-blobs))
 calls for JSON-in / binary-out — the MVP uses
 `lib/server`'s native msg_id framing for both directions to keep the
 prototype small.  Migration to JSON + binary blobs is filed under

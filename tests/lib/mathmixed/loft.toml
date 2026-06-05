@@ -1,0 +1,8 @@
+[package]
+name    = "mathmixed"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry   = "src/mathmixed.loft"
+compile = "native"

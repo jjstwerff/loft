@@ -74,10 +74,14 @@ pub fn load_all(_state: &mut crate::state::State, paths: Vec<String>) {
 #[cfg(not(feature = "native-extensions"))]
 pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 
-/// Loaded libraries kept alive for the process lifetime.
-/// Used by `try_dlsym` to look up symbols from previously loaded cdylibs.
+/// Loaded libraries kept alive for the process lifetime, each paired with
+/// whether it exported `loft_register_v1` (the registration protocol).  Used by
+/// `try_dlsym` to look up symbols from previously loaded cdylibs *and* report
+/// whether the resolving library opted into registration — so the "unregistered
+/// symbol" guard fires only for a library that chose the protocol, not for a
+/// (legitimately) zero-registration cdylib loaded after one that did.
 #[cfg(feature = "native-extensions")]
-static LOADED_LIBS: Mutex<Vec<libloading::Library>> = Mutex::new(Vec::new());
+static LOADED_LIBS: Mutex<Vec<(libloading::Library, bool)>> = Mutex::new(Vec::new());
 
 /// Load a single native extension shared library.
 ///
@@ -112,8 +116,13 @@ fn load_one(path: &str) {
         }
     };
 
-    // Try the registration protocol first.
+    // Try the registration protocol first.  Records whether this library opted
+    // into it — `try_dlsym` reports the flag so the unregistered-symbol guard
+    // only fires for a library that chose the protocol (issue #119), not for a
+    // zero-registration cdylib that legitimately relies on dlsym.
+    let mut uses_v1 = false;
     if let Ok(register_sym) = unsafe { lib.get::<RegisterFn>(b"loft_register_v1\0") } {
+        uses_v1 = true;
         let register_sym = *register_sym;
         let mut collected: Vec<(String, *const ())> = Vec::new();
         unsafe {
@@ -150,23 +159,24 @@ fn load_one(path: &str) {
     LOADED_LIBS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(lib);
+        .push((lib, uses_v1));
 }
 
-/// Try to resolve a symbol by name from any loaded cdylib.
-/// Called by `wire_native_fns` as a fallback when the symbol wasn't
-/// provided via `loft_register_v1`. This enables zero-registration cdylibs:
+/// Try to resolve a symbol by name from any loaded cdylib.  Returns the symbol
+/// pointer paired with whether the resolving library opted into
+/// `loft_register_v1`.  Called by `wire_native_fns` as a fallback when the symbol
+/// wasn't provided via the registry. This enables zero-registration cdylibs:
 /// just export `#[unsafe(no_mangle)] pub extern "C" fn n_my_func(...)`.
 #[cfg(feature = "native-extensions")]
-fn try_dlsym(name: &str) -> Option<*const ()> {
+fn try_dlsym(name: &str) -> Option<(*const (), bool)> {
     let libs = LOADED_LIBS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut sym_name = name.to_string();
     sym_name.push('\0');
-    for lib in libs.iter() {
+    for (lib, uses_v1) in libs.iter() {
         if let Ok(sym) = unsafe { lib.get::<*const ()>(sym_name.as_bytes()) } {
-            return Some(*sym);
+            return Some((*sym, *uses_v1));
         }
     }
     None
@@ -240,6 +250,14 @@ struct NativeSig {
 /// Populated by `wire_native_fns`, read by the generic dispatcher.
 #[cfg(feature = "native-extensions")]
 static NATIVE_SIGS: Mutex<Option<HashMap<u16, (String, NativeSig)>>> = Mutex::new(None);
+
+/// @PLN11 Arc N — side table for the **shared-store** bridge
+/// (`native_lib::generate_shared_cdylib_lib_rs`): library index → (bridge fn ptr,
+/// signature).  Populated by `wire_shared_native_fns`, read by
+/// `shared_store_dispatch`.  Separate from `NATIVE_SIGS` because the ABI differs
+/// (a `*mut Stores` + `LibArg` bridge, not the `LoftStore`/raw-ptr marshalling).
+#[cfg(feature = "native-extensions")]
+static SHARED_SIGS: Mutex<Option<HashMap<u16, (FnPtr, NativeSig)>>> = Mutex::new(None);
 
 /// Compute the argument type list and return type from a definition's signature.
 /// Returns `None` if the signature contains types that can't be auto-marshalled
@@ -341,6 +359,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
                 continue;
             }
             let sym = &def.native;
+            // @PLN11 Arc N: shared-store bridges are wired by
+            // `wire_shared_native_fns` (a different ABI) — skip them here.
+            if sym.starts_with("loft_shared_") {
+                continue;
+            }
             if let Some(stubs) = stub_syms
                 && !stubs.contains(sym)
             {
@@ -354,23 +377,18 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         drop(reg_guard);
         drop(stub_guard);
 
-        // Check if any library used loft_register_v1 (i.e. registry is non-empty).
-        // If so, dlsym fallback is a registration bug — the library chose
-        // the registration protocol, so all its symbols should be registered.
-        let has_v1 = {
-            let rg = NATIVE_REGISTRY
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            rg.as_ref().is_some_and(|r| !r.is_empty())
-        };
-
-        // Resolve via dlsym (no locks held).
+        // Resolve via dlsym (no locks held).  The guard is now keyed on the
+        // *resolving library's* own `uses_v1` flag (returned by `try_dlsym`), not
+        // a global "registry non-empty" proxy — so a zero-registration cdylib
+        // loaded after one that used the protocol no longer false-positives, while
+        // issue #119 (a v1 library's unregistered-but-dlsym-found symbol) still
+        // panics.
         for sym in to_resolve {
-            if let Some(ptr) = try_dlsym(&sym) {
-                // The library used loft_register_v1 but didn't register
+            if let Some((ptr, lib_uses_v1)) = try_dlsym(&sym) {
+                // The resolving library used loft_register_v1 but didn't register
                 // this symbol — this is a registration bug.
                 assert!(
-                    !has_v1,
+                    !lib_uses_v1,
                     "native symbol '{sym}' was not registered via loft_register_v1 \
                      but was found via dlsym. This is a registration bug — \
                      add reg!(b\"{sym}\", <fn>) to loft_register_v1.",
@@ -409,6 +427,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
         let sym = &def.native;
 
+        // @PLN11 Arc N: shared-store bridges use a different dispatcher — skip.
+        if sym.starts_with("loft_shared_") {
+            continue;
+        }
+
         // Only replace stubs — skip hand-written glue from native::init().
         if let Some(stubs) = stub_syms
             && !stubs.contains(sym)
@@ -442,6 +465,159 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
 #[cfg(not(feature = "native-extensions"))]
 pub fn wire_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
+
+/// @PLN11 Arc N — wire the **shared-store** bridge dispatchers.  For every
+/// `#native "loft_shared_…"` definition (the marker for an auto-generated
+/// shared-store bridge), resolve the bridge symbol from the loaded cdylibs via
+/// dlsym, record `(bridge_ptr, signature)` in `SHARED_SIGS`, and replace the stub
+/// `OpStaticCall` target with `shared_store_dispatch`.  Call this *after*
+/// `load_all` (and, if also using legacy `#native`, after `wire_native_fns` —
+/// they handle disjoint symbol sets, `wire_native_fns` skips `loft_shared_…`).
+#[cfg(feature = "native-extensions")]
+pub fn wire_shared_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
+    // Phase 1: collect resolvable shared bridges (no lock held).
+    let mut wired: Vec<(String, u16, *const (), NativeSig)> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        let sym = &def.native;
+        if !sym.starts_with("loft_shared_") {
+            continue;
+        }
+        let Some((ptr, _uses_v1)) = try_dlsym(sym) else {
+            continue; // bridge not in any loaded cdylib (yet)
+        };
+        let Some(sig) = compute_sig(data, d_nr) else {
+            continue; // signature not bridge-marshallable
+        };
+        let Some(&lib_idx) = state.library_names.get(sym) else {
+            continue;
+        };
+        wired.push((sym.clone(), lib_idx, ptr, sig));
+    }
+
+    // Phase 2: record signatures, then replace the stub dispatch targets.
+    {
+        let mut guard = SHARED_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = guard.get_or_insert_with(HashMap::new);
+        for (_, lib_idx, ptr, sig) in &wired {
+            table.insert(*lib_idx, (FnPtr(*ptr), sig.clone()));
+        }
+    }
+    for (sym, ..) in &wired {
+        state.replace_static_fn(sym, shared_store_dispatch);
+    }
+}
+
+#[cfg(not(feature = "native-extensions"))]
+pub fn wire_shared_native_fns(_state: &mut crate::state::State, _data: &crate::data::Data) {}
+
+/// @PLN11 Arc N — the shared-store bridge dispatcher.  Invoked via `OpStaticCall`
+/// for a function whose `#native` symbol is an auto-generated `loft_shared_…`
+/// bridge.  Reads the call's args off the interpreter stack into `LibArg` slots
+/// (scalars by value; `vector`/`reference` as the **raw** stack `DbRef`, no
+/// deref — the `--native` body expects the same indirect form), passes the
+/// caller's `*mut Stores` directly (zero-marshalling shared store), calls the
+/// bridge, and writes the return back onto the stack.
+#[cfg(feature = "native-extensions")]
+fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate::keys::DbRef) {
+    use crate::keys::DbRef;
+    use crate::native_lib::LibArg;
+
+    crate::state::SHARED_DISPATCH_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
+    let (bridge_ptr, sig) = {
+        let guard = SHARED_SIGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = guard.as_ref().expect("SHARED_SIGS not initialized");
+        match table.get(&lib_idx) {
+            Some((p, s)) => (p.0, s.clone()),
+            None => panic!("no shared signature for lib_idx {lib_idx}"),
+        }
+    };
+
+    // Pop in reverse (stack is LIFO), then restore declaration order.
+    let mut args: Vec<LibArg> = Vec::with_capacity(sig.params.len());
+    for &t in sig.params.iter().rev() {
+        let slot = match t {
+            ArgT::I32 | ArgT::I64 => LibArg {
+                scalar: *stores.get::<i64>(stack),
+                ..LibArg::ZERO
+            },
+            ArgT::F64 => LibArg {
+                scalar: (*stores.get::<f64>(stack)).to_bits() as i64,
+                ..LibArg::ZERO
+            },
+            ArgT::F32 => LibArg {
+                scalar: i64::from((*stores.get::<f64>(stack) as f32).to_bits()),
+                ..LibArg::ZERO
+            },
+            ArgT::Bool => LibArg {
+                scalar: i64::from(*stores.get::<bool>(stack)),
+                ..LibArg::ZERO
+            },
+            // The raw stack DbRef, passed UNCHANGED (the --native body consumes
+            // the indirect-header form, not the dereferenced direct record).
+            ArgT::Ref | ArgT::Vec => LibArg {
+                dbref: *stores.get::<DbRef>(stack),
+                ..LibArg::ZERO
+            },
+            // Text arg → `&str` for the body: the store-backed bytes (borrowed for
+            // the call's duration, valid because the store is shared and live).
+            ArgT::Text => {
+                let s = *stores.get::<crate::keys::Str>(stack);
+                LibArg {
+                    text_ptr: s.ptr,
+                    text_len: s.len as usize,
+                    ..LibArg::ZERO
+                }
+            }
+        };
+        args.push(slot);
+    }
+    args.reverse();
+
+    let mut ret = LibArg::ZERO;
+    let stores_ptr: *mut crate::database::Stores = stores;
+    // SAFETY: `bridge_ptr` is a `loft_shared_…` export of an auto-generated cdylib
+    // that links this exact `LibArg` / `Stores` / `DbRef` from libloft, so the ABI
+    // matches.  `stores_ptr` is borrowed from the live `&mut Stores`; the bridge
+    // uses it (and only it) for the duration of the call.
+    let bridge: unsafe extern "C" fn(
+        *mut crate::database::Stores,
+        *const LibArg,
+        usize,
+        *mut LibArg,
+    ) = unsafe { std::mem::transmute(bridge_ptr) };
+    unsafe {
+        bridge(
+            stores_ptr,
+            args.as_ptr(),
+            args.len(),
+            std::ptr::from_mut(&mut ret),
+        )
+    };
+
+    match sig.ret {
+        None => {}
+        Some(ArgT::I32 | ArgT::I64) => stores.put::<i64>(stack, ret.scalar),
+        Some(ArgT::F64) => stores.put::<f64>(stack, f64::from_bits(ret.scalar as u64)),
+        Some(ArgT::F32) => stores.put::<f64>(stack, f64::from(f32::from_bits(ret.scalar as u32))),
+        Some(ArgT::Bool) => stores.put(stack, ret.scalar != 0),
+        Some(ArgT::Ref | ArgT::Vec) => stores.put::<DbRef>(stack, ret.dbref),
+        // The bridge already copied the result text into `stores.scratch[0]`
+        // (stable); point the stack `Str` at it (mirrors `bridge_push_str`).
+        Some(ArgT::Text) => {
+            let s = crate::keys::Str {
+                ptr: ret.text_ptr,
+                len: ret.text_len as u32,
+            };
+            stores.put(stack, s);
+        }
+    }
+}
 
 /// Generic auto-marshal dispatcher. Called via `OpStaticCall` for all
 /// auto-wired native functions. Reads signature from `NATIVE_SIGS` using
@@ -1869,7 +2045,7 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
     // dir's own `native/target/` is the target root.
     #[cfg(not(feature = "registry"))]
     {
-        return pkg_dir.join("native").join("target");
+        pkg_dir.join("native").join("target")
     }
     #[cfg(feature = "registry")]
     {
@@ -1934,13 +2110,22 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
+    // @PLN11 Arc N / N0 — reuse a cached artifact only if it was built by THIS
+    // loft build (its fingerprint sidecar matches).  A loft rebuild flips the
+    // fingerprint, so a stale package rlib / cdylib is rebuilt instead of being
+    // silently linked against a changed loft ABI — the automatic replacement for
+    // `make rebuild-native-cdylibs`.
+    let fp = crate::cache::loft_build_fingerprint();
     let find_existing = || {
         for root in &search_roots {
             for profile in ["release", "debug"] {
                 let dir = root.join(profile);
                 let lib = dir.join(&lib_name);
                 let rlib = dir.join(&rlib_name);
-                if lib.exists() && rlib.exists() {
+                if lib.exists()
+                    && rlib.exists()
+                    && crate::cache::native_artifact_fingerprint_matches(&dir, fp)
+                {
                     return Some(lib.to_string_lossy().to_string());
                 }
             }
@@ -1996,8 +2181,15 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     let built_path = target_root.join("release").join(&lib_name);
     let status = cmd.status();
     match status {
-        Ok(s) if s.success() && built_path.exists() => {
-            Some(built_path.to_string_lossy().to_string())
+        Ok(s) if s.success() => {
+            // @PLN11 Arc N / N0 — stamp the build fingerprint on ANY successful
+            // cargo build: the rlib is produced even for rlib-only packages whose
+            // cdylib `built_path` is absent, so a later loft change still
+            // invalidates it (see `find_existing` / `add_native_extern_flags`).
+            crate::cache::write_native_artifact_fingerprint(&target_root.join("release"), fp);
+            built_path
+                .exists()
+                .then(|| built_path.to_string_lossy().to_string())
         }
         _ => None,
     }

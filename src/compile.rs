@@ -22,7 +22,7 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
     byte_code_from(state, data, 0, None);
 }
 
-/// @PLAN54 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
+/// @PLN11 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
 /// store (the mmap'd cache bundle), so codegen reads bodies straight from it via
 /// `def_body_node` — no per-run materialise and no `read_data` body rebuild.
 pub fn byte_code_with_store(
@@ -65,7 +65,7 @@ pub fn byte_code_from(
     }
     let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
     let t_codegen = std::time::Instant::now();
-    // @PLAN54 G2/M2/M6 — codegen body source:
+    // @PLN11 G2/M2/M6 — codegen body source:
     //  * `warm_store` (M6): a pre-loaded mmap'd cache bundle — read bodies
     //    straight from it (no materialise, no `read_data` body rebuild).
     //  * else `LOFT_CODEGEN_STORE` (M2/M5 proof): materialise the whole `Data`
@@ -83,7 +83,7 @@ pub fn byte_code_from(
         None
     };
     for d_nr in start_d_nr..data.definitions() {
-        if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
+        if !matches!(data.def(d_nr).def_type(), DefType::Function) || data.def(d_nr).is_operator() {
             continue;
         }
         state.def_code(d_nr, data, program_store);
@@ -127,20 +127,20 @@ fn build_const_vectors(
         .resize(data.definitions() as usize, null_ref);
 
     for d_nr in 0..data.definitions() {
-        if data.def(d_nr).def_type != DefType::Constant {
+        if data.def(d_nr).def_type() != DefType::Constant {
             continue;
         }
-        let Type::Vector(ref elem_tp, _) = data.def(d_nr).returned else {
+        let Type::Vector(elem_tp, _) = data.def(d_nr).returned() else {
             continue;
         };
         let elem_tp = (**elem_tp).clone();
-        // @PLAN54 G2/M6 — read the const body from the persistent store when
+        // @PLN11 G2/M6 — read the const body from the persistent store when
         // present (store-backed), else the native graph.
         let body = match program_store {
             Some((stores, root)) => {
                 IrNode::Store(stores, crate::ir_read::def_body_node(stores, *root, d_nr))
             }
-            None => IrNode::Native(&data.def(d_nr).code),
+            None => IrNode::Native(data.def(d_nr).code()),
         };
         let values = extract_literal_values(body, data);
         if values.is_empty() {
@@ -154,7 +154,7 @@ fn build_const_vectors(
         if vec_struct_dnr == u32::MAX {
             continue;
         }
-        let vec_tp = data.def(vec_struct_dnr).known_type;
+        let vec_tp = data.def(vec_struct_dnr).known_type();
         let size = u32::from(state.database.size(vec_tp));
         let db = state.database.database(size);
         state
@@ -277,15 +277,15 @@ fn register_native_stubs(state: &mut State, data: &Data) {
     let mut stub_syms = std::collections::HashSet::new();
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
-        if def.native.is_empty() {
+        if def.native().is_empty() {
             continue;
         }
-        let sym = &def.native;
+        let sym = def.native();
         // Skip if already registered (e.g. by native::init for built-in functions).
         if state.library_names.contains_key(sym) {
             continue;
         }
-        stub_syms.insert(sym.clone());
+        stub_syms.insert(sym.to_string());
         // Register a stub that panics with a descriptive message.
         let stub: fn(&mut Stores, &mut DbRef) = {
             // We can't capture sym_owned in a fn pointer, so use a single
@@ -316,7 +316,7 @@ pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> 
     }
     for d_nr in 0..data.definitions() {
         if !matches!(
-            data.def(d_nr).def_type,
+            data.def(d_nr).def_type(),
             DefType::Function | DefType::Dynamic
         ) {
             continue;
@@ -325,17 +325,17 @@ pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> 
         if is_op && !config.show_all_functions {
             continue;
         }
-        let from_default = data.def(d_nr).position.file.starts_with("default/")
-            || data.def(d_nr).position.file.starts_with("default\\");
+        let from_default = data.def(d_nr).position().file.starts_with("default/")
+            || data.def(d_nr).position().file.starts_with("default\\");
         if from_default && !config.show_all_functions {
             continue;
         }
-        if !config.show_function(&data.def(d_nr).name) {
+        if !config.show_function(data.def(d_nr).name()) {
             continue;
         }
         write!(writer, "{} ", data.def(d_nr).header(data, d_nr))?;
-        let mut vars = Function::copy(&data.def(d_nr).variables);
-        data.show_code(writer, &mut vars, &data.def(d_nr).code, 0, false)?;
+        let mut vars = Function::copy(data.def(d_nr).variables());
+        data.show_code(writer, &mut vars, data.def(d_nr).code(), 0, false)?;
         writeln!(writer, "\n")?;
     }
     Ok(())
@@ -366,37 +366,37 @@ pub fn show_captures_summary(writer: &mut dyn Write, data: &Data) -> Result<(), 
     //      already).
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
-        if !matches!(def.def_type, DefType::Function | DefType::Dynamic) {
+        if !matches!(def.def_type(), DefType::Function | DefType::Dynamic) {
             continue;
         }
-        let is_lambda = def.closure_record != u32::MAX;
-        let direct_match = def.name.contains(&target);
+        let is_lambda = def.closure_record() != u32::MAX;
+        let direct_match = def.name().contains(&target);
         if !direct_match && !is_lambda {
             continue;
         }
-        if def.scalars_to_box.is_empty() && !is_lambda {
+        if def.scalars_to_box().is_empty() && !is_lambda {
             continue;
         }
         writeln!(
             writer,
             "[captures] === {} (d_nr={d_nr}, {kind}) ===",
-            def.name,
+            def.name(),
             kind = if is_lambda { "lambda" } else { "parent" }
         )?;
-        if !def.scalars_to_box.is_empty() {
+        if !def.scalars_to_box().is_empty() {
             writeln!(
                 writer,
                 "[captures]   scalars_to_box = {:?}",
-                def.scalars_to_box
+                def.scalars_to_box()
             )?;
         }
         if is_lambda {
             writeln!(
                 writer,
                 "[captures]   mutated_captures = {:?}",
-                def.mutated_captures
+                def.mutated_captures()
             )?;
-            let cr_d = def.closure_record;
+            let cr_d = def.closure_record();
             let cr = data.def(cr_d);
             writeln!(
                 writer,
@@ -452,7 +452,7 @@ pub fn show_code(
 ) -> Result<(), Error> {
     for d_nr in 0..data.definitions() {
         if !matches!(
-            data.def(d_nr).def_type,
+            data.def(d_nr).def_type(),
             DefType::Function | DefType::Dynamic
         ) {
             continue;
@@ -461,28 +461,28 @@ pub fn show_code(
         if is_op && !config.show_all_functions {
             continue;
         }
-        let from_default = data.def(d_nr).position.file.starts_with("default/")
-            || data.def(d_nr).position.file.starts_with("default\\");
+        let from_default = data.def(d_nr).position().file.starts_with("default/")
+            || data.def(d_nr).position().file.starts_with("default\\");
         if from_default && !config.show_all_functions {
             continue;
         }
-        if !config.show_function(&data.def(d_nr).name) {
+        if !config.show_function(data.def(d_nr).name()) {
             continue;
         }
         if config.phases.ir {
             write!(writer, "{} ", data.def(d_nr).header(data, d_nr))?;
-            let mut vars = Function::copy(&data.def(d_nr).variables);
-            data.show_code(writer, &mut vars, &data.def(d_nr).code, 0, false)?;
+            let mut vars = Function::copy(data.def(d_nr).variables());
+            data.show_code(writer, &mut vars, data.def(d_nr).code(), 0, false)?;
             writeln!(writer, "\n")?;
         }
         if config.phases.bytecode {
-            write!(writer, "byte-code for {}:", data.def(d_nr).position.file)?;
+            write!(writer, "byte-code for {}:", data.def(d_nr).position().file)?;
             state.dump_code(writer, d_nr, data, config.annotate_slots)?;
         }
         if config.show_variables {
-            write!(writer, "variables for {}:", data.def(d_nr).position.file)?;
+            write!(writer, "variables for {}:", data.def(d_nr).position().file)?;
             writeln!(writer, "{}", data.def(d_nr).header(data, d_nr))?;
-            dump_variables(writer, &data.def(d_nr).variables, data)?;
+            dump_variables(writer, data.def(d_nr).variables(), data)?;
         }
     }
     Ok(())
@@ -522,10 +522,10 @@ pub fn disassemble(
     let def = data.def(d_nr);
     let start = def.code_position as usize;
     let end = start + def.code_length as usize;
-    let vars = &def.variables;
+    let vars = def.variables();
 
     let targets = collect_jump_targets(bytecode, start, end, data);
-    writeln!(writer, "--- {} ---", def.name)?;
+    writeln!(writer, "--- {} ---", def.name())?;
 
     let mut pc = start;
     while pc < end && pc < bytecode.len() {

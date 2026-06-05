@@ -34,7 +34,7 @@ fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
 }
 
 impl Stores {
-    /// @PLAN54 D2a — install a store-loaded type schema (`Vec<Type>` from
+    /// @PLN11 D2a — install a store-loaded type schema (`Vec<Type>` from
     /// [`crate::ir_read::read_schema`]) into this `Stores`, replacing whatever
     /// was there.  Rebuilds the `name → known_type` lookup from each type's
     /// name (correct for a non-colliding schema such as the core stdlib; P379
@@ -1791,7 +1791,7 @@ pub struct Type {
 }
 
 impl Type {
-    // @PLAN54 D2a read seam — `complex`/`linked`/`size`/`align` are `pub(super)`
+    // @PLN11 D2a read seam — `complex`/`linked`/`size`/`align` are `pub(super)`
     // (computed by `finish`); expose them `pub(crate)` so the schema
     // materializer (`crate::ir_store`) can cache them.  `parents` stays private
     // (a derived back-reference index, rebuilt on load, never serialized).
@@ -1812,7 +1812,7 @@ impl Type {
         self.align
     }
 
-    /// @PLAN54 D2a — reconstruct a `Type` from cached store fields.  `parents`
+    /// @PLN11 D2a — reconstruct a `Type` from cached store fields.  `parents`
     /// (a derived back-reference index, read only by parse-time layout
     /// validation + debug display, never by codegen/execution) is restored
     /// empty; the load path skips the layout validation that consumes it.
@@ -1841,7 +1841,7 @@ impl Type {
         }
     }
 
-    /// @PLAN54 D2a — drop the derived `parents` index (for comparing a
+    /// @PLN11 D2a — drop the derived `parents` index (for comparing a
     /// store-reloaded schema against a fresh parse, which carries `parents`).
     pub(crate) fn clear_parents(&mut self) {
         self.parents.clear();

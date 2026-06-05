@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 G2/M5 — store-backed codegen equivalence proof.
+//! @PLN11 G2/M5 — store-backed codegen equivalence proof.
 //!
 //! With `LOFT_CODEGEN_STORE` set, `def_code` materialises each function body
 //! into a store and lowers it through `IrNode::Store` instead of the native

@@ -90,7 +90,7 @@ contract locked here.
 
 ### Plan-36 design doc update (Tier 3)
 
-`plans/36-audience-generative-art/README.md`
+`plans/6-audience-generative-art/README.md`
 gains a § "Persistence" subsection:
 
 ```markdown
@@ -134,7 +134,7 @@ This is fast (<1 sec); ships in `make ci`.
 |---|---|
 | `tools/indexer/scan.loft` (@PLAN37 phase 07/08) | EXTEND: open store via `IntegrityOnly` |
 | `plans/future/32-tic-tac-toe/README.md` | ADD § Persistence (Tier 2) |
-| `plans/36-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
+| `plans/6-audience-generative-art/README.md` | ADD § Persistence (Tier 3) |
 | `tests/store_durable_smoke.rs` | NEW: per-tier consumer-shaped end-to-end smoke |
 
 ## Existing functions / utilities to reuse
@@ -162,7 +162,7 @@ This is fast (<1 sec); ships in `make ci`.
 - Indexer (@PLAN37 phase 07/08) demonstrably uses Tier 1
   in production: a deliberate `kill -9` of the daemon +
   restart triggers the rebuild path.
-- TTT v5 + @PLAN36 design docs cite @PLAN38 tiers + the
+- TTT v5 + @PLN6 design docs cite @PLAN38 tiers + the
   acceptance contract.
 - Cross-link from this plan's README to each consumer.
 - No regression: existing non-durable Store usage (not
@@ -173,7 +173,7 @@ This is fast (<1 sec); ships in `make ci`.
 | Risk | Mitigation |
 |---|---|
 | Indexer's Tier 1 callback (full rescan) is slow on huge trees | Phase 04 stress baseline measures rescan time per repo size; phase 06 closeout documents the floor |
-| TTT v5 / @PLAN36 not yet shipping their persistence arcs → design-doc updates feel premature | The contracts are still useful: when v5 / @PLAN36 implementation begins, the API is already there + tested.  No surprise dependency. |
+| TTT v5 / @PLN6 not yet shipping their persistence arcs → design-doc updates feel premature | The contracts are still useful: when v5 / @PLN6 implementation begins, the API is already there + tested.  No surprise dependency. |
 | Consumer wires Tier 1 to data that needs Tier 3 | STDLIB.md (phase 06) has a clear "when to pick which tier" table; named modes make the choice visible at the call site |
 
 ## Cross-references
@@ -183,4 +183,4 @@ This is fast (<1 sec); ships in `make ci`.
 - [Phase 06 — closeout](06-closeout.md)
 - [Plan-37 phase 08](../37-tracker-index/08-multi-project-deploy.md) — Tier 1 consumer
 - [Plan-32 TTT v5](../32-tic-tac-toe/) — Tier 2 consumer
-- [Plan-36 audience demo](../36-audience-generative-art/) — Tier 3 consumer
+- [Plan-36 audience demo](../6-audience-generative-art/) — Tier 3 consumer

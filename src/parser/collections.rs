@@ -177,7 +177,7 @@ impl Parser {
         if let Type::Iterator(inner, _) = is_type
             && !self.first_pass
             && let Value::Call(d_nr, _) = code.unspan()
-            && matches!(self.data.def(*d_nr).returned, Type::Iterator(_, _))
+            && matches!(self.data.def(*d_nr).returned(), Type::Iterator(_, _))
         {
             let gen_var = self.create_unique("__gen", is_type);
             self.vars.defined(gen_var);
@@ -234,7 +234,7 @@ impl Parser {
                 Type::Vector(vtp, dep) => {
                     let i = Value::Var(iter_var);
                     let vec_tp = self.data.type_def_nr(vtp);
-                    let db_tp = self.data.def(vec_tp).known_type;
+                    let db_tp = self.data.def(vec_tp).known_type();
                     // narrow vector element iteration uses
                     // the forced_size stride so the generated
                     // `vector::get_vector(size, idx)` matches the actual
@@ -353,7 +353,7 @@ impl Parser {
                     let next =
                         v_block(vec![v_set(iter_var, step), ref_expr], block_tp, "iter next");
                     self.vars
-                        .set_loop(0, self.data.def(vec_tp).known_type, code);
+                        .set_loop(0, self.data.def(vec_tp).known_type(), code);
                     if reverse {
                         // Start at length; the first step gives len-1 (last element).
                         *code = v_set(
@@ -470,7 +470,7 @@ impl Parser {
                 return Some(Value::Null);
             }
             if let Value::Call(get_nr, get_args) = to.unspan()
-                && self.data.def(*get_nr).name == "OpGetRecord"
+                && self.data.def(*get_nr).name() == "OpGetRecord"
                 && let Some(Value::Int(db_tp_val)) = get_args.get(1)
                 && (*db_tp_val as usize) < self.database.types.len()
                 && matches!(
@@ -513,7 +513,7 @@ impl Parser {
         if op == "="
             && matches!(f_type, Type::Reference(_, _))
             && let Value::Call(get_nr, get_args) = to.unspan()
-            && self.data.def(*get_nr).name == "OpGetRecord"
+            && self.data.def(*get_nr).name() == "OpGetRecord"
             && let Some(Value::Int(db_tp)) = get_args.get(1)
             && (*db_tp as usize) < self.database.types.len()
             && matches!(
@@ -532,7 +532,7 @@ impl Parser {
             // corruption — matching the pre-@P305 behaviour for that case).
             let mut multi_index = false;
             if let Value::Call(gf_nr, gf_args) = coll.unspan()
-                && self.data.def(*gf_nr).name == "OpGetField"
+                && self.data.def(*gf_nr).name() == "OpGetField"
                 && let Some(Value::Int(byte_off)) = gf_args.get(1)
                 && let Value::Var(sv) = gf_args[0].unspan()
             {
@@ -545,7 +545,7 @@ impl Parser {
                     _ => u32::MAX,
                 };
                 if d_nr != u32::MAX {
-                    let struct_tp = self.data.def(d_nr).known_type;
+                    let struct_tp = self.data.def(d_nr).known_type();
                     multi_index = self
                         .database
                         .keyed_field_is_linked(struct_tp, *byte_off as u16);
@@ -672,7 +672,7 @@ impl Parser {
         }
         let code = self.compute_op_code(op, to, val, f_type);
         if let Value::Call(d_nr, args) = to.unspan() {
-            let name = self.data.def(*d_nr).name.clone();
+            let name = self.data.def(*d_nr).name().to_string();
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
         } else if let Value::Var(nr) = to.unspan() {
@@ -988,7 +988,7 @@ use #count instead"
         if self.data.def_type(d_nr) != DefType::Struct {
             return None;
         }
-        let tv_name = self.data.def(d_nr).name.clone();
+        let tv_name = self.data.def(d_nr).name().to_string();
         if tv_name.is_empty() {
             return None;
         }
@@ -1082,7 +1082,7 @@ use #count instead"
             Type::Vector(cont, _) => {
                 let fmt = format.clone();
                 let d_nr = self.data.type_def_nr(&cont);
-                let db_tp = self.data.def(d_nr).known_type;
+                let db_tp = self.data.def(d_nr).known_type();
                 let vec_tp = if db_tp == u16::MAX {
                     0
                 } else {
@@ -1120,7 +1120,7 @@ use #count instead"
                     self.append_data_text(list, start, var, text_call, state);
                 } else {
                     let fmt = format.clone();
-                    let db_tp = self.data.def(d_nr).known_type;
+                    let db_tp = self.data.def(d_nr).known_type();
                     list.push(self.cl(
                         &(start.to_owned() + "Database"),
                         &[
@@ -1134,7 +1134,7 @@ use #count instead"
             }
             Type::Enum(d_nr, is_ref, _) => {
                 let fmt = format.clone();
-                let e_tp = self.data.def(d_nr).known_type;
+                let e_tp = self.data.def(d_nr).known_type();
                 if e_tp == u16::MAX || !is_ref {
                     let e_val = self.cl("OpCastTextFromEnum", &[fmt, Value::Int(i32::from(e_tp))]);
                     self.append_data_text(list, start, var, e_val, state);
@@ -1527,7 +1527,7 @@ use #count instead"
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
             let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
                 && !self.first_pass
-                && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
+                && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
             let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);
@@ -1570,7 +1570,7 @@ use #count instead"
                 let (elem_types_opt, ref_def_nr): (Option<Vec<Type>>, u32) = match &var_tp {
                     Type::Tuple(elems) => (Some(elems.clone()), u32::MAX),
                     Type::Reference(d_nr, _)
-                        if self.data.def(*d_nr).name.starts_with("__tuple<") =>
+                        if self.data.def(*d_nr).name().starts_with("__tuple<") =>
                     {
                         let elems: Vec<Type> = self
                             .data
@@ -1837,7 +1837,7 @@ use #count instead"
         //   tmp = OpNewRecord(refs, vec_tp, u16::MAX)
         //   OpCopyRecord(elm_var, tmp, content_tp)
         //   OpFinishRecord(refs, tmp, vec_tp, u16::MAX)
-        let content_known = self.data.def(content_d).known_type;
+        let content_known = self.data.def(content_d).known_type();
         let elem_size = if content_known == u16::MAX {
             8
         } else {
@@ -1989,7 +1989,7 @@ use #count instead"
             diagnostic!(self.lexer, Level::Error, "'{work_id}' is not a function");
             return (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new());
         }
-        let ret_type = self.data.def(work_d_nr).returned.clone();
+        let ret_type = self.data.def(work_d_nr).returned().clone();
         if self.first_pass {
             // First pass: return the user worker so the parser's
             // downstream type-shape decisions (return_size, ladder
@@ -2187,7 +2187,7 @@ use #count instead"
         let destructure_var_nrs: Option<Vec<u16>> = if let Some(names) = destructure_names {
             let elem_types_opt: Option<Vec<Type>> = match &elem_tp {
                 Type::Tuple(elems) => Some(elems.clone()),
-                Type::Reference(d_nr, _) if self.data.def(*d_nr).name.starts_with("__tuple<") => {
+                Type::Reference(d_nr, _) if self.data.def(*d_nr).name().starts_with("__tuple<") => {
                     Some(
                         self.data
                             .def(*d_nr)
@@ -2350,7 +2350,7 @@ use #count instead"
                 // narrow writes.
                 4
             } else {
-                let known = self.data.def(elm_td).known_type;
+                let known = self.data.def(elm_td).known_type();
                 let db_size = i32::from(self.database.size(known));
                 if db_size > 0 {
                     db_size
@@ -2924,7 +2924,7 @@ use #count instead"
                 -1 => {
                     // reference: inline struct size from the database
                     let ret_td = self.data.type_def_nr(ret_type);
-                    let known = self.data.def(ret_td).known_type;
+                    let known = self.data.def(ret_td).known_type();
                     i32::from(self.database.size(known))
                 }
                 other => other,
@@ -3421,10 +3421,10 @@ use #count instead"
     /// Build ops to construct a struct/struct-enum instance, replicating the IR that
     /// `parse_object` produces. Returns the ops list and the work variable holding the result.
     fn build_object_ops(&mut self, td_nr: u32, fields: &[(usize, Value)]) -> (Vec<Value>, u16) {
-        let ret = self.data.def(td_nr).returned.clone();
+        let ret = self.data.def(td_nr).returned().clone();
         let w = self.vars.work_refs(&ret, &mut self.lexer);
         self.data.set_referenced(td_nr, self.context, Value::Null);
-        let tp = i32::from(self.data.def(td_nr).known_type);
+        let tp = i32::from(self.data.def(td_nr).known_type());
         let mut list: Vec<Value> = vec![
             v_set(w, Value::Null),
             self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]),
@@ -3475,7 +3475,7 @@ use #count instead"
 
             let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
             let variant_def_nr = self.data.def_nr(variant_name);
-            let disc_val = self.data.def(variant_def_nr).attributes[0].value.clone();
+            let disc_val = self.data.def(variant_def_nr).attributes()[0].value.clone();
 
             // Construct FieldValue variant as Value::Insert (flat ops list).
             let (fv_ops, fv_work) =
@@ -3539,7 +3539,7 @@ use #count instead"
                 let variant_name = self.data.attr_name(*parent_d_nr, a_nr);
                 let variant_d_nr = self.data.def_nr(&variant_name);
                 if variant_d_nr != u32::MAX {
-                    let variant_known = self.data.def(variant_d_nr).known_type;
+                    let variant_known = self.data.def(variant_d_nr).known_type();
                     let s = i32::from(self.database.size(variant_known));
                     if s > max_size {
                         max_size = s;
@@ -3551,7 +3551,7 @@ use #count instead"
             }
         }
         if elm_td != u32::MAX {
-            let known = self.data.def(elm_td).known_type;
+            let known = self.data.def(elm_td).known_type();
             let db_size = i32::from(self.database.size(known));
             if db_size > 0 {
                 return db_size;

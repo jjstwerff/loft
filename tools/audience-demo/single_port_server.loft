@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 — combined HTTP + multi-client WebSocket server.
+// @PLN6 — combined HTTP + multi-client WebSocket server.
 //
 // One port, one process, serves both:
 //   GET /                → doc/audience-demo/index.html  (page)
@@ -63,7 +63,7 @@ struct Player {
   ly:               integer not null,
   last_active_tick: integer not null,   // world.tick of this player's last
                                         // paint — 0 = never painted (1.7)
-  // Incremental replay (@PLAN36-1.8): on connect we snapshot the current cell
+  // Incremental replay (@PLN6-1.8): on connect we snapshot the current cell
   // keys here and stream them a budget at a time from the main loop, so a
   // new client never blocks the pump on a full O(cells) world dump.
   replay_keys:      vector<text>,
@@ -144,7 +144,7 @@ fn read_index() -> text {
 
 // ── Periodic snapshot — minimum-viable fallback for the full design ────────
 //
-// Full design in `doc/claude/plans/36-audience-generative-art/01-server-state.md`
+// Full design in `doc/claude/plans/6-audience-generative-art/01-server-state.md`
 // § Persistence — snapshot + change log.  This is the "fallback if blockers
 // don't unblock" subset: whole-world dump on a 5-second timer, no change
 // log, no CRC, no atomic rename.  Bounded loss = 5 s of paints if killed
@@ -200,7 +200,7 @@ DECAY_LEASE_DEFAULT  = 600;           // +1 min per filled neighbour
 DECAY_WINDOW_DEFAULT = 300;           // 30 s eligible → removed
 ACTIVE_HEARTBEAT_US  = 1000000;       // 1 s — active-player signal cadence (1.7)
 
-// Cells streamed to each mid-replay player per loop iteration (@PLAN36-1.8):
+// Cells streamed to each mid-replay player per loop iteration (@PLN6-1.8):
 // bounds the per-connect cost so a big world is never dumped in one go.
 // Accept / per-client polling / fan-out are handled by the Rust event pump
 // (srv.poll_event / srv.broadcast), so there is no loft-side accept batching
@@ -474,7 +474,7 @@ fn main() {
   while true {
     work = 0;
 
-    // 1. Drain pump events (@PLAN36-1.8: the supported multi-client path —
+    // 1. Drain pump events (@PLN6-1.8: the supported multi-client path —
     //    Rust accepts, polls, and parses frames; idle clients cost ~nothing
     //    so connect latency stays low even with many phones).  HTTP requests
     //    arrive as `ev.http` (serve the page); WS clients as connect +

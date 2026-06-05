@@ -245,7 +245,7 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
 /// the eager-collect factory builds `__yf_*` / `__vdb_*` inline)
 /// and adding them as struct fields would conflict with those.
 fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u16, Type)> {
-    let var_table = &data.def(def_nr).variables;
+    let var_table = data.def(def_nr).variables();
     let next = var_table.next_var();
     let mut out = Vec::new();
     for v in 0..next {
@@ -297,7 +297,7 @@ fn emit_struct_def(
         writeln!(w, "    var_{}: {field_tp},", sanitize(&attr.name))?;
     }
     // P224: persistent function-locals as struct fields.
-    let var_table = &data.def(def_nr).variables;
+    let var_table = data.def(def_nr).variables();
     for (v, tp) in persistent {
         let n = sanitize(var_table.name(*v));
         let field_tp = match tp {
@@ -370,7 +370,7 @@ fn emit_factory_fn(
         }
     }
     // P224: initialise persistent locals to default.
-    let var_table = &data.def(def_nr).variables;
+    let var_table = data.def(def_nr).variables();
     for (v, tp) in persistent {
         let n = sanitize(var_table.name(*v));
         let init = persistent_default(tp);
@@ -406,7 +406,7 @@ impl Output<'_> {
     /// `Box<dyn LoftCoroutine>` that we can store inline in the outer struct.
     fn gen_inner_factory(&mut self, init: &Value) -> std::io::Result<String> {
         if let Value::Call(d_nr, args) = init {
-            let fn_name = self.data.def(*d_nr).name.clone();
+            let fn_name = self.data.def(*d_nr).name().to_string();
             // P199 — the factory now takes `&UnsafeCell<Stores>`; pass the
             // caller's `cell` binding instead of `stores`.
             let mut buf = format!("{fn_name}(cell");
@@ -563,10 +563,10 @@ impl Output<'_> {
         // every consumer site that uses them re-initialises before
         // reading.  Adding them to `self.declared` keeps the per-state
         // Set ops emitting as assignments rather than `let mut`.
-        let next = self.data.def(self.def_nr).variables.next_var();
+        let next = self.data.def(self.def_nr).variables().next_var();
         let mut to_predeclare: Vec<u16> = Vec::new();
         {
-            let var_table = &self.data.def(self.def_nr).variables;
+            let var_table = self.data.def(self.def_nr).variables();
             for v in 0..next {
                 if var_table.is_argument(v) {
                     continue;
@@ -581,7 +581,7 @@ impl Output<'_> {
             }
         }
         for v in &to_predeclare {
-            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            let name = sanitize(self.data.def(self.def_nr).variables().name(*v));
             writeln!(w, "        let mut var_{name}: String = String::new();")?;
             self.declared.insert(*v);
         }
@@ -599,7 +599,7 @@ impl Output<'_> {
         // state still re-initialises before use.
         let mut to_predeclare_vdb: Vec<u16> = Vec::new();
         {
-            let var_table = &self.data.def(self.def_nr).variables;
+            let var_table = self.data.def(self.def_nr).variables();
             for v in 0..next {
                 if var_table.is_argument(v) {
                     continue;
@@ -618,7 +618,7 @@ impl Output<'_> {
             }
         }
         for v in &to_predeclare_vdb {
-            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            let name = sanitize(self.data.def(self.def_nr).variables().name(*v));
             writeln!(
                 w,
                 "        let mut var_{name}: DbRef = stores.null_named(\"var_{name}\");"
@@ -781,11 +781,11 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
-        let fn_name = def.name.clone();
+        let fn_name = def.name().to_string();
         let struct_name = gen_struct_name(&fn_name);
 
         // Emit a minimal stub for bodyless functions and return early.
-        let Value::Block(body_block) = &def.code.clone() else {
+        let Value::Block(body_block) = &def.code().clone() else {
             writeln!(w, "struct {struct_name} {{}}")?;
             writeln!(
                 w,
@@ -809,8 +809,8 @@ impl Output<'_> {
         let has_yf = segments
             .iter()
             .any(|s| matches!(s, YieldSegment::YieldFrom { .. }));
-        let attrs: Vec<_> = def.attributes.clone();
-        let yield_tp = match &def.returned {
+        let attrs: Vec<_> = def.attributes().to_vec();
+        let yield_tp = match def.returned() {
             Type::Iterator(inner, _) => (**inner).clone(),
             other => other.clone(),
         };
@@ -858,7 +858,7 @@ impl Output<'_> {
 
         // ── 3. Factory function ──────────────────────────────────────────────
         let def = self.data.def(def_nr);
-        let attrs: Vec<_> = def.attributes.clone();
+        let attrs: Vec<_> = def.attributes().to_vec();
         let has_for_body = segments
             .iter()
             .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
@@ -959,10 +959,10 @@ impl Output<'_> {
         // a-loop-body, which scoped them to that block and left them
         // invisible at later assignment sites).  Mark them declared so
         // the IR's per-body Set ops emit as assignments.
-        let next = self.data.def(self.def_nr).variables.next_var();
+        let next = self.data.def(self.def_nr).variables().next_var();
         let mut to_predeclare: Vec<u16> = Vec::new();
         {
-            let var_table = &self.data.def(self.def_nr).variables;
+            let var_table = self.data.def(self.def_nr).variables();
             for v in 0..next {
                 if var_table.is_argument(v) {
                     continue;
@@ -977,7 +977,7 @@ impl Output<'_> {
             }
         }
         for v in &to_predeclare {
-            let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
+            let name = sanitize(self.data.def(self.def_nr).variables().name(*v));
             writeln!(w, "    let mut var_{name}: String = String::new();")?;
             self.declared.insert(*v);
         }
@@ -1067,7 +1067,7 @@ impl Output<'_> {
         // fields but omits the persistent-locals fields that
         // `emit_struct_def` declared, producing a Rust E0063 ("missing
         // fields in initializer").
-        let var_table = &self.data.def(def_nr).variables;
+        let var_table = self.data.def(def_nr).variables();
         for (v, tp) in persistent {
             let n = sanitize(var_table.name(*v));
             let init = persistent_default(tp);

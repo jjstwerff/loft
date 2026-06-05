@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 #
-# @PLAN54 arc A — extract the IR store-schema registration from the Rust that
+# @PLN11 arc A — extract the IR store-schema registration from the Rust that
 # `loft --native --show-rust` generates for tools/ir_schema/ir.loft, and emit a
 # self-contained `register_ir_schema(db: &mut Stores) -> IrSchemaIds` function.
 #
@@ -30,7 +30,7 @@ IR_STRUCTS = {
     "Position", "Key", "SortKey", "NameRef", "NameNr", "IntegerSpec",
     "Block", "ParForBody", "Attribute", "Variable", "Function",
     "LinkedFieldGroup", "Definition", "Data",
-    # @PLAN54 D2a — database type-schema types (Stores.types).
+    # @PLN11 D2a — database type-schema types (Stores.types).
     "DbField", "EnumPair", "KeyField", "DbType", "Bundle",
 }
 
@@ -102,7 +102,7 @@ def main(path: str) -> int:
     out.append("// Copyright (c) 2026 Jurjen Stellingwerff")
     out.append("// SPDX-License-Identifier: LGPL-3.0-or-later")
     out.append("//")
-    out.append("//! The store schema for the compiler IR (@PLAN54 arc A): registers every")
+    out.append("//! The store schema for the compiler IR (@PLN11 arc A): registers every")
     out.append("//! IR struct/enum as `Stores` type records so the IR can live in a store and")
     out.append("//! the schema-driven inspection layer (`Stores::show_json`) can walk it.")
     # Generated code trips several pedantic lints by nature (long fn, reused

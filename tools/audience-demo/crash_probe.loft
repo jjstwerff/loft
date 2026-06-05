@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 sub-task 1.9 — crash-resistance probe for the audience server.
+// @PLN6 sub-task 1.9 — crash-resistance probe for the audience server.
 // Fires a barrage of malformed text frames at the server (bad numbers,
 // unknown msg ids, no-colon frames, empty frames, out-of-range values),
 // then connects a fresh GOOD client and confirms a valid paint still

@@ -642,7 +642,19 @@ pub(crate) fn add_native_extern_flags(
         // so without this the first (only) run links nothing and rustc errors
         // E0463 "can't find crate".  Build it on demand here.  Native target
         // only; WASM relies on prebuilt rlibs (no host cargo build).
-        if target.is_none() && !rlib_path.exists() {
+        // @PLN11 Arc N / N0 — rebuild on a missing rlib OR a stale one (a package
+        // rlib built by a DIFFERENT loft build, e.g. left by `make
+        // rebuild-native-cdylibs` before loft's ABI changed).  Without the
+        // fingerprint check the stale rlib is linked as-is → the "generated
+        // rust-code error".  `auto_build_native` re-checks + re-stamps the sidecar.
+        let profile_dir = rlib_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let stale = !loft::cache::native_artifact_fingerprint_matches(
+            profile_dir,
+            loft::cache::loft_build_fingerprint(),
+        );
+        if target.is_none() && (!rlib_path.exists() || stale) {
             let stem = crate_name.replace('-', "_");
             let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
         }

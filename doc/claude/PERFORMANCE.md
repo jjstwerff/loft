@@ -2919,6 +2919,58 @@ safeguards landed).  Independent of BUILD1.
 
 ---
 
+## Startup cache (shipped, default-on)
+
+**Status: SHIPPED as part of @PLN11 G2 Track 1 (commit `77da481`).**
+
+The whole-program startup cache skips ALL parsing — stdlib + lazily-`use`d
+libs + user file — on warm runs by writing a binary bundle (content-addressed
+`.store` + `.manifest`) to `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`).
+Warm-run speedup measured at **~3–3.6×**.
+
+### What is cached
+
+The bundle contains the fully-parsed IR (`Data`) for the entire program prefix:
+every `default/*.loft` file, every `use`-d library, and the user script.  It is
+keyed on a drift manifest holding a SHA-256 of each parsed source's bytes
+(`cache::file_hash`), so any source edit invalidates the cache automatically.
+
+### Default-on behaviour and overrides
+
+`cache::program_cache_enabled()` (`src/cache.rs`) implements the precedence
+order:
+
+1. `LOFT_NO_CACHE` (non-empty) → **off** — the explicit kill switch for
+   production scripts that must never read/write bundles.
+2. `LOFT_PROGRAM_CACHE` (non-empty) → **on** — explicit force; used by the
+   cache's own tests to override the cargo-context default below.
+3. `CARGO_MANIFEST_DIR` present → **off** — auto-disables inside
+   `cargo run` / `cargo test`.  The compiler-debug loop and the entire
+   integration-test suite never read/write bundles with zero per-test wiring.
+4. otherwise → **on** — the default for installed / real invocations.
+
+### Invalidation
+
+`build_signature()` folds together:
+
+- The cache-format version constant, loft version, and git HEAD (`BUILD_ID`).
+- The running binary's mtime (`binary_signature_tag()`) so an *uncommitted*
+  compiler rebuild invalidates bundles.  `BUILD_ID` (git HEAD) alone does not
+  change across uncommitted edits; the mtime addition closes that gap.
+
+### Eviction
+
+`cache::prune_program_cache()` is called after each cold save.  It evicts the
+oldest `(.store + .manifest)` pairs until the cache directory is under
+`LOFT_CACHE_MAX_MB` (default **512 MiB**).
+
+### See also
+
+Full design, E1/E2/E3 arc, and the zero-copy follow-up: see
+`doc/claude/plans/11-data-as-store/README.md`.
+
+---
+
 ## Open work
 
 The 9 design entries above (P1, P2, P3, N1, N2, N3, N4, N5, W1)
@@ -2931,9 +2983,9 @@ plan-cleanup audits:
 | **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter | Open — design ready, no scheduled slot. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
 | **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
-| **P5** — `vector +=` capacity reservation (amortised growth) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Discovered via the `store_memory()` builtin while profiling the @PLAN36 crystal mesh: single-element `+= [x]` reallocated the backing record on (nearly) every append, fragmenting the store into O(N) freed records (a 12 738-element build → **101 815 free blocks / ~250 MB** vs ~0.8 MB of data).  Fixed by amortised (~×2) growth in `vector::vector_append` (`src/vector.rs`): when the backing record is out of room it grows to ~2× `length+1` instead of exactly `length+1`; `Store::resize` is grow-only so in-room appends are no-ops.  Length lives in a separate field (word 1), so the trailing slack never affects `len()`/indexing/copy (length-based, shrinks to fit)/serialisation.  One shared function → both backends.  Same 12 000-element build now shows **~8 free blocks** (one trailing slack block).  Guards: `tests/scripts/124-vector-amortised-growth.loft` (cross-mode correctness + fragmentation digit-count bound).  `vector_set_size` (bulk `+= [a,b,c]`) and `insert_vector` keep exact sizing (not the hot path); a user-facing `reserve(v, n)` (wrapping the existing `OpPreAllocVector`) remains an optional opt-in follow-up. |
+| **P5** — `vector +=` capacity reservation (amortised growth) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Discovered via the `store_memory()` builtin while profiling the @PLN6 crystal mesh: single-element `+= [x]` reallocated the backing record on (nearly) every append, fragmenting the store into O(N) freed records (a 12 738-element build → **101 815 free blocks / ~250 MB** vs ~0.8 MB of data).  Fixed by amortised (~×2) growth in `vector::vector_append` (`src/vector.rs`): when the backing record is out of room it grows to ~2× `length+1` instead of exactly `length+1`; `Store::resize` is grow-only so in-room appends are no-ops.  Length lives in a separate field (word 1), so the trailing slack never affects `len()`/indexing/copy (length-based, shrinks to fit)/serialisation.  One shared function → both backends.  Same 12 000-element build now shows **~8 free blocks** (one trailing slack block).  Guards: `tests/scripts/124-vector-amortised-growth.loft` (cross-mode correctness + fragmentation digit-count bound).  `vector_set_size` (bulk `+= [a,b,c]`) and `insert_vector` keep exact sizing (not the hot path); a user-facing `reserve(v, n)` (wrapping the existing `OpPreAllocVector`) remains an optional opt-in follow-up. |
 | **P6** — Free-block coalescing in `Store` (merge mergeable neighbours) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Partner of P5.  `Store::delete` coalesces only FORWARD (`rec + size`) — the header-only block layout has no footer, so a freed block can't find its PREDECESSOR; freeing B while A is already free left A|B uncoalesced, and accumulated small free blocks forced the store to GROW instead of reusing freed space.  **Fixed with NO new index** (no end→start map, no boundary-tag footer — those grow with the free-block count): a lazy `coalesce_free` sweep walks the contiguous block chain (the adjacency info that already exists — the same walk `claim_scan`/`usage`/`fl_rebuild` do), merges every run of adjacent free blocks in place, and rebuilds the ONE existing size-keyed free tree via `fl_rebuild`.  It runs in `claim` only when a best-fit miss would otherwise grow the store (that path already costs O(n) via `resize_store`), guarded by a single `needs_coalesce` bool so alloc-only workloads never sweep.  Backward coalescing falls out of the address-order walk (A+B merge regardless of free order).  Shared `Store` → both backends.  Guards: Rust unit test `coalesce_free_merges_adjacent_and_reuses_space` (`src/store.rs` — mergeable-pairs → 0, merged block reused without growing), cross-mode `tests/scripts/126-store-coalesce.loft`. |
-| **P7** — `reserve(v, n)` / `shrink_to_fit(v)` vector builtins | — | — | Interpreter + Native | Open — the deferred P5 follow-up.  P5's amortised ×2 growth leaves a vector at up to ~2× capacity (builds run ~57–73 % utilised).  Expose `reserve(v, n)` (wrapping the existing `OpPreAllocVector` / `vector::pre_alloc_vector`) so a known-size build claims exactly once, and/or `shrink_to_fit(v)` (a length-based re-claim — the deep-copy path `copy_claims_seq_vector` already does this internally) to reclaim slack after building.  Opt-in, benefits every vector consumer; drives @PLAN36 mesh memory-reduction item **M2** (`plans/36-audience-generative-art/03-projector-view.md`).  Effort S–M. |
+| **P7** — `reserve(v, n)` / `shrink_to_fit(v)` vector builtins | — | — | Interpreter + Native | Open — the deferred P5 follow-up.  P5's amortised ×2 growth leaves a vector at up to ~2× capacity (builds run ~57–73 % utilised).  Expose `reserve(v, n)` (wrapping the existing `OpPreAllocVector` / `vector::pre_alloc_vector`) so a known-size build claims exactly once, and/or `shrink_to_fit(v)` (a length-based re-claim — the deep-copy path `copy_claims_seq_vector` already does this internally) to reclaim slack after building.  Opt-in, benefits every vector consumer; drives @PLN6 mesh memory-reduction item **M2** (`plans/6-audience-generative-art/03-projector-view.md`).  Effort S–M. |
 | **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/future/03-lazy-stdlib/` and `plans/future/21-retire-scratch/` (N1 narrows the scratch consumer set). |
 | **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
 | **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |
@@ -2942,6 +2994,7 @@ plan-cleanup audits:
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
 | **BUILD1** — Eliminate lib/bin double compilation | § Design: BUILD1 | — | Build-time | Open — discovered 2026-05-30 wiring the tmpfs safeguards.  `main.rs` re-declares 41 modules already in `lib.rs` (~38,520 LOC of single-file modules) → whole crate compiled twice (rlib + bin).  Fix = thin-binary lib/bin split.  M–L, crate-wide; needs its own change.  Until then, shared `platform` helpers used only by `tests/` carry `#[allow(dead_code)]` in the binary view. |
 | **BUILD2** — Persist native-test binary cache across CI runs | § Design: BUILD2 | — | Build-time (CI + local) | **LANDED 2026-05-30.**  Both cache keys fold rlib CONTENT hash (was mtime) + ci.yml sets `LOFT_TMPDIR=target/loft-native-cache` (persisted by actions/cache) + prune step.  Warm runs skip ~565s/OS of native recompiles; also a local speedup (rlib rebuild no longer busts the native cache on the mtime bump).  NB: `libraries4` `f73e58a0 @P334` fixes the world.loft wasip2 stub at the source — supersedes the harness preopen workaround when it merges. |
+| **E2 (zero-copy `read_data`)** — `read_data` profiling breakdown | `§ Startup cache` above | — | Startup / parse | Open but **deprioritised (2026-06-04): the native-library execution model supersedes E2 as the startup-perf lever** — in that model library bodies + variable tables are never materialised at all (libraries are native artifacts loaded via `dlopen`), so the allocation cost E2 eliminates is simply not incurred.  See [DESIGN_DECISIONS.md § C71](DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model) and [BROADENING.md § Native-library execution model](BROADENING.md#native-library-execution-model--the-steady-state-design).  Measurement record: `bench_read_data_breakdown` (`src/ir_read.rs`, `#[ignore]`) on the real stdlib bundle: full `read_data` = **693 µs** = def-fields **453 µs (65%)** + variable tables **98 µs (14%)** + body trees **142 µs (20%)**.  Variable-table decode is **~0.39 µs/variable** (linear in allocation count); each variable rebuilds a `String` name + a boxed `Type` — exactly what E2 eliminates.  No cheap `read_function` optimisation exists; E2 is the only lever **if** this cost matters.  E2 startup prize: **~0.7 ms on the stdlib** (scales with def + var count).  Full arc: `plans/11-data-as-store/README.md`. |
 
 Other ROADMAP rows that conceptually belong here but lack
 PERFORMANCE.md design content yet — A12 (lazy work-variable

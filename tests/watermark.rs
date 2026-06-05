@@ -100,3 +100,65 @@ pub fn test() {
         "10 distinct-locals store peak {peak} > 6 — reclaim regression (locals pinned to scope exit; un-reclaimed peak is ~12)"
     );
 }
+
+/// Positive control for the Plan-57 **Phase-4 Goal-E guard** — `scopes::check`'s
+/// `reclaim_unfreed_eligible == 0` assertion.  This is the *live* store guard (the
+/// `[store-guard]` eprintln is superseded by it, scopes.rs:312), and it is what
+/// Goal E's "`LOFT_STORE_GUARD` silent corpus-wide" check and the N5 mixed-path
+/// store assertion (`tests/n3_parity.rs`) both lean on.
+///
+/// A detector whose *silence* is treated as evidence MUST be shown to fire, or its
+/// silence is evidence of nothing (engineering-rigor: silence-is-evidence-only-
+/// after-a-positive-control).  `LOFT_STORE_GUARD_INJECT` is a test-only fault that
+/// skips the early-free while keeping the guard armed — a simulated reclaim
+/// regression — so a reclaim-active program (11× reassign: every overwrite's store
+/// is dead at the next assignment) MUST trip the assertion.  Without the fault the
+/// same program is silent (reclaim frees the dead stores): the negative control.
+/// Spawned as a subprocess so the env fault can never leak into sibling tests.
+#[test]
+fn phase4_goal_e_guard_is_falsifiable() {
+    use std::process::Command;
+    let prog = "fn main() {\n\
+        \x20 v = [0,1]; v = [1,2]; v = [2,3]; v = [3,4]; v = [4,5]; v = [5,6];\n\
+        \x20 v = [6,7]; v = [7,8]; v = [8,9]; v = [9,10]; v = [10,11];\n\
+        \x20 println(\"{v[0]}\");\n\
+        }\n";
+    let pid = std::process::id();
+    let path = std::env::temp_dir().join(format!("loft_phase4_pc_{pid}.loft"));
+    std::fs::write(&path, prog).unwrap();
+
+    let run = |inject: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("--interpret")
+            .arg(&path)
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_STORE_GUARD", "1"); // arm the guard in a release binary too
+        if inject {
+            cmd.env("LOFT_STORE_GUARD_INJECT", "1");
+        }
+        cmd.output().expect("spawn loft binary")
+    };
+
+    // Negative control: reclaim works → guard silent → clean exit.
+    let base = run(false);
+    assert!(
+        base.status.success(),
+        "baseline (no inject) must be clean, but the guard fired:\n{}",
+        String::from_utf8_lossy(&base.stderr)
+    );
+
+    // Positive control: the fault leaves eligible stores live-but-dead → guard fires.
+    let inj = run(true);
+    let err = String::from_utf8_lossy(&inj.stderr);
+    assert!(
+        !inj.status.success(),
+        "INJECT must trip the Phase-4 Goal-E guard, but the program exited cleanly \
+         — the guard is unfalsifiable / dead"
+    );
+    assert!(
+        err.contains("plan-57 Phase 4") && err.contains("reclaim-eligible"),
+        "INJECT must panic with the Phase-4 Goal-E message, got:\n{err}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

@@ -3,10 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLAN34 — `lib/server` hardening (post-v5 polish + @PLAN36 prereqs)
+# @PLAN34 — `lib/server` hardening (post-v5 polish + @PLN6 prereqs)
 
 Consolidates the gaps surfaced during TTT v5 ([@PLAN32](../32-tic-tac-toe/README.md))
-that the audience-server demo ([@PLAN36](../../36-audience-generative-art/README.md))
+that the audience-server demo ([@PLN6](../../6-audience-generative-art/README.md))
 will hit on day one.  All items are **single-file**, **no language
 changes**, and **focused on `lib/server` + `lib/web` runtime quality**
 — this is library-quality work, not a feature arc.
@@ -19,7 +19,7 @@ session for items a-d, +S for f).
 
 ## Goal
 
-After this plan lands, @PLAN36 can build its audience-server
+After this plan lands, @PLN6 can build its audience-server
 without inlining native-fn workarounds (t4 already did this for
 `broadcast_binary`), without losing arbitrary bytes on the
 server-side recv path, and with enough observability to actually
@@ -193,7 +193,7 @@ Expose as native fns:
 - `srv.client_metrics(cid: integer) -> ClientMetrics`.
 
 Lets the soak test ASSERT health invariants instead of
-inferring from stdout.  Also gives @PLAN36's audience-server a
+inferring from stdout.  Also gives @PLN6's audience-server a
 free `/metrics` HTTP endpoint by handing the counters through.
 
 ---
@@ -215,32 +215,32 @@ free `/metrics` HTTP endpoint by handing the counters through.
 ```
 
 **Recommended landing order:** (a)+(b) first as a single small
-commit; then (e) before @PLAN36 phase 1 starts (it unblocks the
+commit; then (e) before @PLN6 phase 1 starts (it unblocks the
 real demo); then (c) and (f) together (the metrics make the
 soak meaningful); then (d) once we've SEEN a real panic in the
 wild.
 
 ## Out of scope (deferred to a later plan)
 
-- TLS / `wss://` support — @PLAN36 is HTTP-only over a trusted
+- TLS / `wss://` support — @PLN6 is HTTP-only over a trusted
   LAN.  Add to a future hardening pass once a real deployment
   needs it.
 - HTTP/2 or WebSocket multiplexing — single-stream WS is fine
   for the audience demo; multiplexing earns its keep when
   per-client message rates reach kHz.
-- Persistent replay cache — @PLAN36's catch-up can reconstruct
+- Persistent replay cache — @PLN6's catch-up can reconstruct
   from the live world state; on-disk session log not needed.
 - Connection-rejection-at-cap — v5 explicitly deferred this;
   re-deferred here.
 - HTTP route decorator syntax (C57 from
   [@PLAN29](../29-server-features/README.md)) — orthogonal
-  language feature; not on @PLAN36's critical path.
+  language feature; not on @PLN6's critical path.
 
 ## Dependencies
 
 - **Builds on:** [@PLAN32 v5](../32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
   (the binary WS surface, blob format, multi-client routing).
-- **Unblocks:** [@PLAN36](../../36-audience-generative-art/README.md)
+- **Unblocks:** [@PLN6](../../6-audience-generative-art/README.md)
   phase 1 (server-state) — items (a), (b), (e) are prereqs;
   (c), (d), (f) are post-launch hardening.
 
@@ -250,14 +250,14 @@ wild.
   bindings under `--native` (closed; resolved during v5 work).
 - [PROBLEMS.md @P245](../../../PROBLEMS.md) — `parallel{}` + I/O
   composition (closed; the snapshot fix unblocks any single-process
-  server + client variant a future @PLAN36 demo wants).
+  server + client variant a future @PLN6 demo wants).
 - [PROBLEMS.md @P246](../../../PROBLEMS.md) — file-scope `const`
   (closed; relevant because the server's wire-format constants like
   `H_HELLO`, `TYPE_DELTA` now declare cleanly).
 - [INCONSISTENCIES.md § 33](../../../INCONSISTENCIES.md#33-const-applies-to-locals-and-parameters-but-not-fields)
   — the const-fields gap.  Tangentially relevant: tightening
   `Cell` / `Player` field immutability would catch tick-loop
-  mistakes early in @PLAN36.
+  mistakes early in @PLN6.
 - [lib/game_protocol/examples/v5_t3_n_clients_server.loft](../../../../../lib/game_protocol/examples/v5_t3_n_clients_server.loft) —
   current multi-client routing pattern; (a)+(b)+(e) extend it.
 - [lib/server/native/src/lib.rs](../../../../../lib/server/native/src/lib.rs) —

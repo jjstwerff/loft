@@ -69,7 +69,7 @@ impl Output<'_> {
         // output_call emits nothing for OpCreateStack, so we must intercept here and emit
         // `&mut var_<name>` instead.
         if let Value::Call(d_nr, args) = v
-            && self.data.def(*d_nr).name == "OpCreateStack"
+            && self.data.def(*d_nr).name() == "OpCreateStack"
             && let [Value::Var(nr)] = args.as_slice()
         {
             return Some(*nr);
@@ -82,7 +82,7 @@ impl Output<'_> {
                 .operators
                 .iter()
                 .filter(|op| !matches!(op, Value::Line(_)))
-                .all(|op| matches!(op, Value::Call(d_nr, _) if self.data.def(*d_nr).name == "OpCreateStack"));
+                .all(|op| matches!(op, Value::Call(d_nr, _) if self.data.def(*d_nr).name() == "OpCreateStack"));
             return only_create_stack.then_some(*vr);
         }
         None
@@ -124,13 +124,13 @@ impl Output<'_> {
         &self,
         ops: &'a [Value],
     ) -> std::borrow::Cow<'a, [Value]> {
-        let fn_returned = &self.data.def(self.def_nr).returned;
+        let fn_returned = self.data.def(self.def_nr).returned();
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);
         }
         let is_free_op = |op: &Value| {
             if let Value::Call(d, _) = op {
-                let name = &self.data.def(*d).name;
+                let name = self.data.def(*d).name();
                 name == "OpFreeText" || name == "OpFreeRef"
             } else {
                 false
@@ -161,7 +161,7 @@ impl Output<'_> {
         //   • Return is `Return(Var(target))`.
         //   • No other operator between Set and Return reads or writes
         //     the target var.
-        let variables = &self.data.def(self.def_nr).variables;
+        let variables = self.data.def(self.def_nr).variables();
         let mut result: Vec<Value> = ops.to_vec();
         let mut ret_search_from = 0;
         while let Some(ret_pos) = result[ret_search_from..]
@@ -265,7 +265,7 @@ impl Output<'_> {
         // (the first arg, which is always a `Var(_)` for these builtins).
         let freed_var = |op: &Value| -> Option<u16> {
             if let Value::Call(d, args) = op.unspan() {
-                let name = &self.data.def(*d).name;
+                let name = self.data.def(*d).name();
                 if (name == "OpFreeRef" || name == "OpFreeText")
                     && let Some(first) = args.first()
                     && let Value::Var(v) = first.unspan()
@@ -363,7 +363,7 @@ impl Output<'_> {
     /// to avoid hoisting a Call past a free of one of the Call's operands.
     fn free_op_var(op: &Value, data: &crate::data::Data) -> Option<u16> {
         if let Value::Call(d, args) = op.unspan() {
-            let name = data.def(*d).name.as_str();
+            let name = data.def(*d).name();
             if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
                 && let Some(arg0) = args.first()
                 && let Value::Var(v) = arg0.unspan()
@@ -404,19 +404,19 @@ impl Output<'_> {
                 let def = self.data.def(*d_nr);
                 // User-defined functions (rust template is empty AND have loft code body)
                 // always need pre-eval to avoid double-borrow.
-                if def.rust.is_empty() && def.code != Value::Null {
+                if def.rust().is_empty() && *def.code() != Value::Null {
                     true
-                } else if def.rust.contains("stores") {
+                } else if def.rust().contains("stores") {
                     // Template fns that use `stores` can cause double-borrow when nested
                     // inside another stores-using call; treat them as needing pre-eval.
                     true
-                } else if def.rust.is_empty() && Self::op_uses_stores(&def.name) {
+                } else if def.rust().is_empty() && Self::op_uses_stores(def.name()) {
                     // Native Op functions whose special-case emit code passes `stores`
                     // also cause double-borrow when nested inside other stores-using calls.
                     true
-                } else if def.rust.is_empty()
-                    && def.code == Value::Null
-                    && !def.name.starts_with("Op")
+                } else if def.rust().is_empty()
+                    && *def.code() == Value::Null
+                    && !def.name().starts_with("Op")
                 {
                     // User-fn stubs (no rust template, no loft body, not a built-in Op)
                     // are emitted as todo!() but still take `&mut Stores` — pre-eval
@@ -505,7 +505,7 @@ impl Output<'_> {
         }
         if let Value::Call(d_nr, vals) = v {
             let def_fn = self.data.def(*d_nr);
-            if def_fn.rust.is_empty() {
+            if def_fn.rust().is_empty() {
                 // User-defined function: pre-eval any Block or nested user-fn arguments
                 // (both cause double-borrow of stores if left inline).
                 // @P312 — also pre-eval any arg that READS a variable which another
@@ -536,10 +536,10 @@ impl Output<'_> {
                 // Also pre-eval any arg whose template placeholder appears more than once
                 // (e.g., `#rust"!@v1.is_nan() && ... @v1 ..."` expands @v1 twice, causing
                 // double-borrow when @v1 is a user-fn call returning stores-backed data).
-                let has_dup_param = def_fn.attributes.iter().enumerate().any(|(i, a)| {
+                let has_dup_param = def_fn.attributes().iter().enumerate().any(|(i, a)| {
                     let placeholder = format!("@{}", a.name);
                     i < vals.len()
-                        && def_fn.rust.matches(placeholder.as_str()).count() > 1
+                        && def_fn.rust().matches(placeholder.as_str()).count() > 1
                         && self.needs_pre_eval(&vals[i])
                 });
                 // Templates that touch `s.database.…`, `s.const_refs`, or
@@ -557,14 +557,14 @@ impl Output<'_> {
                 // text-returning call that uses these helpers) hoist
                 // the inner call into a `let _pre_N = ...` binding
                 // and avoid the rustc E0499 double-borrow.
-                let template_uses_stores = def_fn.rust.contains("stores")
-                    || def_fn.rust.contains("s.database.")
-                    || def_fn.rust.contains("s.const_ref_at(")
-                    || def_fn.rust.contains("s.string_from_const_store(")
-                    || def_fn.rust.contains("s.raise(")
-                    || def_fn.rust.contains("s.vec_get_or_raise(")
-                    || def_fn.rust.contains("s.vec_ref_or_raise(")
-                    || def_fn.rust.contains("s.text_char_or_raise(");
+                let template_uses_stores = def_fn.rust().contains("stores")
+                    || def_fn.rust().contains("s.database.")
+                    || def_fn.rust().contains("s.const_ref_at(")
+                    || def_fn.rust().contains("s.string_from_const_store(")
+                    || def_fn.rust().contains("s.raise(")
+                    || def_fn.rust().contains("s.vec_get_or_raise(")
+                    || def_fn.rust().contains("s.vec_ref_or_raise(")
+                    || def_fn.rust().contains("s.text_char_or_raise(");
                 let needs_pre_eval_args = block_count > 0
                     || user_fn_count > 1
                     || (template_uses_stores && user_fn_count > 0)
@@ -574,9 +574,9 @@ impl Output<'_> {
                         let is_block = matches!(arg, Value::Block(_));
                         let is_multi_user_fn = user_fn_count > 1 && self.needs_pre_eval(arg);
                         let is_stores_conflict = template_uses_stores && self.needs_pre_eval(arg);
-                        let is_dup = if arg_idx < def_fn.attributes.len() {
-                            let placeholder = format!("@{}", def_fn.attributes[arg_idx].name);
-                            def_fn.rust.matches(placeholder.as_str()).count() > 1
+                        let is_dup = if arg_idx < def_fn.attributes().len() {
+                            let placeholder = format!("@{}", def_fn.attributes()[arg_idx].name);
+                            def_fn.rust().matches(placeholder.as_str()).count() > 1
                                 && self.needs_pre_eval(arg)
                         } else {
                             false
@@ -654,9 +654,9 @@ impl Output<'_> {
                     format!("({substituted}) as i64")
                 } else if matches!(tp, Type::Text(_))
                     && matches!(arg, Value::Call(d, _) if
-                        matches!(self.data.def(*d).returned, Type::Text(_))
-                        && self.data.def(*d).rust.is_empty()
-                        && !self.data.def(*d).name.starts_with("Op"))
+                        matches!(self.data.def(*d).returned(), Type::Text(_))
+                        && self.data.def(*d).rust().is_empty()
+                        && !self.data.def(*d).name().starts_with("Op"))
                 {
                     // Text-returning user fn calls produce `Str`; callees
                     // expect `&str`.  Deref at the binding site.
@@ -750,7 +750,7 @@ impl Output<'_> {
         // to string-level substitution below.
         if let Value::Call(d_nr, vals) = v {
             let def_fn = self.data.def(*d_nr);
-            if def_fn.rust.is_empty() && !def_fn.name.starts_with("Op") {
+            if def_fn.rust().is_empty() && !def_fn.name().starts_with("Op") {
                 // Full-expression match: if this entire call equals a pre-eval, emit the name.
                 let saved_counter = self.counter;
                 let saved_declared = self.declared.clone();
@@ -774,17 +774,17 @@ impl Output<'_> {
                 // &mut Stores`); it only surfaced once @P297's argument-lift
                 // routed a user-fn call such as `assert(!file(p).sync())` through
                 // this structural pre-eval path.
-                let fn_name = def_fn.name.clone();
-                let attrs = def_fn.attributes.clone();
+                let fn_name = def_fn.name().to_string();
+                let attrs = def_fn.attributes().to_vec();
                 write!(w, "{fn_name}(cell")?;
                 for (idx, val) in vals.iter().enumerate() {
                     write!(w, ", ")?;
                     if let Some(vr) = self.create_stack_var(val) {
-                        let vname = sanitize(self.data.def(self.def_nr).variables.name(vr));
+                        let vname = sanitize(self.data.def(self.def_nr).variables().name(vr));
                         write!(w, "&mut var_{vname}")?;
                     // OpCreateStack wrapping an addressable expression.
                     } else if let Value::Call(d_nr, args) = val
-                        && self.data.def(*d_nr).name == "OpCreateStack"
+                        && self.data.def(*d_nr).name() == "OpCreateStack"
                         && args.len() == 1
                         && !matches!(&args[0], Value::Var(_))
                     {
@@ -794,7 +794,7 @@ impl Output<'_> {
                         && matches!(attrs[idx].typedef, Type::RefVar(_))
                         && let Value::Var(nr) = val
                         && matches!(
-                            self.data.def(self.def_nr).variables.tp(*nr),
+                            self.data.def(self.def_nr).variables().tp(*nr),
                             Type::RefVar(_)
                         )
                     {
@@ -803,7 +803,7 @@ impl Output<'_> {
                         // `calls.rs::output_call_user_fn`; the pre-eval
                         // path re-emits calls structurally and needs the
                         // same handling.
-                        let caller_vars = &self.data.def(self.def_nr).variables;
+                        let caller_vars = self.data.def(self.def_nr).variables();
                         let name = sanitize(caller_vars.name(*nr));
                         if caller_vars.is_argument(*nr) {
                             // An argument RefVar is already &mut DbRef — pass
@@ -833,14 +833,14 @@ impl Output<'_> {
                                 }
                             }
                             // set fn_ref_context for fn-ref parameter evaluation.
-                            let param_is_fnref = idx < self.data.def(*d_nr).attributes.len()
+                            let param_is_fnref = idx < self.data.def(*d_nr).attributes().len()
                                 && matches!(
-                                    self.data.def(*d_nr).attributes[idx].typedef,
+                                    self.data.def(*d_nr).attributes()[idx].typedef,
                                     Type::Function(_, _, _)
                                 );
-                            let param_is_routine = idx < self.data.def(*d_nr).attributes.len()
+                            let param_is_routine = idx < self.data.def(*d_nr).attributes().len()
                                 && matches!(
-                                    self.data.def(*d_nr).attributes[idx].typedef,
+                                    self.data.def(*d_nr).attributes()[idx].typedef,
                                     Type::Routine(_)
                                 );
                             if param_is_fnref && matches!(val, Value::Int(_)) {
@@ -859,7 +859,7 @@ impl Output<'_> {
                 write!(w, ")")?;
                 // Add narrow-int cast if the user function returns a narrow int type.
                 // Post-2c: widen to i64 to match the default Integer width.
-                if narrow_int_cast(&self.data.def(*d_nr).returned).is_some() {
+                if narrow_int_cast(self.data.def(*d_nr).returned()).is_some() {
                     write!(w, " as i64")?;
                 }
                 return Ok(());
@@ -1016,7 +1016,7 @@ impl Output<'_> {
             Value::If(_, _, false_v) => matches!(**false_v, Value::Null),
             Value::Call(d_nr, _) => {
                 let def = self.data.def(*d_nr);
-                matches!(def.returned, Type::Void)
+                matches!(def.returned(), Type::Void)
             }
             Value::Block(bl) => matches!(bl.result, Type::Void),
             _ => false,
@@ -1059,7 +1059,7 @@ impl Output<'_> {
         let target_type: &Type = match &bl.result {
             Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => &bl.result,
             Type::Never => {
-                let fn_ret = &self.data.def(self.def_nr).returned;
+                let fn_ret = self.data.def(self.def_nr).returned();
                 match fn_ret {
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => fn_ret,
                     _ => return None,
@@ -1086,7 +1086,7 @@ impl Output<'_> {
             match operators[i].unspan() {
                 Value::Line(_) => {}
                 Value::Call(d_nr, _) => {
-                    let name = &self.data.def(*d_nr).name;
+                    let name = self.data.def(*d_nr).name();
                     if name == "OpFreeText" || name == "OpFreeRef" || name == "n_set_store_lock" {
                         continue;
                     }
@@ -1096,7 +1096,7 @@ impl Output<'_> {
                     if name.starts_with("Op") {
                         return None;
                     }
-                    let callee_ret = &self.data.def(*d_nr).returned;
+                    let callee_ret = self.data.def(*d_nr).returned();
                     if !Self::heap_shape_matches(callee_ret, target_type) {
                         return None;
                     }

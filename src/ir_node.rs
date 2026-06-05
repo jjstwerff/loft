@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 G2 / M3.0 — the IR node-walk handle (`IrNode` / `IrType`).
+//! @PLN11 G2 / M3.0 — the IR node-walk handle (`IrNode` / `IrType`).
 //!
 //! ## Why this exists
 //!

@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLAN36 phase 1 MVP — minimal multi-client audience server.
+// @PLN6 phase 1 MVP — minimal multi-client audience server.
 //
 // Holds a world of painted hexes, accepts seed/clear/color_select events
 // from any number of clients, broadcasts every change to all clients
 // (including the sender as confirmation), and replays the current world
 // to each new connection.
 //
-// Scope vs the full phase 1 spec (doc/claude/plans/36-audience-generative-art/
+// Scope vs the full phase 1 spec (doc/claude/plans/6-audience-generative-art/
 // 01-server-state.md):
 //   ✅ 1.1 simplified — single-hash world; chunk model deferred
 //   ✅ 1.2 event dispatch by msg_id (not JSON yet — spec wants JSON

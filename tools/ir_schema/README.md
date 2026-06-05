@@ -3,11 +3,11 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# tools/ir_schema — store-schema generator for the compiler IR (@PLAN54 arc A)
+# tools/ir_schema — store-schema generator for the compiler IR (@PLN11 arc A)
 
 The hybrid pipeline that turns the compiler IR into a store-schema
 registration, so `Data`/`Value`/`Type`/… can live as `Stores` records (the
-plan-54 mmap end-goal) and be walked by the schema-driven inspection layer
+@PLN11 mmap end-goal) and be walked by the schema-driven inspection layer
 (`Stores::show_json`).
 
 ## Pipeline
@@ -36,7 +36,7 @@ ir.loft  ──(loft --native --show-rust)──▶  generated.rs  ──(extrac
 
 Why hybrid: generation owns the schema (mechanical, regenerate when the IR
 changes — no hand-sync of ~940 sites); the ergonomic typed API is hand-coded
-(codegen never emits an accessor layer — see plan-54 § "What the generated
+(codegen never emits an accessor layer — see @PLN11 § "What the generated
 Rust gives us").
 
 ## Extraction findings (2026-06-01)
@@ -54,7 +54,7 @@ Rust gives us").
   the extracted block is self-contained: emit a base-type prelude, then our
   registrations with `tN` ids rebased.
 - **Variant names are global** and must be unique + CamelCase, hence the
-  `Ty`/`Nd` prefixes in `ir.loft` (plan-54 § Arc A reference, finding 1).
+  `Ty`/`Nd` prefixes in `ir.loft` (@PLN11 § Arc A reference, finding 1).
 - **`--native` needs dependency-respecting definition order** (`Block` before
   `Node`, etc.) or it emits a forward-reference `E0425`; `ir.loft` is ordered
   accordingly.  Moot under `--interpret`.

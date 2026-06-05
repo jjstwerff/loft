@@ -97,7 +97,7 @@ fn main() {
   ns = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
   labels = ["block ", "line  ", "sparse", "ring  "];
   // Modest rep count: the ring pattern at 80+ hexes is ~300 ms/build
-  // (fork-explosion, see plan @PLAN36 perf notes), so a high rep count
+  // (fork-explosion, see plan @PLN6 perf notes), so a high rep count
   // makes the full ramp take minutes.  12 reps still averages out jitter.
   reps = 12;
 

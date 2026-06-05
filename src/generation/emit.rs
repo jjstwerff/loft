@@ -13,7 +13,7 @@ use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
 
 impl Output<'_> {
     /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
-    /// [`Self::output_code_node`].  @PLAN54 G2/M4 (cf. interpreter `generate`):
+    /// [`Self::output_code_node`].  @PLN11 G2/M4 (cf. interpreter `generate`):
     /// every existing caller keeps this signature; M5's store-backed entry calls
     /// `output_code_node(IrNode::Store(…))`.
     pub(super) fn output_code_inner(
@@ -25,7 +25,7 @@ impl Output<'_> {
     }
 
     /// Central recursive dispatch from an IR node to its Rust representation
-    /// (@PLAN54 G2/M4).  Dispatches on `node.kind()` and reads payloads through
+    /// (@PLN11 G2/M4).  Dispatches on `node.kind()` and reads payloads through
     /// the `IrNode` handle; arms not yet converted fall to the `match
     /// node.as_native()` below (native-backed bridge, lifted as they convert).
     #[allow(clippy::too_many_lines)]
@@ -68,11 +68,11 @@ impl Output<'_> {
             ValueType::Float => return write!(w, "{}_f64", node.float_value()),
             ValueType::Single => return write!(w, "{}_f32", node.single_value()),
             ValueType::Null => return write!(w, "()"),
-            // @PLAN54 G2/M4.2 — scalar arms (no Value child).
+            // @PLN11 G2/M4.2 — scalar arms (no Value child).
             ValueType::Line => {
                 // P198 / DX-source-map: a `// loft:<file>:<line>` comment so
                 // rustc errors trace back to the loft source line.
-                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                let file = self.data.def(self.def_nr).position().file.replace('\n', "");
                 return writeln!(w, "// loft:{file}:{}", node.line_nr());
             }
             ValueType::Break => {
@@ -91,7 +91,7 @@ impl Output<'_> {
                 let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
                 return write!(w, "continue 'l{}", self.loop_stack[idx]);
             }
-            // @PLAN54 G2/M4.4 — single/list-child arms recurse via output_code_node.
+            // @PLN11 G2/M4.4 — single/list-child arms recurse via output_code_node.
             ValueType::Drop => return self.output_code_node(w, node.drop_inner()),
             ValueType::BreakWith => {
                 let n = node.breakwith_nr();
@@ -119,7 +119,7 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
-            // @PLAN54 G2/M4.5 — self-contained arms (no &Value-helper delegation).
+            // @PLN11 G2/M4.5 — self-contained arms (no &Value-helper delegation).
             ValueType::Yield => {
                 if self.yield_collect {
                     // Inside a ForLoopBody factory: push to the collector.
@@ -143,7 +143,7 @@ impl Output<'_> {
                 let clos_name = if clos_var == u16::MAX {
                     None
                 } else {
-                    let variables = &self.data.def(self.def_nr).variables;
+                    let variables = self.data.def(self.def_nr).variables();
                     Some(sanitize(variables.name(clos_var)))
                 };
                 let d_nr = node.fnref_dnr();
@@ -178,11 +178,11 @@ impl Output<'_> {
                     "/* par_for(...) — native codegen lands in spine step 3b */"
                 );
             }
-            // @PLAN54 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
+            // @PLN11 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
             // keeps a native bridge as it is a &Value-only predicate).
             ValueType::Var => {
                 let var = node.var_nr();
-                let variables = &self.data.def(self.def_nr).variables;
+                let variables = self.data.def(self.def_nr).variables();
                 let var_name = sanitize(variables.name(var));
                 if self.coroutine_persistent_vars.contains(&var) {
                     // P224: read from the coroutine struct field.
@@ -229,7 +229,7 @@ impl Output<'_> {
                 // N8a.2: use the variable's declared name (not its number).
                 let var = node.tupleget_var();
                 let idx = node.tupleget_idx();
-                let variables = &self.data.def(self.def_nr).variables;
+                let variables = self.data.def(self.def_nr).variables();
                 let name = sanitize(variables.name(var));
                 let elem_is_text = match variables.tp(var) {
                     Type::Tuple(elems) => elems
@@ -254,13 +254,13 @@ impl Output<'_> {
                 // N8a.2: emit the element assignment (TuplePut is a void stmt).
                 let var = node.tupleput_var();
                 let idx = node.tupleput_idx();
-                let name = sanitize(self.data.def(self.def_nr).variables.name(var));
+                let name = sanitize(self.data.def(self.def_nr).variables().name(var));
                 write!(w, "var_{name}.{idx} = ")?;
                 return self.output_code_node(w, node.tupleput_inner());
             }
             _ => {}
         }
-        // @PLAN54 G2/M4 — materialise-at-boundary for the residual arms
+        // @PLN11 G2/M4 — materialise-at-boundary for the residual arms
         // (Block/Loop/Set/If/Call/Return/Keys/CallRef), which delegate to large
         // `&Value`/`&Block` helpers (output_block/output_if/output_set/…).
         // Native backing is zero-cost (`code = v`); a store-backed node
@@ -296,7 +296,7 @@ impl Output<'_> {
                 self.output_call(w, *def_nr, vals)?;
             }
             Value::Return(val) => {
-                let returned = &self.data.def(self.def_nr).returned;
+                let returned = self.data.def(self.def_nr).returned();
                 if matches!(**val, Value::Null) && *returned != Type::Void {
                     write!(w, "return {}", super::default_native_value(returned))?;
                 } else if let Value::If(test, true_v, false_v) = &**val {
@@ -355,10 +355,10 @@ impl Output<'_> {
                     let inner_already_str = matches!(
                         &**val,
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
-                            && matches!(self.data.def(*d).returned, Type::Text(_))
-                            && self.data.def(*d).rust.is_empty()
-                            && self.data.def(*d).native.is_empty()
-                            && !self.data.def(*d).name.starts_with("Op")
+                            && matches!(self.data.def(*d).returned(), Type::Text(_))
+                            && self.data.def(*d).rust().is_empty()
+                            && self.data.def(*d).native().is_empty()
+                            && !self.data.def(*d).name().starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
                     // T1.8a's tuple-of-text return path was retired by
@@ -388,7 +388,7 @@ impl Output<'_> {
                     // ref_return does), so we don't filter on `a.hidden`.
                     let needs_p205_scratch = wrap_text && {
                         let def = self.data.def(self.def_nr);
-                        let no_work_buffer = !def.attributes.iter().any(|a| {
+                        let no_work_buffer = !def.attributes().iter().any(|a| {
                             matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
                         });
                         // @P321e — also route through scratch when the return
@@ -401,8 +401,8 @@ impl Output<'_> {
                         // fn returns a DIFFERENT local, so the `no_work_buffer`
                         // guard above doesn't catch it.
                         let returns_local_text = matches!((**val).unspan(), Value::Var(v)
-                            if matches!(def.variables.tp(*v), Type::Text(_))
-                                && !def.variables.is_argument(*v));
+                            if matches!(def.variables().tp(*v), Type::Text(_))
+                                && !def.variables().is_argument(*v));
                         // @PLAN52 cluster VI (2026-05-30): closures returning text
                         // have a `__work_ret: &mut String` parameter but the
                         // closure body's `??` value-block doesn't write into it —
@@ -500,7 +500,7 @@ impl Output<'_> {
             Value::CallRef(v_nr, args) => {
                 self.output_call_ref(w, *v_nr, args)?;
             }
-            // @PLAN54 G2/M4.1–M4.6 — these kinds are handled by the
+            // @PLN11 G2/M4.1–M4.6 — these kinds are handled by the
             // `match node.kind()` above, which `return`s before reaching here.
             Value::Var(_)
             | Value::Tuple(_)
@@ -544,7 +544,7 @@ impl Output<'_> {
         v_nr: u16,
         args: &[Value],
     ) -> std::io::Result<()> {
-        let variables = &self.data.def(self.def_nr).variables;
+        let variables = self.data.def(self.def_nr).variables();
         let var_name = sanitize(variables.name(v_nr));
         let fn_type = variables.tp(v_nr).clone();
         let (param_types, ret_type) = if let Type::Function(p, r, _) = &fn_type {
@@ -574,17 +574,20 @@ impl Output<'_> {
                 continue;
             }
             let def = self.data.def(d);
-            if !matches!(def.def_type, crate::data::DefType::Function) {
+            if !matches!(def.def_type(), crate::data::DefType::Function) {
                 continue;
             }
             // Exclude bytecode ops (Op* prefix) — they are not callable in native mode.
-            if def.name.starts_with("Op") {
+            if def.name().starts_with("Op") {
                 continue;
             }
             // closure-capturing lambdas have a hidden __closure param as the last
             // attribute. The closure is injected explicitly at the call site (in arg_exprs),
             // so total arg count must equal the full attribute count.
-            let has_closure = def.attributes.last().is_some_and(|a| a.name == "__closure");
+            let has_closure = def
+                .attributes()
+                .last()
+                .is_some_and(|a| a.name == "__closure");
             // P227: hidden-attribute detection is TYPE-based, not name-based.
             // Text-return work-buffers ride as `Type::RefVar(Type::Text(_))`
             // attributes that the parser names after the user-visible variable
@@ -623,11 +626,11 @@ impl Output<'_> {
             if !params_match {
                 continue;
             }
-            if rust_type(&def.returned, &Context::Result) != rust_type(&ret_type, &Context::Result)
+            if rust_type(def.returned(), &Context::Result) != rust_type(&ret_type, &Context::Result)
             {
                 continue;
             }
-            candidates.push((d, def.name.clone(), has_closure));
+            candidates.push((d, def.name().to_string(), has_closure));
         }
         // Phase 09 phase 00 step 0.7 — fn-ref dispatch routes each
         // candidate arm through `output_call_user_fn` (which dispatches
@@ -700,10 +703,10 @@ impl Output<'_> {
             }
         }
         // Look up the closure work-var for this fn-ref variable (if any).
-        let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
+        let closure_var_nr = self.data.def(self.def_nr).variables().closure_var_of(v_nr);
         let closure_expr: String = if let Some(clos_nr) = closure_var_nr {
             // Same-scope closure: pass the local ___clos_N variable.
-            let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+            let clos_name = sanitize(self.data.def(self.def_nr).variables().name(clos_nr));
             format!("var_{clos_name}")
         } else {
             // Cross-scope closure — pass .1 from the fn-ref tuple.
@@ -844,7 +847,7 @@ impl Output<'_> {
                     .clone(),
             ),
             ValueType::Call => {
-                let ret = &self.data.def(node.call_to()).returned;
+                let ret = self.data.def(node.call_to()).returned();
                 (*ret != Type::Void).then(|| ret.clone())
             }
             ValueType::Block => {
@@ -1056,7 +1059,7 @@ impl Output<'_> {
         let mut f_vars: Vec<u16> = Vec::new();
         Self::collect_set_vars(IrNode::Native(true_v), &mut t_vars);
         Self::collect_set_vars(IrNode::Native(false_v), &mut f_vars);
-        let variables = &self.data.def(self.def_nr).variables;
+        let variables = self.data.def(self.def_nr).variables();
         for &v in &t_vars {
             if f_vars.contains(&v) && !self.declared.contains(&v) {
                 let name = sanitize(variables.name(v));
@@ -1127,7 +1130,7 @@ impl Output<'_> {
         fn walk(this: &Output, v: &Value) -> bool {
             match v.unspan() {
                 Value::Set(var, val) => {
-                    let variables = &this.data.def(this.def_nr).variables;
+                    let variables = this.data.def(this.def_nr).variables();
                     if variables.name(*var).starts_with("__ncc_") && variables.is_skip_free(*var) {
                         return true;
                     }
@@ -1149,7 +1152,7 @@ impl Output<'_> {
         block: IrBlock,
         wrap_text: bool,
     ) -> std::io::Result<()> {
-        // @PLAN54 G2/M4 — materialise-at-boundary: native is zero-cost; a
+        // @PLN11 G2/M4 — materialise-at-boundary: native is zero-cost; a
         // store-backed block materialises once, then the intricate `&Block` body
         // (which threads `bl` through patch_hoisted_returns /
         // detect_ref_tail_capture / is_void_value) runs unchanged.
@@ -1184,7 +1187,7 @@ impl Output<'_> {
             bl.name,
             bl.scope,
             bl.result
-                .show(self.data, &self.data.def(self.def_nr).variables)
+                .show(self.data, self.data.def(self.def_nr).variables())
         )?;
         // Inject shadow call stack instrumentation if set by output_function().
         if let Some(prefix) = self.call_stack_prefix.take() {
@@ -1202,7 +1205,7 @@ impl Output<'_> {
         // `[Call, OpFreeText(work), Return(Null)]` pattern at the top of the
         // body block — without the patch, native codegen emits the Call as a
         // discarded statement and returns STRING_NULL.
-        let fn_name = &self.data.def(self.def_nr).name;
+        let fn_name = self.data.def(self.def_nr).name();
         let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
         // P240 fix (2026-05-11): bounded-generic T-stubs that return a
         // stack-passed tuple — `t_<len><Type>_<method>` returning
@@ -1228,8 +1231,8 @@ impl Output<'_> {
         let has_ret_temp = matches!(bl.result, Type::Text(_))
             && bl.operators.iter().any(|op| {
                 matches!(op.unspan(), Value::Set(v, _) if
-                    self.data.def(self.def_nr).variables.name(*v).starts_with("__ret_")
-                    && self.data.def(self.def_nr).variables.is_skip_free(*v))
+                    self.data.def(self.def_nr).variables().name(*v).starts_with("__ret_")
+                    && self.data.def(self.def_nr).variables().is_skip_free(*v))
             });
         let patched_ops;
         let operators: &[Value] = if is_void_block
@@ -1279,8 +1282,8 @@ impl Output<'_> {
             && return_idx.is_some()
             && operators.iter().any(|op| {
                 matches!(op.unspan(), Value::Set(v, _) if
-                    self.data.def(self.def_nr).variables.name(*v).starts_with("__ncc_")
-                    && self.data.def(self.def_nr).variables.is_skip_free(*v))
+                    self.data.def(self.def_nr).variables().name(*v).starts_with("__ncc_")
+                    && self.data.def(self.def_nr).variables().is_skip_free(*v))
             });
         let has_trailing_void =
             return_idx.is_some_and(|i| i < last_op_idx) || has_ncc_skip_free_temp;
@@ -1294,7 +1297,7 @@ impl Output<'_> {
             // source.  Without this, only Value::Line nodes inside an
             // expression context get rendered (rare in practice).
             if let Value::Line(line) = v {
-                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                let file = self.data.def(self.def_nr).position().file.replace('\n', "");
                 self.indent(w)?;
                 writeln!(w, "// loft:{file}:{line}")?;
                 continue;
@@ -1316,14 +1319,14 @@ impl Output<'_> {
                 Value::Set(var, boxed)
                     if matches!(**boxed, Value::Text(_))
                         && matches!(
-                            self.data.def(self.def_nr).variables.tp(*var),
+                            self.data.def(self.def_nr).variables().tp(*var),
                             crate::data::Type::Text(_)
                         ) =>
                 {
                     count_format_ops(operators, vnr + 1, self.data)
                 }
                 Value::Call(d, _) => {
-                    let name = &self.data.def(*d).name;
+                    let name = self.data.def(*d).name();
                     if name == "OpClearStackText" || name == "OpClearText" {
                         count_format_ops(operators, vnr + 1, self.data)
                     } else {
@@ -1389,10 +1392,10 @@ impl Output<'_> {
                 // directly rather than delegating to output_call which writes nothing.
                 if is_return_expr
                     && let Value::Call(d_nr, args) = v.unspan()
-                    && self.data.def(*d_nr).name == "OpCreateStack"
+                    && self.data.def(*d_nr).name() == "OpCreateStack"
                     && let [Value::Var(nr)] = args.as_slice()
                 {
-                    let vname = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+                    let vname = sanitize(self.data.def(self.def_nr).variables().name(*nr));
                     writeln!(w, "&mut var_{vname}")?;
                 } else {
                     // A `Value::Return(...)` already emits its own `return …`
@@ -1452,9 +1455,9 @@ impl Output<'_> {
                     let needs_p205_scratch = wrap_result
                         && {
                             let def = self.data.def(self.def_nr);
-                            matches!(def.returned, Type::Text(_))
+                            matches!(def.returned(), Type::Text(_))
                             && (
-                                !def.attributes.iter().any(|a| {
+                                !def.attributes().iter().any(|a| {
                                     matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
                                 })
                                 // @PLAN52 cluster VI (2026-05-30): closures (and
@@ -1559,7 +1562,7 @@ impl Output<'_> {
             bl.name,
             bl.scope,
             bl.result
-                .show(self.data, &self.data.def(self.def_nr).variables)
+                .show(self.data, self.data.def(self.def_nr).variables())
         )?;
         Ok(())
     }

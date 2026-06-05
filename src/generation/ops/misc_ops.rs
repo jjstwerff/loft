@@ -69,7 +69,7 @@ impl OpEmitter for OpStepEmitter {
         write!(ctx.w, "OpStep(cell,&mut ")?;
         if let Value::Var(v) = &args[0] {
             let nm =
-                super::super::sanitize(ctx.output.data.def(ctx.output.def_nr).variables.name(*v));
+                super::super::sanitize(ctx.output.data.def(ctx.output.def_nr).variables().name(*v));
             write!(ctx.w, "var_{nm}")?;
         } else {
             ctx.emit(&args[0])?;
@@ -96,7 +96,7 @@ impl OpEmitter for OpRemoveEmitter {
         write!(ctx.w, "OpRemove(cell,&mut ")?;
         if let Value::Var(v) = &args[0] {
             let nm =
-                super::super::sanitize(ctx.output.data.def(ctx.output.def_nr).variables.name(*v));
+                super::super::sanitize(ctx.output.data.def(ctx.output.def_nr).variables().name(*v));
             write!(ctx.w, "var_{nm}")?;
         } else {
             ctx.emit(&args[0])?;

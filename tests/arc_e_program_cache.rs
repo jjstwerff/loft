@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 arc E — the opt-in whole-program startup cache, end-to-end.
+//! @PLN11 arc E — the opt-in whole-program startup cache, end-to-end.
 //!
 //! On `LOFT_PROGRAM_CACHE` a cold run caches the ENTIRE parsed program (stdlib +
 //! the script's lazily-loaded libs + user file) keyed on the script path, and a
@@ -89,7 +89,7 @@ fn program_cache_cold_warm_then_drift() {
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
 
-/// @PLAN54 G2/M6 — the manifest's build-signature line invalidates a stale
+/// @PLN11 G2/M6 — the manifest's build-signature line invalidates a stale
 /// bundle on a (simulated) binary upgrade.  Without it, a bundle written by an
 /// older build would be warm-loaded by a newer one whose store layout/codegen
 /// differs — a silent stale-load.  We simulate the upgrade by rewriting the
@@ -138,6 +138,51 @@ fn manifest_build_signature_invalidates_stale_bundle() {
     assert!(
         !restored.contains("STALE-OTHER-BUILD"),
         "a cold reparse should overwrite the stale-sig manifest"
+    );
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+/// @PLN11 — regression: a `#cwd` program's parse-time path-resolution mode must
+/// survive a warm load.  `#cwd` flips `program_relative` to false (cwd-relative)
+/// at parse time; a warm load skips parsing, so without the manifest's `prel`
+/// line the mode reverted to the program-relative default and `file()` resolved
+/// against the program's own dir — the bug that made the indexer scan nothing on
+/// a cached run.  The program checks `Cargo.toml` relative to cwd (= workspace
+/// root, set by `run`): cwd-relative finds it (`found=true`), program-relative
+/// looks in the script's /tmp dir (`found=false`).
+#[test]
+fn cwd_directive_survives_warm_load() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_cwd_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "#cwd\nfn main() {\n  found = file(\"Cargo.toml\").format != Format.NotExists;\n  print(\"found={found}\\n\");\n}\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_cwd_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    // Cache-off baseline: `#cwd` resolves cwd-relative → finds the repo Cargo.toml.
+    let (ok_off, out_off) = run(&script, None);
+    assert!(ok_off, "cache-off failed: {out_off}");
+    assert!(
+        out_off.contains("found=true"),
+        "#cwd must resolve cwd-relative (found Cargo.toml): {out_off}"
+    );
+
+    // Cold parses the `#cwd` directive; warm skips parsing and must restore the mode.
+    let (ok_cold, out_cold) = run(&script, Some(&cache_dir));
+    assert!(ok_cold, "cold failed: {out_cold}");
+    let (ok_warm, out_warm) = run(&script, Some(&cache_dir));
+    assert!(ok_warm, "warm failed: {out_warm}");
+    assert_eq!(out_off, out_cold, "cold differs from cache-off");
+    // The bug: warm reverted to program-relative → looked in /tmp → `found=false`.
+    assert_eq!(
+        out_off, out_warm,
+        "warm lost the #cwd mode (program-relative regression): {out_warm}"
     );
 
     let _ = std::fs::remove_file(&script);

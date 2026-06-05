@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 #
-# @PLAN36 — one-shot launcher for the audience generative-art demo.
+# @PLN6 — one-shot launcher for the audience generative-art demo.
 #
 # Makes the demo "just work on any wifi": it INSPECTS THE CURRENT LAN ADDRESS,
 # regenerates the scan-to-join QR for that address, starts the single-port

@@ -1,0 +1,13 @@
+// @PLN11 Arc N / N3 Step 3 — control fixture for the default-native env gate.
+// A normal loft library that does NOT opt into `compile = "native"`.  Store-touching
+// public API (text + vector) so a shared-store-ABI bug under default-native shows up.
+
+pub fn banner(s: text) -> text {
+    "[" + s + "]"
+}
+
+pub fn doubled(v: vector<integer>) -> vector<integer> {
+    out: vector<integer> = [];
+    for x in v { out += [x * 2]; }
+    out
+}

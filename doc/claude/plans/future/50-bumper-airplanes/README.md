@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLAN50 — Bumper-airplanes — the next audience demo
 
 **Status:** Draft (2026-05-27, captured from chat).  No code yet.
-Successor to [@PLAN36](../../36-audience-generative-art/README.md)
+Successor to [@PLN6](../../6-audience-generative-art/README.md)
 (painting/decay audience demo) — same projector+phones substrate,
 new mechanic.
 
@@ -77,7 +77,7 @@ audience can see who's where without needing to read labels.
   densest cluster.
   Zoom widens to keep the full active group in frame; tightens only
   when planes cluster naturally.  Pose interpolation borrowed from
-  @PLAN36 phase 3.
+  @PLN6 phase 3.
 - **Render layers, back to front:**
   1. Sky / fog backdrop.
   2. Extruded world geometry (instanced per palette type).
@@ -105,7 +105,7 @@ audience can see who's where without needing to read labels.
 
 ### Phone client (per player) — first-person cockpit
 
-- Same connection pattern as @PLAN36 (HTTP page + WebSocket on one
+- Same connection pattern as @PLN6 (HTTP page + WebSocket on one
   port).
 - **First-person view from inside the cockpit.**  The phone is the
   player's intimate viewport; the projector is the spatial overview.
@@ -649,7 +649,7 @@ into phase 0 (phone client) rather than a separate sub-arc.
 
 ## Why this is interesting for loft
 
-The shipping mechanics of @PLAN36 — phone HTML page + loft server +
+The shipping mechanics of @PLN6 — phone HTML page + loft server +
 projector — are already proven.  What this demo would surface as
 **new** language / library asks:
 
@@ -665,12 +665,12 @@ projector — are already proven.  What this demo would surface as
 | Off-axis collision scoring | Cross-product / dot-product on velocity vectors | Trivial math; no library need |
 
 **No language gaps surface.**  The plan is application code on top
-of shipped libraries — same pattern as @PLAN36 phase 3 was.  The
+of shipped libraries — same pattern as @PLN6 phase 3 was.  The
 language has all the primitives this needs.
 
-## Why it's a better audience demo than @PLAN36
+## Why it's a better audience demo than @PLN6
 
-@PLAN36 was generative-art on a 2D hex grid — the audience watched
+@PLN6 was generative-art on a 2D hex grid — the audience watched
 patterns emerge from collective painting.  Lovely as art, but the
 **participatory loop** was thin: tap a hex, see it appear.
 
@@ -689,11 +689,11 @@ This demo:
   authoring tool, demonstrating dryopea's downstream use-case the
   same way moros's editor doubles as a level builder for moros.
 - **Same physical setup** — projector + phones over LAN, no new
-  hardware ask vs. @PLAN36.
+  hardware ask vs. @PLN6.
 
 ## Open questions (not blockers for the draft)
 
-1. **Player cap.**  @PLAN36's load test validated 30 simultaneous
+1. **Player cap.**  @PLN6's load test validated 30 simultaneous
    clients.  Does plane physics + per-frame WS scale to 30?  Or do
    we cap at ~12 and have the rest spectate?  Trivial network test
    can answer.
@@ -752,15 +752,15 @@ This demo:
    Recommend global only for v1, revisit if a specific target
    keeps breaking the round economy.
 
-## Sub-arcs (sketch — phase the work like @PLAN36)
+## Sub-arcs (sketch — phase the work like @PLN6)
 
 | # | What ships | Effort | Builds on |
 |---|---|---|---|
-| 0a | [Network throughput probe](00a-network-probe.md) — synthetic 30 Hz × N WS load against the existing @PLAN36 server; resolves the dominant unknown (does the broadcast pump hold at 12 / 20 / 30 clients?) before phase 0 commits substantial code | XS | @PLAN36 phase 1.9 (Tier A′ pump + WsGroup) |
-| 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples + **per-peer smooth-rendering (linear interp between received frames + fade in/out on sight-range crossings)** | S-M | phase 0a verdict + @PLAN36 phase 0 |
-| 1  | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLAN36 phase 1 (Tier A′) |
+| 0a | [Network throughput probe](00a-network-probe.md) — synthetic 30 Hz × N WS load against the existing @PLN6 server; resolves the dominant unknown (does the broadcast pump hold at 12 / 20 / 30 clients?) before phase 0 commits substantial code | XS | @PLN6 phase 1.9 (Tier A′ pump + WsGroup) |
+| 0  | Phone client — twin-strip + first-person canvas + WS skeleton + Web Audio samples + **per-peer smooth-rendering (linear interp between received frames + fade in/out on sight-range crossings)** | S-M | phase 0a verdict + @PLN6 phase 0 |
+| 1  | Loft server — per-client pose state, 30 Hz broadcast loop, event dispatch (collisions, scores, stalls) | S | @PLN6 phase 1 (Tier A′) |
 | 2  | Static world loader — `hex_world::load_mapfile()` + per-palette extrusion (palette-`md_extrude` → 3D pillars / cliffs / ramps) | XS | [`hex_world/MAPFILE.md`](https://github.com/loft-lang/loft-libs-world/blob/main/hex_world/MAPFILE.md); @PLAN46 plan 01 E4 |
-| 3  | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLAN36 phase 3; [`lib_plans/future/27-particles/`](../../../lib_plans/future/27-particles/README.md) Phase 1 (Trail) + Phase 2 (Burst) |
+| 3  | Projector renderer — world + planes + trails + centroid camera + score-pop overlays + countdown | M | @PLN6 phase 3; [`lib_plans/future/27-particles/`](../../../lib_plans/future/27-particles/README.md) Phase 1 (Trail) + Phase 2 (Burst) |
 | 4  | Physics — plane integrator + bounce + stall | M | [`lib_plans/future/26-physics-2body/`](../../../lib_plans/future/26-physics-2body/README.md) Phases 1-5; the existing [`tools/audience-demo-50/forecast_test.loft`](../../../../../tools/audience-demo-50/forecast_test.loft) (Q1/Q2/Q4/Q5 — 4/4 PASS) is the acceptance rig for the slot's reflect-with-energy-split + nose/body 2-collider |
 | 5  | Scoring + ambience — targets file + off-axis collision rule + leaderboard + "the storm" difficulty ramp | S | particles Phase 3 (score-burst factory) |
 | 6  | Live playtest + tuning (controls, audio mix, palette) | S | all above |
@@ -768,11 +768,11 @@ This demo:
 
 Each phase ships standalone (incremental playable state); the
 cadence is the same flat-2D-MVP-first sequence that worked for
-@PLAN36.
+@PLN6.
 
 ## Cross-references
 
-- [@PLAN36 audience-generative-art](../../36-audience-generative-art/README.md)
+- [@PLN6 audience-generative-art](../../6-audience-generative-art/README.md)
   — phase 3 renderer pattern, single-port HTTP+WS server,
   multi-client load test (the reusable substrate).
 - [@PLAN38 phase 01c — store_persist_bind](../38-loft-store-durable/README.md)

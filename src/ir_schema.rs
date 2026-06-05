@@ -10,14 +10,14 @@
 //! stored verbatim: this is the whole-bundle image (internally consistent),
 //! not the deferred per-library form ([`DESIGN_DECISIONS.md` § C69]).
 //!
-//! ## Interim — slated for retirement (@PLAN54)
+//! ## Interim — slated for retirement (@PLN11)
 //!
-//! This codec walks the **native** Rust IR graph.  @PLAN54 (Data-as-store)
+//! This codec walks the **native** Rust IR graph.  @PLN11 (Data-as-store)
 //! moves the IR into `Stores` records, after which `Stores::show_json`
 //! serialises it directly and this hand-rolled native walk is retired.  Until
-//! then it earns its keep two ways: as the **traversal skeleton** @PLAN54
+//! then it earns its keep two ways: as the **traversal skeleton** @PLN11
 //! arc B's native→store materializer mirrors, and as arc B's **equivalence
-//! oracle** ([`compare_data`]).  See `plans/future/54-data-as-store`
+//! oracle** ([`compare_data`]).  See `plans/11-data-as-store`
 //! § Standalone upside decision.  Nothing in the live compile path calls into
 //! this module yet — only the `LOFT_DUMP_SNAPSHOT` debug hook in `main.rs`.
 //!

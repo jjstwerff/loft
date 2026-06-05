@@ -144,11 +144,14 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Test
-        # `index_hygiene` is extracted to its own advisory `index-hygiene` job
-        # (and the nightly): a whole-repo doc-link check shouldn't gate every
-        # per-platform code PR, and it's platform-independent (no value running
-        # it 3x in the required matrix).
-        run: cargo nextest run --profile ci -E 'not binary(index_hygiene)'
+        # `index_hygiene` and `viewer_markdown` are extracted to their own advisory
+        # ubuntu jobs (and the nightly): both are platform-independent — a whole-repo
+        # doc-link check, and the markdown renderer's HTML output — so there is no
+        # value running them 3× in the required matrix.  `viewer_markdown` is also an
+        # HTTP smoke test whose interpreted viewer gets starved by this suite's
+        # parallel native-build load (empty response under contention), so it runs
+        # ISOLATED in the `viewer-smoke` job where it's reliable.
+        run: cargo nextest run --profile ci -E 'not binary(index_hygiene) and not binary(viewer_markdown)'
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so
@@ -237,6 +240,40 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
+
+  # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
+  # the per-platform `Test` matrix: it tests platform-independent rendering (no
+  # value running it 3×), and it is an HTTP smoke test whose interpreted viewer
+  # gets starved by the full suite's parallel native-build load (it returns an
+  # empty body under contention) — so it runs ISOLATED here (no contention →
+  # reliable).  ADVISORY: not in the required-status-checks list, so a real
+  # renderer regression shows red without blocking the merge (the rendering logic
+  # is also covered by the lib/markdown unit tests in the required `Test` job).
+  viewer-smoke:
+    name: markdown viewer smoke (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-viewer-cargo-
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      # The viewer test spawns `target/release/loft`; build it or the test skips.
+      - name: Build release loft binary
+        run: cargo build --release --bin loft
+      - name: Markdown viewer smoke (isolated — no native-build contention)
+        run: cargo nextest run --profile ci -E 'binary(viewer_markdown)'
 
   fixtures-check:
     name: lib fixtures vs pinned tags (ubuntu, advisory)

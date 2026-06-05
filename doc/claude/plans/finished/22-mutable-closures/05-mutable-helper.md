@@ -29,7 +29,7 @@ hatch for the residual cases where the aliasing is intentional
 and unavoidable.
 
 Per [README § Drivers](README.md#drivers): TTT v6 server retrofit
-+ @PLAN36 audience-demo BOTH ship without phase 05 if it doesn't
++ @PLN6 audience-demo BOTH ship without phase 05 if it doesn't
 land.  Real-world demand for `Mutable<T>` should drive
 prioritisation; phase 05 lands when a use case surfaces that the
 case-D message can't easily fix.

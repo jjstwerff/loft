@@ -4087,14 +4087,17 @@ fn main() {
     let t_parse_default = std::time::Instant::now();
     let default_dir = std::path::Path::new(&dir).join("default");
     let default_str = default_dir.to_string_lossy().to_string();
-    // @PLAN54 arc E / D2b — opt-in startup caches (default off).  The
-    // whole-program cache (`LOFT_PROGRAM_CACHE`) mmaps the ENTIRE parsed program
-    // (stdlib + lazily-loaded libs + user file) on a repeated unchanged run,
-    // skipping all parsing; the narrower stdlib cache (`LOFT_STDLIB_CACHE`, D2b)
-    // caches `default/` only.  Unset → both are no-ops, behaviour unchanged.
-    let program_cache_on = std::env::var_os("LOFT_PROGRAM_CACHE").is_some_and(|v| !v.is_empty());
+    // @PLN11 arc E / D2b / track 1 — the whole-program startup cache mmaps the
+    // ENTIRE parsed program (stdlib + lazily-loaded libs + user file) on a
+    // repeated unchanged run, skipping all parsing (~3–3.6× faster).  It is now
+    // **default-on** (`cache::program_cache_enabled`): off only under
+    // `LOFT_NO_CACHE`, or automatically when running inside Cargo (`cargo run` /
+    // the test suite — the dev-safety + test-isolation default).  The narrower
+    // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
+    // just when the program cache is off.
+    let program_cache_on = loft::cache::program_cache_enabled();
     p.track_sources = program_cache_on;
-    // @PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
+    // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
     // here so codegen reads bodies straight from it (no read_data body rebuild).
     let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
@@ -4138,7 +4141,7 @@ fn main() {
     if introspect_mode && introspect_trace {
         p.trace_types = true;
     }
-    // @PLAN54 arc E — a whole-program warm load already holds every definition;
+    // @PLN11 arc E — a whole-program warm load already holds every definition;
     // skip parsing the user file (and its lib loads) entirely.
     if !program_warm {
         p.parse(&abs_file, false);
@@ -4205,7 +4208,60 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
-    // @PLAN54 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
+    // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
+    // `[library] compile = "native"`, **build-before-mark**: build each library's
+    // cdylib from the post-parse type schema FIRST, then mark its functions native
+    // (so `byte_code` emits `OpStaticCall`) ONLY on success.  A build failure (or
+    // `LOFT_FORCE_NATIVE_BUILD_FAIL`) leaves the library unmarked → it **silently
+    // interprets** — byte-identical, no `exit`, no dispatch to an unbuilt symbol.
+    // An auto-native program bypasses the program cache for now (artifact caching is
+    // N1/Phase D).
+    // `LOFT_NO_NATIVE_LIBS=1` forces ALL `use`d libraries to interpret — the parity
+    // reference (a library run native ≡ run interpreted) and a manual escape hatch.
+    let native_libs_off = std::env::var_os("LOFT_NO_NATIVE_LIBS").is_some();
+    let force_build_fail = std::env::var_os("LOFT_FORCE_NATIVE_BUILD_FAIL").is_some();
+    let pending_native = if native_libs_off {
+        p.pending_native_compile.clear();
+        Vec::new()
+    } else {
+        std::mem::take(&mut p.pending_native_compile)
+    };
+    let mut auto_native_libs: Vec<String> = Vec::new();
+    let mut any_dev_interpret = false;
+    for pkg_dir in &pending_native {
+        let export = loft::native_lib::library_export_set(&p.data, pkg_dir);
+        if export.is_empty() {
+            continue;
+        }
+        let built = if force_build_fail {
+            Err("LOFT_FORCE_NATIVE_BUILD_FAIL".to_string())
+        } else {
+            loft::native_lib::cached_or_build_shared_cdylib(&p.data, &p.database, &export, pkg_dir)
+        };
+        match built {
+            Ok(Some(so)) => {
+                loft::native_lib::mark_exports(&mut p.data, &export);
+                auto_native_libs.push(so.to_string_lossy().into_owned());
+            }
+            Ok(None) => {
+                // Dev-interpret-on-edit (Step 4): the library is being actively
+                // edited, so it interprets this run — instant loop, no `rustc`, no
+                // marking, no warning (this is the intended fast path while you iterate).
+                // Do NOT cache the program: a warm load would replay this interpreted
+                // image and the "rebuild once editing settles" check would never fire.
+                any_dev_interpret = true;
+            }
+            Err(e) => {
+                // Silent interpret-fallback (Step 2 invariant): warn, do NOT mark,
+                // do NOT exit — the library's calls stay ordinary interpreted calls.
+                eprintln!(
+                    "loft: library '{pkg_dir}' could not compile native ({e}); interpreting it"
+                );
+            }
+        }
+    }
+    let has_auto_native = !auto_native_libs.is_empty();
+    // @PLN11 G2 / M0 — equivalence harness.  With `LOFT_IR_CHECK` set, assert
     // the store-materialised IR is bit-for-bit identical to the native `Data`
     // before any subsystem is rewired to read from the store.  Opt-in (default
     // off): validates the store-mirror invariant on the *actual* program being
@@ -4222,10 +4278,16 @@ fn main() {
             );
         }
     }
-    // @PLAN54 arc E — on a cold run with the program cache enabled, write the
+    // @PLN11 arc E — on a cold run with the program cache enabled, write the
     // whole-program bundle + drift manifest (post-`scopes::check`, so loaded
     // functions carry `done=true` and the baked free-ops).
-    if program_cache_on && !program_warm {
+    // Skip the program cache for auto-native programs: the warm-load path restores
+    // the parsed `Data` without re-running manifest detection, so it would have the
+    // `def.native` markings but no rebuilt cdylib to wire (Phase D persists this).
+    // Also skip when a library took the dev-interpret-on-edit path (Step 4): caching
+    // the interpreted image would pin it, so the "rebuild once editing settles" check
+    // would never run on a warm load.
+    if program_cache_on && !program_warm && !has_auto_native && !any_dev_interpret {
         loft::startup_cache::save_program(&p, &abs_file);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
@@ -4261,7 +4323,10 @@ fn main() {
     }
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
-    // @PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+    // @PLN11 G2/M6 — lower from the warm-loaded mmap store when present.
+    // (The auto-native cdylibs were already built + their symbols marked above,
+    // build-before-mark, so `byte_code` has emitted `OpStaticCall` only for the
+    // libraries that compiled.)
     compile::byte_code_with_store(&mut state, &mut p.data, warm_store.as_ref());
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
@@ -4271,9 +4336,14 @@ fn main() {
             all_native_libs.push(nlp.clone());
         }
     }
+    all_native_libs.extend(auto_native_libs);
     extensions::load_all(&mut state, all_native_libs.clone());
     // PKG.5: wire auto-marshalled native functions from loaded cdylibs.
     extensions::wire_native_fns(&mut state, &p.data);
+    // @PLN11 Arc N / N3 — wire the shared-store bridge dispatchers for the
+    // auto-native libraries (the `loft_shared_*` symbols), a disjoint set from the
+    // hand-written `#native` symbols `wire_native_fns` handles.
+    extensions::wire_shared_native_fns(&mut state, &p.data);
 
     // --check: parse + compile only, report errors and exit.
     // When combined with --native, fall through to the native pipeline

@@ -313,7 +313,7 @@ impl Parser {
             Value::Call(fn_nr, _) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
-                def.name.starts_with("n_") && def.code != Value::Null
+                def.name().starts_with("n_") && *def.code() != Value::Null
             }
             // Struct constructor blocks allocate a store too — when assigned
             // to a field, the source store is a temporary that should be freed.
@@ -324,7 +324,7 @@ impl Parser {
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
-        let tp = self.data.def(d_nr).known_type;
+        let tp = self.data.def(d_nr).known_type();
         // When the source is a struct-returning function CALL, set the high
         // bit (0x8000) on the type parameter to signal copy_record to free the
         // callee's temporary store after the deep copy.  Without this, the
@@ -712,7 +712,7 @@ impl Parser {
                     let elems = elems.clone();
                     self.parse_ref_tuple_elem(&mut t, code, &elems);
                 } else if let Type::Reference(d_nr, _) = t
-                    && self.data.def(d_nr).name.starts_with("__tuple<")
+                    && self.data.def(d_nr).name().starts_with("__tuple<")
                     && matches!(self.lexer.peek().has, crate::lexer::LexItem::Integer(_, _))
                 {
                     // P189b: vector-of-tuple loop var / index result —
@@ -1257,7 +1257,7 @@ impl Parser {
         // declared return type.  Empty `return` in a non-void function
         // produces the typed null sentinel.
         let mut ret_val = Value::Null;
-        let r_type = self.data.def(self.context).returned.clone();
+        let r_type = self.data.def(self.context).returned().clone();
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             let t = self.expression(&mut ret_val);
             if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
