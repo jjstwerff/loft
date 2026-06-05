@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLAN54 arc D / D2b — opt-in stdlib startup cache wiring.
+//! @PLN11 arc D / D2b — opt-in stdlib startup cache wiring.
 //!
 //! On a **warm** run (the `LOFT_STDLIB_CACHE` env var set and a valid bundle on
 //! disk), [`warm_load_stdlib`] mmaps the precompiled stdlib bundle — the native
@@ -95,33 +95,45 @@ fn hex32(key: &[u8; 32]) -> String {
     s
 }
 
-/// True iff `manifest` exists and every listed source's current content hash
-/// still matches (no input drifted since the bundle was written).
+/// On a valid match, returns `Some(program_relative)` — the parse-time path-
+/// resolution mode (the `#cwd` directive's effect) persisted in the manifest,
+/// which a warm load cannot re-derive because it skips parsing.  `None` on a
+/// miss: absent manifest, stale build signature, or any source drifted since
+/// the bundle was written.
 #[cfg(feature = "mmap")]
-fn manifest_matches(manifest: &std::path::Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(manifest) else {
-        return false;
-    };
+fn manifest_program_relative(manifest: &std::path::Path) -> Option<bool> {
+    let text = std::fs::read_to_string(manifest).ok()?;
     let mut lines = text.lines();
-    // @PLAN54 G2/M6 — the first line pins THIS build's signature.  A binary
+    // @PLN11 G2/M6 — the first line pins THIS build's signature.  A binary
     // upgrade (new store layout / codegen / version / features) changes it, so a
     // stale bundle is a clean cache miss (reparse), never a wrong-format load
     // (`Store::is_store_file`'s fixed magic can't catch a layout change).
     match lines.next().and_then(|l| l.strip_prefix("sig ")) {
         Some(sig) if sig == crate::cache::build_signature() => {}
-        _ => return false,
+        _ => return None,
     }
+    // @PLN11 — optional `prel <0|1>` header: the parse-time `program_relative`
+    // flag (the `#cwd` directive's resolved effect).  Present in manifests this
+    // build wrote; absent only in pre-fix manifests, which the build-signature
+    // bump already invalidates — so the `true` default is never actually read.
+    let mut program_relative = true;
+    let mut next = lines.next();
+    if let Some(rest) = next.and_then(|l| l.strip_prefix("prel ")) {
+        program_relative = rest != "0";
+        next = lines.next();
+    }
+    // Remaining lines: `<hexhash> <path>` for every parsed source.
     let mut any = false;
-    for line in lines {
-        let Some((hexhash, path)) = line.split_once(' ') else {
-            return false;
-        };
+    let mut cur = next;
+    while let Some(line) = cur {
+        let (hexhash, path) = line.split_once(' ')?;
         match crate::cache::file_hash(path) {
-            Some(cur) if hex32(&cur) == hexhash => any = true,
-            _ => return false,
+            Some(c) if hex32(&c) == hexhash => any = true,
+            _ => return None,
         }
+        cur = lines.next();
     }
-    any // an empty source list is not a valid hit
+    any.then_some(program_relative) // an empty source list is not a valid hit
 }
 
 /// Whole-program warm load: if a valid bundle exists for `script_abspath` and
@@ -135,18 +147,18 @@ pub fn warm_load_program(
     store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
 ) -> bool {
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
-    if !manifest_matches(&manifest) {
+    let Some(program_relative) = manifest_program_relative(&manifest) else {
         return false;
-    }
-    // @PLAN54 Arc N / N1 — touch-on-use: a warm hit marks the bundle recently-used
+    };
+    // @PLN11 Arc N / N1 — touch-on-use: a warm hit marks the bundle recently-used
     // so the idle-TTL GC keeps actively-run programs and ages out one-offs.
     crate::cache::touch_now(&bundle);
     let bundle_s = bundle.to_string_lossy();
-    // @PLAN54 G2/M6 — with LOFT_CODEGEN_STORE, do a *skeleton* load: mmap the
+    // @PLN11 G2/M6 — with LOFT_CODEGEN_STORE, do a *skeleton* load: mmap the
     // bundle, reconstruct only the def table (bodies stay in the store), and
     // hand the store back so codegen reads bodies straight from it — skipping
     // read_data's body rebuild.  Otherwise full read_data (the M2/M5 default).
-    if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
+    let loaded = if std::env::var_os("LOFT_CODEGEN_STORE").is_some() {
         match crate::ir_read::open_program_store(&bundle_s) {
             Ok((stores, root, data, schema)) => {
                 p.database.install_schema(schema);
@@ -164,7 +176,16 @@ pub fn warm_load_program(
             }
             Err(_) => false,
         }
+    };
+    if loaded {
+        // @PLN11 — restore the parse-time `#cwd` path-resolution mode the warm
+        // load skipped.  Without it a cached `#cwd` program resolves relative
+        // paths program-relative instead of cwd-relative, silently reading the
+        // wrong base (e.g. the indexer scanning nothing).  `source_dir` needs no
+        // such restore — main.rs sets it every run from the script path.
+        p.database.program_relative = program_relative;
     }
+    loaded
 }
 
 /// Cold path: after the full parse, write the whole-program bundle + its drift
@@ -180,9 +201,12 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     paths.sort_unstable();
     paths.dedup();
     let mut lines = String::new();
-    // @PLAN54 G2/M6 — pin the build signature first so a binary upgrade
+    // @PLN11 G2/M6 — pin the build signature first so a binary upgrade
     // invalidates this bundle (see `manifest_matches`).
     let _ = writeln!(lines, "sig {}", crate::cache::build_signature());
+    // @PLN11 — persist the parse-time path-resolution mode (the `#cwd` directive's
+    // resolved effect) so a warm load (which skips parsing) can restore it.
+    let _ = writeln!(lines, "prel {}", u8::from(p.database.program_relative));
     for path in &paths {
         let Some(h) = crate::cache::file_hash(path) else {
             return; // an unreadable source → don't cache (would never validate)
@@ -205,7 +229,7 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     if std::fs::write(&tmp, lines.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, &manifest);
     }
-    // @PLAN54 G2 / track 1 — with the cache default-on, bound the directory size
+    // @PLN11 G2 / track 1 — with the cache default-on, bound the directory size
     // by evicting the oldest bundles after each cold save.
     crate::cache::prune_program_cache();
 }

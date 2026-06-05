@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 54 — `Data` as a store (IR mirrors the `--native` data model)
+# @PLN11 — `Data` as a store (IR mirrors the `--native` data model)  ·  [loft-lang/plans#11](https://github.com/loft-lang/plans/issues/11)  ·  *(was `@PLAN54`)*
 
 ## Status
 
@@ -1465,7 +1465,7 @@ next; enter self-hosting through this keyhole, not head-on:
 | Rung | Effort | Permanent contribution to self-hosting |
 |---|---|---|
 | @PLAN28 JSON stop-gap | days | proves loft data *can* hold the IR; ships the whole-bundle cold-start win (per-library JSON considered + deferred as too brittle) |
-| **plan-54 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
+| **@PLN11 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
 | full loft-in-loft | multi-quarter | the destination |
 
 **This plan removes a self-hosting blocker.**  Self-hosting makes the
