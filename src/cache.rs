@@ -713,7 +713,11 @@ mod tests {
             std::fs::write(&store, b"0123456789").unwrap();
             std::fs::write(dir.join(format!("{name}.manifest")), b"m").unwrap();
             let when = std::time::SystemTime::now() - Duration::from_secs(age_secs);
-            std::fs::File::open(&store)
+            // Open for WRITE before set_modified: Windows `SetFileTime` needs write
+            // access (Unix `futimens` works on a read-only fd), matching `touch_now`.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&store)
                 .unwrap()
                 .set_modified(when)
                 .unwrap();
@@ -756,7 +760,11 @@ mod tests {
             std::fs::write(&store, b"x").unwrap();
             std::fs::write(dir.join(format!("{name}.manifest")), b"m").unwrap();
             let when = std::time::SystemTime::now() - Duration::from_secs(age_secs);
-            std::fs::File::open(&store)
+            // Open for WRITE before set_modified: Windows `SetFileTime` needs write
+            // access (Unix `futimens` works on a read-only fd), matching `touch_now`.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&store)
                 .unwrap()
                 .set_modified(when)
                 .unwrap();
