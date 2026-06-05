@@ -14,8 +14,8 @@ it is the design + the build evidence each issue below builds on.
 > producer (that file is ZERO scratch), the keystone `W`, the coverage proof `C`,
 > **N2a** (the cdylib FFI codegen wrap now returns owned `String`), the
 > **`LOFT_SCRATCH_TRIP` sentinel** (live-vs-dead is now a runtime fact, not a
-> grep guess), and **Phase 1 batch 1** (`ymd_days_ago` + `store_memory`
-> dest-pass).  Native + interp green.
+> grep guess), and **Phase 1 batches 1+2** (`ymd_days_ago`, `store_memory`,
+> `struct_to_json`(+`_pretty`), `i_parse_errors` dest-pass).  Native + interp green.
 >
 > ### The metric is now the sentinel, not the grep
 > `LOFT_SCRATCH_TRIP=1` makes every *live* `scratch.push` print its `file:line`
@@ -30,16 +30,15 @@ it is the design + the build evidence each issue below builds on.
 > is then the compile-time guard).
 >
 > ### What the sentinel found — the corpus-live set (the real targets)
-> Enumerated across all `tests/scripts/*.loft` + `tests/docs/*.loft` (interpret):
-> only **four** sites fire.  Static-live producers `pack_take` / `ws_client_message`
-> / `struct_to_json_dispatch` aren't even exercised by the corpus.
+> Enumerated across all `tests/scripts/*.loft` + `tests/docs/*.loft` (interpret).
+> After batches 1+2, **three** sites fire (was four — `i_parse_errors` now silent).
+> Static-live producers `pack_take` / `ws_client_message` aren't exercised at all.
 >
 > | Trips | Site | Producer | Class |
 > |---|---|---|---|
 > | 7 | `native.rs` | `n_as_text` | **Phase 2** (returns null) |
-> | 6 | `native.rs` | `n_parallel_buf_get_text` | audit (parallel-specific) |
+> | 6 | `native.rs` | `n_parallel_buf_get_text` | **audit** (last Phase-1 candidate; parallel-specific) |
 > | 5 | `format.rs:333` | `os_variable` (`push_scratch` helper) | **Phase 2** (null if unset) |
-> | 3 | `native.rs` | `i_parse_errors` | **Phase 1** (non-null) |
 >
 > ### How far from zero — the count drops at three steps; I1 is the enabler
 > The hard infrastructure is built; the rest is proven-pattern application, **one**
@@ -59,14 +58,15 @@ it is the design + the build evidence each issue below builds on.
 > by risk + subsystem coherence.  Each phase drives a coherent backend region to
 > zero; difficulty rises across phases:
 >
-> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)* — **batch 1 DONE**
->    (`ymd_days_ago` + `store_memory`, sentinel-proven zero-trip).  Give each
->    non-null live producer a `_dest` variant + `is_text_dest_native` entry — the
->    Build-3 template (now 10 producers).  **Batch 2:** `i_parse_errors`
->    (corpus-live) + `struct_to_json_dispatch` (source-live, non-null).  Then
->    **audit** `parallel_buf` / `pack_take` / `ws_client_message` for null — any
->    that can return null fall to Phase 2.  Per producer: convert + `LOFT_SCRATCH_TRIP`
->    matrix + commit.
+> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)* — **batches 1+2 DONE**
+>    (`ymd_days_ago`, `store_memory`, `struct_to_json`(+`_pretty`), `i_parse_errors`
+>    — 13 producers now in `is_text_dest_native`, each sentinel-proven via the
+>    positive→negative control pair).  **Remaining:** **audit**
+>    `parallel_buf` / `pack_take` / `ws_client_message` for null — any that can
+>    return null fall to Phase 2; `parallel_buf` is the last corpus-live Phase-1
+>    candidate.  Per producer: convert + `LOFT_SCRATCH_TRIP` control pair + commit.
+>    (Batch 2 surfaced pre-existing native bug #272 — a stateful producer in an
+>    inline `"{x}" != literal` — orthogonal, filed with a verified workaround.)
 > 2. **Phase 2 — the null-aware interp primitive → I1-null + N2b** *(THE one novel
 >    piece)*: a single mechanism — "materialise possibly-null dynamically-produced
 >    text on the interp stack without scratch" — feeds THREE consumers that all
@@ -263,11 +263,13 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
   route to **Phase 2** instead.
 - **Status (sentinel-classified):**
   - ✅ **batch 1 DONE** — `n_ymd_days_ago`, `n_store_memory` (non-null, zero-trip).
-  - **batch 2 (non-null):** `i_parse_errors` (corpus-live), `struct_to_json_dispatch`
-    (source-live, not corpus-exercised).
-  - **audit:** `n_parallel_buf_get_text` (corpus-live, parallel-specific),
-    `n_pack_take`, `n_ws_client_message` (neither corpus-exercised) — any that can
-    return null → Phase 2.
+  - ✅ **batch 2 DONE** — `n_struct_to_json`(+`_pretty`), `i_parse_errors`
+    (non-null; full positive→negative control pair).  Surfaced orthogonal native
+    bug #272 (stateful producer in inline `"{x}" != literal`) — filed, not a
+    regression of this conversion.
+  - **audit (the only Phase-1 work left):** `n_parallel_buf_get_text` (corpus-live,
+    parallel-specific), `n_pack_take`, `n_ws_client_message` (neither
+    corpus-exercised) — any that can return null → Phase 2.
   - **→ Phase 2 (null, sentinel-located):** `os_variable` (`format.rs:333`),
     interp `n_as_text` (`native.rs`).
 - **Accept:** each producer **zero-trip** under `LOFT_SCRATCH_TRIP` in value
@@ -349,7 +351,7 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 | Milestone | Issues | Meaning |
 |---|---|---|
 | **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
-| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ `I1`-batch1✅ · `I1`-batch2 `N2b` `B` | every producer off scratch (sentinel reads zero) |
+| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ `I1`-batch1✅ `I1`-batch2✅ · `I1`-audit `N2b` `B` | every producer off scratch (sentinel reads zero) |
 | **M3 — fallbacks gone** | `C`✅ `F` | coverage proof DONE (fallbacks are dead code); `F` deletes them, folded into `D` |
 | **M4 — GOAL** | `D` | field deleted |
 
