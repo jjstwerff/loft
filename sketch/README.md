@@ -46,8 +46,11 @@ Background top=A bottom=B               grayscale sky gradient (A top, B bottom;
 Background topc=R,G,B botc=R,G,B         colour sky gradient
 name <element>                          tag following marks (so they can be measured)
 Line (x1,y1) - (x2,y2) [w=N]
-Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [fill=L | rgb=R,G,B]   round (aspect-corrected)
-Poly (x1,y1) (x2,y2) ... [w=N] [fill=L | rgb=R,G,B]            stroke, or filled
+Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [<fill>]              round (aspect-corrected)
+Poly (x1,y1) (x2,y2) ... [w=N] [<fill>]                       stroke, or filled
+  <fill> = fill=L | rgb=R,G,B                                solid (gray / colour)
+         | grad=R,G,B>R,G,B [dir=ax,ay,bx,by]                linear gradient (c1->c2)
+         | radial=R,G,B>R,G,B [at=cx,cy,r]                   radial gradient (centre->edge)
 landmark <name> = <value>
 check <prop> <op> <term> [tol T]        op: ~ < > <= == ; arithmetic on the RHS only
                                         prop: <element>.{left,right,top,bottom,cx,cy,w,h}
@@ -56,7 +59,14 @@ check <prop> <op> <term> [tol T]        op: ~ < > <= == ; arithmetic on the RHS 
 
 - Coords are **fractions** of the paper (0..1); origin top-left, **y grows down**.
 - Fills: `fill=L` is grayscale (L 0..1, 0 = black); `rgb=R,G,B` is colour (0..255). A
-  shape with neither is *stroked*; with one, it's *filled*.
+  shape with no fill is *stroked*; with one, it's *filled*.
+- **Gradient fills (soft modelling).** `grad=c1>c2` is a linear gradient (c1 at the
+  axis start → c2 at the end; default axis is vertical over the shape's bbox, or set
+  it with `dir=ax,ay,bx,by` in fractions). `radial=c1>c2` runs centre→edge (centre =
+  the shape's centroid, radius = half its extent, or set `at=cx,cy,r`). Both are
+  computed small, resized, and supersampled, so the transition is smooth — use them
+  for *form*: a rounded face (radial, lit centre → shadowed edge), a soft cloud
+  belly, a glow, a lit-to-shadow plane. This is what turns a flat fill into modelling.
 - **Each measurable thing should get its own `name`** — tagging a sub-part (a chimney,
   a light-spill) under a parent bloats the parent's bbox and breaks its checks.
 

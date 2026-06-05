@@ -24,8 +24,11 @@ Commands (coords are fractions; origin top-left, y down; gray L in 0..1, 0=black
   Background top=A bottom=B               vertical gradient sky (A at top, B at bottom)
   name <element>                          tag following marks (for measurement)
   Line (x1,y1) - (x2,y2) [w=N]
-  Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [fill=L]   round; fill=L => filled gray
-  Poly (x1,y1) (x2,y2) ... [w=N] [fill=L]            stroke; fill=L => filled gray
+  Circle (cx,cy) r=R [n=N] [flat=F] [w=N] [<fill>]   round; <fill> => filled
+  Poly (x1,y1) (x2,y2) ... [w=N] [<fill>]            stroke; <fill> => filled
+    <fill> = fill=L | rgb=R,G,B                      solid (gray / colour)
+           | grad=R,G,B>R,G,B [dir=ax,ay,bx,by]      linear gradient (c1->c2)
+           | radial=R,G,B>R,G,B [at=cx,cy,r]         radial gradient (centre->edge)
   landmark <name> = <value>
   check <prop> <op> <term> [tol T]        op: ~ < > <= >= ; arithmetic on RHS only
   # ...                                    comment / SHOULD note (ignored, searchable)
@@ -58,6 +61,10 @@ PT = re.compile(r"\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)")
 WOPT = re.compile(r"\bw\s*=\s*(\d+)", re.I)
 FILL = re.compile(r"\bfill\s*=\s*([\d.]+)", re.I)
 RGB = re.compile(r"\brgb\s*=\s*\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?", re.I)
+GRAD = re.compile(r"\bgrad\s*=\s*\(?(\d+),(\d+),(\d+)\)?\s*>\s*\(?(\d+),(\d+),(\d+)\)?", re.I)
+RADIAL = re.compile(r"\bradial\s*=\s*\(?(\d+),(\d+),(\d+)\)?\s*>\s*\(?(\d+),(\d+),(\d+)\)?", re.I)
+DIR = re.compile(r"\bdir\s*=\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)", re.I)
+ATC = re.compile(r"\bat\s*=\s*([-\d.]+),([-\d.]+),([-\d.]+)", re.I)
 BGC = re.compile(r"Background\s+topc\s*=\s*\(?(\d+),(\d+),(\d+)\)?\s+botc\s*=\s*\(?(\d+),(\d+),(\d+)\)?", re.I)
 LAND = re.compile(r"landmark\s+(\w+)\s*=\s*([-\d.]+)", re.I)
 
@@ -67,15 +74,73 @@ def gray(L):
     return (g, g, g)
 
 
-def _fillcolor(s):
-    """A shape's fill: rgb=R,G,B (colour) or fill=L (grayscale), else None (stroke)."""
+def _paint(s):
+    """A shape's fill descriptor:
+       ('solid', rgb) | ('linear', c1, c2, axis|None) | ('radial', c1, c2, (cx,cy,r)|None)
+       else None (stroke). Linear: c1@axis-start -> c2@axis-end (axis = fractional
+       ax,ay,bx,by; None => vertical over the bbox). Radial: c1 centre -> c2 edge."""
+    m = RADIAL.search(s)
+    if m:
+        c1 = (int(m[1]), int(m[2]), int(m[3])); c2 = (int(m[4]), int(m[5]), int(m[6]))
+        a = ATC.search(s)
+        return ("radial", c1, c2, (float(a[1]), float(a[2]), float(a[3])) if a else None)
+    m = GRAD.search(s)
+    if m:
+        c1 = (int(m[1]), int(m[2]), int(m[3])); c2 = (int(m[4]), int(m[5]), int(m[6]))
+        d = DIR.search(s)
+        axis = (float(d[1]), float(d[2]), float(d[3]), float(d[4])) if d else None
+        return ("linear", c1, c2, axis)
     m = RGB.search(s)
     if m:
-        return (int(m[1]), int(m[2]), int(m[3]))
+        return ("solid", (int(m[1]), int(m[2]), int(m[3])))
     m = FILL.search(s)
     if m:
-        return gray(float(m[1]))
+        return ("solid", gray(float(m[1])))
     return None
+
+
+def _make_gradient(kind, c1, c2, spec, bbox, size):
+    """A size=(w,h) RGB gradient image for the bbox (fractional fx0,fy0,fx1,fy1).
+       Computed small (100x100) then resized — cheap and smooth."""
+    fx0, fy0, fx1, fy1 = bbox
+    if kind == "linear":
+        ax, ay, bx, by = spec if spec else ((fx0+fx1)/2, fy0, (fx0+fx1)/2, fy1)
+        dx, dy = bx-ax, by-ay
+        denom = dx*dx + dy*dy or 1e-9
+    else:
+        cx, cy, r = spec if spec else ((fx0+fx1)/2, (fy0+fy1)/2, max(fx1-fx0, fy1-fy0)/2)
+        r = r or 1e-9
+    G = 100
+    im = Image.new("RGB", (G, G))
+    px = im.load()
+    for j in range(G):
+        fy = fy0 + (fy1-fy0)*(j+0.5)/G
+        for i in range(G):
+            fx = fx0 + (fx1-fx0)*(i+0.5)/G
+            if kind == "linear":
+                t = ((fx-ax)*dx + (fy-ay)*dy)/denom
+            else:
+                t = (((fx-cx)**2 + (fy-cy)**2) ** 0.5)/r
+            t = 0.0 if t < 0 else 1.0 if t > 1 else t
+            px[i, j] = (int(c1[0]+(c2[0]-c1[0])*t),
+                        int(c1[1]+(c2[1]-c1[1])*t),
+                        int(c1[2]+(c2[2]-c1[2])*t))
+    return im.resize((max(1, size[0]), max(1, size[1])))
+
+
+def _paint_polygon(img, pts, paint, BW, BH):
+    if paint[0] == "solid":
+        ImageDraw.Draw(img).polygon([(x*BW, y*BH) for x, y in pts], fill=paint[1])
+        return
+    _, c1, c2, spec = paint
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    fx0, fy0, fx1, fy1 = min(xs), min(ys), max(xs), max(ys)
+    x0p, y0p = int(fx0*BW), int(fy0*BH)
+    w, h = max(1, int(fx1*BW)+1 - x0p), max(1, int(fy1*BH)+1 - y0p)
+    grad = _make_gradient(paint[0], c1, c2, spec, (fx0, fy0, fx1, fy1), (w, h))
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).polygon([(p[0]*BW-x0p, p[1]*BH-y0p) for p in pts], fill=255)
+    img.paste(grad, (x0p, y0p), mask)
 
 
 def circle_pts(cx, cy, r, n, flat, W, H):
@@ -140,9 +205,9 @@ def parse(text):
             flat = float(m[5]) if m[5] else 0.0
             pts = circle_pts(cx, cy, r, n, flat, W, H)
             accpts(pts)
-            col = _fillcolor(s)
-            if col is not None:
-                ops.append(("fill", pts, col))
+            paint = _paint(s)
+            if paint is not None:
+                ops.append(("fill", pts, paint))
             else:
                 wm = WOPT.search(s)
                 ops.append(("stroke", pts, int(wm[1]) if wm else 3))
@@ -150,9 +215,9 @@ def parse(text):
         if low.startswith("poly"):
             pts = [(float(a), float(b)) for a, b in PT.findall(s)]
             accpts(pts)
-            col = _fillcolor(s)
-            if col is not None:
-                ops.append(("fill", pts, col))
+            paint = _paint(s)
+            if paint is not None:
+                ops.append(("fill", pts, paint))
             else:
                 wm = WOPT.search(s)
                 ops.append(("stroke", pts, int(wm[1]) if wm else 3))
@@ -373,8 +438,8 @@ def render():
                 c = tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3))
                 d.line([(0, yy), (BW, yy)], fill=c)
         elif op[0] == "fill":
-            _, pts, col = op
-            d.polygon([(x*BW, y*BH) for x, y in pts], fill=col)
+            _, pts, paint = op
+            _paint_polygon(img, pts, paint, BW, BH)
         elif op[0] == "stroke":
             _, pts, w = op
             for p, q in zip(pts, pts[1:]):
