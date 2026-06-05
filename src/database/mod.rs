@@ -231,7 +231,7 @@ pub struct Stores {
     /// `n_set_bridge_dest` (emitted right before a dest-passed cdylib text call)
     /// and `take()`n by the bridge's text path (`bridge_push_str` /
     /// `push_loft_str`): when `Some`, the foreign `LoftStr` bytes are written
-    /// into that store record instead of the never-cleared `scratch`, and the
+    /// directly into that store record, and the
     /// bridge pushes nothing (the record IS the result).  Transient — lives only
     /// across the two adjacent `OpStaticCall`s.
     pub bridge_text_dest: Option<crate::keys::DbRef>,
@@ -473,7 +473,6 @@ impl Clone for Stores {
             max: self.max,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Scratch::default(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
@@ -943,7 +942,6 @@ impl Stores {
             max: 0,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Scratch::default(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
