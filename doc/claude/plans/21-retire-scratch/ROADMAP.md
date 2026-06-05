@@ -10,6 +10,15 @@ of dependency-ordered issues.
 Read [`01-destination-passing-design.md`](01-destination-passing-design.md) first —
 it is the design + the build evidence each issue below builds on.
 
+> **These "issues" live HERE, not in GitHub.**  They are plan sub-tasks WE
+> decomposed and fix ourselves in sequence — the DAG below tracks them and they
+> close as the plan advances.  A GitHub Issue is earned by being *surfaced* (a
+> defect found in the wild, especially one that blocks or another repo hits), not
+> by being *planned*; filing our own decomposition would just pollute the tracker
+> with rows nobody outside this plan needs.  Promote one to a real Issue only if it
+> escapes the plan (blocks unrelated work / handed off).  See
+> [ISSUE_TRACKING.md § The split](../../ISSUE_TRACKING.md#the-split--what-lives-where).
+
 ---
 
 ## The goal & the acceptance bar

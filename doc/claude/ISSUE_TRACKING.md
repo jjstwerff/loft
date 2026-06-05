@@ -20,6 +20,17 @@ files.
 | **Closed bugs** (the FIXED record) | `PROBLEMS.md` (frozen archive) + git history + the regression test | the fix + its test ARE the record; keep the history greppable |
 | **Design entries** (the big `###` P-sections, e.g. @P213) | reference docs (`doc/claude/*.md`) | these are design docs, not bug rows — they don't belong as one-line Issues |
 | **Benign tradeoffs / open work** (not defects) | `QUALITY.md § Open work` | a known tradeoff with a fix mapped, not a bug |
+| **Plan sub-tasks** (the dependency-ordered work-items WE decompose from a plan + fix in sequence) | the plan doc (`plans/*/ROADMAP.md`) | self-created, self-fixed, transient; **don't file them as GitHub Issues** |
+
+**An Issue is earned by being *surfaced*, not by being *planned*.**  A defect
+found in the wild — especially one that blocks, recurs, or another repo hits —
+becomes a GitHub Issue (commodity record, external discoverability, cross-repo
+refs).  But when WE decompose a plan into its phases and fix them ourselves in
+sequence, those phases stay **inside the plan doc** (`plans/<NN>/ROADMAP.md`).
+Filing our own plan decomposition into the tracker just pollutes the issue list
+with rows nobody outside the plan needs — the plan's DAG already tracks them, and
+they close as the plan advances.  (Promote one to a real Issue only if it escapes
+the plan: it blocks unrelated work, another repo hits it, or it's handed off.)
 
 **Investigations PRODUCE Issues.**  The closure rule
 ([`plans/_INVESTIGATION_TEMPLATE.md § Closing`](plans/_INVESTIGATION_TEMPLATE.md#closing-an-investigation-plan-required))
