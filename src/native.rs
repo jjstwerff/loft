@@ -646,8 +646,7 @@ fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
 fn n_env_variable(stores: &mut Stores, stack: &mut DbRef) {
     let v_name = *stores.get::<Str>(stack);
     let value = stores.os_variable(v_name.str());
-    stores.scratch.push(value);
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, value);
 }
 
 // @PLN10 Phase 2 — destination-passing variant of `n_env_variable`.
@@ -739,9 +738,7 @@ fn t_4text_replace(stores: &mut Stores, stack: &mut DbRef) {
     let v_value = *stores.get::<Str>(stack);
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().replace(v_value.str(), v_with.str());
-    stores.scratch.push(new_value);
-    let s = Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, new_value);
 }
 
 fn t_4text_replace_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -759,9 +756,7 @@ fn t_4text_replace_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn t_4text_to_lowercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().to_lowercase();
-    stores.scratch.push(new_value);
-    let s = Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, new_value);
 }
 
 fn t_4text_to_lowercase_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -777,9 +772,7 @@ fn t_4text_to_lowercase_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn t_4text_to_uppercase(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = v_self.str().to_uppercase();
-    stores.scratch.push(new_value);
-    let s = Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, new_value);
 }
 
 fn t_4text_to_uppercase_dest(stores: &mut Stores, stack: &mut DbRef) {
@@ -840,9 +833,7 @@ fn n_arguments(stores: &mut Stores, stack: &mut DbRef) {
 /// Negative `days` clamps to today (no future dates).
 fn n_ymd_days_ago(stores: &mut Stores, stack: &mut DbRef) {
     let v_days = *stores.get::<i64>(stack);
-    stores.scratch.push(Stores::ymd_days_ago_native(v_days));
-    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, Stores::ymd_days_ago_native(v_days));
 }
 
 // @PLN10 Phase 1 — destination-passing variant of `n_ymd_days_ago`.
@@ -863,9 +854,7 @@ fn n_ymd_days_ago_dest(stores: &mut Stores, stack: &mut DbRef) {
 /// Takes no arguments — pushes the report string as the return value.
 fn n_store_memory(stores: &mut Stores, stack: &mut DbRef) {
     let report = stores.memory_report();
-    stores.scratch.push(report);
-    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, report);
 }
 
 // @PLN10 Phase 1 — destination-passing variant of `n_store_memory`.
@@ -952,10 +941,7 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return the directory of the main source file being executed.
 fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
-    // @P354: do not clear scratch — see `n_as_text`.  Clearing frees
-    // live `Str` views of sibling call args; push + `last()` instead.
-    stores.scratch.push(stores.source_dir.clone());
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, stores.source_dir.clone());
 }
 
 // @PLN10 — destination-passing variant: write straight into the caller's
@@ -978,6 +964,22 @@ fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn n_set_bridge_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     stores.bridge_text_dest = Some(dest);
+}
+
+/// @PLN10 D/G3 — output for a non-destination-passing text native that is DEAD:
+/// every covered call position routes through its `_dest` variant (whole-suite
+/// `LOFT_SCRATCH_TRIP` == 0 proves the base never executes).  The base fn stays
+/// registered — `p54` doc-hygiene requires the `"n_<name>"` string, and codegen's
+/// general dispatch resolves the base name — but produces an empty `Str` instead
+/// of `stores.scratch` (the field is being retired), with a dev assert if an
+/// uncovered position ever reaches it.
+fn put_dead_text(stores: &mut Stores, stack: &mut DbRef, _result: String) {
+    debug_assert!(
+        false,
+        "non-dest text native reached at runtime — covered positions route to its \
+         _dest variant; this is dead (@PLN10 D/G3)"
+    );
+    stores.put(stack, crate::keys::Str::new(""));
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
@@ -1573,9 +1575,7 @@ fn n_parallel_buf_get_text(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_buf_get_text: par_text_buffer_stack is empty");
         buf[idx as usize].clone()
     };
-    stores.scratch.push(s_owned);
-    let s = Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_dead_text(stores, stack, s_owned);
 }
 
 #[cfg(feature = "threading")]
@@ -2153,9 +2153,7 @@ fn i_parse_error_push(stores: &mut Stores, stack: &mut DbRef) {
 fn i_parse_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_parse_errors.join("\n");
     stores.last_parse_errors.clear();
-    // @P354: do not clear scratch — see `n_as_text`.
-    stores.scratch.push(msg);
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, msg);
 }
 
 // @PLN10 Phase 1 — destination-passing variant of `i_parse_errors`.
@@ -2627,9 +2625,7 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
 
 fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.last_json_errors.join("|");
-    // @P354: do not clear scratch — see `n_as_text`.
-    stores.scratch.push(msg);
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, msg);
 }
 
 // @PLN10 — destination-passing variant of `n_json_errors`.
@@ -2659,8 +2655,7 @@ fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
         // `last()` is the canonical pattern (matches `to_lowercase`,
         // `t_9JsonValue_as_text` native, etc.); `OpClearScratch` reclaims
         // the buffer at the next source-line boundary.
-        stores.scratch.push(s);
-        stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+        put_dead_text(stores, stack, s);
     } else {
         stores.put(stack, Str::new(crate::state::STRING_NULL));
     }
@@ -3332,10 +3327,7 @@ fn struct_to_json_dispatch(stores: &mut Stores, stack: &mut DbRef, pretty: bool)
     let struct_kt = struct_kt_arg as u16;
     let mut out = String::new();
     stores.show_json(&mut out, &src, struct_kt, pretty);
-    let idx = stores.scratch.len();
-    stores.scratch.push(out);
-    let s = Str::new(&stores.scratch[idx]);
-    stores.put(stack, s);
+    put_dead_text(stores, stack, out);
 }
 
 // @PLN10 Phase 1 — destination-passing variants of `n_struct_to_json` /
@@ -3703,9 +3695,7 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
         JV_DISCR_OBJECT => "JObject",
         _ => "JUnknown",
     };
-    // @P354: do not clear scratch — see `n_as_text`.
-    stores.scratch.push(name.to_string());
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, name.to_string());
 }
 
 // @PLN10 — destination-passing variant of `n_kind`.
@@ -3904,9 +3894,7 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
 fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, false);
-    // @P354: do not clear scratch — see `n_as_text`.
-    stores.scratch.push(out);
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, out);
 }
 
 // @PLN10 — destination-passing variant of `n_to_json`.
@@ -3930,9 +3918,7 @@ fn n_to_json_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, true);
-    // @P354: do not clear scratch — see `n_as_text`.
-    stores.scratch.push(out);
-    stores.put(stack, Str::new(stores.scratch.last().unwrap()));
+    put_dead_text(stores, stack, out);
 }
 
 // @PLN10 — destination-passing variant of `n_to_json_pretty`.
