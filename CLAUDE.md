@@ -382,10 +382,14 @@ When the bug is FIXED, reference the issue in the commit (`Fixes #NNN`) so GitHu
 closes it — but do **not** file at all for a bug you fix in the same change: the
 fix + its regression test ARE the record.
 
-**Inside an investigation plan, don't file at all** — the plan's probes + cluster
-docs already document every shape (see
+**Inside any plan, file a problem only when it reproduces *outside* the plan —
+already on `main`.**  A GitHub Issue is a claim about `main`: a pre-existing
+`main` bug you stumble on during plan work gets filed (and cross-linked to the
+plan), but a breakage the plan's own in-progress work caused is branch-internal —
+it lives in the plan's docs and is fixed on the branch, never filed.  Investigation
+plans are the strongest case of this rule: the probes + cluster docs already
+document every shape, so a separate P-issue would just double-document it (see
 [`plans/_INVESTIGATION_TEMPLATE.md`](doc/claude/plans/_INVESTIGATION_TEMPLATE.md)).
-A separate P-issue would double-document the same shape.
 
 This is **not** a license to scope-creep the active fix.  When you're focused on
 shipping fix X, an unrelated bug Y you can't fix without derailing X is exactly
