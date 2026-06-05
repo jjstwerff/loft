@@ -181,6 +181,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_queue_text", n_parallel_queue_text),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_get_text", n_parallel_buf_get_text),
+    // @PLN10 Phase 1 — dest-passing variant (interp scratch retirement).
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_text_dest", n_parallel_buf_get_text_dest),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_text", n_parallel_buf_drop_text),
     #[cfg(feature = "threading")]
@@ -1515,6 +1518,26 @@ fn n_parallel_buf_get_text(stores: &mut Stores, stack: &mut DbRef) {
     stores.scratch.push(s_owned);
     let s = Str::new(stores.scratch.last().unwrap());
     stores.put(stack, s);
+}
+
+#[cfg(feature = "threading")]
+/// @PLN10 Phase 1 — destination-passing variant of `n_parallel_buf_get_text`.
+/// Always-non-null (clones an owned `String` from the par text buffer).
+/// Routed by `is_text_dest_native`.
+fn n_parallel_buf_get_text_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let idx = *stores.get::<i64>(stack);
+    let s_owned = {
+        let buf = stores
+            .par_text_buffer_stack
+            .last()
+            .expect("parallel_buf_get_text: par_text_buffer_stack is empty");
+        buf[idx as usize].clone()
+    };
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&s_owned);
 }
 
 #[cfg(feature = "threading")]

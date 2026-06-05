@@ -67,6 +67,9 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             | "i_parse_errors"
             | "n_struct_to_json"
             | "n_struct_to_json_pretty"
+            // @PLN10 Phase 1 — par-text buffer reader (interp; native is owned
+            // String already, native par-text loops are blocked by #273).
+            | "n_parallel_buf_get_text"
     )
 }
 
