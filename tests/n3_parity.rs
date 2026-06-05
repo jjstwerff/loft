@@ -9,15 +9,15 @@
 //! This harness runs the same program three ways and diffs stdout against the
 //! interpreted reference:
 //! - **interp** — `LOFT_NO_NATIVE_LIBS=1` forces every `use`d library to interpret;
-//! - **mixed** — the default: the script interprets, the `compile = "native"`
-//!   library auto-compiles + dispatches over the shared store (the new N3 path);
+//! - **mixed** — the default (Step 3, default-native): the script interprets, every
+//!   `use`d library auto-compiles + dispatches over the shared store — no opt-in;
 //! - **native** — `--native` compiles the whole program (script + library).
 //!
 //! A divergence is a real shared-store-ABI / codegen bug caught **before** the
-//! choice becomes invisible — which is exactly what makes default-native (Step 3)
-//! a proven flip rather than a hopeful one.  Seeded with `datalib`, whose public
-//! API carries the store-touching types (vector/struct/text/enum, args + returns)
-//! across the boundary.
+//! choice becomes invisible — which is exactly what made the default-native flip
+//! (Step 3) a proven move rather than a hopeful one.  Seeded with `datalib`, whose
+//! public API carries the store-touching types (vector/struct/text/enum, args +
+//! returns) across the boundary.
 
 use std::path::Path;
 use std::process::Command;
@@ -172,19 +172,23 @@ const PLAINLIB_PROG: &str = "use plainlib;\n\
      \x20   println(\"{doubled([1, 2, 3])}\");\n\
      }\n";
 
-/// @PLAN54 Arc N / N3 Step 3 — the default-native **env gate**, proven on a
-/// library that never opted in.
+/// @PLAN54 Arc N / N3 Step 3 — **default-native**, proven on a library that never
+/// opted in.
 ///
-/// *Invariant:* `LOFT_DEFAULT_NATIVE=1` makes **every** `use`d library a native
-/// candidate — not just the `compile = "native"` ones — and the result is
-/// byte-identical to interpreting it.  This is the reversible instrument for the
-/// eventual chokepoint flip (drop the opt-in): it lets the parity gate prove a
-/// fresh, un-annotated library goes native correctly before the default changes.
+/// *Invariant:* with no annotation and no flag, a `use`d library is a native
+/// candidate — it auto-builds a cdylib and dispatches, byte-identical to
+/// interpreting it.  `LOFT_NO_NATIVE_LIBS=1` is the interpret escape.
 ///
-/// Asserts both directions of the gate: WITHOUT it, `plainlib` interprets and no
-/// cdylib is built; WITH it, the cdylib is built and dispatched, byte-identically.
+/// Asserts both directions of the now-default flip: by DEFAULT `plainlib` (which
+/// has no `compile = "native"`) auto-builds + dispatches native; under
+/// `LOFT_NO_NATIVE_LIBS` it interprets and builds no cdylib.
 #[test]
-fn default_native_env_gate_picks_up_unopted_library() {
+fn default_native_dispatches_unopted_library() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (default-native build needs it)");
+        return;
+    }
+
     let pid = std::process::id();
     let tmp = std::env::temp_dir().join(format!("loft_n3_plainparity_{pid}"));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -195,34 +199,34 @@ fn default_native_env_gate_picks_up_unopted_library() {
 
     let interp = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1")], &prog);
 
-    // WITHOUT the gate: plainlib never opted in, so the default run interprets it.
+    // ESCAPE: `LOFT_NO_NATIVE_LIBS` interprets and builds no cdylib.
     let _ = std::fs::remove_dir_all(native_auto);
-    let ungated = run(&[], &[], &prog);
-    assert!(ungated.success, "ungated run failed:\n{}", ungated.stderr);
-    assert_eq!(
-        ungated.stdout, interp.stdout,
-        "an un-opted-in library must interpret by default, byte-identical"
+    let escaped = run(&[], &[("LOFT_NO_NATIVE_LIBS", "1")], &prog);
+    assert!(
+        escaped.success,
+        "interpret-escape run failed:\n{}",
+        escaped.stderr
     );
     assert!(
         !native_auto.exists(),
-        "no cdylib should be built for an un-opted-in library without the gate"
+        "LOFT_NO_NATIVE_LIBS must build no cdylib"
     );
 
-    // WITH the gate: plainlib becomes a native candidate, builds, and dispatches.
+    // DEFAULT: plainlib never opted in, yet default-native auto-builds + dispatches.
     let _ = std::fs::remove_dir_all(native_auto);
-    let gated = run(&[], &[("LOFT_DEFAULT_NATIVE", "1")], &prog);
+    let dflt = run(&[], &[], &prog);
     assert!(
-        gated.success,
+        dflt.success,
         "default-native run failed:\nstdout:\n{}\nstderr:\n{}",
-        gated.stdout, gated.stderr
+        dflt.stdout, dflt.stderr
     );
     assert_eq!(
-        gated.stdout, interp.stdout,
+        dflt.stdout, interp.stdout,
         "PARITY DIVERGENCE: default-native (un-opted lib) != interpreted"
     );
     assert!(
         native_auto.exists(),
-        "the gate must auto-build the cdylib for the un-opted-in library"
+        "default-native must auto-build the cdylib for an un-opted-in library"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

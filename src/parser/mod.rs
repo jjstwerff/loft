@@ -5357,21 +5357,20 @@ impl Parser {
                 self.pending_native_libs.push(built);
             }
         }
-        // @PLAN54 Arc N / N3 — `[library] compile = "native"`: opt a normal loft
-        // library into auto-compilation.  Record the package dir; the driver marks
-        // + builds + loads after scope analysis (see `pending_native_compile`).
-        // `native` (hand-written cdylib) takes precedence — don't double-compile.
-        //
-        // Step 3 instrument: `LOFT_DEFAULT_NATIVE=1` makes EVERY `use`d library a
-        // native candidate (the steady-state default), not just the opted-in ones —
-        // a reversible env gate so the full suite can be run under default-native to
-        // see which libraries are ready vs. which fall back to interpret (Step 2's
-        // safety net) BEFORE the chokepoint default is flipped for real.
-        let default_native = std::env::var_os("LOFT_DEFAULT_NATIVE").is_some();
-        if m.native.is_none()
-            && (m.compile.as_deref() == Some("native") || default_native)
-            && !self.pending_native_compile.iter().any(|d| d == pkg_dir)
-        {
+        // @PLAN54 Arc N / N3 Step 3 — **default-native**.  Every `use`d normal loft
+        // library is a native candidate: record the package dir; the driver marks +
+        // builds + loads after scope analysis (see `pending_native_compile`).  No
+        // opt-in, no flag — "libraries compile, scripts interpret" is the default.
+        //   - `native` (a hand-written cdylib via `[library] native = ...`) takes
+        //     precedence — don't double-compile.
+        //   - `LOFT_NO_NATIVE_LIBS=1` is the interpret escape (handled in the driver:
+        //     it clears `pending_native_compile`), used by the dev/edit loop + the
+        //     parity reference until Step 4 (dev-interpret-on-edit) lands.
+        //   - A build failure silently interprets (Step 2), so recording a library
+        //     that can't compile native is harmless.
+        // The legacy `[library] compile = "native"` opt-in is now redundant but still
+        // accepted (a no-op): default-native already records it.
+        if m.native.is_none() && !self.pending_native_compile.iter().any(|d| d == pkg_dir) {
             self.pending_native_compile.push(pkg_dir.to_string());
         }
         // PKG.4: register native function symbols and package crate info.
