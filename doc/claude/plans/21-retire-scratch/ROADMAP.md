@@ -56,18 +56,24 @@ cell-ABI producers.  `39 → 34`.
 
 ## The issues
 
-### W — WASM text-result access via `Deref` *(keystone, blocks the native chain)*
-- **Problem:** converting any native text producer to return owned `String` works
-  on `--native` but breaks the WASM cdylib libraries (`wasm_library_suite`:
-  `E0599`/`E0609`→`E0308`).  The WASM text-result path reads `Str` fields/methods
-  directly (`.ptr` / `.str()`) where the native binding uses `Deref`
-  (`.to_string()` / `&*`).  Build-confirmed + reverted (design doc § native-backend).
-- **Scope:** find the `Str`-specific access in the WASM text path (`src/generation/`
-  + the wasm bridge); route it through `Deref` so a `String` return type-checks.
-- **Accept:** the `def.code == Null → "String"` conditional (N1) compiles + passes
-  `wasm_library_suite` and `native_library_suite`.
-- **Effort/risk:** M / **high** (WASM backend; the path is intricate).  ⚠ rebuild the
-  `wasm32-unknown-unknown` rlib before trusting a wasm failure (design doc env note).
+### W — curated owned-`String` wrapper-return gate *(keystone — ROOT CAUSE FOUND, de-risked)*
+- **Root cause (investigated this session):** on `wasm32-wasip2`, EVERY text native
+  gets a generated *wrapper function* (the native backend inlines them).  A blanket
+  `def.code → String` flip changes the wrapper *return type* but not the *bodies*,
+  which still produce `Str`/`&str` (`#rust` templates like `trim → &str`,
+  unconverted producers like `parallel-buf`/`as_text` → `Str`) → `E0308`.  It is
+  **wrapper/body type consistency, NOT** the `Deref`/`Str`-field rewrite first
+  guessed.  (`wasm[node]`'s `--html` build emits fewer wrappers, which is why it
+  goes green once the introspector bodies match.)  See design doc § native-backend.
+- **Scope:** add `native_returns_owned_string(name)` (shape of `is_text_dest_native`)
+  gating `mod.rs:2134 → "String"` to ONLY producers whose `codegen_runtime` body we
+  convert; add each name **in lockstep** with its body conversion.  `#rust` / `as_text`
+  / cdylib stay `Str`.  Then regenerate `tests/generated/*.rs` (cached `-> Str`).
+- **Accept:** `wasm_library_suite` (node + wasmtime) + `native_library_suite` green
+  with the introspectors converted.
+- **Effort/risk:** **M / med** (was "high" — now a scoped helper + golden regen, no
+  bridge rewrite).  ⚠ rebuild the `wasm32-unknown-unknown` rlib before trusting a
+  wasm failure (a stale rlib panics "build panicked" before the real error).
 - **Label:** `area:wasm` `area:codegen`
 
 ### N1 — internal text stubs return owned `String` *(needs W)*

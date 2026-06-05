@@ -476,10 +476,9 @@ pub fn db_from_text(stores: &mut Stores, val: &str, db_tp: u16) -> DbRef {
 
 /// Return the parse errors from the last `Type.parse()` call as a single
 /// newline-separated string.  Called by the `#errors` accessor.
-// @PLN10 — still scratch-backed.  The `def.code == Null → String` conditional
-// (which would let this return owned `String`) works on native but breaks the
-// WASM cdylib text path (`Str`-field access); deferred until the WASM bridge is
-// handled — see the design doc's native-backend section.
+// @PLN10 — still scratch-backed; converting it to owned `String` needs the
+// curated `native_returns_owned_string` wrapper-return gate (issue W) + a
+// golden-file regen.  See the design doc's native-backend section.
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_parse_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_parse_errors.join("\n");
@@ -498,7 +497,7 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
 /// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
 /// NOT clear the buffer — errors persist across `json_errors()` reads
 /// until the next successful parse implicitly clears them.
-// @PLN10 — still scratch-backed (same WASM-cdylib deferral as `i_parse_errors`).
+// @PLN10 — still scratch-backed (same gate as `i_parse_errors`).
 #[allow(clippy::missing_panics_doc)] // scratch.last().unwrap() — we just pushed
 pub fn i_json_errors(stores: &mut Stores) -> Str {
     let msg = stores.last_json_errors.join("|");

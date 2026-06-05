@@ -271,22 +271,36 @@ concat/loop), zero scratch; full suite green both backends; regression
     `def.code == Null && returns text → "String"` (owned-text stubs only), and
     convert each remaining stub body in the same change.  Contained, but genuinely
     per-category — not the free unification it looked like.
-  - **The refined `def.code` conditional ALSO breaks WASM (attempted + reverted).**
-    Conditioning `mod.rs:2134` on `def.code == Null && text → "String"` (even
-    narrowed to `def.native.is_empty()`, internal stubs only) compiles + passes on
-    **native** (`native_scripts` + `native_library_suite` green) but the **WASM
-    cdylib libraries** (`wasm_library_suite`: audience_crystal / html / markdown)
-    fail to compile — `E0599`/`E0609` then `E0308`.  The WASM cdylib text path
-    accesses `Str` fields/methods (`.ptr` / `.str()`) directly where the native
-    binding uses `Deref` (`.to_string()` / `&*`).  So the conditional needs the
-    **WASM-specific text-result access made `Deref`-based too** — a separate WASM
-    bridge change, not a native-only edit.  Reverted; the 2 introspector sites stay
-    scratch-backed.  ⚠ Env note: `wasm_library_suite` requires a fresh
+  - **Issue W — the WASM root cause, FOUND (investigated this session; not the
+    `Deref` story I first guessed).**  The `def.code → String` conditional broke
+    `wasm_library_suite`, and reading the generated `*_wasip2.rs` settled why:
+    **on `wasm32-wasip2`, EVERY text native gets a generated *wrapper function*
+    `fn name(cell, …) -> <ret> { <body> }`** (the native backend inlines them
+    instead).  The conditional flipped the wrapper *return type* to `String`, but
+    the *bodies* still produce `Str`/`&str`:
+    - `#rust` natives — the template wrapped in `Str::new(…)` (e.g. `t_4text_trim`
+      → `var_self.trim()` is `&str`),
+    - the codegen_runtime producers we *haven't* converted (`parallel-buf`,
+      `as_text`) — `Str`,
+    - so `-> String { …Str… }` → `E0308`.
+    The `wasm[node]` (`--html`) build emits *fewer* wrappers, which is why it
+    passed once the introspector bodies matched — proving the issue is **wrapper /
+    body type consistency**, NOT a fundamental `Str`-field access.  Converting the
+    introspector bodies to `String` fixed `wasm[node]`; only `wasm[wasmtime]`
+    (wasip2) stayed red, on the unconverted producers above.
+  - **The fix (clean, scoped):** a curated `native_returns_owned_string(name)`
+    helper — exactly the shape of `is_text_dest_native` — gates the `mod.rs:2134`
+    `→ String` to *only* the producers whose bodies we've actually converted to
+    owned `String`.  `#rust` natives, `as_text` (null), and cdylib stay `Str`
+    (their wrapped bodies match `-> Str`).  Add a producer's name to the helper in
+    **lockstep** with converting its `codegen_runtime` body.  Plus: regenerate the
+    checked-in `tests/generated/*.rs` golden wrappers (they cache the old `-> Str`
+    signature).  ⚠ Env: `wasm_library_suite` needs a fresh
     `wasm32-unknown-unknown` rlib (`cargo build --release --target
     wasm32-unknown-unknown --lib --no-default-features --features random`) — a
     stale wasm rlib panics with a misleading "build panicked" before the real
-    error; rebuild it before trusting a WASM failure (the native-rlib gotcha's
-    WASM twin).
+    error (the native-rlib gotcha's WASM twin).  **Issue W is now de-risked:
+    scoped to the curated helper + golden regen, no `Deref`/bridge rewrite.**
 - **Phase B** (`emit.rs` generic-specialisation wraps).
 - **Final**: delete `Stores::scratch` + the dead `clear_scratch` / `OpClearScratch`
   + the `#[cfg(debug_assertions)]` assert-empty guard.
