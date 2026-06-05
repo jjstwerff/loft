@@ -363,12 +363,33 @@ fn n_ws_client_recv(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, ok);
 }
 
+/// @PLN10 N2b (wasm tail) — put an owned-`String` text result, honouring the
+/// cdylib bridge destination.  The web library's text producers (`pack_take`,
+/// `ws_client_message`) carry `#native` symbols, so `is_cdylib_text_call` routes
+/// them through `n_set_bridge_dest` on BOTH backends; in wasm they bind to these
+/// DIRECT natives (`WEB_FUNCTIONS_WASM`) rather than the FFI bridge, so they must
+/// honour `bridge_text_dest` exactly as `bridge_text_result` does — write into the
+/// caller's work buffer + push nothing if set, else the legacy scratch `Str`.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn put_owned_text_or_dest(stores: &mut Stores, stack: &mut DbRef, s: String) {
+    if let Some(dest) = stores.bridge_text_dest.take() {
+        if !s.is_empty() {
+            stores
+                .store_mut(&dest)
+                .addr_mut::<String>(dest.rec, dest.pos)
+                .push_str(&s);
+        }
+        return;
+    }
+    stores.scratch.push(s);
+    let st = crate::keys::Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, st);
+}
+
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 fn n_ws_client_message(stores: &mut Stores, stack: &mut DbRef) {
     let msg = crate::wasm::host_ws_last_message();
-    stores.scratch.push(msg);
-    let s = crate::keys::Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, s);
+    put_owned_text_or_dest(stores, stack, msg);
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
@@ -425,9 +446,7 @@ fn n_pack_u32_le(_stores: &mut Stores, stack: &mut DbRef) {
 fn n_pack_take(stores: &mut Stores, stack: &mut DbRef) {
     let v = PACK_BUF.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
     let s = unsafe { String::from_utf8_unchecked(v) };
-    stores.scratch.push(s);
-    let st = crate::keys::Str::new(stores.scratch.last().unwrap());
-    stores.put(stack, st);
+    put_owned_text_or_dest(stores, stack, s);
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
