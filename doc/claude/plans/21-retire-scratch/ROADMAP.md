@@ -3,46 +3,70 @@ render_with_liquid: false
 ---
 # @PLN10 — Roadmap to delete `stores.scratch`
 
-The clear path from **today (29 `scratch.push` sites; native + node-wasm +
-wasmtime-wasm green — keystone `W` SOLVED, `codegen_runtime` now scratch-free,
-the cdylib FFI codegen wrap now owned-`String`)** to the **goal (the field
-deleted; Goal E for strings — no global text buffer)**, as a set of
-dependency-ordered issues.
+The clear path from **today** to the **goal (the field deleted; Goal E for
+strings — no global text buffer)**, as a set of dependency-ordered issues.
 
 Read [`01-destination-passing-design.md`](01-destination-passing-design.md) first —
 it is the design + the build evidence each issue below builds on.
 
 > ## ▶ Next session — start here
 > **Done (✅):** the interpreter chokepoint, every native `codegen_runtime`
-> producer (that file is now ZERO `scratch.push`), the keystone `W`, the
-> coverage proof `C`, and **N2a** — the cdylib FFI **codegen** wrap (the @P244
-> `output_native_direct_call` text path now returns owned `String`, not a
-> scratch-backed `Str`).  **39 → 29** grep hits (**28 real** statements — one
-> `pre_eval.rs:556` hit is a comment); native + interp green.
+> producer (that file is ZERO scratch), the keystone `W`, the coverage proof `C`,
+> **N2a** (the cdylib FFI codegen wrap now returns owned `String`), the
+> **`LOFT_SCRATCH_TRIP` sentinel** (live-vs-dead is now a runtime fact, not a
+> grep guess), and **Phase 1 batch 1** (`ymd_days_ago` + `store_memory`
+> dest-pass).  Native + interp green.
 >
-> ### How far from zero — the count only drops at three steps
-> The hard infrastructure is built; the rest is proven-pattern application, **one**
-> genuinely-new mechanism, and a mechanical delete.  Crucially, **I1 (converting
-> the live interp producers) drops the count by ZERO** — it adds `_dest` variants
-> but leaves the old bodies in place; its job is to make D's final delete *safe*.
+> ### The metric is now the sentinel, not the grep
+> `LOFT_SCRATCH_TRIP=1` makes every *live* `scratch.push` print its `file:line`
+> (`=panic` trips a backtrace).  This **supersedes the bare `grep scratch.push`**,
+> which is now polluted by the sentinel's own doc/output strings AND has always
+> over-counted (it sees dead fallbacks and live sites alike).  Static proxy:
+> `grep -rn 'scratch\.push(' src/` = **28** (one is the `pre_eval.rs:556`
+> comment → **27 real**), **unchanged by Phase 1** — converting a producer adds a
+> `_dest` variant but leaves the old body for `D`, so I1 is **count-neutral by
+> design**.  The real acceptance gate: a **whole-suite `LOFT_SCRATCH_TRIP` run
+> with zero trips** → nothing depends on scratch → the field deletes (its absence
+> is then the compile-time guard).
 >
-> | Step | Removes | Count | Nature |
+> ### What the sentinel found — the corpus-live set (the real targets)
+> Enumerated across all `tests/scripts/*.loft` + `tests/docs/*.loft` (interpret):
+> only **four** sites fire.  Static-live producers `pack_take` / `ws_client_message`
+> / `struct_to_json_dispatch` aren't even exercised by the corpus.
+>
+> | Trips | Site | Producer | Class |
 > |---|---|---|---|
-> | **now** | — | **28** | emit 8 / native 16 (5 dead + 11 live) / format 2 / extensions 2 |
-> | **Phase B** | emit.rs −8 | 20 | central Return conversion, direction-proven (matrix-gated) |
-> | **N2b** | extensions.rs −2 | 18 | needs the new null-aware interp primitive |
-> | **D + F** | native −16, format −2 | **0** | mechanical delete + field gone |
+> | 7 | `native.rs` | `n_as_text` | **Phase 2** (returns null) |
+> | 6 | `native.rs` | `n_parallel_buf_get_text` | audit (parallel-specific) |
+> | 5 | `format.rs:333` | `os_variable` (`push_scratch` helper) | **Phase 2** (null if unset) |
+> | 3 | `native.rs` | `i_parse_errors` | **Phase 1** (non-null) |
+>
+> ### How far from zero — the count drops at three steps; I1 is the enabler
+> The hard infrastructure is built; the rest is proven-pattern application, **one**
+> genuinely-new mechanism, and a mechanical delete.  **I1 drops the count by ZERO**
+> — it adds `_dest` variants but leaves the old bodies for `D`; its job is to make
+> D's delete *safe* (every live producer must have a `_dest` first, or D's deletion
+> breaks it).  After batch 1, `native.rs` is **10 dead fallbacks + 6 live**.
+>
+> | Step | Removes (real statements) | Nature |
+> |---|---|---|
+> | **Phase B** | emit.rs ~7 | central Return conversion, direction-proven (matrix-gated) |
+> | **N2b** | extensions.rs 2 | needs the new null-aware interp primitive |
+> | **D + F** | native 16 + format 2 | mechanical delete + field gone (gated on the sentinel reading zero) |
 >
 > ### The cleanest ordering (sequence by MECHANISM, not by issue-label)
 > Phase B, I1, N2b are mutually **independent** and all gate D, so order is driven
 > by risk + subsystem coherence.  Each phase drives a coherent backend region to
 > zero; difficulty rises across phases:
 >
-> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)*: give the non-null
->    live producers (`ymd_days_ago`, `store_memory`, `struct_to_json`,
->    `parallel_buf`, `pack_take`…) a `_dest` variant + `is_text_dest_native` entry
->    — exactly the Build-3 template the 5 already-converted producers use.  Per
->    producer: convert + matrix + commit.  Unlocks (part of) D's final delete.
+> 1. **Phase 1 — I1-nonnull** *(proven, fast, count-neutral)* — **batch 1 DONE**
+>    (`ymd_days_ago` + `store_memory`, sentinel-proven zero-trip).  Give each
+>    non-null live producer a `_dest` variant + `is_text_dest_native` entry — the
+>    Build-3 template (now 10 producers).  **Batch 2:** `i_parse_errors`
+>    (corpus-live) + `struct_to_json_dispatch` (source-live, non-null).  Then
+>    **audit** `parallel_buf` / `pack_take` / `ws_client_message` for null — any
+>    that can return null fall to Phase 2.  Per producer: convert + `LOFT_SCRATCH_TRIP`
+>    matrix + commit.
 > 2. **Phase 2 — the null-aware interp primitive → I1-null + N2b** *(THE one novel
 >    piece)*: a single mechanism — "materialise possibly-null dynamically-produced
 >    text on the interp stack without scratch" — feeds THREE consumers that all
@@ -63,9 +87,11 @@ it is the design + the build evidence each issue below builds on.
 >    returns (one buffer-view `Str::new(work_buf)`, one owned local) can't be one
 >    clean signature.  **Build a return-shape matrix first.**  Do it last before D
 >    so a thorny Phase B doesn't block the banked interp wins (−8).
-> 4. **Phase 4 — D + F** *(mechanical payoff)*: delete `Stores::scratch` + the 16
+> 4. **Phase 4 — D + F** *(mechanical payoff)*: **gated on a whole-suite
+>    `LOFT_SCRATCH_TRIP` run reading zero.**  Delete `Stores::scratch` + the
+>    `Scratch` newtype + the sentinel (the field they wrap is gone) + the 16
 >    `native.rs` dead bodies + 2 `format.rs` helpers + dead `clear_scratch` /
->    `OpClearScratch` + the `state/codegen.rs:329` emission (and reword the
+>    `OpClearScratch` + the `state/codegen.rs:329` emission (and the
 >    `pre_eval.rs:556` comment).  The loft *def* stays for the IR `Call`; a
 >    `library_names` miss then loudly catches any residual emit.  Gated on 1–3
 >    reaching zero.
@@ -76,6 +102,19 @@ it is the design + the build evidence each issue below builds on.
 > places.  Isolating the two genuinely-hard pieces (Phase 2's null primitive,
 > Phase 3's mixed-return) into their own matrix-gated phases keeps Phase 1
 > (proven-mechanical) and Phase 4 (the payoff) low-risk.
+>
+> 🔧 **The sentinel — your live-vs-dead oracle (use it every batch):**
+> ```
+> LOFT_SCRATCH_TRIP=1 ./target/release/loft --interpret <file>   # warn: print each live push file:line
+> LOFT_SCRATCH_TRIP=panic ./target/release/loft --interpret <file>  # backtrace the first hit
+> # enumerate the whole corpus (the "what's still live" map):
+> for f in tests/scripts/*.loft tests/docs/*.loft; do \
+>   LOFT_SCRATCH_TRIP=1 ./target/release/loft --interpret "$f" 2>&1 | grep LOFT_SCRATCH_TRIP; \
+> done | sed 's/.*@ //' | sort | uniq -c | sort -rn
+> ```
+> A converted producer must produce **zero trips** in its matrix probe; a
+> whole-suite zero is the `D` acceptance gate.  (Interpreter-side only — native
+> generated programs don't touch `Stores::scratch`.)
 >
 > ⚠ **Env:** after ANY `src/generation/` or `codegen_runtime.rs` change, rebuild
 > **all three** rlibs before trusting a backend, or a stale one fakes failures:
@@ -100,17 +139,25 @@ it is the design + the build evidence each issue below builds on.
 
 ## The goal & the acceptance bar
 
-**Goal:** delete `Stores::scratch` (`src/database/mod.rs`), the dead
-`clear_scratch` (`fill.rs`), the no-op `OpClearScratch` (`default/02_files.loft`),
-and the dead per-`Line` emission (`state/codegen.rs:329`).
+**Goal:** delete `Stores::scratch` (`src/database/mod.rs`) + its `Scratch` newtype
+and `LOFT_SCRATCH_TRIP` sentinel, the dead `clear_scratch` (`fill.rs`), the no-op
+`OpClearScratch` (`default/02_files.loft`), and the dead per-`Line` emission
+(`state/codegen.rs:329`).
 
-**Acceptance:** `grep -rn 'scratch.push' src/` = **0**, then the field deletes and
-its absence is the compile-time guard.  `tests/scripts/192`–`195` stay green on
-**all three backends** (interpreter / native / wasm) throughout.
+**Acceptance (runtime, via the sentinel — supersedes the grep):** a whole-suite
+run under `LOFT_SCRATCH_TRIP=1` reports **zero trips** → nothing depends on
+scratch → the field + newtype delete, and their absence is the compile-time
+guard.  (The bare `grep scratch.push` is no longer the metric: the sentinel's own
+doc/output strings pollute it, and it always over-counted dead vs live.  Static
+proxy while converting: `grep -rn 'scratch\.push(' src/`.)  `tests/scripts/192`–`196`
+stay green on **all three backends** (interpreter / native / wasm) throughout.
 
 **Done so far:** the interpreter synth-temp chokepoint, all native `codegen_runtime`
 cell-ABI producers, the keystone `W`/`N1`, the coverage proof `C`, `A` (native
-`as_text` null), and `N2a` (cdylib FFI codegen wrap).  `39 → 28` real statements.
+`as_text` null), `N2a` (cdylib FFI codegen wrap), the `LOFT_SCRATCH_TRIP`
+**sentinel**, and **Phase 1 batch 1** (`ymd_days_ago` + `store_memory`).  27 real
+`scratch.push(` statements remain; the sentinel reads **4 live sites** across the
+corpus (`as_text`, `parallel_buf`, `os_variable`, `i_parse_errors`).
 
 ---
 
@@ -122,9 +169,11 @@ cell-ABI producers, the keystone `W`/`N1`, the coverage proof `C`, `A` (native
    A (null)✅ ──────────────────────────────────► C✅ ─► F ─► D  (GOAL)
                                                     ▲
    ── remaining (each gates D, mutually independent) ──
-   Phase 1: I1-nonnull ────────────────────────────┤   (count-neutral; makes
+   Phase 1: I1-nonnull (batch 1 ✅ ymd/store_memory)┤   (count-neutral; makes
    Phase 2: null primitive → I1-null + N2b ─────────┤    D's delete safe / −2)
-   Phase 3: B (central Return emit) ────────────────┘   (−8)
+   Phase 3: B (central Return emit) ────────────────┘   (−7)
+
+   tool: LOFT_SCRATCH_TRIP sentinel ✅ — runtime live-vs-dead oracle + D's gate
 ```
 
 `W` was the **keystone** — it unblocked every native `Str→String` conversion (done).
@@ -196,17 +245,25 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 - **Accept:** `scratch.push` −2; cdylib libraries green on the interpreter.
 - **Effort/risk:** M / med-high.  **Label:** `area:codegen`
 
-### I1 — remaining interpreter producers → dest-passing *(independent; native half needs W)*
+### I1 — remaining interpreter producers → dest-passing *(= Phase 1; native half done via #rust/codegen_runtime)*
 - **Scope:** per producer, the proven Build-3 pattern — a `_dest` variant +
-  `is_text_dest_native` entry (interp) and an owned-`String` `codegen_runtime`
-  body (native, gated on W).  **Audit each for null-safety first.**  The set
-  (from the producer audit): `n_ymd_days_ago`, `n_store_memory`,
-  `struct_to_json_dispatch`, `n_parallel_buf_get_text(_native)`,
-  `n_ws_client_message`, `n_pack_take`, `os_variable` (`database/format.rs`).
-- **Accept:** each producer dest-passes in value position (matrix), both backends.
-- **Effort/risk:** M / low-med (mechanical × N; some may be null → route to A).
-  **Split** the interp side (ship now) from the native side (gate on W).
-  **Label:** `area:codegen`
+  `is_text_dest_native` entry (interp).  The native half is already scratch-free
+  (the `#rust` template inlines an owned `String`, or the `codegen_runtime` body
+  returns one), so I1 is **interp-only**.  **Audit each for null-safety first** —
+  null-carrying producers can't dest-pass (a buffer can't represent null) and
+  route to **Phase 2** instead.
+- **Status (sentinel-classified):**
+  - ✅ **batch 1 DONE** — `n_ymd_days_ago`, `n_store_memory` (non-null, zero-trip).
+  - **batch 2 (non-null):** `i_parse_errors` (corpus-live), `struct_to_json_dispatch`
+    (source-live, not corpus-exercised).
+  - **audit:** `n_parallel_buf_get_text` (corpus-live, parallel-specific),
+    `n_pack_take`, `n_ws_client_message` (neither corpus-exercised) — any that can
+    return null → Phase 2.
+  - **→ Phase 2 (null, sentinel-located):** `os_variable` (`format.rs:333`),
+    interp `n_as_text` (`native.rs`).
+- **Accept:** each producer **zero-trip** under `LOFT_SCRATCH_TRIP` in value
+  position (matrix), both backends.
+- **Effort/risk:** S-M / low (mechanical × N; the proven template).  **Label:** `area:codegen`
 
 ### A — `as_text` null-carrying return ✅ **DONE (native)** *(the "blocker" wasn't one)*
 > The premise was wrong: **native text-null IS an owned `String` value** — the
@@ -283,7 +340,7 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 | Milestone | Issues | Meaning |
 |---|---|---|
 | **M1 — keystone** ✅ | `W` `N1` | DONE — the curated owned-`String` wrapper gate; unblocks the native chain |
-| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ · `N2b` `I1` `B` | every producer off scratch (fallbacks aside) |
+| **M2 — producers converted** | `N1`✅ `N2a`✅ `A`✅ `I1`-batch1✅ · `I1`-batch2 `N2b` `B` | every producer off scratch (sentinel reads zero) |
 | **M3 — fallbacks gone** | `C`✅ `F` | coverage proof DONE (fallbacks are dead code); `F` deletes them, folded into `D` |
 | **M4 — GOAL** | `D` | field deleted |
 
