@@ -51,7 +51,7 @@ it is the design + the build evidence each issue below builds on.
 > ### What's left to delete the field
 > | Region | Sites | Nature |
 > |---|---|---|
-> | **Phase B** (`emit.rs`) | 7 | central `Value::Return`/`wrap_result` text wraps — *emitted* `scratch.push` in generated native code; the mixed-return / W-trap hazard (matrix-gated). |
+> | ~~**Phase B** (`emit.rs`)~~ ✅ **DONE** | 0 | central `Value::Return`/`wrap_result` text wraps — Direction A: nwb→owned `String` + buffered local/ncc/ripple→work-buffer write.  Generated native corpus scratch-free (`80cab896`+`c4ea7824`). |
 > | **N2b** (`extensions.rs`) | 2 | the interpreter cdylib bridge (`bridge_push_str`/`push_loft_str`) — write into a dest instead of scratch (now known: plain dest-passing, "\0"/empty for null). |
 > | **wasm tail** (`native.rs` cfg(wasm)) | 2 | `pack_take` + `ws_client_message` — non-null; need a *wasm* positive control (`pack_take` testable, `ws` needs a host). |
 > | **D + F** | the dead fallbacks + the field | the `native.rs` non-`_dest` bodies are now ALL dead (corpus reads zero); delete them + `Stores::scratch` + the `Scratch` newtype + sentinel + dead ops. |
@@ -298,7 +298,39 @@ bodies (`F`) + the field.  Order them by mechanism — see § the cleanest order
 > regression `tests/scripts/195`.  (Interp `n_as_text` + `os_variable` fold into
 > the interp-side cleanup with the other fallbacks, at `D`.)
 
-### B — central `Value::Return` / `wrap_result` text wraps (Phase B) *(independent)*
+### B — central `Value::Return` / `wrap_result` text wraps (Phase B) ✅ **DONE** *(Direction A)*
+- **LANDED (`80cab896` nwb→String + `c4ea7824` buffer-write).**  The generated
+  native corpus is now **scratch-free** (`scratch.push = 0` across the entire
+  `tests/scripts` emit; verified statically AND under `LOFT_SCRATCH_TRIP=panic`).
+  Direction A was implemented exactly as the diagnosis predicted — **no buffer
+  added, no signature change, no instability** (Direction B's blocker sidestepped):
+  - **nwb fns → owned `String`** (`def_returns_owned_text` helper, shared by the
+    `mod.rs` wrapper gate + all 4 `emit.rs` return sites: Null-return, If-Return,
+    main Return, block-tail).  `Str: Display` makes `(val).to_string()` coerce
+    &str / String / Str / buffered-inner-`Str` / nwb-inner-`String` uniformly.
+    Generic monomorphs fell out **for free** (they're `nwb`) — no specialisation
+    change, the very thing that blocked B.
+  - **The ripple, both directions, handled.** `inner_already_str` now EXCLUDES nwb
+    inner fns (a `return nwb_helper()` is re-wrapped, not forwarded); a buffered
+    outer returning an nwb-inner routes through the buffer-write.
+  - **Buffered (`!nwb`) local/ncc/ripple → write the existing work buffer**
+    (`return_buffer_name()` → `*var_<buf> = _tmp; Str::new(&*var_<buf>)`), not
+    scratch.  The buffer-write path is **live** (1 site: the `155` ncc closure),
+    not dead-but-safe.  The scratch emission survives only as an impossible-case
+    fallback (`!nwb && no-buffer`).
+  - **Positive-controlled** (per the rigor skill): a forced `scratch.push` injected
+    into every generated fn PANICS the native child under `=panic` (exit 101,
+    `#[track_caller]` names the generated `.rs:line`) — proving the env reaches the
+    child and the sentinel fires, so the suite-wide `=panic` silence is *valid*
+    evidence of zero, not a dead probe.
+  - **All four backends green:** interp, --native (native_scripts + native_dir under
+    `=panic`, full native.rs + native_ext + codegen_emitter), --html/wasm32-unknown
+    (wasm-html-test 8/8, incl. markdown's nwb `rewrite_link`), wasip2 (`--native-wasm`
+    compiles — the W-trap would be E0308 here — + wasmtime runs exit 0).
+- **What's left for the field delete (`D`):** N2b (interp cdylib bridge) + I1
+  (remaining interp producers) still emit scratch; once those + the suite-wide
+  `=panic` gate are zero, `D` deletes the field + the now-dead fallbacks/newtype.
+- **Diagnosis history (kept — the two-session matrix that led here):**
 - **Scope (corrected — bigger than first framed):** the 8 `emit.rs`
   `stores.scratch.push((expr).to_string()); Str::new(...)` emissions.  They serve
   **THREE distinct roots**, all "the function body produced an owned `String` but
