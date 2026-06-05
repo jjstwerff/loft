@@ -375,50 +375,42 @@ own cdylib and dispatch native; output stays byte-identical.  Verified the main
 program's own package is NOT over-recorded (`library_suite` builds no `native-auto/`).
 Guard: `tests/n3_parity.rs::interdependent_libraries_are_fully_native` (the diamond).
 
-**F3 — ⛔ THE BIG ONE: auto-native dispatch never executes → 0× speedup (the whole arc's value is currently unrealized).** 🔴 *(found 2026-06-05 via gate ② — the first time anyone measured the C71 *execution* path, vs. the plan's load-side numbers)*
-**SOLID (direct measurement) — the impact:** an interpreted script calling a
-default-native library does NOT speed up.  Measured on `benchlib::compute` (a 200M-iter
-integer loop) with a **runtime argument** (`env_variable` — so NOT const-folded; the
-earlier constant-arg run measured const-folding, an instrument bug since corrected):
-**interp 5229 ms vs native 5206 ms = 1.0×**, warm cdylib, min-of-5.  Hand-written Rust /
-`--native` whole-program is 10–40× (PERFORMANCE.md), so the **codegen is fast** — the
-gap is specific to the C71 interp-script→native-lib path.  *Why parity masked it:* every
-test asserts `interp == native` **output**, never **speed**; native running at interp
-speed (whatever the cause) is `interp == interp == correct`, so all parity/n2/n3 tests
-pass.  **The arc needs a speed assertion (a `use`d-library bench row).**
+**F3 — ✅ the C71 speedup is REAL (63.6×): a measured value + a false alarm that taught the method.** *(2026-06-05 — gate ②, the first time anyone measured the C71 *execution* path)*
 
-**CONFIRMED (probes that fired in the setup phase, + disassembly):** the function is
-marked (`def.native = loft_shared_…`), the cdylib builds + exports the bridge symbol,
-`byte_code` emits `OpStaticCall(loft_shared_n_compute)` into `n_main` (seen in a
-`dump_code` dump), and `wire_shared_native_fns` wires it (dlsym + `compute_sig` +
-`library_names` index all succeed).  So setup is end-to-end correct up to the call site.
+**The value, measured right:** an interpreted script calling an auto-native library is
+**63.6× faster** than interpreting the library — `benchlib::compute` (200M-iter loop),
+`--interpret`, **runtime** arg, warm cdylib, min-of-5: interp-lib **25049 ms** vs
+auto-native-lib **394 ms**, with the bridge dispatch **confirmed live by a sentinel**
+(`SHARED_DISPATCH_HITS`).  Two real fixes fell out:
+- **opt-level (landed):** `build_shared_cdylib` was `-C opt-level=0`; the bridge calls
+  `ops::op_*` per arithmetic op, un-inlined when unoptimized.  opt-0 = 4706 ms (5.3×),
+  opt-2 = 394 ms (63.6×) — an **11.9× difference**.  Now opt-2 (builds run only when a
+  library is stable, Step 4, so the slower build is the right trade).
+- **liveness guard (landed):** output-parity asserts the RESULT (correct whether the
+  call dispatches or interprets its body), so it can't catch a silent revert to
+  interpret-the-body.  `tests/n2_cdylib.rs::f3_body_bearing_marked_fn_dispatch_vs_interpret`
+  asserts the bridge sentinel *moved*, with a no-body `#native` call as the positive
+  control.  This is the speed/liveness assertion the arc was missing.
 
-**NOT EARNED — retracted mechanism claims (instrument was broken):** an earlier draft
-asserted "the bridge never fires / `State::static_call` is dead code / `OpStaticCall`
-mis-routes."  Those came from CLI `eprintln` probes that **did not fire even in
-`execute_argv` — which must run to execute `main`** (a sensor that's silent in code that
-definitely runs is broken, not evidence).  So **why** native runs at interp speed is
-currently **unknown**: the call could be interpreting its body, or dispatching to a
-bridge that itself re-enters the interpreter, or something else.  Do not trust the
-"dead code / mis-route" story until a working instrument confirms it.
+**The false alarm — and why it's worth recording (the method, not the bug).**  An
+earlier draft of this entry screamed "0× speedup / dispatch is dead / `static_call` is
+dead code."  All of it was **measurement artifact** from three compounding broken
+instruments — the canonical engineering-rigor failure (build the instrument *and verify
+it* before trusting it):
+1. **Wrong mode.** `loft <file>` defaults to whole-program `--native` (main.rs:101,
+   "native is default").  So both "interp" and "native" runs compiled the *same* whole
+   program → trivially 1.0×, and the interpreter (where the cdylib dispatch lives) never
+   ran.  The C71 path is `--interpret`; the benchmark never used it.
+2. **Const-fold.** The first benchmark passed a constant arg → interpreted at compile
+   time (a real user-facing surprise too: a constant-arg library call is const-folded).
+3. **Broken sensors.** CLI `eprintln`/counter probes read 0 because the interpreter
+   wasn't running at all — and the silence was read as "dead dispatch" instead of "wrong
+   sensor."  The fix was a **positive control**: an in-process harness (which *uses* the
+   interpreter) fired the bridge, and a Drop-guard sentinel showed `exec[argv=0]` for the
+   default CLI mode → "native is default" → the whole benchmark was the wrong mode.
 
-**The right instrument (the one to build first next time):** an **in-process** harness —
-construct `State`+`Data`, parse a minimal interp-script-calls-native-lib case,
-`byte_code` + execute it directly, and step the dispatch — deterministic and immune to
-main.rs's ~11 dispatch-loop variants / multiple `execute_*` entries that defeated
-outside-in CLI probing.  It doubles as the regression guard.  Candidate hypotheses to
-*falsify* with it (not assume): `OpStaticCall`'s op_code (assigned sequentially,
-`data.rs:2423`) vs the `OPERATORS` index of `static_call` (fill.rs) drift; a user-bodied
-marked fn preferring its body; or the bridge being reached but slow.
-
-**Secondary, independently real:** the cdylib builds at **`-C opt-level=0`** (unoptimized,
-`native_lib.rs::build_shared_cdylib`); and a library call with a **constant argument is
-const-folded** (interpreted at compile time), bypassing dispatch — a user-facing surprise
-and the benchmark trap that contaminated the first measurement.
-
-*Priority:* the **impact** (no speedup) is above F1/F2/N5 — N5 guards a boundary whose
-runtime payoff is currently 1.0×.  But the **fix** is gated on first building the
-in-process instrument and *confirming* the mechanism — no code change until then.
+*Lesson folded back into the rigor skill:* the usage sentinel generalized beyond
+removal, plus the **silence-is-evidence-only-after-a-positive-control** clause.
 
 ---
 
