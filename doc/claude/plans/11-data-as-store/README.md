@@ -25,18 +25,22 @@ sections below, this is the index:
 
 2. **F1 — nextest native-test reliability.**  CI-masked (green under
    `make test` + the `ci` nextest profile's `retries = 1`) but flaky
-   under raw `cargo nextest` full-suite.  Two modes, do not conflate:
-   - **Mode B (higher-value, pre-existing) first** — the cdylib build
-     resolves transitive deps against `target/<profile>/deps/`, but a
-     raw nextest test-profile build doesn't lay out standalone dep
-     rlibs the same way (`ring/rustls/webpki … not in rlib format`).
-     Fix: make the cdylib build resolve against the rlibs nextest
-     actually produces (hashed `libloft-<hash>.rlib` + matching dep
-     set), or have the harness build a consistent rlib set first.
-   - **Mode A (unconfirmed)** — a concurrent native-link race vs a
-     `deps/` rewrite.  The serial-group fix was **tried and reverted**
-     (`56132ae`/`8599a2c`); needs a controlled A/B (group vs no-group,
-     several runs) before re-landing or dropping it.
+   under raw `cargo nextest` full-suite.
+   - **Mode A ✅ FIXED (2026-06-05)** — root cause was **not** a deps
+     race but **shared stem-keyed scratch output paths** in
+     `tests/native.rs`: `native_tuple_script`,
+     `native_tuple_return_script`, and `native_scripts` all compile
+     `50-tuples.loft`, and under nextest's process-per-test they
+     truncated each other's `loft_native_<stem>_bin` mid-link → SIGBUS.
+     Fixed by per-process temp output + atomic `rename(2)` publish (no
+     serial group; full parallelism kept).  Forced-collision 0/12,
+     broad cold 0/4, cache intact.
+   - **Mode B (open, lower urgency)** — `ring/rustls/webpki … not in
+     rlib format` from a test-profile dep-layout mismatch.  **Not
+     reproduced** in this env (consistent unhashed
+     `release/deps/libloft.rlib`).  Fix direction unchanged: resolve the
+     cdylib build against the rlib set nextest actually produces, or
+     build a consistent set first.
    → § Discovered follow-ups F1.
 
 3. **Arc N dispatch completion (the live forward work — C71 build-out).**
@@ -401,28 +405,45 @@ n3_use_native 2, issues 684) and in CI (the `ci` nextest profile has `retries = 
 It is **flaky under raw `cargo nextest` full-suite runs** (`find_problems.sh`, the
 `default` profile, no retries).  The failures **move between runs** and every failing
 test **passes in isolation** — so it is a harness interaction, not a flip-logic bug
-(`n2_cdylib`/`native` predate this arc; their build paths are unchanged).  There are
-**two distinct modes**, and they must not be conflated (a session-long mis-step —
-see the honesty note below):
-- *Mode A — concurrent native-link race.*  Two native links racing a `deps/` rewrite
-  → a dep rlib momentarily missing (`libring-… No such file`).  A nextest
-  single-slot `native-build-serial` group would be the precedent-consistent fix
-  (cf. `html-wasm-serial`).  **Tried and reverted** (commits `e648e64`+`a085ce8`,
-  reverted by `56132ae`+`8599a2c`): the commit's stated mechanism (the loft binary
-  auto-firing `cargo build --lib`) was **wrong** — that eprintln fired 0× in the
-  logs.  Whether serialising actually reduces Mode-A flakiness is **still unknown**:
-  the one supporting data point (6→2 failures after adding the group) was confounded
-  with a same-run rlib refresh.  *Next step:* a controlled A/B (same concurrency,
-  group vs no-group, several runs) before re-landing or dropping the group.
-- *Mode B — build-layout mismatch (the real reliability problem).*  The loft native
-  cdylib build resolves transitive deps against `target/<profile>/deps/`, but a raw
-  `cargo nextest` test-profile build doesn't lay out the standalone dep rlibs the
-  same way `cargo build --lib` does → `ring/rustls/webpki … not in rlib format`.
-  Serialisation does **nothing** for this (it fails single-threaded too).  *Fix
-  direction:* make the cdylib build resolve against the rlibs nextest actually
-  produces (the hashed test-profile `libloft-<hash>.rlib` + matching dep set), or
-  have the harness build a consistent rlib set first.  This is the higher-value of
-  the two and is **pre-existing**.
+(`n2_cdylib`/`native` predate this arc; their build paths are unchanged).
+
+**✅ Mode A RESOLVED (2026-06-05) — root cause found by reproduction, and it was
+NOT a deps-read race.**  The matrix-first instrument falsified the long-assumed
+"concurrent links compete for `deps/*.rlib` reads" story: **160 concurrent
+`loft --native` builds reading the shared `release/deps/` dependency closure
+produced zero link errors** — because `loft --native` writes **PID-suffixed**
+scratch paths.  The real cause is in `tests/native.rs`: the native test harness
+wrote **stem-keyed** scratch output paths (`loft_native_<stem>_bin` +
+`.rs`/`.key`/`_args.txt`), and three tests compile the *same* stem —
+`native_tuple_script`, `native_tuple_return_script`, and `native_scripts` all
+build `50-tuples.loft`.  The in-process `native_suite_lock()` serialises them
+within ONE process, but **nextest runs each test in its own process**, so under
+nextest they ran concurrently and their rustc/lld processes wrote the **same**
+output binary, truncating each other's file in place mid-link → **SIGBUS in
+`rust-lld` / `linking with cc failed`** (the same shared-fixed-`/tmp`-path shape
+the `html_wasm` race already documents in `nextest.toml`).  Reproduced
+deterministically (wipe the `50-tuples` cache to force concurrent recompiles →
+1/6 fails); the `linking` symptom is Mode A's "momentarily unusable artifact"
+family — **not** a deps race, and **not** the loft-binary-fires-`cargo-build`
+mechanism the reverted commit guessed.  *Fix (`tests/native.rs`):* compile each
+job to a **per-process temp output** and **publish atomically via `rename(2)`** —
+`rename` swaps the directory entry, so a process executing/linking the old binary
+keeps its inode (no in-place truncation → no SIGBUS), and the BUILD2 cache path is
+always a complete artifact.  **No nextest serial group needed** (full parallelism
+kept); the previously-reverted `native-build-serial` idea is **moot** — it would
+only have masked the path collision.  *Verified:* forced-collision **0/12** (was
+1/6); broad cold `native + n2_cdylib + n3_parity + n3_use_native` set **0/4**, all
+30 pass (was ~1/3); cache intact (251 warm hits); `cargo test --test native` 6/6;
+fmt + clippy clean.
+- *Mode B — build-layout mismatch (`ring/rustls/webpki … not in rlib format`).*
+  **Not reproduced in this environment** and untouched by the Mode-A fix: here
+  `crate-type=["cdylib","rlib"]` yields a single consistent unhashed
+  `release/deps/libloft.rlib` whose transitive dep `.rlib`s all resolve, so the
+  `.rmeta`-only-SVH layout that triggers it never arose.  Remains **open** and
+  pre-existing — the original *fix direction* stands (resolve the cdylib build
+  against the rlib set nextest actually produces, or build a consistent set
+  first).  Lower urgency than believed: Mode A was the symptom `find_problems.sh`
+  actually hit.
 
 **F2 — interdependent libraries are fully native.** ✅ *(fixed 2026-06-05)*  When a
 library was *both* a transitive dep and directly `use`d (consumer uses `top`, `top`
