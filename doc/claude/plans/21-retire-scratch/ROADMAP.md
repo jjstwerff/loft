@@ -116,6 +116,15 @@ it is the design + the build evidence each issue below builds on.
 > whole-suite zero is the `D` acceptance gate.  (Interpreter-side only — native
 > generated programs don't touch `Stores::scratch`.)
 >
+> ⚠ **Silence needs a positive control** (engineering-rigor § the usage sentinel):
+> a zero-trip probe reads the same whether the producer is converted *or the probe
+> never exercised it*.  So pair it: confirm the sentinel CAN fire for that value-
+> position shape first — an unconverted producer in the same positions trips (the
+> batch-1 control was `as_text`), and the IR dump shows the chokepoint actually
+> wrapped your producer's calls (`__work_N = your_producer(...)`).  The
+> whole-suite `D` gate gets this free (if anything used it, you'd see it); a small
+> per-batch probe does NOT.
+>
 > ⚠ **Env:** after ANY `src/generation/` or `codegen_runtime.rs` change, rebuild
 > **all three** rlibs before trusting a backend, or a stale one fakes failures:
 > ```
