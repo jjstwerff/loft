@@ -11,6 +11,36 @@ of dependency-ordered issues.
 Read [`01-destination-passing-design.md`](01-destination-passing-design.md) first —
 it is the design + the build evidence each issue below builds on.
 
+> ## ▶ Next session — start here
+> **Done (✅):** the interpreter chokepoint, every native `codegen_runtime`
+> producer (that file is now ZERO `scratch.push`), the keystone `W`, and the
+> coverage proof `C`.  **39 → 30**, all three backends green, 22 commits, tree
+> clean.
+>
+> **Two site-droppers remain — both intricate codegen (do one, validate, commit):**
+> 1. **Phase B** (`emit.rs` + `pre_eval.rs`, 9 sites) — @P205 generic-spec text
+>    wraps: thread a `RefVar(Text)` work buffer through generic specialisation
+>    (the `text_return` machinery) instead of the scratch wrap.
+> 2. **N2** (`mod.rs` FFI wrap + `extensions.rs` bridge, 3 sites) — the cdylib
+>    text path; the wasip2 variant of the `W` fix (this path gave the original
+>    `E0599`, so probe wasip2 carefully).
+>
+> **Then `D` (the goal):** delete `Stores::scratch` + dead `clear_scratch` /
+> `OpClearScratch`, **folding in `F`** — delete the 18 coverage-proven-dead interp
+> fallbacks (`native.rs` + `format.rs`) + their `FUNCTIONS` registration (the loft
+> *def* stays for the IR `Call`; a `library_names` miss then loudly catches any
+> residual emit).
+>
+> ⚠ **Env:** after ANY `src/generation/` or `codegen_runtime.rs` change, rebuild
+> **all three** rlibs before trusting a backend, or a stale one fakes failures:
+> ```
+> cargo build --release --lib --bin loft
+> cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+> cargo build --release --target wasm32-wasip2          --lib --no-default-features --features random
+> ```
+> And confirm native flakes serially (the dep-rlib `rustls`/`webpki`/`ureq`
+> parallel-build race is NOT a regression).
+
 > **These "issues" live HERE, not in GitHub.**  They are plan sub-tasks WE
 > decomposed and fix ourselves in sequence — the DAG below tracks them and they
 > close as the plan advances.  A GitHub Issue is earned by being *surfaced* (a
