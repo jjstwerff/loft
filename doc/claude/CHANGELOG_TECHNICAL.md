@@ -45,6 +45,12 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   input ladder.  `execute_at_text` now takes a `WorkerArg` (Ref / Primitive /
   Text) and `run_parallel_text` selects it by the worker's first-arg kind —
   the same ladder `run_parallel_queue` applies.
+- **Interpreter ref-return par over a primitive input fixed.** A struct/
+  reference-*returning* par worker over a `vector<integer>` / range fed the
+  worker the element `DbRef` instead of the primitive value (`run_parallel_queue_ref`
+  → `execute_at_ref` had no input ladder) → garbage results.  `execute_at_ref`
+  now takes the same `WorkerArg`; `run_parallel_queue_ref` reads a primitive
+  element by value.  Text / struct inputs keep the `DbRef` path (already correct).
 - **Native text-input par fixed.** A par worker with a `text` parameter (over a
   `vector<text>` source) failed `--native` compilation: the worker closure passed
   the element `DbRef` where the worker wants `&str` (E0308).  `tuple_arg_prep` now

@@ -696,10 +696,12 @@ pub fn run_parallel_queue_ref(
     ret_type: &crate::data::Type,
     data: &crate::data::Data,
     n_hidden_dests: usize,
+    primitive_input_size: u32,
 ) -> (Vec<DbRef>, Vec<u16>) {
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
     }
+    let prim_in = primitive_input_size;
     // ARC.md A2: shared atomic dispenser for parent-namespace slot
     // indices.  Every worker's `database_named` call pulls a unique
     // index from this counter and records it in
@@ -770,9 +772,20 @@ pub fn run_parallel_queue_ref(
                     let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
                         .map(|_| state.database.database(100))
                         .collect();
+                    // Primitive element (a `vector<integer>` / materialised range)
+                    // must reach the worker as its value, not the element DbRef.
+                    // Text and struct/DbRef inputs keep the DbRef path (correct as-is).
+                    let arg = if prim_in > 0 && prim_in <= 8 {
+                        crate::state::WorkerArg::Primitive {
+                            value: read_primitive_at(&state.database, &row_ref, element_size),
+                            size: prim_in,
+                        }
+                    } else {
+                        crate::state::WorkerArg::Ref(row_ref)
+                    };
                     batch.push((
                         row_idx,
-                        state.execute_at_ref(fn_pos, &row_ref, &hidden_dests, extras_ref),
+                        state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref),
                     ));
                 }
                 (batch, state.database)

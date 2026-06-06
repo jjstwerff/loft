@@ -2831,7 +2831,7 @@ impl State {
     pub fn execute_at_ref(
         &mut self,
         fn_pos: u32,
-        arg: &DbRef,
+        arg: WorkerArg,
         hidden_dests: &[DbRef],
         extra_args: &[u64],
     ) -> DbRef {
@@ -2848,15 +2848,31 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
+        // Slot-0 width per input kind — see `execute_at_text`.  A struct/ref
+        // worker takes a 12-byte DbRef; a `vector<integer>`/range worker takes
+        // the primitive value (else it reads the DbRef bytes as its arg → garbage).
+        let args_size: u16 = match arg {
+            WorkerArg::Ref(_) => 12,
+            WorkerArg::Primitive { size, .. } => size as u16,
+            WorkerArg::Text(_) => 16,
+        };
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
             args_base: self.stack_step(4),
-            args_size: 12,
+            args_size,
             line: 0,
         });
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        self.put_stack(*arg);
+        match arg {
+            WorkerArg::Ref(r) => self.put_stack(r),
+            WorkerArg::Primitive { value, size } => match size {
+                1 => self.put_stack(value as u8),
+                4 => self.put_stack(value as u32),
+                _ => self.put_stack(value),
+            },
+            WorkerArg::Text(s) => self.put_stack(s),
+        }
         for &dest in hidden_dests {
             // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
             // (NOT 8-byte i64 like extras).  The codegen for the
