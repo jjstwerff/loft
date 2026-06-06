@@ -459,6 +459,7 @@ fn label(r: const Num) -> text { "v{r.v}" }
         &[],
         n_rows,
         n_hidden,
+        0, // primitive_input_size: worker takes `const Num` (DbRef input)
     );
     assert_eq!(
         strings,

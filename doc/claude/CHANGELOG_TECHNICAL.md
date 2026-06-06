@@ -38,8 +38,14 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
 
   Verified on both backends across range/vector/hash/sorted/index sources and
   integer/float/boolean/single worker returns (`tests/scripts/22c-par-sources.loft`).
-  Known gap, **pre-existing and unrelated**: text-*returning* par workers produce
-  garbage on the interpreter (correct on native) — see open issue.
+- **Interpreter text-return par fixed.** A text-*returning* par worker over a
+  non-`DbRef` element (a `vector<integer>` / range → primitive input; a
+  `vector<text>` → text input) produced garbage or a SIGSEGV: `run_parallel_text`
+  always pushed the element as a 12-byte `DbRef`, unlike the integer path's
+  input ladder.  `execute_at_text` now takes a `WorkerArg` (Ref / Primitive /
+  Text) and `run_parallel_text` selects it by the worker's first-arg kind —
+  the same ladder `run_parallel_queue` applies.  (Native text-input par stays
+  blocked by the separate #272/#273 codegen issues.)
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 

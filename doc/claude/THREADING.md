@@ -206,8 +206,6 @@ data inline into the result vector; field access on the loop variable works dire
   text, keyed collections) — non-vector sources are materialised first.
 - Form 3 (`c.method(a)` — captured receiver) is not yet supported.
 - The worker function may not write to shared state.
-- A text-*returning* worker currently produces garbage on the **interpreter**
-  (correct on `--native`); pre-existing, tracked separately.
 
 ### Element Size
 

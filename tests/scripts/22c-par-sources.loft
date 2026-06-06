@@ -16,6 +16,7 @@ fn half(x: integer) -> float { return (x as float) / 2.0; }
 fn even(x: integer) -> boolean { return x % 2 == 0; }
 fn rec_dbl(r: const Rec) -> integer { return r.v * 2; }
 fn char_one(c: character) -> integer { if c == ' ' { return 0; } return 1; }
+fn label(x: integer) -> text { return "v{x}"; }
 
 fn main() {
   // --- range source, integer worker ---
@@ -43,6 +44,13 @@ fn main() {
   n = 0;
   for ch in "hello" par(r = char_one(ch), 2) { n += r; }
   assert(n == 5, "text source par: {n}");
+
+  // --- text-RETURNING worker over a primitive (range) source ---
+  // Guards the interpreter text-queue input ladder: a primitive element must
+  // reach the worker as its value, not as a DbRef ("v0","v1","v2" each len 2).
+  tn = 0;
+  for i in 0..3 par(r = label(i), 2) { tn += r.len(); }
+  assert(tn == 6, "text-return par over range: {tn}");
 
   // --- hash source (unordered par walk; sum is order-independent) ---
   h: hash<Rec[k]> = [];
