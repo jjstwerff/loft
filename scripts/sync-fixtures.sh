@@ -70,8 +70,9 @@ EOF
 #
 # - gridmesh/README.md, hex_world/README.md, hex_world/src/hex_world.loft
 #   — @PLN6 tracker renumber: the in-repo renumber of plan
-#   `36-audience-generative-art` → `6-audience-generative-art` (tag
-#   `@PLAN36` → `@PLN6`) rewrote these doc-comments/links in the
+#   `36-audience-generative-art` → `6-audience-generative-art` (old tag
+#   `@PLAN36` is a dead illustrative example here, not a live ref) rewrote  <!--noindex-->
+#   these doc-comments/links in the
 #   committed fixtures, but the pinned upstream tags still carry the old
 #   names.  Doc-only divergence (no source/test logic differs).  When the
 #   chunk repos ship tags carrying the renumber, drop these lines and bump
