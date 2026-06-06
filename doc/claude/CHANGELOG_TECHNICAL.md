@@ -9,6 +9,28 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Multiple materialised par loops no longer corrupt each other (#282) (2026-06-06)
+
+Several **materialised** par loops (range / `iterator<T>` / text inputs) in one
+function, with **different element types**, silently corrupted an earlier loop:
+its materialised input (`__par_mat`) was read at the wrong stride (e.g. an
+`integer` range loop's input came back as `vector<character>`), so a worker saw
+garbage elements.
+
+Root cause (var-table / scoping level, not IR-structure): `materialise_iter_for_par`
+builds its body **pass-2-only**, so naming its temps via the global `create_unique`
+counter advanced that counter only on pass 2 — desyncing two-pass numbering for
+sibling materialise loops, whose `__par_mat` vars then **collided on one name**.
+`add_variable` merges by name, so the merged var took one element type; the other
+loop read its store at that type's stride. (Same family as the result-var
+two-pass fix.) Keyed materialise was immune only because all its loops share one
+element type.
+
+Fix: name the materialise temps by the stable `loop_nr` (`_par_mat_l<loop_nr>` …)
+via `add_variable` — unique per loop and identical across both passes, so no
+collision and no counter advance. Verified on both backends
+(`tests/scripts/22e-par-many-materialise.loft`).
+
 ### `for … par(…)` accepts every iterable source; hash skips its sort (#270) (2026-06-06)
 
 The parallel for-clause now runs over **any iterable**, not just a flat vector.

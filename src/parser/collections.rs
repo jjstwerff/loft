@@ -1571,7 +1571,7 @@ use #count instead"
                 // the same iterate-and-append the comprehension uses, then
                 // re-route par() over the materialised vector.
                 if let Some((mat_fill_ir, mat_var, mat_in_type)) =
-                    self.materialise_iter_for_par(&in_type, &expr)
+                    self.materialise_iter_for_par(&in_type, &expr, loop_nr)
                 {
                     let combined_fill = if fill == Value::Null {
                         mat_fill_ir
@@ -1999,6 +1999,7 @@ use #count instead"
         &mut self,
         in_type: &Type,
         source_expr: &Value,
+        loop_nr: u16,
     ) -> Option<(Value, u16, Type)> {
         if !matches!(in_type, Type::Iterator(_, _) | Type::Text(_)) {
             return None;
@@ -2008,26 +2009,36 @@ use #count instead"
         // Register the element vector type EARLY (both passes) so the typedef
         // pass between pass 1 and pass 2 assigns it a real `known_type`.
         let _ = self.data.vector_def(&mut self.lexer, &elem_tp);
-        let mat_var = self.create_unique("__par_mat", &vec_tp);
-        self.vars.defined(mat_var);
+        // Name these vars by the stable `loop_nr` (NOT the global create_unique
+        // counter): the materialise body is built pass-2-only, so a counter-named
+        // var advances the counter only on pass 2, which desyncs numbering for
+        // sibling materialise loops — two loops' `__par_mat` then collide on one
+        // name (#282).  When their element types differ (e.g. integer range vs
+        // character text-source) the merged var takes one type, so the other loop
+        // reads its store at the wrong stride → silent garbage.  A loop-keyed name
+        // is unique per loop and identical across both passes, so no collision.
+        let mk = |p: &mut Self, name: &str, tp: &Type| -> u16 {
+            let v = p
+                .vars
+                .add_variable(&format!("_par_{name}_l{loop_nr}"), tp, &mut p.lexer);
+            p.vars.defined(v);
+            v
+        };
+        let mat_var = mk(self, "mat", &vec_tp);
         if self.first_pass {
             return Some((Value::Null, mat_var, vec_tp));
         }
         // Iterator state vars — text drives a (pos, index) pair, every other
         // iterator a single index — mirroring parse_vector_for.
         let (iter_var, pre_var) = if matches!(in_type, Type::Text(_)) {
-            let pos = self.create_unique("__par_mat#next", &I32);
-            self.vars.defined(pos);
-            let idx = self.create_unique("__par_mat#index", &I32);
-            self.vars.defined(idx);
+            let pos = mk(self, "mat_next", &I32);
+            let idx = mk(self, "mat_index", &I32);
             (pos, Some(idx))
         } else {
-            let iv = self.create_unique("__par_mat#index", &I32);
-            self.vars.defined(iv);
+            let iv = mk(self, "mat_index", &I32);
             (iv, None)
         };
-        let for_var = self.create_unique("__par_mat_e", &elem_tp);
-        self.vars.defined(for_var);
+        let for_var = mk(self, "mat_e", &elem_tp);
         let mut create_iter = source_expr.clone();
         let it = Type::Iterator(Box::new(elem_tp.clone()), Box::new(Type::Null));
         let iter_next = self.iterator(&mut create_iter, in_type, &it, iter_var, pre_var);
