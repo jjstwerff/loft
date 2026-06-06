@@ -146,6 +146,15 @@ touches; a weak matrix that exercises the easy axes and skips the load-bearing o
    vs `i64::MIN` → harmless; the @P380 axis).
 7. **Backend** — `--interpret` vs `--native` (vs WASM where relevant); divergence
    between the two is its own hazard, verified at the end (step 7).
+8. **Transform / accumulation** — when the fault is in the *compiler pipeline*, not
+   the value, axes 1–7 (each the shape of one value) never reach it.  Vary instead:
+   **cardinality** (N of a construct *coexisting* — e.g. many `par` loops in one fn,
+   where per-loop slot/store assignment collides only past a threshold — the #282
+   class); **ordering / position** (the same construct mid-body vs at the tail); and
+   **cross-pass consistency** (the two-pass parser: a value numbered or typed
+   differently on pass 1 vs pass 2 — the result-var counter-desync class).  Tell:
+   if the minimal repro *won't shrink* below N coexisting items, the coexistence
+   **is** the bug — stop hunting a one-instance repro.
 
 The **design** use is this same list run *forward in time*.  Before building a
 feature, its cells against these axes are its conformance spec: it is done not when

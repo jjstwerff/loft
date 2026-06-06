@@ -151,15 +151,27 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 
 ## `par(...)` Parallel For-Loop Syntax
 
-The `par(b=worker(a), N)` clause on a `for ... in` loop is a shorthand that runs the worker in parallel over the vector and iterates the results in order.
+The `par(b=worker(a), N)` clause on a `for ... in` loop is a shorthand that runs the worker in parallel over the source and iterates the results in order.
 
 ### Syntax
 
 ```loft
-for a in <vector> par(b=<worker_call>, <threads>) {
+for a in <iterable> par(b=<worker_call>, <threads>) {
     // body — b holds the worker result for element a
 }
 ```
+
+`<iterable>` may be any for-loop source: a `vector<T>`, an integer range
+(`0..n`), an `iterator<T>`, text (iterates characters), or a keyed collection
+(`hash` / `sorted` / `index` / `spacial`).  Sources that are not already a flat
+vector are materialised into one (`materialise_iter_for_par` for ranges /
+iterators / text via the comprehension lowering; `materialise_keyed_for_par`
+for keyed collections) before the queue dispatcher partitions it across
+threads.  A **hash** uses an *unsorted* bucket walk for par (`hash_unsorted`)
+since the queue has no use for the hash's key order — so a par loop over a hash
+may visit elements in a different order than sequential `for x in h` (which is
+key-ordered).  The queue itself is order-preserving relative to the
+materialised input.
 
 Two worker call forms are supported:
 
@@ -190,9 +202,8 @@ data inline into the result vector; field access on the loop variable works dire
 
 ### Limitations
 
-- Input must be a `vector<T>`; integer ranges (`1..10`) and other
-  iterables are not yet accepted directly — **planned to be lifted; see
-  [§ Design — `par(...)` over any iterator](#design--par-over-any-for-iterable-planned)**.
+- Any for-loop iterable is accepted as input (vector, range, `iterator<T>`,
+  text, keyed collections) — non-vector sources are materialised first.
 - Form 3 (`c.method(a)` — captured receiver) is not yet supported.
 - The worker function may not write to shared state.
 
@@ -243,7 +254,17 @@ worker.  Native and interpreter both back `par_fold` directly
 form is the user-facing alternative; the parser auto-detects
 pure-fold bodies and routes them through the same runtime.
 
-### Design — `par(...)` over any `for`-iterable (planned)
+### Design — `par(...)` over any `for`-iterable (partially shipped)
+
+**Status (2026-06-06, #270).**  `par(...)` now **accepts every for-iterable** —
+the vector-only gate is gone.  Shipped via the **Materialise** path (class 3
+below) generalised to all non-vector sources: ranges / `iterator<T>` / text go
+through `materialise_iter_for_par` (reusing `build_comprehension_code`), keyed
+collections through `materialise_keyed_for_par`.  The **zero-allocation fast
+paths remain future work**: the Range split (`parallel_for_range`, class 1) and
+Fusable-map (class 4) are NOT yet implemented — a range currently materialises
+into a temp `vector<integer>` rather than partitioning `[lo,hi)` directly.  The
+rest of this section is the optimisation roadmap for those fast paths.
 
 **Goal.** `par(...)` should accept anything a `for` statement accepts —
 integer ranges, keyed collections, text, `map`/`filter` chains, custom

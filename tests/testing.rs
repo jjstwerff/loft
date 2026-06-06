@@ -443,6 +443,7 @@ impl Test {
             indent: 0,
             def_nr: 0,
             declared: Default::default(),
+            active_pre_eval: Default::default(),
             reachable: Default::default(),
             loop_stack: Vec::new(),
             next_format_count: 0,

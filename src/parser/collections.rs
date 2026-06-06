@@ -7,6 +7,47 @@ use super::{
 };
 use crate::variables::Function;
 
+/// True when `v` (unspanned) is a CAPTURING fn-ref — `Value::FnRef` whose
+/// closure-var slot is set (`!= u16::MAX`).  A bare `return add5;` carries
+/// `u16::MAX` (non-capturing) and is fine for par.
+fn is_capturing_fnref(v: &Value) -> bool {
+    match v.unspan() {
+        Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
+        // A capturing lambda lowers to a `fn_ref_with_closure` block that builds
+        // the closure record and yields the `FnRef` as its tail expression.
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.last().is_some_and(is_capturing_fnref),
+        Value::Insert(ops) => ops.last().is_some_and(is_capturing_fnref),
+        _ => false,
+    }
+}
+
+/// True when a par worker's body returns a capturing closure in a `return` or
+/// tail position.  Conservative — only flags closures found directly in return
+/// position, so a non-capturing fn-ref return and any closure used only
+/// internally (never returned) are never rejected; an indirect return (via a
+/// local variable) falls through to the runtime path rather than a false
+/// positive.  Used to give a clear diagnostic instead of the dangling-ref panic.
+fn worker_returns_capturing_closure(body: &Value) -> bool {
+    match body.unspan() {
+        Value::Return(inner) => is_capturing_fnref(inner),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.last().is_some_and(is_capturing_fnref)
+                || bl.operators.iter().any(worker_returns_capturing_closure)
+        }
+        Value::Insert(ops) => {
+            ops.last().is_some_and(is_capturing_fnref)
+                || ops.iter().any(worker_returns_capturing_closure)
+        }
+        Value::If(_, t, f) => {
+            is_capturing_fnref(t)
+                || is_capturing_fnref(f)
+                || worker_returns_capturing_closure(t)
+                || worker_returns_capturing_closure(f)
+        }
+        _ => false,
+    }
+}
+
 /// Plan-06 ARC.md A3 / A3.5 — how to convert the i64 returned by
 /// `parallel_buf_get_narrow` back to the worker's actual return type.
 enum NarrowWrap {
@@ -1453,7 +1494,16 @@ use #count instead"
                 } else {
                     i32::from(hash_tp_id)
                 };
-                let hash_sorted_fn = self.data.def_nr("n_hash_sorted");
+                // A `par` loop discards the hash's order across worker threads,
+                // so skip the O(n log n) key sort and walk the buckets raw.
+                let is_par =
+                    matches!(&self.lexer.peek().has, LexItem::Identifier(kw) if kw == "par");
+                let scratch_fn_name = if is_par {
+                    "n_hash_unsorted"
+                } else {
+                    "n_hash_sorted"
+                };
+                let hash_sorted_fn = self.data.def_nr(scratch_fn_name);
                 if hash_sorted_fn != u32::MAX {
                     let call = Value::Call(hash_sorted_fn, vec![expr.clone(), Value::Int(tp_arg)]);
                     fill = v_set(scratch_var, call);
@@ -1500,7 +1550,33 @@ use #count instead"
                     let combined_fill = if fill == Value::Null {
                         mat_fill_ir
                     } else {
-                        v_block(vec![fill, mat_fill_ir], Type::Void, "Combined par fill")
+                        // Inline (Insert), not a scoped Block — see the
+                        // materialise_keyed_for_par note: native codegen must see
+                        // `__par_mat`'s `let` in the enclosing function scope.
+                        Value::Insert(vec![fill, mat_fill_ir])
+                    };
+                    self.parse_parallel_for_loop(
+                        code,
+                        &id,
+                        &mat_in_type,
+                        &Value::Var(mat_var),
+                        combined_fill,
+                        loop_nr,
+                        destructure_names.as_deref(),
+                    );
+                    return;
+                }
+                // A range / `iterator<T>` / text input has no flat vector for
+                // the par dispatcher to partition; materialise it into one via
+                // the same iterate-and-append the comprehension uses, then
+                // re-route par() over the materialised vector.
+                if let Some((mat_fill_ir, mat_var, mat_in_type)) =
+                    self.materialise_iter_for_par(&in_type, &expr, loop_nr)
+                {
+                    let combined_fill = if fill == Value::Null {
+                        mat_fill_ir
+                    } else {
+                        Value::Insert(vec![fill, mat_fill_ir])
                     };
                     self.parse_parallel_for_loop(
                         code,
@@ -1901,9 +1977,103 @@ use #count instead"
         }
         for_steps.push(create_iter);
         for_steps.push(v_loop(lp, "Materialise par input"));
-        let fill_ir = v_block(for_steps, Type::Void, "Materialise par");
+        // Splice the steps inline (Insert), NOT a v_block: native codegen emits
+        // a Block as a Rust `{ }` scope, which would confine the `__par_mat`
+        // `let` to that scope so the following par dispatch can't see it
+        // (E0425).  The vector-input path likewise feeds a bare statement, not a
+        // scoped block.
+        let fill_ir = Value::Insert(for_steps);
         let mat_in_type = vec_ref_tp.depending(mat_var);
         Some((fill_ir, mat_var, mat_in_type))
+    }
+
+    /// Materialise a non-keyed iterable — a range / `iterator<T>` / text — into
+    /// a flat `vector<T>` so the par dispatcher's index-partitioned walk can run
+    /// over it.  This is the same "iterate, append" that the comprehension
+    /// `[for e in src { e }]` performs; we reuse `build_comprehension_code` so
+    /// element append is correct per kind (scalar / text / ref) on both
+    /// backends.  Returns `(fill_ir, mat_var, mat_in_type)`, or None when the
+    /// source isn't one of these iterables (a flat `vector` is dispatched
+    /// directly; keyed collections go through `materialise_keyed_for_par`).
+    pub(crate) fn materialise_iter_for_par(
+        &mut self,
+        in_type: &Type,
+        source_expr: &Value,
+        loop_nr: u16,
+    ) -> Option<(Value, u16, Type)> {
+        if !matches!(in_type, Type::Iterator(_, _) | Type::Text(_)) {
+            return None;
+        }
+        let elem_tp = self.for_type(in_type);
+        let vec_tp = Type::Vector(Box::new(elem_tp.clone()), Vec::new());
+        // Register the element vector type EARLY (both passes) so the typedef
+        // pass between pass 1 and pass 2 assigns it a real `known_type`.
+        let _ = self.data.vector_def(&mut self.lexer, &elem_tp);
+        // Name these vars by the stable `loop_nr` (NOT the global create_unique
+        // counter): the materialise body is built pass-2-only, so a counter-named
+        // var advances the counter only on pass 2, which desyncs numbering for
+        // sibling materialise loops — two loops' `__par_mat` then collide on one
+        // name (#282).  When their element types differ (e.g. integer range vs
+        // character text-source) the merged var takes one type, so the other loop
+        // reads its store at the wrong stride → silent garbage.  A loop-keyed name
+        // is unique per loop and identical across both passes, so no collision.
+        let mk = |p: &mut Self, name: &str, tp: &Type| -> u16 {
+            let v = p
+                .vars
+                .add_variable(&format!("_par_{name}_l{loop_nr}"), tp, &mut p.lexer);
+            p.vars.defined(v);
+            v
+        };
+        let mat_var = mk(self, "mat", &vec_tp);
+        if self.first_pass {
+            return Some((Value::Null, mat_var, vec_tp));
+        }
+        // Iterator state vars — text drives a (pos, index) pair, every other
+        // iterator a single index — mirroring parse_vector_for.
+        let (iter_var, pre_var) = if matches!(in_type, Type::Text(_)) {
+            let pos = mk(self, "mat_next", &I32);
+            let idx = mk(self, "mat_index", &I32);
+            (pos, Some(idx))
+        } else {
+            let iv = mk(self, "mat_index", &I32);
+            (iv, None)
+        };
+        let for_var = mk(self, "mat_e", &elem_tp);
+        let mut create_iter = source_expr.clone();
+        let it = Type::Iterator(Box::new(elem_tp.clone()), Box::new(Type::Null));
+        let iter_next = self.iterator(&mut create_iter, in_type, &it, iter_var, pre_var);
+        if iter_next == Value::Null {
+            return None;
+        }
+        let for_next = v_set(for_var, iter_next);
+        let elm = self.unique_elm_var(&vec_tp, &elem_tp, mat_var);
+        // Identity comprehension `[for e in src { e }]` filling mat_var.  is_var
+        // mode emits a Value::Insert (no Rust `{ }` scope), so the `let mat_var`
+        // lands in the enclosing function scope where par dispatch reads it —
+        // the same scoping the keyed materialiser relies on.
+        let mut fill_expr = Value::Var(mat_var);
+        self.build_comprehension_code(
+            mat_var,
+            &Value::Var(mat_var),
+            elm,
+            &elem_tp,
+            in_type,
+            &elem_tp,
+            for_var,
+            for_next,
+            pre_var,
+            Value::Null,
+            create_iter,
+            Value::Null,
+            Value::Var(for_var),
+            &mut fill_expr,
+            true,
+            false,
+            false,
+            vec_tp.clone(),
+        );
+        let mat_in_type = self.vars.tp(mat_var).clone();
+        Some((fill_expr, mat_var, mat_in_type))
     }
 
     /// P235 par half — parse the worker call inside a destructured
@@ -2321,6 +2491,25 @@ use #count instead"
                     ret_type.name(&self.data)
                 );
             }
+            // A non-capturing fn-ref return (e.g. `return add5;`) is fine, but a
+            // CAPTURING closure can't be returned from a par worker: its captured
+            // environment lives in the worker's per-thread store and is dropped at
+            // join, so the fn-ref would dangle.  Reject it with a clear message
+            // instead of the raw out-of-bounds panic the dangling ref triggers.
+            if is_fn_ref
+                && !self.first_pass
+                && fn_d_nr != u32::MAX
+                && worker_returns_capturing_closure(self.data.def(fn_d_nr).code())
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a parallel worker cannot return a capturing closure — its \
+                     captured state lives in the worker thread's store and cannot \
+                     cross back.  Return a non-capturing function reference, or \
+                     compute the result directly in the worker."
+                );
+            }
             sz.max(1) // fallback to 1 if unknown
         };
         // Use the actual inline element size from the database (e.g. 4 for Score{value:integer},
@@ -2550,8 +2739,7 @@ use #count instead"
             ret_type.clone()
         };
         // Plan-04 B.3 follow-up v2 (b3-par-inline.md): each par block gets
-        // its OWN uniquely-named `b_var` (via `create_unique` → internal
-        // name `_<result_name>_<counter>`), so two par blocks sharing the
+        // its OWN uniquely-named `b_var`, so two par blocks sharing the
         // user's loop-variable name can no longer collide on a single
         // `Function::variables` entry.  During body parsing the user's
         // name is aliased to this `b_var` via `set_name` (same mechanism
@@ -2561,7 +2749,18 @@ use #count instead"
         // below) — `b` becomes an inline alias rather than a runtime
         // slot, so there is no `Set(b_var, …)`, no `OpPut*`, and no
         // type-width mismatch to drift the stack.
-        let b_var = self.create_unique(result_name, &b_type);
+        //
+        // Key it on the stable `loop_nr` (identical across both parser
+        // passes), NOT the global `create_unique` counter: that counter can
+        // accumulate a different number of increments between pass 1 and
+        // pass 2 across many par loops, so a counter-named `b_var` failed to
+        // reuse its pass-1 entry — the user name then aliased to a wrong-typed
+        // var (`r.len()` on a `text` result seen as `integer`).  A loop-keyed
+        // name reuses the same entry on both passes.
+        let b_var_name = format!("_{result_name}_par{loop_nr}");
+        let b_var = self
+            .vars
+            .add_variable(&b_var_name, &b_type, &mut self.lexer);
         self.vars.defined(b_var);
         let prior_name_target = self.vars.set_name(result_name, b_var);
         if matches!(b_type, Type::Integer(_) | Type::Unknown(_)) {

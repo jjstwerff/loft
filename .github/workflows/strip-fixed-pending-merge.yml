@@ -1,0 +1,28 @@
+# When an issue closes, drop the `fixed-pending-merge` label — it means
+# "fixed but NOT yet in main", which is no longer true once the issue is
+# closed (the usual path: a `Fixes #NNN` trailer auto-closes it on merge to
+# main, firing this `closed` event). Keeps the tracker honest without a manual
+# close-time chore. Triggers on any close; a closed issue is never "pending
+# merge", so stripping is always correct.
+name: Strip fixed-pending-merge on close
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  strip:
+    runs-on: ubuntu-latest
+    # Only act when the label is actually present, so the job is a no-op
+    # (and needs no error handling) on the vast majority of closes.
+    if: contains(github.event.issue.labels.*.name, 'fixed-pending-merge')
+    steps:
+      - name: Remove the label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue edit "$NUMBER" --repo "$REPO" --remove-label "fixed-pending-merge"

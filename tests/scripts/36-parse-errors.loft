@@ -280,4 +280,33 @@ fn test_p85c_lambda_still_works() {
   assert(pe_f(5) == 10, "lambda works inside fn");
 }
 
+// --- Parallel for-loop clause errors ---
+
+fn pe_double(x: integer) -> integer { return x * 2; }
+struct PeParS { a: integer }
+
+// @P270 regression: par() error recovery used to hang the parser —
+// skip_to_parallel_body looped forever on the `,` it could not consume.
+// A non-iterable par input drains through that recovery path (the remaining
+// `, 2)` tokens), so this both pins the diagnostic AND guards against the
+// hang (a regressed guard would time the suite out here).  Ranges and other
+// iterables are now materialised and run, so they are NOT errors — covered
+// by tests/scripts/22c-par-sources.loft.
+// @EXPECT_ERROR: par(...) requires a vector
+fn test_par_over_non_iterable() {
+  s = PeParS { a: 1 };
+  for x in s par(r = pe_double(x.a), 2) { print("{r}"); }
+}
+
+// A par worker returning a CAPTURING closure is rejected with a clear message
+// (the captured state can't cross the thread boundary) instead of the raw
+// dangling-ref panic.  A non-capturing fn-ref return is fine (see 22c).
+fn pe_capturing(x: integer) -> fn(integer) -> integer {
+  return fn(n: integer) -> integer { return n + x; };
+}
+// @EXPECT_ERROR: cannot return a capturing closure
+fn test_par_capturing_closure() {
+  for i in 0..3 par(f = pe_capturing(i), 2) { print("{f(10)}"); }
+}
+
 // --- Return path warnings ---

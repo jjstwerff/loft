@@ -215,6 +215,52 @@ Every source file is parsed **twice**:
 
 The two-pass approach allows forward references — a struct or function can be used before it is defined.
 
+### Synthesised-identity stability — the counter-coupling hazard
+
+A recurring bug class spans the parser **and** the native backend. Both synthesise
+named things — temporary variables (parser) and hoisted sub-expressions (native
+pre-eval) — and both historically derived a synthesised thing's **identity from a
+mutable counter that two independent traversals had to read in lock-step**. When the
+two traversals disagree about the counter's state, the identities desync silently.
+
+Three instances seen so far:
+
+| Bug | Synthesised thing | Identity source | The two parties | Failure |
+|---|---|---|---|---|
+| #282 | par materialise temp var | `Vars::unique`: `self.unique += 1` → `_{name}_{N}` | pass-1 walk vs pass-2 walk, matched by **name equality** (`add_variable` reuses by name) | a temp created only in pass 2 shifts the counter → names desync → wrong-type reuse → wrong store stride |
+| result-var (#2) | comprehension/result temp | same `Vars::unique` counter | same two passes | same desync, different construct |
+| #272 | hoisted pre-eval `_pre_{N}` | `collect`'s `self.counter` | `collect_pre_evals` walk vs `output_code_with_subst` walk, matched by **regenerated-string equality** | a node kind that bypasses the structural recogniser (`Op*`) drifts → re-inline → side-effecting operand double-evaluated → empty read |
+
+**Shared root.** Identity is *re-derived from a counter by two traversals* that are
+coupled only by the fragile bet that the counter is in the same state both times.
+`try_subst_pre_eval` (`src/generation/pre_eval.rs`) makes this literal: to recognise a
+node it rewinds `self.counter` and **re-runs codegen, then string-compares the output** —
+so a node's identity is "the exact text it emits at counter K," a property of the *walk*,
+not of the *node*.
+
+**Design invariant.** *Synthesised identity is a pure function of the IR node's intrinsic
+position — minted once, stored, and read. No identity is recomputed from mutable
+traversal state; no two traversals coordinate by regenerating output and comparing.* This
+collapses the re-assertion sites (every counter read) down to one mint per identity.
+
+The invariant has two independent realisations:
+
+- **Parser (mechanism A).** Key the temp name on an intrinsic discriminator the synthesis
+  site already holds — loop number, comprehension id, node span — not on `self.unique`.
+  The two-pass contract becomes "same key ⇒ same name," which is *order-independent*: a
+  pass-2-only temp lands on the same name it would have in pass 1. The #282 fix did this
+  locally (`_par_{name}_l{loop_nr}`); the general form replaces `Vars::unique(name)` with a
+  key-derived `Vars::derived(name, key)` at every synthesis site.
+- **Native (mechanism B).** Collapse `collect_pre_evals` and `output_code_with_subst` into
+  a **single walk** that decides-and-applies hoists as it goes (emit `let _pre_N = …;` to a
+  prelude buffer, drop the name inline). With one walk there is no second traversal to
+  disagree, the counter is read once per node, and the regenerate-and-string-compare
+  machinery deletes entirely — `Op*` stops being special because there is no recogniser to
+  bypass. See [NATIVE.md § Open work](NATIVE.md#open-work) ("one-walk pre-eval").
+
+A heavier third realisation — an explicit `NodeId` numbered once on the IR, making
+identity intrinsic everywhere — is held until more counter-coupling surfaces.
+
 ### Entry points
 
 ```rust

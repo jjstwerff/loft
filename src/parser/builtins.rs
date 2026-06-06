@@ -18,8 +18,18 @@ impl Parser {
             } else if self.lexer.peek_token("") {
                 break;
             }
+            let before = self.lexer.peek().position;
             let mut dummy = Value::Null;
             self.expression(&mut dummy);
+            // Recovery must always make forward progress.  Consume an argument
+            // separator (as consume_call_args does), and bail out if neither the
+            // expression nor the comma advanced the lexer — otherwise a token
+            // expression() cannot start (e.g. a leading `,`) spins this loop
+            // forever instead of recovering to the body.
+            let consumed_comma = self.lexer.has_token(",");
+            if !consumed_comma && self.lexer.peek().position == before {
+                break;
+            }
         }
         let mut dummy = Value::Null;
         self.parse_block("parallel for", &mut dummy, &Type::Void);

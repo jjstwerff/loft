@@ -9,6 +9,119 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Multiple materialised par loops no longer corrupt each other (#282) (2026-06-06)
+
+Several **materialised** par loops (range / `iterator<T>` / text inputs) in one
+function, with **different element types**, silently corrupted an earlier loop:
+its materialised input (`__par_mat`) was read at the wrong stride (e.g. an
+`integer` range loop's input came back as `vector<character>`), so a worker saw
+garbage elements.
+
+Root cause (var-table / scoping level, not IR-structure): `materialise_iter_for_par`
+builds its body **pass-2-only**, so naming its temps via the global `create_unique`
+counter advanced that counter only on pass 2 — desyncing two-pass numbering for
+sibling materialise loops, whose `__par_mat` vars then **collided on one name**.
+`add_variable` merges by name, so the merged var took one element type; the other
+loop read its store at that type's stride. (Same family as the result-var
+two-pass fix.) Keyed materialise was immune only because all its loops share one
+element type.
+
+Fix: name the materialise temps by the stable `loop_nr` (`_par_mat_l<loop_nr>` …)
+via `add_variable` — unique per loop and identical across both passes, so no
+collision and no counter advance. Verified on both backends
+(`tests/scripts/22e-par-many-materialise.loft`).
+
+### `for … par(…)` accepts every iterable source; hash skips its sort (#270) (2026-06-06)
+
+The parallel for-clause now runs over **any iterable**, not just a flat vector.
+
+- **Parser hang fixed (#270).** `for i in 0..3 par(r = i, 2) { … }` infinite-looped
+  the parser: `skip_to_parallel_body` (the par-clause error-recovery drain) had no
+  comma consumption and no forward-progress guard, so it spun on the `,`.  Added a
+  no-progress guard mirroring `consume_call_args`; recovery can no longer hang.
+- **Range / `iterator<T>` / text sources now work.** A non-vector, non-keyed source
+  is materialised into a flat `vector<T>` (via `materialise_iter_for_par`, reusing
+  `build_comprehension_code` for correct per-kind element append) before the queue
+  dispatcher partitions it.  Keyed collections (hash/sorted/index/spacial) keep their
+  existing `materialise_keyed_for_par` path.
+- **Hash skips the sort for par.** `for x in h par(…)` builds its iteration scratch
+  from `hash::records()` (raw bucket walk via the new `hash_unsorted` / `n_hash_unsorted`)
+  instead of the key-sorting `hash_sorted` — the parallel queue has no use for a hash's
+  order.  Sequential `for x in h` stays key-ordered; only the par form differs.
+- **Two pre-existing native-codegen par bugs fixed (surfaced here, untested before —
+  no keyed/range/primitive-vector par script reached `--native`):**
+  - keyed/range materialise wrapped its temp var in a `v_block`, which native lowers
+    to a Rust `{ }` scope, so `__par_mat` died before the dispatch used it (E0425).
+    Now spliced as `Value::Insert` (inline), like the vector path.
+  - a by-value scalar worker (`fn(x: integer)` over `vector<integer>`/range) got the
+    element `DbRef` instead of the read-out value (E0308 `expected i64, found DbRef`).
+    `tuple_arg_prep` now reads scalar element types out of the record, the 1-element
+    case of the existing tuple-worker path.
+
+  Verified on both backends across range/vector/hash/sorted/index sources and
+  integer/float/boolean/single worker returns (`tests/scripts/22c-par-sources.loft`).
+- **Interpreter text-return par fixed.** A text-*returning* par worker over a
+  non-`DbRef` element (a `vector<integer>` / range → primitive input; a
+  `vector<text>` → text input) produced garbage or a SIGSEGV: `run_parallel_text`
+  always pushed the element as a 12-byte `DbRef`, unlike the integer path's
+  input ladder.  `execute_at_text` now takes a `WorkerArg` (Ref / Primitive /
+  Text) and `run_parallel_text` selects it by the worker's first-arg kind —
+  the same ladder `run_parallel_queue` applies.
+- **Interpreter ref-return par over a primitive input fixed.** A struct/
+  reference-*returning* par worker over a `vector<integer>` / range fed the
+  worker the element `DbRef` instead of the primitive value (`run_parallel_queue_ref`
+  → `execute_at_ref` had no input ladder) → garbage results.  `execute_at_ref`
+  now takes the same `WorkerArg`; `run_parallel_queue_ref` reads a primitive
+  element by value.  Text / struct inputs keep the `DbRef` path (already correct).
+- **Par result-var two-pass instability fixed.** The fused-par result var was
+  named `_<name>_<global-counter>` via `create_unique`.  Across many par loops
+  with mixed result types the `create_unique` count diverged between parser
+  pass 1 and pass 2, so the pass-2 `b_var` failed to reuse its pass-1 entry —
+  the user name then aliased to a wrong-typed var (`r.len()` on a `text` result
+  rejected as `integer`).  The `b_var` is now keyed on the stable `loop_nr`
+  (`_<name>_par<loop_nr>`), identical across both passes.  Guarded by the
+  intentional `r`-reuse in `tests/scripts/22c-par-sources.loft`.
+- **Native text-input par fixed.** A par worker with a `text` parameter (over a
+  `vector<text>` source) failed `--native` compilation: the worker closure passed
+  the element `DbRef` where the worker wants `&str` (E0308).  `tuple_arg_prep` now
+  emits `loft::codegen_runtime::par_read_text_input(cell, elm)` (reads the row's
+  text into an owned `String`) for a text first-arg — the text-input sibling of
+  the scalar-element read.
+- **Native literal-returning text-return par fixed (#273).** A par worker that
+  returns text via literals (the @P205 no-work-buffer / owned-`String` shape) has
+  no `&mut String` work-buffer param, but the worker closure unconditionally
+  passed one → `E0061`.  The Text closure now branches on
+  `generation::returns_owned_string(worker_def)`: owned-`String` workers are
+  called `worker(cell, arg)` (no buffer); buffer-building workers keep the
+  `let mut _w = String::new(); worker(cell, arg, &mut _w); _w` form.  Both par
+  emitters (For + Queue) updated; verified on both backends over range / vector /
+  text inputs (`tests/scripts/22c-par-sources.loft`).
+- **Native fn-ref-returning par implemented (#281).** A par worker returning a
+  function reference had no native lowering — the emitter fell through to a
+  wrong-arity call to the interpreter stub (`E0061`).  Added the `QueueStitch::Fn`
+  native path: `ClosureShape::Fn` (closure returns the native fn-ref tuple
+  `(u32, DbRef)` verbatim) → `n_parallel_queue_fn_native` +
+  `n_parallel_buf_get_fn_native` / `_drop_fn_native`, buffering one `(u32, DbRef)`
+  per row in the new typed `Stores::par_fn_native_buffer_stack`.  Non-capturing
+  fn-ref returns now compile + run on `--native`, matching `--interpret`.
+- **Capturing closure from a par worker → clear diagnostic.** A par worker that
+  returns a *capturing* closure used to hit a raw `index out of bounds` panic on
+  both backends (the worker-local captured store is dropped at join, leaving the
+  fn-ref dangling).  It is now rejected at parse time: "a parallel worker cannot
+  return a capturing closure …".  The check (`worker_returns_capturing_closure`)
+  flags only `FnRef` with a set closure-var in return/tail position, so a
+  non-capturing `return add5;` and closures used only internally are never
+  rejected.  Supporting capture would mean copying each captured environment
+  across the thread boundary — deliberately not done.
+- **Native narrow-integer-vector par fixed.** par over a `vector<u8>` / `vector<i32>`
+  (or any narrow-Integer element) read garbage on `--native`: the worker-element
+  closure used `get_int` (8 bytes) regardless of the element's 1/4-byte stride,
+  over-reading across rows.  `tuple_arg_prep` now reads a scalar `Integer` element
+  at the vector's stride (`element_size`, threaded in) — `get_byte` / `get_i32_raw`
+  zero-extended to `i64`, matching the interpreter's `read_primitive_at`.  Other
+  scalar kinds keep their fixed-width reads.  Verified both backends
+  (`tests/scripts/22d-par-narrow.loft`).
+
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
 Relative file paths now resolve against the **program's own directory** (source

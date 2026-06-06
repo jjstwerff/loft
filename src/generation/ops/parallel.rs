@@ -48,11 +48,16 @@ enum ClosureShape {
     Float,
     /// Worker returns scalar integer / boolean; closure casts `as i64`.
     Scalar,
+    /// Worker returns a function reference (`(u32, DbRef)` native tuple);
+    /// closure returns it verbatim into the fn-ref Queue buffer (#281).
+    Fn,
 }
 
 fn closure_shape(ret: &Type) -> ClosureShape {
     if matches!(ret, Type::Text(_)) {
         ClosureShape::Text
+    } else if matches!(ret, Type::Function(_, _, _)) {
+        ClosureShape::Fn
     } else if ret.heap_def_nr().is_some() {
         ClosureShape::HeapRef
     } else if matches!(ret, Type::Float | Type::Single) {
@@ -69,6 +74,10 @@ fn helper_name(shape: ClosureShape) -> &'static str {
         // Float and Scalar both use the primitive helper — they
         // differ only in the closure body's return-value transform.
         ClosureShape::Float | ClosureShape::Scalar => "n_parallel_for_native",
+        // fn-ref returns always route through the Queue family (the parser
+        // emits `n_parallel_queue_fn`), so the for-loop helper is never
+        // selected for them; map it to the Queue entry for totality.
+        ClosureShape::Fn => "n_parallel_queue_fn_native",
     }
 }
 
@@ -79,6 +88,7 @@ fn queue_helper_name(shape: ClosureShape) -> &'static str {
     match shape {
         ClosureShape::Text => "n_parallel_queue_text_native",
         ClosureShape::HeapRef => "n_parallel_queue_ref_native",
+        ClosureShape::Fn => "n_parallel_queue_fn_native",
         ClosureShape::Float | ClosureShape::Scalar => "n_parallel_queue_native",
     }
 }
@@ -142,25 +152,77 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
 /// that materialises a Rust tuple `_p` from the record's fields, and `arg` is
 /// the expression passed to the worker.  Non-tuple workers return
 /// `("", "elm")` — byte-identical to the original single-`DbRef` path.
-fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str) {
+fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32, elem_size: i32) -> (String, &'static str) {
     let worker_def = ctx.output.data.def(fn_d_nr);
     let Some(elem_attr) = worker_def.attributes().first() else {
         return (String::new(), "elm");
     };
-    let Type::Tuple(elems) = &elem_attr.typedef else {
-        return (String::new(), "elm");
-    };
-    let offsets = crate::data::element_offsets(elems);
-    let reads: Vec<String> = elems
-        .iter()
-        .zip(offsets.iter())
-        .map(|(t, off)| tuple_elem_read(t, *off))
-        .collect();
-    let prep = format!(
-        "let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = ({},); ",
-        reads.join(", ")
-    );
-    (prep, "_p")
+    if let Type::Tuple(elems) = &elem_attr.typedef {
+        let offsets = crate::data::element_offsets(elems);
+        let reads: Vec<String> = elems
+            .iter()
+            .zip(offsets.iter())
+            .map(|(t, off)| tuple_elem_read(t, *off))
+            .collect();
+        let prep = format!(
+            "let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = ({},); ",
+            reads.join(", ")
+        );
+        return (prep, "_p");
+    }
+    // A by-value scalar worker parameter (e.g. `fn(x: integer)` over a
+    // `vector<integer>` / range): the queue hands the closure a `DbRef` into
+    // the element record, but the worker wants the value.  Read it out — the
+    // 1-element version of the tuple path.  Reference / struct / heap-enum /
+    // text workers take the `DbRef` directly, so they keep the bare `elm`.
+    if is_by_value_scalar(&elem_attr.typedef) {
+        // An `Integer` element is read at the vector's STRIDE width (`elem_size`),
+        // not the worker param's width — they differ when a narrow element
+        // (`vector<u8>`/`u16`/`i32`) widens to an `integer` param.  Read raw +
+        // zero-extend to `i64` (the worker's arg-context type), matching the
+        // interpreter's `read_primitive_at`.  Other scalar kinds (bool / char /
+        // enum / single / float) have a fixed, type-determined width.
+        let read = if matches!(&elem_attr.typedef, Type::Integer(_)) {
+            match elem_size {
+                1 => "i64::from(_ts.get_byte(elm.rec, elm.pos, 0))".to_string(),
+                4 => "(_ts.get_i32_raw(elm.rec, elm.pos) as u32) as i64".to_string(),
+                _ => "_ts.get_int(elm.rec, elm.pos)".to_string(),
+            }
+        } else {
+            tuple_elem_read(&elem_attr.typedef, 0)
+        };
+        let prep = format!("let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = {read}; ");
+        return (prep, "_p");
+    }
+    // A text worker parameter (`fn(s: text)` over a `vector<text>` / text input):
+    // the closure receives the element `DbRef`, but the worker wants `&str`.
+    // Read the row's text into an owned String and pass it by reference — the
+    // expression is constant (uses only the closure's `cell`/`elm`), so it rides
+    // as the `arg` directly with no `prep`.
+    if matches!(elem_attr.typedef, Type::Text(_)) {
+        return (
+            String::new(),
+            "&loft::codegen_runtime::par_read_text_input(cell, elm)",
+        );
+    }
+    (String::new(), "elm")
+}
+
+/// True for worker-parameter types the par closure must read out of the
+/// element record by value (the scalar kinds `tuple_elem_read` handles).
+/// Reference / heap-enum / struct / text parameters instead receive the
+/// element `DbRef` directly, so they are excluded here.
+fn is_by_value_scalar(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Integer(_)
+            | Type::Character
+            | Type::Null
+            | Type::Boolean
+            | Type::Enum(_, false, _)
+            | Type::Single
+            | Type::Float
+    )
 }
 
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
@@ -189,6 +251,11 @@ impl OpEmitter for ParallelForEmitter {
         let worker_name = worker_def.name().to_string();
         let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
+        // A literal / bufferless text worker (@P205 nwb) returns an owned `String`
+        // and takes NO `&mut String` work-buffer param — so its closure must NOT
+        // pass one (else E0061).  Computed as a bool now to avoid holding the
+        // `worker_def` borrow across the `ctx.emit` calls below.
+        let owned_text = crate::generation::returns_owned_string(worker_def);
 
         // Extra context args: vals[5..len-1].  The trailing element
         // is `n_extra` (the count); we don't read it directly because
@@ -246,13 +313,29 @@ impl OpEmitter for ParallelForEmitter {
         // parameter is named `cell` and threaded through verbatim.
         // `prep`/`arg` unpack a by-value tuple element from the record
         // (empty/`elm` for the common single-`DbRef` worker).
-        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
+        // args[1] is the vector element stride (a literal Int), needed to read a
+        // narrow scalar element at its true width.
+        let elem_sz = match args.get(1).map(Value::unspan) {
+            Some(Value::Int(s)) => *s,
+            _ => 8,
+        };
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
         match shape {
+            ClosureShape::Text if owned_text => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
             ClosureShape::Text => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
+            // #281 — fn-ref return: the worker yields the native fn-ref tuple
+            // `(u32, DbRef)` directly; the closure returns it verbatim.
+            ClosureShape::Fn => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,
@@ -320,6 +403,11 @@ impl OpEmitter for ParallelQueueEmitter {
         let worker_name = worker_def.name().to_string();
         let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
+        // A literal / bufferless text worker (@P205 nwb) returns an owned `String`
+        // and takes NO `&mut String` work-buffer param — so its closure must NOT
+        // pass one (else E0061).  Computed as a bool now to avoid holding the
+        // `worker_def` borrow across the `ctx.emit` calls below.
+        let owned_text = crate::generation::returns_owned_string(worker_def);
 
         // Extras: args[5..len-1]; trailing args[len-1] is the n_extra count.
         let n_extra = if args.len() > 6 { args.len() - 6 } else { 0 };
@@ -366,13 +454,29 @@ impl OpEmitter for ParallelQueueEmitter {
             s
         };
 
-        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
+        // args[1] is the vector element stride (a literal Int), needed to read a
+        // narrow scalar element at its true width.
+        let elem_sz = match args.get(1).map(Value::unspan) {
+            Some(Value::Int(s)) => *s,
+            _ => 8,
+        };
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
         match shape {
+            ClosureShape::Text if owned_text => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
             ClosureShape::Text => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
+            // #281 — fn-ref return: the worker yields the native fn-ref tuple
+            // `(u32, DbRef)` directly; the closure returns it verbatim.
+            ClosureShape::Fn => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,

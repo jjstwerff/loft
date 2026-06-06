@@ -592,6 +592,7 @@ pub fn run_parallel_text(
     extra_args: &[u64],
     n_rows: usize,
     n_hidden_text: usize,
+    primitive_input_size: u32,
 ) -> Vec<String> {
     if n_rows == 0 {
         return Vec::new();
@@ -599,6 +600,7 @@ pub fn run_parallel_text(
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
+    let prim_in = primitive_input_size;
     // Plan-06 phase 1b: workers write text results into a per-worker
     // output Store slot — same path text always uses inside loft.
     // Each worker reserves a single record holding `row_count` u32
@@ -620,7 +622,23 @@ pub fn run_parallel_text(
                 row_idx as i64,
                 &state.database.allocations,
             );
-            let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
+            // Deliver the element the way the worker's first parameter expects —
+            // the same ladder `run_parallel_queue` applies for integer returns.
+            // Without it a `vector<integer>` / range / text element was always
+            // pushed as a 12-byte DbRef → garbage worker arg (text input: SIGSEGV).
+            // Wide / tuple inputs (`prim_in > 8`) keep the DbRef path: they are
+            // not constructible as a vector literal today, so unreachable here.
+            let arg = if prim_in == u32::MAX {
+                crate::state::WorkerArg::Text(read_text_at(&state.database, &row_ref))
+            } else if prim_in > 0 && prim_in <= 8 {
+                crate::state::WorkerArg::Primitive {
+                    value: read_primitive_at(&state.database, &row_ref, element_size),
+                    size: prim_in,
+                }
+            } else {
+                crate::state::WorkerArg::Ref(row_ref)
+            };
+            let s = state.execute_at_text(fn_pos, arg, &extras, n_hidden_text);
             let slot_store = &mut state.database.allocations[slot.store_nr as usize];
             let s_pos = slot_store.set_str(&s);
             slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
@@ -678,10 +696,12 @@ pub fn run_parallel_queue_ref(
     ret_type: &crate::data::Type,
     data: &crate::data::Data,
     n_hidden_dests: usize,
+    primitive_input_size: u32,
 ) -> (Vec<DbRef>, Vec<u16>) {
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
     }
+    let prim_in = primitive_input_size;
     // ARC.md A2: shared atomic dispenser for parent-namespace slot
     // indices.  Every worker's `database_named` call pulls a unique
     // index from this counter and records it in
@@ -752,9 +772,20 @@ pub fn run_parallel_queue_ref(
                     let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
                         .map(|_| state.database.database(100))
                         .collect();
+                    // Primitive element (a `vector<integer>` / materialised range)
+                    // must reach the worker as its value, not the element DbRef.
+                    // Text and struct/DbRef inputs keep the DbRef path (correct as-is).
+                    let arg = if prim_in > 0 && prim_in <= 8 {
+                        crate::state::WorkerArg::Primitive {
+                            value: read_primitive_at(&state.database, &row_ref, element_size),
+                            size: prim_in,
+                        }
+                    } else {
+                        crate::state::WorkerArg::Ref(row_ref)
+                    };
                     batch.push((
                         row_idx,
-                        state.execute_at_ref(fn_pos, &row_ref, &hidden_dests, extras_ref),
+                        state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref),
                     ));
                 }
                 (batch, state.database)

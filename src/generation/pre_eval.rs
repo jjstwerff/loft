@@ -8,10 +8,62 @@
 use crate::data::{Block, Type, Value};
 use crate::data_store::ValueType;
 use crate::ir_node::IrNode;
-use std::collections::HashSet;
-use std::io::Write;
+use std::collections::{HashMap, HashSet};
 
-use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
+use super::{Output, PreEvalEntry, narrow_int_cast};
+
+/// Intrinsic identity of an IR node: its address in the (frozen) IR tree.
+///
+/// Both pre-eval walks — `collect_pre_evals` then `output_code_with_subst` —
+/// traverse the *same* `&Value` without mutating it, so any sub-node has the
+/// same address in each walk.  Identity is therefore a property of the node,
+/// not of the walk.  This is the fix for the recurring counter-coupling class
+/// (see COMPILER.md § Synthesised-identity stability): the old recogniser
+/// re-derived identity by regenerating the node's Rust text at a rewound
+/// `counter` and string-comparing — which silently fails when the regenerated
+/// text drifts (e.g. an `Op*` operand whose inner `_pre_N` names differ), so
+/// the node is re-inlined and any side effect is evaluated twice (#272).
+#[inline]
+fn node_id(v: &Value) -> usize {
+    std::ptr::from_ref(v) as usize
+}
+
+/// Explicit shared state between the collect walk and the emit walk: which IR
+/// nodes were hoisted into a `let _pre_N = …;` binding, and under what name.
+///
+/// Built once by `collect_pre_evals`; the emit walk then reads it through
+/// `name_map` (installed as `Output::active_pre_eval`).  `by_node` is the
+/// authoritative, intrinsic lookup — node identity (address) → entry — so a
+/// hoisted node emits its `_pre_N` name with no counter re-derivation and no
+/// regenerate-and-string-match.  This is the single source of truth for
+/// pre-eval identity (see COMPILER.md § Synthesised-identity stability).
+#[derive(Default)]
+pub(super) struct PreEvalSet {
+    /// Hoisted bindings in collection (= emission) order.
+    pub entries: Vec<PreEvalEntry>,
+    /// Intrinsic node identity → index into `entries`.
+    by_node: HashMap<usize, usize>,
+}
+
+impl PreEvalSet {
+    /// Register one hoisted binding, keyed on the source node's intrinsic identity.
+    fn push(&mut self, node: &Value, entry: PreEvalEntry) {
+        let idx = self.entries.len();
+        self.by_node.insert(node_id(node), idx);
+        self.entries.push(entry);
+    }
+
+    /// The address→name map the emit walk consults at every node
+    /// (`Output::active_pre_eval`).  This is the single source of truth for
+    /// pre-eval identity during emission: a node whose address is a key emits
+    /// its `_pre_N` name instead of being regenerated inline.
+    pub(super) fn name_map(&self) -> HashMap<usize, String> {
+        self.by_node
+            .iter()
+            .map(|(&addr, &i)| (addr, self.entries[i].0.clone()))
+            .collect()
+    }
+}
 
 /// True if `v` reads any variable in `vars`, at any depth.  Used by @P312 to
 /// detect a call argument that reads a variable which ANOTHER argument passes
@@ -449,19 +501,19 @@ impl Output<'_> {
     /// expression to prevent simultaneous `&mut Stores` borrows.
     /// Returns `(var_name, expr_code)` pairs ordered innermost-first so each pre-eval
     /// can safely reference earlier ones.
-    pub(super) fn collect_pre_evals(&mut self, v: &Value) -> std::io::Result<Vec<PreEvalEntry>> {
-        let mut result = Vec::new();
+    pub(super) fn collect_pre_evals(&mut self, v: &Value) -> std::io::Result<PreEvalSet> {
+        let mut result = PreEvalSet::default();
         self.collect_pre_evals_inner(v, &mut result)?;
         Ok(result)
     }
 
     /// Use this as the recursive worker for `collect_pre_evals`.
-    /// Splitting from the wrapper keeps the result `Vec` allocated once, and the pre-eval
+    /// Splitting from the wrapper keeps the result allocated once, and the pre-eval
     ///  counter is globally unique within a block.
     fn collect_pre_evals_inner(
         &mut self,
         v: &Value,
-        result: &mut Vec<PreEvalEntry>,
+        result: &mut PreEvalSet,
     ) -> std::io::Result<()> {
         // Recurse into wrapper nodes so nested Call nodes inside Set/Drop/If are found.
         // @P312 — a bare user-fn call STATEMENT is wrapped in `Span` (source-position
@@ -603,7 +655,7 @@ impl Output<'_> {
     /// pre-evals already substituted, then push `(name, code)` onto `result`.
     fn rewrite_code(
         &mut self,
-        result: &mut Vec<PreEvalEntry>,
+        result: &mut PreEvalSet,
         arg: &Value,
         name: String,
         replace_all: bool,
@@ -611,17 +663,17 @@ impl Output<'_> {
         // Collect inner pre-evals first, so the pre-eval code itself
         // is free of double borrows.
         let decl_clone = self.declared.clone();
-        let start_idx = result.len();
+        let start_idx = result.entries.len();
         self.collect_pre_evals_inner(arg, result)?;
         // Propagate replace_all flag: if this pre-eval is a dup-param (replace_all=true),
         // all its inner pre-evals must also use replace_all so that progressive substitution
         // correctly transforms all N occurrences of the dup arg in the outer expression.
         if replace_all {
-            for entry in &mut result[start_idx..] {
+            for entry in &mut result.entries[start_idx..] {
                 entry.4 = true;
             }
         }
-        let inner_pre_evals = result[start_idx..].to_vec();
+        let inner_pre_evals = result.entries[start_idx..].to_vec();
         // Save counter state before generating the expression text;
         // output_block will restore to this value before output_code_with_subst
         // so the block inner pre-eval names (_pre_N) match in both passes.
@@ -681,325 +733,21 @@ impl Output<'_> {
             substituted.clone()
         };
         if !substituted.is_empty() && substituted != "()" {
-            result.push((
-                name,
-                substituted,
-                bind_code,
-                counter_before_gen,
-                replace_all,
-            ));
+            // Key the binding on `arg`'s intrinsic identity so the emit walk can
+            // re-find it by node, not by regenerated text (see PreEvalSet).
+            result.push(
+                arg,
+                (
+                    name,
+                    substituted,
+                    bind_code,
+                    counter_before_gen,
+                    replace_all,
+                ),
+            );
         }
         self.declared = decl_clone;
         Ok(())
-    }
-
-    /// Use this instead of `output_code_inner` when `pre_evals` is non-empty.
-    /// Without substitution the same expression would be emitted twice, causing a second
-    /// mutable borrow of `stores`.
-    #[allow(clippy::too_many_lines)]
-    pub(super) fn output_code_with_subst(
-        &mut self,
-        w: &mut dyn Write,
-        v: &Value,
-        pre_evals: &[(String, String, String, u32, bool)],
-    ) -> std::io::Result<()> {
-        if pre_evals.is_empty() {
-            self.output_code_inner(w, v)?;
-            return Ok(());
-        }
-        // For If expressions, apply substitution structurally rather than via string
-        // replacement on the full generated text.  String-level substitution on the full
-        // if-else tree corrupts the `let _pre_N = …;` declarations that inner Block
-        // branches emit for their own operators: those declarations contain the same
-        // raw code strings (e.g. `get_int_8_code`) as the outer pre-evals, so a
-        // replacen call intended for the outer condition accidentally replaces the inner
-        // declaration, making the inner variable a stale alias of the outer pre-eval.
-        //
-        // The structural fix: apply substitution only to the *condition* part of the If
-        // (and recursively to any else-if conditions); emit Block branches directly via
-        // `output_code_inner`, which calls `output_block` and manages their own
-        // pre-evals internally.
-        if let Value::If(test, true_v, false_v) = v {
-            // Check exact match first: if this entire If expression equals a pre-eval
-            // binding, emit the name.  Save/restore counter and declared so the check
-            // pass does not corrupt state for the real structural emission below.
-            let saved_counter = self.counter;
-            let saved_declared = self.declared.clone();
-            let mut check_buf = std::io::BufWriter::new(Vec::new());
-            self.output_code_inner(&mut check_buf, v)?;
-            let full_code = String::from_utf8(check_buf.into_inner()?).unwrap();
-            self.counter = saved_counter;
-            self.declared = saved_declared;
-            for (name, pre_code, _, _, _) in pre_evals {
-                if full_code == *pre_code {
-                    write!(w, "{name}")?;
-                    return Ok(());
-                }
-            }
-            return self.output_if_with_subst(w, test, true_v, false_v, pre_evals);
-        }
-        // For calls to user-defined functions, apply substitution structurally per
-        // argument.  String-level substitution on the full call text fails when a
-        // `Value::Block` argument emits counter-dependent inner pre-eval names that
-        // differ between the collect pass (high counter stored in pre_evals) and
-        // the regeneration pass (counter reset to counter_before).  Without structural
-        // handling the block is emitted inline, causing a double `&mut stores` borrow.
-        //
-        // Built-in opcodes (names starting with "Op") are handled by special-case
-        // logic in `output_call` and must NOT be intercepted here; they fall through
-        // to string-level substitution below.
-        if let Value::Call(d_nr, vals) = v {
-            let def_fn = self.data.def(*d_nr);
-            if def_fn.rust().is_empty() && !def_fn.name().starts_with("Op") {
-                // Full-expression match: if this entire call equals a pre-eval, emit the name.
-                let saved_counter = self.counter;
-                let saved_declared = self.declared.clone();
-                let mut check_buf = std::io::BufWriter::new(Vec::new());
-                self.output_code_inner(&mut check_buf, v)?;
-                let full_code = String::from_utf8(check_buf.into_inner()?).unwrap();
-                self.counter = saved_counter;
-                self.declared = saved_declared;
-                for (name, pre_code, _, _, _) in pre_evals {
-                    if full_code == *pre_code {
-                        write!(w, "{name}")?;
-                        return Ok(());
-                    }
-                }
-                // Structural emission: emit each argument with per-arg substitution.
-                // A user loft function (`rust` template empty, not an `Op*`
-                // builtin) takes the P198 `cell: &UnsafeCell<Stores>` ABI as its
-                // implicit first arg — same as `calls.rs::output_call_user_fn`'s
-                // `name(cell, …)`.  Emitting `stores` (the `&mut Stores` deref)
-                // here is a type error (`expected &UnsafeCell<Stores>, found
-                // &mut Stores`); it only surfaced once @P297's argument-lift
-                // routed a user-fn call such as `assert(!file(p).sync())` through
-                // this structural pre-eval path.
-                let fn_name = def_fn.name().to_string();
-                let attrs = def_fn.attributes().to_vec();
-                write!(w, "{fn_name}(cell")?;
-                for (idx, val) in vals.iter().enumerate() {
-                    write!(w, ", ")?;
-                    if let Some(vr) = self.create_stack_var(val) {
-                        let vname = sanitize(self.data.def(self.def_nr).variables().name(vr));
-                        write!(w, "&mut var_{vname}")?;
-                    // OpCreateStack wrapping an addressable expression.
-                    } else if let Value::Call(d_nr, args) = val
-                        && self.data.def(*d_nr).name() == "OpCreateStack"
-                        && args.len() == 1
-                        && !matches!(&args[0], Value::Var(_))
-                    {
-                        let expr = self.generate_expr_buf(&args[0])?;
-                        write!(w, "&mut ({expr})")?;
-                    } else if idx < attrs.len()
-                        && matches!(attrs[idx].typedef, Type::RefVar(_))
-                        && let Value::Var(nr) = val
-                        && matches!(
-                            self.data.def(self.def_nr).variables().tp(*nr),
-                            Type::RefVar(_)
-                        )
-                    {
-                        // Forwarding a & parameter to another & parameter.
-                        // Mirrors the check in
-                        // `calls.rs::output_call_user_fn`; the pre-eval
-                        // path re-emits calls structurally and needs the
-                        // same handling.
-                        let caller_vars = self.data.def(self.def_nr).variables();
-                        let name = sanitize(caller_vars.name(*nr));
-                        if caller_vars.is_argument(*nr) {
-                            // An argument RefVar is already &mut DbRef — pass
-                            // it directly instead of dereferencing.
-                            write!(w, "var_{name}")?;
-                        } else {
-                            // A local RefVar alias (#257) is a plain `DbRef` —
-                            // borrow it to the &mut DbRef the callee expects.
-                            write!(w, "&mut var_{name}")?;
-                        }
-                    } else {
-                        let matched = self.try_subst_pre_eval(w, val, pre_evals)?;
-                        if !matched {
-                            // Emit the argument with string-level substitution.
-                            let saved_c = self.counter;
-                            let saved_d = self.declared.clone();
-                            let mut buf = std::io::BufWriter::new(Vec::new());
-                            self.output_code_inner(&mut buf, val)?;
-                            let mut arg_code = String::from_utf8(buf.into_inner()?).unwrap();
-                            self.counter = saved_c;
-                            self.declared = saved_d;
-                            for (pname, pcode, _, _, replace_all) in pre_evals {
-                                if *replace_all {
-                                    arg_code = arg_code.replace(pcode.as_str(), pname.as_str());
-                                } else {
-                                    arg_code = arg_code.replacen(pcode.as_str(), pname.as_str(), 1);
-                                }
-                            }
-                            // set fn_ref_context for fn-ref parameter evaluation.
-                            let param_is_fnref = idx < self.data.def(*d_nr).attributes().len()
-                                && matches!(
-                                    self.data.def(*d_nr).attributes()[idx].typedef,
-                                    Type::Function(_, _, _)
-                                );
-                            let param_is_routine = idx < self.data.def(*d_nr).attributes().len()
-                                && matches!(
-                                    self.data.def(*d_nr).attributes()[idx].typedef,
-                                    Type::Routine(_)
-                                );
-                            if param_is_fnref && matches!(val, Value::Int(_)) {
-                                write!(
-                                    w,
-                                    "({arg_code} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                                )?;
-                            } else if param_is_routine && matches!(val, Value::Int(_)) {
-                                write!(w, "{arg_code} as u32")?;
-                            } else {
-                                write!(w, "{arg_code}")?;
-                            }
-                        }
-                    }
-                }
-                write!(w, ")")?;
-                // Add narrow-int cast if the user function returns a narrow int type.
-                // Post-2c: widen to i64 to match the default Integer width.
-                if narrow_int_cast(self.data.def(*d_nr).returned()).is_some() {
-                    write!(w, " as i64")?;
-                }
-                return Ok(());
-            }
-        }
-        let mut buf_check = std::io::BufWriter::new(Vec::new());
-        self.output_code_inner(&mut buf_check, v)?;
-        let code = String::from_utf8(buf_check.into_inner()?).unwrap();
-        for (name, pre_code, _, _, _) in pre_evals {
-            if code == *pre_code {
-                write!(w, "{name}")?;
-                return Ok(());
-            }
-        }
-        let mut result = code;
-        for (name, pre_code, _, _, replace_all) in pre_evals {
-            if *replace_all {
-                // Dup-param: the same arg code appears multiple times in a template
-                // expansion; replace all occurrences so the pre-eval is used everywhere.
-                result = result.replace(pre_code.as_str(), name.as_str());
-            } else {
-                // Normal pre-eval: use replace-first so that identical code strings
-                // inside nested block pre-eval declarations are NOT substituted.
-                // Multiple pre-evals with the same binding code (one per usage site)
-                // are generated by the caller and each replaces exactly one occurrence.
-                result = result.replacen(pre_code.as_str(), name.as_str(), 1);
-            }
-        }
-        write!(w, "{result}")?;
-        Ok(())
-    }
-
-    /// Use this to emit an `if`/`else` expression with pre-eval substitution applied
-    /// structurally: the condition receives substitution, Block branches are emitted
-    /// directly (they handle their own pre-evals via `output_block`), and non-Block
-    /// branches (else-if chains) receive substitution recursively.
-    fn output_if_with_subst(
-        &mut self,
-        w: &mut dyn Write,
-        test: &Value,
-        true_v: &Value,
-        false_v: &Value,
-        pre_evals: &[(String, String, String, u32, bool)],
-    ) -> std::io::Result<()> {
-        write!(w, "if ")?;
-        let b_true = matches!(*true_v, Value::Block(_));
-        let b_false = matches!(*false_v, Value::Block(_));
-        // @PLAN52 cluster VII: see emit.rs::output_if_inner.  Same text-branch
-        // unification — wrap non-Block branches with `&*(...)` to coerce
-        // `&String` / `Str` / `&str` to a common `&str` so rustc accepts the
-        // if-expression.  Without this, recursive-`??` and other chained
-        // text patterns whose test has pre-evals would fail E0308.
-        let text_unify = !b_true
-            && !b_false
-            && !matches!(false_v, Value::Null)
-            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
-        // Condition: apply substitution (this is exactly what the pre-evals are for).
-        self.output_code_with_subst(w, test, pre_evals)?;
-        if b_true {
-            write!(w, " ")?;
-        } else if text_unify {
-            write!(w, " {{&*(")?;
-        } else {
-            write!(w, " {{")?;
-        }
-        self.indent += u32::from(!b_true);
-        if b_true {
-            // Block branch: manages its own pre-evals, no outer substitution needed.
-            self.output_code_inner(w, true_v)?;
-        } else {
-            self.output_code_with_subst(w, true_v, pre_evals)?;
-        }
-        self.indent -= u32::from(!b_true);
-        if let Value::Block(_) = *true_v {
-            write!(w, " else ")?;
-        } else if text_unify {
-            write!(w, ")}} else ")?;
-        } else {
-            write!(w, "}} else ")?;
-        }
-        if !b_false {
-            if text_unify {
-                write!(w, "{{&*(")?;
-            } else {
-                write!(w, "{{")?;
-            }
-        }
-        self.indent += u32::from(!b_false);
-        if matches!(false_v, Value::Null)
-            && let Some(tp) = self.infer_type(IrNode::Native(true_v))
-        {
-            Self::write_typed_null(w, &tp)?;
-        } else if b_false {
-            // Block branch: manages its own pre-evals, no outer substitution needed.
-            self.output_code_inner(w, false_v)?;
-        } else {
-            // Non-block false branch (else-if chain or leaf): apply substitution.
-            self.output_code_with_subst(w, false_v, pre_evals)?;
-        }
-        if text_unify && !b_false {
-            write!(w, ")")?;
-        }
-        self.indent -= u32::from(!b_false);
-        if !b_false {
-            write!(w, "}}")?;
-        }
-        Ok(())
-    }
-
-    /// Try to match `val` against one of the pre-eval bindings by regenerating `val`
-    /// at the counter state stored when that pre-eval was collected.  If a match is
-    /// found the pre-eval name is written to `w` and `Ok(true)` is returned.
-    ///
-    /// This is used by the structural `Value::Call` handler in `output_code_with_subst`
-    /// to match block-typed arguments whose inner counter-dependent names differ between
-    /// the collect pass (high counter) and the regeneration pass (reset counter).
-    fn try_subst_pre_eval(
-        &mut self,
-        w: &mut dyn Write,
-        val: &Value,
-        pre_evals: &[(String, String, String, u32, bool)],
-    ) -> std::io::Result<bool> {
-        for (pre_name, pre_code, _, pre_counter, _) in pre_evals {
-            let saved_counter = self.counter;
-            let saved_declared = self.declared.clone();
-            let saved_indent = self.indent;
-            self.counter = *pre_counter;
-            let mut check_buf = std::io::BufWriter::new(Vec::new());
-            let _ = self.output_code_inner(&mut check_buf, val);
-            let arg_code =
-                String::from_utf8(check_buf.into_inner().unwrap_or_default()).unwrap_or_default();
-            self.counter = saved_counter;
-            self.declared = saved_declared;
-            self.indent = saved_indent;
-            if arg_code == *pre_code {
-                write!(w, "{pre_name}")?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     /// Use this to determine whether a value produces no Rust result (type `()`).

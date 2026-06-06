@@ -319,6 +319,12 @@ pub struct Stores {
     /// have a fixed 20-byte stride so no per-call width field is
     /// needed.
     pub par_fn_buffer_stack: Vec<Vec<u8>>,
+    /// Native fn-ref-return Queue buffer — each row is the worker's native
+    /// fn-ref value `(u32 d_nr, DbRef closure)`.  The native packer
+    /// (`n_parallel_queue_fn_native`) and reader (`n_parallel_buf_get_fn_native`)
+    /// agree on this typed shape, so the native path needs no 20-byte byte
+    /// serialization (distinct from the interpreter's `par_fn_buffer_stack`).
+    pub par_fn_native_buffer_stack: Vec<Vec<(u32, DbRef)>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -483,6 +489,7 @@ impl Clone for Stores {
             par_ref_buffer_stack: Vec::new(),
             par_narrow_buffer_stack: Vec::new(),
             par_fn_buffer_stack: Vec::new(),
+            par_fn_native_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             runtime_error: None,
@@ -952,6 +959,7 @@ impl Stores {
             par_ref_buffer_stack: Vec::new(),
             par_narrow_buffer_stack: Vec::new(),
             par_fn_buffer_stack: Vec::new(),
+            par_fn_native_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             runtime_error: None,

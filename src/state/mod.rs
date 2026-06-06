@@ -192,6 +192,22 @@ pub fn emit_op(op_code: u16, state: &mut State) {
     }
 }
 
+/// How a parallel worker's first (element) argument is delivered.  Text-returning
+/// par dispatch (`run_parallel_text` → `execute_at_text`) uses this to push slot 0
+/// the way the worker's parameter expects — mirroring the input ladder the
+/// integer path (`run_parallel_queue`) already applies.  Without it, a primitive
+/// or text element was always pushed as a 12-byte `DbRef`, feeding the worker
+/// garbage (or, for text input, a wild pointer → SIGSEGV).
+#[derive(Clone, Copy)]
+pub enum WorkerArg {
+    /// Struct / reference element — a 12-byte `DbRef` into the element record.
+    Ref(DbRef),
+    /// Primitive element pushed at its native width (`size` = 1 / 4 / 8).
+    Primitive { value: u64, size: u32 },
+    /// Text element — a 16-byte `Str`.
+    Text(crate::keys::Str),
+}
+
 impl State {
     /**
     Create a new interpreter state
@@ -2815,7 +2831,7 @@ impl State {
     pub fn execute_at_ref(
         &mut self,
         fn_pos: u32,
-        arg: &DbRef,
+        arg: WorkerArg,
         hidden_dests: &[DbRef],
         extra_args: &[u64],
     ) -> DbRef {
@@ -2832,15 +2848,31 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
+        // Slot-0 width per input kind — see `execute_at_text`.  A struct/ref
+        // worker takes a 12-byte DbRef; a `vector<integer>`/range worker takes
+        // the primitive value (else it reads the DbRef bytes as its arg → garbage).
+        let args_size: u16 = match arg {
+            WorkerArg::Ref(_) => 12,
+            WorkerArg::Primitive { size, .. } => size as u16,
+            WorkerArg::Text(_) => 16,
+        };
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
             args_base: self.stack_step(4),
-            args_size: 12,
+            args_size,
             line: 0,
         });
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        self.put_stack(*arg);
+        match arg {
+            WorkerArg::Ref(r) => self.put_stack(r),
+            WorkerArg::Primitive { value, size } => match size {
+                1 => self.put_stack(value as u8),
+                4 => self.put_stack(value as u32),
+                _ => self.put_stack(value),
+            },
+            WorkerArg::Text(s) => self.put_stack(s),
+        }
         for &dest in hidden_dests {
             // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
             // (NOT 8-byte i64 like extras).  The codegen for the
@@ -2879,7 +2911,7 @@ impl State {
     pub fn execute_at_text(
         &mut self,
         fn_pos: u32,
-        arg: &DbRef,
+        arg: WorkerArg,
         extra_args: &[u64],
         n_hidden_text: usize,
     ) -> String {
@@ -2896,11 +2928,21 @@ impl State {
             .iter()
             .position(|&p| p == fn_pos)
             .map_or(u32::MAX, |i| i as u32);
+        // slot-0 width depends on how the element is delivered — a 12-byte
+        // DbRef for struct elements, the primitive's native width for a
+        // `vector<integer>`/range, 16 for a text element.  Mirrors the input
+        // ladder in `run_parallel_queue` so text-returning workers get their
+        // element as the worker's parameter expects, not always as a DbRef.
+        let args_size: u16 = match arg {
+            WorkerArg::Ref(_) => 12,
+            WorkerArg::Primitive { size, .. } => size as u16,
+            WorkerArg::Text(_) => 16,
+        };
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
             args_base: self.stack_step(4),
-            args_size: 12,
+            args_size,
             line: 0,
         });
         // Allocate String buffers for hidden RefVar(Text) params in the stack store.
@@ -2919,7 +2961,15 @@ impl State {
         }
 
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        self.put_stack(*arg);
+        match arg {
+            WorkerArg::Ref(r) => self.put_stack(r),
+            WorkerArg::Primitive { value, size } => match size {
+                1 => self.put_stack(value as u8),
+                4 => self.put_stack(value as u32),
+                _ => self.put_stack(value),
+            },
+            WorkerArg::Text(s) => self.put_stack(s),
+        }
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }

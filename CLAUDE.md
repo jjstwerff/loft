@@ -249,6 +249,13 @@ VERIFIED on both backends** (a wrong workaround is worse than `wa:none`). Label 
 `tests/scripts/` regression. Close with `Fixes #NNN` — but don't file at all for a bug you fix in
 the same change (the fix + its regression test ARE the record).
 
+**When you fix an EXISTING issue but it isn't merged to `main` yet:** after pushing the fix, apply
+the **`fixed-pending-merge`** label and keep the issue open — `main` is the release branch, so
+closing on the working branch would claim "fixed" while released code still has the bug. Comment
+naming the fixing commit + regression test; ensure the commit (or PR body) carries `Fixes #NNN`
+(a bare `(#NNN)` mention does NOT auto-close) so the merge closes it in one clean transition. Never
+close such an issue by hand. Full lifecycle: [ISSUE_TRACKING.md § Issue lifecycle](doc/claude/ISSUE_TRACKING.md).
+
 **Inside any plan, file a problem only when it reproduces *outside* the plan —
 already on `main`.**  A GitHub Issue is a claim about `main`: a pre-existing
 `main` bug you stumble on during plan work gets filed (and cross-linked to the
