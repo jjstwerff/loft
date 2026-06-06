@@ -155,7 +155,9 @@ The cause is structural: **verification is local and instantaneous; a real syste
 embedded and historical.** A part is checked against its own spec at a moment, but it
 sits in a shared medium and carries accumulated state — and local-instantaneous
 checking is blind to embedded-historical coupling. The composition failure is that
-hidden channel finally becoming visible.
+hidden channel finally becoming visible. (Physical engineering lives this: separately
+sound components fail the next one through shared air pressure, shock, static buildup,
+or a tear propagating through shared material — the channel no datasheet lists.)
 
 So when isolated-correct parts fail together:
 
