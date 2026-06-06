@@ -632,12 +632,13 @@ impl Parser {
             // very different user intents — real misuse of `[..]` on a
             // scalar, and an attempted generic-constructor
             // (`hash<Row[id]>()`, `sorted<Elm[k]>()`) that the language
-            // doesn't support.  The second case leaves readers stuck; add
-            // a pointer to the struct-literal idiom that *does* work.
+            // doesn't support.  The second case leaves readers stuck; point
+            // at the type-annotated local idiom that *does* work (a struct
+            // field works too, but the local form is usually what they want).
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db {{ h: hash<Row[id]> }}; db = Db {{ h: [Row {{ id: 1 }}] }}`"
+                "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row {{ id: 1 }}];` (a struct field `struct Db {{ h: hash<Row[id]> }}` works too)"
             );
             Type::Unknown(0)
         }

@@ -4863,25 +4863,18 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         return;
     }
 
-    // Check rustc availability; fall back to interpreter if not found.
-    if native_mode && native_emit.is_none() {
-        if let Err(e) = std::process::Command::new("rustc")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-        {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                eprintln!("Warning: rustc not found, falling back to interpreter mode");
-            } else {
-                eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
-            }
-            native_mode = false;
+    // Native codegen pipeline: --native or --native-emit.
+    //
+    // rustc availability is checked lazily, in the cache-miss compile branch
+    // below (the NotFound arm of `cmd.output()`) — NOT up front.  A warm cache
+    // hit runs the cached binary and never needs rustc, so an up-front
+    // `rustc --version` probe would tax every run with a ~18 ms process spawn
+    // for nothing.  The `'native` label lets the lazy check fall back to the
+    // interpreter when rustc is genuinely absent on a cache miss.
+    'native: {
+        if !(native_mode || native_emit.is_some()) {
+            break 'native;
         }
-    }
-
-    // Native codegen pipeline: --native or --native-emit
-    if native_mode || native_emit.is_some() {
         let end_def = p.data.definitions();
         let emit_path = match native_emit.as_deref() {
             // Default `loft <file>` writes to a per-process tmp file
@@ -5215,14 +5208,18 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             let output = match output {
                 Ok(o) => o,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!(
-                        "loft: rustc not found; install the Rust toolchain to use --native mode"
-                    );
-                    std::process::exit(1);
+                    // No rustc on a cache miss → fall back to the interpreter
+                    // rather than failing.  This is the moment the old up-front
+                    // probe used to fire; doing it here means a warm cache hit
+                    // never pays for a `rustc --version` spawn.
+                    eprintln!("Warning: rustc not found, falling back to interpreter mode");
+                    let _ = std::fs::remove_file(&emit_path);
+                    break 'native;
                 }
                 Err(e) => {
-                    eprintln!("loft: failed to launch rustc: {e}");
-                    std::process::exit(1);
+                    eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+                    let _ = std::fs::remove_file(&emit_path);
+                    break 'native;
                 }
             };
             // Relay rustc's own output to the user.
@@ -5393,6 +5390,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         if !run_status.success() {
             std::process::exit(run_status.code().unwrap_or(1));
         }
+        return;
+    }
+
+    // Reached only by the `'native` fallback above (rustc absent on a cache
+    // miss).  A `--check --native` run wants a status, not execution: report
+    // ok on a clean parse — the same answer the interpret-mode check gives —
+    // rather than falling through and running the program.
+    if check_only {
+        println!("ok {abs_file}");
         return;
     }
 

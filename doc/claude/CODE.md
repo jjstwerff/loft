@@ -31,7 +31,7 @@ Rules for all Rust and loft code in this project.
 
 ## Doc Comments
 
-- Describe *why* to call the function (preconditions, trade-offs, when to use), not *what* it does.
+- Describe *why to use* the function (preconditions, trade-offs, when to use), not *what* it does and not *why it was written*. Link to a doc or issue for the design reason. See [DOC_QUALITY.md](DOC_QUALITY.md).
 - Inline comments only where the algorithm is non-obvious. Avoid restating what the code says.
 
 ## Test Suite (`tests/docs/`, `tests/scripts/`)

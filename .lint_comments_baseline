@@ -1,0 +1,1265 @@
+src/cache.rs	! foundation. The retired Phase D cache (removed in the integer-i64
+src/cache.rs	@PLAN54 G2/M6 — a stable string identifying THIS binary build, for the
+src/cache.rs	@PLAN54 arc E — SHA-256 of a file's bytes, or `None` if unreadable. Used to
+src/cache.rs	@PLAN54 arc E — the `(bundle, manifest)` paths for the whole-program cache of
+src/cache.rs	The on-disk path for the stdlib bundle keyed by `key` (@PLAN54 D2b — the
+src/calc.rs	B2-runtime (2026-04-13): a unit variant in a mixed struct-enum
+src/calc.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/codegen_runtime.rs	(@P327 native). Writes the yielded value's bytes into `dest` and
+src/codegen_runtime.rs	2026-05-13 to close the unimplemented set so any loft
+src/codegen_runtime.rs	@P290 — clear the soft free-protection.
+src/codegen_runtime.rs	@P290 — soft free-protect marker for the fn-call deep-copy bracket.
+src/codegen_runtime.rs	@P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+src/codegen_runtime.rs	@P305 — `coll[key] = value` insert-or-replace into a keyed collection.
+src/codegen_runtime.rs	@P307 — clear a keyed collection (`sorted`/`hash`/`index`) held in a
+src/codegen_runtime.rs	@P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.
+src/codegen_runtime.rs	@P354: do not clear scratch — earlier scratch Strings may still be
+src/codegen_runtime.rs	@P354: do not clear scratch — see `i_parse_errors` above.
+src/codegen_runtime.rs	@P372: size the target record to the struct, not a fixed 8 words — see
+src/codegen_runtime.rs	@PLAN12 phase 3.5a (2026-05-24) — cr_rand_seed / cr_rand_int /
+src/codegen_runtime.rs	@PLAN12 phase 3.5a (2026-05-24) — n_rand / n_rand_seed /
+src/codegen_runtime.rs	@PLAN12 phase 3.5a (2026-05-24).
+src/codegen_runtime.rs	@PLAN49 T1 — refresh the shared breadcrumb at every native fn
+src/codegen_runtime.rs	@PLAN51 Cluster II — true alias copy is a no-op. Same rationale
+src/codegen_runtime.rs	Plan 09 phase 01 step 1.5: migrated to the no-stores ABI
+src/codegen_runtime.rs	Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
+src/codegen_runtime.rs	Plan 09 phase 01 — Cell/Stores ABI consolidation
+src/codegen_runtime.rs	Plan-06 phase 1b: each worker reserves a per-worker output Store
+src/codegen_runtime.rs	Plan-06 phase 3b.1 — shared epilogue for the native par result store.
+src/codegen_runtime.rs	Plan-06 phase 3b.1 — shared prologue for the native par result store.
+src/codegen_runtime.rs	Plan-09 phase 09: shape-trait-driven parallel-for runtime.
+src/codegen_runtime.rs	Plan-57 Phase C: single-ownership (ref-count removed) — close the file
+src/codegen_runtime.rs	Removed the last element: signal end-of-iteration.
+src/codegen_runtime.rs	Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
+src/codegen_runtime.rs	Unified store-backed yield channel (@P327 native; designed to absorb
+src/codegen_runtime.rs	`iterator<vector<T>>` / any DbRef-shaped yield (@P326).
+src/codegen_runtime.rs	for owned-free struct/variant payloads — plan-06 phase 2b refinement).
+src/codegen_runtime.rs	helpers; phase 01 migrated all 11 entries to `Cell` (8) or `None` (3).
+src/codegen_runtime.rs	mirroring `coroutine_next_i64` (@P326).
+src/codegen_runtime.rs	n_rand_indices removed. All three live in lib/random/native/'s
+src/codegen_runtime.rs	template (rayon work-stealing pool, plan-06 phase 1.5), mirroring the
+src/codegen_runtime.rs	the `external::` module that wrapped them all removed. random's
+src/codegen_runtime.rs	── Plan-09 phase 06: parallel-queue runtime (P202 close) ──────────────────
+src/compile.rs	@P381 — fixes the "Claim on read-only store (locked by: compile.rs
+src/compile.rs	@PLAN54 G2/M2/M6 — codegen body source:
+src/compile.rs	@PLAN54 G2/M6 — read the const body from the persistent store when
+src/compile.rs	@PLAN54 G2/M6 — warm-cache entry: lower from a pre-loaded persistent program
+src/compile.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/compile.rs	re-derive relative offsets after ops are inserted or removed (the jump
+src/compile.rs	sentinel as the ref-count is removed.
+src/coroutine_layout.rs	! phase 02).
+src/crash_report.rs	Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
+src/crash_report.rs	Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+src/crash_report.rs	Plan-07 phase 1 step 1.20 / phase 3 — publish a snapshot of the
+src/crash_report.rs	Plan-07 phase 3 — emit `at file:line:col` when the source
+src/crash_report.rs	Plan-07 phase 3 — source-position lookup for the panic hook +
+src/crash_report.rs	Plan-07 phase 3 — try to resolve the offending pc to a loft
+src/data.rs	! Plan-07 phase 6.1 — `Type::name()` must produce loft-surface
+src/data.rs	(e.g. the @P344 loop-var reuse check fired on `for f in a {…}` then
+src/data.rs	(phase-1 step 1.D), which phase 3's pc→span table consumes.
+src/data.rs	@P352: two `Type::Function`s compare by SHAPE (params + return),
+src/data.rs	@P379 — a library-qualified database name for a struct/enum-value
+src/data.rs	@P379 — the native backend emits each loft function as a flat
+src/data.rs	@PLAN28 Step 2 (C3) — rebuild the derived lookup indices from
+src/data.rs	@PLAN54 arc D — load a `Data` from a file-backed IR store written by
+src/data.rs	@PLAN54 arc D — serialize this `Data` to a file-backed IR store at
+src/data.rs	Detection-only at phase 02d-i: the field is populated but
+src/data.rs	Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+src/data.rs	Plan 09 phase 00 step 0.7 — codegen-internal "raw expression"
+src/data.rs	Plan-06 phase 4d (P193): null fn-ref defaults are needed
+src/data.rs	Plan-06 phase 4d (P193): tuple struct fields default to
+src/data.rs	Plan-06 phase 4d.A.2 — fn-ref element types route to
+src/data.rs	Plan-06 phase 4d.A.2 — fn-ref vector elements use 4-byte
+src/data.rs	Plan-06 phase 4d.C step 1 — register the synthetic struct
+src/data.rs	Plan-06 phase 5a (DESIGN.md D8.1) — purity classification of a
+src/data.rs	Plan-06 phase 5a (DESIGN.md D8.1) — purity classification set
+src/data.rs	Plan-06 phase 5a (DESIGN.md D8.1) — sub-classification of
+src/data.rs	Plan-06 phase 5b' (DESIGN.md D12) — every user fn that calls
+src/data.rs	Plan-06 phase 5b' (DESIGN.md D12) — every user-defined
+src/data.rs	Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
+src/data.rs	Plan-06 phase 5b' (DESIGN.md D12) — recursive walk of a `Value`
+src/data.rs	Plan-07 phase 1 — Span is transparent in pretty-print.
+src/data.rs	Plan-07 phase 1 — wrap a fault-prone IR construction with its
+src/data.rs	Plan-07 phase 1, step 1.1 acceptance: construct a Span, clone it,
+src/data.rs	Plan-07 phase 1, step 1.B.0 acceptance: `unspan()` returns the
+src/data.rs	Plan-07 phase 1, step 1.B.0 — see through any number of nested
+src/data.rs	Plan-07 phase 5 suggestions. Find a similar type name —
+src/data.rs	Plan-07 phase 6.1 — explicit user-facing rendering for the
+src/data.rs	Plan-14 phase 07 (P234 runtime): does this type carry a lifetime
+src/data.rs	Plan-22 phase 01 — names of captured bindings whose value is
+src/data.rs	Plan-22 phase 02d-i — names of LOCAL bindings in THIS
+src/data.rs	Skips `Value::CallRef` (runtime function reference) — phase 5e
+src/data.rs	Source span wrapper (plan-07 phase 1, decision A).
+src/data.rs	This definition is referenced by a specific definition, the code is used to update this
+src/data.rs	Used to construct `--extern` flags for `rustc`.
+src/data.rs	`Data::forced_size(alias_d_nr)`. When phase 2 routes
+src/data.rs	`Purity::Unknown` (no annotation provided); phase 5b's
+src/data.rs	lib_plan-29 W1c: WASM bridge package directories — (`crate_name`,
+src/data.rs	lib_plan-29 W1c: WASM bridge routes — loft `#native` symbol
+src/data.rs	lib_plan-29 W2: absolute paths to per-library JS host-imports
+src/data.rs	no longer collides, so a second call is a no-op).
+src/data.rs	par-safety analyser (phase 5e) iterates over for the
+src/data.rs	phase 3 (codegen rework) have a single place to call.
+src/data.rs	phase 5e's analyser pessimises any caller of a CallRef-routed
+src/data.rs	so phase 3's pc→span lookup can run.
+src/data.rs	─── @PLAN54 arc C — store-backed-field read seam ───────────────────────
+src/data_store.rs	! @PLAN54 — store-backed compiler IR (`Data`).
+src/data_store.rs	(@PLAN54 arc D). A freshly-opened file-backed store's first `claim(16)`
+src/data_store.rs	Lower-level than the named accessors above: the arc B materializer writes
+src/data_store.rs	rather than silently reading the wrong bytes. `pub(crate)` so the arc B
+src/data_store.rs	record's field, for the arc B materializer's root).
+src/data_store.rs	─── Write side (arc B materializer) ─────────────────────────────────────
+src/database/allocation.rs	@P290 sibling — the hash bucket record (per `src/hash.rs::add`)
+src/database/allocation.rs	@P290 — currently unused but kept available).
+src/database/allocation.rs	@P295 (keyed-local reassignment calls `remove_claims` on a
+src/database/allocation.rs	@P295 — element record layout (per `record_new`'s Hash arm):
+src/database/allocation.rs	@P309 — claim by element COUNT (header word + one 4-byte rec-id
+src/database/allocation.rs	@P317 debug — `LOFT_LOG=copy_check` (or `LOFT_COPY_CHECK=1`): after a
+src/database/allocation.rs	@P317 — enrich the tripwire: this fires when the free-bitmap and the
+src/database/allocation.rs	@P317 — entry point for the `copy_check` validator. Compares the
+src/database/allocation.rs	@P317 — leaked stores grouped BY TYPE, most-leaked first. The previous
+src/database/allocation.rs	@P318 — deep-copying a struct whose `hash<T[k]>` field is populated must
+src/database/allocation.rs	@P318 — re-INSERT each entry into an emptied destination via `hash::add`
+src/database/allocation.rs	@PLAN38 — bind the Store at `slot` to a file at `path`, returning
+src/database/allocation.rs	@PLAN38 — pad a Store byte image out to `target_words` while keeping
+src/database/allocation.rs	@PLAN53 cluster 3: sound disjoint-borrow cross-store copy
+src/database/allocation.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/allocation.rs	Matches `copy_claims_hash_body`'s @P290 fix; surfaced by
+src/database/allocation.rs	Plan-06 phase 2 step 2b — narrow rebase path for structs whose
+src/database/allocation.rs	Plan-57 Phase C: the Stores ref-count is removed. Every non-pinned
+src/database/allocation.rs	bare message did during the @P311/@P313/@P317 store-ownership hunts.
+src/database/allocation.rs	high-water (plan-57).
+src/database/allocation.rs	pinpointed the @P317 native ref-local leak. Used by
+src/database/allocation.rs	rehash invariants, subsuming the earlier @P317 length-word and @P290
+src/database/allocation.rs	reinitialise a store that was previously locked by a const
+src/database/allocation.rs	sentinel + the `ref_count > 1` guard below as the ref-count is removed.
+src/database/format.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/format.rs	Plan-06 phase 4d.C step 2: format a stored DbRef
+src/database/io.rs	@P321(c): consult the browser-side asset table so PNGs
+src/database/io.rs	@P334 fix (2026-05-29): widen the active-impl cfg from
+src/database/io.rs	@P334 fix: narrowed from `target_arch = "wasm32"` to also exclude
+src/database/io.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/io.rs	Plan-06 phase 4d.C step 2: see read_data's DbRef arm.
+src/database/io.rs	Plan-06 phase 4d.C step 2: stored DbRef pointer is
+src/database/mod.rs	@P275 fix.
+src/database/mod.rs	@P356 — Stores-side counterpart of `State::raise_recoverable`. Logs a
+src/database/mod.rs	@PLAN53 cluster 2 / S4: pop the value's STEPPED span (8-rounded in
+src/database/mod.rs	@PLAN53 cluster 2 / S4: push the value's STEPPED span so a native
+src/database/mod.rs	@PLAN54 D2a read seam — `other_indexes` is module-private; expose it
+src/database/mod.rs	@PLAN54 D2a — reconstruct a `Field` from cached store fields (the
+src/database/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/mod.rs	Plan-06 phase 1 — marker telling the parent which slot in this
+src/database/mod.rs	Plan-06 phase 2 — extract every worker-allocated Store
+src/database/mod.rs	Plan-06 phase 2b prereq — adopt all stores a worker allocated
+src/database/mod.rs	Plan-06 phase 4d.C step 2: 12-byte stored DbRef pointer (store_nr
+src/database/mod.rs	Plan-07 phase 4 — typed runtime error captured by the most recent
+src/database/mod.rs	Plan-07 phase 4c — Stores-side counterpart of
+src/database/mod.rs	Plan-07 phase 4c — Stores-side counterpart of `State::raise`.
+src/database/mod.rs	Plan-07 phase 4e.3 — `LOFT_FORMAT_BARE_NULL=1` opt-out for the
+src/database/mod.rs	Plan-07 phase 4e.3 — fault-kind tag for the next format-string
+src/database/mod.rs	Plan-07 phase 4e.3 — read + clear the format-fault tag.
+src/database/mod.rs	Plan-07 phase 4e.3 — set the next-format-render fault tag.
+src/database/mod.rs	Plan-07 phase 4g.3 — `--dev-soft-halt` mirror of the
+src/database/mod.rs	`vec_get_or_raise_runtime`, etc. @P275 fix.
+src/database/mod.rs	allocations. See plan-06 DESIGN.md D2.1 for the rationale.
+src/database/mod.rs	watermark** plan-57 tracks (the peak the `LOFT_STORES=log` trace prints
+src/database/search.rs	@P305 — insert-or-replace a value into a keyed collection
+src/database/search.rs	@P306 — before linking a new keyed record, drop any EXISTING record
+src/database/search.rs	@P317 — LOFT_LOG=copy_check: warn if the keyed deep copy changed any
+src/database/search.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/search.rs	already exists it is removed first (so the key stays unique — dedup),
+src/database/snapshot.rs	! @PLAN28 Design A — JSON codec for the database **schema** (`Stores.types`
+src/database/structures.rs	@P305 — true when the keyed field at byte offset `byte_off` in
+src/database/structures.rs	@P306 — replace any existing record with this key (dedup).
+src/database/structures.rs	@P306 — replace any existing record with this key (dedup);
+src/database/structures.rs	@P357: an EMPTY JSON array must still zero the collection
+src/database/structures.rs	@P366: an unknown JSON key has no matching struct field.
+src/database/structures.rs	@P373: write the default to the COLLECTION FIELD's slot,
+src/database/structures.rs	@P376 — Array(content) → Array(content) append. When the content
+src/database/structures.rs	@P376 — when `known` is "linked" (multiple containers share this
+src/database/structures.rs	@PLAN53 cluster 3: sound cross-store byte copy. Copies `len` bytes from
+src/database/structures.rs	@PLAN53 cluster 3: sound disjoint-borrow cross-store copy.
+src/database/structures.rs	@PLAN53 cluster 3: two different data structures in distinct stores —
+src/database/structures.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/structures.rs	Plan-06 phase 4d.C step 2: default for a 12-byte
+src/database/structures.rs	Plan-06 phase 4d.C step 2: stored DbRef pointer has no
+src/database/structures.rs	crate; the legacy hand-rolled scanner was removed when
+src/database/structures.rs	per-element offsets). Used to populate the `at` field of
+src/database/structures.rs	the @P357 case), so that path is preserved.
+src/database/types.rs	(which used to disrupt largest-first packing and pull the
+src/database/types.rs	@P375: a vector field carries no nullable flag — it is always at
+src/database/types.rs	@P375: only an UNSET text (str_rec 0) is null; an allocated
+src/database/types.rs	@PLAN54 D2a read seam — `complex`/`linked`/`size`/`align` are `pub(super)`
+src/database/types.rs	@PLAN54 D2a — drop the derived `parents` index (for comparing a
+src/database/types.rs	@PLAN54 D2a — install a store-loaded type schema (`Vec<Type>` from
+src/database/types.rs	@PLAN54 D2a — reconstruct a `Type` from cached store fields. `parents`
+src/database/types.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/database/types.rs	Plan-06 phase 2 — true iff `tp` (a struct or struct-enum-variant)
+src/database/types.rs	Plan-06 phase 2b refinement — per-variant ownership for
+src/database/types.rs	Plan-06 phase 4d.C step 2 — register the 12-byte raw `DbRef` storage
+src/database/types.rs	Plan-22 phase 02c (2026-05-12): override the alignment from the
+src/database/types.rs	the containing struct's size/align both 0. Symptom: phase 02c's
+src/database/types.rs	those indices, when used to look up fields, return EXACTLY
+src/diagnostic_render.rs	! Plan-07 phase 2 — pretty diagnostic renderer.
+src/diagnostic_render.rs	! Plan-07 phase 4 will wire runtime errors through the same
+src/diagnostic_render.rs	! renderer; phase 5 adds suggestions; phase 6 adds typed-mismatch
+src/diagnostic_render.rs	Number of decimal digits in `n` (used to size the gutter).
+src/diagnostic_render.rs	full unicode-width handling deferred to phase 4 if needed).
+src/diagnostics.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/diagnostics.rs	Plan-07 phase 5: suggestion with a length-aware distance cap.
+src/extensions.rs	@P362: widen the i32 C return to the 8-byte loft `integer`
+src/extensions.rs	@P370 a plain loft `integer` marshals as I64, so lib/web + lib/server
+src/extensions.rs	@P370: a plain loft `integer` is 64-bit (8-byte slot) — it must
+src/extensions.rs	@P370: plain loft `integer` is 64-bit → I64; only explicit narrow
+src/extensions.rs	@P388: serialise on-demand native builds ACROSS PROCESSES. Parallel test
+src/extensions.rs	@PLAN12 Phase 6b — compute the target dir for a package's
+src/extensions.rs	@PLAN12 Phase 6b — target root via the shared helper (redirects
+src/extensions.rs	@PLAN12 phase 3.5a (2026-05-24) — added so the `--native` codegen
+src/extensions.rs	P244-windows fix #2 (2026-05-12): use PathBuf::join, not
+src/extensions.rs	Pre-2026-05-12 this function checked ONLY the cdylib before
+src/extensions.rs	Used by `try_dlsym` to look up symbols from previously loaded cdylibs.
+src/extensions.rs	covers the latent end-user-parallelism half of @P388.) The `--locked`
+src/extensions.rs	── @PLAN48 P1b: I64 arms — a plain loft `integer` now marshals as I64
+src/extensions.rs	── @PLAN48 P3: I64 twins of the text-bearing I32 arms above. After
+src/generation/calls.rs	@P275 fix.
+src/generation/calls.rs	@P276 — same wrap for `Value::Block` whose result type is
+src/generation/calls.rs	@P299 — a text-returning fn-ref call (`CallRef`) lowers to
+src/generation/calls.rs	@P304 — fire for ANY non-`Op` text-returning call, USER
+src/generation/calls.rs	@P321b — `OpSetText` with a NULL value must store the null pointer
+src/generation/calls.rs	@P361 — a `#rust` body that names a loft-internal *pub module* must
+src/generation/calls.rs	@P386: a text-result `Value::Block` argument whose body
+src/generation/calls.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/generation/calls.rs	Phase 09 phase 00 step 0.4: dispatches through
+src/generation/calls.rs	Plan 09 phase 01 added per-fn ABI tagging via the
+src/generation/calls.rs	Plan-07 phase 4 — RuntimeErrorKind enum lives in
+src/generation/calls.rs	Plan-07 phase 4c — Stores-side counterparts of the
+src/generation/calls.rs	State::text_char_or_raise helpers (added 2026-05-11 by 4a).
+src/generation/calls.rs	`output_block`'s @P321e/@P323 materialisation at
+src/generation/coroutine.rs	- `state_idx`: the state number for this segment (used to name the struct field)
+src/generation/coroutine.rs	@P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
+src/generation/coroutine.rs	@P326 — Reference-yielding generators override `next_dbref` (not
+src/generation/coroutine.rs	@P326 — also pre-declare `__ref_*` work-vars used by
+src/generation/coroutine.rs	@P326 — for-body factory must use the DbRef channel for
+src/generation/coroutine.rs	@P327 / @P328 native — tuple-of-(integer|float) AND fn-ref yields
+src/generation/coroutine.rs	@P328 native — pack the fn-ref `(u32, DbRef)`
+src/generation/coroutine.rs	@PLAN16 phase 02 — a tuple whose every element classifies into a
+src/generation/coroutine.rs	@PLAN16 phase 02 — layout-driven flatten-walk.
+src/generation/coroutine.rs	Plan-12 phase 01: descend through Span wrappers so a
+src/generation/dispatch.rs	(cell), not `&mut Stores` (stores). Plan 09 phase 01 added
+src/generation/dispatch.rs	@P283 — source is a `RefVar(Text)` argument (`&mut String`).
+src/generation/dispatch.rs	@P298 / @P297 (native half) — free the callee's return store
+src/generation/dispatch.rs	@P302 reassignment / `s = []` clear: the slot already holds a
+src/generation/dispatch.rs	@P302 — a keyed local backed by its own store carries a self-dep
+src/generation/dispatch.rs	@P302 — capture first-vs-reassign BEFORE the `declared` insert below
+src/generation/dispatch.rs	@P317 — a struct `Reference` local with no resolvable
+src/generation/dispatch.rs	@P321g: unspan `to` first. The parser wraps an assignment RHS in
+src/generation/dispatch.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/generation/dispatch.rs	Phase 09 phase 00 step 0.6: registry-first dispatch. When a
+src/generation/dispatch.rs	`"a".to_string()` wrap on the inner literals (plan-14 phase 02).
+src/generation/dispatch.rs	`first == false` is an @P302 keyed-collection reassignment (`s = []`
+src/generation/dispatch.rs	this, plan-14 phase-02 cells like
+src/generation/emit.rs	(@PLAN54 G2/M4). Dispatches on `node.kind()` and reads payloads through
+src/generation/emit.rs	(String, …) tuple-return literal (@P330) emit the bare name.
+src/generation/emit.rs	@P321e / @P323 — a TEXT value-block's `_ret` is typically a
+src/generation/emit.rs	@P321e — also route through scratch when the return
+src/generation/emit.rs	@P323 materialisation at line ~1382) when the block holds a
+src/generation/emit.rs	@P386: a text-result if-expression where any branch is a Block
+src/generation/emit.rs	@P386: when an if-branch is a Text-result Block whose
+src/generation/emit.rs	@PLAN52 cluster I iteration 2 (2026-05-30): force the
+src/generation/emit.rs	@PLAN52 cluster I/VI helper: walk a Block's operators (recursively
+src/generation/emit.rs	@PLAN52 cluster VI (2026-05-30): closures (and
+src/generation/emit.rs	@PLAN52 cluster VI (2026-05-30): closures returning text
+src/generation/emit.rs	@PLAN52 cluster VII: when the if-result is `Text`, branches can
+src/generation/emit.rs	@PLAN54 G2/M4 — materialise-at-boundary for the residual arms
+src/generation/emit.rs	@PLAN54 G2/M4 — materialise-at-boundary: native is zero-cost; a
+src/generation/emit.rs	@PLAN54 G2/M4.1–M4.6 — these kinds are handled by the
+src/generation/emit.rs	@PLAN54 G2/M4.2 — scalar arms (no Value child).
+src/generation/emit.rs	@PLAN54 G2/M4.4 — single/list-child arms recurse via output_code_node.
+src/generation/emit.rs	@PLAN54 G2/M4.5 — self-contained arms (no &Value-helper delegation).
+src/generation/emit.rs	@PLAN54 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
+src/generation/emit.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/generation/emit.rs	P205 (plan-09 phase 07): if the function returns
+src/generation/emit.rs	P205 (plan-09 phase 07): when this function returns
+src/generation/emit.rs	P208 (plan-17 phase 01 follow-up): the same redundancy
+src/generation/emit.rs	P240 fix (2026-05-11): bounded-generic T-stubs that return a
+src/generation/emit.rs	Phase 09 phase 00 step 0.7 — fn-ref dispatch routes each
+src/generation/emit.rs	Plan-06 phase 4d: fn-ref field read emits the (u32, DbRef)
+src/generation/emit.rs	Plan-07 phase 4 — pre-bind the body's text
+src/generation/emit.rs	Plan-14 phase 07 (P234 runtime closure). Function
+src/generation/emit.rs	[`Self::output_code_node`]. @PLAN54 G2/M4 (cf. interpreter `generate`):
+src/generation/emit.rs	here became dead code and was removed.
+src/generation/emit.rs	phase 07 / P234) does NOT fire for generic
+src/generation/emit.rs	variable is marked `skip_free`. Used to gate scratch-buffer
+src/generation/mod.rs	(E0428). When the lib_plan-29 routing maps these to a
+src/generation/mod.rs	@P296 — keyed-collection types reachable only as a struct/enum FIELD
+src/generation/mod.rs	@P299 — a fn-ref stored into a struct FIELD lowers to
+src/generation/mod.rs	@P310 regression: the FFI element pointer width must track the vector's
+src/generation/mod.rs	@P310: the FFI data-pointer element width must match the
+src/generation/mod.rs	@P321c (2026-05-25) — a struct `Reference` ARG (not just a
+src/generation/mod.rs	@P321c browser-WASM (2026-05-29): skip the host-import
+src/generation/mod.rs	@P321c browser-WASM fix (2026-05-29): for store-mutating `#native` fns
+src/generation/mod.rs	@P321c — pass the struct as a `LoftRef`. `var_{var}` is a
+src/generation/mod.rs	@P328 — `yield <fn-ref>` for a non-capturing closure emits as
+src/generation/mod.rs	@P353: an empty `vector<fn(…)>` literal registers its
+src/generation/mod.rs	@P353: flush the content bare type if it is registered
+src/generation/mod.rs	@P353: the narrow element type may have a higher
+src/generation/mod.rs	@P379 — emit the REGISTERED database name (library-qualified on a
+src/generation/mod.rs	@PLAN12 phase 2 step 2 (2026-05-24): check `def.native` FIRST.
+src/generation/mod.rs	@PLAN12 phase 3.5a (2026-05-24) — LoftStore forwarding for
+src/generation/mod.rs	@PLAN12 phase 3.5a (2026-05-24) — removed the `mod external {…}`
+src/generation/mod.rs	@PLAN37 phase 10.3 fix.
+src/generation/mod.rs	@PLAN52 cluster IV-Vec-nested-field-push secondary (2026-05-30):
+src/generation/mod.rs	@PLAN54 G2/M2 — persistent program store (mirrors the interpreter's
+src/generation/mod.rs	@PLAN54 G2/M2/M5 — store-backed body emission. When
+src/generation/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/generation/mod.rs	Plan-06 phase 4d: tuple struct fields inline the
+src/generation/mod.rs	Plan-12 phase 1a (2026-05-23) — `is_crypto_runtime_symbol` removed.
+src/generation/mod.rs	Plan-22 phase 02c (P258 native fix, 2026-05-12): auto-Reference
+src/generation/mod.rs	Routed via lib_plan-29: each library's `[wasm.bridge].routes`
+src/generation/mod.rs	Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
+src/generation/mod.rs	Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
+src/generation/mod.rs	a Reference arg (@P321c made that combination reachable).
+src/generation/mod.rs	as the @P299 (`OpSetInt4(field, …)`) and @P328 (`yield`) recoveries.
+src/generation/mod.rs	as the @P299 fix for `OpSetInt4(field, pos, Int(d_nr))`;
+src/generation/mod.rs	cross-reference in phase 2 is a backward reference to an already-bound
+src/generation/mod.rs	indexes into an empty Vec and panics. @P275 fix.
+src/generation/mod.rs	lib_plan-29 W1c (2026-05-29): the routing table is now
+src/generation/mod.rs	type minted only for a LOCAL var (@P296) is referenced by
+src/generation/mod.rs	whose own id falls AFTER the struct (the @P353 inversion: an
+src/generation/mod.rs	would shadow the real implementation. Plan 09 phase 01
+src/generation/ops/coroutine.rs	- 1 = unified `next_into(stores, &mut [i64; N])` channel (@P327 native)
+src/generation/ops/coroutine.rs	8 → `i64` / 1 → `bool` / 12 → `DbRef` (@P326) /
+src/generation/ops/coroutine.rs	@P328 native — unified channel, fn-ref rebuild. Native
+src/generation/ops/coroutine.rs	@PLAN16 phase 02 — unified channel, layout-driven rebuild.
+src/generation/ops/coroutine.rs	not occur post-@PLAN16) decodes as the legacy all-i64
+src/generation/ops/coroutine.rs	size_of::<DbRef>() == 12 — Reference-yielding generator (@P326).
+src/generation/ops/default.rs	! After phase 00 step 0.5, both `output_call_user_fn` and
+src/generation/ops/int_compare.rs	! Plan 09 phase 10 step 10.3 — integer-comparison emitter family.
+src/generation/ops/key_ops.rs	! Plan 09 phase 04 — key-keyed Op emitters.
+src/generation/ops/key_ops.rs	! `OpClearKeyed` (clear a keyed-collection field, @P307) — are plain
+src/generation/ops/key_ops.rs	! `OpSetKeyed` (`coll[key] = value` insert-or-replace, @P305) and
+src/generation/ops/key_ops.rs	! phase 04 deletes the legacy arms.
+src/generation/ops/key_ops.rs	`OpClearKeyed` emitter — @P307 clear a keyed-collection struct field
+src/generation/ops/key_ops.rs	`OpSetKeyed` emitter — @P305 keyed insert-or-replace (`coll[key] = value`).
+src/generation/ops/mod.rs	! After phase 00 (this scaffold + step 0.7b's let-bind-on-repeat already
+src/generation/ops/mod.rs	! Smoke-test the `OpEmitter` trait shape so phase 00's claim that
+src/generation/ops/mod.rs	! before phase 05 lands the first real one.
+src/generation/ops/mod.rs	@P283 refvar->Stack rewrite + the sub-match internally). Registered for
+src/generation/ops/mod.rs	@P283 — Op-name rewrite for `RefVar(Text)` destinations.
+src/generation/ops/mod.rs	Plan 09 phase 00's forwarding-smoke emitters were retired by
+src/generation/ops/mod.rs	during the @PLAN36 dogfood: @P305 OpSetKeyed, @P307 OpClearKeyed,
+src/generation/ops/mod.rs	phase 00's runtime smoke test, so they ARE registered).
+src/generation/ops/mod.rs	phase 03's for-par emitter for the queue protocol: `n_parallel_queue`
+src/generation/ops/mod.rs	plan-12 phase 02 — their job (proving the registry → emit_op →
+src/generation/ops/mod.rs	priority over the special-case match arms (phase 00 step 0.6).
+src/generation/ops/parallel.rs	! Plan 09 phase 03 — parallel-for emitter family.
+src/generation/ops/parallel.rs	! The emitter takes over because of phase 00 step 0.6's registry-
+src/generation/ops/parallel.rs	fns introduced in plan-09 phase 06 (P202 close).
+src/generation/ops/text_ops.rs	! and depend on the @P283 refvar→`Stack` rewrite: the ORIGINAL op name
+src/generation/ops/text_ops.rs	@P283 — mirror src/state/codegen.rs: a first arg that is a Var of type
+src/generation/pre_eval.rs	&mut Stores`); it only surfaced once @P297's argument-lift
+src/generation/pre_eval.rs	@P274 guard: refuse the hoist when any intervening free-op
+src/generation/pre_eval.rs	@P312 — a bare user-fn call STATEMENT is wrapped in `Span` (source-position
+src/generation/pre_eval.rs	@P312 — also pre-eval any arg that READS a variable which another
+src/generation/pre_eval.rs	@P312 — same ref-alias hoist as the user-fn Call arm below.
+src/generation/pre_eval.rs	@P312 — the set of variables that some argument passes as a fresh
+src/generation/pre_eval.rs	@P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
+src/generation/pre_eval.rs	@P364: the collapse HOISTS the Set's Call from `set_idx` (which
+src/generation/pre_eval.rs	@PLAN52 cluster VII: see emit.rs::output_if_inner. Same text-branch
+src/generation/pre_eval.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/generation/pre_eval.rs	Plan-06 phase 4d: tuple-element read blocks
+src/generation/pre_eval.rs	Plan-12 phase 01: unspan recursively. Without this, the
+src/generation/pre_eval.rs	True if `v` reads any variable in `vars`, at any depth. Used by @P312 to
+src/generation/pre_eval.rs	and avoid double-borrow. Plan-07 phase 4 added more
+src/generation/pre_eval.rs	copy where `Return(Null)` is replaced by `Return(expr)` and `expr` is removed from
+src/generation/pre_eval.rs	ret_pos shifted by -1 because we removed one element before it.
+src/generation/pre_eval.rs	the @P274 path where `parse_append_text` (in vectors.rs) keeps
+src/generation/text.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/install.rs	chain (@PLAN12 Phase 6.6).
+src/introspect.rs	! Plan-08 phase 01: introspection CLI.
+src/ir_node.rs	! @PLAN54 G2 / M3.0 — the IR node-walk handle (`IrNode` / `IrType`).
+src/ir_node.rs	`try_text_dest_pass`). Removed at M5 when that cluster iterates
+src/ir_node.rs	not-yet-converted recursion (`self.generate(&Value)`). Removed at M5,
+src/ir_read.rs	! @PLAN28 JSON re-encode comparison, and needing no JSON at all).
+src/ir_read.rs	! @PLAN54 arc C — store → native IR reader (the read path).
+src/ir_read.rs	! [`Box::leak`], exactly as the @PLAN28 JSON decoder does (a loaded image holds
+src/ir_read.rs	@PLAN54 D2a step 3 — `read_schema` is the inverse of `materialize_schema`:
+src/ir_read.rs	@PLAN54 D2a step 5 (capstone) — the warm-load bundle round-trip: save the
+src/ir_read.rs	@PLAN54 G2 / M0 — the equivalence harness wrapper (`ir_roundtrip_check`)
+src/ir_read.rs	@PLAN54 G2 / M0 — the read-site migration's equivalence harness.
+src/ir_read.rs	@PLAN54 G2 / M2 — navigate a **persistent program store** (a whole `Data`
+src/ir_read.rs	@PLAN54 G2/M6 — `bodies=false` leaves the body in the store
+src/ir_read.rs	@PLAN54 G2/M6 — like [`read_data`] but leaves each function body in the store
+src/ir_read.rs	@PLAN54 G2/M6 — warm-cache store-backed load. Mmap the bundle into a
+src/ir_read.rs	@PLAN54 arc D micro-bench — wall-clock of producing the native stdlib
+src/ir_read.rs	@PLAN54 arc D probe — the full mmap loop end-to-end: materialize the
+src/ir_read.rs	@PLAN54 arc D step D1 — the public `Data::save` / `Data::open` API:
+src/ir_read.rs	@PLAN54 arc E — reject a missing / non-store / truncated / corrupt bundle
+src/ir_read.rs	Load a whole **bundle** written by [`crate::ir_store::save_bundle`] (@PLAN54
+src/ir_read.rs	[`crate::ir_store::save_data`] (@PLAN54 arc D): mmap the file
+src/ir_read.rs	as the @PLAN28 JSON decoder does.
+src/ir_read.rs	codegen reads both on the load path; see plan README § arc C).
+src/ir_read.rs	definitions. This is arc C's read-path milestone: a store-materialised
+src/ir_read.rs	file; integrity-checked loading is arc E's drift-detection job (Q4).
+src/ir_read.rs	half of the @PLAN28 schema-rebuild wall, resolved by caching the schema.
+src/ir_read.rs	re-derived via [`Data::rebuild_indices`], mirroring the @PLAN28 JSON loader.
+src/ir_read.rs	startup cache (`main.rs`, @PLAN54 D2b) uses, since `Stores::install_schema`
+src/ir_schema.rs	! ## Interim — slated for retirement (@PLAN54)
+src/ir_schema.rs	! Interim native-IR ↔ JSON codec — @PLAN28 startup-cache bootstrap.
+src/ir_schema.rs	! This codec walks the **native** Rust IR graph. @PLAN54 (Data-as-store)
+src/ir_schema.rs	! arc B's native→store materializer mirrors, and as arc B's **equivalence
+src/ir_schema.rs	! then it earns its keep two ways: as the **traversal skeleton** @PLAN54
+src/ir_schema_gen.rs	! The store schema for the compiler IR (@PLAN54 arc A): registers every
+src/ir_store.rs	! (`plans/future/54-data-as-store` § arc B).
+src/ir_store.rs	! @PLAN28 `ir_schema::data_to_json` walk with its JSON sink swapped for a
+src/ir_store.rs	! @PLAN54 arc B — native IR → store materializer (the write path).
+src/ir_store.rs	(@PLAN54 D2a step 4). `Data` is inlined at `BUNDLE_DATA` (offset 0, so the
+src/ir_store.rs	23-field store subset — the same set the @PLAN28 codec serialises).
+src/ir_store.rs	@PLAN54 D2a step 2 — materialize the real stdlib's database type schema
+src/ir_store.rs	Serialize `data` to a file-backed IR store at `path` (@PLAN54 arc D).
+src/ir_store.rs	The file is removed first so the root lands at the well-known first record.
+src/ir_store.rs	Written **atomically** (@PLAN54 arc E): materialized into a `<path>.<pid>.tmp`
+src/ir_store.rs	`vector<DbType>` field at `off` of `parent` (@PLAN54 arc D / D2a) so a
+src/ir_store.rs	at `path` (@PLAN54 D2a step 4) — the cacheable artifact a warm startup loads
+src/ir_store.rs	materialised IR lands directly on disk for the mmap load path (@PLAN54 arc
+src/ir_store.rs	strongest arc B write-path validation short of a store→native reader).
+src/keys.rs	@P355: `Str::str()` must NOT silently truncate a legitimately-large
+src/keys.rs	@P355: the cheap pointer guards stay (a null or low/dangling ptr —
+src/keys.rs	Node.js (CVE-2011-4815 et al.).
+src/keys.rs	P253 fix (2026-05-11) — process-wide seeded `RandomState` so the
+src/lexer.rs	@PLAN49 T1 breadcrumb — refresh every 256 iterations so a
+src/lexer.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/lexer.rs	Create a link to the current lexer position, it can be used to revert to
+src/lexer.rs	Expect code with spaces, line ends and remarks removed.
+src/lexer.rs	indentation. That many leading spaces are removed from every line of the
+src/lib.rs	@PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
+src/lib.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/log_config.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/log_config.rs	Plan-22 phase 02d-vii follow-up — central check for the
+src/log_config.rs	tree for the named function. Used to verify "did the parser
+src/logger.rs	Convert a count of days since the Unix epoch (1970-01-01) to `(year, month, day)`.
+src/logger.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/logger.rs	Example: `"2026-03-13T14:05:32.417Z"`
+src/logger.rs	Plan-07 phase 4 — log a typed runtime event (`RuntimeError`)
+src/logger.rs	Shift epoch from 1970-01-01 to 0000-03-01
+src/logger.rs	`main_loft_file` is used to determine the default log directory.
+src/main.rs	(@P382). That synthesis also tripped a CONST_STORE re-lock by
+src/main.rs	@P229 G3: a transitive native dep (e.g. web's `ureq`/`rustls`
+src/main.rs	@P282 fix: when `--no-warnings` is set, suppress
+src/main.rs	@P282 — diagnostics (warnings + errors) go to STDERR,
+src/main.rs	@P296-sibling (Windows-only): `canonicalize()` returns an
+src/main.rs	@P321(c) Phase 3a: auto-discover *.png siblings of the entry .loft
+src/main.rs	@P321(c) Phase 3a: raw base64 of *.png siblings of the entry .loft
+src/main.rs	@P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
+src/main.rs	@P337: a missing wasm-opt is NOT a cosmetic "larger output"
+src/main.rs	@P350: self-validate the emitted wasm BEFORE writing the HTML so a
+src/main.rs	@P363: join with a path separator (Path::join) instead of string
+src/main.rs	@P379 — qualify native symbols for functions whose name
+src/main.rs	@PLAN12 Phase 6.11 — `loft bundle export <outdir>` writes a
+src/main.rs	@PLAN12 Phase 6.11 — `loft bundle import <indir>` installs a
+src/main.rs	@PLAN12 Phase 6.11 — offline bundle export/import.
+src/main.rs	@PLAN12 Phase 6.16 — `loft publish` author helper.
+src/main.rs	@PLAN12 Phase 6.16 — author-side publish helper.
+src/main.rs	@PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
+src/main.rs	@PLAN12 Phase 6.6 — `loft pin <script>` writes a sidecar
+src/main.rs	@PLAN12 Phase 6.6 — enumerate ~/.loft/registry/<pkg>-<ver>/
+src/main.rs	@PLAN12 Phase 6.6 — write a sidecar lockfile next to
+src/main.rs	@PLAN12 Phase 6.7 — `loft audit` walks every installed package
+src/main.rs	@PLAN12 Phase 6.7 — explicit deep scan: every cached
+src/main.rs	@PLAN12 Phase 6.7a — `loft yank` author helper.
+src/main.rs	@PLAN12 Phase 6.7a — author-side yank workflow.
+src/main.rs	@PLAN12 Phase 6.8 — `loft update` driver.
+src/main.rs	@PLAN12 Phase 6.8 — knob set for the `loft update` command.
+src/main.rs	@PLAN12 Phase 6.8 — refresh lockfile entries to latest
+src/main.rs	@PLAN12 — `loft new <name>` scaffolds a fresh library
+src/main.rs	@PLAN12 — `loft new <name>` scaffolds a fresh loft library
+src/main.rs	@PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
+src/main.rs	@PLAN49 T1+T3 — arm the execution-timeout watchdog from the env
+src/main.rs	@PLAN49 T3 — `--timeout <secs>` arms the watchdog. The
+src/main.rs	@PLAN49 T3 — default the timeout ON under `loft test` / `--tests`.
+src/main.rs	@PLAN54 G2 / M0 — equivalence harness. With `LOFT_IR_CHECK` set, assert
+src/main.rs	@PLAN54 G2/M6 — lower from the warm-loaded mmap store when present.
+src/main.rs	@PLAN54 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
+src/main.rs	@PLAN54 arc E / D2b — opt-in startup caches (default off). The
+src/main.rs	@PLAN54 arc E — a whole-program warm load already holds every definition;
+src/main.rs	@PLAN54 arc E — on a cold run with the program cache enabled, write the
+src/main.rs	@lib_plan-29 W2: apply each library's host.js-registered extension
+src/main.rs	@lib_plan-29 W2: concatenate every used library's
+src/main.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/main.rs	Days since 1970-01-01 (Unix epoch).
+src/main.rs	PKG.REG R4 (2026-05-24): the `loft install <name>` entry point in
+src/main.rs	Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
+src/main.rs	Plan-07 phase 2: --errors=compact|pretty CLI flag (overrides
+src/main.rs	Plan-07 phase 2: --errors=compact|pretty selects the
+src/main.rs	Plan-07 phase 4 — render typed runtime errors through the
+src/main.rs	Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
+src/main.rs	Plan-07 phase 4g.3 — demote dev-mode raises to
+src/main.rs	Plan-08 phase 01: --introspect mode collects per-section
+src/main.rs	Plan-08 phase 01: --introspect short-circuits everything.
+src/main.rs	Plan-08 phase 01: introspection mode. Default = emit
+src/main.rs	SAME `State`, so per-call store-lifetime leaks (the @P377
+src/main.rs	calling `compile::byte_code` a second time (@P381, fixed by
+src/main.rs	lib_plan-29 W1c (2026-05-29): link each used library's wasm
+src/main.rs	silently corrupts every native struct read/write. @P321c.
+src/manifest.rs	@PLAN12 phase 3.5b (2026-05-24) — path-deps in `loft.toml`
+src/manifest.rs	lib_plan-29 W1c: bridge crate from `[wasm.bridge] crate = "..."`.
+src/manifest.rs	lib_plan-29 W1c: loft `#native` symbol → bridge `pub fn` name from
+src/manifest.rs	lib_plan-29 W2: per-library JS host-imports file from
+src/native.rs	**JObject walk (2026-04-14):** for each JsonField, copies the
+src/native.rs	@P290 — clear the soft free-protection set by `n_protect_store_frees`.
+src/native.rs	@P290 — soft "don't free" marker for the fn-call deep-copy bracket.
+src/native.rs	@P354: do not clear scratch — see `n_as_text`.
+src/native.rs	@P354: do not clear scratch — see `n_as_text`. Clearing frees
+src/native.rs	@P354: must NOT clear scratch — earlier scratch Strings may
+src/native.rs	@PLAN38 phase 01b — interpreter handler for `store_durable_check`.
+src/native.rs	@PLAN38 phase 01b — interpreter handler for `store_durable_seal`.
+src/native.rs	@PLAN38 — interpreter handler for `store_persist_bind`. Pops a
+src/native.rs	B7 (2026-04-13): when called with method syntax (`v.len()`),
+src/native.rs	Empty object: same @P357 fix as the empty-array arm — zero the
+src/native.rs	HTTP client glue removed — n_http_do and n_http_body are now auto-marshalled.
+src/native.rs	Plan-06 ARC.md A4 (closed 2026-05-07) — companion to
+src/native.rs	Plan-06 ARC.md A4 (closed 2026-05-07) — the legacy materialised
+src/native.rs	Plan-06 phase 4d.A — typed worker-input dispatch. Replaces the
+src/native.rs	Plan-06 phase 4d.A.2: also returns `Some(vec![first.typedef])`
+src/native.rs	Plan-07 phase 4 — route through Logger::log_runtime_kind
+src/native.rs	Plan-07 phase 4 — same routing as n_assert; ensures the
+src/native.rs	Plan-07 phase 4 — typed runtime error. Replaces the legacy
+src/native.rs	Plan-07 phase 4 — typed runtime error. Same shape as n_assert
+src/native.rs	Plan-12 phase 1a (2026-05-23) — crypto `n_*` impls moved to
+src/native.rs	Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
+src/native.rs	Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
+src/native.rs	Step 4 fourth slice (2026-04-14) — recurse into nested
+src/native.rs	Step 4 second + fourth slices (2026-04-14): non-empty
+src/native.rs	Step 4 third + fourth slices (2026-04-14): non-empty
+src/native.rs	Used to freeze `ticks()` and `now()` for deterministic snapshot tests —
+src/native.rs	`Store::get_single` in `src/store.rs:1406-1421`: those write /
+src/native.rs	fused for-par over text-returning workers no longer allocates a
+src/native.rs	status / summary / progress lines. Driver: @PLAN37 phase 07's
+src/native.rs	the items-vector handle. @P357 — `jv_alloc` claims a RECYCLED
+src/native.rs	── Crypto built-ins moved to lib/crypto/native (plan-12 phase 1a) ──────
+src/native.rs	── WebSocket + TCP + OpenGL + random glue removed ─────────────────────
+src/native_utils.rs	@P229 (G2): harvest build-script `rustc-link-search` dirs from
+src/native_utils.rs	@P341: also fold each native PACKAGE rlib's path + content, so rebuilding
+src/native_utils.rs	@P350: parse the import section of a `loft --html` wasm and verify every
+src/native_utils.rs	@P359: on a clean checkout the package-under-test's rlib may not
+src/native_utils.rs	@P360: this is a dev convenience — rebuild loft's OWN runtime rlib when
+src/native_utils.rs	@PLAN12 Phase 6b — native target via the shared helper:
+src/native_utils.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/native_utils.rs	P244-windows fix #2 (2026-05-12): use single-segment joins,
+src/ops.rs	@PLAN12 phase 3.5a (2026-05-24) — `RNG` thread-local + the
+src/ops.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/ops.rs	Plan-07 phase 4e.3 — `format_long` with an optional fault-tag
+src/ops.rs	Text ordering compare `<=` — see [`op_lt_text`]. @P347.
+src/ops.rs	`no_i64_sentinel_in_int_functions` removed in C54 Phase 2c. Int
+src/ops.rs	provenances. @P347.
+src/ops.rs	removed. random's drain to lib/random/native/ makes the cdylib
+src/parallel.rs	**Currently dead code** — phase 3b lands the dispatcher that
+src/parallel.rs	ARC.md A4 (closed 2026-05-07) — Stitch::Concat removed.
+src/parallel.rs	ARC.md A4 (closed 2026-05-07) — the binary side has no callers
+src/parallel.rs	Currently unused at runtime — phase 2b's narrow path
+src/parallel.rs	Currently unused at runtime — phase 2b's reference-path switch is
+src/parallel.rs	Plan-06 phase 1 G2 — read a 1/4/8-byte primitive from a row
+src/parallel.rs	Plan-06 phase 1 G2/G3 — input-type dispatch.
+src/parallel.rs	Plan-06 phase 1 G3 — read the `&str` slice that the input row's
+src/parallel.rs	Plan-06 phase 1.5 — use rayon's global work-stealing pool
+src/parallel.rs	Plan-06 phase 1b: workers write text results into a per-worker
+src/parallel.rs	Plan-06 phase 2 — type-driven recursive walk that translates every
+src/parallel.rs	Plan-06 phase 3a (DESIGN.md D1a) — selects the per-call stitch
+src/parallel.rs	Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.
+src/parallel.rs	Plan-06 phase 3c: production paths now use `run_parallel_direct`
+src/parallel.rs	Plan-06 phase 4b': the loft-surface `parallel_for_int` (string-based
+src/parallel.rs	Plan-06 phase 4d.A — wide-inline element reader for tuple,
+src/parallel.rs	See plan-06 DESIGN.md D2.1 (slot-marker design) and DESIGN.md D11c
+src/parallel.rs	The unified runtime entry point that phase 3b lands will be
+src/parallel.rs	Used by phase 7's fused for-par when the body never references `r`, and by
+src/parallel.rs	Used by phase 7's fused for-par when the body references the worker
+src/parallel.rs	`par_for_each`. Lands in plan-06 phase 7.
+src/parallel.rs	analysis). Runtime lands in phase 3e; surface in phase 7e.
+src/parallel.rs	effects. Runtime lands in phase 7b.
+src/parallel.rs	must be par-safe (D8 rule, enforced by phase 5b').
+src/parallel.rs	no production caller. The variants exist so that phase 3b/3d/3e have
+src/parallel.rs	par-safety + side-effect-correctness via phase 5's analyser before
+src/parallel.rs	previously inlined the same 5-line loop.
+src/parallel.rs	result, and by phase 10's value-position lowering (`let r =
+src/parallel.rs	return type; phase 3 collapses those into one polymorphic dispatcher
+src/parallel.rs	── Plan-06 phase 1 step 4.5 — shared run_parallel_* template ─────────────────
+src/parallel.rs	── Plan-06 phase 2 — store-rebase infrastructure ─────────────────────────────
+src/parallel.rs	── Plan-06 phase 3a — Stitch policy enum (DESIGN.md D1) ─────────────────────
+src/parser/builtins.rs	ARC.md A4 (closed 2026-05-07) — `check_light_eligible` and its
+src/parser/builtins.rs	ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
+src/parser/builtins.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/builtins.rs	`collect_callees`) were removed when the light Concat path
+src/parser/collections.rs	(parser/collections.rs:1492-1499) converts to false
+src/parser/collections.rs	@P305 — `coll[key] = value` insert-or-replace for a KEYED
+src/parser/collections.rs	@P308 — a KEYED-collection FIELD whole-assignment `s.h = expr`
+src/parser/collections.rs	@P311: do NOT set the 0x8000 "free source" bit here. Unlike the
+src/parser/collections.rs	@P327 / @P328 native — yield-channel dispatch via packed
+src/parser/collections.rs	@P327 — for-yield types without a single-value null sentinel
+src/parser/collections.rs	@P343: a `vector<fn(...)>` element stores only the
+src/parser/collections.rs	@P343: a `vector<fn(...)>` loop terminates by testing the
+src/parser/collections.rs	@P343: vector-of-fn-ref element read. Mirror the
+src/parser/collections.rs	@P345: a loop variable's type is fully determined by the
+src/parser/collections.rs	@PLAN16 phase 02 — a tuple whose every element classifies into a
+src/parser/collections.rs	@PLAN16 phase 05 — closures (`Type::Function`) join tuples on
+src/parser/collections.rs	ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
+src/parser/collections.rs	B5 (2026-04-13): for a mixed struct-enum element type
+src/parser/collections.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/collections.rs	Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+src/parser/collections.rs	Plan-06 phase 1 G2.1 — narrow-integer vector inputs
+src/parser/collections.rs	Plan-06 phase 1 G4 — accept Type::Function returns
+src/parser/collections.rs	Plan-06 phase 1 G4 — fn-ref returns (Type::Function, 20 bytes)
+src/parser/collections.rs	Plan-06 phase 1 G6: vector<T> returns also route here —
+src/parser/collections.rs	Plan-06 phase 4d.A.2 — fn-ref vector storage is
+src/parser/collections.rs	Plan-06 phase 4d.B — materialise a keyed-collection input
+src/parser/collections.rs	Plan-06 phase 4d.B — par-over-keyed-collection
+src/parser/collections.rs	Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
+src/parser/collections.rs	Plan-07 phase 1 — Span is transparent; recurse into the
+src/parser/collections.rs	Plan-07 phase 4 step 4.6 — for-loop iteration uses
+src/parser/collections.rs	Plan-07 phase 4 step 4.6 — fused-for-par iteration site →
+src/parser/collections.rs	Plan-07 phase 4 step 4.6 — par-worker iteration over the
+src/parser/collections.rs	Plan-07 phase 4 step 4.8 — for-loop iteration over
+src/parser/collections.rs	Plan-07 phase 6 (partial) — name the offending type
+src/parser/collections.rs	`b` is no longer a runtime variable — each reference expands
+src/parser/collections.rs	`iter_next` is consumed by `for_next` — @P327 needs it for the
+src/parser/collections.rs	copy_claims is unimplemented (per @P295), so `keyed_field_kt`
+src/parser/collections.rs	corruption — matching the pre-@P305 behaviour for that case).
+src/parser/collections.rs	gate no longer needs to filter by input kind — every
+src/parser/collections.rs	is no longer a valid (callable, > 0) function reference.
+src/parser/collections.rs	parse_for:1289-1346. The variables persist through the
+src/parser/collections.rs	phase 1 G1: struct-enum returns (Enum variants with
+src/parser/collections.rs	user's loop-variable name can no longer collide on a single
+src/parser/collections.rs	work_checkpoint + clean_work_refs removed — see comment at the
+src/parser/control.rs	(6) @PLAN51 Cluster II — extend the substitution backwards to
+src/parser/control.rs	@P314 — narrow-aware element type (see `append_elem_tp`).
+src/parser/control.rs	@P327 — same encoding as the for-loop's `iterator()` path
+src/parser/control.rs	@P330: a tuple local hoisted to a tuple parameter
+src/parser/control.rs	@P365: a `return [ … ]` vector literal needs the function's return
+src/parser/control.rs	@P374: mirror block_result's tuple→synthetic-struct rewrite for an
+src/parser/control.rs	@P377 / S1 — parse-time NRVO for the intermediate-local return shape.
+src/parser/control.rs	@P377 / S1: collapse `cv = inner_call(...); cv` so the
+src/parser/control.rs	@P377 / S1: see above.
+src/parser/control.rs	@PLAN16 phase 02 — same packed encoding as the
+src/parser/control.rs	@PLAN51 probe 39 — Reference parallel of the Vector
+src/parser/control.rs	B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
+src/parser/control.rs	B5 remaining half (2026-04-14): match-arm
+src/parser/control.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/control.rs	P206 + plan-18: emit the missing-arrow diagnostic, then
+src/parser/control.rs	Plan-07 phase 1, step 1.13 — wrap intrinsic-keyword calls
+src/parser/control.rs	Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
+src/parser/control.rs	Plan-07 phase 4d.2 — defensive-check flow-analysis. When
+src/parser/control.rs	Plan-07 phase 4d.2 — recursive walker that returns `true` if
+src/parser/control.rs	Plan-07 phase 4d.2 — walks `ops` looking for adjacent
+src/parser/control.rs	Plan-07 phase 4f.5 — float / single div / mod peers.
+src/parser/control.rs	Plan-14 phase 07 (P234 runtime): rewrite a body-tail
+src/parser/control.rs	Plan-14 phase 07 (P234 runtime): when the function's expected
+src/parser/control.rs	Plan-22 phase 02d-iii.e + @P319 — skip the
+src/parser/control.rs	RETURN values via deep-copy temps; @P330 fixes
+src/parser/control.rs	Soundness floor for `parallel {}` (plan-57 Bug 2). An arm runs in an
+src/parser/control.rs	and spins (PROBLEMS.md plan-18 phase 01 finding).
+src/parser/control.rs	applied one layer up: @P329 fixed tuple-of-text
+src/parser/control.rs	fall through to the raising peer + log path; phase 4e's
+src/parser/control.rs	hide the host inside a read-projection chain. (See the plan-57 capture
+src/parser/control.rs	lambda (@P319).
+src/parser/control.rs	local is freed. Same logical fix family as @P329,
+src/parser/control.rs	remaining owner — that's the @P377 leak.
+src/parser/control.rs	server/client library) — see the plan-57 deferred-follow-ups.
+src/parser/control.rs	used to report `not null` violations at the tuple literal site.
+src/parser/control.rs	vantage during match-pattern debugging (P206, plan-18).
+src/parser/definitions.rs	8-byte storage. Type::Long is no longer produced.
+src/parser/definitions.rs	@P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
+src/parser/definitions.rs	@PLAN12 — bare `#native` defaults the symbol to the
+src/parser/definitions.rs	@PLAN12 — if the explicit string EQUALS the canonical
+src/parser/definitions.rs	@PLAN52 cluster-IV-Spacial-parser.md. Match the
+src/parser/definitions.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/definitions.rs	I5 (phase 1): factory methods (Self in return without self: Self first param)
+src/parser/definitions.rs	P196 follow-up (2026-05-12): exclude tuples that contain a
+src/parser/definitions.rs	Phase 2c round 10c: `long` has been removed as a user-facing
+src/parser/definitions.rs	Plan-06 phase 4d.A — accept tuple as the inner type of
+src/parser/definitions.rs	Plan-06 phase 4d.A.2 — recognise `fn` as a type-keyword inside
+src/parser/definitions.rs	Plan-06 phase 4d: register the synthetic `__tuple<…>`
+src/parser/definitions.rs	Plan-06 phase 4d: tuple-typed struct fields are now
+src/parser/definitions.rs	Plan-06 phase 5a (DESIGN.md D8.1):
+src/parser/definitions.rs	Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
+src/parser/definitions.rs	Plan-07 phase 4e.2 — undefended fault-site warning.
+src/parser/definitions.rs	Plan-14 phase 07 (P234 runtime): when the declared return type
+src/parser/definitions.rs	Plan-17 phase 01 (B) — bound resolution + t-stub creation now
+src/parser/definitions.rs	Plan-22 phase 02d-iii.e — ACTIVATE the type
+src/parser/definitions.rs	Used to validate that a generic type variable appears in a parameter type.
+src/parser/definitions.rs	`capture_context`, so phase 02c's auto-Reference
+src/parser/definitions.rs	explicit `par_to_vec(...)` (planned phase 11).
+src/parser/expressions.rs	(objects.rs:1306-1361).
+src/parser/expressions.rs	- @P292: when rhs later goes out of scope its storage is freed → v
+src/parser/expressions.rs	- @P394: when this is v's FIRST assignment (its own store not yet
+src/parser/expressions.rs	@P277 — `local_keyed += [literal]`. Without this branch, the
+src/parser/expressions.rs	@P287 — same materialisation, but the LHS is a struct field
+src/parser/expressions.rs	@P292 / @P394 — `local_v = other_var_v` where the RHS is a bare vector
+src/parser/expressions.rs	@P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
+src/parser/expressions.rs	@P295 — `spacial` reassignment is not yet supported (copy_claims
+src/parser/expressions.rs	@P300 — prepend `Set(v, Null)` so the destination keeps a
+src/parser/expressions.rs	@P307 — keyed-collection STRUCT FIELD clear: `s.h = []` where
+src/parser/expressions.rs	@P314 — narrow-aware element type (see `append_elem_tp`).
+src/parser/expressions.rs	@P328 — when yielding a NON-CAPTURING closure into an
+src/parser/expressions.rs	@P376 follow-up — formerly emitted `n_set_store_lock(p, true)`
+src/parser/expressions.rs	@P390 — `v = v[a..b]` self-slice-assign. The plain materialise emits
+src/parser/expressions.rs	@P390 — does `val` reference `Value::Var(target)` anywhere (a READ of the
+src/parser/expressions.rs	@PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
+src/parser/expressions.rs	@PLAN51 Cluster IV: also null-init caller-side hidden-
+src/parser/expressions.rs	@PLAN52 cluster IV (Vec/Hash/Sorted/Index `??`): the original
+src/parser/expressions.rs	@PLAN52 cluster IV-Vec-nested-field-push (2026-05-30): Vector
+src/parser/expressions.rs	@PLAN52 cluster IV-Vec-nested-field-push (2026-05-30): strict
+src/parser/expressions.rs	@PLAN52 cluster IV-Vec-nested-field-push: STRICT rule — concat is
+src/parser/expressions.rs	Boolean / exotic types: phase 02d-iii.e or later.
+src/parser/expressions.rs	Context: phase 02d-iii.b's auto-deref wraps every read of
+src/parser/expressions.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/expressions.rs	LHS REMOVED from this branch. Vector `+= elem` is ambiguous
+src/parser/expressions.rs	Mirrors the keyed-LOCAL clear (@P302, via OpDatabase) but for the
+src/parser/expressions.rs	P250 fix (2026-05-11): when destructuring a synthetic
+src/parser/expressions.rs	P261 (2026-05-13): the third case — `s.v = [literal items]` —
+src/parser/expressions.rs	Phase 09 phase 00 step 0.7 — RawExpr is codegen-internal.
+src/parser/expressions.rs	Phase 09 phase 00 step 0.7 — codegen-internal.
+src/parser/expressions.rs	Plan-07 phase 1 — Span is transparent; recurse into the
+src/parser/expressions.rs	Plan-07 phase 1: compare via unspan() so the same
+src/parser/expressions.rs	Plan-07 phase 1: unspan() so the wrap on `.` (step 1.12) does
+src/parser/expressions.rs	Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+src/parser/expressions.rs	Plan-22 phase 02a (2026-05-12): also save body in pass 1
+src/parser/expressions.rs	Plan-22 phase 02d-iii.c — build the rewrite IR for an
+src/parser/expressions.rs	Plan-22 phase 02d-iii.c — preserve the boxed scalar's
+src/parser/expressions.rs	Plan-22 phase 02d-iii.d — prepend cell allocation when a
+src/parser/expressions.rs	Plan-22 phase 02d-iii.e — wrap a first-set boxed-
+src/parser/expressions.rs	Plan-22 phase 02d-v — extract the boxed-scalar `v_nr`
+src/parser/expressions.rs	Plan-22 phase 02d-vi — bypass the text-special branch
+src/parser/expressions.rs	The deep-copy gives `s` its OWN store, so it no longer borrows
+src/parser/expressions.rs	Used to find which block statement first assigns an inline-ref temporary.
+src/parser/expressions.rs	`addr_mut`. See PROBLEMS.md @P376 follow-up + PLANNING.md S22
+src/parser/expressions.rs	`s.v = fresh` (RHS is a vector variable/expr) used to silently drop
+src/parser/expressions.rs	alias would dangle when a loop-local RHS is freed (the @P292 bug,
+src/parser/expressions.rs	dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
+src/parser/expressions.rs	handles `s.v = []`; the keyed analog used to fall through to the
+src/parser/expressions.rs	lookup at lines 1783-1822. The struct-field twin at lines
+src/parser/expressions.rs	match. (@P287)
+src/parser/expressions.rs	proven @P287 struct-field pattern), then `OpClearVector + OpAppendVector`
+src/parser/expressions.rs	release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
+src/parser/expressions.rs	shapes that phase 02d-iii.b's `auto_deref_boxed_scalar`
+src/parser/expressions.rs	slice / range / collection-iteration shape). (@P287)
+src/parser/expressions.rs	still takes the clear+refill path below. (Mirrors the @P295
+src/parser/expressions.rs	the for-loop destructure in collections.rs:1289-1304).
+src/parser/expressions.rs	the same shape that lines ~1020-1033 below build for
+src/parser/expressions.rs	variant soundly. Used to detect a self-aliasing slice-assign (`v = v[a..b]`),
+src/parser/expressions.rs	version; pass 1's body is only consulted by phase 01's
+src/parser/expressions.rs	~1159-1194 handles the same shape for fields after-the-fact;
+src/parser/fields.rs	(same reason plan-17 (B) bounded-T dispatch runs on both
+src/parser/fields.rs	@P278/P281 — pass-1 Unknown receiver: consume the
+src/parser/fields.rs	@P281 — when the dot-access is followed by `(args)`
+src/parser/fields.rs	@P285 — a keyed-collection lookup RESULT is nullable (an absent
+src/parser/fields.rs	@P285 — see the Hash/Spacial arm above; the lookup result is nullable.
+src/parser/fields.rs	@P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
+src/parser/fields.rs	@PLAN58 cluster-I (boolean outer-handle stride): a vector-typed element
+src/parser/fields.rs	B2-runtime (2026-04-13): `Sig.Idle` on a mixed struct-enum
+src/parser/fields.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/fields.rs	Likely also closes plan-17 (A) caveat (implicit
+src/parser/fields.rs	Plan-07 phase 4 step 4.6 — this is the for-loop
+src/parser/fields.rs	Plan-07 phase 4h — count this read for the
+src/parser/fields.rs	Plan-17 phase 01 (B) — bounded-T method dispatch must run
+src/parser/fields.rs	Plan-19 phase 03 — method-on-parent-enum dispatch. When
+src/parser/fields.rs	arms below, @P285) so `v[i] ?? default` is NOT flagged
+src/parser/fields.rs	documented at parser/collections.rs:1492-1499.
+src/parser/fields.rs	vantage during method-dispatch debugging (plan-17 B).
+src/parser/mod.rs	(mirrors the parse-time concrete path at `vectors.rs:1532-1535`).
+src/parser/mod.rs	@P296-sibling (Windows) — build the package paths with
+src/parser/mod.rs	@P301 — struct-enums are heap records like
+src/parser/mod.rs	@P314 — the element STORAGE type id to pass as the `OpAppendVector` /
+src/parser/mod.rs	@P320: keyed-remove `coll[key] = null` lowers to
+src/parser/mod.rs	@P320: keyed-remove `coll[key] = null` → `OpHashRemove(coll, …)`;
+src/parser/mod.rs	@PLAN12 Phase 6.6 — auto-install on `use`.
+src/parser/mod.rs	@PLAN12 Phase 6.6 — project-mode lockfile resolution.
+src/parser/mod.rs	@PLAN12 Phase 6.6 — sidecar lockfile next to the script.
+src/parser/mod.rs	@PLAN12 Phase 6.6 — walk-up project root detection.
+src/parser/mod.rs	@PLAN12 Phase 6.7 — dedupe set for the per-invocation advisory
+src/parser/mod.rs	@PLAN12 Phase 6.7 — per-invocation advisory classifier.
+src/parser/mod.rs	@PLAN12 phase 2 step 2 (2026-05-24) — make
+src/parser/mod.rs	@PLAN12 phase 2 step 2 (2026-05-24) — same manifest-driven
+src/parser/mod.rs	@PLAN12 phase 3.5a wiring (2026-05-24): closes the "loft install →
+src/parser/mod.rs	@PLAN12 phase 3.5b (2026-05-24) — for path-deps
+src/parser/mod.rs	@PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
+src/parser/mod.rs	@PLAN48 P2: literal exemption — true when `code` is a constant integer that
+src/parser/mod.rs	@PLAN48 P2: render an integer type with its explicit narrow alias
+src/parser/mod.rs	@PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
+src/parser/mod.rs	@PLAN49 T1 — set the breadcrumb phase + initial file/line so
+src/parser/mod.rs	@PLAN51 Cluster IV: tag this work-ref so parse_code's
+src/parser/mod.rs	@PLAN54 arc E — paths of every source file parsed (stdlib + lazily-loaded
+src/parser/mod.rs	@PLAN54 arc E — record the input file for the whole-program cache key.
+src/parser/mod.rs	@PLAN54 arc E — set by the driver (`main.rs`) only when the whole-program
+src/parser/mod.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/mod.rs	Mirrors `vectors.rs:1161-1178` for perf parity with
+src/parser/mod.rs	Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
+src/parser/mod.rs	P239 fix (2026-05-11): the for-loop iter-termination
+src/parser/mod.rs	P241 fix (2026-05-11) — slice 2: integer-only. POST-PASS that
+src/parser/mod.rs	P241 fix (2026-05-11) — slice 2: integer-only. Walks a Block's
+src/parser/mod.rs	P241 fix (2026-05-11): post-substitution rewrite of the
+src/parser/mod.rs	P251 fix (2026-05-11): for `Value::Var(v)` where `v`
+src/parser/mod.rs	P252 fix (2026-05-11): also recognise `OpGetVectorNullable`
+src/parser/mod.rs	Plan-06 phase 4d.A.2 — fn-ref vector elements store the
+src/parser/mod.rs	Plan-06 phase 4d: emit the per-element OpSet* sequence for a
+src/parser/mod.rs	Plan-06 phase 4d: nested tuple element — recurse into
+src/parser/mod.rs	Plan-06 phase 4d: tuple struct field assignment.
+src/parser/mod.rs	Plan-06 phase 4d: tuple struct field read. Each
+src/parser/mod.rs	Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
+src/parser/mod.rs	Plan-07 phase 1: unspan() so wraps on `[` / `.` (steps 1.11
+src/parser/mod.rs	Plan-07 phase 4h — emit `not null` field-reminder hints
+src/parser/mod.rs	Plan-07 phase 4h — per-(struct_d_nr, attr_idx) read counter.
+src/parser/mod.rs	Plan-07 phase 4h — set of (struct_d_nr, attr_idx) that have at
+src/parser/mod.rs	Plan-07 phase 4h — site of the most recently parsed field
+src/parser/mod.rs	Plan-07 phase 4h — walk user struct definitions and emit
+src/parser/mod.rs	Plan-07 phase 5 suggestions. Find a similar field name on
+src/parser/mod.rs	Plan-07 phase 5 suggestions. Find a similar type name —
+src/parser/mod.rs	Plan-07 phase 5 suggestions. Find a similar user-defined
+src/parser/mod.rs	Plan-07 phase 6 (partial) — "expected E, got G on context"
+src/parser/mod.rs	Plan-17 phase 01 (A) — predict the substituted return type of a
+src/parser/mod.rs	Plan-17 phase 01 (A) — propagate the substituted return type
+src/parser/mod.rs	Plan-17 phase 01 — substitute through tuple element types so a
+src/parser/mod.rs	Plan-22 phase 02b (2026-05-12): auto-Reference field
+src/parser/mod.rs	Spine step 7 (DONE 2026-04-29): emits `Level::Error` on
+src/parser/mod.rs	Trace point: full instantiation result. Used during plan-17
+src/parser/mod.rs	Used to validate constant names
+src/parser/mod.rs	`par_to_vec(...)` helper (planned phase 11).
+src/parser/mod.rs	`set_field_check` (line 3202-3216).
+src/parser/mod.rs	`tests/`; otherwise `""`. Used to locate the project-root `lib/`
+src/parser/mod.rs	bytecode dispatch (`state/codegen.rs:2207-2217`, which
+src/parser/mod.rs	concrete-T dispatch in `parser/vectors.rs:1560-1599`.
+src/parser/mod.rs	inference of generic call sites. Used during plan-17 (A)
+src/parser/mod.rs	instead of OpCopyRecord. P255 (2026-05-12): also handle
+src/parser/mod.rs	lib_plan-29 W1c (2026-05-29) — register WASM bridge crate +
+src/parser/mod.rs	lib_plan-29 W1c — same population in the sibling-probe path
+src/parser/mod.rs	lib_plan-29 W2 (2026-05-29) — resolve `[wasm.bridge].host_js`
+src/parser/mod.rs	lib_plan-29 W2 — host_js mirror.
+src/parser/mod.rs	mirrors the @P266-style guard below: only populate defs
+src/parser/mod.rs	narrow-int dispatch mirrors `vectors.rs:1576-1586`.
+src/parser/mod.rs	— plan-07 phase 4 step 4.6 swapped the for-loop iter step
+src/parser/objects.rs	(copy_claims panics for it, per @P295).
+src/parser/objects.rs	(per C66 + DESIGN_DECISIONS 2026-05-11). Walk the
+src/parser/objects.rs	(set by phase 02d-iii.a's flip helper for mutated-
+src/parser/objects.rs	@P279 — when pass-1 sees an Unknown value being assigned
+src/parser/objects.rs	@P295). Mirrors the keyed-LOCAL `keyed_kt` logic in
+src/parser/objects.rs	@P308 — a keyed-collection field (hash/sorted/index)
+src/parser/objects.rs	@P308 — the specific keyed-collection db type id (the id
+src/parser/objects.rs	@P335: functions are stored mangled as `n_<name>` and are reached
+src/parser/objects.rs	@P335: the RAW fallback resolves names stored un-prefixed,
+src/parser/objects.rs	@P392: the un-annotated form `<name> = …` is caught by the
+src/parser/objects.rs	B2-runtime (2026-04-13): in a mixed struct-enum,
+src/parser/objects.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/objects.rs	HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
+src/parser/objects.rs	P257 (2026-05-12): reject collection-typed captures with a
+src/parser/objects.rs	Plan-07 phase 4e.1 — format strings are the user's
+src/parser/objects.rs	Plan-07 phase 5: skip suggestions for very short names
+src/parser/objects.rs	Plan-07 phase 6 (partial) — name the value side first
+src/parser/objects.rs	Plan-22 phase 02d-iii.b — read auto-deref for boxed
+src/parser/objects.rs	Plan-22 phase 02d-iii.b — wrap a resolved variable read
+src/parser/objects.rs	bare DbRef — phase 02d-ii's silent gap for exotic
+src/parser/objects.rs	phase 02d-iii.a's flip).
+src/parser/objects.rs	that closed @P281 / @P278 (same architectural fix:
+src/parser/operators.rs	(unspanned) no longer is `Var(orig_var)`.
+src/parser/operators.rs	@P313: do NOT set 0x8000 for an inline struct-literal `Block "Object"`
+src/parser/operators.rs	@P316 — pick the coalesce result type. When the value and default are
+src/parser/operators.rs	@P368 follow-up — when the dividend is float / single and the divisor
+src/parser/operators.rs	@P368 — a literal divisor is statically known; only a *non-zero* literal
+src/parser/operators.rs	@P368 — wording: not "integer" (the same `/` warning covers float
+src/parser/operators.rs	@PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
+src/parser/operators.rs	@PLAN52 cluster I iteration 2 (2026-05-30): name `__ncc_N`
+src/parser/operators.rs	@PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
+src/parser/operators.rs	@PLAN52 cluster IV interpret (2026-05-30, iteration 3): extend
+src/parser/operators.rs	@PLAN52 cluster IV-Tuple (2026-05-30): Tuple values are not heap-DbRef
+src/parser/operators.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/operators.rs	Plan-07 phase 1, step 1.B.1 — capture the operator's source
+src/parser/operators.rs	Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
+src/parser/operators.rs	Plan-07 phase 1, steps 1.11 + 1.12 — capture the chaining
+src/parser/operators.rs	Plan-07 phase 1, steps 1.11 + 1.12 — wrap the chained
+src/parser/operators.rs	Plan-07 phase 1: unspan() so wraps on `.`
+src/parser/operators.rs	Plan-07 phase 4d — vector / text indexing followed by `??`.
+src/parser/operators.rs	Plan-07 phase 4e.1 — recursive variant of
+src/parser/operators.rs	Plan-07 phase 4e.2 — entry point. Called from `parse_function`
+src/parser/operators.rs	Plan-07 phase 4e.2 — undefended fault-site compile-time warning
+src/parser/operators.rs	Plan-07 phase 4f.5 — float / single div / mod by zero
+src/parser/operators.rs	Plan-07 phase 4f.5 — float / single div / mod peers.
+src/parser/operators.rs	Plan-07 phase 4h — if the `??` LHS is the just-emitted
+src/parser/operators.rs	Plan-22 phase 02d-iv — character / text cell writes
+src/parser/operators.rs	Self-concat reassign `v = v + [...]` (sibling of @P390's
+src/parser/operators.rs	True when `src` is a `len(<Var>)` call — used to recognise the
+src/parser/operators.rs	`DESIGN_DECISIONS.md` 2026-05-11: format strings are the user's
+src/parser/operators.rs	churn). Same shape as the @P311 OpSetKeyed fix, here on the
+src/parser/operators.rs	matching the @P390 / @P287 temp precedent.
+src/parser/operators.rs	on both parser passes — pass-stable, no @P384 alloc divergence.
+src/parser/operators.rs	plan-57 cluster II — a literal / comprehension / struct-vector
+src/parser/operators.rs	prefix instead). Sibling of @P390's self-slice. Materialise
+src/parser/operators.rs	sequencing. Tracked in plan-07 phase 4e.3 row.
+src/parser/operators.rs	to swap the inner op. @P356: this list previously covered only
+src/parser/operators.rs	warning no longer fires on a statically-safe float division.
+src/parser/vectors.rs	! 3729-3755) handles today's `p86_lambda_capture_*`
+src/parser/vectors.rs	! Plan-22 phase 01 — verify `collect_mutated_captures` populates
+src/parser/vectors.rs	! Plan-22 phase 02d-i — verify the parent-function
+src/parser/vectors.rs	! Plan-22 phase 02d-ii — verify `synthesize_cell_structs`
+src/parser/vectors.rs	! Plan-22 phase 02d-iii.a — verify
+src/parser/vectors.rs	! Plan-22 phase 02d-iii.b — verify
+src/parser/vectors.rs	! Plan-22 phase 02d-iii.c — verify
+src/parser/vectors.rs	! Plan-22 phase 02d-iii.d — verify
+src/parser/vectors.rs	! be removed without a regression.
+src/parser/vectors.rs	! representative shapes phase 02 will consume.
+src/parser/vectors.rs	! representative shapes phase 02d-iii will consume. No
+src/parser/vectors.rs	"Scalar" set (per phase 02d design):
+src/parser/vectors.rs	(exotic integer widths) — phase 02d-ii's silent gap.
+src/parser/vectors.rs	- Text: phase 02d-vi added a bypass guard in
+src/parser/vectors.rs	2 GiB word limit (`src/store.rs:643`). Mirror the @P327 fix in
+src/parser/vectors.rs	@P213/@P214) and currently CRASHES at runtime ("Write to read-only
+src/parser/vectors.rs	@P274 — non-text/non-character parts (integer / float /
+src/parser/vectors.rs	@P274 — see RefVar branch above.
+src/parser/vectors.rs	@P314 — narrow-aware element type (see `append_elem_tp`).
+src/parser/vectors.rs	@P315 — `declared` is true when the element type comes from a typed
+src/parser/vectors.rs	@P315 — the element type is DECLARED (typed local / struct
+src/parser/vectors.rs	@P325 — coroutine comprehensions `[for v in gen() { … }]` had NO
+src/parser/vectors.rs	@P380 (generalized, plan-58 cluster II): a freshly-created
+src/parser/vectors.rs	@P380 handle-zero is now hoisted above (after the element
+src/parser/vectors.rs	@P395 — a parenthesised vector concat consumed by a trailing
+src/parser/vectors.rs	@PLAN58 III-a: propagate the declared element type `in_t` into the
+src/parser/vectors.rs	@PLAN58 cluster IV: a NESTED comprehension's body is a vector (a 12-byte
+src/parser/vectors.rs	@PLAN58 cluster IV: use the SAME element-type `known` as the proven
+src/parser/vectors.rs	@PLAN58 cluster-I (boolean outer-handle stride): for a nested
+src/parser/vectors.rs	A typed standalone empty `[]` (the @P365 fall-through above) has no
+src/parser/vectors.rs	Case B (Reference) — `s` is a struct; phase 02c handles
+src/parser/vectors.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/parser/vectors.rs	Int(1)])`; phase 02d-v's `extract_boxed_var_from_lhs`
+src/parser/vectors.rs	P260 (2026-05-13): ALL Reference captures
+src/parser/vectors.rs	Plan-06 phase 4d.A.2 — fn-ref in a vector stores as
+src/parser/vectors.rs	Plan-06 phase 4d.A.2 — fn-ref vector elements store
+src/parser/vectors.rs	Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+src/parser/vectors.rs	Plan-22 phase 01 — walk the lambda body's IR and identify
+src/parser/vectors.rs	Plan-22 phase 02c (2026-05-12): collect mutations BEFORE
+src/parser/vectors.rs	Plan-22 phase 02c (2026-05-12): for each mutated Reference
+src/parser/vectors.rs	Plan-22 phase 02c (2026-05-12): the captured-name list comes
+src/parser/vectors.rs	Plan-22 phase 02d-i (2026-05-12): accumulate scalar
+src/parser/vectors.rs	Plan-22 phase 02d-i — accumulate the names of scalar-typed
+src/parser/vectors.rs	Plan-22 phase 02d-ii — canonical cell-struct name for a scalar
+src/parser/vectors.rs	Plan-22 phase 02d-ii — canonical type for the cell's `value`
+src/parser/vectors.rs	Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
+src/parser/vectors.rs	Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct exists
+src/parser/vectors.rs	Plan-22 phase 02d-iii.a — at the start of pass 2 for the
+src/parser/vectors.rs	Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
+src/parser/vectors.rs	Plan-22 phase 02d-iii.e — pre-box `captured_names`
+src/parser/vectors.rs	Plan-22 phase 02d-iii.e — replace `captured_names` entries
+src/parser/vectors.rs	Plan-22 phase 02d-vi — text is now flipped via the
+src/parser/vectors.rs	Plan-22 phase 02d-vii — skip text-cell boxing when the
+src/parser/vectors.rs	Plan-22 phase 02d-vii — symmetric guard with
+src/parser/vectors.rs	Plan-22 phase 02d-vii — text-skip when parent
+src/parser/vectors.rs	Returns the conventional name `__cell_<T>` used to box a scalar
+src/parser/vectors.rs	Struct (Reference) captures are handled by phase 02c's
+src/parser/vectors.rs	The non-empty dep activates phase 02b's auto-Reference
+src/parser/vectors.rs	`Reference(__cell_int, _)` from creation, so phase 02c's
+src/parser/vectors.rs	`s` is a struct (Reference type) — handled by phase 02c
+src/parser/vectors.rs	back through the auto-Reference path (phase 02b/02c encoding).
+src/parser/vectors.rs	capture (per phase 01's `mutated_captures` walker, populated
+src/parser/vectors.rs	cell struct via the same machinery phase 02d-ii uses.
+src/parser/vectors.rs	for proper liveness tracking. For phase 02c's case-B
+src/parser/vectors.rs	in pass 1 by phase 02a), the attribute type is
+src/parser/vectors.rs	names queued by phase 02d-i's accumulator).
+src/parser/vectors.rs	other paths (Reference: phase 02c; Function: phase 02c via
+src/parser/vectors.rs	queued. `r` (read-only) is excluded by phase 01's
+src/parser/vectors.rs	ran first — the original phase 01 path) OR from the lambda's
+src/parser/vectors.rs	silently skipped — phase 02d-iii's outer-binding rewrite
+src/parser/vectors.rs	the explicit `Mutable<T>` path in phase 05).
+src/parser/vectors.rs	type threaded in (@P365) — falls through to the normal construction
+src/platform.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/platform.rs	Used to normalise incoming paths that may carry the foreign separator.
+src/platform.rs	double compilation is removed — see PERFORMANCE.md § Design: BUILD1.
+src/png_store.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/radix_tree.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/registry.rs	The part after the `:` in a status field (e.g. `"CVE-2026-001"` from `"yanked:CVE-2026-001"`).
+src/registry_advisories.rs	! "published": "2026-05-30T08:00:00Z",
+src/registry_advisories.rs	! "updated": "2026-05-31T12:00:00Z",
+src/registry_advisories.rs	! @PLAN12 Phase 6.7 — security advisory channel.
+src/registry_index.rs	@P332: resolve the home base from `LOFT_HOME` FIRST, falling back to
+src/registry_index.rs	@PLAN12 Phase 6.11 — support `file://` URLs for offline
+src/registry_keys.rs	! removed in a subsequent loft release.
+src/runtime_error.rs	! Plan-07 phase 4 — typed runtime errors.
+src/runtime_error.rs	! fault sites. After phase 4, every fault attributable to user code is
+src/runtime_error.rs	Plan-07 phase 4g.1 / 4g.2 — call-chain at raise time
+src/scopes.rs	(@P297), the result is `Insert([Set(__lift_N, …), final])` — a
+src/scopes.rs	(plan-57 cluster I) so the block-exit `free_vars` sweep frees its store
+src/scopes.rs	(state/codegen.rs:1186-1238) — OpConvRefFromNull +
+src/scopes.rs	@P297 — a USER struct-returning call (`n_*` with a body) passed
+src/scopes.rs	@P302 — a keyed-collection local backed by its OWN store
+src/scopes.rs	@P303 — a user fn returning a struct-enum by FRESH owned
+src/scopes.rs	@P322 — when the function body ends with a nested
+src/scopes.rs	@P329: tuple-of-text return — when an element is a non-literal
+src/scopes.rs	@P376 follow-up — no const-param unlock emitted anymore (matching
+src/scopes.rs	@P378(a) — INVERSE of `paired_witness` for the case where the
+src/scopes.rs	@P378(a) — `v` is an inner-scoped witness whose store
+src/scopes.rs	@P378(a) — witness `v` is INNER-scoped (e.g.
+src/scopes.rs	@P378(b) — a heap-returning tail `If` whose CONDITION lifted a
+src/scopes.rs	@P393 (t9) — a loft-source fn OR `t_` method returning an OWNED vector
+src/scopes.rs	@PLAN52 cluster I iteration 2 (2026-05-30): honor skip_free
+src/scopes.rs	@PLAN53 cluster 2 / S4: in aligned mode each arg + the return-address
+src/scopes.rs	@PLAN53 cluster 2: remap the var-numbers these IR nodes carry through
+src/scopes.rs	@PLAN53 — the aligned V2 allocator is the ONLY allocator. Compute the
+src/scopes.rs	ARC.md A4 (closed 2026-05-07) — `parallel_for_light` was
+src/scopes.rs	Currently no production caller — phase 5b proper hooks it.
+src/scopes.rs	Currently no production caller — phase 5b proper hooks the
+src/scopes.rs	Currently no production caller — phase 5b' wires this in place
+src/scopes.rs	EXCEPTION (@P302): keyed collections — `s = []` lowers to
+src/scopes.rs	Fix A (plan-57 / @PLN2 follow-up): a store whose null-init *declaration* would be
+src/scopes.rs	Plan-04 close-out (2026-04-22): V1 remains the slot
+src/scopes.rs	Plan-06 phase 5b minimal — purity-driven `is_par_safe` classifier.
+src/scopes.rs	Plan-06 phase 5b' G5 — calling a ParentWrite stdlib fn
+src/scopes.rs	Plan-06 phase 5b' G5 — for a `ParentWrite` callee, treat the
+src/scopes.rs	Plan-06 phase 5b' G5 — heap-typed return values are passed
+src/scopes.rs	Plan-06 phase 5b' — DEEP parent-write check for par() workers.
+src/scopes.rs	Plan-06 phase 5b' — precise shallow par-safety check.
+src/scopes.rs	Plan-06 phase 5d (DESIGN.md D8 diagnostic shapes) — explains
+src/scopes.rs	Plan-06 phase 5e — monotonic fixed-point over the call graph.
+src/scopes.rs	Used by phase 5b proper's codegen integration: when
+src/scopes.rs	`free_vars` sweep frees the store there. Empty on phase 1; populated from
+src/scopes.rs	`gen_set_first_ref_var_copy` (state/codegen.rs:1025-1033)
+src/scopes.rs	`trigger` allocates. Their scope-exit `OpFreeRef` is REMOVED, not kept as an
+src/scopes.rs	a hidden-param return (@P301 via-local: ownership handled by
+src/scopes.rs	and set each variable's scope. Runs once normally; plan-57 cluster I re-runs
+src/scopes.rs	codegen has two sub-paths (state/codegen.rs:1039-1066):
+src/scopes.rs	direct calls are checked. Plan-06 phase 5b' (eventual)
+src/scopes.rs	empty / garbage bytes. See PROBLEMS.md @P329.
+src/scopes.rs	fn-ref` in native codegen, @P258/@P259 territory).
+src/scopes.rs	in the dep list (`src/parser/mod.rs:1924-1928`) so the
+src/scopes.rs	pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
+src/scopes.rs	the single-valued `dep` no longer records because its holding local was
+src/scopes.rs	there instead of at function exit. `confined` is empty on phase 1, so
+src/scopes.rs	trick — phase 5e replaces with proper monotonic fixed-point).
+src/scopes.rs	── Plan-06 phase 5b — par-safety analyser (DESIGN.md D8) ────────────────────
+src/scopes.rs	── Plan-06 phase 5b' shallow check (precise, no false positives) ────────────
+src/scopes.rs	── Plan-06 phase 5d — par-safety diagnostic helpers (DESIGN.md D8) ──────────
+src/scopes.rs	── Plan-06 phase 5e — fixed-point par-safety (DESIGN.md D8 phase 5e) ────────
+src/stack.rs	@PLAN53 cluster 2 / S4 — codegen mirror of `State::stack_step`: one
+src/stack.rs	@PLAN53 cluster 2 / S4: a mutable param / the return value each
+src/stack.rs	Both terms are `size()`-derived (see @PLAN53 cluster 2 / S1):
+src/stack.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/startup_cache.rs	! @PLAN54 arc D / D2b — opt-in stdlib startup cache wiring.
+src/startup_cache.rs	! skipping the parse of `default/` entirely (~12× faster, see § arc D probe).
+src/startup_cache.rs	@PLAN54 G2/M6 — pin the build signature first so a binary upgrade
+src/startup_cache.rs	@PLAN54 G2/M6 — the first line pins THIS build's signature. A binary
+src/startup_cache.rs	@PLAN54 G2/M6 — with LOFT_CODEGEN_STORE, do a *skeleton* load: mmap the
+src/startup_cache.rs	─── whole-program cache (arc E) ─────────────────────────────────────────────
+src/state/codegen.rs	(reassignment — the @P302 `s = []` clear): the slot already holds a
+src/state/codegen.rs	2026-04-28 element_offsets update). Reaches this branch only
+src/state/codegen.rs	@P283 — the same dispatch is needed for `OpAppendText`
+src/state/codegen.rs	@P290 — protect caller args from being freed by the
+src/state/codegen.rs	@P290 — soft free-protect over the deep-copy; writes / claims
+src/state/codegen.rs	@P302 — `s = []` on a populated keyed local clears it IN PLACE
+src/state/codegen.rs	@P305 — keyed collections passed by `&` are DbRef-backed
+src/state/codegen.rs	@P327 — `value_size` packs two fields (encoding from
+src/state/codegen.rs	@P328 — a non-capturing closure has no closure variable; push
+src/state/codegen.rs	@P346: assigning "" to a RefVar(Text) is NOT a no-op — it
+src/state/codegen.rs	@P356: an EXPRESSION if whose true branch produces a value but whose
+src/state/codegen.rs	@P377-CORRUPTION: skip when this is an S1-substituted call
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — collect caller-hidden-buf
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — collect caller-hidden-buf work-ref
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — post-wrap free + sentinel
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — post-wrap free + sentinel reset
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — post-wrap sentinel reset.
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — require VISIBLE-arg dep for
+src/state/codegen.rs	@PLAN51 Cluster II Step 2 — require at least one
+src/state/codegen.rs	@PLAN51 Cluster II/III — also skip the pre-Set OpFreeRef
+src/state/codegen.rs	@PLAN53 S4: 20B fn-ref push − 16B `text` account.
+src/state/codegen.rs	@PLAN53 S4: both occupy stepped spans.
+src/state/codegen.rs	@PLAN53 S4: the arg occupies a stepped span on the stack.
+src/state/codegen.rs	@PLAN53 S4: the block result occupies a stepped span.
+src/state/codegen.rs	@PLAN53 cluster 2 / S4 (2b+2c): OpIterate pushes the start+finish
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: a DbRef push occupies a stepped span; the
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: args were pushed at stepped spans.
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: args_size is the runtime frame-base
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: each arg + the return-address slot
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: each arg occupies a stepped span (Σ step).
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: round the frame high-water mark to 8 so the
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: stepped DbRef span (see emit_push_sentinel).
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: stepped DbRef span; dep_pos shifts by the
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: stepped arg span (identity when off).
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: the args + the create-stack dest DbRef each
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: the iterator-pushed value (+4) and the
+src/state/codegen.rs	@PLAN53 cluster 2 / S4: the value occupies a stepped eval span;
+src/state/codegen.rs	@PLAN54 G2 — Block/Loop lower through the IrBlock handle; TupleGet/
+src/state/codegen.rs	@PLAN54 G2 — list-child + scalar arms. Insert/Tuple iterate the
+src/state/codegen.rs	@PLAN54 G2 — lower one IR node. Dispatches entirely on `node.kind()`
+src/state/codegen.rs	@PLAN54 G2 — single-child / compound delegating arms: dispatch +
+src/state/codegen.rs	@PLAN54 G2/M2/M5 — store-backed lowering. When `byte_code_from`
+src/state/codegen.rs	@PLAN54 G2/M3.15 — materialise-at-boundary (see generate_set).
+src/state/codegen.rs	@PLAN54 G2/M3.15 — materialise-at-boundary. generate_set's body is an
+src/state/codegen.rs	@PLAN54 G2/M3.4 — Span passthrough + the two never-reachable
+src/state/codegen.rs	@PLAN54 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
+src/state/codegen.rs	@PLAN54 G2/M6 — read the body's SHAPE (null / empty-block) from the
+src/state/codegen.rs	B7 (2026-04-13): set up the same frame layout the regular
+src/state/codegen.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/state/codegen.rs	Handle-based recursion entry (@PLAN54 G2): depth-guard + dispatch on the
+src/state/codegen.rs	OpCopyRecord 0x8000 already freed the source or @P290
+src/state/codegen.rs	Phase 09 phase 00 step 0.7 — RawExpr is created only by native
+src/state/codegen.rs	Plan-06 phase 4d: nested tuple element — push
+src/state/codegen.rs	Plan-07 phase 1 step 1.20 — record the entry pc → source
+src/state/codegen.rs	Plan-07 phase 4 step 4.6 — `OpGetVectorNullable` /
+src/state/codegen.rs	Slot-move is removed in B.3.h, at which point `slot_offset`
+src/state/codegen.rs	`n_protect_store_frees` so the two semantics no longer collide.
+src/state/codegen.rs	`scan_set` no longer elides keyed `Set(v, Null)`. Without this
+src/state/codegen.rs	bytecode-level overhead. Once slot-move is removed, the
+src/state/codegen.rs	or any tuple containing a tuple) previously panicked here
+src/state/codegen.rs	position so phase 3's runtime-error printer can surface
+src/state/codegen.rs	push. @PLAN53 S4: the yielded value occupied a stepped span.
+src/state/codegen.rs	self). Once slot-move is removed, this becomes the
+src/state/codegen.rs	this signature; @PLAN54 G2/M5's store-backed entry will call
+src/state/debug.rs	@PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
+src/state/debug.rs	@PLAN53 cluster 2 / S4: match execute_argv's aligned entry base.
+src/state/debug.rs	@PLAN53 cluster 2 / S4: the entry frame base is the STEPPED
+src/state/debug.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/state/debug.rs	is set; used to emit `[alloc #N at pc=…]` and matching `[free #N
+src/state/io.rs	@P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
+src/state/io.rs	@P305 — `coll[key] = value` insert-or-replace into a keyed
+src/state/io.rs	@P317 — LOFT_LOG=copy_check: warn if the deep copy changed any nested
+src/state/io.rs	@P334 fix (2026-05-29): narrowed from `target_arch = "wasm32"` to
+src/state/io.rs	@P349: consult VIRT_FS first — `compile_and_run` populates it with
+src/state/io.rs	@P372: size the target record to the struct, not a fixed 8 words.
+src/state/io.rs	@PLAN51 Cluster II Step 2 — handle u16::MAX sentinel inputs.
+src/state/io.rs	@PLAN51 Cluster II — true alias copy is a no-op. When data
+src/state/io.rs	@PLAN53 cluster 2 / 2f: get_var adds NO step, so this finish-read
+src/state/io.rs	@PLAN53 cluster 2 / 2f: this is the lone non-self-compensating
+src/state/io.rs	@PLAN53 cluster 2 / S4 (2b+2c): push the iterator state as ONE
+src/state/io.rs	@PLAN53 cluster 2 / S4 (2d): format_db pops the composite value's 12-byte
+src/state/io.rs	@PLAN53 cluster 2 / S4 (2d): see format_database — back up by the stepped
+src/state/io.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/state/io.rs	Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file
+src/state/io.rs	Removed the last element in iteration order; signal end-of-iteration
+src/state/mod.rs	(see `src/generation/calls.rs`). @P275.
+src/state/mod.rs	@P294: cached byte-capacity of the value-stack store (`stack_cur`).
+src/state/mod.rs	@P294: ensure the value-stack store (`stack_cur`) buffer can hold a
+src/state/mod.rs	@P294: native lib fns push their results through the stack store
+src/state/mod.rs	@P294: the frame-snapshot copy + the Created-status zone
+src/state/mod.rs	@P317 — aggregate leaked stores BY TYPE, most-leaked first, so the
+src/state/mod.rs	@P356 — record a RECOVERABLE fault (out-of-bounds / negative vector
+src/state/mod.rs	@PLAN49 T1 — runtime phase breadcrumb. One call per
+src/state/mod.rs	@PLAN53 cluster 2 / 2h: copy the input bytes as ONE CONTIGUOUS chunk.
+src/state/mod.rs	@PLAN53 cluster 2 / 2i: the worker body's frame reserves the tuple arg
+src/state/mod.rs	@PLAN53 cluster 2 / S4 (2a): codegen lays the return slot at a STEPPED span
+src/state/mod.rs	@PLAN53 cluster 2 / S4 (R4): push the value_size zero bytes as
+src/state/mod.rs	@PLAN53 cluster 2 / S4 — alignment invariant guard. In aligned
+src/state/mod.rs	@PLAN53 cluster 2 / S4 — homegrown alignment guard (debug + aligned only).
+src/state/mod.rs	@PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance, always
+src/state/mod.rs	@PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
+src/state/mod.rs	@PLAN53 cluster 2 / S4: 8-rounded stepped spans, mirroring
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the entry frame base must be 8-aligned in
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the returned value occupies a stepped slot
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the returned value sits at the LOW end of
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the value slid to `base` occupies a stepped slot.
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the value's footprint on the stack is its
+src/state/mod.rs	@PLAN53 cluster 2 / S4: the yielded value sits in a stepped slot at TOS.
+src/state/mod.rs	@PLAN53 cluster 2: the worker's `copy_result`/`fn_return` advanced TOS by
+src/state/mod.rs	@PLAN53 cluster-1 Miri finding) — write through the unaligned
+src/state/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/state/mod.rs	PKG.1: Replace a previously registered function (e.g. a stub) with a
+src/state/mod.rs	Plan-06 phase 1 G2 — primitive-input worker dispatch.
+src/state/mod.rs	Plan-06 phase 1 G3 — text-input worker dispatch.
+src/state/mod.rs	Plan-06 phase 1 G4 — variable-width-return worker dispatch.
+src/state/mod.rs	Plan-06 phase 4d.A — wide-inline-input worker dispatch.
+src/state/mod.rs	Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
+src/state/mod.rs	Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+src/state/mod.rs	Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
+src/state/mod.rs	Plan-07 phase 4 step 4.1 — raise a typed runtime error from a
+src/state/mod.rs	Plan-07 phase 4 step 4.6 — bounds-checked variant of
+src/state/mod.rs	Plan-07 phase 4 step 4.6 — bounds-checked vector index that raises
+src/state/mod.rs	Plan-07 phase 4 step 4.8 — bounds-checked text index. `text[i]`
+src/state/mod.rs	Plan-07 phase 4 — typed runtime error halt (mirrors
+src/state/mod.rs	Plan-07 phase 4 — typed runtime error halt. Native fns
+src/state/mod.rs	Plan-07 phase 4f.12 — stack overflow becomes a typed
+src/state/mod.rs	Plan-07 phase 4g.1 / 4g.2 slice 1 — capture the call
+src/state/mod.rs	Plan-07 phase 4g.3 — `--dev-soft-halt` (CLI flag /
+src/state/mod.rs	Plan-07 phase 4g.3 — read once at first raise. When set
+src/state/mod.rs	Unaligned by construction — see code_put (@PLAN53 cluster 1).
+src/state/mod.rs	Variables from byte code, used to also gain stack position
+src/state/mod.rs	that were removed at yield. The generator's locals are live again
+src/state/mod.rs	there's no UAF hazard). @P324 narrows this by demoting
+src/state/mod.rs	unaligned reference — UB (the @PLAN53 cluster-1 Miri finding) —
+src/state/text.rs	@PLAN53 cluster 2 / S4: N = stepped span of the popped i64+i64+f32
+src/state/text.rs	@PLAN53 cluster 2 / S4: stepped char-pop span (4 off, 8 aligned).
+src/state/text.rs	@PLAN53 cluster 2 / S4: stepped span of popped i64+i64+f32 (20/24).
+src/state/text.rs	@PLAN53 cluster 2 / S4: the char pop occupies a stepped span
+src/state/text.rs	@PLAN53 cluster 5: deallocate the String's heap buffer. `clear()` sets
+src/state/text.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/state/text.rs	Plan-04 Phase 2h: positional variant of the removed `text()`. Writes a
+src/state/text.rs	Plan-07 phase 4e.3 — consume the fault tag set by the
+src/state/text.rs	Plan-07 phase 4e.3 — when a fault tag is set on the
+src/state/text.rs	sole deallocation point). Miri's leak checker caught it (cluster 5).
+src/store.rs	@P284 — guard `rec != 0` like the integer getters do. In release
+src/store.rs	@P284 — sibling of `get_float`'s rec=0 guard; needed for
+src/store.rs	@P290 — clear the call-bracket free-protection.
+src/store.rs	@P290 — mark the store as PROTECTED-FROM-FREE for the duration
+src/store.rs	@P294: grow this store's backing buffer to at least `words` words,
+src/store.rs	@P317 debug — `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) zeroes
+src/store.rs	@PLAN38 phase 01 — `size` MUST be read AFTER the resize. The
+src/store.rs	@PLAN38 phase 01 — durability-mode tier on this store. Tracks
+src/store.rs	@PLAN38 phase 01 — for durable stores, flush mmap + rewrite
+src/store.rs	@PLAN38 phase 01 — when `Some(path)`, this store was opened
+src/store.rs	@PLAN38 phase 01: this module is now `pub mod store` (was `mod store`).
+src/store.rs	@PLAN38 — durable-store support (phases 00 + 01 — IntegrityOnly tier).
+src/store.rs	@PLAN54 arc E — cheap validity pre-check for a store image file: it
+src/store.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/store.rs	Delete a record, this assumes that all links towards this record are already removed
+src/store.rs	Trace helper for @PLAN38 debugging. Writes a line to
+src/store.rs	`zero_claim` is enabled (@P317 debugging lever). No-op otherwise.
+src/store.rs	by a fn-call deep-copy bracket. @P290.
+src/store.rs	const TIER_SNAPSHOT_EVERY: u16 = 2; // reserved — phase 02
+src/store.rs	const TIER_WAL: u16 = 3; // reserved — phase 03
+src/store.rs	from `n_set_store_lock(r, false)`. See @P290 for the
+src/store.rs	shipped in phase 01; tiers 2 and 3 land in later phases.
+src/store.rs	training-port consumer that drives @PLAN38 lives in another repo and
+src/test_runner.rs	@P367: a typed runtime fault fired (no Rust panic).
+src/test_runner.rs	@P367: assert(false) / panic / divide-by-zero / OOB /
+src/test_runner.rs	@P389: each native package's rlib carries its own
+src/test_runner.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/timeout.rs	! @PLAN49 T1+T3 — process-wide execution timeout with a watchdog
+src/timeout.rs	@PLAN49 T2 — cooperative graceful exit. A `checkpoint_*` on the
+src/tree.rs	Copyright (c) 2023-2025 Jurjen Stellingwerff
+src/tree.rs	Should be removed when actually in use
+src/typedef.rs	@P379 — struct-type registration is a flat table keyed by name. When
+src/typedef.rs	@PLAN58: a nested-vector element is itself a vector — the
+src/typedef.rs	B2-runtime (2026-04-13): Before laying out records, retroactively
+src/typedef.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
+src/typedef.rs	Plan-06 phase 4d: tuple struct fields inline the
+src/typedef.rs	Plan-22 phase 02b (2026-05-12): auto-Reference
+src/typedef.rs	in literal type-inference, fixed separately — see plan-58.)
+src/typedef.rs	— phase 02c is the only producer that sets it
+src/variables/intervals.rs	@PLAN53 cluster 2: these three variants all carry child `Value`s
+src/variables/intervals.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/variables/intervals.rs	P240 fix (2026-05-11): tuple-literal reads. Without explicit
+src/variables/intervals.rs	Plan-07 phase 1: Span carries a source position and wraps a
+src/variables/mod.rs	@P295 — keyed collections carry a lifetime dep list too
+src/variables/mod.rs	@PLAN28 C4 — borrowed view of the codegen-read fields of one `Variable`,
+src/variables/mod.rs	@PLAN28 C4 — owned codegen-read fields of one `Variable`, consumed by
+src/variables/mod.rs	@PLAN51 Cluster IV: mark this variable as a caller-side work-ref
+src/variables/mod.rs	@PLAN51 Cluster IV: set by `add_defaults` when it synthesises a
+src/variables/mod.rs	@PLAN53 cluster 2 / S4 — one eval-TOS / frame-reserve advance step.
+src/variables/mod.rs	@PLAN53 — the aligned V2 allocator is the only allocator; scopes.rs drives
+src/variables/mod.rs	Create an exact copy of a variable, used to duplicate them when reused in later scopes.
+src/variables/mod.rs	Plan-07 phase 1: compare via unspan() so the iterated-collection
+src/variables/mod.rs	S2 (@PLAN53 cluster 2): the stack-alignment table. Text is align-8
+src/variables/mod.rs	S4 (@PLAN53 cluster 2): the eval-TOS step — every advance rounds up to
+src/variables/mod.rs	Used to lift inline struct-returning call arguments.
+src/variables/mod.rs	aligned reference (@PLAN53 cluster 2).
+src/variables/mod.rs	double-insert those frees (@PLAN54 arc D / @PLAN28 C4 insight).
+src/variables/mod.rs	for-loop (including outer loops). Used to detect unsafe mutation during iteration.
+src/variables/mod.rs	including outer loops. Used to detect nested same-name loops.
+src/variables/mod.rs	variable at some point in the function. Used to distinguish
+src/variables/mod.rs	─── @PLAN28 startup-cache snapshot seam (C4) ────────────────────────
+src/variables/slots_v2.rs	! Plan-04 Phase 2 / @PLAN53 cluster 2 — single-pool, scope-blind,
+src/variables/slots_v2.rs	@PLAN53 cluster 2 — see the fn doc for the algorithm. This replaced an
+src/variables/slots_v2.rs	greedy search avoids. (@PLAN53 cluster 2: without this, V2 placed
+src/variables/validate.rs	! plan-04 Phase 2a. Each test constructs a minimal `Function`
+src/variables/validate.rs	@PLAN53 cluster 2 — alignment invariant for the **aligned V2 layout only**.
+src/variables/validate.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
+src/variables/validate.rs	I8 (@PLAN53 cluster 2): a slot whose byte range exceeds the
+src/variables/validate.rs	bloat or a runaway offset (@PLAN53 cluster 2).
+src/variables/validate.rs	claim (@PLAN53 cluster 2).
+src/variables/validate.rs	class that under the V2-drive attempt (plan-04 retraction) put
+src/vector.rs	@P306 — a record with this key already exists: replace it in place
+src/vector.rs	@P321(c): bulk-allocate a vector record and copy raw bytes into it
+src/vector.rs	Added in @PLAN37 phase 10.8 to extend `sort()` from
+src/wasm.rs	Post-Stage B (2026-05-31): web sourced from the fixture clone
+src/wasm.rs	Post-Stage B (5b, 2026-05-31): graphics + shapes sourced from
+src/wasm_assets.rs	! @lib_plan-29 W1d — generic browser-WASM asset table accessor.

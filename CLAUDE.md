@@ -311,6 +311,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DOC.md](doc/claude/DOC.md) | HTML doc generation (gendoc.rs + documentation.rs) |
 | [DESIGN.md](doc/claude/DESIGN.md) | Algorithm catalog with complexity analysis |
 | [CODE.md](doc/claude/CODE.md) | Code quality rules (naming, functions, doc comments, clippy, deps) |
+| [DOC_QUALITY.md](doc/claude/DOC_QUALITY.md) | In-code comment quality — keep present-tense why/invariants, trim plan-tag/history narration, write for entry-level + non-native-English readers; evidence + runnable Check (`scripts/lint_comments.sh`) |
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Dev workflow — branching, WIP commit, rebase, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostics |
 | [ISSUE_TRACKING.md](doc/claude/ISSUE_TRACKING.md) | Where bugs live: open → GitHub Issues; investigations → files; closed → PROBLEMS.md. Labels, `@GH###` refs, workaround-as-signal |
