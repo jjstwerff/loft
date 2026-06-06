@@ -7,6 +7,47 @@ use super::{
 };
 use crate::variables::Function;
 
+/// True when `v` (unspanned) is a CAPTURING fn-ref — `Value::FnRef` whose
+/// closure-var slot is set (`!= u16::MAX`).  A bare `return add5;` carries
+/// `u16::MAX` (non-capturing) and is fine for par.
+fn is_capturing_fnref(v: &Value) -> bool {
+    match v.unspan() {
+        Value::FnRef(_, clos_var, _) => *clos_var != u16::MAX,
+        // A capturing lambda lowers to a `fn_ref_with_closure` block that builds
+        // the closure record and yields the `FnRef` as its tail expression.
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.last().is_some_and(is_capturing_fnref),
+        Value::Insert(ops) => ops.last().is_some_and(is_capturing_fnref),
+        _ => false,
+    }
+}
+
+/// True when a par worker's body returns a capturing closure in a `return` or
+/// tail position.  Conservative — only flags closures found directly in return
+/// position, so a non-capturing fn-ref return and any closure used only
+/// internally (never returned) are never rejected; an indirect return (via a
+/// local variable) falls through to the runtime path rather than a false
+/// positive.  Used to give a clear diagnostic instead of the dangling-ref panic.
+fn worker_returns_capturing_closure(body: &Value) -> bool {
+    match body.unspan() {
+        Value::Return(inner) => is_capturing_fnref(inner),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.last().is_some_and(is_capturing_fnref)
+                || bl.operators.iter().any(worker_returns_capturing_closure)
+        }
+        Value::Insert(ops) => {
+            ops.last().is_some_and(is_capturing_fnref)
+                || ops.iter().any(worker_returns_capturing_closure)
+        }
+        Value::If(_, t, f) => {
+            is_capturing_fnref(t)
+                || is_capturing_fnref(f)
+                || worker_returns_capturing_closure(t)
+                || worker_returns_capturing_closure(f)
+        }
+        _ => false,
+    }
+}
+
 /// Plan-06 ARC.md A3 / A3.5 — how to convert the i64 returned by
 /// `parallel_buf_get_narrow` back to the worker's actual return type.
 enum NarrowWrap {
@@ -2437,6 +2478,25 @@ use #count instead"
                     Level::Error,
                     "Parallel worker return type '{}' (size {sz}) is not supported",
                     ret_type.name(&self.data)
+                );
+            }
+            // A non-capturing fn-ref return (e.g. `return add5;`) is fine, but a
+            // CAPTURING closure can't be returned from a par worker: its captured
+            // environment lives in the worker's per-thread store and is dropped at
+            // join, so the fn-ref would dangle.  Reject it with a clear message
+            // instead of the raw out-of-bounds panic the dangling ref triggers.
+            if is_fn_ref
+                && !self.first_pass
+                && fn_d_nr != u32::MAX
+                && worker_returns_capturing_closure(self.data.def(fn_d_nr).code())
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a parallel worker cannot return a capturing closure — its \
+                     captured state lives in the worker thread's store and cannot \
+                     cross back.  Return a non-capturing function reference, or \
+                     compute the result directly in the worker."
                 );
             }
             sz.max(1) // fallback to 1 if unknown

@@ -298,4 +298,15 @@ fn test_par_over_non_iterable() {
   for x in s par(r = pe_double(x.a), 2) { print("{r}"); }
 }
 
+// A par worker returning a CAPTURING closure is rejected with a clear message
+// (the captured state can't cross the thread boundary) instead of the raw
+// dangling-ref panic.  A non-capturing fn-ref return is fine (see 22c).
+fn pe_capturing(x: integer) -> fn(integer) -> integer {
+  return fn(n: integer) -> integer { return n + x; };
+}
+// @EXPECT_ERROR: cannot return a capturing closure
+fn test_par_capturing_closure() {
+  for i in 0..3 par(f = pe_capturing(i), 2) { print("{f(10)}"); }
+}
+
 // --- Return path warnings ---

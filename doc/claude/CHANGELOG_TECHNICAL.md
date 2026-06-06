@@ -82,9 +82,15 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   `n_parallel_buf_get_fn_native` / `_drop_fn_native`, buffering one `(u32, DbRef)`
   per row in the new typed `Stores::par_fn_native_buffer_stack`.  Non-capturing
   fn-ref returns now compile + run on `--native`, matching `--interpret`.
-  Capturing closures remain unsupported in fn-ref par on **both** backends
-  (the captured store isn't adopted across the worker boundary) — pre-existing,
-  out of scope.
+- **Capturing closure from a par worker → clear diagnostic.** A par worker that
+  returns a *capturing* closure used to hit a raw `index out of bounds` panic on
+  both backends (the worker-local captured store is dropped at join, leaving the
+  fn-ref dangling).  It is now rejected at parse time: "a parallel worker cannot
+  return a capturing closure …".  The check (`worker_returns_capturing_closure`)
+  flags only `FnRef` with a set closure-var in return/tail position, so a
+  non-capturing `return add5;` and closures used only internally are never
+  rejected.  Supporting capture would mean copying each captured environment
+  across the thread boundary — deliberately not done.
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
