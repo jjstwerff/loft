@@ -57,6 +57,34 @@ loft-libs-game      time-v0.1.0              time
 EOF
 )
 
+# Files that intentionally diverge from the pinned upstream tag and
+# must NOT be flagged as drift.  Format: `<pkg>/<relpath>`.
+#
+# - hex_world/tests/hex_world.loft — @P387 local patch: the upstream
+#   tag hard-codes `/tmp/...` save paths, which don't exist on Windows
+#   CI.  The fixture rewrites them cwd-relative (and deletes the save
+#   artifact afterwards) so the loft test suite passes cross-platform.
+#   Re-syncing would clobber the patch; the divergence is deliberate.
+#   When loft-libs-world ships a tag carrying this fix, drop this line
+#   and bump PINNED_REFS instead.
+#
+# - gridmesh/README.md, hex_world/README.md, hex_world/src/hex_world.loft
+#   — @PLN6 tracker renumber: the in-repo renumber of plan
+#   `36-audience-generative-art` → `6-audience-generative-art` (old tag
+#   `@PLAN36` is a dead illustrative example here, not a live ref) rewrote  <!--noindex-->
+#   these doc-comments/links in the
+#   committed fixtures, but the pinned upstream tags still carry the old
+#   names.  Doc-only divergence (no source/test logic differs).  When the
+#   chunk repos ship tags carrying the renumber, drop these lines and bump
+#   PINNED_REFS instead.
+LOCAL_PATCHES=$(cat <<'EOF'
+hex_world/tests/hex_world.loft
+hex_world/README.md
+hex_world/src/hex_world.loft
+gridmesh/README.md
+EOF
+)
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/tests/fixtures/libs"
 TMPDIR_ROOT="$(mktemp -d -t loft-sync-fixtures.XXXXXX)"
@@ -100,19 +128,40 @@ while IFS= read -r line; do
         fi
         dest="$FIXTURE_ROOT/$pkg"
         if [[ $CHECK_ONLY -eq 1 ]]; then
-            # Exclude `target/` — the sync strips `native/target` from the
-            # fixture (build artifacts), so a locally-built native fixture would
-            # otherwise false-flag as drift against the (artifact-free) clone.
-            if ! diff -qr -x target "$src" "$dest" >/dev/null 2>&1; then
+            # Exclude build artifacts the repo itself gitignores, so they can
+            # NEVER appear in a committed fixture even though upstream tags
+            # sometimes commit them — otherwise the diff false-flags an
+            # unfixable "drift":
+            #   target      — native build output (`rm`d on sync below)
+            #   Cargo.lock  — gitignored repo-wide (.gitignore)
+            #   .loft       — loft per-source cache dir, gitignored
+            diff_out="$(diff -qr -x target -x Cargo.lock -x .loft "$src" "$dest" 2>&1 || true)"
+            # Drop any diff line touching a documented LOCAL_PATCHES file for
+            # this pkg (intentional, must-keep divergence from the tag).
+            while IFS= read -r patch; do
+                [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
+                rel="${patch#"$pkg"/}"
+                diff_out="$(grep -vF -- "$rel" <<< "$diff_out" || true)"
+            done <<< "$LOCAL_PATCHES"
+            if [[ -n "${diff_out//[[:space:]]/}" ]]; then
                 echo "[check] DRIFT: tests/fixtures/libs/$pkg vs $chunk@$ref"
                 drift=1
             fi
         else
             rm -rf "$dest"
             cp -r "$src" "$dest"
-            # Strip the chunk-repo's own native build artifacts —
-            # the fixtures are source-only.
+            # Strip artifacts the repo gitignores — fixtures are source-only.
             rm -rf "$dest/native/target" 2>/dev/null || true
+            find "$dest" -name Cargo.lock -type f -delete 2>/dev/null || true
+            find "$dest" -name .loft -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            # Preserve documented LOCAL_PATCHES (e.g. @P387) — restore the
+            # committed version so a routine re-sync doesn't silently revert
+            # an intentional, cross-platform-required divergence.  To take the
+            # upstream version instead, drop the file from LOCAL_PATCHES first.
+            while IFS= read -r patch; do
+                [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
+                git -C "$REPO_ROOT" checkout -- "tests/fixtures/libs/$patch" 2>/dev/null || true
+            done <<< "$LOCAL_PATCHES"
         fi
     done
 done <<< "$PINNED_REFS"
