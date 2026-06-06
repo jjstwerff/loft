@@ -5,6 +5,12 @@
 // into a flat vector before the par dispatcher partitions it.  Reductions
 // are order-independent (sum / count), so the hash's unordered par walk is
 // fine.  See @P270 (the range case once hung the parser).
+//
+// The result variable `r` is deliberately REUSED across loops with conflicting
+// return types (integer / float / boolean / text / struct) — this guards the
+// two-pass result-var fix: a global-counter-named `b_var` mis-typed `r` across
+// many mixed par loops (`r.len()` on a text result seen as integer).  The
+// per-loop-keyed name keeps the var two-pass-stable.
 
 struct Rec {
   k: integer,
@@ -25,35 +31,35 @@ fn mk_box(x: integer) -> Rec { return Rec {k: x, v: x * 2}; }
 fn main() {
   // --- range source, integer worker ---
   s1 = 0;
-  for i in 0..5 par(ri = dbl(i), 3) { s1 += ri; }
+  for i in 0..5 par(r = dbl(i), 3) { s1 += r; }
   assert(s1 == 20, "range int par: {s1}");
 
   // --- range source, float worker ---
   s2 = 0.0;
-  for i in 0..4 par(rf = half(i), 2) { s2 += rf; }
+  for i in 0..4 par(r = half(i), 2) { s2 += r; }
   assert(s2 == 3.0, "range float par: {s2}");
 
   // --- range source, boolean worker ---
   c = 0;
-  for i in 0..6 par(rb = even(i), 2) { if rb { c += 1; } }
+  for i in 0..6 par(r = even(i), 2) { if r { c += 1; } }
   assert(c == 3, "range bool par: {c}");
 
   // --- plain vector<integer> source ---
   v = [1, 2, 3, 4, 5];
   s3 = 0;
-  for i in v par(rv = dbl(i), 2) { s3 += rv; }
+  for i in v par(r = dbl(i), 2) { s3 += r; }
   assert(s3 == 30, "vector int par: {s3}");
 
   // --- text source, character worker ---
   n = 0;
-  for ch in "hello" par(rc = char_one(ch), 2) { n += rc; }
+  for ch in "hello" par(r = char_one(ch), 2) { n += r; }
   assert(n == 5, "text source par: {n}");
 
   // --- text-RETURNING worker over a primitive (range) source ---
   // Guards the interpreter text-queue input ladder: a primitive element must
   // reach the worker as its value, not as a DbRef ("v0","v1","v2" each len 2).
   tn = 0;
-  for i in 0..3 par(rt = label(i), 2) { tn += rt.len(); }
+  for i in 0..3 par(r = label(i), 2) { tn += r.len(); }
   assert(tn == 6, "text-return par over range: {tn}");
 
   // --- text-INPUT worker over a vector<text> source ---
@@ -61,14 +67,14 @@ fn main() {
   // raw element DbRef (both backends).  Each "[{s}]" is len(s)+2.
   tv = ["a", "bb", "ccc"];
   ti = 0;
-  for s in tv par(rw = wrap(s), 2) { ti += rw.len(); }
+  for s in tv par(r = wrap(s), 2) { ti += r.len(); }
   assert(ti == 12, "text-input par: {ti}");
 
   // --- literal-returning text worker (#273): no work buffer, owned String ---
   // Must compile + run on --native (the closure must not pass a work buffer the
   // worker lacks).  0..3 -> "sm","sm","big" -> total length 2+2+3 = 7.
   lt = 0;
-  for i in 0..3 par(rl = lit(i), 2) { lt += rl.len(); }
+  for i in 0..3 par(r = lit(i), 2) { lt += r.len(); }
   assert(lt == 7, "literal text-return par: {lt}");
 
   // --- struct/reference-RETURNING worker over a primitive (range) source ---
@@ -82,20 +88,20 @@ fn main() {
   h: hash<Rec[k]> = [];
   h += [Rec {k: 3, v: 30}, Rec {k: 1, v: 10}, Rec {k: 2, v: 20}];
   hs = 0;
-  for x in h par(rh = rec_dbl(x), 2) { hs += rh; }
+  for x in h par(r = rec_dbl(x), 2) { hs += r; }
   assert(hs == 120, "hash par: {hs}");
 
   // --- sorted source ---
   srt: sorted<Rec[k]> = [];
   srt += [Rec {k: 2, v: 20}, Rec {k: 1, v: 10}];
   ss = 0;
-  for x in srt par(rs = rec_dbl(x), 2) { ss += rs; }
+  for x in srt par(r = rec_dbl(x), 2) { ss += r; }
   assert(ss == 60, "sorted par: {ss}");
 
   // --- index source ---
   ix: index<Rec[k]> = [];
   ix += [Rec {k: 1, v: 10}, Rec {k: 2, v: 20}];
   ixs = 0;
-  for x in ix par(rx = rec_dbl(x), 2) { ixs += rx; }
+  for x in ix par(r = rec_dbl(x), 2) { ixs += r; }
   assert(ixs == 60, "index par: {ixs}");
 }

@@ -51,6 +51,14 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   → `execute_at_ref` had no input ladder) → garbage results.  `execute_at_ref`
   now takes the same `WorkerArg`; `run_parallel_queue_ref` reads a primitive
   element by value.  Text / struct inputs keep the `DbRef` path (already correct).
+- **Par result-var two-pass instability fixed.** The fused-par result var was
+  named `_<name>_<global-counter>` via `create_unique`.  Across many par loops
+  with mixed result types the `create_unique` count diverged between parser
+  pass 1 and pass 2, so the pass-2 `b_var` failed to reuse its pass-1 entry —
+  the user name then aliased to a wrong-typed var (`r.len()` on a `text` result
+  rejected as `integer`).  The `b_var` is now keyed on the stable `loop_nr`
+  (`_<name>_par<loop_nr>`), identical across both passes.  Guarded by the
+  intentional `r`-reuse in `tests/scripts/22c-par-sources.loft`.
 - **Native text-input par fixed.** A par worker with a `text` parameter (over a
   `vector<text>` source) failed `--native` compilation: the worker closure passed
   the element `DbRef` where the worker wants `&str` (E0308).  `tuple_arg_prep` now

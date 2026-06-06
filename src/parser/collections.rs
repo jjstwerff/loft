@@ -2668,8 +2668,7 @@ use #count instead"
             ret_type.clone()
         };
         // Plan-04 B.3 follow-up v2 (b3-par-inline.md): each par block gets
-        // its OWN uniquely-named `b_var` (via `create_unique` → internal
-        // name `_<result_name>_<counter>`), so two par blocks sharing the
+        // its OWN uniquely-named `b_var`, so two par blocks sharing the
         // user's loop-variable name can no longer collide on a single
         // `Function::variables` entry.  During body parsing the user's
         // name is aliased to this `b_var` via `set_name` (same mechanism
@@ -2679,7 +2678,18 @@ use #count instead"
         // below) — `b` becomes an inline alias rather than a runtime
         // slot, so there is no `Set(b_var, …)`, no `OpPut*`, and no
         // type-width mismatch to drift the stack.
-        let b_var = self.create_unique(result_name, &b_type);
+        //
+        // Key it on the stable `loop_nr` (identical across both parser
+        // passes), NOT the global `create_unique` counter: that counter can
+        // accumulate a different number of increments between pass 1 and
+        // pass 2 across many par loops, so a counter-named `b_var` failed to
+        // reuse its pass-1 entry — the user name then aliased to a wrong-typed
+        // var (`r.len()` on a `text` result seen as `integer`).  A loop-keyed
+        // name reuses the same entry on both passes.
+        let b_var_name = format!("_{result_name}_par{loop_nr}");
+        let b_var = self
+            .vars
+            .add_variable(&b_var_name, &b_type, &mut self.lexer);
         self.vars.defined(b_var);
         let prior_name_target = self.vars.set_name(result_name, b_var);
         if matches!(b_type, Type::Integer(_) | Type::Unknown(_)) {
