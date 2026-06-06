@@ -227,6 +227,11 @@ impl OpEmitter for ParallelForEmitter {
         let worker_name = worker_def.name().to_string();
         let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
+        // A literal / bufferless text worker (@P205 nwb) returns an owned `String`
+        // and takes NO `&mut String` work-buffer param — so its closure must NOT
+        // pass one (else E0061).  Computed as a bool now to avoid holding the
+        // `worker_def` borrow across the `ctx.emit` calls below.
+        let owned_text = crate::generation::returns_owned_string(worker_def);
 
         // Extra context args: vals[5..len-1].  The trailing element
         // is `n_extra` (the count); we don't read it directly because
@@ -286,6 +291,10 @@ impl OpEmitter for ParallelForEmitter {
         // (empty/`elm` for the common single-`DbRef` worker).
         let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
         match shape {
+            ClosureShape::Text if owned_text => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
             ClosureShape::Text => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
@@ -358,6 +367,11 @@ impl OpEmitter for ParallelQueueEmitter {
         let worker_name = worker_def.name().to_string();
         let worker_ret = worker_def.returned().clone();
         let shape = closure_shape(&worker_ret);
+        // A literal / bufferless text worker (@P205 nwb) returns an owned `String`
+        // and takes NO `&mut String` work-buffer param — so its closure must NOT
+        // pass one (else E0061).  Computed as a bool now to avoid holding the
+        // `worker_def` borrow across the `ctx.emit` calls below.
+        let owned_text = crate::generation::returns_owned_string(worker_def);
 
         // Extras: args[5..len-1]; trailing args[len-1] is the n_extra count.
         let n_extra = if args.len() > 6 { args.len() - 6 } else { 0 };
@@ -406,6 +420,10 @@ impl OpEmitter for ParallelQueueEmitter {
 
         let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
         match shape {
+            ClosureShape::Text if owned_text => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
             ClosureShape::Text => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"

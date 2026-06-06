@@ -50,8 +50,16 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   the element `DbRef` where the worker wants `&str` (E0308).  `tuple_arg_prep` now
   emits `loft::codegen_runtime::par_read_text_input(cell, elm)` (reads the row's
   text into an owned `String`) for a text first-arg — the text-input sibling of
-  the scalar-element read.  (Literal-returning text-*return* workers on native
-  remain blocked by the separate #273.)
+  the scalar-element read.
+- **Native literal-returning text-return par fixed (#273).** A par worker that
+  returns text via literals (the @P205 no-work-buffer / owned-`String` shape) has
+  no `&mut String` work-buffer param, but the worker closure unconditionally
+  passed one → `E0061`.  The Text closure now branches on
+  `generation::returns_owned_string(worker_def)`: owned-`String` workers are
+  called `worker(cell, arg)` (no buffer); buffer-building workers keep the
+  `let mut _w = String::new(); worker(cell, arg, &mut _w); _w` form.  Both par
+  emitters (For + Queue) updated; verified on both backends over range / vector /
+  text inputs (`tests/scripts/22c-par-sources.loft`).
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
