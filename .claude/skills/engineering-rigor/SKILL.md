@@ -62,7 +62,9 @@ one level apart** — learn the column you're in, but know it's one method.
 
 2. **Build the instrument — it is your eyes.** Debug: a boundary matrix of `/tmp`
    probes, varying **one axis per probe** (type-kind, construction-path, depth,
-   null, backend — the composition axes). Design: the cheapest test that could
+   null, backend — and, when the fault is in the *transform* rather than the
+   value: **cardinality** (N of a thing coexisting), **ordering/position**,
+   **cross-pass consistency** — the composition axes). Design: the cheapest test that could
    *falsify* each load-bearing claim — a probe, a targeted read, one boundary
    case. Control-flow (*which code actually runs*): a **usage sentinel** — route
    the uses through one chokepoint and make it loud (its own § below).
@@ -74,7 +76,11 @@ one level apart** — learn the column you're in, but know it's one method.
    in no single repro. The false unification in a design ("…and it also handles
    X") shows up *under a probe* and in no re-reading of the prose. This is *why*
    step 2 is non-negotiable: the thing you're hunting is a property of the class,
-   so you must be able to see the class.
+   so you must be able to see the class. **An irreducible minimal repro is itself
+   a reading:** when you cannot shrink below *N coexisting* constructs (N loops, N
+   declarations, N allocations), stop shrinking — the bug *is* the coexistence (a
+   resource / slot / store / accumulation fault), not any one instance, and
+   chasing a one-instance repro there is the matrix aimed down the wrong axis.
 
 4. **Find the ONE invariant; enforce it at the chokepoint — no narrower, no
    wider.** *Narrower* (a per-case/per-type patch; an N-way spray) leaves the
@@ -116,6 +122,27 @@ same whether the consumer is dead *or the sentinel sits on a dead path* — so p
 anything used it, you'd see it); debug and design must show the chokepoint fires for a
 known-live case before trusting a zero. Skip it and you call a handler "dead code"
 when you've only proven "my probe never reached it."
+
+This is one face of a wider law: **the instrument is part of the system, so validate
+it before you trust its reading.** Two properties must hold, and each fails silently
+as a "bug" that isn't one:
+
+- **Calibration** — *can it report the truth for this question?* A dead-path sentinel
+  can't (above); neither can a **stale build artifact** — a matrix cell reflects the
+  *binary you ran*, not the source you edited, and a self-hosted compiler links
+  several lenses (debug rlib, release rlib, wasm rlib, fixture cdylibs) that can each
+  lag the source independently. So **a surprising cell is a stale-artifact suspect
+  before it is a bug**: rebuild the lens behind that cell and re-read before believing
+  it. (Step 5's cross-mode verify is this property as a precondition — each mode is a
+  separate lens that must be in focus on its own.)
+- **Non-intrusiveness** — *does observing change the result?* For codegen / slot /
+  layout / aliasing faults it does: adding a `print`, a temporary, or one more
+  reference shifts the codegen and *moves* the bug. When an added observation flips
+  the outcome, that perturbation **is** the boundary — you've localized to
+  codegen-sensitivity, and bisecting *what minimal edit flips it* often names the
+  mechanism. Then read from **outside the run** (IR / bytecode / trace dumps, the
+  variable table, the generated source), never an in-program probe that re-runs the
+  compiler you are trying to inspect.
 
 ## The two ways to fail (symmetric — both modes share them)
 
@@ -161,7 +188,12 @@ so working memory is free for the building and the judgment.
   matrix finds the class, and the proportionate fix is itself a small design whose
   invariant you should be able to name. When an investigation reveals the real fix
   is a substrate change, you've crossed from debug into design — pick up the design
-  column without dropping the matrix.
+  column without dropping the matrix. And when that substrate change is *out of the
+  current change's scope* (a store-lifetime or representation rework), rigor is to
+  **finish the localization and route it** — a well-localized issue with the matrix
+  attached — not to force a patch the matrix says is too wide; a blind fix to a
+  substrate you haven't earned the design for re-introduces the very class you were
+  removing.
 
 ## The residual (why this isn't enough on its own)
 
