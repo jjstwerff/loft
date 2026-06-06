@@ -273,6 +273,13 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_queue_narrow",
         Box::new(parallel::ParallelQueueEmitter),
     );
+    // #281 — fn-ref-return queue routes through the same emitter (Fn shape
+    // → n_parallel_queue_fn_native); buf_get_fn / buf_drop_fn are
+    // pass-through renames to their _native counterparts.
+    r.insert(
+        "n_parallel_queue_fn",
+        Box::new(parallel::ParallelQueueEmitter),
+    );
     // Plan-06 ARC.md A5b — fold emitter.  Closure-based bridge to
     // `n_parallel_fold_native` (runtime helper in
     // `src/codegen_runtime.rs`).  Different arg layout from the
@@ -292,6 +299,9 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "n_parallel_buf_drop_text",
         "n_parallel_buf_drop_ref",
         "n_parallel_buf_drop_narrow",
+        // #281 — fn-ref-return row reader + buffer drop.
+        "n_parallel_buf_get_fn",
+        "n_parallel_buf_drop_fn",
     ] {
         r.insert(name, Box::new(parallel::ParallelBufRenameEmitter));
     }

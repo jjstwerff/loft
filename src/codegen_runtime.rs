@@ -86,6 +86,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_queue_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_fn_native",   abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_fold_native",       abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_native",    abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_get_text_native", abi: Abi::Cell },
@@ -96,6 +97,8 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_parallel_buf_drop_native",     abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_text_native", abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_buf_drop_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_fn_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_fn_native", abi: Abi::Cell },
     RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
@@ -3571,6 +3574,107 @@ pub fn n_parallel_buf_drop_ref_native(cell: &std::cell::UnsafeCell<Stores>) {
         };
         stores.free_named(&synthetic, "par_buf_drop_ref");
     }
+}
+
+// ── #281 — native fn-ref-return Queue ───────────────────────────────────────
+//
+// A par worker that returns a function reference yields the native fn-ref value
+// `(u32 d_nr, DbRef closure)`.  These three fns mirror the scalar/ref queue
+// family: run the worker closures, buffer one `(u32, DbRef)` per row in
+// `par_fn_native_buffer_stack`, and let the body read each back.  The
+// interpreter's `n_parallel_*_fn` use a byte-packed 20-byte buffer; the native
+// path stays typed (no serialization) since it owns both ends.
+
+/// Per-row worker driver for the fn-ref Queue — mirrors
+/// `run_native_workers_primitive` but collects the worker's `(u32, DbRef)`
+/// fn-ref return per row.
+fn run_native_workers_fn<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<(u32, DbRef)>
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> (u32, DbRef) + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut local: Vec<(u32, DbRef)> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let elm =
+                vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+            local.push(worker(cell, elm));
+        }
+        (start, local)
+    });
+    let null_fn = (
+        u32::MAX,
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        },
+    );
+    crate::parallel::merge_batches(batches, n, null_fn)
+}
+
+/// fn-ref-return Queue runtime entry — runs workers, buffers one `(u32, DbRef)`
+/// per row on `par_fn_native_buffer_stack`, returns the row count.
+pub fn n_parallel_queue_fn_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> (u32, DbRef) + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let results = run_native_workers_fn(stores, &input, elem_size, threads, n, &worker);
+    stores.par_fn_native_buffer_stack.push(results);
+    n as i64
+}
+
+/// Read row `idx`'s fn-ref `(u32, DbRef)` from the active fn-ref Queue buffer.
+///
+/// # Panics
+/// Panics if no fn-ref Queue is active (`par_fn_native_buffer_stack` empty) or
+/// `idx` is out of range — both indicate a parser-side bug, not reachable from
+/// valid loft source.
+pub fn n_parallel_buf_get_fn_native(
+    cell: &std::cell::UnsafeCell<Stores>,
+    idx: i64,
+) -> (u32, DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let buf = stores
+        .par_fn_native_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_fn_native: par_fn_native_buffer_stack is empty");
+    buf[idx as usize]
+}
+
+/// Pop the active fn-ref Queue buffer after the loop body completes.
+///
+/// # Panics
+/// Panics if the buffer stack is already empty (a drop without a matching
+/// queue — parser-side bug).
+pub fn n_parallel_buf_drop_fn_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_fn_native_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_fn_native: par_fn_native_buffer_stack is already empty");
 }
 
 // ── N8b.1: Native coroutine runtime ─────────────────────────────────────────

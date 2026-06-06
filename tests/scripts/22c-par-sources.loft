@@ -27,6 +27,9 @@ fn wrap(s: text) -> text { return "[{s}]"; }
 // literal-returning text worker (@P205 nwb / #273): no work buffer, owned String.
 fn lit(x: integer) -> text { if x > 1 { return "big"; } return "sm"; }
 fn mk_box(x: integer) -> Rec { return Rec {k: x, v: x * 2}; }
+fn add5(n: integer) -> integer { return n + 5; }
+// fn-ref-returning worker (#281): native must lower QueueStitch::Fn.
+fn pick(x: integer) -> fn(integer) -> integer { return add5; }
 
 fn main() {
   // --- range source, integer worker ---
@@ -83,6 +86,13 @@ fn main() {
   bs = 0;
   for i in 0..4 par(b = mk_box(i), 2) { bs += b.v; }
   assert(bs == 12, "ref-return par over range: {bs}");
+
+  // --- fn-ref-RETURNING worker (#281): native QueueStitch::Fn lowering ---
+  // Each worker returns the (non-capturing) fn `add5`; the body calls it.
+  // 3 rows x add5(10)=15 -> 45.
+  fsum = 0;
+  for i in 0..3 par(fr = pick(i), 2) { fsum += fr(10); }
+  assert(fsum == 45, "fn-ref-return par: {fsum}");
 
   // --- hash source (unordered par walk; sum is order-independent) ---
   h: hash<Rec[k]> = [];

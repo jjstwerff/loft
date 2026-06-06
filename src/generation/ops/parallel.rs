@@ -48,11 +48,16 @@ enum ClosureShape {
     Float,
     /// Worker returns scalar integer / boolean; closure casts `as i64`.
     Scalar,
+    /// Worker returns a function reference (`(u32, DbRef)` native tuple);
+    /// closure returns it verbatim into the fn-ref Queue buffer (#281).
+    Fn,
 }
 
 fn closure_shape(ret: &Type) -> ClosureShape {
     if matches!(ret, Type::Text(_)) {
         ClosureShape::Text
+    } else if matches!(ret, Type::Function(_, _, _)) {
+        ClosureShape::Fn
     } else if ret.heap_def_nr().is_some() {
         ClosureShape::HeapRef
     } else if matches!(ret, Type::Float | Type::Single) {
@@ -69,6 +74,10 @@ fn helper_name(shape: ClosureShape) -> &'static str {
         // Float and Scalar both use the primitive helper — they
         // differ only in the closure body's return-value transform.
         ClosureShape::Float | ClosureShape::Scalar => "n_parallel_for_native",
+        // fn-ref returns always route through the Queue family (the parser
+        // emits `n_parallel_queue_fn`), so the for-loop helper is never
+        // selected for them; map it to the Queue entry for totality.
+        ClosureShape::Fn => "n_parallel_queue_fn_native",
     }
 }
 
@@ -79,6 +88,7 @@ fn queue_helper_name(shape: ClosureShape) -> &'static str {
     match shape {
         ClosureShape::Text => "n_parallel_queue_text_native",
         ClosureShape::HeapRef => "n_parallel_queue_ref_native",
+        ClosureShape::Fn => "n_parallel_queue_fn_native",
         ClosureShape::Float | ClosureShape::Scalar => "n_parallel_queue_native",
     }
 }
@@ -303,6 +313,12 @@ impl OpEmitter for ParallelForEmitter {
                 ctx.w,
                 ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,
+            // #281 — fn-ref return: the worker yields the native fn-ref tuple
+            // `(u32, DbRef)` directly; the closure returns it verbatim.
+            ClosureShape::Fn => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
             ClosureShape::Float => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}).to_bits() as i64 }})"
@@ -429,6 +445,12 @@ impl OpEmitter for ParallelQueueEmitter {
                 ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
+                ctx.w,
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+            )?,
+            // #281 — fn-ref return: the worker yields the native fn-ref tuple
+            // `(u32, DbRef)` directly; the closure returns it verbatim.
+            ClosureShape::Fn => write!(
                 ctx.w,
                 ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
             )?,

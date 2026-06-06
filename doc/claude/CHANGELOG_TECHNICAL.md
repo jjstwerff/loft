@@ -74,6 +74,17 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   `let mut _w = String::new(); worker(cell, arg, &mut _w); _w` form.  Both par
   emitters (For + Queue) updated; verified on both backends over range / vector /
   text inputs (`tests/scripts/22c-par-sources.loft`).
+- **Native fn-ref-returning par implemented (#281).** A par worker returning a
+  function reference had no native lowering — the emitter fell through to a
+  wrong-arity call to the interpreter stub (`E0061`).  Added the `QueueStitch::Fn`
+  native path: `ClosureShape::Fn` (closure returns the native fn-ref tuple
+  `(u32, DbRef)` verbatim) → `n_parallel_queue_fn_native` +
+  `n_parallel_buf_get_fn_native` / `_drop_fn_native`, buffering one `(u32, DbRef)`
+  per row in the new typed `Stores::par_fn_native_buffer_stack`.  Non-capturing
+  fn-ref returns now compile + run on `--native`, matching `--interpret`.
+  Capturing closures remain unsupported in fn-ref par on **both** backends
+  (the captured store isn't adopted across the worker boundary) — pre-existing,
+  out of scope.
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
