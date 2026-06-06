@@ -9,6 +9,38 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `for … par(…)` accepts every iterable source; hash skips its sort (#270) (2026-06-06)
+
+The parallel for-clause now runs over **any iterable**, not just a flat vector.
+
+- **Parser hang fixed (#270).** `for i in 0..3 par(r = i, 2) { … }` infinite-looped
+  the parser: `skip_to_parallel_body` (the par-clause error-recovery drain) had no
+  comma consumption and no forward-progress guard, so it spun on the `,`.  Added a
+  no-progress guard mirroring `consume_call_args`; recovery can no longer hang.
+- **Range / `iterator<T>` / text sources now work.** A non-vector, non-keyed source
+  is materialised into a flat `vector<T>` (via `materialise_iter_for_par`, reusing
+  `build_comprehension_code` for correct per-kind element append) before the queue
+  dispatcher partitions it.  Keyed collections (hash/sorted/index/spacial) keep their
+  existing `materialise_keyed_for_par` path.
+- **Hash skips the sort for par.** `for x in h par(…)` builds its iteration scratch
+  from `hash::records()` (raw bucket walk via the new `hash_unsorted` / `n_hash_unsorted`)
+  instead of the key-sorting `hash_sorted` — the parallel queue has no use for a hash's
+  order.  Sequential `for x in h` stays key-ordered; only the par form differs.
+- **Two pre-existing native-codegen par bugs fixed (surfaced here, untested before —
+  no keyed/range/primitive-vector par script reached `--native`):**
+  - keyed/range materialise wrapped its temp var in a `v_block`, which native lowers
+    to a Rust `{ }` scope, so `__par_mat` died before the dispatch used it (E0425).
+    Now spliced as `Value::Insert` (inline), like the vector path.
+  - a by-value scalar worker (`fn(x: integer)` over `vector<integer>`/range) got the
+    element `DbRef` instead of the read-out value (E0308 `expected i64, found DbRef`).
+    `tuple_arg_prep` now reads scalar element types out of the record, the 1-element
+    case of the existing tuple-worker path.
+
+  Verified on both backends across range/vector/hash/sorted/index sources and
+  integer/float/boolean/single worker returns (`tests/scripts/22c-par-sources.loft`).
+  Known gap, **pre-existing and unrelated**: text-*returning* par workers produce
+  garbage on the interpreter (correct on native) — see open issue.
+
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
 Relative file paths now resolve against the **program's own directory** (source

@@ -99,6 +99,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
+    RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
     // around `crate::native::json_parse_into_stores` + the JsonValue
     // method natives so `--native` programs can read/parse JSON
@@ -1955,6 +1956,14 @@ pub fn n_path_sep() -> i32 {
 pub fn n_hash_sorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_hash_sorted_vec(&h, tp as u16)
+}
+
+/// Raw bucket-walk sibling of `n_hash_sorted` for `for e in h par(...)` —
+/// skips the key sort because the parallel queue has no use for hash order.
+/// Bytecode equivalent: `n_hash_unsorted` in `src/native.rs`.
+pub fn n_hash_unsorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.build_hash_unsorted_vec(&h, tp as u16)
 }
 
 /// P268 — JSON parser native runtime stub.  Wraps the shared

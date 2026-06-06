@@ -465,18 +465,33 @@ impl Stores {
     pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
         let keys = self.types[tp as usize].keys.clone();
         let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
+        self.build_rec_scratch(hash_ref, &recs)
+    }
+
+    /// Like `build_hash_sorted_vec` but in raw bucket-walk order, skipping the
+    /// O(n log n) key sort.  Used to feed `for e in h par(...)`: the parallel
+    /// queue preserves input order, but a hash has no user-meaningful order, so
+    /// sorting the records only to hand them straight to worker threads is
+    /// wasted work.  Iteration order therefore differs from sequential
+    /// `for e in h` (which is key-ordered) — acceptable for a hash.
+    pub fn build_hash_unsorted_vec(&mut self, hash_ref: &DbRef, _tp: u16) -> DbRef {
+        let recs = crate::hash::records(hash_ref, &self.allocations);
+        self.build_rec_scratch(hash_ref, &recs)
+    }
+
+    /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
+    /// the Ordered (on=3) iteration path walks.
+    ///
+    /// C60 piece 3 edit A: allocate IN THE HASH'S STORE, not a fresh one.  This
+    /// makes the yielded scratch DbRef share `store_nr` with the hash records —
+    /// so when Ordered iteration yields `DbRef{store=scratch.store_nr,
+    /// rec=<u32 rec-nr from vector>, pos=8}`, the rec-nr resolves to a valid
+    /// hash record in the same store.  No new on=4 mode, no bytecode protocol
+    /// change — hash iteration reuses the existing Ordered (on=3) path.
+    fn build_rec_scratch(&mut self, hash_ref: &DbRef, recs: &[u32]) -> DbRef {
         let n = recs.len();
-        // C60 piece 3 edit A: allocate IN THE HASH'S STORE, not a
-        // fresh one.  This makes the yielded scratch DbRef share
-        // `store_nr` with the hash records — so when Ordered
-        // iteration yields `DbRef{store=scratch.store_nr, rec=<u32
-        // rec-nr from vector>, pos=8}`, the rec-nr resolves to a
-        // valid hash record in the same store.  No new on=4 mode,
-        // no bytecode protocol change — hash iteration reuses the
-        // existing Ordered (on=3) path.
-        //
-        // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to
-        // 8-byte words (store claim granularity).
+        // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to 8-byte
+        // words (store claim granularity).
         let vec_words = ((n as u32) * 4 + 8).div_ceil(8);
         let vec_words = vec_words.max(1);
         let vec_cr = self.claim(hash_ref, vec_words);

@@ -147,20 +147,47 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str)
     let Some(elem_attr) = worker_def.attributes().first() else {
         return (String::new(), "elm");
     };
-    let Type::Tuple(elems) = &elem_attr.typedef else {
-        return (String::new(), "elm");
-    };
-    let offsets = crate::data::element_offsets(elems);
-    let reads: Vec<String> = elems
-        .iter()
-        .zip(offsets.iter())
-        .map(|(t, off)| tuple_elem_read(t, *off))
-        .collect();
-    let prep = format!(
-        "let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = ({},); ",
-        reads.join(", ")
-    );
-    (prep, "_p")
+    if let Type::Tuple(elems) = &elem_attr.typedef {
+        let offsets = crate::data::element_offsets(elems);
+        let reads: Vec<String> = elems
+            .iter()
+            .zip(offsets.iter())
+            .map(|(t, off)| tuple_elem_read(t, *off))
+            .collect();
+        let prep = format!(
+            "let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = ({},); ",
+            reads.join(", ")
+        );
+        return (prep, "_p");
+    }
+    // A by-value scalar worker parameter (e.g. `fn(x: integer)` over a
+    // `vector<integer>` / range): the queue hands the closure a `DbRef` into
+    // the element record, but the worker wants the value.  Read it out — the
+    // 1-element version of the tuple path.  Reference / struct / heap-enum /
+    // text workers take the `DbRef` directly, so they keep the bare `elm`.
+    if is_by_value_scalar(&elem_attr.typedef) {
+        let read = tuple_elem_read(&elem_attr.typedef, 0);
+        let prep = format!("let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = {read}; ");
+        return (prep, "_p");
+    }
+    (String::new(), "elm")
+}
+
+/// True for worker-parameter types the par closure must read out of the
+/// element record by value (the scalar kinds `tuple_elem_read` handles).
+/// Reference / heap-enum / struct / text parameters instead receive the
+/// element `DbRef` directly, so they are excluded here.
+fn is_by_value_scalar(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Integer(_)
+            | Type::Character
+            | Type::Null
+            | Type::Boolean
+            | Type::Enum(_, false, _)
+            | Type::Single
+            | Type::Float
+    )
 }
 
 /// `n_parallel_for` / `n_parallel_for_light` emitter.
