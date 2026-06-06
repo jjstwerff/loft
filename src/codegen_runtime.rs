@@ -1966,6 +1966,25 @@ pub fn n_hash_unsorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) 
     stores.build_hash_unsorted_vec(&h, tp as u16)
 }
 
+/// Read the text element a par worker's `&str` parameter expects out of the
+/// input row `elm` (a `vector<text>` element holds a 4-byte text-pointer at
+/// `elm.pos`).  Returns an owned `String` so the borrow outlives the worker
+/// call regardless of later store mutation — the per-row cost is negligible
+/// next to the worker.  Emitted by `tuple_arg_prep` for text-input par workers;
+/// without it the closure passes the raw `DbRef` where the worker wants `&str`.
+#[must_use]
+pub fn par_read_text_input(cell: &std::cell::UnsafeCell<Stores>, elm: DbRef) -> String {
+    let stores: &Stores = unsafe { &*cell.get() };
+    let store = &stores.allocations[elm.store_nr as usize];
+    let base = store.base_ptr();
+    let text_rec = unsafe {
+        base.offset(elm.rec as isize * 8 + elm.pos as isize)
+            .cast::<u32>()
+            .read_unaligned()
+    };
+    store.get_str(text_rec).to_string()
+}
+
 /// P268 — JSON parser native runtime stub.  Wraps the shared
 /// `crate::native::json_parse_into_stores` helper (extracted from the
 /// interp `n_json_parse` body) so `--native`-compiled programs can

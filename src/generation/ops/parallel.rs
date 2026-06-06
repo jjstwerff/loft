@@ -170,6 +170,17 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str)
         let prep = format!("let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = {read}; ");
         return (prep, "_p");
     }
+    // A text worker parameter (`fn(s: text)` over a `vector<text>` / text input):
+    // the closure receives the element `DbRef`, but the worker wants `&str`.
+    // Read the row's text into an owned String and pass it by reference — the
+    // expression is constant (uses only the closure's `cell`/`elm`), so it rides
+    // as the `arg` directly with no `prep`.
+    if matches!(elem_attr.typedef, Type::Text(_)) {
+        return (
+            String::new(),
+            "&loft::codegen_runtime::par_read_text_input(cell, elm)",
+        );
+    }
     (String::new(), "elm")
 }
 

@@ -17,6 +17,7 @@ fn even(x: integer) -> boolean { return x % 2 == 0; }
 fn rec_dbl(r: const Rec) -> integer { return r.v * 2; }
 fn char_one(c: character) -> integer { if c == ' ' { return 0; } return 1; }
 fn label(x: integer) -> text { return "v{x}"; }
+fn wrap(s: text) -> text { return "[{s}]"; }
 
 fn main() {
   // --- range source, integer worker ---
@@ -51,6 +52,14 @@ fn main() {
   tn = 0;
   for i in 0..3 par(r = label(i), 2) { tn += r.len(); }
   assert(tn == 6, "text-return par over range: {tn}");
+
+  // --- text-INPUT worker over a vector<text> source ---
+  // The worker's `text` parameter must receive the element as a string, not the
+  // raw element DbRef (both backends).  Each "[{s}]" is len(s)+2.
+  tv = ["a", "bb", "ccc"];
+  ti = 0;
+  for s in tv par(r = wrap(s), 2) { ti += r.len(); }
+  assert(ti == 12, "text-input par: {ti}");
 
   // --- hash source (unordered par walk; sum is order-independent) ---
   h: hash<Rec[k]> = [];

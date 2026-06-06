@@ -44,8 +44,14 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   always pushed the element as a 12-byte `DbRef`, unlike the integer path's
   input ladder.  `execute_at_text` now takes a `WorkerArg` (Ref / Primitive /
   Text) and `run_parallel_text` selects it by the worker's first-arg kind —
-  the same ladder `run_parallel_queue` applies.  (Native text-input par stays
-  blocked by the separate #272/#273 codegen issues.)
+  the same ladder `run_parallel_queue` applies.
+- **Native text-input par fixed.** A par worker with a `text` parameter (over a
+  `vector<text>` source) failed `--native` compilation: the worker closure passed
+  the element `DbRef` where the worker wants `&str` (E0308).  `tuple_arg_prep` now
+  emits `loft::codegen_runtime::par_read_text_input(cell, elm)` (reads the row's
+  text into an owned `String`) for a text first-arg — the text-input sibling of
+  the scalar-element read.  (Literal-returning text-*return* workers on native
+  remain blocked by the separate #273.)
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
