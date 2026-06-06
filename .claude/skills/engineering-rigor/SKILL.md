@@ -144,6 +144,37 @@ as a "bug" that isn't one:
   variable table, the generated source), never an in-program probe that re-runs the
   compiler you are trying to inspect.
 
+## A fourth lens: when verified parts fail *together* — read the shared medium
+
+The matrix varies inputs to one part; the sentinel traces one control path. A third
+shape is neither: each part **passes alone** yet they **corrupt each other in
+composition**. Re-auditing the parts is wasted motion — they are locally correct; the
+bug is in the **medium they share**, which sits in no part's contract.
+
+The cause is structural: **verification is local and instantaneous; a real system is
+embedded and historical.** A part is checked against its own spec at a moment, but it
+sits in a shared medium and carries accumulated state — and local-instantaneous
+checking is blind to embedded-historical coupling. The composition failure is that
+hidden channel finally becoming visible.
+
+So when isolated-correct parts fail together:
+
+1. **Read the boundary contract first.** A mismatch *there* — one part's output vs the
+   next's expected input, each verified against a different spec — is composition
+   failure you can **audit**; it is not hidden. Rule it out before hunting a medium.
+2. **If the contracts hold, enumerate the shared medium — don't re-audit the parts.**
+   The channels: mutable state, a **namespace / counter**, a slot / store,
+   **ordering**, the **build artifact** — the cardinality / ordering / cross-pass axes
+   *are* this medium. Then ask the conserved-quantity question: **what accumulates,
+   and where does it discharge?** (a desync building in a shared counter until two
+   siblings collide is the software form of charge building until it arcs).
+3. **Fix by owning the medium.** Every engineering field manages the medium, not the
+   parts — a ground strap, a damper, pressure equalization. The software form is
+   Goal E (`doc/claude/GOALS.md`): give the shared thing **one owned home** (a
+   per-loop-keyed name instead of a global counter) so the channel can't carry
+   contention — or make the coupling explicit. The stale-artifact trap above is the
+   same lens: a shared medium (the build) out of sync, coupling source and test.
+
 ## The two ways to fail (symmetric — both modes share them)
 
 | Failure | What it is | Caught by |
