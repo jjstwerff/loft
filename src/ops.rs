@@ -116,6 +116,17 @@ pub fn to_char(val: i32) -> char {
 
 #[inline]
 pub fn format_text(s: &mut String, val: &str, width: i64, dir: i8, token: u8) {
+    // @PLN10 — render the text null sentinel ("\0") as `null`, mirroring
+    // `format_long`'s `i64::MIN → null`.  A loft text equal to `STRING_NULL`
+    // IS null (the content-based null model — `conv_bool_from_text`), so the
+    // substitution is consistent with `?? ` / `!`.  Both backends route text
+    // interpolation through this fn (interp `OpFormatText` + the native
+    // `generation/text.rs` emitter), so this one site fixes both.
+    let val = if val == crate::state::STRING_NULL {
+        "null"
+    } else {
+        val
+    };
     // dir=2 means "unset default"; text defaults to left-align (-1)
     let dir = if dir == 2 { -1 } else { dir };
     let mut tokens = width as usize;
@@ -756,7 +767,12 @@ use std::fmt::Write as _;
 pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
-    if precision >= 0 {
+    // @PLN10 — NaN is the float null sentinel (`?? ` / `!` treat it as null) and
+    // is not a JSON value; render it as `null`, mirroring text "\0" and integer
+    // i64::MIN.  `inf`/`-inf` are real (non-null) values and render normally.
+    if val.is_nan() {
+        res.push_str("null");
+    } else if precision >= 0 {
         write!(res, "{val:.p$}", p = precision as usize).unwrap();
     } else {
         write!(res, "{val}").unwrap();
@@ -767,7 +783,10 @@ pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i
 pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
-    if precision >= 0 {
+    // @PLN10 — NaN is the float null sentinel; render as `null` (see `format_float`).
+    if val.is_nan() {
+        res.push_str("null");
+    } else if precision >= 0 {
         write!(res, "{val:.p$}", p = precision as usize).unwrap();
     } else {
         write!(res, "{val}").unwrap();

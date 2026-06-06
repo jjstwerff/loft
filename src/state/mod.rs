@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-mod codegen;
+pub(crate) mod codegen;
 pub mod debug;
 mod io;
 mod text;

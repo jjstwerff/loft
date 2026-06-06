@@ -1819,15 +1819,20 @@ fn native_rs_functions_up_to_date() {
         if d.is_operator() || d.rust.is_empty() {
             continue;
         }
+        // @PLN10 F — a text producer is satisfied by EITHER its base native
+        // (`"name"`) OR its destination-passing variant (`"name_dest"`): once
+        // codegen routes every call position through `_dest` (synth-dest), the
+        // base is deleted and the `_dest` impl is the binding.
         let entry = format!("\"{}\"", d.name);
-        if !native_src.contains(&entry) {
+        let dest_entry = format!("\"{}_dest\"", d.name);
+        if !native_src.contains(&entry) && !native_src.contains(&dest_entry) {
             missing.push(d.name.clone());
         }
     }
     assert!(
         missing.is_empty(),
         "src/native.rs is missing {} function(s) from default/*.loft:\n  {}\n\
-         Add them to the FUNCTIONS array and implement the fn bodies.",
+         Add them to the FUNCTIONS array (or a `_dest` variant) and implement the fn bodies.",
         missing.len(),
         missing.join("\n  ")
     );

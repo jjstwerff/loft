@@ -441,6 +441,68 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     }
 }
 
+/// @PLN10 — text-returning natives whose generated **wrapper** body returns an
+/// owned `String` (their `codegen_runtime` impl was converted off the
+/// never-cleared `stores.scratch`).  The wrapper return type (the `-> …` at the
+/// function header below) keys on this so wrapper and body never disagree — a
+/// blanket "all text wrappers return `String`" flip breaks `#rust` natives
+/// (whose bodies stay `Str`-wrapped), `as_text` (null), and cdylib `#native`
+/// fns.  Curate this in **lockstep** with the body conversions in
+/// `codegen_runtime.rs`.  Sibling of `state::codegen::is_text_dest_native`.
+fn native_returns_owned_string(name: &str) -> bool {
+    matches!(
+        name,
+        "i_parse_errors" | "n_json_errors" | "n_parallel_buf_get_text"
+    )
+}
+
+/// @PLN10 Phase A — a **USER** text-returning function with **no `RefVar(Text)`
+/// work buffer** ("nwb") returns an owned `String` rather than a buffer-backed
+/// `Str`.  Its wrapper signature is `-> String` and every text return emits
+/// `(val).to_string()` (the @PLN10 Phase B owned-String flip).  Two roots map
+/// here, both bufferless: `no_work_buffer` (@P205 generic monomorphs, excluded
+/// from `text_return` in `definitions.rs`) and any user text fn whose returns are
+/// all literal / computed / inner-call (no promoted-local buffer).  Adding **no**
+/// buffer means **no** two-pass signature change → it sidesteps Direction-B's
+/// instability.  Disjoint from `native_returns_owned_string` (that gates `#native`
+/// / `codegen_runtime` stubs; this gates `Block` bodies).
+pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
+    // nwb = a real loft **Block** body that returns text WITHOUT a `RefVar(Text)`
+    // work buffer.  The discriminator is the Block body itself, NOT
+    // `rust()/native()` emptiness: an auto-native library fn inlined into a
+    // consumer build (main's C71) has a Block body AND `native()` set, yet is
+    // still an ordinary user text fn whose buffered-vs-bufferless shape is
+    // decided solely by the presence of the work-buffer attribute.  emit.rs only
+    // ever runs this on Block bodies, so a non-Block (FFI-direct / `#rust` / Null)
+    // body is correctly excluded here and handled by the other owned-String signals.
+    matches!(def.returned(), Type::Text(_))
+        && matches!(def.code(), Value::Block(_))
+        && !def.name().starts_with("Op")
+        && !def
+            .attributes()
+            .iter()
+            .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+}
+
+/// @PLN10 — does this function's generated `--native` wrapper return an owned
+/// `String` (rather than a buffer-backed `Str`)?  The single source of truth for
+/// both the wrapper signature (`output_function`) and any caller that must adapt
+/// to it (the shared-store bridge in `native_lib::bridge_write_ret`).  Three
+/// disjoint owned-`String` producers:
+/// - the curated `codegen_runtime` set (`native_returns_owned_string`);
+/// - an FFI-direct text native — `output_native_direct_call` returns the copied
+///   `LoftStr` bytes as an owned `String` (N2).  This path is taken ONLY when the
+///   body is `Null` (no inlined `Block`), so gate on `code() == Null` to stay
+///   aligned with the body selector — an inlined native-lib fn (`Block` body AND
+///   `native()` set, main's C71 consumer build) returns `Str`, not `String`;
+/// - a bufferless ("nwb") user text fn (`def_returns_owned_text`).
+pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
+    matches!(def.returned(), Type::Text(_))
+        && (native_returns_owned_string(def.name())
+            || (*def.code() == Value::Null && !def.native().is_empty())
+            || def_returns_owned_text(def))
+}
+
 /// Use this to map a loft type to the Rust type used in generated code.
 /// The context controls whether the type appears as an owned value, argument, variable, or reference.
 ///
@@ -2162,7 +2224,14 @@ extern crate loft;"
         }
         write!(w, ") ")?;
         if *def.returned() != Type::Void {
-            write!(w, "-> {} ", rust_type(def.returned(), &Context::Result))?;
+            // @PLN10 — owned-`String` vs buffer-backed `Str` wrapper: the single
+            // decision lives in `returns_owned_string` (shared with the
+            // shared-store bridge), so the signature and the body never disagree.
+            if returns_owned_string(def) {
+                write!(w, "-> String ")?;
+            } else {
+                write!(w, "-> {} ", rust_type(def.returned(), &Context::Result))?;
+            }
         }
         // Mark argument variables as already declared so Set won't re-declare them.
         for arg_nr in def.variables().arguments() {
@@ -2505,7 +2574,11 @@ extern crate loft;"
                     Type::Boolean => writeln!(w, "  false")?,
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
                     Type::Text(_) => {
-                        writeln!(w, "  loft::keys::Str {{ ptr: std::ptr::null(), len: 0 }}")?;
+                        // @PLN10 N2 — cdylib text-native wrappers now return
+                        // `-> String` (gated by `!def.native.is_empty()`); the
+                        // graceful browser stub returns an empty owned String
+                        // to match the flipped signature.
+                        writeln!(w, "  String::new()")?;
                     }
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         writeln!(
@@ -2616,12 +2689,13 @@ extern crate loft;"
         }
 
         let needs_ret_cast = matches!(def.returned(), Type::Integer(_));
-        // P244: `text`-returning natives return `loft_ffi::LoftStr` from the
-        // extern, but the wrapper's declared return type (per `rust_type` with
-        // `Context::Result`) is `Str`.  Capture the LoftStr as a typed local
-        // and copy its bytes into `stores.scratch`, then hand back a `Str`
-        // borrowed from the long-lived scratch buffer (mirrors the P205
-        // pattern used by text-returning loft functions).
+        // P244 / @PLN10 N2: `text`-returning natives return `loft_ffi::LoftStr`
+        // from the extern.  Capture it as a typed local, copy its bytes into an
+        // OWNED `String`, and return that directly — the wrapper signature is
+        // `-> String` (gated by `!def.native().is_empty()` at the header) and the
+        // caller bridges `String` → `Str` via `Deref` (the @P304 path).  The
+        // original P244 fix borrowed a `Str` from `stores.scratch`; N2 retired
+        // the scratch hop (owned, freed at scope end — no program-lifetime leak).
         let needs_text_wrap = matches!(def.returned(), Type::Text(_));
         if needs_ret_cast {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
@@ -2720,16 +2794,20 @@ extern crate loft;"
         if needs_ret_cast {
             write!(w, ") }}) as i64")?;
         } else if needs_text_wrap {
+            // @PLN10 N2 — cdylib `#native` text return: copy the foreign
+            // `LoftStr` bytes into an OWNED `String` and return it directly.
+            // The wrapper signature is `-> String` (gated by `!def.native
+            // .is_empty()` at the header) and the caller bridges `String` →
+            // `Str` via `Deref<Target=str>` (the @P304 path — same as the
+            // curated `codegen_runtime` producers in Build 4).  No
+            // `stores.scratch`: the `String` is owned by the caller and freed
+            // at scope end instead of leaked into the program-lifetime buffer.
             writeln!(w, ") }};")?;
             writeln!(
                 w,
                 "  let _bytes: Vec<u8> = if _ret_str.ptr.is_null() {{ Vec::new() }} else {{ unsafe {{ std::slice::from_raw_parts(_ret_str.ptr, _ret_str.len) }}.to_vec() }};"
             )?;
-            writeln!(
-                w,
-                "  stores.scratch.push(unsafe {{ String::from_utf8_unchecked(_bytes) }});"
-            )?;
-            write!(w, "  Str::new(stores.scratch.last().unwrap())")?;
+            write!(w, "  unsafe {{ String::from_utf8_unchecked(_bytes) }}")?;
         } else if returns_loft_ref {
             // Convert cdylib's LoftRef return to a DbRef.  `_guard`
             // (Drop) clears CURRENT_STORES at function exit.  Transmute

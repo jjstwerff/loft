@@ -579,6 +579,14 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
     }
     args.reverse();
 
+    // @PLN10 — dest-mode detection: the interpreter caller routes a text-returning
+    // auto-native call through `gen_cdylib_text_dest_call`, which set a per-call
+    // `bridge_text_dest` before this dispatch.  The bridge consumes it (writes the
+    // result into that caller-owned record) and signals dest-mode by leaving `ret`
+    // text null — so we must push NOTHING here, matching the codegen's dest-mode
+    // stack accounting.  Captured before the call because the bridge `take()`s it.
+    let text_dest_mode = stores.bridge_text_dest.is_some();
+
     let mut ret = LibArg::ZERO;
     let stores_ptr: *mut crate::database::Stores = stores;
     // SAFETY: `bridge_ptr` is a `loft_shared_…` export of an auto-generated cdylib
@@ -607,14 +615,20 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         Some(ArgT::F32) => stores.put::<f64>(stack, f64::from(f32::from_bits(ret.scalar as u32))),
         Some(ArgT::Bool) => stores.put(stack, ret.scalar != 0),
         Some(ArgT::Ref | ArgT::Vec) => stores.put::<DbRef>(stack, ret.dbref),
-        // The bridge already copied the result text into `stores.scratch[0]`
-        // (stable); point the stack `Str` at it (mirrors `bridge_push_str`).
+        // @PLN10 — dest-passing: in dest-mode the bridge wrote the result into the
+        // caller-owned `bridge_text_dest` record and left `ret` text null; the value
+        // lives in its destination, so push NOTHING (matches the dest-mode codegen).
+        // The non-dest branch is an uncovered value position (whole-suite `=panic`
+        // == 0 proved it dead) — degrade to an empty `Str` rather than re-introduce
+        // `stores.scratch`, and flag it loudly in dev.
+        Some(ArgT::Text) if text_dest_mode => {}
         Some(ArgT::Text) => {
-            let s = crate::keys::Str {
-                ptr: ret.text_ptr,
-                len: ret.text_len as u32,
-            };
-            stores.put(stack, s);
+            debug_assert!(
+                ret.text_ptr.is_null(),
+                "auto-native text return reached the dispatcher without a dest \
+                 (uncovered value position) — @PLN10 dest-passing coverage gap"
+            );
+            stores.put(stack, crate::keys::Str::new(""));
         }
     }
 }
@@ -819,16 +833,51 @@ fn bridge_push_str(
     stack: &mut crate::keys::DbRef,
     s: loft_ffi::LoftStr,
 ) {
+    bridge_text_result(stores, stack, s.ptr, s.len);
+}
+
+/// Materialise a foreign `LoftStr` text return into the interpreter.
+///
+/// @PLN10 N2b — when `stores.bridge_text_dest` is set (by `n_set_bridge_dest`,
+/// emitted immediately before this cdylib call by `gen_cdylib_text_dest_call`),
+/// write the bytes into that caller-owned work-buffer record and push NOTHING —
+/// the record IS the result (read by the chokepoint's `Var(w)`), so the
+/// never-cleared `stores.scratch` is bypassed.  Otherwise fall back to the legacy
+/// scratch-backed `Str` (the value-position case the chokepoint hasn't wrapped).
+#[cfg(feature = "native-extensions")]
+fn bridge_text_result(
+    stores: &mut crate::database::Stores,
+    stack: &mut crate::keys::DbRef,
+    ptr: *const u8,
+    len: usize,
+) {
     use crate::keys::Str;
-    if !s.ptr.is_null() && s.len > 0 {
-        let text =
-            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(s.ptr, s.len)) };
-        stores.scratch.clear();
-        stores.scratch.push(text.to_string());
-        stores.put(stack, Str::new(&stores.scratch[0]));
+    let text: &str = if !ptr.is_null() && len > 0 {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }
     } else {
-        stores.put(stack, Str::new(""));
+        ""
+    };
+    if let Some(dest) = stores.bridge_text_dest.take() {
+        if !text.is_empty() {
+            stores
+                .store_mut(&dest)
+                .addr_mut::<String>(dest.rec, dest.pos)
+                .push_str(text);
+        }
+        return;
     }
+    // @PLN10 D/G2 — no dest set ⇒ this cdylib text call was NOT routed through
+    // `n_set_bridge_dest` (an uncovered value position).  Dest-passing covers
+    // every position in the corpus (whole-suite `=panic` == 0), so this is dead;
+    // degrade gracefully to an empty `Str` rather than re-introduce
+    // `stores.scratch` (the field is being retired), and flag the coverage gap
+    // loudly in dev builds.
+    debug_assert!(
+        false,
+        "cdylib text return reached the bridge without a dest (uncovered value \
+         position) — @PLN10 N2b coverage gap"
+    );
+    stores.put(stack, Str::new(""));
 }
 
 /// Wrap a returned `loft_ffi::LoftRef` (direct vector record) in the indirect
@@ -978,8 +1027,6 @@ fn dispatch_call(
     params: &[ArgT],
     ret: Option<ArgT>,
 ) {
-    use crate::keys::Str;
-
     // Normalize Vec → Ref for dispatch matching. The vector dereference
     // already happened during argument extraction, so Vec and Ref have
     // identical calling conventions at this point.
@@ -1063,15 +1110,8 @@ fn dispatch_call(
         stack: &mut crate::keys::DbRef,
         s: LoftStr,
     ) {
-        if !s.ptr.is_null() && s.len > 0 {
-            let text =
-                unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(s.ptr, s.len)) };
-            stores.scratch.clear();
-            stores.scratch.push(text.to_string());
-            stores.put(stack, Str::new(&stores.scratch[0]));
-        } else {
-            stores.put(stack, Str::new(""));
-        }
+        // @PLN10 N2b — shares the bridge dest-passing path (see `bridge_text_result`).
+        bridge_text_result(stores, stack, s.ptr, s.len);
     }
 
     // Helper: widen an i32 native return to i64, preserving the null

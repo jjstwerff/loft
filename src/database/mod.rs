@@ -227,9 +227,14 @@ pub struct Stores {
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
     /// requirement on `free()` that the old cascade-based scan imposed.
     pub free_bits: Vec<u64>,
-    /// Temporary strings produced by text-returning native functions.
-    /// Cleared by `OpClearScratch` at statement boundaries.
-    pub scratch: Vec<String>,
+    /// @PLN10 N2b — destination for the NEXT cdylib FFI text return.  Set by
+    /// `n_set_bridge_dest` (emitted right before a dest-passed cdylib text call)
+    /// and `take()`n by the bridge's text path (`bridge_push_str` /
+    /// `push_loft_str`): when `Some`, the foreign `LoftStr` bytes are written
+    /// directly into that store record, and the
+    /// bridge pushes nothing (the record IS the result).  Transient — lives only
+    /// across the two adjacent `OpStaticCall`s.
+    pub bridge_text_dest: Option<crate::keys::DbRef>,
     /// per-definition DbRef into the CONST_STORE for vector
     /// constants (e.g. `pub HEIGHT_STEP_LABELS: vector<text> = […]`).
     /// Indexed by `d_nr`; a null DbRef (store_nr = u16::MAX) means
@@ -468,7 +473,7 @@ impl Clone for Stores {
             max: self.max,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Vec::new(),
+            bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
@@ -937,7 +942,7 @@ impl Stores {
             max: 0,
             peak: 0,
             free_bits: Vec::new(),
-            scratch: Vec::new(),
+            bridge_text_dest: None,
             const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),

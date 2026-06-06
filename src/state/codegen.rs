@@ -46,11 +46,48 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
 }
 
 /// Text-returning natives that accept a destination buffer instead of allocating one.
-fn is_text_dest_native(name: &str) -> bool {
+pub(crate) fn is_text_dest_native(name: &str) -> bool {
     matches!(
         name,
-        "t_4text_replace" | "t_4text_to_lowercase" | "t_4text_to_uppercase"
+        "t_4text_replace"
+            | "t_4text_to_lowercase"
+            | "t_4text_to_uppercase"
+            // @PLN10 — text producers with `_dest` variants (registered in
+            // `native.rs FUNCTIONS`).  `as_text` is INCLUDED (Phase 2): text-null
+            // is content-based ("\0"), so a dest record carries it — the premise
+            // that "a dest can't represent null" was probe-falsified on both
+            // backends.
+            | "n_source_dir"
+            | "n_json_errors"
+            | "t_9JsonValue_kind"
+            | "t_9JsonValue_to_json"
+            | "t_9JsonValue_to_json_pretty"
+            // @PLN10 Phase 1 — always-non-null `#rust`-template producers.
+            | "n_ymd_days_ago"
+            | "n_store_memory"
+            // @PLN10 Phase 1 batch 2 — always-non-null codegen_runtime producers.
+            | "i_parse_errors"
+            | "n_struct_to_json"
+            | "n_struct_to_json_pretty"
+            // @PLN10 Phase 1 — par-text buffer reader (interp; native is owned
+            // String already, native par-text loops are blocked by #273).
+            | "n_parallel_buf_get_text"
+            // @PLN10 Phase 2 — as_text (null carried as the "\0" sentinel content).
+            | "t_9JsonValue_as_text"
+            // @PLN10 Phase 2 — env_variable (non-null; os_variable owns its String).
+            | "n_env_variable"
     )
+}
+
+/// @PLN10 N2b — a **cdylib FFI** text call: an EXTERNAL `#native "symbol"`
+/// function returning text.  Built-in text natives are `#pure` / `#rust` (empty
+/// `def.native`); only loaded cdylib functions carry a non-empty native symbol,
+/// so this is disjoint from `is_text_dest_native` (no `default/` decl uses
+/// `#native`).  Such calls dispatch through the runtime bridge, which is
+/// dest-passed via `n_set_bridge_dest` + `gen_cdylib_text_dest_call` instead of
+/// `stores.scratch`.
+pub(crate) fn is_cdylib_text_call(def: &crate::data::Definition) -> bool {
+    !def.native().is_empty() && matches!(def.returned(), Type::Text(_))
 }
 
 impl State {
@@ -326,10 +363,10 @@ impl State {
             ValueType::Null => Type::Void,
             ValueType::Line => {
                 self.line_numbers.insert(self.code_pos, node.line_nr());
-                if let Some(&lib_nr) = self.library_names.get("OpClearScratch") {
-                    stack.add_op("OpStaticCall", self);
-                    self.code_add(lib_nr);
-                }
+                // @PLN10 D/G4 — the former `OpClearScratch` emission here never
+                // fired (`library_names` never resolved the opcode name), which is
+                // why `scratch` was never cleared.  The field is retired (G5), so
+                // the dead emit is removed.
                 Type::Void
             }
             // @PLN11 G2 — single-child / compound delegating arms: dispatch +
@@ -2248,8 +2285,12 @@ impl State {
         if stack.data.def(op).name() != "OpAppendText" || parameters.len() < 2 {
             return false;
         }
+        // P217-class footgun: the parser wraps the appended RHS in a
+        // `Value::Span` for source-position tracking, so matching `&parameters[1]`
+        // as a bare `Value::Call` silently misses every `out += native()` and
+        // routed it through scratch instead of `_dest`.  Unspan both operands.
         let (Value::Var(dest_var), Value::Call(inner_op, inner_args)) =
-            (&parameters[0], &parameters[1])
+            (parameters[0].unspan(), parameters[1].unspan())
         else {
             return false;
         };
@@ -3166,6 +3207,40 @@ impl State {
                     self.code_add(var_pos);
                     return;
                 }
+                // @PLN10 — destination-passing into a `RefVar(Text)` work buffer.
+                // When the value is a text-dest native (`is_text_dest_native`), the
+                // native writes its result DIRECTLY into the deref'd buffer (clear
+                // it first, then the `_dest` native `push_str`s into the empty
+                // record), avoiding `stores.scratch`.  This is the return-dep-local
+                // case: `text_return` promotes `k = json.kind()` 's `k` to this
+                // `&text` return slot, so the `Type::Text` dest-pass below never
+                // fires and the call fell back to the scratch producer (`n_kind`).
+                if let Value::Call(op, args) = value.unspan() {
+                    let name = stack.data.def(*op).name().to_owned();
+                    if is_text_dest_native(&name)
+                        && let Some(&lib_nr) = self.library_names.get(&(name + "_dest"))
+                    {
+                        let var_pos = stack.var_pos(var);
+                        stack.add_op("OpClearStackText", self);
+                        self.code_add(var_pos);
+                        self.gen_text_dest_call(stack, var, *op, args, lib_nr);
+                        return;
+                    }
+                    // @PLN10 N2b — a cdylib FFI text call assigned to a return-dep
+                    // `RefVar(Text)` buffer (e.g. `p = req.path(); … return p`).
+                    // `gen_cdylib_text_dest_call` pushes the RefVar's raw DbRef as
+                    // the dest, so clear it first (the bridge `push_str`s in).
+                    if is_cdylib_text_call(stack.data.def(*op)) {
+                        let native_sym = stack.data.def(*op).native().to_owned();
+                        if let Some(&cdylib_lib) = self.library_names.get(&native_sym) {
+                            let var_pos = stack.var_pos(var);
+                            stack.add_op("OpClearStackText", self);
+                            self.code_add(var_pos);
+                            self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
+                            return;
+                        }
+                    }
+                }
                 // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
                 {
@@ -3206,6 +3281,16 @@ impl State {
                 let dest_name = name.clone() + "_dest";
                 if let Some(&lib_nr) = self.library_names.get(&dest_name) {
                     self.gen_text_dest_call(stack, var, *op, args, lib_nr);
+                    return;
+                }
+            }
+            // @PLN10 N2b — cdylib FFI text call (an external `#native` text fn;
+            // built-ins are `#pure`/`#rust` with empty `def.native`).  Dest-pass
+            // through the bridge: write into `var` instead of `stores.scratch`.
+            if is_cdylib_text_call(stack.data.def(*op)) {
+                let native_sym = stack.data.def(*op).native().to_owned();
+                if let Some(&cdylib_lib) = self.library_names.get(&native_sym) {
+                    self.gen_cdylib_text_dest_call(stack, var, *op, args, cdylib_lib);
                     return;
                 }
             }
@@ -3316,8 +3401,22 @@ impl State {
         for arg_val in args {
             self.generate(arg_val, stack, false);
         }
-        let dep_offset = stack.var_pos(var);
-        self.emit_push_create_stack(stack, dep_offset);
+        // The destination DbRef the `_dest` native writes into.  For a plain
+        // `Text` var that is the create-stack address of the var's String slot.
+        // @PLN10 — for a `RefVar(Text)` var (a `&mut String` work buffer, e.g. a
+        // return-dep local promoted by `text_return`) the dest is the RAW DbRef
+        // the RefVar holds — pushed via `OpVarRef` (returns `reference`, so
+        // `add_op` self-accounts the stepped DbRef, matching `emit_push_create_stack`).
+        // The caller (`set_var`) has already cleared the buffer, so the native's
+        // `push_str` appends into an empty record.
+        if matches!(stack.function.tp(var), Type::RefVar(_)) {
+            let var_pos = stack.var_pos(var);
+            stack.add_op("OpVarRef", self);
+            self.code_add(var_pos);
+        } else {
+            let dep_offset = stack.var_pos(var);
+            self.emit_push_create_stack(stack, dep_offset);
+        }
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
         // @PLAN53 cluster 2 / S4: the args + the create-stack dest DbRef each
@@ -3329,6 +3428,59 @@ impl State {
             stack.position -= stack.step(size(attr_type, &Context::Argument));
         }
         stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
+    }
+
+    /// @PLN10 N2b — destination-passing for a **cdylib FFI** text call.  Unlike a
+    /// built-in `_dest` native (one `OpStaticCall`), the foreign function has no
+    /// `_dest` variant, so this emits TWO calls: `n_set_bridge_dest` (pops the
+    /// work-buffer DbRef and stashes it on `stores`), then the cdylib itself —
+    /// whose bridge (`bridge_text_result`) writes the `LoftStr` into that record
+    /// and pushes NOTHING (dest-mode), bypassing `stores.scratch`.  Stack order
+    /// mirrors `gen_text_dest_call`: args, then the dest on top.
+    fn gen_cdylib_text_dest_call(
+        &mut self,
+        stack: &mut Stack,
+        var: u16,
+        op: u32,
+        args: &[Value],
+        cdylib_lib: u16,
+    ) {
+        let set_dest_lib = *self
+            .library_names
+            .get("n_set_bridge_dest")
+            .expect("n_set_bridge_dest registered in native FUNCTIONS");
+        let attr_types: Vec<Type> = stack
+            .data
+            .def(op)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect();
+        for arg_val in args {
+            self.generate(arg_val, stack, false);
+        }
+        // Push the destination DbRef (top) — the raw RefVar DbRef for a promoted
+        // return buffer, else the create-stack address of the plain text slot
+        // (same dest forms as `gen_text_dest_call`).
+        if matches!(stack.function.tp(var), Type::RefVar(_)) {
+            let var_pos = stack.var_pos(var);
+            stack.add_op("OpVarRef", self);
+            self.code_add(var_pos);
+        } else {
+            let dep_offset = stack.var_pos(var);
+            self.emit_push_create_stack(stack, dep_offset);
+        }
+        // n_set_bridge_dest pops the dest DbRef off the top and stashes it.
+        stack.add_op("OpStaticCall", self);
+        self.code_add(set_dest_lib);
+        stack.position -= stack.step(size_of::<crate::keys::DbRef>() as u16);
+        // The cdylib dispatch pops its args; the bridge writes into the stashed
+        // dest and pushes nothing — so subtract the args but DON'T add a result.
+        stack.add_op("OpStaticCall", self);
+        self.code_add(cdylib_lib);
+        for attr_type in &attr_types {
+            stack.position -= stack.step(size(attr_type, &Context::Argument));
+        }
     }
 }
 

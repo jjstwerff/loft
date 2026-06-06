@@ -74,7 +74,7 @@ Items below are "what to BUILD" derived from the design content in this document
 
 | Item | Section | Status |
 |---|---|---|
-| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; cooperates with `plans/future/21-retire-scratch/` |
+| **Dep-inference** — for native fn returns (zero-leak unblock) | [§ Active design — Dep-inference](#active-design--dep-inference-for-native-fn-returns-zero-leak-unblock) | Closes closure / native-fn dep-tracking gap; `plans/finished/21-retire-scratch/` shipped the scratch side |
 
 ### Compiler-blocker cluster
 
