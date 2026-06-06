@@ -15,7 +15,14 @@ pub(crate) mod ops;
 mod pre_eval;
 mod text;
 
-/// Entry produced by `collect_pre_evals`: `(temp_var, type_str, expr_code, def_nr, stores_fn)`.
+/// One hoisted binding produced by `collect_pre_evals`:
+/// `(name, match_code, bind_code, counter, replace_all)` — `name` is the
+/// `_pre_N` temp, `match_code` is the node's regenerated text (legacy
+/// string-recogniser fallback), `bind_code` is what the `let` binds (may
+/// differ from `match_code`, e.g. a narrow-int `as i64` wrap), `counter` is the
+/// codegen counter when generated, `replace_all` substitutes every occurrence
+/// (template dup-param).  Stored in `PreEvalSet`, which adds intrinsic
+/// node-identity keys — see `pre_eval.rs`.
 type PreEvalEntry = (String, String, String, u32, bool);
 
 /// Rust source spliced into the native `main` bootstrap just before its
@@ -369,6 +376,14 @@ pub struct Output<'a> {
     pub def_nr: u32,
     pub indent: u32,
     pub declared: HashSet<u16>,
+    /// Active hoisted sub-expressions for the statement being emitted: IR node
+    /// address → its `_pre_N` name.  `output_code_inner` consults this at every
+    /// node so a hoisted operand emits its name instead of being re-generated
+    /// inline — the single source of truth for pre-eval identity (no counter
+    /// re-derivation, no regenerate-and-string-match).  Saved/restored per
+    /// statement in `output_block`; empty outside pre-eval emission.  See
+    /// COMPILER.md § Synthesised-identity stability.
+    pub active_pre_eval: HashMap<usize, String>,
     /// Set of reachable `def_nrs` for native output (populated by `output_native_reachable`).
     pub reachable: HashSet<u32>,
     /// Stack of enclosing loop scope ids, innermost last.

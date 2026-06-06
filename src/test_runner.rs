@@ -809,6 +809,7 @@ pub(crate) fn run_tests(
                             indent: 0,
                             def_nr: 0,
                             declared: HashSet::new(),
+                            active_pre_eval: std::collections::HashMap::new(),
                             reachable: HashSet::new(),
                             loop_stack: Vec::new(),
                             next_format_count: 0,

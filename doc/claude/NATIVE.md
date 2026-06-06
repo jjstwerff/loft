@@ -910,6 +910,76 @@ functions from fill.rs.
 
 ---
 
+## N21 — one-walk pre-eval (unlink collect from emit) — **Shipped (2026-06-06)**
+
+Fixes the #272 counter-coupling class. Full root analysis:
+[COMPILER.md § Synthesised-identity stability](COMPILER.md#synthesised-identity-stability--the-counter-coupling-hazard).
+
+### Problem
+
+Native statement lowering hoists store-borrowing / side-effecting / duplicated
+sub-expressions into `let _pre_N = …;` bindings so an outer expression can borrow
+them safely. Today this is **two traversals of the same IR**:
+
+1. `collect_pre_evals(v)` walks `v`, decides what to hoist, and records
+   `PreEvalEntry = (name, pcode, prefix, pre_counter, replace_all)` — where `pcode` is
+   *the Rust text the node generates with `self.counter` at `pre_counter`*.
+2. `output_code_with_subst(v, pre_evals)` walks `v` again and must re-recognise each
+   hoisted node to emit its `_pre_N` name instead of the inline code. It does this by
+   `try_subst_pre_eval`: rewind `self.counter = pre_counter`, **re-run codegen, and
+   string-compare** to `pcode`; on match emit the name, else fall through to a
+   whole-expression `.replacen(pcode, name)`.
+
+A node's identity is therefore "the exact text it emits at counter K" — a property of
+the walk, not the node. Any node kind that bypasses the structural recogniser (`Op*`
+comparisons go through `output_call`'s template, not the per-arg `try_subst_pre_eval`
+path) or whose inner `_pre_N` names drift between the two walks fails to match. #272:
+`"{x}" != literal` with a stateful producer hoists the format block into a dead `_pre_4`
+**and** re-inlines it in the `!=`; the producer (`#errors`, cleared on read) is consumed
+by the dead copy, so the live copy reads empty. Silent on the interpreter, wrong on native.
+
+### Fix as shipped: intrinsic identity, read from one place
+
+`collect_pre_evals` still runs as a pass, but it now records each hoist keyed on the
+**IR node's address** in a `PreEvalSet` (`by_node: address → entry`). `output_block`
+emits the `let _pre_N = …;` bindings, then installs the set's address→name map as
+`Output::active_pre_eval` (saved/restored per statement so nested blocks nest cleanly).
+`output_code_inner` — the one primitive every sub-expression emission funnels through,
+including `#rust` template operands via `generate_expr_buf` — checks `active_pre_eval`
+at the top: a hoisted node emits its `_pre_N` name and returns. The operand is therefore
+emitted **once**, recognised by identity, never re-generated.
+
+With identity intrinsic, the second traversal's recogniser is dead and **deleted**:
+`output_code_with_subst`, `output_if_with_subst`, `try_subst_pre_eval`, the
+`pre_counter`-rewind regeneration, and the `.replacen` string substitution are gone.
+`Op*` stops being special because nothing re-recognises anything — the `output_code_inner`
+check fires for every node regardless of kind. The `PreEvalEntry`'s `match_code` /
+`pre_counter` fields survive only for collect-time inner-binding assembly in
+`rewrite_code` (not for emit-time matching).
+
+### How the risks were handled
+
+- **Borrow / evaluation order** — unchanged: bindings emit before the statement body in
+  collection order (inner hoists before outer, since `rewrite_code` collects inner first).
+- **Nested hoists** — the bindings list is already inner-first; address keys are unique
+  across the live IR tree, so no collisions.
+- **Nested blocks** — `active_pre_eval` is saved/restored around each statement, so an
+  inner block installs its own map and restores the outer on return.
+- **`patch_hoisted_returns` / ref-tail capture** — unaffected; verified by the full suite.
+
+### Verification (done)
+
+Matrix on **both** backends — pure operand, side-effecting operand (#272), nested user-fn
+args (the double-borrow case), narrow-int — all identical interp/native. Regression test
+`tests/scripts/repro_p272_inline_format_compare.loft` (runs both backends). Full suite
+green (only the pre-existing `viewer_markdown` timing flake red).
+
+**Files:** `src/generation/pre_eval.rs` (`PreEvalSet`, deletions), `src/generation/emit.rs`
+(`output_code_inner` push-down, `output_block` install/restore), `src/generation/mod.rs`
+(`Output::active_pre_eval`).
+
+---
+
 ## Dependency Graph
 
 ```
@@ -1259,6 +1329,7 @@ shipped state.  Each row links to its design content above.
 | **N20b** — Run `cargo fmt` on generated `fill.rs` | [§ N20](#n20--repair-fillrs-auto-generation) | Open — runs `rustfmt` on the generated file so formatting matches the hand-maintained version. |
 | **N9 (C71)** — native-dispatch completeness | [§ N9](#n9--native-library-shared-store-dispatch-c71) | Open *enhancements* on a complete, graceful core (a construct that can't cross **interprets** — not a bug): closures (`__closure`) · `generate_interface` aggregate names (`sorted<Item[k]>`) · D2a binary schema interface (no source re-parse; ties to the registry) · `hash`/`index`/`spacial` coverage · gate-driven dispatch (N4 tail) · background build (N3 polish).  Detail in § N9.  Routed here from @PLN11 Arc N (2026-06-05). |
 | **N10 prune** | [§ N10 below](#current-state-2026-04-07) | **Stale.**  Says "6 fail, 34 skip of 85 files"; current state is 108/108 pass.  Sub-steps are diagnostic recipes for failures that no longer exist.  Action: prune § N10 + N20 to historical pointers when N8b.3 + N8c.x close. |
+| **one-walk pre-eval** (#272 class) | [§ N21 below](#n21--one-walk-pre-eval-unlink-collect-from-emit) | **Shipped (2026-06-06).**  Pre-eval identity is now intrinsic (IR node address → `_pre_N`, in `PreEvalSet`); `output_code_inner` substitutes a hoisted node by address, so the operand is emitted once and never re-generated.  The regenerate-and-string-match machinery (`output_code_with_subst` / `output_if_with_subst` / `try_subst_pre_eval`) is **deleted**.  Fixes #272 + the counter-coupling class.  See [COMPILER.md § Synthesised-identity stability](COMPILER.md#synthesised-identity-stability--the-counter-coupling-hazard). |
 
 Suggested order: N8c.1 audit (fastest) → N20a + N20b (trivial pair)
 → N8b.3 (actual feature work; touches `src/generation/coroutine.rs`)

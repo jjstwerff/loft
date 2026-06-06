@@ -268,6 +268,91 @@ runtime really does. This is why the standing detectors (the sanitizer for A,
 `LOFT_STORE_GUARD` for E, a differential backend sweep for D) earn their place:
 they turn hidden behaviour into a visible signal, so the model becomes checkable.
 
+### Don't tolerate re-derivation patterns — engineer the class away
+
+Some bugs are not a broken spot but a **broken pattern**: shared state that several
+routines each work out *independently*, instead of reading it from one place. When two
+of those routines disagree, the result is wrong — yet no single routine is at fault, so
+the failure is **silent**. It slips past [Goal A](#goal-a--soundness-no-silent-corruption),
+and it often shows up only as a **backend disagreement** — interpret says one thing,
+`--native` another ([Goal D](#goal-d--cross-platform--cross-backend-parity)). That
+hidden, re-derived state is the same shape of machinery
+[Goal E](#goal-e--predictable-memory-the-programmers-model-is-the-truth) removes from the
+memory model: a counter or convention that quietly decides an outcome the source never
+names.
+
+Three examples from loft's own internals:
+
+- **variable slots** — slot numbers were once worked out per pass; two passes could
+  land on different numbers and collide.
+- **the store reference count** — a hidden counter, not the scope, decided when a value
+  died (removed in plan-57; see Goal E above).
+- **native pre-evaluation identity** — the collect walk and the emit walk each
+  re-derived a hoisted sub-expression's name from a codegen counter, and disagreed when
+  the counter drifted (the `PreEvalSet` work; see
+  [COMPILER.md § Synthesised-identity stability](COMPILER.md#synthesised-identity-stability--the-counter-coupling-hazard)).
+
+When we find a pattern like this we do **not** tolerate it. Tolerating wears four
+respectable disguises, and we refuse all of them: **patch one site** (the siblings stay
+broken); **add a workaround or a guard** (a new rule someone must maintain — itself fresh
+friction, against [Goal F](#goal-f--friction-free-surface-the-language-serves-the-programmer-not-the-compiler));
+**file it for later** (you re-pay to re-derive the scope you understand right now); or
+**add an assertion and move on** (both derivations stay alive, so it returns).
+
+We engineer the **class** away, on the same four-step arc the slot and reference-count
+work used:
+
+1. **Observe** the brittleness — name the state being re-derived, and the silent failure
+   it causes.
+2. **Reify** it — give the state one explicit home (the slot table; `PreEvalSet`), so the
+   implicit thing becomes a value you can hold and inspect.
+3. **Prove coverage** — check that *every* routine can be served from that one home,
+   **without changing behaviour yet**. This is a gate, not a courtesy: cutting over before
+   coverage is proven breaks the one consumer that cannot yet read from it. A standing
+   detector that reports the remaining gaps (`LOFT_STORE_GUARD` for memory; the pre-eval
+   drift report for identity) is how this stays measurable.
+4. **Cut over** — the routines *read* the one home, and the second derivation is
+   **deleted**. The class is gone only when nothing re-derives the state, because then
+   there is nothing left to disagree.
+
+The definition of done is step 4: until the second derivation is deleted, the bug can
+come back. Making the hidden state **visible** (steps 1–2) is diagnosis; making it the
+**only** state (step 4) is the cure — the constructive form of Goal E's law that a
+divergence is fixed by *removing* hidden machinery, not by adding cleverness.
+
+#### The largest instance — the two backends, and where the arc must stop at step 3
+
+The biggest re-derivation in the whole project is the **interpreter vs the native
+backend**: two implementations that each derive "what this program means" from the same
+IR. Its silent-failure symptom is exactly [Goal D](#goal-d--cross-platform--cross-backend-parity)
+backend divergence — interp says one thing, `--native` another, no error. The pattern is
+*fractal*: #272 was a tiny re-derivation **inside** native (collect vs emit, pre-eval
+identity from a counter) that surfaced as a full parity break (`inline=true` vs `false`).
+The small disagreement *was* the large one — fixing the sub-derivation restored parity.
+
+The **native-library work** (`@PLN11` "Data as a store" + store-backed IR; the C71
+shared-store dispatch in [NATIVE.md § N9](NATIVE.md#n9--native-library-shared-store-dispatch-c71))
+is this same arc applied to the substrate, not a one-off fix:
+
+- **Reify** — data and the IR *become a store*, one substrate both backends index into,
+  instead of each holding its own representation.
+- **Cut over** — a native library and its interpreted caller share **one** store, not two
+  copies kept in sync. The N9 open item *"binary schema, no source re-parse"* is the same
+  move: re-parsing source to recover a library's types is a second derivation of the
+  schema; the binary schema is the reified single truth both sides read.
+
+But here the arc **cannot reach step 4 at the top level**: the three backends are
+deliberately three implementations (interp for debug/wasm, native for speed — Goal D), so
+"make native read the interpreter's execution" is impossible *by design*. This is exactly
+the case the arc's fallback covers — *when you cannot delete the second derivation, make
+its violation loud.* That is what the **differential backend sweep** is (Goal D's Check:
+"identical output and diagnostics — zero differences"): the standing detector for the one
+re-derivation we are forced to keep. So the native-library work and this principle are one
+effort from two directions — **every piece of shared state reified into one truth (one
+store, one schema, one IR, one node-identity) is one fewer place the backends can silently
+disagree**, shrinking the irreducible remainder down to just the execution strategy, small
+enough that the differential sweep can actually guard it.
+
 ---
 
 ## Goal F — Friction-free surface (the language serves the programmer, not the compiler)

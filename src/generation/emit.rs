@@ -21,6 +21,19 @@ impl Output<'_> {
         w: &mut dyn Write,
         code: &Value,
     ) -> std::io::Result<()> {
+        // One-walk pre-eval substitution: if THIS node was hoisted for the
+        // statement being emitted, emit its `_pre_N` name.  Keyed on the node's
+        // address (intrinsic identity) — no counter, no regenerated-text match.
+        // Every operand emission funnels through here (incl. `#rust` template
+        // operands via `generate_expr_buf`), so this single check covers them
+        // all.  See COMPILER.md § Synthesised-identity stability.
+        if !self.active_pre_eval.is_empty()
+            && let Some(name) = self
+                .active_pre_eval
+                .get(&(std::ptr::from_ref(code) as usize))
+        {
+            return write!(w, "{name}");
+        }
         self.output_code_node(w, IrNode::Native(code))
     }
 
@@ -1437,14 +1450,20 @@ impl Output<'_> {
             let pre_evals = self.collect_pre_evals(v)?;
             self.indent -= 1;
             let counter_after_collect = self.counter;
-            for (name, _, bind_code, _, _) in &pre_evals {
+            for (name, _, bind_code, _, _) in &pre_evals.entries {
                 self.indent(w)?;
                 writeln!(w, "let {name} = {bind_code};")?;
             }
+            // Make the hoisted bindings the active source of truth for this
+            // statement's emission: output_code_inner now substitutes each
+            // hoisted node by address.  Saved/restored so nested blocks (emitted
+            // during this statement) can install their own without clobbering ours.
+            let saved_pre_eval = std::mem::replace(&mut self.active_pre_eval, pre_evals.name_map());
             // Restore counter to the value it had when the pre-eval code was generated
             // so that output_code_with_subst regenerates the same inner _pre_N names
             // as those stored in the pre-eval strings (counter desync fix).
             let restore_counter = pre_evals
+                .entries
                 .iter()
                 .map(|(_, _, _, c, _)| *c)
                 .max()
@@ -1461,7 +1480,7 @@ impl Output<'_> {
                 // Emit the return directly instead; the function exits here.
                 if matches!(v.unspan(), Value::Return(_)) {
                     self.indent += 1;
-                    self.output_code_with_subst(w, v, &pre_evals)?;
+                    self.output_code_inner(w, v)?;
                     self.indent -= 1;
                     writeln!(w, ";")?;
                     // All remaining operators are unreachable — skip trailing void tail.
@@ -1470,7 +1489,7 @@ impl Output<'_> {
                 } else {
                     write!(w, "let _ret = ")?;
                     self.indent += 1;
-                    self.output_code_with_subst(w, v, &pre_evals)?;
+                    self.output_code_inner(w, v)?;
                     self.indent -= 1;
                     writeln!(w, ";")?;
                 }
@@ -1602,7 +1621,7 @@ impl Output<'_> {
                         write!(w, "(")?;
                     }
                     self.indent += 1;
-                    self.output_code_with_subst(w, v, &pre_evals)?;
+                    self.output_code_inner(w, v)?;
                     self.indent -= 1;
                     if tail_outer_owned {
                         write!(w, ").to_string()")?;
@@ -1642,6 +1661,8 @@ impl Output<'_> {
             // Restore counter to the state after collect_pre_evals so the next
             // operator gets fresh, non-conflicting pre-eval names.
             self.counter = counter_after_collect;
+            // Restore the enclosing statement's pre-eval map (empty at top level).
+            self.active_pre_eval = saved_pre_eval;
         }
         if has_trailing_void && !return_value_is_return {
             self.indent(w)?;
