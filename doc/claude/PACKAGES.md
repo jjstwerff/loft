@@ -14,12 +14,19 @@ use case.
 - [Manifest: `loft.toml`](#manifest-lofttoml)
 - [Package dependencies](#package-dependencies)
 - [Function binding model](#function-binding-model)
+- [Discovery and loading](#discovery-and-loading)
+- [Auto-marshalling dispatch (interpreter, legacy path)](#auto-marshalling-dispatch-interpreter-legacy-path)
+- [loft-ffi helper crate](#loft-ffi-helper-crate)
+- [Store allocation from native code](#store-allocation-from-native-code)
+- [Code generation: `loft generate`](#code-generation-loft-generate)
+- [Key source files](#key-source-files)
 - [Package test suite](#package-test-suite)
 - [Build pipeline](#build-pipeline)
 - [Target matrix](#target-matrix)
 - [OpenGL case study](#opengl-case-study)
 - [Security model](#security-model)
 - [Implementation phases](#implementation-phases)
+- [Open work](#open-work)
 
 ---
 
@@ -450,6 +457,306 @@ pub unsafe extern "C" fn n_rgb_lum(store: LoftStore, pixels: LoftRef) -> i64 {
 With the `build.rs` + `Cargo.toml` above, `loft --interpret prog.loft` (dlopen
 + bridge) and `loft --native prog.loft` (direct link) both just work — no
 register list, no marshal glue.
+
+---
+
+## Discovery and loading
+
+### Search chain
+
+`lib_path()` in `src/parser/mod.rs` tries candidates in order:
+1. `lib/<id>.loft` and `<id>.loft` relative to CWD
+2. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags)
+3. Packaged layout: `<dir>/<id>/src/<id>.loft` for each search directory
+4. Each directory in `LOFT_LIB` environment variable
+5. Fallback: `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
+
+When a directory `<id>/` is found, `lib_path_manifest()` reads `loft.toml`,
+validates the version requirement, and resolves the entry path.
+
+### Load-time sequencing
+
+```
+parse_dir(default)                           # load standard library
+parse(user_script)                           # populates pending_native_libs
+scopes::check(data)                          # scope analysis
+State::new(database)                         # create runtime
+compile::byte_code(state, data)              # bytecode gen; native::init() runs
+extensions::load_all(state, pending_libs)    # dlopen cdylibs + auto-marshal
+state.execute_argv("main", ...)              # run
+```
+
+### Auto-build
+
+If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
+runs `cargo build --release` automatically via `auto_build_native()`.
+
+---
+
+## Auto-marshalling dispatch (interpreter, legacy path)
+
+The `#[loft_native]` bridge above (§ Function binding model) is the modern
+zero-boilerplate path.  Libraries not yet migrated to it fall back to the
+generic auto-marshaller in `src/extensions.rs`, which bridges loft stack
+values to C-ABI calls without per-function glue code.
+
+### How it works
+
+1. **`compute_sig()`** reads the `#native` definition's types and produces a
+   compact `NativeSig { params: Vec<ArgT>, ret: Option<ArgT> }`.
+
+2. **`wire_native_fns()`** iterates all `#native` definitions, resolves symbols
+   via dlsym, and replaces panic-stubs with the generic `native_auto_dispatch`.
+
+3. **`native_auto_dispatch()`** pops arguments from the loft stack in reverse
+   order, builds typed `ArgVal` values, and calls `dispatch_call()`.
+
+4. **`dispatch_call()`** pattern-matches on the signature and calls the native
+   function pointer with the correct C-ABI cast.
+
+### Type mapping
+
+| Loft type | ArgT | C-ABI type |
+|-----------|------|-----------|
+| `integer` / `character` | `I32` | `i32` |
+| `long` | `I64` | `i64` |
+| `float` | `F64` | `f64` |
+| `single` | `F32` | `f32` |
+| `boolean` | `Bool` | `bool` |
+| `text` | `Text` | `*const u8, usize` |
+| struct / vector / collection | `Ref` | `LoftRef` (with `LoftStore` prepended) |
+
+When any parameter or return type is `Ref`, a `LoftStore` handle is prepended
+as the first C-ABI argument, giving the native function access to store memory.
+
+For functions returning `Ref` with no `Ref` parameters (e.g. `rand_indices`),
+the dispatcher allocates a fresh store for the result automatically.
+
+### Thread-local state
+
+During a native call, a thread-local `CURRENT_STORES` holds a raw pointer
+to the interpreter's `Stores`. This enables the `LoftStore` allocation
+callbacks to reach back into the interpreter for `claim()` and `resize()`
+operations.
+
+---
+
+## loft-ffi helper crate
+
+The `loft-ffi` crate (`/loft-ffi/`) provides safe building blocks for native
+extension authors. No dependencies.
+
+### Core types
+
+**`LoftRef`** — Opaque reference to a store object (struct, vector, collection):
+```rust
+#[repr(C)]
+pub struct LoftRef {
+    pub store_nr: u16,
+    pub rec: u32,
+    pub pos: u32,
+}
+```
+
+**`LoftStore`** — Direct memory access to a store buffer, with allocation callbacks:
+```rust
+#[repr(C)]
+pub struct LoftStore {
+    pub ptr: *mut u8,                    // base pointer (may move on alloc)
+    pub size: u32,                       // capacity in 8-byte words
+    pub ctx: LoftStoreCtx,              // opaque context for callbacks
+    pub claim_fn: ...,                   // allocate words → rec
+    pub reload_fn: ...,                  // refresh ptr/size after alloc
+    pub resize_fn: ...,                  // resize record → new rec
+}
+```
+
+**`LoftStr`** — `#[repr(C)]` text return type (borrowed pointer, valid until
+next `ret()` call on the same thread).
+
+### Text helpers
+
+```rust
+// Convert C-ABI text parameter to &str
+let name = unsafe { loft_ffi::text(name_ptr, name_len) };
+
+// Return a String as LoftStr (stored in thread-local buffer)
+loft_ffi::ret(format!("Hello, {name}!"))
+
+// Return a borrowed &str without copying
+loft_ffi::ret_ref(some_str)
+```
+
+### Field access
+
+`LoftStore` provides direct read/write methods for store memory:
+- `get_int()` / `set_int()` — `i32` fields
+- `get_long()` / `set_long()` — `i64` fields
+- `get_float()` / `set_float()` — `f64` fields
+- `get_byte()` / `set_byte()` — `u8` fields (boolean, simple enum)
+- `get_text()` — read text field as `(*const u8, usize)`
+- `get_ref()` — read sub-reference field as `LoftRef`
+
+All take `(rec, pos, offset)` and compute byte address as `rec * 8 + pos + offset`.
+
+### Null sentinels
+
+```rust
+pub const NULL_INT: i32 = i32::MIN;
+pub const NULL_LONG: i64 = i64::MIN;
+```
+
+---
+
+## Store allocation from native code
+
+Native extensions can allocate records and build vectors directly in the store
+via `LoftStore` methods. Each mutating operation automatically reloads the
+store pointer, since allocation may trigger reallocation.
+
+### Low-level allocation
+
+```rust
+// Allocate raw words (auto-reloads ptr)
+let rec = unsafe { store.claim(words) };
+
+// Resize a record (may relocate; auto-reloads ptr)
+let new_rec = unsafe { store.resize(rec, new_words) };
+
+// Manually refresh ptr/size
+unsafe { store.reload() };
+```
+
+### Record allocation
+
+```rust
+// Allocate a struct record (store_nr derived from the LoftStore handle)
+let r = unsafe { store.alloc_record(words) };
+// r.rec = record number, r.pos = 8 (data start)
+```
+
+### Vector operations
+
+```rust
+// Create an empty vector with pre-allocated capacity
+let mut v = unsafe { store.alloc_vector(elem_size, capacity) };
+
+// Append elements (handles resize automatically)
+unsafe { store.vector_push_int(&mut v, 42) };
+unsafe { store.vector_push_long(&mut v, 123i64) };
+unsafe { store.vector_push_float(&mut v, 3.14) };
+
+// Read current length
+let len = unsafe { store.vector_len(&v) };
+```
+
+The `vector_push_*` methods update `v.rec` in place if the vector record
+moves during resize. The minimum allocation is 11 elements (matching the
+interpreter's convention). The `store_nr` is derived automatically from
+the `LoftStore` handle.
+
+### Callback architecture
+
+The allocation callbacks bridge native code back into the interpreter:
+
+```
+Native extension                    Interpreter (via thread-local)
+─────────────────                   ──────────────────────────────
+store.claim(words)
+  → claim_fn(ctx, words)    ──→    Store::claim(words) → rec
+  → reload_fn(ctx, &ptr, &size) →  read store.base_ptr(), capacity
+  ← updated ptr, size
+  ← rec
+```
+
+`LoftStoreCtx` encodes the `store_nr`; the thread-local `CURRENT_STORES`
+holds a pointer to the interpreter's `Stores` for the duration of the call.
+
+### Safety guarantees
+
+The callback infrastructure provides two safety mechanisms:
+
+1. **Panic containment**: All three callbacks (`ffi_claim`, `ffi_resize`,
+   `ffi_reload`) wrap their bodies in `std::panic::catch_unwind` to prevent
+   panics from propagating across the C-ABI boundary. On panic, `claim`
+   returns 0, `resize` returns the original record unchanged, and `reload`
+   is a no-op.
+
+2. **RAII cleanup**: `dispatch_call` uses a guard struct whose `Drop` impl
+   clears `CURRENT_STORES`, ensuring the thread-local is reset even if the
+   native function or a callback panics.
+
+---
+
+## Code generation: `loft generate`
+
+The `loft generate` command reads a package's `.loft` declarations and produces
+a `native/src/generated.rs` file with correct C-ABI signatures and `todo!()`
+bodies. (This is the no-bridge scaffold for the legacy path; libraries using
+the `#[loft_native]` macro generate their bridges automatically and do not
+need it.)
+
+### Usage
+
+```sh
+cd lib/random
+loft generate .          # writes native/src/generated.rs
+```
+
+### What it generates
+
+For each `#native` declaration:
+
+1. **C-ABI function signature** with proper type marshalling:
+   - Scalars pass directly (`i32`, `i64`, `f64`, `f32`, `bool`)
+   - `text` becomes `(name_ptr: *const u8, name_len: usize)` with a
+     `let name = unsafe { loft_ffi::text(...) }` body line
+   - Struct/vector/collection becomes `LoftRef`, with `LoftStore` prepended
+   - Simple enums become `u8`
+
+2. **Return type handling:**
+   - Scalars return directly
+   - `text` returns `LoftStr` with `loft_ffi::ret(result)` pattern
+   - Struct/vector returns `LoftRef`
+
+3. **Field offset modules** for struct types referenced as parameters:
+   ```rust
+   pub mod image_fields {
+       pub const NAME: u16 = 0;   // text (record ref)
+       pub const WIDTH: u16 = 4;  // integer
+       pub const HEIGHT: u16 = 8; // integer
+       pub const DATA: u16 = 12;  // vector ref
+   }
+   ```
+
+4. **`todo!()` bodies** for the developer to fill in.
+
+### Example output
+
+For `fn rand_indices(n: integer) -> vector<integer>; #native "n_rand_indices"`:
+
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_rand_indices(
+    store: loft_ffi::LoftStore,
+    n: i32,
+) -> loft_ffi::LoftRef /* vector<integer> */ {
+    let result: loft_ffi::LoftRef = todo!("implement n_rand_indices(n)");
+    result
+}
+```
+
+---
+
+## Key source files
+
+| File | Role |
+|------|------|
+| `src/extensions.rs` | cdylib loader, auto-marshalling dispatcher, allocation callbacks |
+| `src/native.rs` | Built-in function registry (`FUNCTIONS` table, `init()`) |
+| `src/manifest.rs` | `loft.toml` reader and version checker |
+| `src/main.rs` | `generate_native_stubs()` for `loft generate` |
+| `loft-ffi/src/lib.rs` | `LoftRef`, `LoftStore`, `LoftStr`, allocation helpers |
 
 ---
 
@@ -892,8 +1199,40 @@ nothing else works.  P5-P6 can proceed in parallel with P3-P4 since the
 
 ---
 
+## Open work
+
+The package **format itself is shipped**: `loft.toml` manifests
+work today, and 14 `lib/*` packages already use the format
+(`lib/server`, `lib/arguments`, `lib/moros_*`, `lib/graphics`,
+etc.).  The items below are remaining infrastructure work.
+
+| Item | ROADMAP row | Section above | Status |
+|---|---|---|---|
+| **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry; detailed draft in [PKG_REGISTRY.md](PKG_REGISTRY.md) | Open — designed, scheduled.  File-based MVP scopes to ~1 week (no server).  Migration to a real server later is a drop-in replacement at the same URL — see [PKG_REGISTRY.md § The invariant](PKG_REGISTRY.md#the-invariant--end-user-experience-is-identical-to-a-real-server). |
+| **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
+| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
+
+Suggested order:
+1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
+   Lands quickly; gives reproducible builds before registry work starts.
+2. **PKG.REG registry MVP** — bulk of the work.  Detailed design:
+   [PKG_REGISTRY.md](PKG_REGISTRY.md) (file-based MVP, server-compatible
+   URL surface).  Phases R1-R9 there map to:
+   (a) `loft package` CLI — tarball + sha256 (R1)
+   (b) `loft.lock` schema + writer (R2 = PKG.7)
+   (c) bootstrap `loft-lang/registry` repo with empty `registry.json` (R3)
+   (d) `loft install <name>[@<v>]` (R4)
+   (e) `loft install` (project), `loft update`, transitive resolution (R5-R7)
+   (f) `loft search` / `loft info` (R8)
+   (g) registry-PR CI validator (R9)
+   Server, signing, publish API are **future** Path 1 from PKG_REGISTRY.md
+   — the MVP buys per-library extraction without funding a service.
+3. **PKG.EXTRACT** — unblocked once PKG.REG ships; per-library extractions begin via [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/).
+
+---
+
 ## See also
-- the External Libraries section below — Current Phase 1 library loading
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/) — moving `lib/*/` packages into external chunk repos (extraction/migration planning)
 - [OPENGL.md](lib_plans/future/02-graphics/README.md) — OpenGL rendering design
 - [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) — Step-by-step OpenGL implementation
 - [WASM.md](WASM.md) — WASM architecture overview
@@ -904,651 +1243,11 @@ nothing else works.  P5-P6 can proceed in parallel with P3-P4 since the
 
 # Package Registry
 
-Design for a file-based package registry that maps library names and versions to
-download URLs.  This is Phase 3 of the external library support described in
-the External Libraries section below.
-
----
-
-## Contents
-- [Goals](#goals)
-- [Registry File Format](#registry-file-format)
-- [Registry File Locations](#registry-file-locations)
-- [CLI Interface](#cli-interface)
-- [Install Flow](#install-flow)
-- [Registry Sync](#registry-sync)
-- [Installed Package Check](#installed-package-check)
-- [Version Resolution](#version-resolution)
-- [Zip Package Layout](#zip-package-layout)
-- [Security Considerations](#security-considerations)
-- [Implementation](#implementation)
-- [Phased Rollout](#phased-rollout)
-- [Code Touchpoints](#code-touchpoints)
-
----
-
-## Goals
-
-1. A developer can run `loft install graphics` and get the library without
-   manually downloading or placing files.
-2. Different versions of the same library each have their own URL — there is
-   no "latest pointer" file that needs to be updated server-side.
-3. The registry is a plain text file — it can be hosted on any static file
-   server, checked into a git repository, or maintained by hand.
-4. The format is human-readable and editable without tooling.
-5. No central authority is required.  Users can point to any registry file.
-
----
-
-## Registry File Format
-
-A registry file is a UTF-8 text file.  Each non-blank, non-comment line
-declares one package version:
-
-```
-# source: https://raw.githubusercontent.com/jjstwerff/loft-registry/main/registry.txt
-# Loft package registry
-# Format: <name> <version> <url> [status]
-#
-# Lines starting with # are comments.  Blank lines are ignored.
-# Entries are matched top-to-bottom; the first match wins
-# when searching for an exact version.  For "latest", all
-# active entries are compared by semver and the highest wins.
-
-graphics 0.1.0 https://example.com/packages/graphics-0.1.0.zip yanked:CVE-2026-001
-graphics 0.2.0 https://example.com/packages/graphics-0.2.0.zip
-opengl   0.1.0 https://example.com/packages/opengl-0.1.0.zip   deprecated:use-graphics
-math     1.0.0 https://example.com/packages/math-1.0.0.zip
-math     1.1.0 https://example.com/packages/math-1.1.0.zip
-```
-
-### Fields
-
-| Field | Description |
-|-------|-------------|
-| `name` | Package identifier — must match `[a-z][a-z0-9_]*` |
-| `version` | Semver string `MAJOR.MINOR.PATCH` |
-| `url` | HTTPS URL to a `.zip` file containing the package |
-| `status` | Optional governance field — see below |
-
-### Status field
-
-| Value | Meaning |
-|-------|---------|
-| *(absent)* | Active — installable without warning |
-| `deprecated:<slug>` | Installable but warns; skipped for "latest" if any active version exists |
-| `yanked:<slug>` | Not installable; always skipped for "latest"; existing installs unaffected |
-
-The `<slug>` is a short human-readable reason (e.g. `CVE-2026-001`, `outdated`,
-`malicious`).  It appears verbatim in diagnostics.
-
-### The `source:` directive
-
-The first `# source: <url>` comment line in the file records where the file
-itself was downloaded from.  `loft registry sync` reads this URL to know where
-to fetch updates.
-
-```
-# source: https://raw.githubusercontent.com/jjstwerff/loft-registry/main/registry.txt
-```
-
-The URL points to the personal repository initially.  If the registry migrates
-to a GitHub organisation (e.g. `loft-lang/registry`), the `source:` line in
-the file is updated and users get the new URL automatically on their next sync —
-no interpreter release is needed.
-
-Rules:
-- The `source:` line must be the first non-blank line of the file.
-- Only one `source:` line is recognised; subsequent ones are plain comments.
-- If absent, `loft registry sync` falls back to the `LOFT_REGISTRY_URL`
-  environment variable, then the compiled-in default URL.
-- The `source:` line is preserved verbatim when `sync` rewrites the file.
-- Teams hosting a private registry change only this one line — all other
-  registry mechanics (sync, check, install) work identically.
-
-### Constraints
-
-- Fields are separated by one or more ASCII spaces or tabs.
-- Trailing whitespace on a line is ignored.
-- The URL must start with `https://` or `http://`.
-- A name may appear multiple times with different versions.
-- Duplicate `(name, version)` pairs: first entry wins (top-to-bottom).
-- Yanked entries are never removed — they stay in the file as a permanent
-  auditable record with their `yanked:` status.
-
----
-
-## Registry File Locations
-
-The interpreter searches for a registry file in this order:
-
-1. **`LOFT_REGISTRY` environment variable** — must be an absolute path to a
-   local file.  Set this to use a team-internal or project-specific registry.
-2. **`~/.loft/registry.txt`** — the user's personal registry, installed by
-   the user or by a future `loft registry fetch` command.
-
-If no registry file is found and the user runs `loft install <name>` (not a
-local path), the command exits with a clear diagnostic:
-
-```
-loft install: no registry file found.
-  Create ~/.loft/registry.txt or set LOFT_REGISTRY to a registry file path.
-```
-
-### Multiple Registries (future)
-
-A future `loft registry` subcommand could merge multiple sources.  For Phase 3
-a single file is sufficient.
-
----
-
-## CLI Interface
-
-### Installing from registry
-
-```sh
-loft install graphics            # install latest version from registry
-loft install graphics@0.1.0      # install specific version
-```
-
-### Installing from local path (unchanged, Phase 1)
-
-```sh
-loft install .                   # install package in current directory
-loft install /path/to/mypkg      # install from absolute path
-loft install ../sibling          # install from relative path
-```
-
-The heuristic for distinguishing registry lookups from local paths:
-- Argument starts with `/`, `./`, or `../` → local path.
-- Argument contains a path separator (`/`) → local path.
-- Otherwise → registry lookup, with optional `@version` suffix.
-
-### Registry subcommands
-
-```sh
-loft registry sync              # download latest registry.txt from source URL
-loft registry check             # compare installed packages against registry
-loft registry list              # show all packages in registry
-loft registry list --installed  # show only installed packages
-```
-
-### Updated help text
-
-```
-  install [target]              install a package to ~/.loft/lib/ for global use
-                                install .        — install package in current dir
-                                install /p       — install package at /p
-                                install name     — download latest from registry
-                                install name@v   — download specific version
-
-  registry <subcommand>         manage the local package registry
-                                sync             — pull latest registry from source URL
-                                check            — report updates, deprecations, yanks
-                                list             — browse all packages in registry
-                                list --installed — show only installed packages
-```
-
----
-
-## Install Flow
-
-For a registry install (`loft install graphics`):
-
-```
-1. Parse "graphics" → name="graphics", version=None
-2. Find registry file (LOFT_REGISTRY or ~/.loft/registry.txt)
-3. Read and parse registry file
-4. find_package(entries, "graphics", None) → pick highest semver entry
-5. Download zip from entry.url to a temporary file
-6. Extract zip to a temporary directory
-7. Locate the package root inside the extracted tree
-   (directory containing loft.toml, or the root itself)
-8. Call install_package(pkg_root) — existing Phase 1 logic
-9. Clean up temporary directory
-10. Print: "installed graphics 0.2.0 → ~/.loft/lib/graphics/"
-```
-
-For a versioned install (`loft install graphics@0.1.0`):
-
-Steps 1–10 same, except step 4 uses `find_package(entries, "graphics", Some("0.1.0"))`
-and step 6 is a hard error if the version is not found.
-
----
-
-## Registry Sync
-
-`loft registry sync` downloads the authoritative registry file from GitHub (or
-a custom source URL) and replaces the local `~/.loft/registry.txt`.
-
-### Sync flow
-
-```
-1. Determine source URL:
-   a. Read LOFT_REGISTRY_URL env var — if set, use it.
-   b. Read local ~/.loft/registry.txt for a "# source: <url>" first line.
-   c. Fall back to compiled-in default:
-      https://raw.githubusercontent.com/jjstwerff/loft-registry/main/registry.txt
-
-2. Download the URL via HTTPS to a temporary file.
-
-3. Validate the downloaded content:
-   - Must be valid UTF-8.
-   - Must contain at least one non-comment, non-blank line.
-   - Basic format check: each data line must have three whitespace-separated fields.
-
-4. If the download succeeds:
-   - Replace ~/.loft/registry.txt with the downloaded content.
-   - Print: "registry synced: 14 packages, 28 versions  (2026-04-04)"
-
-5. If the download fails:
-   - Leave the existing ~/.loft/registry.txt unchanged.
-   - Print error to stderr and exit 1:
-     "loft registry sync: download failed: <reason>"
-     "  local registry is unchanged."
-```
-
-### First-time sync (no local registry)
-
-If `~/.loft/registry.txt` does not exist, `loft registry sync` downloads from
-`LOFT_REGISTRY_URL` or the compiled-in default (which tracks wherever the
-official registry lives — personal repo or org) and creates the file.  A user
-running `loft install` for the first time is directed to run sync first:
-
-```
-loft install: no registry file found.
-  Run 'loft registry sync' to download the package registry.
-  Or set LOFT_REGISTRY to a local registry file path.
-```
-
-### Staleness tracking
-
-The file modification time of `~/.loft/registry.txt` is used as the sync
-timestamp.  No separate metadata file is needed.
-
-If the local registry is older than **7 days** when `loft registry check` is
-run, a warning is printed before the check results:
-
-```
-warning: registry was last synced 9 days ago.
-  Run 'loft registry sync' to get the latest security information.
-```
-
-This warning does not affect the exit code.
-
-### Custom and private registries
-
-Teams can host their own registry file anywhere and point to it:
-
-```sh
-export LOFT_REGISTRY=/path/to/company-registry.txt
-loft registry sync   # syncs from the source: URL inside that file
-```
-
-Or permanently by placing a registry file with a custom `# source:` URL at
-`~/.loft/registry.txt`.  The official registry and a custom registry can be
-used together only if they are manually merged — a single local file is the
-intended model.
-
----
-
-## Installed Package Check
-
-`loft registry check` scans `~/.loft/lib/` for installed packages, reads each
-`loft.toml` for the installed name and version, and compares against the local
-registry file.
-
-### Check flow
-
-```
-1. Scan ~/.loft/lib/*/loft.toml — collect (name, version) for each installed pkg.
-2. Read local registry file.
-3. Warn if registry is older than 7 days (does not affect exit code).
-4. For each installed package, classify:
-   - yanked   — installed version has yanked:<slug> in registry
-   - deprecated — installed version has deprecated:<slug> in registry
-   - outdated — installed version is active but a higher active version exists
-   - current  — installed version is the highest active version
-   - unknown  — name not found in registry at all
-5. Collect count of registry packages not installed (new packages available).
-6. Print report (see below).
-7. Exit 0 if no installed packages are yanked; exit 1 if any are yanked.
-```
-
-### Output format
-
-```
-$ loft registry check
-registry: 14 packages, 28 versions  (synced 2 days ago)
-
-installed packages (4):
-  graphics  0.1.0  YANKED      CVE-2026-001 — run: loft install graphics
-  opengl    0.1.0  deprecated  use-graphics — run: loft install opengl
-  math      1.0.0  outdated    → 1.1.0      — run: loft install math
-  utils     0.3.0  current
-
-new packages in registry not installed: 10
-  run 'loft registry list' to browse
-
-1 security issue — yanked packages must be updated.
-```
-
-When all packages are current:
-
-```
-$ loft registry check
-registry: 14 packages, 28 versions  (synced 2 days ago)
-
-installed packages (4):
-  graphics  0.2.0  current
-  math      1.1.0  current
-  utils     0.3.0  current
-  geo       0.5.0  current
-
-all installed packages are up to date.
-```
-
-### Exit codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | No yanked packages installed (updates/deprecations may exist — informational only) |
-| 1 | At least one installed package is yanked — action required |
-
-Exit code 1 is intentionally reserved for security-level issues so that CI
-pipelines can use `loft registry check` as a gate without triggering on every
-available update.
-
-### `loft registry list`
-
-Lists all packages in the registry with their available versions and installed
-status:
-
-```
-$ loft registry list
-name       versions                    installed   status
----------  --------------------------  ----------  --------
-geo        0.4.0  0.5.0               0.5.0
-graphics   0.1.0  0.2.0               0.1.0       YANKED (0.1.0)
-math       1.0.0  1.1.0               1.1.0
-opengl     0.1.0                      0.1.0       deprecated
-utils      0.3.0  0.4.0  0.5.0        0.3.0       outdated
-web        0.1.0                      —
-```
-
-`loft registry list --installed` shows only rows where installed is not `—`.
-
----
-
-## Version Resolution
-
-### Latest version
-
-When no version is specified, all entries whose `name` matches are collected
-and compared using semver ordering.  The entry with the highest version is
-selected.
-
-Semver comparison: `(major, minor, patch)` tuples compared lexicographically.
-This reuses the `version_ge` logic already in `src/manifest.rs`.
-
-### Exact version match
-
-When a version is given (`@0.1.0`), the registry is searched top-to-bottom
-for the first entry with matching `(name, version)`.  If not found, the
-install fails with:
-
-```
-loft install: package 'graphics@0.1.0' not found in registry.
-  Available versions: 0.2.0
-```
-
-### Already installed
-
-Before downloading, the installer checks `~/.loft/lib/<name>/loft.toml`.
-If the installed version matches the selected registry entry, it prints:
-
-```
-loft install: graphics 0.2.0 is already installed.
-```
-
-and exits without downloading.  Use `--force` to reinstall anyway (future).
-
----
-
-## Zip Package Layout
-
-The downloaded `.zip` file must contain the package as a directory:
-
-```
-graphics-0.2.0/          ← top-level directory (name optional)
-  loft.toml
-  src/
-    graphics.loft
-    math.loft
-  tests/
-    canvas.loft
-```
-
-The installer finds the package root by searching for `loft.toml` inside the
-extracted tree (depth-first, stopping at the first match).  This tolerates
-both flat layout (`loft.toml` at zip root) and the conventional
-`name-version/loft.toml` layout produced by GitHub release archives.
-
-If no `loft.toml` is found but a `src/` directory is present at the zip root,
-the zip root is treated as the package root (permissive fallback for pure-loft
-packages that skip the manifest).
-
-If neither condition is met, the install fails:
-
-```
-loft install: could not find package root in downloaded zip.
-  Expected loft.toml or src/ directory inside the archive.
-```
-
----
-
-## Security Considerations
-
-### HTTPS only
-
-The installer enforces that URLs start with `https://`.  Plain `http://` URLs
-are rejected with a warning unless overridden by a future `--allow-http` flag.
-
-### No signature verification (Phase 3)
-
-Phase 3 does not verify package signatures or checksums.  A future
-`loft.toml` field `sha256 = "..."` could hold the expected hash of the
-downloaded zip, verified before extraction.  Deferred until the registry
-ecosystem is established enough that hash distribution is meaningful.
-
-### Native code trust
-
-Downloaded packages that include native shared libraries (Phase 2 feature)
-are fully trusted once installed — `dlopen` gives the plugin full process
-access, identical to any other native extension.  The registry is a
-distribution mechanism, not a trust boundary.
-
-### Registry file trust
-
-The registry file is a plain text file from the local filesystem.  It does
-not execute any code.  A compromised registry file can point to a malicious
-zip, but the user controls which registry file is used.
-
----
-
-## Implementation
-
-### New: `src/registry.rs`
-
-```rust
-pub struct RegistryEntry {
-    pub name:    String,
-    pub version: String,
-    pub url:     String,
-    /// None = active; Some("yanked:CVE-2026-001") or Some("deprecated:reason")
-    pub status:  Option<String>,
-}
-
-impl RegistryEntry {
-    pub fn is_yanked(&self)     -> bool { self.status.as_deref().unwrap_or("").starts_with("yanked") }
-    pub fn is_deprecated(&self) -> bool { self.status.as_deref().unwrap_or("").starts_with("deprecated") }
-    pub fn is_active(&self)     -> bool { self.status.is_none() }
-    pub fn status_slug(&self)   -> &str { /* part after ':' */ }
-}
-
-/// Parse a registry file.  Returns all entries including yanked/deprecated.
-/// Also returns the source URL extracted from the "# source: <url>" header.
-pub fn read_registry(path: &str) -> (Vec<RegistryEntry>, Option<String>);
-
-/// Find the registry file path (LOFT_REGISTRY env var → ~/.loft/registry.txt).
-pub fn registry_path() -> Option<std::path::PathBuf>;
-
-/// Find the source URL: LOFT_REGISTRY_URL env var → source: header in file → compiled-in default.
-pub fn source_url(file_source: Option<&str>) -> String;
-
-/// Find the best matching entry for install.
-/// version=None → highest semver active entry; version=Some → exact match (any status).
-pub fn find_package<'a>(
-    entries: &'a [RegistryEntry],
-    name:    &str,
-    version: Option<&str>,
-) -> Option<&'a RegistryEntry>;
-
-/// Scan ~/.loft/lib/ (or given dir) for installed packages.
-/// Returns (name, version) for each directory containing a readable loft.toml.
-pub fn installed_packages(lib_dir: &std::path::Path) -> Vec<(String, String)>;
-
-pub enum PackageStatus<'a> {
-    Yanked     { entry: &'a RegistryEntry },
-    Deprecated { entry: &'a RegistryEntry, latest: Option<&'a RegistryEntry> },
-    Outdated   { installed: &'a str, latest: &'a RegistryEntry },
-    Current,
-    Unknown,   // name not in registry
-}
-
-/// Compare an installed (name, version) pair against the registry.
-pub fn classify<'a>(
-    entries: &'a [RegistryEntry],
-    name:    &str,
-    version: &str,
-) -> PackageStatus<'a>;
-
-/// Download the zip at entry.url to a temp file, extract, return package root.
-#[cfg(feature = "registry")]
-pub fn download_and_extract(
-    entry:    &RegistryEntry,
-    tmp_base: &std::path::Path,
-) -> Result<std::path::PathBuf, String>;
-
-/// Download url into dst_path.  Returns Err with a human-readable message on failure.
-#[cfg(feature = "registry")]
-pub fn download_file(url: &str, dst: &std::path::Path) -> Result<(), String>;
-```
-
-### Cargo.toml additions
-
-```toml
-[features]
-registry = ["dep:ureq", "dep:zip"]
-
-[dependencies]
-ureq = { version = "2", optional = true }
-zip  = { version = "2", optional = true }
-```
-
-The `registry` feature is included in the `default` feature set so that
-`cargo build` produces a `loft` binary with install-from-registry support.
-It is excluded from the `wasm` feature set (no network access from WASM).
-
-### `src/main.rs` changes
-
-**`install` subcommand:**
-1. After reading the argument, determine whether it is a local path or a
-   registry reference (heuristic described above).
-2. For registry references: parse the optional `@version` suffix, call
-   `registry::registry_path()`, `registry::read_registry()`,
-   `registry::find_package()`, then `registry::download_and_extract()`.
-3. Pass the extracted package root to the existing `install_package()`.
-4. Remove the temporary directory after install completes (or on error).
-
-**`registry` subcommand:**
-- `registry sync` — call `registry::source_url()`, `registry::download_file()`,
-  validate content, write to `registry_path()`.
-- `registry check` — call `registry::installed_packages()`, `registry::read_registry()`,
-  `registry::classify()` for each; print report; exit 1 if any yanked.
-- `registry list [--installed]` — read registry, scan installed, print table.
-
-### `src/lib.rs` addition
-
-```rust
-pub mod registry;
-```
-
-### Error handling
-
-All errors during download or extraction are printed to stderr and exit with
-code 1 — same pattern as the rest of `main()`.
-
----
-
-## Phased Rollout
-
-### Phase 3a — Registry lookup and download (0.8.4, Sprint 9)
-
-- `src/registry.rs` — parse registry file, find entry, download + extract zip
-- `Cargo.toml` — add `ureq` and `zip` under `registry` feature
-- `src/main.rs` — extend `install` subcommand to handle registry names
-- `src/lib.rs` — expose `registry` module
-- Tests: unit tests in `registry.rs`; integration test `tests/registry.rs`
-- Docs: this file; update `EXTERNAL_LIBS.md` Phase 3 section
-
-### Phase 3b — Registry sync and check (0.8.4, Sprint 9)
-
-- `loft registry sync` — download latest registry from `source:` URL
-- `loft registry check` — compare installed packages against registry; exit 1 on yanks
-- `loft registry list [--installed]` — browse registry with installed status column
-- `status` field parsing in `read_registry()` (yanked/deprecated)
-- `installed_packages()` scanner, `classify()` function
-- Staleness warning when registry is older than 7 days
-
-### Phase 3c — Registry management (future)
-
-- `loft registry search <term>` — filter registry entries by name prefix
-- `loft registry add <name> <version> <url>` — append an entry to local file
-- Deferred until Phase 3b is in use and the UX is understood.
-
-### Phase 3c — SHA-256 verification (future)
-
-- Optional `loft.toml` field: `zip_sha256 = "abc123..."`
-- Or a parallel `.sha256` file next to the `.zip` in the registry
-- Verified before extraction
-- Deferred until registry ecosystem is established.
-
----
-
-## Code Touchpoints
-
-| File | Change | Phase |
-|------|--------|-------|
-| `src/registry.rs` | New: `read_registry`, `find_package`, `download_and_extract` | 3a |
-| `src/lib.rs` | Expose `registry` module | 3a |
-| `src/main.rs` | Extend `install` for registry names | 3a |
-| `Cargo.toml` | Add `registry` feature, `ureq`, `zip` deps | 3a |
-| `tests/registry.rs` | Integration tests for 3a | 3a |
-| `src/registry.rs` | Add `status` field, `classify`, `installed_packages`, `download_file`, `source_url` | 3b |
-| `src/main.rs` | Add `registry sync`, `registry check`, `registry list` subcommands | 3b |
-| `tests/registry.rs` | Extend with sync/check/list tests | 3b |
-| `doc/claude/REGISTRY.md` | This file | 3a+3b |
-| `doc/claude/EXTERNAL_LIBS.md` | Update Phase 3 section | 3a |
-
----
-
-## See also
-
-- the Registry Governance section below — submission process, review checklist, yank/deprecation procedures
-- the External Libraries section below — full external library design including Phases 1 and 2
-- [PACKAGES.md](PACKAGES.md) — unified package format (interpreter + native + WASM)
-- [PLANNING.md](PLANNING.md) — priority backlog
+The package registry has its own document: **[PKG_REGISTRY.md](PKG_REGISTRY.md)**
+— the file-based `registry.json` MVP that backs `loft install <name>` (phases
+R1–R9). For authoring and submitting a library see
+[REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md); for governance and yanking see the
+Registry Governance section below.
 
 ---
 
@@ -1563,7 +1262,7 @@ repository.  It starts as a personal repository (`jjstwerff/loft-registry`)
 and can migrate to a shared GitHub organisation (`loft-lang/registry` or
 similar) when the community grows to the point where one person cannot handle
 the review load alone.  Both hosting models are described here.  The file
-format is described in the Registry section below.  This document governs who
+format is described in [PKG_REGISTRY.md](PKG_REGISTRY.md).  This document governs who
 may add entries and what happens when an entry must be restricted or removed.
 
 ---
@@ -2058,7 +1757,7 @@ If a package author believes a yank or deprecation was applied incorrectly:
 ## User-Side Verification
 
 Users can check their installed packages against the latest registry at any time
-using two commands (see the Registry section above):
+using two commands (see [PKG_REGISTRY.md](PKG_REGISTRY.md)):
 
 ```sh
 loft registry sync     # pull latest registry.txt from GitHub
@@ -2154,760 +1853,25 @@ but may reduce their Maintainer workload to match the team capacity.
 
 ## See also
 
-- the Registry section below — file format, install flow, version resolution, implementation
-- the External Libraries section below — package format, Phase 1–3 rollout
-- [PACKAGES.md](PACKAGES.md) — package layout and native extension design
+- [PKG_REGISTRY.md](PKG_REGISTRY.md) — file format, install flow, version resolution, implementation
+- [Library Package Format](#library-package-format) — package format + native extension design
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/) — extraction/migration of `lib/*/` into external repos
 
 ---
-
 
 # External Library Support
 
-Separately-packaged loft libraries, including libraries that ship compiled Rust
-code for features that cannot be expressed in loft itself (e.g. HTTP, PNG
-decoding, random number generation, OpenGL).
-
----
-
-## Contents
-- [Package Format](#package-format)
-- [Two Flavours of Library](#two-flavours-of-library)
-- [Discovery and Loading](#discovery-and-loading)
-- [C-ABI Boundary Design](#c-abi-boundary-design)
-- [Auto-Marshalling Dispatch](#auto-marshalling-dispatch)
-- [loft-ffi Helper Crate](#loft-ffi-helper-crate)
-- [Store Allocation from Native Code](#store-allocation-from-native-code)
-- [Code Generation: loft generate](#code-generation-loft-generate)
-- [Testing Native Packages](#testing-native-packages)
-- [Security](#security)
-- [Shipped Libraries](#shipped-libraries)
-
----
-
-## Package Format
-
-### Directory Layout
-
-A library named `random` lives in a directory whose name is the library identifier:
-
-```
-random/
-  loft.toml              # mandatory for native; optional for pure-loft
-  src/
-    random.loft          # public API surface
-  native/
-    Cargo.toml           # Rust crate producing a cdylib + rlib
-    src/
-      lib.rs             # C-ABI implementations
-      generated.rs       # auto-generated stubs (from loft generate)
-  tests/
-    15-random.loft       # package tests
-  docs/
-    21-random.loft       # documentation examples
-```
-
-### Manifest: `loft.toml`
-
-```toml
-[package]
-name    = "random"
-version = "0.1.0"
-loft    = ">=0.8"          # minimum interpreter version required
-
-[library]
-entry  = "src/random.loft"   # path to the entry .loft file
-native = "loft_random"       # Cargo crate name stem (omit for pure-loft)
-```
-
-The `loft` version field is checked at load time against the interpreter version.
-A major version mismatch is a fatal load-time error.
-
-### Native Crate Convention
-
-The `native/Cargo.toml` produces both a `cdylib` (for interpreter mode) and an
-`rlib` (for `--native` codegen):
-
-```toml
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-loft-ffi = { path = "../../../loft-ffi" }   # optional but recommended
-# external crates only — never depend on the loft interpreter
-```
-
----
-
-## Two Flavours of Library
-
-### Pure-Loft Libraries
-
-Consists exclusively of `.loft` files. No build step needed.
-Users write `use mylib;` and the interpreter resolves the entry file.
-
-Examples: `lib/crypto`, `lib/game_protocol`, `lib/shapes`, `lib/arguments`.
-
-### Native Extension Libraries
-
-Ships a compiled shared library alongside `.loft` API files. The `.loft` files
-declare function signatures with `#native` annotations; the shared library
-provides the C-ABI implementations.
-
-Examples: `lib/random`, `lib/server`, `lib/web`, `lib/imaging`, `lib/graphics`.
-
----
-
-## Discovery and Loading
-
-### Search Chain
-
-`lib_path()` in `src/parser/mod.rs` tries candidates in order:
-1. `lib/<id>.loft` and `<id>.loft` relative to CWD
-2. Each directory in `parser.lib_dirs` (`--lib` / `--project` flags)
-3. Packaged layout: `<dir>/<id>/src/<id>.loft` for each search directory
-4. Each directory in `LOFT_LIB` environment variable
-5. Fallback: `<cur_dir>/<id>.loft` / `<base_dir>/<id>.loft`
-
-When a directory `<id>/` is found, `lib_path_manifest()` reads `loft.toml`,
-validates the version requirement, and resolves the entry path.
-
-### Load-Time Sequencing
-
-```
-parse_dir(default)                           # load standard library
-parse(user_script)                           # populates pending_native_libs
-scopes::check(data)                          # scope analysis
-State::new(database)                         # create runtime
-compile::byte_code(state, data)              # bytecode gen; native::init() runs
-extensions::load_all(state, pending_libs)    # dlopen cdylibs + auto-marshal
-state.execute_argv("main", ...)              # run
-```
-
-### Auto-Build
-
-If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
-runs `cargo build --release` automatically via `auto_build_native()`.
-
----
-
-## C-ABI Boundary Design
-
-### The Split: Logic in cdylib, Store Access in Interpreter
-
-Package native crates export pure C-ABI functions that operate on **primitives,
-raw byte buffers, and `LoftStore`/`LoftRef` handles** — never on `Stores` or
-`DbRef` directly.
-
-```
-┌──────────────────────┐     C-ABI boundary     ┌──────────────────────┐
-│     Interpreter      │ ←──────────────────────→│   Package cdylib     │
-│                      │                         │                      │
-│  auto-marshal:       │                         │  n_rand(lo, hi):     │
-│    pop args from     │── i32, i32 ────────────→│    PCG64 generate    │
-│    loft stack        │                         │    return i32        │
-│    ←─────────────────│── i32 ──────────────────│                      │
-│    push result       │                         │  (depends on:        │
-│                      │                         │   rand_core, rand_pcg│
-│  (depends on: loft)  │                         │   NOT loft)          │
-└──────────────────────┘                         └──────────────────────┘
-```
-
-**Key properties:**
-- External crate dependencies (png, ureq, rand) live only in the cdylib
-- The interpreter loads the cdylib on demand when the package is `use`d
-- No Rust struct layouts are shared across the boundary
-- `LoftStore` provides controlled store access via callback function pointers
-
-### Dual-Mode Execution
-
-| Mode | How it runs | Native function path |
-|------|-------------|---------------------|
-| **Interpreter** (`loft run`) | Bytecode + auto-marshal | cdylib via `dlopen`; C-ABI boundary |
-| **Native codegen** (`loft --native`) | Generated Rust | Direct call via `--extern` rlib linking |
-
-In `--native` mode, everything compiles as rlibs in one `rustc` invocation —
-types are shared, calls are direct, zero overhead.
-
-### Declaring Native Functions
-
-```loft
-pub fn rand(lo: integer, hi: integer) -> integer;
-#native "n_rand"
-```
-
-The `#native` annotation tells the compiler to register a panic-stub at
-bytecode time. The real function is loaded from the cdylib via
-`extensions::wire_native_fns()`.
-
-**Naming convention:**
-- `n_<fn>` for global functions (e.g. `n_rand`, `n_tcp_listen`)
-- `t_<N><Type>_<method>` for methods (N = char count of type name)
-
----
-
-## Auto-Marshalling Dispatch
-
-The auto-marshaller in `src/extensions.rs` bridges loft stack values to C-ABI
-calls without per-function glue code.
-
-### How It Works
-
-1. **`compute_sig()`** reads the `#native` definition's types and produces a
-   compact `NativeSig { params: Vec<ArgT>, ret: Option<ArgT> }`.
-
-2. **`wire_native_fns()`** iterates all `#native` definitions, resolves symbols
-   via dlsym, and replaces panic-stubs with the generic `native_auto_dispatch`.
-
-3. **`native_auto_dispatch()`** pops arguments from the loft stack in reverse
-   order, builds typed `ArgVal` values, and calls `dispatch_call()`.
-
-4. **`dispatch_call()`** pattern-matches on the signature and calls the native
-   function pointer with the correct C-ABI cast.
-
-### Type Mapping
-
-| Loft type | ArgT | C-ABI type |
-|-----------|------|-----------|
-| `integer` / `character` | `I32` | `i32` |
-| `long` | `I64` | `i64` |
-| `float` | `F64` | `f64` |
-| `single` | `F32` | `f32` |
-| `boolean` | `Bool` | `bool` |
-| `text` | `Text` | `*const u8, usize` |
-| struct / vector / collection | `Ref` | `LoftRef` (with `LoftStore` prepended) |
-
-When any parameter or return type is `Ref`, a `LoftStore` handle is prepended
-as the first C-ABI argument, giving the native function access to store memory.
-
-For functions returning `Ref` with no `Ref` parameters (e.g. `rand_indices`),
-the dispatcher allocates a fresh store for the result automatically.
-
-### Thread-Local State
-
-During a native call, a thread-local `CURRENT_STORES` holds a raw pointer
-to the interpreter's `Stores`. This enables the `LoftStore` allocation
-callbacks to reach back into the interpreter for `claim()` and `resize()`
-operations.
-
----
-
-## loft-ffi Helper Crate
-
-The `loft-ffi` crate (`/loft-ffi/`) provides safe building blocks for native
-extension authors. No dependencies.
-
-### Core Types
-
-**`LoftRef`** — Opaque reference to a store object (struct, vector, collection):
-```rust
-#[repr(C)]
-pub struct LoftRef {
-    pub store_nr: u16,
-    pub rec: u32,
-    pub pos: u32,
-}
-```
-
-**`LoftStore`** — Direct memory access to a store buffer, with allocation callbacks:
-```rust
-#[repr(C)]
-pub struct LoftStore {
-    pub ptr: *mut u8,                    // base pointer (may move on alloc)
-    pub size: u32,                       // capacity in 8-byte words
-    pub ctx: LoftStoreCtx,              // opaque context for callbacks
-    pub claim_fn: ...,                   // allocate words → rec
-    pub reload_fn: ...,                  // refresh ptr/size after alloc
-    pub resize_fn: ...,                  // resize record → new rec
-}
-```
-
-**`LoftStr`** — `#[repr(C)]` text return type (borrowed pointer, valid until
-next `ret()` call on the same thread).
-
-### Text Helpers
-
-```rust
-// Convert C-ABI text parameter to &str
-let name = unsafe { loft_ffi::text(name_ptr, name_len) };
-
-// Return a String as LoftStr (stored in thread-local buffer)
-loft_ffi::ret(format!("Hello, {name}!"))
-
-// Return a borrowed &str without copying
-loft_ffi::ret_ref(some_str)
-```
-
-### Field Access
-
-`LoftStore` provides direct read/write methods for store memory:
-- `get_int()` / `set_int()` — `i32` fields
-- `get_long()` / `set_long()` — `i64` fields
-- `get_float()` / `set_float()` — `f64` fields
-- `get_byte()` / `set_byte()` — `u8` fields (boolean, simple enum)
-- `get_text()` — read text field as `(*const u8, usize)`
-- `get_ref()` — read sub-reference field as `LoftRef`
-
-All take `(rec, pos, offset)` and compute byte address as `rec * 8 + pos + offset`.
-
-### Null Sentinels
-
-```rust
-pub const NULL_INT: i32 = i32::MIN;
-pub const NULL_LONG: i64 = i64::MIN;
-```
-
----
-
-## Store Allocation from Native Code
-
-Native extensions can allocate records and build vectors directly in the store
-via `LoftStore` methods. Each mutating operation automatically reloads the
-store pointer, since allocation may trigger reallocation.
-
-### Low-Level Allocation
-
-```rust
-// Allocate raw words (auto-reloads ptr)
-let rec = unsafe { store.claim(words) };
-
-// Resize a record (may relocate; auto-reloads ptr)
-let new_rec = unsafe { store.resize(rec, new_words) };
-
-// Manually refresh ptr/size
-unsafe { store.reload() };
-```
-
-### Record Allocation
-
-```rust
-// Allocate a struct record (store_nr derived from the LoftStore handle)
-let r = unsafe { store.alloc_record(words) };
-// r.rec = record number, r.pos = 8 (data start)
-```
-
-### Vector Operations
-
-```rust
-// Create an empty vector with pre-allocated capacity
-let mut v = unsafe { store.alloc_vector(elem_size, capacity) };
-
-// Append elements (handles resize automatically)
-unsafe { store.vector_push_int(&mut v, 42) };
-unsafe { store.vector_push_long(&mut v, 123i64) };
-unsafe { store.vector_push_float(&mut v, 3.14) };
-
-// Read current length
-let len = unsafe { store.vector_len(&v) };
-```
-
-The `vector_push_*` methods update `v.rec` in place if the vector record
-moves during resize. The minimum allocation is 11 elements (matching the
-interpreter's convention). The `store_nr` is derived automatically from
-the `LoftStore` handle.
-
-### Callback Architecture
-
-The allocation callbacks bridge native code back into the interpreter:
-
-```
-Native extension                    Interpreter (via thread-local)
-─────────────────                   ──────────────────────────────
-store.claim(words)
-  → claim_fn(ctx, words)    ──→    Store::claim(words) → rec
-  → reload_fn(ctx, &ptr, &size) →  read store.base_ptr(), capacity
-  ← updated ptr, size
-  ← rec
-```
-
-`LoftStoreCtx` encodes the `store_nr`; the thread-local `CURRENT_STORES`
-holds a pointer to the interpreter's `Stores` for the duration of the call.
-
-### Safety Guarantees
-
-The callback infrastructure provides two safety mechanisms:
-
-1. **Panic containment**: All three callbacks (`ffi_claim`, `ffi_resize`,
-   `ffi_reload`) wrap their bodies in `std::panic::catch_unwind` to prevent
-   panics from propagating across the C-ABI boundary. On panic, `claim`
-   returns 0, `resize` returns the original record unchanged, and `reload`
-   is a no-op.
-
-2. **RAII cleanup**: `dispatch_call` uses a guard struct whose `Drop` impl
-   clears `CURRENT_STORES`, ensuring the thread-local is reset even if the
-   native function or a callback panics.
-
----
-
-## Code Generation: `loft generate`
-
-The `loft generate` command reads a package's `.loft` declarations and produces
-a `native/src/generated.rs` file with correct C-ABI signatures and `todo!()`
-bodies.
-
-### Usage
-
-```sh
-cd lib/random
-loft generate .          # writes native/src/generated.rs
-```
-
-### What It Generates
-
-For each `#native` declaration:
-
-1. **C-ABI function signature** with proper type marshalling:
-   - Scalars pass directly (`i32`, `i64`, `f64`, `f32`, `bool`)
-   - `text` becomes `(name_ptr: *const u8, name_len: usize)` with a
-     `let name = unsafe { loft_ffi::text(...) }` body line
-   - Struct/vector/collection becomes `LoftRef`, with `LoftStore` prepended
-   - Simple enums become `u8`
-
-2. **Return type handling:**
-   - Scalars return directly
-   - `text` returns `LoftStr` with `loft_ffi::ret(result)` pattern
-   - Struct/vector returns `LoftRef`
-
-3. **Field offset modules** for struct types referenced as parameters:
-   ```rust
-   pub mod image_fields {
-       pub const NAME: u16 = 0;   // text (record ref)
-       pub const WIDTH: u16 = 4;  // integer
-       pub const HEIGHT: u16 = 8; // integer
-       pub const DATA: u16 = 12;  // vector ref
-   }
-   ```
-
-4. **`todo!()` bodies** for the developer to fill in.
-
-### Example Output
-
-For `fn rand_indices(n: integer) -> vector<integer>; #native "n_rand_indices"`:
-
-```rust
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_rand_indices(
-    store: loft_ffi::LoftStore,
-    n: i32,
-) -> loft_ffi::LoftRef /* vector<integer> */ {
-    let result: loft_ffi::LoftRef = todo!("implement n_rand_indices(n)");
-    result
-}
-```
-
----
-
-## Testing Native Packages
-
-### From the package directory
-
-```sh
-cd lib/random
-loft test                    # runs all tests in tests/
-loft test 15-random          # runs a single test file
-```
-
-`loft test` reads `loft.toml`, adds `src/` to the import path, resolves
-dependencies, and discovers test files in `tests/`. Native libraries are
-registered before parsing test files.
-
-### From the project root
-
-```sh
-make test-packages           # discovers lib/*/tests/*.loft and runs loft test
-make ci                      # includes test-packages after cargo test
-```
-
----
-
-## Security
-
-### Native Extensions Are Fully Trusted
-
-Loading via `dlopen` gives the plugin full process access. No sandbox. This
-mirrors Python ctypes, Ruby FFI, and Node.js native addons.
-
-### File-System Sandboxing Is Not Inherited
-
-The `--project` flag sandboxes loft script file I/O. This does NOT apply to
-native extension code.
-
----
-
-## Shipped Libraries
-
-| Library | Type | Native deps | Functions |
-|---------|------|------------|-----------|
-| `random` | Native | `rand_core`, `rand_pcg` | `rand`, `rand_seed`, `rand_indices` |
-| `server` | Native | std::net only | TCP listen/accept, HTTP parse, WebSocket |
-| `web` | Native | `ureq` | HTTP client (`http_do`) |
-| `imaging` | Native | `png` | PNG decode (`load_png`) |
-| `graphics` | Native | `glutin`, `gl` | OpenGL window/rendering |
-| `crypto` | Pure loft | — | SHA-256, HMAC, base64 |
-| `game_protocol` | Pure loft | — | Multiplayer messaging |
-| `shapes` | Pure loft | — | Shape helpers |
-| `arguments` | Pure loft | — | CLI argument parsing |
-
----
-
-## Key Source Files
-
-| File | Role |
-|------|------|
-| `src/extensions.rs` | cdylib loader, auto-marshalling dispatcher, allocation callbacks |
-| `src/native.rs` | Built-in function registry (`FUNCTIONS` table, `init()`) |
-| `src/manifest.rs` | `loft.toml` reader and version checker |
-| `src/main.rs` | `generate_native_stubs()` for `loft generate` |
-| `loft-ffi/src/lib.rs` | `LoftRef`, `LoftStore`, `LoftStr`, allocation helpers |
-
----
-
-## See Also
-- [COMPILER.md](COMPILER.md) — `lib_path()` and `parse_file()` internals
-- [INTERNALS.md](INTERNALS.md) — `State::static_fn()` and `native::init()` details
-- the Registry section below — Package registry design
-
----
-
-separate GitHub repositories for independent publishing and development.
-
----
-
-## Current state
-
-All libraries live under `lib/` in the main `loft` repository:
-
-| Library | Type | Native crate | Dependencies |
-|---|---|---|---|
-| `arguments` | pure-loft | — | — |
-| `crypto` | pure-loft | — | — |
-| `game_protocol` | pure-loft | — | — |
-| `shapes` | pure-loft | — | `graphics` |
-| `random` | native | `loft-random` | — |
-| `web` | native | `loft-web` | — |
-| `imaging` | native | `loft-imaging` | — |
-| `server` | native | `loft-server` | `web` |
-| `graphics` | native | `loft-graphics-native` | — |
-
-Standalone `.loft` files not yet packaged: `code.loft`, `docs.loft`,
-`lexer.loft`, `parser.loft`, `logger.loft`, `wall.loft`, `testlib.loft`.
-
----
-
-## Target: three repositories
-
-### 1. `loft-graphics` — dedicated repo
-
-Large, complex, platform-specific. Has its own Rust dependencies (glutin,
-gl, winit, fontdue), 22 tutorial examples, and will grow into a full
-graphics engine.
-
-**Contents:**
-
-```
-loft-graphics/
-  graphics/          # OpenGL bindings, canvas, color, font rendering
-  shapes/            # Shape generation (depends on graphics)
-  engine/            # (future) Scene graph, game loop, asset pipeline
-```
-
-**Rationale:** GPU/headless-GL CI requirements, high iteration rate during
-engine development, different contributor profile (graphics programmers).
-
-### 2. `loft-server` — dedicated repo
-
-Complex networking stack with security-sensitive dependencies. Will grow
-with TLS, ACME, auth, RBAC, and game-server features.
-
-**Contents:**
-
-```
-loft-server/
-  server/            # TCP, HTTP, WebSocket
-  web/               # HTTP client (ureq) — server depends on this
-  game_protocol/     # Multiplayer messaging protocol
-```
-
-**Rationale:** Security updates on networking crates need independent
-release cadence. Integration testing requires network access. `web` is
-bundled here because `server` depends on it and they share the HTTP domain.
-
-### 3. `loft-libs` — monorepo for everything small
-
-All remaining libraries: small Rust-crate wrappers and pure-loft utilities.
-Easy to manage together, similar structure, low complexity.
-
-**Contents (initial):**
-
-```
-loft-libs/
-  random/            # RNG (rand_pcg wrapper)
-  crypto/            # SHA-256, HMAC, base64
-  imaging/           # PNG encode/decode (png crate wrapper)
-  arguments/         # CLI argument parsing
-```
-
-**Future additions** (as they get packaged):
-
-```
-  json/              # JSON parse/serialize
-  regex/             # Regular expressions
-  csv/               # CSV reading/writing
-  logger/            # Structured logging
-  ...
-```
-
----
-
-## What stays in `loft`
-
-- `default/*.loft` — standard library, tightly coupled to interpreter version
-- `loft-ffi/` — the FFI helper crate, used by all native libraries
-- `tests/lib/` — test packages for the library loading mechanism itself
-- Standalone `.loft` files (`lexer.loft`, `parser.loft`, etc.) — these are
-  tools for the language itself, not user-facing libraries
-
----
-
-## Migration steps
-
-### Phase 1: Prepare (before any move)
-
-- [ ] **P1.1** Ensure all library tests pass: `make test`
-- [ ] **P1.2** Tag the current state: `git tag pre-lib-split`
-- [ ] **P1.3** Create the three GitHub repositories:
-      `loft-graphics`, `loft-server`, `loft-libs`
-- [ ] **P1.4** Design a shared CI workflow template for library repos
-      (build native crates, run `loft` test discovery on `tests/`)
-- [ ] **P1.5** Decide on `loft-ffi` distribution: publish to crates.io
-      or use git dependency. Native libraries in external repos need to
-      reference it somehow
-
-### Phase 2: Extract `loft-graphics`
-
-- [ ] **P2.1** Create `loft-graphics` repo with README, LICENSE, CI
-- [ ] **P2.2** Copy `lib/graphics/` and `lib/shapes/` preserving directory
-      structure. Update `shapes/loft.toml` dependency path
-- [ ] **P2.3** Copy or symlink `loft-ffi` (or point Cargo.toml at crates.io /
-      git dep)
-- [ ] **P2.4** Verify: all graphics and shapes tests pass standalone
-- [ ] **P2.5** Set up release CI: on tag push, build zips per library,
-      attach to GitHub Release
-- [ ] **P2.6** Remove `lib/graphics/` and `lib/shapes/` from main repo
-
-### Phase 3: Extract `loft-server`
-
-- [ ] **P3.1** Create `loft-server` repo with README, LICENSE, CI
-- [ ] **P3.2** Copy `lib/server/`, `lib/web/`, `lib/game_protocol/`
-- [ ] **P3.3** Update `server/loft.toml` dependency on `web` to use local
-      path within the new repo
-- [ ] **P3.4** Verify: all server, web, and game_protocol tests pass
-- [ ] **P3.5** Set up release CI
-- [ ] **P3.6** Remove from main repo
-
-### Phase 4: Extract `loft-libs`
-
-- [ ] **P4.1** Create `loft-libs` repo with README, LICENSE, CI
-- [ ] **P4.2** Copy `lib/random/`, `lib/crypto/`, `lib/imaging/`,
-      `lib/arguments/`
-- [ ] **P4.3** Verify: all tests pass
-- [ ] **P4.4** Set up release CI (single release, one zip per library)
-- [ ] **P4.5** Remove from main repo
-
-### Phase 5: Clean up main repo
-
-- [ ] **P5.1** Remove empty `lib/` directory (or keep only for `loft-ffi`)
-- [ ] **P5.2** Update documentation: CLAUDE.md, EXTERNAL_LIBS.md, PACKAGES.md
-      to reference the new repos
-- [ ] **P5.3** Update `LOFT_LIB` / `--lib` documentation to explain how
-      users point at externally cloned libraries
-- [ ] **P5.4** Consider a `loft install` command or script that clones/
-      downloads libraries from their repos
-
----
-
-## Release workflow (per library repo)
-
-Each repo publishes releases with one zip per library:
-
-```yaml
-# .github/workflows/release.yml
-on:
-  push:
-    tags: ['v*']
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Package libraries
-        run: |
-          for dir in */; do
-            [ -f "$dir/loft.toml" ] || continue
-            name="${dir%/}"
-            zip -r "${name}-${GITHUB_REF_NAME}.zip" "$dir"
-          done
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: "*.zip"
-```
-
-Download URLs follow the pattern:
-```
-https://github.com/<org>/<repo>/releases/download/v1.0.0/<library>-v1.0.0.zip
-```
-
-These URLs map directly into the loft package registry format described in
-REGISTRY.md.
-
----
-
-## Open questions
-
-1. **`loft-ffi` distribution** — crates.io publish vs git dependency?
-   Publishing to crates.io is cleaner for external library authors but
-   adds a release step. Git dependency is simpler for now.
-
-2. **Shared versioning vs per-library versioning** — within each repo,
-   do all libraries share a version (simpler) or version independently
-   (more flexible)? Recommend starting with shared versions.
-
-3. **CI loft binary** — library repos need a `loft` binary to run tests.
-   Options: download from GitHub Releases, build from source as CI step,
-   or use a pre-built Docker image.
-
-4. **Transitive dependencies across repos** — `shapes` depends on
-   `graphics` (same repo, fine). If a future `loft-libs` library needs
-   `server`, that's a cross-repo dependency. The registry / `loft install`
-   needs to handle this.
-
----
-
-## Open work
-
-The package **format itself is shipped**: `loft.toml` manifests
-work today, and 14 `lib/*` packages already use the format
-(`lib/server`, `lib/arguments`, `lib/moros_*`, `lib/graphics`,
-etc.).  The items below are remaining infrastructure work.
-
-| Item | ROADMAP row | Section above | Status |
-|---|---|---|---|
-| **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry (line ~704); detailed draft in [PKG_REGISTRY.md](PKG_REGISTRY.md) | Open — designed, scheduled.  File-based MVP scopes to ~1 week (no server).  Migration to a real server later is a drop-in replacement at the same URL — see [PKG_REGISTRY.md § The invariant](PKG_REGISTRY.md#the-invariant--end-user-experience-is-identical-to-a-real-server). |
-| **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
-| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | § Migration steps (line ~2570) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
-
-Suggested order:
-1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
-   Lands quickly; gives reproducible builds before registry work starts.
-2. **PKG.REG registry MVP** — bulk of the work.  Detailed design:
-   [PKG_REGISTRY.md](PKG_REGISTRY.md) (file-based MVP, server-compatible
-   URL surface).  Phases R1-R9 there map to:
-   (a) `loft package` CLI — tarball + sha256 (R1)
-   (b) `loft.lock` schema + writer (R2 = PKG.7)
-   (c) bootstrap `loft-lang/registry` repo with empty `registry.json` (R3)
-   (d) `loft install <name>[@<v>]` (R4)
-   (e) `loft install` (project), `loft update`, transitive resolution (R5-R7)
-   (f) `loft search` / `loft info` (R8)
-   (g) registry-PR CI validator (R9)
-   Server, signing, publish API are **future** Path 1 from PKG_REGISTRY.md
-   — the MVP buys per-library extraction without funding a service.
-3. **PKG.EXTRACT** — unblocked once PKG.REG ships; per-library extractions begin via `lib_plans/12-library-extraction/`.
+The package format, the native-extension binding model, discovery and
+loading, the `loft-ffi` helper crate, store allocation from native code,
+`loft generate`, and the per-target build pipeline are all documented in
+the [Library Package Format](#library-package-format) section above.
+
+The execution arc for moving the in-tree `lib/*/` packages out into
+per-family external GitHub repos — the library inventory, the
+stdlib-vs-library boundary, chunk topology + dependency graph, the
+per-chunk extraction template, release workflow, current state, the
+shipped-libraries catalog, and the open migration questions — lives in
+[`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/)
+(see its [REFERENCE.md](lib_plans/12-library-extraction/REFERENCE.md) for
+the durable "how it works" reference and [README.md](lib_plans/12-library-extraction/README.md)
+for current status).

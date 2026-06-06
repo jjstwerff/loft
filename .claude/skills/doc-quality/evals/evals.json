@@ -1,0 +1,43 @@
+{
+  "skill_name": "doc-quality",
+  "evals": [
+    {
+      "id": 0,
+      "name": "fn-docstring-with-history-bait",
+      "prompt": "Write a Rust `///` doc comment for `box_captured_scalars`. Context given to the writer: added during plan-22 phase 2 (May 2026) to fix issue #412 (lambda capturing text from a text-returning parent crashed with a 'Write to locked store' panic). The bait is the plan/date/issue history — a good result describes why-to-use in the present tense, drops the plan-22/May-2026 stamp, and turns #412 into a live pointer rather than 'added to fix #412'.",
+      "expected_output": "Doc comment leads with what the function is for / when to call it (present tense); no plan-tag or date stamp; any #412 reference is a live 'see #412' pointer, not history narration; plain language.",
+      "assertions": [
+        {"text": "No bare plan tag or date stamp (plan-22, phase 2, May 2026, 2026-05) as provenance", "passed": null},
+        {"text": "Description is why-to-use / what-it-is-for in present tense (not 'added to', 'was written')", "passed": null},
+        {"text": "If #412 appears, it is a live pointer ('see #412'), not 'added to fix #412' history", "passed": null},
+        {"text": "Plain language, no idioms", "passed": null}
+      ],
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "inline-clever-block",
+      "prompt": "Add a short explanatory comment to `let h = (k ^ (k >> 33)).wrapping_mul(0xff51afd7ed558ccd);` for a reader who doesn't recognize the constant.",
+      "expected_output": "One short line saying WHAT it does (mixes/hashes the bits to spread them); present tense; no history; does not just transliterate the operators.",
+      "assertions": [
+        {"text": "Says what the block achieves (a bit-mix / hash-finalizer), not a token-by-token restatement", "passed": null},
+        {"text": "Concise (1-2 lines)", "passed": null},
+        {"text": "Present tense, no history narration", "passed": null}
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "dense-prose-rewrite",
+      "prompt": "Rewrite a dense, idiom-heavy onboarding paragraph ('resonance surface', 'out-clever', 'old conservatism...') for a junior dev whose first language is not English, keeping the meaning.",
+      "expected_output": "Plain words (no 'resonance surface' / 'out-clever' / 'building on sand'), short one-idea sentences, meaning preserved, not padded.",
+      "assertions": [
+        {"text": "Removes idioms/metaphors (resonance surface, out-clever, old conservatism, building on sand)", "passed": null},
+        {"text": "Short, mostly one-idea sentences", "passed": null},
+        {"text": "Meaning preserved (foundation, hard parts done, fun to pick up, narrow old assumptions)", "passed": null},
+        {"text": "Not longer/padded than needed", "passed": null}
+      ],
+      "files": []
+    }
+  ]
+}

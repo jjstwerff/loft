@@ -1,0 +1,133 @@
+---
+name: doc-quality
+description: >-
+  Write and edit documentation in the loft repo the way it should read: code
+  comments and doc-comments in `.rs` files, AND prose docs (`.md` — README,
+  onboarding, reference). Use this whenever you add or revise a `///` doc comment,
+  an inline comment, a module `//!` header, or any Markdown doc, and whenever you
+  review the comments in a diff. It keeps comments present-tense (describe the code
+  as it is NOW, not its history), makes a function's description about *why to use
+  it* (not why it was written), strips dead plan-tag/date stamps while keeping live
+  pointers to issues/plans, and keeps prose readable for entry-level and
+  non-native-English readers. Reach for it even when the user only says "document
+  this", "add comments", "write the docstring", "explain this function", "write up
+  the README", or "clean up the comments" — it applies to all of those.
+user-invocable: false
+---
+
+# Documentation quality
+
+These rules are three loft goals applied to documentation. Keeping the goals in
+view is the point — the rules are how they show up when you write a comment:
+
+- **Goal B — legible on contact:** comments and the on-ramp are where a reader
+  first meets the value. If only a senior native speaker can read them, B fails.
+- **Goal F — serve the reader, not the author:** a comment exists for whoever
+  reads the code next, not as the author's audit trail. Provenance stamps bill
+  the reader for the author's bookkeeping.
+- **Goal E — the stated thing must match reality:** a comment describing a
+  deleted past is a stated model that no longer matches the code — E's exact
+  failure mode. A stale comment hides the present code instead of revealing it.
+
+Full reference (evidence, worked rewrites, the measurement): **`doc/claude/DOC_QUALITY.md`**.
+The goals themselves: **`doc/claude/GOALS.md` §B/E/F**.
+
+## When to apply
+
+Apply these to the comment or doc you are **writing or editing right now**. Do
+not sweep a file to "fix its comments" during unrelated work — that burns effort
+and risks churn. The Check (below) is a thermometer you run on purpose, not a
+gate on every edit.
+
+## The seven rules
+
+1. **Describe the code as it is now, never the change.** If a comment only makes
+   sense to someone who saw the old version, it belongs in the commit message.
+   *(Goal E: the comment must match the present code.)*
+2. **No plan tags, dates, or resolved-bug history in code comments** — `git blame`
+   keeps that. A **live pointer** to a doc/issue/plan that explains the code is the
+   allowed exception (see "Stamp vs pointer"). *(Goal F: serve the reader, not the
+   author's bookkeeping.)*
+3. **Keep the high-value kinds:** rules the code enforces, the odd-but-needed
+   *why*, cross-file coupling ("change X too"), costs/dangers, and a short module
+   intro. These are what a reader cannot recover from the code itself.
+4. **Judge by content, not length.** A 70-line module header can be right; a
+   one-line "increment i" is wrong. There is no line limit.
+5. **A function `///` description says *why to use it*, not *why it was written*** —
+   what it is for, when to use it, preconditions, trade-offs. For the design
+   reason, **link to the issue or plan you implemented it from** — you are usually
+   already reading it; do not rewrite it inline or build a new doc home for it.
+   *(Goal F.)*
+6. **Inside a function, comment *what* the non-obvious code does** — a dense or
+   clever block (a bit twiddle, a hand-rolled search, a careful ordering) gets one
+   line on what it achieves. You may point to the problem/issue the block handles.
+7. **Write for entry-level and non-native-English readers** (code comments + any
+   user-facing or on-ramp doc): common words over fancy ones, short one-idea
+   sentences, no idioms or metaphors, explain a term on first use, lead with a
+   concrete example. Plain and short — not long and simple. *(Goal B.)*
+
+## Two layers, and the prose exception
+
+- **Function `///` description** → rule 5: *why to use it*.
+- **Inline body comment** → rule 6: *what* the non-obvious code does.
+- **Prose docs (`.md`)** → rule 7 (plain language) always applies to user-facing
+  and on-ramp docs. But rules 1–2 are softer here: a changelog, a plan, or
+  `GOALS.md` legitimately carries dates and plan refs. The stamp ban is a *code*
+  rule. Maintainer-facing design docs may use denser, project-specific language;
+  do not let that creep into the user-facing surface.
+
+## Stamp vs pointer (the one distinction to get right)
+
+- **Dead stamp — remove it:** `@PLAN12 phase 3.5a (2026-05-24) — …`, a bare prefix
+  recording which plan and when, with nothing to open. Following it tells you only
+  when the line was written.
+- **Live pointer — keep it:** a link to a doc, issue, or plan that *explains* why
+  the code is needed (`see LIFETIME.md § locked-store text for why`). Following it
+  teaches you about the present code. It counts **even if the plan/issue is
+  closed** — a finished investigation still explains. Prefer a stable target (an
+  issue URL, or a ref `./scripts/idx` resolves) over a raw plan path.
+
+The loft tracker tags (CLAUDE.md § "Tracker tags") belong in plans, design docs,
+and commit messages — where `./scripts/idx` resolves them — not in a `.rs`
+comment. The comment carries a *link* to the tagged plan, not the tag.
+
+## Worked example
+
+```rust
+// BEFORE — the description explains why the function was WRITTEN, under a stamp
+/// @PLAN52 (2026-05-30): added during the closure-capture rework to fix the
+/// "Write to locked store" panic; re-types text captures. Mirrors
+/// flip_scalars_to_box_types.
+fn box_captured_names_for_outer_scalars(…) { … }
+
+// AFTER — why to USE it (present tense), design reason as a live pointer
+/// Re-types a lambda's captured outer scalars to their cell form so the closure
+/// record can hold them by reference. Call after capture analysis, before
+/// emitting the closure record. Skips text captures when the parent returns
+/// text — see LIFETIME.md § locked-store text for why.
+fn box_captured_names_for_outer_scalars(…) { … }
+```
+
+## Check (advisory)
+
+A runnable detector backs this standard — *progress is evaluated, not asserted*
+(`GOALS.md`). It is a thermometer; it never fails CI and never edits.
+
+```bash
+scripts/lint_comments.sh            # full report + biggest offenders
+scripts/lint_comments.sh -c         # counts only (the thermometer)
+scripts/lint_comments.sh top        # files ranked by flagged count (cleanup)
+```
+
+For adopting on the existing tree without a big-bang cleanup, use the baseline
+ratchet (accept today's flags, block only new ones, shrink over time):
+
+```bash
+scripts/lint_comments.sh --baseline   # accept today's flagged lines
+scripts/lint_comments.sh --check       # list only NEW flags (CI advisory)
+scripts/lint_comments.sh --prune        # after a cleanup pass: drop fixed lines
+```
+
+A flagged `#NNN` or doc pointer that *explains* the code is a keeper — only bare
+plan/date stamps and change-narration should go. The full workflow is in
+`DOC_QUALITY.md` § Check.
