@@ -152,7 +152,7 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
 /// that materialises a Rust tuple `_p` from the record's fields, and `arg` is
 /// the expression passed to the worker.  Non-tuple workers return
 /// `("", "elm")` — byte-identical to the original single-`DbRef` path.
-fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str) {
+fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32, elem_size: i32) -> (String, &'static str) {
     let worker_def = ctx.output.data.def(fn_d_nr);
     let Some(elem_attr) = worker_def.attributes().first() else {
         return (String::new(), "elm");
@@ -176,7 +176,21 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32) -> (String, &'static str)
     // 1-element version of the tuple path.  Reference / struct / heap-enum /
     // text workers take the `DbRef` directly, so they keep the bare `elm`.
     if is_by_value_scalar(&elem_attr.typedef) {
-        let read = tuple_elem_read(&elem_attr.typedef, 0);
+        // An `Integer` element is read at the vector's STRIDE width (`elem_size`),
+        // not the worker param's width — they differ when a narrow element
+        // (`vector<u8>`/`u16`/`i32`) widens to an `integer` param.  Read raw +
+        // zero-extend to `i64` (the worker's arg-context type), matching the
+        // interpreter's `read_primitive_at`.  Other scalar kinds (bool / char /
+        // enum / single / float) have a fixed, type-determined width.
+        let read = if matches!(&elem_attr.typedef, Type::Integer(_)) {
+            match elem_size {
+                1 => "i64::from(_ts.get_byte(elm.rec, elm.pos, 0))".to_string(),
+                4 => "(_ts.get_i32_raw(elm.rec, elm.pos) as u32) as i64".to_string(),
+                _ => "_ts.get_int(elm.rec, elm.pos)".to_string(),
+            }
+        } else {
+            tuple_elem_read(&elem_attr.typedef, 0)
+        };
         let prep = format!("let _ts = unsafe {{ &*cell.get() }}.store(&elm); let _p = {read}; ");
         return (prep, "_p");
     }
@@ -299,7 +313,13 @@ impl OpEmitter for ParallelForEmitter {
         // parameter is named `cell` and threaded through verbatim.
         // `prep`/`arg` unpack a by-value tuple element from the record
         // (empty/`elm` for the common single-`DbRef` worker).
-        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
+        // args[1] is the vector element stride (a literal Int), needed to read a
+        // narrow scalar element at its true width.
+        let elem_sz = match args.get(1).map(Value::unspan) {
+            Some(Value::Int(s)) => *s,
+            _ => 8,
+        };
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
         match shape {
             ClosureShape::Text if owned_text => write!(
                 ctx.w,
@@ -434,7 +454,13 @@ impl OpEmitter for ParallelQueueEmitter {
             s
         };
 
-        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr);
+        // args[1] is the vector element stride (a literal Int), needed to read a
+        // narrow scalar element at its true width.
+        let elem_sz = match args.get(1).map(Value::unspan) {
+            Some(Value::Int(s)) => *s,
+            _ => 8,
+        };
+        let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
         match shape {
             ClosureShape::Text if owned_text => write!(
                 ctx.w,

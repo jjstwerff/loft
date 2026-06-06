@@ -91,6 +91,14 @@ The parallel for-clause now runs over **any iterable**, not just a flat vector.
   non-capturing `return add5;` and closures used only internally are never
   rejected.  Supporting capture would mean copying each captured environment
   across the thread boundary — deliberately not done.
+- **Native narrow-integer-vector par fixed.** par over a `vector<u8>` / `vector<i32>`
+  (or any narrow-Integer element) read garbage on `--native`: the worker-element
+  closure used `get_int` (8 bytes) regardless of the element's 1/4-byte stride,
+  over-reading across rows.  `tuple_arg_prep` now reads a scalar `Integer` element
+  at the vector's stride (`element_size`, threaded in) — `get_byte` / `get_i32_raw`
+  zero-extended to `i64`, matching the interpreter's `read_primitive_at`.  Other
+  scalar kinds keep their fixed-width reads.  Verified both backends
+  (`tests/scripts/22d-par-narrow.loft`).
 
 ### Program-relative asset loading — relative paths resolve against the program (#255 / @PLN9) (2026-06-04)
 
