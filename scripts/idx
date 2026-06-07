@@ -164,14 +164,14 @@ case "$QUERY" in
     # @GH<n> → a deterministic GitHub URL (issues + PRs share one number
     # space; /issues/<n> redirects to /pull/<n> when n is a PR).  No gh call.
     if [[ "$t" =~ ^@GH([0-9]+)$ ]]; then
-      echo "→ https://github.com/jjstwerff/loft/issues/${BASH_REMATCH[1]}  (issue or PR — GitHub redirects)"
+      echo "→ https://github.com/loft-lang/loft/issues/${BASH_REMATCH[1]}  (issue or PR — GitHub redirects)"
     fi
     jq --arg t "$t" '.[$t] // []' "$IDX" | add_excerpts
     ;;
   gh:*)
     # idx gh:247 → the issue/PR URL + every @GH247 reference (offline).
     n="${QUERY#gh:}"
-    echo "→ https://github.com/jjstwerff/loft/issues/${n}  (issue or PR — GitHub redirects)"
+    echo "→ https://github.com/loft-lang/loft/issues/${n}  (issue or PR — GitHub redirects)"
     jq --arg t "@GH${n}" '.[$t] // []' "$IDX" | add_excerpts
     ;;
   prefix:*)

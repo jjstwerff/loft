@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLAN38 — LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
 **Status:** Phases 00 + 01 **shipped** (merged to `main` via
-[PR #219](https://github.com/jjstwerff/loft/pull/219), commit
+[PR #219](https://github.com/loft-lang/loft/pull/219), commit
 `d494edc`).  Phase 01b (loft-callable binding) is actionable
 now on branch `store-durable-phase1b` to unblock the
 training-port consumer.  Phases 02-06 stay in `future/` until

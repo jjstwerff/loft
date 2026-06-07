@@ -319,7 +319,7 @@ $ loft update --check         # CI gate: exit 1 if updates available
 
 This step is **only** for libraries that the loft compiler's own
 test-suite exercises through a pinned source mirror under
-[`jjstwerff/loft`](https://github.com/jjstwerff/loft)'s
+[`loft-lang/loft`](https://github.com/loft-lang/loft)'s
 `tests/fixtures/libs/<pkg>/` — the dogfood libraries (`arguments`,
 `graphics`, `gridmesh`, `shapes`, `imaging`, `game_protocol`, `web`,
 `hex_world`, `time`).  A pure registry-only library has no fixture; skip
@@ -330,7 +330,7 @@ library change that affects the compiler tests is a reviewable commit in
 the loft repo, never silent drift.  After the new tag exists in the
 chunk repo (5a step 2):
 
-1. In `jjstwerff/loft`, bump the tag in `scripts/sync-fixtures.sh`'s
+1. In `loft-lang/loft`, bump the tag in `scripts/sync-fixtures.sh`'s
    `PINNED_REFS` table for your package
    (`graphics  graphics-v0.1.0` → `graphics  graphics-v0.1.1`).
 2. Refresh the snapshot:
@@ -363,7 +363,7 @@ repo, **out of the loft tree**, so no stale artifacts accrue in loft:
    (`loft-lang/loft-libs-<chunk>`), per
    [ISSUE_TRACKING.md § Convention](ISSUE_TRACKING.md) — so `Fixes #N` is
    same-repo and the `fixed-pending-merge` lifecycle works.  (A bug mis-filed in
-   `jjstwerff/loft` whose fix is library code gets re-homed there.)
+   `loft-lang/loft` whose fix is library code gets re-homed there.)
 2. **Checkout — out of tree.** Clone the chunk repo to a dedicated dev dir
    *outside* the loft working tree (e.g. `~/loft-dev/<chunk>`), never into
    `loft/lib/<pkg>/`.  The pre-extraction `lib/<pkg>/` layout is being removed;

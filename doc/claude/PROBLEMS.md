@@ -50,17 +50,17 @@ the command line.
 
 ## Open Issues — Quick Reference
 
-> **🔒 FROZEN (2026-06) — open bugs are now [GitHub Issues](https://github.com/jjstwerff/loft/issues).**
+> **🔒 FROZEN (2026-06) — open bugs are now [GitHub Issues](https://github.com/loft-lang/loft/issues).**
 > This file is the **closed/historical record**: the FIXED rows below are the
 > regression record; the detailed `###` entries (e.g. @P213) are design references.
 > **All open bugs migrated** —
-> @P396→[#247](https://github.com/jjstwerff/loft/issues/247) ·
-> @P397→[#246](https://github.com/jjstwerff/loft/issues/246) ·
-> @P391→[#248](https://github.com/jjstwerff/loft/issues/248) ·
-> @P389→[#249](https://github.com/jjstwerff/loft/issues/249) ·
-> @P384→[#250](https://github.com/jjstwerff/loft/issues/250) ·
-> @P351→[#251](https://github.com/jjstwerff/loft/issues/251) ·
-> @P340→[#252](https://github.com/jjstwerff/loft/issues/252).
+> @P396→[#247](https://github.com/loft-lang/loft/issues/247) ·
+> @P397→[#246](https://github.com/loft-lang/loft/issues/246) ·
+> @P391→[#248](https://github.com/loft-lang/loft/issues/248) ·
+> @P389→[#249](https://github.com/loft-lang/loft/issues/249) ·
+> @P384→[#250](https://github.com/loft-lang/loft/issues/250) ·
+> @P351→[#251](https://github.com/loft-lang/loft/issues/251) ·
+> @P340→[#252](https://github.com/loft-lang/loft/issues/252).
 > **New bugs:** `gh issue create` (NOT a row here).  Convention:
 > [`ISSUE_TRACKING.md`](ISSUE_TRACKING.md); labels: [`../../.github/LABELS.md`](../../.github/LABELS.md).
 

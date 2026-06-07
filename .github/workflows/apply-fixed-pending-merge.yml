@@ -1,81 +1,13 @@
-# Mirror of strip-fixed-pending-merge.yml for the OTHER end of the lifecycle.
-# When a fix is pushed to any non-main branch, label every issue its commits
-# say they close (`Fixes/Closes/Resolves #N`) with `fixed-pending-merge` — the
-# signal that "a fix is on a branch, not yet in main".  GitHub only auto-closes
-# such an issue once the commit reaches the default branch, so without this the
-# issue shows no progress until merge and someone has to hand-label it.
-#
-# Keying off the SAME `Fixes #N` trailer that drives the merge-time auto-close
-# means one author action — the trailer — runs the whole lifecycle:
-#   write `Fixes #N`  →  label on branch push (here)
-#                     →  GitHub auto-closes on merge to main
-#                     →  strip-fixed-pending-merge.yml removes the label on close
-# So multiple people can fix bugs on their own branches concurrently and the
-# tracker stays correct without anyone remembering the labeling procedure.
-#
-# Activates once this file is on `main` (push workflows run from the default
-# branch's definition for branches created afterwards).
-name: Apply fixed-pending-merge on branch push
-
+# Stub: opt loft into the org-wide reusable apply workflow (logic lives once in
+# loft-lang/.github). On a push to a non-main branch it labels every issue a
+# commit says it Fixes/Closes/Resolves with `fixed-pending-merge`, and warns on
+# bare `(#N)` mentions. See loft-lang/.github README.
+name: fixed-pending-merge (apply)
 on:
   push:
     branches-ignore: [main]
-
 permissions:
   issues: write
-
 jobs:
-  label:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Label closed-by issues as fixed-pending-merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -uo pipefail
-          # Issue numbers this push's commits say they FIX.  A keyword is
-          # required: a bare `(#N)` reference is intentionally NOT matched (it
-          # does not auto-close on merge either — the lint job warns about it).
-          nums=$(jq -r '.commits[]?.message' "$GITHUB_EVENT_PATH" \
-            | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?) +#[0-9]+' \
-            | grep -oE '[0-9]+' | sort -u || true)
-          for n in $nums; do
-            state=$(gh issue view "$n" --repo "$REPO" --json state -q .state 2>/dev/null) || continue
-            [ "$state" = "OPEN" ] || continue
-            # Idempotent: skip when the label is already present so re-pushes /
-            # force-pushes don't re-comment.
-            if gh issue view "$n" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null \
-                 | grep -qFx 'fixed-pending-merge'; then
-              continue
-            fi
-            gh issue edit "$n" --repo "$REPO" --add-label fixed-pending-merge
-            gh issue comment "$n" --repo "$REPO" --body \
-              "🔧 Fix pushed on branch \`$BRANCH\` (commit \`$SHA\`), not yet merged to \`main\` — labeled \`fixed-pending-merge\`. The \`Fixes #$n\` trailer closes this on merge; the author adds the verification / regression-test note."
-          done
-
-  lint-bare-refs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Warn on bare issue refs that may want a Fixes trailer
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          # A bare `(#N)` mention of an OPEN issue does NOT auto-close on merge
-          # and does NOT get labeled above (the #270 class).  Warn — but never
-          # fail: cross-references are legitimate, so this is advisory only.
-          jq -r '.commits[]? | "\(.id) \(.message | gsub("\n"; " "))"' "$GITHUB_EVENT_PATH" \
-          | while read -r sha msg; do
-              fixed=$(printf '%s' "$msg" | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-              refs=$(printf '%s' "$msg" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
-              for n in $refs; do
-                echo "$fixed" | grep -qx "$n" && continue   # already a Fixes/Closes ref
-                state=$(gh issue view "$n" --repo "$REPO" --json state -q .state 2>/dev/null) || continue
-                [ "$state" = "OPEN" ] || continue
-                echo "::warning::commit $sha mentions #$n as a bare reference, not 'Fixes #$n'. If this commit fixes it, use a Fixes/Closes trailer so it auto-closes on merge and gets the fixed-pending-merge label (the #270 class)."
-              done
-            done
+  apply:
+    uses: loft-lang/.github/.github/workflows/apply-fixed-pending-merge.yml@main

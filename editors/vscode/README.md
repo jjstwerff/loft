@@ -1,7 +1,7 @@
 # Loft Language — VS Code Extension
 
 Syntax highlighting and snippets for the [Loft programming
-language](https://github.com/jjstwerff/loft) in Visual Studio Code.
+language](https://github.com/loft-lang/loft) in Visual Studio Code.
 
 ## Features
 

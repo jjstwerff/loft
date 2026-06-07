@@ -65,7 +65,7 @@ design itself read [README.md](README.md); for tunables read
 
 ### Immediate (can be done in one short session)
 
-1. **Open PR for `dryopea-fixes`** to land the @P368c fix (and PROBLEMS.md doc update).  Branch is push-clean, tests pass locally.  URL: https://github.com/jjstwerff/loft/pull/new/dryopea-fixes
+1. **Open PR for `dryopea-fixes`** to land the @P368c fix (and PROBLEMS.md doc update).  Branch is push-clean, tests pass locally.  URL: https://github.com/loft-lang/loft/pull/new/dryopea-fixes
 2. **Delete `aid_dryopea` branch** — superseded by `store-persist-bind` PR #222 which merged.
 
 ### Open loft-side bug — @P376 (dryopea-surfaced)

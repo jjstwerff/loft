@@ -1258,7 +1258,7 @@ Procedures for adding third-party libraries to the central Loft package registry
 and for responding when problems are discovered in listed packages.
 
 The registry is a plain text file (`registry.txt`) maintained in a GitHub
-repository.  It starts as a personal repository (`jjstwerff/loft-registry`)
+repository.  It starts as a personal repository (`loft-lang/registry`)
 and can migrate to a shared GitHub organisation (`loft-lang/registry` or
 similar) when the community grows to the point where one person cannot handle
 the review load alone.  Both hosting models are described here.  The file
@@ -1308,7 +1308,7 @@ may add entries and what happens when an entry must be restricted or removed.
 ### Solo model (starting point)
 
 The registry begins as a personal repository owned by the project author
-(`jjstwerff/loft-registry`).  One person handles all submissions, yanks, and
+(`loft-lang/registry`).  One person handles all submissions, yanks, and
 deprecations.  The compiled-in `source:` URL in the interpreter points here.
 
 This model works for a small package ecosystem.  When the submission queue
@@ -1528,7 +1528,7 @@ The maintainer works through this checklist before approving:
 ### Step 1 — Open a submission issue
 
 The package author opens a GitHub issue in the registry repository
-(`jjstwerff/loft-registry` or `loft-lang/registry` if the team model is active)
+(`loft-lang/registry` or `loft-lang/registry` if the team model is active)
 using the **Package Submission** template.  Required fields:
 
 - Package name and version
@@ -1784,7 +1784,7 @@ regularly without being an error.
 ### How yanks reach users
 
 1. Maintainer edits `registry.txt` — adds `yanked:<reason>` to the affected line.
-2. The change is committed and pushed to `jjstwerff/loft-registry` on GitHub.
+2. The change is committed and pushed to `loft-lang/registry` on GitHub.
 3. Any user who runs `loft registry sync` gets the updated file immediately.
 4. `loft registry check` then surfaces the yank in the terminal and in CI.
 

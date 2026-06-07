@@ -1535,7 +1535,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
                  - name: Install mold (loft's pinned linker)\n        \
                  run: sudo apt-get update -y && sudo apt-get install -y mold\n\n      \
                  - name: Clone loft source\n        uses: actions/checkout@v4\n        \
-                 with:\n          repository: jjstwerff/loft\n          path: loft-src\n\n      \
+                 with:\n          repository: loft-lang/loft\n          path: loft-src\n\n      \
                  - name: Cache cargo registry + loft build\n        uses: actions/cache@v4\n        \
                  with:\n          path: |\n            ~/.cargo/registry\n            ~/.cargo/git\n            loft-src/target\n          \
                  key: loft-${{{{ hashFiles('loft-src/Cargo.lock') }}}}\n\n      \

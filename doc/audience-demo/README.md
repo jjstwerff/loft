@@ -18,7 +18,7 @@ for the development plan).
 
 Open this page in any modern browser:
 
-  - On the deployed site: <https://jjstwerff.github.io/loft/audience-demo/>
+  - On the deployed site: <https://loft-lang.org/loft/audience-demo/>
   - Locally: `python3 -m http.server 8766 -d doc` then
     <http://localhost:8766/audience-demo/>
 

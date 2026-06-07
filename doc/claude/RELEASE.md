@@ -282,8 +282,8 @@ The current single-crate layout is correct for the project's scale.  A Cargo wor
 name        = "loft"          # ✓ done 2026-03-15
 version     = "1.0.0"             # bump at release
 description = "loft — interpreter for the loft scripting language"  # ✓ done 2026-03-15
-homepage    = "https://github.com/jjstwerff/loft"  # ✓ done 2026-03-15
-repository  = "https://github.com/jjstwerff/loft"  # ✓ done 2026-03-15
+homepage    = "https://github.com/loft-lang/loft"  # ✓ done 2026-03-15
+repository  = "https://github.com/loft-lang/loft"  # ✓ done 2026-03-15
 keywords    = ["language", "interpreter", "scripting"]  # ✓ done 2026-03-15
 categories  = ["command-line-utilities", "compilers"]   # ✓ done 2026-03-15
 ```

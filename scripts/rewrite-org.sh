@@ -27,11 +27,22 @@ CHECK=0
 
 # Ordered sed -E substitutions.  Renamed/specific first; bare-loft last with a
 # guard: `([^-A-Za-z0-9]|$)` after `loft` matches a delimiter (/ . space ) " etc.)
-# or end-of-line, so `jjstwerff/loft-registry` / `-graphics` are never touched.
+# or end-of-line, so `jjstwerff/loft-registry` / `-graphics` are never caught by it.
+# Canonical library naming: `loft-lang/loft-libs-<chunk>` (per sync-fixtures.sh
+# PINNED_REFS — graphics/shapes/imaging/gridmesh ⇒ graphics; web/game_protocol ⇒
+# net).  `server`/`game-client` are future net libs (not yet extracted) ⇒ net.
+# Pages now lives on the org apex custom domain: jjstwerff.github.io/loft ⇒
+# loft-lang.org/loft (verified live, HTTPS).
 transform() {
   sed -E \
     -e 's#jjstwerff/loft-registry#loft-lang/registry#g' \
-    -e 's#jjstwerff\.github\.io/loft#loft-lang.github.io/loft#g' \
+    -e 's#jjstwerff/loft-graphics#loft-lang/loft-libs-graphics#g' \
+    -e 's#jjstwerff/loft-shapes#loft-lang/loft-libs-graphics#g' \
+    -e 's#jjstwerff/loft-web#loft-lang/loft-libs-net#g' \
+    -e 's#jjstwerff/loft-game-protocol#loft-lang/loft-libs-net#g' \
+    -e 's#jjstwerff/loft-game-client#loft-lang/loft-libs-net#g' \
+    -e 's#jjstwerff/loft-server#loft-lang/loft-libs-net#g' \
+    -e 's#jjstwerff\.github\.io/loft#loft-lang.org/loft#g' \
     -e 's#jjstwerff/loft([^-A-Za-z0-9]|$)#loft-lang/loft\1#g'
 }
 
@@ -39,6 +50,7 @@ transform() {
 # INTENTIONALLY contain the old refs (this script + the migration doc).
 mapfile -t FILES < <(
   git ls-files '*.md' '*.rs' '*.yml' '*.yaml' '*.sh' '*.toml' '*.loft' '*.json' \
+              '*.html' '*.typ' '*.example' '*.txt' 'scripts/idx' \
     | grep -vE '^(target/|scripts/rewrite-org\.sh$|doc/claude/MOVING\.md$)'
 )
 [[ ${#FILES[@]} -gt 0 ]] || { echo "no tracked text files"; exit 0; }

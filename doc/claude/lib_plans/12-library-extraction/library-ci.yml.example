@@ -7,7 +7,7 @@
 # Behaviour:
 #   - One job per package — a single-package failure names the package in the
 #     PR check list.
-#   - Builds loft from source (jjstwerff/loft main) and caches against the
+#   - Builds loft from source (loft-lang/loft main) and caches against the
 #     loft Cargo.lock SHA, so steady-state cost is `cargo build` no-op after
 #     first install.
 #   - `LOFT_DENY_WARNINGS=1` by default — warnings fail CI.  A package opts
@@ -47,7 +47,7 @@ jobs:
       - name: Clone loft source
         uses: actions/checkout@v4
         with:
-          repository: jjstwerff/loft
+          repository: loft-lang/loft
           path: loft-src
 
       - name: Cache cargo registry + loft build

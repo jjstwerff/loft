@@ -43,7 +43,7 @@ Before you can submit, you need:
    package's `homepage`.
 
 3. **A loft binary** ≥ the version your package requires.
-   Build from [github.com/jjstwerff/loft](https://github.com/jjstwerff/loft)
+   Build from [github.com/loft-lang/loft](https://github.com/loft-lang/loft)
    if your distro doesn't ship one new enough.
 
 You do NOT need:
@@ -366,4 +366,4 @@ A mirror with an unmodified `index.json.sig` works
 transparently — clients verify the upstream signature.  A
 mirror that wants to use a different signing key needs its
 public key added to the loft binary's `TRUSTED_PUBLIC_KEYS`;
-file an issue against `jjstwerff/loft` to discuss.
+file an issue against `loft-lang/loft` to discuss.

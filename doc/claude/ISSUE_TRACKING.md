@@ -82,7 +82,7 @@ files would.  The win is the *uniform* convention, not GitHub itself.
   the `.github/workflows/{apply,strip}-fixed-pending-merge.yml` pair) is **per
   repo**.  So the routing rule is mechanical — *where does the edit land?*:
   - compiler / runtime / in-loft stdlib (a `build.rs` or `src/` fix, e.g.
-    `@GH274`) → `jjstwerff/loft`.
+    `@GH274`) → `loft-lang/loft`.
   - an extracted library's own code (e.g. a `graphics` text-metrics fix in
     `native/src/text.rs`, `@GH252`) → that library's **chunk repo**
     (`loft-lang/loft-libs-<chunk>`) — NOT the loft repo, and NOT the read-only
@@ -96,7 +96,7 @@ files would.  The win is the *uniform* convention, not GitHub itself.
   ([LIBRARY_AUTHORING.md § 5d](LIBRARY_AUTHORING.md)) is a **separate** reviewable
   commit in loft, not the issue's closer.
 - **Cross-repo** — a bug in repo A that *blocks* repo B → an Issue in A, referenced
-  from a `blocked-by`-labelled tracking Issue in B (`jjstwerff/loft#247`).  The
+  from a `blocked-by`-labelled tracking Issue in B (`loft-lang/loft#247`).  The
   dogfood loop (moros / dryopea drive loft) lives on these links.
 - **Roadmap** — a `gh` Project board across the orgs for "which release bundles
   which consumer-driven work"; ROADMAP.md can't span orgs.
@@ -350,7 +350,7 @@ The rest of this section is the *design rationale*; here is the **current realit
 
 - **Plans live as Issues in [`loft-lang/plans`](https://github.com/loft-lang/plans)** —
   the central, public, cross-ecosystem overview (the generic *org* home, not
-  `jjstwerff/loft`).  Distributing plans across individual product repos would lose
+  `loft-lang/loft`).  Distributing plans across individual product repos would lose
   the overview; centralising the tracking keeps it built-in.  The labelled issue
   list **is** the overview today.
 - **`@PLN<N>` is the canonical plan identity** = that repo's issue number

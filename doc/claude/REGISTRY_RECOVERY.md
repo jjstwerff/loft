@@ -376,7 +376,7 @@ new installs to malicious tarballs.
    - Any suspicious row → yank immediately.
 
 9. [ ] **Communicate**:
-   - Banner at the top of `jjstwerff/loft`'s README.
+   - Banner at the top of `loft-lang/loft`'s README.
    - GitHub Discussion / Issue pinned on `loft-lang/loft` AND
      `loft-lang/registry`.
    - CVE filing through GitHub's CNA flow if any user-facing

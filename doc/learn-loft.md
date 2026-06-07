@@ -347,6 +347,6 @@ You've seen the language surface.  Pick one of:
   through.  Variable names are rust-internal (`var_x`); proper
   source mapping is planned for 0.8.6.
 - **Ask questions** — open an issue at
-  <https://github.com/jjstwerff/loft/issues>.
+  <https://github.com/loft-lang/loft/issues>.
 
 You're done.  Welcome to loft.

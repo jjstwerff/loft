@@ -366,7 +366,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
-| Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md`) → [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
+| Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md`) → [GitHub Issues](https://github.com/loft-lang/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) stdlib function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
 | Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
 | Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
@@ -376,7 +376,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
 | Find test coverage gaps | [TESTING.md](doc/claude/TESTING.md) § Test Coverage Gaps |
-| Fix a known bug | [GitHub Issues](https://github.com/jjstwerff/loft/issues) (`gh issue list --label "wa:none"`) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
+| Fix a known bug | [GitHub Issues](https://github.com/loft-lang/loft/issues) (`gh issue list --label "wa:none"`) → [TESTING.md](doc/claude/TESTING.md); close with `Fixes #NNN` |
 | Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) |
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |

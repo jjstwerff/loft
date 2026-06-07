@@ -303,7 +303,7 @@ Demo apps ship on their own cadence and do **not** gate any language work.  Per 
 
 | Demo | State |
 |---|---|
-| **Brick Buster** | Shipped 2026-04-25 ([brick-buster.html](https://jjstwerff.github.io/loft/brick-buster.html)).  itch.io publication optional. |
+| **Brick Buster** | Shipped 2026-04-25 ([brick-buster.html](https://loft-lang.org/loft/brick-buster.html)).  itch.io publication optional. |
 | **Moros editor — native** | Shipped 2026-04-22 (plans/finished/03-native-moros-editor/).  `make editor-dist` builds a self-contained `dist/moros-editor/`. |
 | **Moros editor — web** | Designed, not built.  ~20 sprints (MO.1–MO.13).  Lives in `../moros/doc/claude/` + PLANNING.md MO.* once PKG.EXTRACT lets the libraries iterate independently. |
 | **Web IDE** (W2–W6) | G category above (Browser game UI section). |

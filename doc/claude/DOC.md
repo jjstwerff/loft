@@ -176,8 +176,8 @@ The registry file format (`name version url`) gains an optional `docs` field:
 
 ```
 # name  version  url                                          docs
-graphics 0.2.0  https://example.com/graphics-0.2.0.zip       https://jjstwerff.github.io/loft-graphics/
-server   0.1.0  https://example.com/server-0.1.0.zip         https://jjstwerff.github.io/loft-server/
+graphics 0.2.0  https://example.com/graphics-0.2.0.zip       https://loft-lang.org/loft-graphics/
+server   0.1.0  https://example.com/server-0.1.0.zip         https://loft-lang.org/loft-server/
 ```
 
 The catalog page is a simple table generated from this data — no packages

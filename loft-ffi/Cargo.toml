@@ -5,8 +5,8 @@ edition = "2024"
 authors = ["Jurjen Stellingwerff"]
 license = "LGPL-3.0-or-later"
 description = "Helpers for writing loft native extension cdylibs"
-homepage = "https://github.com/jjstwerff/loft"
-repository = "https://github.com/jjstwerff/loft"
+homepage = "https://github.com/loft-lang/loft"
+repository = "https://github.com/loft-lang/loft"
 keywords = ["loft", "ffi", "extension"]
 categories = ["api-bindings"]
 

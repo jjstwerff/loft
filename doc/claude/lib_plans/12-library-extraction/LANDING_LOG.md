@@ -52,7 +52,7 @@ crypto) end-to-end:
   `library-ci.yml` template (--lib --bin loft, Cargo.lock-keyed
   cache, LOFT_DENY_WARNINGS=1).  Phase 6r per-symbol re-clean
   + warning sweep bundled into the same omnibus.
-- Surfaced @P385 + @P386 in jjstwerff/loft (parser + native
+- Surfaced @P385 + @P386 in loft-lang/loft (parser + native
   codegen bugs); fixed before the chunk PR could land green.
 
 ## 2026-05-31 — Phase 6r/6.5 second chunk — loft-libs-net v0.1.1
@@ -63,7 +63,7 @@ crypto) end-to-end:
   → 3 GitHub releases → registry PR #5 (all 3 validator gates
   green).
 - Discovered + fixed two infrastructure prerequisites:
-  - `loft package` deterministic mtime (jjstwerff/loft #234).
+  - `loft package` deterministic mtime (loft-lang/loft #234).
   - Registry validator multi-package homepage parsing
     (loft-lang/registry #4).
 - Filed @P389: cross-package `--native` link failure on Linux

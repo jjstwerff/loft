@@ -150,12 +150,12 @@ packages.  Schema:
 ```json
 "loft": {
   "kind": "toolchain",          // distinguishes from library packages
-  "homepage": "https://github.com/jjstwerff/loft",
+  "homepage": "https://github.com/loft-lang/loft",
   "versions": {
     "0.8.5": {
       "platforms": {
         "linux-x86_64": {
-          "url": "https://github.com/jjstwerff/loft/releases/download/v0.8.5/loft-linux-x86_64-0.8.5.tar.gz",
+          "url": "https://github.com/loft-lang/loft/releases/download/v0.8.5/loft-linux-x86_64-0.8.5.tar.gz",
           "sha256": "...",
           "size": ...,
           "rustc": "1.83.0"

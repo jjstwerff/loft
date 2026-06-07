@@ -395,7 +395,7 @@ the hard plumbing so it is fun to pick up*. That makes friction **fatal, not
 cosmetic**: a Goal-F violation means the plumbing isn't finished, so whoever picked
 it up gets a *fight* instead of fun, and leaves. The crawler dogfood made this
 literal — its "survival guide" of store-lifetime workarounds (C1/C3/C4/C18 →
-[loft#248](https://github.com/jjstwerff/loft/issues/248)) *is* the plumbing not yet
+[loft#248](https://github.com/loft-lang/loft/issues/248)) *is* the plumbing not yet
 done.
 
 **Check.** No feature design ever reaches "…and the user must write X so the

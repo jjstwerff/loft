@@ -6,10 +6,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Reporting a bug
 
-Open a **[GitHub Issue](https://github.com/jjstwerff/loft/issues/new/choose)**
+Open a **[GitHub Issue](https://github.com/loft-lang/loft/issues/new/choose)**
 using the **Bug report** template. The single most useful thing is a **minimal
 reproducer** — the smallest `.loft` program that triggers it (try it in the
-[web playground](https://jjstwerff.github.io/loft/playground.html) first).
+[web playground](https://loft-lang.org/loft/playground.html) first).
 
 Please say:
 - **expected vs actual**, and **which mode** (`--interpret` / `--native` / browser);
@@ -18,7 +18,7 @@ Please say:
 
 ## Known issues + the labels
 
-Browse **[open Issues](https://github.com/jjstwerff/loft/issues)**.  Triage uses a
+Browse **[open Issues](https://github.com/loft-lang/loft/issues)**.  Triage uses a
 small label vocabulary — what `sev:`, `wa:`, and `area:codegen` etc. mean is in
 **[`.github/LABELS.md`](.github/LABELS.md)**, written so you don't need to read the
 loft source. The most useful filters:

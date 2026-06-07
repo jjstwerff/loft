@@ -5,8 +5,8 @@ edition = "2024"
 authors = ["Jurjen Stellingwerff"]
 license = "LGPL-3.0-or-later"
 description = "The loft scripting language interpreter"
-homepage = "https://github.com/jjstwerff/loft"
-repository = "https://github.com/jjstwerff/loft"
+homepage = "https://github.com/loft-lang/loft"
+repository = "https://github.com/loft-lang/loft"
 keywords = ["language", "interpreter", "scripting"]
 categories = ["command-line-utilities", "compilers"]
 
@@ -148,4 +148,3 @@ assets = [
 # Skip wasm-opt to keep the table descriptor intact; the ~30 % size
 # increase is acceptable compared to a non-functional deployed site.
 wasm-opt = false
-

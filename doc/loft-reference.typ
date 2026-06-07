@@ -52,7 +52,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 The quickest way to get the `loft` binary on your PATH:
 
 ```
-cargo install --git https://github.com/jjstwerff/loft --bin loft
+cargo install --git https://github.com/loft-lang/loft --bin loft
 ```
 
 This compiles loft in release mode and places the binary in `~/.cargo/bin/`, which is already on your PATH if you used rustup.
@@ -62,7 +62,7 @@ This compiles loft in release mode and places the binary in `~/.cargo/bin/`, whi
 Clone the repository and build with Cargo:
 
 ```
-git clone https://github.com/jjstwerff/loft
+git clone https://github.com/loft-lang/loft
 cd loft
 cargo build --release
 ```
@@ -6362,5 +6362,3 @@ Post-1.0 items include route decorators (`@get` / `@post` / `@ws`), WASM Web Wor
 === Following progress
 
 Development is tracked in the GitHub repository. The full internal roadmap with effort estimates, dependencies, and design pointers is in the repository's `doc/claude/ROADMAP.md`.
-
-

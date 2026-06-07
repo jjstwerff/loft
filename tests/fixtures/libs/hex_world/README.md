@@ -31,7 +31,7 @@ engine and the loft library ecosystem.
 - TTT v5 (`game_protocol/examples/v5_*`) — the canonical multiplayer
   smoke test reuses `Cell` for X/O marks.
 - The audience-generative-art demo
-  ([plans/future/36](https://github.com/jjstwerff/loft/tree/main/doc/claude/plans/future/6-audience-generative-art))
+  ([plans/future/36](https://github.com/loft-lang/loft/tree/main/doc/claude/plans/future/6-audience-generative-art))
   — projector + phone clients share the same chunked binary surface.
 - Future hex_walls / hex_terrain / hex_items packages — they place
   features *within* the hex_world addressing space.
@@ -39,7 +39,7 @@ engine and the loft library ecosystem.
   in-memory model.
 
 Renamed from `world` 2026-06-01 (see
-[LAVITION.md W.1](https://github.com/jjstwerff/loft/blob/main/doc/claude/LAVITION.md#next-library-work--execution-order))
+[LAVITION.md W.1](https://github.com/loft-lang/loft/blob/main/doc/claude/LAVITION.md#next-library-work--execution-order))
 — the `hex_` prefix disambiguates from voxel / tile / BSP "world"
 expectations.
 

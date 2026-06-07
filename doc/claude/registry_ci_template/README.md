@@ -25,8 +25,8 @@ edit the canonical, regenerate this template:
 ```sh
 cp doc/claude/REGISTRY_SUBMIT.md doc/claude/registry_ci_template/SUBMITTING.md
 sed -i.bak \
-  -e 's|](PKG_REGISTRY.md|](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md|g' \
-  -e 's|](PACKAGES.md|](https://github.com/jjstwerff/loft/blob/main/doc/claude/PACKAGES.md|g' \
+  -e 's|](PKG_REGISTRY.md|](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md|g' \
+  -e 's|](PACKAGES.md|](https://github.com/loft-lang/loft/blob/main/doc/claude/PACKAGES.md|g' \
   doc/claude/registry_ci_template/SUBMITTING.md
 # then re-add the deploy-copy header at the top by hand
 rm doc/claude/registry_ci_template/SUBMITTING.md.bak

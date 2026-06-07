@@ -4,7 +4,7 @@
 //! # loft-plugin-api
 //!
 //! Stable C-ABI interface for writing native extension plugins for the
-//! [loft](https://github.com/jjstwerff/loft) scripting language interpreter.
+//! [loft](https://github.com/loft-lang/loft) scripting language interpreter.
 //!
 //! ## Usage
 //!

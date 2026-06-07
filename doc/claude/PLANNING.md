@@ -132,17 +132,17 @@ for TCP, TLS, WebSockets, ACME, and cryptographic primitives.  Phases:
 - **Phase 5** — ACME / Let's Encrypt automatic certificate provisioning and renewal.
 - **Phase 6** — Advanced middleware: CORS, rate limiting, decompression, static files.
 
-**`graphics` → `jjstwerff/loft-graphics`** (LIB.2, 0.9.0):
+**`graphics` → `loft-lang/loft-libs-graphics`** (LIB.2, 0.9.0):
 2D canvas, mesh, scene, and GLB export.  Migrated from `lib/graphics/` in the
 main repo.
 
-**`shapes` → `jjstwerff/loft-shapes`** (LIB.3, 0.9.0):
+**`shapes` → `loft-lang/loft-libs-graphics`** (LIB.3, 0.9.0):
 Shape primitives built on the graphics library.  Migrated from `lib/shapes/`.
 
 **`web` — HTTP client** (H4, 0.8.4):
-Blocking HTTP client and JSON response handling.  Lives in `jjstwerff/loft-web`.
+Blocking HTTP client and JSON response handling.  Lives in `loft-lang/loft-libs-net`.
 
-**`game_protocol` — shared multiplayer protocol** (`jjstwerff/loft-game-protocol`):
+**`game_protocol` — shared multiplayer protocol** (`loft-lang/loft-libs-net`):
 Lightweight shared package depended on by both `server` (when used as a game server)
 and `game_client`.  Contains the canonical `WsMessage` enum, `GameEnvelope` struct,
 `MSG_*` constants, and all `Msg*` request/response structs.  Extracting these into a

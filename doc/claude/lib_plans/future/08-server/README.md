@@ -90,7 +90,7 @@ primitives.
 ## Package structure
 
 ```
-server/                        ← GitHub: jjstwerff/loft-server
+server/                        ← GitHub: loft-lang/loft-libs-net
   loft.toml
   src/
     server.loft                ← Server config struct, serve()
@@ -1213,7 +1213,7 @@ be duplicated with slight modifications.
 `game_protocol` package.
 
 ```
-game_protocol/              ← GitHub: jjstwerff/loft-game-protocol
+game_protocol/              ← GitHub: loft-lang/loft-libs-net
   loft.toml
   src/
     envelope.loft           ← GameEnvelope, MSG_* constants
