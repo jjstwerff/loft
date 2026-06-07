@@ -128,6 +128,11 @@ PR #238 closure (2026-05-31) shipped every 6.x consumer/author UX
 phase + net Stage B; what remains is the longer-arc graphics/world/
 moros extraction work plus the closure ritual.
 
+> **Quality gate (2026-07 cycle):** before any remaining `lib/` library is
+> extracted or published it must pass the library rules
+> ([LIBRARY_CHECKLIST](../../LIBRARY_CHECKLIST.md)).  The per-library worklist —
+> inventory, what's checked, and progress — is [stabilization.md](stabilization.md).
+
 1. ~~Migrate `server`/`graphics` to the `[native.functions]` manifest
    pattern.~~  **DONE + superseded** — the manifest was a transitional
    step; the libraries now use the **clean source-scan pattern**
