@@ -39,6 +39,6 @@ loft install graphics
 ## Provenance
 
 Extracted from the loft monorepo's `lib/graphics/` 2026-05-31 as part of
-[@PLAN12](https://github.com/loft-lang/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
+[@PLAN12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
 Phase 5b (`loft-libs-graphics` Stage B — Stage A for graphics + imaging,
 then monorepo cleanup).
