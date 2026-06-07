@@ -814,6 +814,68 @@ impl Parser {
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
+    /// @PLN12 phase 02 — does `input` end mid-construct, so a REPL should read
+    /// more lines before trying to parse it?
+    ///
+    /// Returns `true` when a bracket is still open (`(`, `[`, `{`), a `"…"`
+    /// string literal is unterminated, or the last meaningful token is a
+    /// binary / continuation operator (`1 +`, `x.`).  `//` line comments and
+    /// escaped quotes are skipped.  It is deliberately conservative: a missed
+    /// "incomplete" just produces the ordinary parse error the caller already
+    /// handles, never a crash.  Pure over the input string — no parser state.
+    #[must_use]
+    pub fn statement_incomplete(input: &str) -> bool {
+        let chars: Vec<char> = input.chars().collect();
+        let mut depth: i32 = 0;
+        let (mut in_str, mut esc) = (false, false);
+        let mut last: Option<char> = None;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if c == '\\' {
+                    esc = true;
+                } else if c == '"' {
+                    in_str = false;
+                    last = Some('"');
+                }
+                i += 1;
+                continue;
+            }
+            // `//` to end of line is a comment — skip it.
+            if c == '/' && chars.get(i + 1) == Some(&'/') {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    last = Some(c);
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    last = Some(c);
+                }
+                w if w.is_whitespace() => {}
+                other => last = Some(other),
+            }
+            i += 1;
+        }
+        if in_str || depth > 0 {
+            return true;
+        }
+        // A trailing binary / continuation operator means more is coming.
+        matches!(
+            last,
+            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '=' | '<' | '>' | ',' | '.')
+        )
+    }
+
     // ********************
     // * Helper functions *
     // ********************
