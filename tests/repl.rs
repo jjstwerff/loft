@@ -87,3 +87,51 @@ fn quit_exits() {
         "clean quit: {out:?}"
     );
 }
+
+// ── phase 05: introspection commands ─────────────────────────────────────────
+
+const DEF: &str = "fn dbl(n: integer) -> integer { n + n }\n";
+
+#[test]
+fn bytecode_command() {
+    let out = repl(&["repl"], &format!("{DEF}:bytecode dbl\n:quit\n"));
+    assert!(
+        out.contains("n_dbl") && out.contains("=== bytecode ==="),
+        "bytecode: {out:?}"
+    );
+}
+
+#[test]
+fn rust_command() {
+    let out = repl(&["repl"], &format!("{DEF}:rust dbl\n:quit\n"));
+    assert!(out.contains("fn n_dbl"), "rust: {out:?}");
+}
+
+#[test]
+fn slots_command() {
+    let out = repl(&["repl"], &format!("{DEF}:slots dbl\n:quit\n"));
+    assert!(
+        out.contains("n_dbl") && out.contains("arg"),
+        "slots: {out:?}"
+    );
+}
+
+#[test]
+fn fns_command_lists_user_fns() {
+    let out = repl(
+        &["repl"],
+        &format!("{DEF}fn inc(x: integer) -> integer {{ x + 1 }}\n:fns\n:quit\n"),
+    );
+    assert!(out.contains("dbl -> integer"), "fns: {out:?}");
+    assert!(out.contains("inc -> integer"), "fns: {out:?}");
+}
+
+/// An unknown `:command` doesn't crash the session.
+#[test]
+fn unknown_command_is_safe() {
+    let out = repl(&["repl"], ":nonsense\n1 + 1\n:quit\n");
+    assert!(
+        out.contains('2'),
+        "session continues after unknown cmd: {out:?}"
+    );
+}

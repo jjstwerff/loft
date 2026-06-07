@@ -19,7 +19,9 @@
 //! refinement sits behind this same `ReplSession` API.
 
 use crate::compile;
+use crate::data::DefType;
 use crate::diagnostics::{DiagEntry, Level};
+use crate::introspect::{Options, Section};
 use crate::parser::Parser;
 use crate::state::State;
 use std::io::{BufRead, Write};
@@ -66,16 +68,25 @@ pub fn run_repl<R: BufRead, W: Write>(
         let trimmed = line.trim_end();
         // `:`-commands are only recognised at the start of a fresh statement.
         if pending.is_empty() && trimmed.starts_with(':') {
-            match trimmed {
-                ":quit" | ":q" => break,
-                ":help" | ":h" => {
-                    writeln!(chrome, "commands: :quit  :help  :reset")?;
-                }
-                ":reset" => {
+            let mut words = trimmed[1..].split_whitespace();
+            let cmd = words.next().unwrap_or("");
+            let filter: Vec<String> = words.map(str::to_string).collect();
+            match cmd {
+                "quit" | "q" => break,
+                "help" | "h" => writeln!(
+                    chrome,
+                    "commands: :quit  :help  :reset  :fns  \
+                     :bytecode [fn]  :rust [fn]  :slots [fn]"
+                )?,
+                "reset" => {
                     session = ReplSession::new(stdlib_dir)?;
                     writeln!(chrome, "session reset.")?;
                 }
-                other => writeln!(chrome, "unknown command: {other}  (:help)")?,
+                "bytecode" => session.introspect(Section::Bytecode, filter),
+                "rust" => session.introspect(Section::Rust, filter),
+                "slots" => session.introspect(Section::Slots, filter),
+                "fns" => session.list_fns(),
+                other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
             }
             continue;
         }
@@ -266,6 +277,43 @@ impl ReplSession {
             Some(name)
         } else {
             None
+        }
+    }
+
+    /// Compile the current session and emit one introspection `section`
+    /// (bytecode / Rust / slots / types) to stdout, optionally restricted to
+    /// named functions — the engine behind the REPL's `:bytecode` / `:rust` /
+    /// `:slots` commands (reuses phase 01's `introspect`).
+    pub fn introspect(&mut self, section: Section, fn_filter: Vec<String>) {
+        crate::scopes::check(&mut self.parser.data);
+        let mut state = State::new(self.parser.database.clone());
+        compile::byte_code(&mut state, &mut self.parser.data);
+        let end_def = self.parser.data.definitions();
+        let opts = Options {
+            sections: vec![section],
+            fn_filter,
+            ..Options::new()
+        };
+        let _ = crate::introspect::emit_all(&mut self.parser.data, &mut state, end_def, &opts);
+    }
+
+    /// Print the user-defined functions entered this session (name + return
+    /// type), to stdout — the `:fns` command.  Synthetic generation wrappers
+    /// (`repl_*` / `replmain_*`) and stdlib functions are excluded.
+    pub fn list_fns(&self) {
+        let data = &self.parser.data;
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type != DefType::Function
+                || !def.name.starts_with("n_")
+                || def.name.starts_with("n_repl")
+                || def.position.file != "<repl>"
+            {
+                continue;
+            }
+            let user = def.name.strip_prefix("n_").unwrap_or(&def.name);
+            let ret = def.returned.show(data, &def.variables);
+            println!("{user} -> {ret}");
         }
     }
 }
