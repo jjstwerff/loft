@@ -38,6 +38,19 @@ The load-bearing claim to spike first: a statement compiled against a
 pre-seeded, function-shaped `vars` reads/writes the right slots and the values
 survive a reset-and-re-enter.
 
+**Slice A — DONE (2026-06-07).** The parse → compile → execute pipeline composes
+end-to-end: `parse_statement` → `compile::byte_code` → `execute_argv` on the
+phase-02 wrapper.  A definition from one input is callable from a later input
+(functions persist in `Data`); bare expressions and stdlib calls run.
+`tests/repl_eval.rs`.  Slice A uses a fresh `State` + full compile per input
+(correct, not yet optimized — a fresh State sidesteps the @P381 CONST_STORE
+re-lock).
+
+**Slice B — remaining.** Cross-input *variable* persistence: a persistent
+`State` (so `byte_code_from` appends + the stack region survives), the
+function-shaped `vars` seeded per input, `reset_for_repl` (preserve `stack_pos`),
+and resume-execution over the preserved frame.
+
 ---
 
 ## Original design (bytecode-append — NOT pursued; kept for context)
