@@ -77,10 +77,10 @@ fn main() {
   assert(u2.id == u.id, "round-trip id");
   assert(u2.name == u.name, "round-trip name");
 
-  // Type-mismatched fields (id: string, name: number) parse as
-  // JSON fine but the struct unwrap produces null sentinels.
-  // Schema-level diagnostics are a Q1 follow-up — for now
-  // verify the unwrap does not crash on mismatched shapes.
+  // Type-mismatched fields (id: string, name: number) parse as JSON fine, but
+  // the struct unwrap produces null sentinels; path-qualified diagnostics on the
+  // mismatch are collected in `json_errors`. Here we verify the unwrap does not
+  // crash on mismatched shapes.
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
   assert(bad.id == null, "type-mismatched id becomes null: {bad.id}");
 
