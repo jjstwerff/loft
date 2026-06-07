@@ -108,6 +108,13 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # gendoc + the wasm builds compile Rust, which needs a linker (`ld`).
+      # Unlike the build jobs (which pull binutils in via musl-tools), this job
+      # installs no toolchain, so the runner had none — `cargo run` died with
+      # "collect2: cannot find 'ld'".  build-essential supplies gcc + ld.
+      - name: Install C toolchain (linker)
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -161,5 +168,16 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # Skip gracefully when the token secret is unset rather than hard-failing
+      # the release: a missing CARGO_REGISTRY_TOKEN should not turn the whole
+      # tag run red.  cargo reads the token from CARGO_REGISTRY_TOKEN, so no
+      # `--token ''` (which errors with "a value is required").
       - name: Publish
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+            echo "CARGO_REGISTRY_TOKEN not set — skipping crates.io publish."
+            exit 0
+          fi
+          cargo publish
