@@ -3,7 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLAN08 — REPL + interpreter-introspection tool
+# @PLN12 — REPL + interpreter-introspection tool  ·  [loft-lang/plans#12](https://github.com/loft-lang/plans/issues/12)  ·  *(was `@PLAN08`)*
+
+**Status:** ACTIVE — promoted from `future/` 2026-06-07; the last new language
+feature before the 2026-07 warm feature freeze.  Phase 0 done; 1–6 open.
 
 ## Goal
 
@@ -139,7 +142,7 @@ Inherits from [doc/claude/plans/README.md](../../README.md):
 - No regression-now-fix-later trades.
 - Each phase ships its own `make ci` run + at least one new test.
 
-Specific to @PLAN08:
+Specific to @PLN12:
 
 1. **Introspection tool's output is byte-stable** across loft
    versions for the same input.  Tests pin the exact text shape

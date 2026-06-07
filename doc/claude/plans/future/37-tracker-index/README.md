@@ -182,7 +182,7 @@ rendering works regardless).
 Splitting also keeps each plan ≤7 phases — @PLAN35 was
 already at 7 with two stretches (08 + 09 + 10) waiting.
 Adding the indexer to @PLAN35 would have pushed it to ~12
-phases, beyond the "max 3 active plans" cap's spirit.
+phases, far past a manageable single-plan scope.
 
 ## Cross-references
 

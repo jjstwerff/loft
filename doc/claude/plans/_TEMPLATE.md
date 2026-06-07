@@ -38,8 +38,6 @@ Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--p
   **Primary deliverable: mechanism understanding + fix-design
   decision.**  Canonical example: `plans/finished/51-hidden-buffer-aliasing/`.
 
-All plan shapes capped at 2-3 active per `plans/`.
-
 If your TODO fits in one row of a reference-doc table with one
 sentence of design, you don't need a plan — close this template
 and add the row.

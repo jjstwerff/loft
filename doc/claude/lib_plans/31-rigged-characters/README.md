@@ -220,5 +220,3 @@ parallel, on Blender-made glB assets; this is the genuinely valuable loft delive
 - **Pure-loft glB *writer*** (the "eventually" authoring path): trigger to build it
   once generation lives in loft.
 - Animal coverage: how many templates / which gaits for v1.
-- Active-plan budget: a 4th top-level `lib_plans` slot (12 / 19 / 21 active); per the
-  ≤3-active discipline, confirm which to park or that this supersedes one.

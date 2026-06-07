@@ -337,8 +337,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
-| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives (≤2-3 active) |
-| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (≤3 active; numbering independent) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (numbering independent) |
 | [BROADENING.md](doc/claude/BROADENING.md) | Using loft beyond games (CLI, server, data), sequenced unlocks |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()`, `StackFrame`, `ArgValue` |
