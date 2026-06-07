@@ -169,7 +169,10 @@ must be releasable. All changes land on a feature branch and reach `main` only v
 4. Branch from the tip of `main` with a **GENERAL name** (`quality-pass`, `cleanup`, `work`) so one
    long-lived branch hosts cross-theme work — new branches keep re-rebasing against a moving `main`
    and failing CI on patterns they didn't author. Only a substantial plan with its own design doc
-   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name.
+   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name. The active cycle's long-lived branch is
+   a **monthly release branch** named for its release month, `YYYY-MM` (e.g. `2026-07`); cross-theme
+   work lands there and it ships at the start of that month once the tree is stable with a low bug
+   count — see [RELEASE.md § Release cadence](doc/claude/RELEASE.md#release-cadence).
 5. Merge to `main` via a GitHub PR — never a local `git merge`.
 
 ---

@@ -25,6 +25,18 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
+## Feature freeze — heading into the 2026-07 cycle (added 2026-06-07)
+
+Loft is entering a **warm feature freeze** to stabilise toward a release we can trust.  Scope for this cycle is deliberately narrow:
+
+- The **REPL** (interactive read-eval-print loop) is the **last new language feature** before the freeze — built on the `repl` branch.
+- After the REPL, the **only** new-feature work allowed is **making libraries work on loft** (the library system; see [`lib_plans/README.md`](lib_plans/README.md)).
+- **Optimizations are allowed** — libraries depend on performance, so speed/footprint work stays in scope.
+- **Everything else is fixing existing language features** — stabilisation and bug-fixing, lowering the bug count.
+- **New features resume only once we have confidence that all language features work.**  Until then, nothing new beyond the REPL and library-enablement.
+
+This is the sequencing view; the per-cycle ship gate and the monthly branch model live in [`RELEASE.md § Release cadence`](RELEASE.md#release-cadence).
+
 ## Near-term focus — friend-readiness (added 2026-05-13)
 
 Loft has crossed the threshold where a developer friend with
