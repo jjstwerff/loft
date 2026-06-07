@@ -26,5 +26,5 @@ See [src/shapes.loft](src/shapes.loft).  Major primitives:
 ## Provenance
 
 Extracted from the loft monorepo's `lib/shapes/` 2026-05-24
-as part of [@PLAN12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
+as part of [@PLAN12](https://github.com/loft-lang/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
 Phase 5 (loft-libs-graphics chunk).

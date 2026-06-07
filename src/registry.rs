@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Default registry URL — used when no `source:` header or env var is set.
 const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/jjstwerff/loft-registry/main/registry.txt";
+    "https://raw.githubusercontent.com/loft-lang/registry/main/registry.txt";
 
 /// A single entry from the registry file.
 #[derive(Debug, Clone)]

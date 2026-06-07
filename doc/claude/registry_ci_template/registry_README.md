@@ -9,7 +9,7 @@ ecosystem contributors see when they land on the registry repo.
 
 # loft-lang / registry
 
-The package registry for the [loft](https://github.com/jjstwerff/loft)
+The package registry for the [loft](https://github.com/loft-lang/loft)
 language ecosystem.  A single static `index.json` file that the
 loft client consumes when you run `loft install <pkg>`.
 
@@ -30,7 +30,7 @@ include in your package, yanking, mirror policy.  Read that
 before opening a PR.
 
 **Short version**, per the design in
-[loft's PKG_REGISTRY.md](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md):
+[loft's PKG_REGISTRY.md](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md):
 
 1. **Author tags a release** in their package repo (e.g.,
    `git tag v0.1.0 && git push --tags`).
@@ -85,7 +85,7 @@ for ~30 seconds of human work per merge.
 
 ## Schema
 
-See [loft's PKG_REGISTRY.md § Schema](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md#schema)
+See [loft's PKG_REGISTRY.md § Schema](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md#schema)
 for the full field reference.  Minimum required per version row:
 `url`, `sha256`, `size`, `loft`, `published`.  Everything else
 (`deps`, `conflicts`, `replaces`, `provides`, `binaries`,
@@ -100,7 +100,7 @@ maintainers.  The public half is embedded in every loft binary
 release (in `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS`).
 
 If you suspect the signing key is compromised, file an issue
-ASAP — see [REGISTRY_BOOTSTRAP.md § Trust-root recovery](https://github.com/jjstwerff/loft/blob/main/doc/claude/REGISTRY_BOOTSTRAP.md#trust-root-recovery)
+ASAP — see [REGISTRY_BOOTSTRAP.md § Trust-root recovery](https://github.com/loft-lang/loft/blob/main/doc/claude/REGISTRY_BOOTSTRAP.md#trust-root-recovery)
 for the response procedure.
 
 ---
@@ -139,7 +139,7 @@ skip them.  Use the PR description to record the reason.
   investigation.
 - **Registry bug**: file an issue here.
 - **Loft client bug** (install fails, sig verify fails): file
-  an issue in [jjstwerff/loft](https://github.com/jjstwerff/loft/issues).
+  an issue in [loft-lang/loft](https://github.com/loft-lang/loft/issues).
 
 ---
 

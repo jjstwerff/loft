@@ -61,7 +61,7 @@ keygen reads `/dev/urandom`):
 ```sh
 # Build the keygen from the loft repo (ships with the binary as of
 # the PKG.REG MVP).  The `registry` feature is on by default.
-git clone https://github.com/jjstwerff/loft.git
+git clone https://github.com/loft-lang/loft.git
 cd loft
 cargo build --release --bin loft-keygen
 ./target/release/loft-keygen generate

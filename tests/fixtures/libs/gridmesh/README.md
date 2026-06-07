@@ -33,6 +33,6 @@ See [src/gridmesh.loft](src/gridmesh.loft) for the full type
 ## Provenance
 
 Extracted from the loft monorepo's `lib/gridmesh/` 2026-05-24
-as part of [@PLAN12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
+as part of [@PLAN12](https://github.com/loft-lang/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
 Phase 5.  Originally prototyped for the audience-generative-art
-crystal demo ([@PLN6](https://github.com/jjstwerff/loft/blob/main/doc/claude/plans/future/6-audience-generative-art/README.md)).
+crystal demo ([@PLN6](https://github.com/loft-lang/loft/blob/main/doc/claude/plans/future/6-audience-generative-art/README.md)).

@@ -52,7 +52,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 The quickest way to get the `loft` binary on your PATH:
 
 ```
-cargo install --git https://github.com/jjstwerff/loft --bin loft
+cargo install --git https://github.com/loft-lang/loft --bin loft
 ```
 
 This compiles loft in release mode and places the binary in `~/.cargo/bin/`, which is already on your PATH if you used rustup.
@@ -62,7 +62,7 @@ This compiles loft in release mode and places the binary in `~/.cargo/bin/`, whi
 Clone the repository and build with Cargo:
 
 ```
-git clone https://github.com/jjstwerff/loft
+git clone https://github.com/loft-lang/loft
 cd loft
 cargo build --release
 ```
@@ -5674,10 +5674,6 @@ pub fn split_text(self: text, separator: text) -> vector < text >
 ```
 
 ```rust
-pub fn join(self: vector<text>, jn_sep: text) -> text
-```
-
-```rust
 pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
 ```
 
@@ -5823,7 +5819,7 @@ pub fn is_control(self: character) -> boolean
 True if the character is a control character.
 
 ```rust
-pub fn join(parts: vector < text >, sep: text) -> text
+pub fn join(self: vector < text >, sep: text) -> text
 ```
 
 Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
@@ -5855,6 +5851,12 @@ pub fn hash_sorted(h: reference, tp: integer) -> reference
 ```
 
 C60 Step 3a-part2: iterate a hash in ascending key order. Returns a fresh vector\<reference\<T\>\> with the hash's records sorted by key field(s).  The parser desugars `for e in h { … }` into a call with the hash's type id; direct user calls need to supply the id via `sizeof`-style introspection (not yet exposed).  Inefficient by design — walks + sorts all records per call.  See CAVEATS.md C60.
+
+```rust
+pub fn hash_unsorted(h: reference, tp: integer) -> reference
+```
+
+Raw bucket-walk sibling of `hash\_sorted` for `for e in h par(...)`. Same fresh vector\<reference\<T\>\> scratch, but in storage order — skips the key sort because the parallel queue has no use for a hash's order.  The parser desugars the par form of `for e in h` into this call.
 
 ```rust
 pub fn len(both: hash) -> integer

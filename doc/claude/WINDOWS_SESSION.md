@@ -36,7 +36,7 @@ where.exe gh
 # If missing: winget install --id GitHub.cli
 
 # 5. Clone + initial build (catches base-toolchain issues immediately)
-git clone https://github.com/jjstwerff/loft
+git clone https://github.com/loft-lang/loft
 cd loft
 cargo build --release
 cargo build --release --lib   # the unhashed libloft.rlib for --native (reference_native_rlib_rebuild)

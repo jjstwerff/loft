@@ -145,7 +145,7 @@ declares external references:
 ```toml
 [trackers.loft]
 regex = "loft#P[0-9]+"
-url   = "https://github.com/jjstwerff/loft/blob/main/doc/claude/PROBLEMS.md#$0"
+url   = "https://github.com/loft-lang/loft/blob/main/doc/claude/PROBLEMS.md#$0"
 external = true        # don't try to resolve locally
 ```
 

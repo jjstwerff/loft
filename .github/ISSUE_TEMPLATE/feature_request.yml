@@ -8,9 +8,9 @@ body:
       value: |
         loft tracks design decisions in `doc/claude/`.  Before
         opening a feature request, it helps to skim
-        [`PLANNING.md`](https://github.com/jjstwerff/loft/blob/main/doc/claude/PLANNING.md),
-        [`ROADMAP.md`](https://github.com/jjstwerff/loft/blob/main/doc/claude/ROADMAP.md),
-        and [`DESIGN_DECISIONS.md`](https://github.com/jjstwerff/loft/blob/main/doc/claude/DESIGN_DECISIONS.md)
+        [`PLANNING.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/PLANNING.md),
+        [`ROADMAP.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/ROADMAP.md),
+        and [`DESIGN_DECISIONS.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/DESIGN_DECISIONS.md)
         — the last one lists features that have been considered and
         explicitly declined, with reasoning.
 

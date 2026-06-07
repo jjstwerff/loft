@@ -68,6 +68,21 @@ pub fn font_ascent(font_idx: i32, size: f32) -> f32 {
     })
 }
 
+/// Return the font's line height in pixels at the given size — fontdue's real
+/// `new_line_size` (ascent + descent + line gap).  @P340/#252: replaces the
+/// `size * 1.2` approximation.  Falls back to `size * 1.2` when a font exposes
+/// no horizontal metrics.
+pub fn font_line_height(font_idx: i32, size: f32) -> f32 {
+    FONTS.with(|fonts| {
+        let fonts = fonts.borrow();
+        let Some(font) = fonts.get(font_idx as usize) else {
+            return size * 1.2;
+        };
+        font.horizontal_line_metrics(size)
+            .map_or(size * 1.2, |lm| lm.new_line_size)
+    })
+}
+
 /// Rasterize a string into an alpha bitmap. Returns (width, height, pixels).
 /// Each pixel is a single u8 alpha value.
 pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8>) {
@@ -106,7 +121,16 @@ pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8
             return (0, 0, Vec::new());
         }
 
-        let line_height = (size * 1.2) as u32;
+        // @P340/#252: fontdue's real line metrics instead of the size*1.2 /
+        // size*0.8 approximations; fall back to the legacy constants when the
+        // font exposes no (or pathological) horizontal metrics.  Baseline is
+        // loop-invariant — computed once here, not per glyph.
+        let (line_height, baseline) = match font.horizontal_line_metrics(size) {
+            Some(m) if m.new_line_size > 0.0 => {
+                (m.new_line_size.ceil() as u32, m.ascent.round() as i32)
+            }
+            _ => ((size * 1.2).ceil() as u32, (size * 0.8).round() as i32),
+        };
         let mut pixels = vec![0u8; (total_width * line_height) as usize];
         let mut x_pen = 0.0f32;
 
@@ -115,7 +139,6 @@ pub fn rasterize_text(font_idx: i32, text: &str, size: f32) -> (u32, u32, Vec<u8
             let x_cursor = x_pen.max(0.0) as u32;
             let gw = metrics.width as u32;
             let gh = metrics.height as u32;
-            let baseline = (size * 0.8) as i32;
             let y_off = (baseline - metrics.height as i32 - metrics.ymin).max(0) as u32;
 
             for gy in 0..gh {

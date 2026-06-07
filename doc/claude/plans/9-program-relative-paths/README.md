@@ -7,15 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**SHIPPED — merged to `main` via [PR #269](https://github.com/jjstwerff/loft/pull/269)
-(2026-06-04); [#255](https://github.com/jjstwerff/loft/issues/255) closed.**
+**SHIPPED — merged to `main` via [PR #269](https://github.com/loft-lang/loft/pull/269)
+(2026-06-04); [#255](https://github.com/loft-lang/loft/issues/255) closed.**
 Program-relative by default (interp + native) with the `#cwd` opt-in.  Residual tail:
 the wasip2 `--native-wasm` print path stays gated on
-[#268](https://github.com/jjstwerff/loft/issues/268) (`191-wasm` skipped) — the only
+[#268](https://github.com/loft-lang/loft/issues/268) (`191-wasm` skipped) — the only
 reason this dir hasn't moved to `finished/` yet.  Tracked as
 [`@PLN9`](https://github.com/loft-lang/plans/issues/9)
 (loft-lang/plans); promoted from loft issue
-[#255](https://github.com/jjstwerff/loft/issues/255). A relative file path resolves
+[#255](https://github.com/loft-lang/loft/issues/255). A relative file path resolves
 against the program's own directory by default; CLI tools opt back into cwd with the
 one-line `#cwd` file directive.
 
@@ -40,7 +40,7 @@ round-trips with no leak.  Interp suite green (wrap 50/0, issues 684/0); native_
 
 Open: **1w** — the wasm anchor *code* is wired (`source_dir()` = the host working dir
 via `current_dir()`), but running `191` under wasm is gated on
-[#268](https://github.com/jjstwerff/loft/issues/268) (wasip2 `print()` codegen calls an
+[#268](https://github.com/loft-lang/loft/issues/268) (wasip2 `print()` codegen calls an
 undeclared `loft_host_print`); and **4** the graphics consumer — **PR'd**
 ([loft-libs-graphics#2](https://github.com/loft-lang/loft-libs-graphics/pull/2)):
 `gl_load_font` now wraps the raw native binding and resolves a relative path
@@ -108,7 +108,7 @@ is unaffected, and the opt-in flips resolution to cwd — on the right backend.
 | **1b** | **Resolver chokepoint** — `Stores::resolve_path`, the single home every file-op site routes through (interp io.rs + database/io.rs + png; native codegen_runtime ×5; standalone delete/move/mkdir in fill.rs + `#rust` templates). Resolves at the OS boundary (keeps `File.path`). | M | **Shipped** (`7519de96`) |
 | **2** | **`#cwd` opt-in** — file-level directive parsed in `parse_file`; native bakes it via `const LOFT_PROGRAM_RELATIVE`. + `LOFT_PATHS` env override. | S | **Shipped** (`7519de96`) |
 | **3** | **Default flip + corpus migration** — `Stores::new` defaults program-relative; 13 cwd-relative tests migrated with `#cwd`; suite green both backends. | S–M | **Shipped** (`7519de96`) |
-| **1w** | **Wasm anchor** — `source_dir()` = host working dir via `current_dir()` (was "" under WASI). Code wired; 191 wasm-run gated on [#268](https://github.com/jjstwerff/loft/issues/268). | S | **Shipped** (`25feaac2`) · test gated on #268 |
+| **1w** | **Wasm anchor** — `source_dir()` = host working dir via `current_dir()` (was "" under WASI). Code wired; 191 wasm-run gated on [#268](https://github.com/loft-lang/loft/issues/268). | S | **Shipped** (`25feaac2`) · test gated on #268 |
 | **4** | **Graphics consumer** — `gl_load_font` wraps the raw native binding + resolves program-relative via `source_dir()`. Canonical change in external `loft-libs-graphics` ([PR #2](https://github.com/loft-lang/loft-libs-graphics/pull/2)). | S + cross-repo | **PR'd** · pending merge + release tag + fixture re-sync |
 
 ## Phase ordering
@@ -135,7 +135,7 @@ migrating cwd-dependent files onto it). `4` last (consumes the anchor, cross-rep
 
 ## See also
 
-- Issue [#255](https://github.com/jjstwerff/loft/issues/255) — the use-case framing, the
+- Issue [#255](https://github.com/loft-lang/loft/issues/255) — the use-case framing, the
   ratified decision, and this cost breakdown (the lightweight capture; this plan is the
   design + sequencing).
 - [`ISSUE_TRACKING.md` § Designing](../../ISSUE_TRACKING.md) — the use-case-matrix

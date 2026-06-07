@@ -113,6 +113,10 @@ present.
 
 ## 3. Pre-release checklist
 
+The mechanical `[auto]` core of the full correctness bar — see
+[LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) for the Goal-by-Goal + doc-quality
+`[review]` items and the registry `verified` administration.
+
 Before you ship a version:
 
 - [ ] All tests pass under both `loft test` and `loft --native test`.
@@ -319,7 +323,7 @@ $ loft update --check         # CI gate: exit 1 if updates available
 
 This step is **only** for libraries that the loft compiler's own
 test-suite exercises through a pinned source mirror under
-[`jjstwerff/loft`](https://github.com/jjstwerff/loft)'s
+[`loft-lang/loft`](https://github.com/loft-lang/loft)'s
 `tests/fixtures/libs/<pkg>/` — the dogfood libraries (`arguments`,
 `graphics`, `gridmesh`, `shapes`, `imaging`, `game_protocol`, `web`,
 `hex_world`, `time`).  A pure registry-only library has no fixture; skip
@@ -330,7 +334,7 @@ library change that affects the compiler tests is a reviewable commit in
 the loft repo, never silent drift.  After the new tag exists in the
 chunk repo (5a step 2):
 
-1. In `jjstwerff/loft`, bump the tag in `scripts/sync-fixtures.sh`'s
+1. In `loft-lang/loft`, bump the tag in `scripts/sync-fixtures.sh`'s
    `PINNED_REFS` table for your package
    (`graphics  graphics-v0.1.0` → `graphics  graphics-v0.1.1`).
 2. Refresh the snapshot:
@@ -350,6 +354,46 @@ Why the fixture and not a registry install: zero network during `cargo
 test`, reproducible across machines + CI, and it survives the eventual
 removal of the in-monorepo `lib/<pkg>/` source.  Full rationale +
 `PINNED_REFS` semantics live in the `scripts/sync-fixtures.sh` header.
+
+### 5e. Fix a library bug — the clean dev-checkout flow
+
+A library's source lives **only** in its chunk repo; loft consumes a pinned,
+read-only **snapshot** under `tests/fixtures/libs/<pkg>/` (§ 5d).  So a library
+fix never happens in the loft tree, and never by editing the fixture directly
+(that's drift — `scripts/sync-fixtures.sh --check` fails).  Work in the chunk
+repo, **out of the loft tree**, so no stale artifacts accrue in loft:
+
+1. **Issue home.** File / find the bug in the **chunk repo's** tracker
+   (`loft-lang/loft-libs-<chunk>`), per
+   [ISSUE_TRACKING.md § Convention](ISSUE_TRACKING.md) — so `Fixes #N` is
+   same-repo and the `fixed-pending-merge` lifecycle works.  (A bug mis-filed in
+   `loft-lang/loft` whose fix is library code gets re-homed there.)
+2. **Checkout — out of tree.** Clone the chunk repo to a dedicated dev dir
+   *outside* the loft working tree (e.g. `~/loft-dev/<chunk>`), never into
+   `loft/lib/<pkg>/`.  The pre-extraction `lib/<pkg>/` layout is being removed;
+   any leftover skeleton there (build cruft, no source, no `.git`) is **stale and
+   should be deleted** — it only pollutes loft's `git status` and creates "is the
+   source here?" ambiguity (the trap that hid `graphics/native/src/text.rs`
+   during the @P340 / `@GH252` follow-up — the real source was in the fixture +
+   chunk repo, never in `lib/graphics/`).
+3. **Fix + test.** Edit the package source in the checkout; run the library's own
+   suite there, or test it against loft with `--lib ~/loft-dev/<chunk>`.  The
+   checkout shadows nothing in loft's tree and builds in its **own** `target/`.
+4. **Tag + push.** Commit with `Fixes #N` (chunk-repo issue), tag
+   `<pkg>-vX.Y.Z`, push.  The chunk repo's own apply/strip workflows label then
+   close the issue on merge.
+5. **Re-sync the loft fixture (§ 5d).** Bump `PINNED_REFS` + run
+   `sync-fixtures.sh`, and commit the `tests/fixtures/libs/<pkg>/` diff in loft as
+   **one reviewable commit** — separate from the issue close.  loft now tracks the
+   fixed snapshot.
+6. **Teardown.** `rm -rf ~/loft-dev/<chunk>` and `~/.loft/build-cache/<pkg>-*`.
+   The loft tree is pristine; no stale artifacts remain.
+
+The principle is the project's anti-stale-artifact rule (GOALS.md § "the method
+mirrors the goals"): one source of truth for where the code lives (the chunk
+repo), isolated + disposable build artifacts (out-of-tree checkout, own
+`target/`), and a clean teardown — so the shared medium (the build) can't drift
+out of sync and lie.
 
 ## Reference
 

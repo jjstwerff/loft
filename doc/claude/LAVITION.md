@@ -645,7 +645,7 @@ Every published library's `README.md` opens with the ecosystem context:
 
 > # hex_world — chunked hex grid for the loft language
 >
-> Part of the [loft](https://github.com/jjstwerff/loft) ecosystem;
+> Part of the [loft](https://github.com/loft-lang/loft) ecosystem;
 > works standalone and with the [lavition](https://github.com/lavition)
 > editor.
 
@@ -706,7 +706,7 @@ So a user can find the right documentation via three paths:
 
 ### 6. Cross-linking between loft + lavition + game project sites
 
-- `lavition`'s homepage: "Built on the [loft](https://github.com/jjstwerff/loft) language."
+- `lavition`'s homepage: "Built on the [loft](https://github.com/loft-lang/loft) language."
 - `loft`'s homepage: "Primary editor: [lavition](https://github.com/lavition).  Also usable from CLI, web, or any other host."
 - Each game's README points at both.
 

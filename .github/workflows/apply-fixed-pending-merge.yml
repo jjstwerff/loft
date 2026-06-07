@@ -1,0 +1,13 @@
+# Stub: opt loft into the org-wide reusable apply workflow (logic lives once in
+# loft-lang/.github). On a push to a non-main branch it labels every issue a
+# commit says it Fixes/Closes/Resolves with `fixed-pending-merge`, and warns on
+# bare `(#N)` mentions. See loft-lang/.github README.
+name: fixed-pending-merge (apply)
+on:
+  push:
+    branches-ignore: [main]
+permissions:
+  issues: write
+jobs:
+  apply:
+    uses: loft-lang/.github/.github/workflows/apply-fixed-pending-merge.yml@main

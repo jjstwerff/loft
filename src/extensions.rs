@@ -2212,6 +2212,15 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
+    // #274 — build the package crate with the SAME RUSTFLAGS loft's own rlibs
+    // used (captured at loft build time), so a shared transitive dep like
+    // `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and the
+    // package's plain copy share a `StableCrateId` but differ in SVH and rustc
+    // aborts at the generated program's link step.  Force it (overriding any
+    // ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so cargo doesn't see
+    // both forms at once.
+    cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
+        .env_remove("CARGO_ENCODED_RUSTFLAGS");
     if use_redirected_target {
         if let Some(parent) = target_root.parent() {
             let _ = std::fs::create_dir_all(parent);

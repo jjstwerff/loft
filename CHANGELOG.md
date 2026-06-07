@@ -354,7 +354,7 @@ directional.
 - **Brick Buster** — a complete arcade game (paddle, ball, powerups,
   music, levels, high score) that runs in your browser and on the
   desktop.  Try it at
-  <https://jjstwerff.github.io/loft/brick-buster.html>.
+  <https://loft-lang.org/loft/brick-buster.html>.
 - **Graphics gallery** — 24 WebGL demos, from hello-triangle to
   physically-based rendering.
 - `loft --html program.loft` produces a single folder you can drop on
@@ -444,7 +444,7 @@ big = map(nums, |x| { x * factor })
 ## 0.8.3 — 2026-03-27 — WebAssembly!
 
 Loft now runs in the browser.  The playground at
-<https://jjstwerff.github.io/loft/playground.html> compiles and executes
+<https://loft-lang.org/loft/playground.html> compiles and executes
 loft programs entirely in your browser tab — no server involved.
 
 Behind the scenes:
@@ -641,8 +641,8 @@ The core language, in one place.
 
 ## Version comparison links
 
-- [Unreleased vs 0.8.3](https://github.com/jjstwerff/loft/compare/v0.8.3...main)
-- [0.8.3](https://github.com/jjstwerff/loft/compare/v0.8.2...v0.8.3)
-- [0.8.2](https://github.com/jjstwerff/loft/compare/v0.8.0...v0.8.2)
-- [0.8.0](https://github.com/jjstwerff/loft/compare/v0.1.0...v0.8.0)
-- [0.1.0](https://github.com/jjstwerff/loft/releases/tag/v0.1.0)
+- [Unreleased vs 0.8.3](https://github.com/loft-lang/loft/compare/v0.8.3...main)
+- [0.8.3](https://github.com/loft-lang/loft/compare/v0.8.2...v0.8.3)
+- [0.8.2](https://github.com/loft-lang/loft/compare/v0.8.0...v0.8.2)
+- [0.8.0](https://github.com/loft-lang/loft/compare/v0.1.0...v0.8.0)
+- [0.1.0](https://github.com/loft-lang/loft/releases/tag/v0.1.0)

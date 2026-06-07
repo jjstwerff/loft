@@ -1,19 +1,19 @@
 
 # loft — build small games, share a link, anyone plays
 
-[![CI](https://github.com/jjstwerff/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/jjstwerff/loft/actions/workflows/ci.yml)
+[![CI](https://github.com/loft-lang/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/loft-lang/loft/actions/workflows/ci.yml)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/jjstwerff/loft/releases)
-[![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://jjstwerff.github.io/loft/gallery.html)
+[![Version](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/loft-lang/loft/releases)
+[![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://loft-lang.org/loft/gallery.html)
 
-[**▶ Try it in the browser**](https://jjstwerff.github.io/loft/playground.html) · [**🎮 Play Brick Buster**](https://jjstwerff.github.io/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://jjstwerff.github.io/loft/gallery.html) · [**📘 Docs**](https://jjstwerff.github.io/loft/)
+[**▶ Try it in the browser**](https://loft-lang.org/loft/playground.html) · [**🎮 Play Brick Buster**](https://loft-lang.org/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://loft-lang.org/loft/gallery.html) · [**📘 Docs**](https://loft-lang.org/loft/)
 
 ---
 
 ## What can you actually make with it?
 
 <p align="center">
-  <a href="https://jjstwerff.github.io/loft/brick-buster.html">
+  <a href="https://loft-lang.org/loft/brick-buster.html">
     <img src="doc/images/hero-brick-buster.png" alt="Brick Buster — a complete arcade game written in loft" width="640">
   </a>
 </p>
@@ -26,9 +26,9 @@ And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.l
 
 | | |
 |---|---|
-| **🌐 [Playground](https://jjstwerff.github.io/loft/playground.html)** | Type a few lines of loft, press run, see output. That *is* the whole tutorial. |
-| **🖼 [Gallery](https://jjstwerff.github.io/loft/gallery.html)** | 24 interactive graphics demos, from hello-triangle to physically-based rendering with shadows — every one running live in WebGL. |
-| **💻 [Install locally](doc/claude/DEVELOPMENT.md)** | `cargo install --git https://github.com/jjstwerff/loft --bin loft` |
+| **🌐 [Playground](https://loft-lang.org/loft/playground.html)** | Type a few lines of loft, press run, see output. That *is* the whole tutorial. |
+| **🖼 [Gallery](https://loft-lang.org/loft/gallery.html)** | 24 interactive graphics demos, from hello-triangle to physically-based rendering with shadows — every one running live in WebGL. |
+| **💻 [Install locally](doc/claude/DEVELOPMENT.md)** | `cargo install --git https://github.com/loft-lang/loft --bin loft` |
 
 ---
 
@@ -68,10 +68,10 @@ Everything you might want is there: `vector<T>`, `sorted<T>`, `index<T>`, `hash<
 
 ```sh
 # one-line install (requires Rust toolchain)
-cargo install --git https://github.com/jjstwerff/loft --bin loft
+cargo install --git https://github.com/loft-lang/loft --bin loft
 
 # or clone + build
-git clone https://github.com/jjstwerff/loft
+git clone https://github.com/loft-lang/loft
 cd loft
 cargo build --release     # binary at target/release/loft
 
@@ -79,7 +79,7 @@ cargo build --release     # binary at target/release/loft
 ./target/release/loft examples/hello.loft
 ```
 
-Pre-built binaries on the [Releases](https://github.com/jjstwerff/loft/releases) page.
+Pre-built binaries on the [Releases](https://github.com/loft-lang/loft/releases) page.
 
 ### First steps
 
@@ -102,7 +102,7 @@ loft examples/match.loft        # Pattern matching on enums
 
 ## Graphics examples
 
-24 progressive examples. Hover each for a live preview in the [gallery](https://jjstwerff.github.io/loft/gallery.html):
+24 progressive examples. Hover each for a live preview in the [gallery](https://loft-lang.org/loft/gallery.html):
 
 | File | What it shows |
 |---|---|
@@ -129,7 +129,7 @@ See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and [PLANNING.m
 
 ## Documentation
 
-Full reference, tutorial, API, and printable PDF at <https://jjstwerff.github.io/loft/>.
+Full reference, tutorial, API, and printable PDF at <https://loft-lang.org/loft/>.
 
 Build locally: `make wasm` (Playground + Gallery) then `cargo run --bin gendoc` (HTML pages), open `doc/index.html`. Or `make gallery` for a one-shot verify-and-rebuild of the whole gallery stack.
 

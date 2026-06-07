@@ -604,18 +604,8 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
         return Some(("loft --native-emit failed".to_string(), false));
     }
 
-    // Inject the WASI-stdout print bridge that the wasip2 codegen expects.
-    let code = std::fs::read_to_string(&rs).ok()?;
-    let shim = "#[unsafe(no_mangle)] pub extern \"C\" fn loft_host_print(ptr: *const u8, len: usize) \
-        { let s = unsafe { std::slice::from_raw_parts(ptr, len) }; use std::io::Write; \
-        let _ = std::io::stdout().write_all(s); }\n";
-    let patched = code.replacen(
-        "extern crate loft;",
-        &format!("extern crate loft;\n{shim}"),
-        1,
-    );
-    std::fs::write(&rs, &patched).ok()?;
-
+    // wasip2 print() now lowers to std `print!` (WASI stdout) directly — the
+    // generated source is self-contained, no host-import shim needed (#268).
     let compile = Command::new("rustc")
         .args([
             "--edition=2024",
@@ -685,6 +675,25 @@ fn run_wasip2_wasm(name: &str, source: &str, lib_dirs: &[&str]) -> Option<(Strin
         s
     };
     Some((report, run.status.success()))
+}
+
+/// @P268 regression: `print()` on wasip2 (`--native-wasm`) used to fail to
+/// compile (E0425) — codegen called `crate::loft_host_print`, which is declared
+/// only for the browser host-import path. wasip2 has working WASI stdout, so its
+/// `print` branch now lowers to std `print!`. A printing program must both
+/// compile and emit to stdout under wasmtime. Self-skips when the wasm toolchain
+/// (rustc wasm32-wasip2 + wasmtime + rlib) is unavailable.
+#[test]
+fn wasip2_print_writes_stdout_p268() {
+    let src = "fn main() { print(\"p268_ok\\n\"); }\n";
+    let Some((out, ok)) = run_wasip2_wasm("p268_print", src, &[]) else {
+        return;
+    };
+    assert!(ok, "wasip2 print program failed to build/run.\n{out}");
+    assert!(
+        out.contains("p268_ok"),
+        "expected wasip2 stdout to contain 'p268_ok'.\nout: {out}"
+    );
 }
 
 /// WASM gate over `lib/<pkg>/tests/*.loft` — runs each main()-bearing lib test

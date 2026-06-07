@@ -29,11 +29,12 @@
 // used by `loft --html`), the `print` opcode's `#rust` template calls
 // `loft_host_print` — a function the browser host is expected to
 // provide via the `loft_io` WASM import module.  Declare it here so
-// `src/fill.rs` (auto-generated) can reference it unqualified.  This
-// cfg is deliberately narrow so native builds, wasm32-wasip2 builds,
-// and the full-featured `wasm` feature all see their own branch of
-// the template.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+// `src/fill.rs` (auto-generated) can reference it unqualified.
+// `not(target_os = "wasi")` keeps this browser-only: wasip2 has working
+// std stdout, so its `print` branch uses `print!` (mirrors the @P334 FS
+// fix in `src/state/io.rs`); native and the full `wasm` feature each take
+// their own branch — so this import is declared only where it is used.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 #[link(wasm_import_module = "loft_io")]
 unsafe extern "C" {
     pub(crate) safe fn loft_host_print(ptr: *const u8, len: usize);

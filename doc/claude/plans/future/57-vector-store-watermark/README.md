@@ -6,8 +6,8 @@
 > rc-removal tail-end complete (Phases A/B/C — `ref_count`/`inc_rc`/`dec_rc`/
 > `OpIncRc` deleted; `Store.pinned` for const/global).  Tracked elsewhere:
 > Cluster III Route 2 → [QUALITY.md § Open work](../../../QUALITY.md); sibling crash
-> → [#258](https://github.com/jjstwerff/loft/issues/258) (capturing closure into a
-> collection); `vv[0]+=[x]` codegen → [#246](https://github.com/jjstwerff/loft/issues/246);
+> → [#258](https://github.com/loft-lang/loft/issues/258) (capturing closure into a
+> collection); `vv[0]+=[x]` codegen → [#246](https://github.com/loft-lang/loft/issues/246);
 > parallel-capture feature → `lib_plans` 08/10; nightly parity sweep → TESTING.md.
 > B.1 (tuple+vector return) was already fixed (regression `tests/scripts/169`).
 > Per the new tracking model the dir stays put; state lives on the board.

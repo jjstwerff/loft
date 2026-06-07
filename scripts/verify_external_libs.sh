@@ -6,7 +6,7 @@
 #   1. loft --interpret test   — interpreter end-to-end
 #   2. loft --native test      — native codegen end-to-end
 # but builds loft from the CURRENT working tree instead of cloning
-# jjstwerff/loft main.  So before merging a loft change (e.g. a parser
+# loft-lang/loft main.  So before merging a loft change (e.g. a parser
 # feature the external repos depend on) you can confirm the external
 # CI will pass — no round-trip through a PR + GitHub Actions.
 #

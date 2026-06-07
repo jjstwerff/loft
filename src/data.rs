@@ -2994,6 +2994,19 @@ impl Data {
         &self.definitions[*nr as usize]
     }
 
+    /// #271: true if some source defines `name` as a NON-`pub` struct/enum type.
+    /// A consumer that `use`s a library only imports the library's `pub` names
+    /// (`import_all`), so brace-constructing a private library type resolves to
+    /// no definition — letting the parser explain "it's private" instead of a
+    /// baffling `Expect token ;` at the `{`.
+    pub fn has_private_type(&self, name: &str) -> bool {
+        self.def_names.iter().any(|((n, _), &d)| {
+            n == name
+                && !self.definitions[d as usize].pub_visible
+                && matches!(self.def_type(d), DefType::Struct | DefType::Enum)
+        })
+    }
+
     /// Import all names from `lib_source` into `into_source`.
     /// Names already present in `into_source` (local definitions) are kept unchanged.
     pub fn import_all(&mut self, lib_source: u16, into_source: u16) {

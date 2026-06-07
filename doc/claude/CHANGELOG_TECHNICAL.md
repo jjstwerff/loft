@@ -3978,7 +3978,7 @@ First release.
 
 ---
 
-[0.8.3]: https://github.com/jjstwerff/loft/compare/v0.8.2...v0.8.3
-[0.8.2]: https://github.com/jjstwerff/loft/compare/v0.8.0...v0.8.2
-[0.8.0]: https://github.com/jjstwerff/loft/compare/v0.1.0...v0.8.0
-[0.1.0]: https://github.com/jjstwerff/loft/releases/tag/v0.1.0
+[0.8.3]: https://github.com/loft-lang/loft/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/loft-lang/loft/compare/v0.8.0...v0.8.2
+[0.8.0]: https://github.com/loft-lang/loft/compare/v0.1.0...v0.8.0
+[0.1.0]: https://github.com/loft-lang/loft/releases/tag/v0.1.0

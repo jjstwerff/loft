@@ -24,5 +24,5 @@ via the ureq + tungstenite crates.
 ## Provenance
 
 Extracted from the loft monorepo's `lib/web/` 2026-05-24 as part
-of [@PLAN12](https://github.com/jjstwerff/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
+of [@PLAN12](https://github.com/loft-lang/loft/blob/main/doc/claude/lib_plans/12-library-extraction/README.md)
 Phase 6.

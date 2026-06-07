@@ -19,12 +19,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/jjstwerff/loft.git",
+    "url": "https://github.com/loft-lang/loft.git",
     "directory": "editors/vscode"
   },
-  "homepage": "https://github.com/jjstwerff/loft",
+  "homepage": "https://github.com/loft-lang/loft",
   "bugs": {
-    "url": "https://github.com/jjstwerff/loft/issues"
+    "url": "https://github.com/loft-lang/loft/issues"
   },
   "main": "./out/extension.js",
   "activationEvents": [

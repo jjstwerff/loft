@@ -39,7 +39,7 @@ jobs:
           # bootstrap phase, the loft binary can be built from
           # source on the runner — replace this `wget` with the
           # cargo install path then.
-          curl -L https://github.com/jjstwerff/loft/releases/latest/download/loft-linux-x86_64 -o /usr/local/bin/loft
+          curl -L https://github.com/loft-lang/loft/releases/latest/download/loft-linux-x86_64 -o /usr/local/bin/loft
           chmod +x /usr/local/bin/loft
           loft --version
 

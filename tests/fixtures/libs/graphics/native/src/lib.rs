@@ -1355,11 +1355,13 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
 loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i64, height: i64, data: vec<i64>) -> bool);
 loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i64, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i64);
 
-/// Return the line height in pixels for a font at the given size.
+/// Return the line height in pixels for a font at the given size — fontdue's
+/// real `new_line_size` (@P340/#252), falling back to `size * 1.2` for a font
+/// with no horizontal metrics.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_text_height(_font_idx: i64, size: f64) -> i64 {
-    (size as f32 * 1.2) as i64
+pub extern "C" fn loft_text_height(font_idx: i64, size: f64) -> i64 {
+    text::font_line_height(font_idx as i32, size as f32).ceil() as i64
 }
 
 /// @P340 — return the font's ASCENT in pixels (baseline → top of glyphs) from

@@ -86,7 +86,7 @@ The companion server-side library is `server` ([WEB_SERVER_LIB.md](../08-server/
 ## Package structure
 
 ```
-game_client/                    ← GitHub: jjstwerff/loft-game-client
+game_client/                    ← GitHub: loft-lang/loft-libs-net
   loft.toml
   src/
     client.loft                 ← WsClient type, connect/send/receive/poll

@@ -7,7 +7,7 @@
 # Behaviour:
 #   - One job per package — a single-package failure names the package in the
 #     PR check list.
-#   - Builds loft from source (jjstwerff/loft main) and caches against the
+#   - Builds loft from source (loft-lang/loft main) and caches against the
 #     loft Cargo.lock SHA, so steady-state cost is `cargo build` no-op after
 #     first install.
 #   - `LOFT_DENY_WARNINGS=1` by default — warnings fail CI.  A package opts
@@ -47,7 +47,7 @@ jobs:
       - name: Clone loft source
         uses: actions/checkout@v4
         with:
-          repository: jjstwerff/loft
+          repository: loft-lang/loft
           path: loft-src
 
       - name: Cache cargo registry + loft build
@@ -108,6 +108,18 @@ jobs:
       - name: Transitive dep tests
         working-directory: ${{ matrix.package }}
         run: loft test --deps
+
+      # API-surface + doc-staleness lints (api_lint / doc_review).  ADVISORY by
+      # design — `continue-on-error: true` so a doc finding NEVER blocks a merge
+      # or a bug-fix release (only correctness — the tests above — can fail CI).
+      # The lints get their teeth from the registry `verified` mark, not here:
+      # a library releases and installs regardless of findings, but earns
+      # `verified` only when these are clean.  See LIBRARY_CHECKLIST.md.
+      - name: Doc-quality lints (advisory)
+        continue-on-error: true
+        run: |
+          python3 loft-src/scripts/api_lint.py --check ${{ matrix.package }}/src
+          python3 loft-src/scripts/doc_review.py ${{ matrix.package }}
 
       # Phase 6.14 — generate per-package HTML docs.
       # `loft doc` reads <pkg>/loft.toml + <pkg>/src/*.loft (+ optional

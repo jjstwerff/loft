@@ -76,7 +76,7 @@ jobs:
 
       - name: Clone + build loft from source
         run: |
-          git clone --depth 1 https://github.com/jjstwerff/loft loft-src
+          git clone --depth 1 https://github.com/loft-lang/loft loft-src
           cd loft-src
           cargo build --release --bin loft
           echo "$PWD/target/release" >> $GITHUB_PATH
@@ -145,7 +145,7 @@ bringing any future chunk to fully-green strict CI; no
 chunk-specific divergences have surfaced yet.
 
 **Prerequisite:** the loft compiler bugs surfaced by the FIRST chunk's
-warning sweep must be fixed on `jjstwerff/loft:main` before later
+warning sweep must be fixed on `loft-lang/loft:main` before later
 chunks attempt the same sweep.  loft-libs-core surfaced @P385 + @P386;
 new chunks may surface different latent bugs.
 
@@ -261,7 +261,7 @@ hidden dependencies that the first chunk didn't expose:
   between author and validator).  Net's release would have failed
   gate-3 reproducible-build re-check on every PR because
   `loft package` baked the current `mtime` into both the gzip
-  header and every tar entry.  Fix shipped in jjstwerff/loft #234:
+  header and every tar entry.  Fix shipped in loft-lang/loft #234:
   `GzBuilder::new().mtime(0)` + `header.set_mtime(0)` +
   `set_uid(0)` + `set_gid(0)`.  Two consecutive `loft package`
   runs on the same source now produce byte-identical tarballs.
@@ -278,7 +278,7 @@ hidden dependencies that the first chunk didn't expose:
   deterministic packaging.
 
 **Order of operations for the third chunk** (`loft-libs-graphics`):
-both fixes are already on registry main + jjstwerff/loft main as
+both fixes are already on registry main + loft-lang/loft main as
 of 2026-05-31, so the third chunk only needs the omnibus PR
 itself.  Estimated path-to-green: ~1 work-day for the omnibus
 + 1 hour for the release sequence + ~5 min for the registry
@@ -322,7 +322,7 @@ surfaced **TWO previously-latent compiler bugs** that had never been
 hit in practice — @P385 (parser type-inference asymmetry on
 `if cond { v[i] ?? null } else { null }` returning text) and @P386
 (native codegen `Str/&str` mismatch for text-nullable returns).
-Both were fixed in jjstwerff/loft #231 (merged 2026-05-30) before
+Both were fixed in loft-lang/loft #231 (merged 2026-05-30) before
 the arguments PR could land green.  **Plan for this pattern on each
 chunk:** budget time during the first strict sweep to file + fix
 1-2 compiler bugs that surface.  The bugs were always there; the
@@ -437,7 +437,7 @@ from the monorepo.  Migrate the following consumers:
 
 **Execution outline:**
 
-1. Verify 6.6 (auto-install) is on `jjstwerff/loft:main` and
+1. Verify 6.6 (auto-install) is on `loft-lang/loft:main` and
    working end-to-end (the `LOFT_OFFLINE=1` off-switch and
    announcement output both green).
 2. Verify 6.12 (`tests/fixtures/libs/`) has `web` / `server` /

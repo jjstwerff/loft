@@ -2812,9 +2812,6 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>pub fn split_text(self: text, separator: text) -&gt; vector &lt; text &gt;</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn join(self: vector&lt;text&gt;, jn_sep: text) -&gt; text</code></pre>
-</div>
-<div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
 <p>Added in @PLAN37 phase 10.5 — closes a stdlib gap surfaced by scan.loft's @PLAN matcher doing `line[i+1] == 'P' &amp;&amp; line[i+2] == 'L' &amp;&amp; line[i+3] == 'A' &amp;&amp; line[i+4] == 'N'` per-char instead of `line.starts_with_at(i, &quot;PLAN&quot;)`.</p>
@@ -2912,7 +2909,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>True if the character is a control character.</p>
 </div>
 <div class="item">
-<pre><code>pub fn join(parts: vector &lt; text &gt;, sep: text) -&gt; text</code></pre>
+<pre><code>pub fn join(self: vector &lt; text &gt;, sep: text) -&gt; text</code></pre>
 <p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
 <h2 id="stdlib-collections">Collections</h2>
@@ -2932,6 +2929,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn hash_sorted(h: reference, tp: integer) -&gt; reference</code></pre>
 <p>C60 Step 3a-part2: iterate a hash in ascending key order. Returns a fresh vector&lt;reference&lt;T&gt;&gt; with the hash's records sorted by key field(s).  The parser desugars `for e in h { … }` into a call with the hash's type id; direct user calls need to supply the id via `sizeof`-style introspection (not yet exposed).  Inefficient by design — walks + sorts all records per call.  See CAVEATS.md C60.</p>
+</div>
+<div class="item">
+<pre><code>pub fn hash_unsorted(h: reference, tp: integer) -&gt; reference</code></pre>
+<p>Raw bucket-walk sibling of `hash_sorted` for `for e in h par(...)`. Same fresh vector&lt;reference&lt;T&gt;&gt; scratch, but in storage order — skips the key sort because the parallel queue has no use for a hash's order.  The parser desugars the par form of `for e in h` into this call.</p>
 </div>
 <div class="item">
 <pre><code>pub fn len(both: hash) -&gt; integer</code></pre>

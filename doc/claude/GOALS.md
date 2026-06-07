@@ -395,7 +395,7 @@ the hard plumbing so it is fun to pick up*. That makes friction **fatal, not
 cosmetic**: a Goal-F violation means the plumbing isn't finished, so whoever picked
 it up gets a *fight* instead of fun, and leaves. The crawler dogfood made this
 literal — its "survival guide" of store-lifetime workarounds (C1/C3/C4/C18 →
-[loft#248](https://github.com/jjstwerff/loft/issues/248)) *is* the plumbing not yet
+[loft#248](https://github.com/loft-lang/loft/issues/248)) *is* the plumbing not yet
 done.
 
 **Check.** No feature design ever reaches "…and the user must write X so the
@@ -480,4 +480,5 @@ obligations.
   (free a vector store at its scope, decoupled from the slot).
 - [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/README.md) — Goal B's structure floor: the package-ecosystem extraction.
 - [PKG_REGISTRY.md](PKG_REGISTRY.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) — Goal B's registry on-ramp.
+- [API_SURFACE.md](API_SURFACE.md) — Goals F + B at the named-API level: verifying the language/stdlib **and** the libraries for dup/confusable/undocumented/footgun functions ([LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) is the per-library bar).
 - [ROADMAP.md](ROADMAP.md) / [PLANNING.md](PLANNING.md) — feature backlog feeding Goal C.

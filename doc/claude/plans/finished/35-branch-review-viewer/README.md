@@ -422,7 +422,7 @@ dumped.  The curated pages link to those via GitHub's
 raw-blob view:
 
 ```html
-<a href="https://github.com/jjstwerff/loft/blob/main/doc/claude/PROBLEMS.md">
+<a href="https://github.com/loft-lang/loft/blob/main/doc/claude/PROBLEMS.md">
    PROBLEMS.md (full catalogue on GitHub)
 </a>
 ```
@@ -461,9 +461,9 @@ dump-mode variant:
 | Source link | Live viewer | Static dump (this phase) |
 |---|---|---|
 | `[X](other.md)` where `other.md` IS in the subset | `/file/dir/other.md` | `dir/other.html` |
-| `[X](other.md)` where `other.md` is NOT in the subset | `/file/dir/other.md` (lives) | `https://github.com/jjstwerff/loft/blob/main/dir/other.md` (GitHub raw) |
-| `[X](other.md#section)` not in subset | `/file/dir/other.md#section` | `https://github.com/jjstwerff/loft/blob/main/dir/other.md#section` (GitHub respects anchors) |
-| `[X](src/parser/foo.rs)` (code file) | `/file/src/parser/foo.rs` | `https://github.com/jjstwerff/loft/blob/main/src/parser/foo.rs` (GitHub renders Rust nicely) |
+| `[X](other.md)` where `other.md` is NOT in the subset | `/file/dir/other.md` (lives) | `https://github.com/loft-lang/loft/blob/main/dir/other.md` (GitHub raw) |
+| `[X](other.md#section)` not in subset | `/file/dir/other.md#section` | `https://github.com/loft-lang/loft/blob/main/dir/other.md#section` (GitHub respects anchors) |
+| `[X](src/parser/foo.rs)` (code file) | `/file/src/parser/foo.rs` | `https://github.com/loft-lang/loft/blob/main/src/parser/foo.rs` (GitHub renders Rust nicely) |
 
 The viewer's static-mode rewriter knows the in-subset set and
 applies the right rule per link.  GitHub's URL convention
@@ -473,7 +473,7 @@ adjusts in one place.
 #### Build pipeline
 
 ```bash
-$ loft-view --static --out=public/ --base-url=https://user.github.io/loft/ --github-blob=https://github.com/jjstwerff/loft/blob/main/
+$ loft-view --static --out=public/ --base-url=https://user.github.io/loft/ --github-blob=https://github.com/loft-lang/loft/blob/main/
    ✓ rendered /welcome → public/welcome.html
    ✓ rendered /file/README.md → public/file/README.html
    ✓ rendered /examples/hello.loft → public/examples/hello.html
@@ -497,8 +497,8 @@ jobs:
       - run: make view-build
       - run: ./tools/viewer/bin/loft-view --static \
                --out=public \
-               --base-url=https://jjstwerff.github.io/loft/ \
-               --github-blob=https://github.com/jjstwerff/loft/blob/main/
+               --base-url=https://loft-lang.org/loft/ \
+               --github-blob=https://github.com/loft-lang/loft/blob/main/
       - uses: actions/deploy-pages@v3
         with: { artifact_name: public }
 ```
@@ -524,7 +524,7 @@ Two deployment options unlocked by phases 08 + 09:
 
 **(a) GitHub Pages** — `.github/workflows/docs.yml` from
 phase 09 runs on every push to `main`; static dump goes
-straight to `https://jjstwerff.github.io/loft/`.  Lag is
+straight to `https://loft-lang.org/loft/`.  Lag is
 "push-to-main + 1 min" — much better than the original
 GitHub Pages worry because the dump is fast and the curation
 filters out the dev-internal noise.

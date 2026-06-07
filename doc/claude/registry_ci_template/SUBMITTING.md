@@ -17,8 +17,8 @@ This is the author-facing guide for publishing a loft library —
 adding a new package, releasing a new version of an existing
 package, or yanking a broken release.  Companion docs:
 
-- [PKG_REGISTRY.md](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md) — registry design + schema reference.
-- [PACKAGES.md](https://github.com/jjstwerff/loft/blob/main/doc/claude/PACKAGES.md) — `loft.toml` package format.
+- [PKG_REGISTRY.md](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md) — registry design + schema reference.
+- [PACKAGES.md](https://github.com/loft-lang/loft/blob/main/doc/claude/PACKAGES.md) — `loft.toml` package format.
 - `loft-lang/registry/README.md` — the registry repo's own
   landing page (lives in the registry, not here).
 
@@ -34,7 +34,7 @@ Before you can submit, you need:
 
 1. **A loft package** — a directory containing a valid
    `loft.toml` and source.  See
-   [PACKAGES.md § Package layout](https://github.com/jjstwerff/loft/blob/main/doc/claude/PACKAGES.md#package-layout) for
+   [PACKAGES.md § Package layout](https://github.com/loft-lang/loft/blob/main/doc/claude/PACKAGES.md#package-layout) for
    the minimum.  In brief:
 
    ```text
@@ -51,7 +51,7 @@ Before you can submit, you need:
    package's `homepage`.
 
 3. **A loft binary** ≥ the version your package requires.
-   Build from [github.com/jjstwerff/loft](https://github.com/jjstwerff/loft)
+   Build from [github.com/loft-lang/loft](https://github.com/loft-lang/loft)
    if your distro doesn't ship one new enough.
 
 You do NOT need:
@@ -157,7 +157,7 @@ then edit `index.json`:
 Most fields are optional — the minimum is `url`, `sha256`,
 `size`, `loft`, `published`.  Drop the empty arrays/objects
 you don't use.  See
-[PKG_REGISTRY.md § Schema](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md#schema) for the
+[PKG_REGISTRY.md § Schema](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md#schema) for the
 full reference.
 
 Open the PR.  Title format: `add my-lib 0.1.0` (or for
@@ -182,7 +182,7 @@ When all four gates pass, a registry maintainer reviews the
 PR — typically a sanity check on the description, homepage URL,
 and tarball provenance.  After approval, the maintainer signs
 the new `index.json` locally (see
-[PKG_REGISTRY.md § Why laptop signing](https://github.com/jjstwerff/loft/blob/main/doc/claude/PKG_REGISTRY.md#why-laptop-signing-not-ci))
+[PKG_REGISTRY.md § Why laptop signing](https://github.com/loft-lang/loft/blob/main/doc/claude/PKG_REGISTRY.md#why-laptop-signing-not-ci))
 and merges.
 
 **Once merged, `loft install my-lib` works for everyone.**
@@ -356,4 +356,4 @@ A mirror with an unmodified `index.json.sig` works
 transparently — clients verify the upstream signature.  A
 mirror that wants to use a different signing key needs its
 public key added to the loft binary's `TRUSTED_PUBLIC_KEYS`;
-file an issue against `jjstwerff/loft` to discuss.
+file an issue against `loft-lang/loft` to discuss.

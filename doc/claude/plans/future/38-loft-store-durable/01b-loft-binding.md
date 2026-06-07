@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 01b — Loft-callable binding for `Store::open_durable`
 
 **Status:** Open — branch `store-durable-phase1b` off `main`
-(merged Phase 00 + 01 already shipped via [PR #219](https://github.com/jjstwerff/loft/pull/219),
+(merged Phase 00 + 01 already shipped via [PR #219](https://github.com/loft-lang/loft/pull/219),
 commit `d494edc`).  Single-PR slice.
 
 ## Goal
@@ -24,7 +24,7 @@ loft program can reach it.
 
 ## Background — what's already shipped
 
-[`d494edc` (PR #219)](https://github.com/jjstwerff/loft/pull/219)
+[`d494edc` (PR #219)](https://github.com/loft-lang/loft/pull/219)
 landed Phase 00 + 01 on `main`.  Concretely available today
 in Rust:
 
@@ -236,7 +236,7 @@ algorithmic code.
 
 ## Cross-references
 
-- [PR #219](https://github.com/jjstwerff/loft/pull/219)
+- [PR #219](https://github.com/loft-lang/loft/pull/219)
   (commit `d494edc`) — shipped Phase 00 + 01, the foundation
   this phase wraps.
 - [Phase 01 — Tier 1 IntegrityOnly](01-tier-1-integrity.md)
