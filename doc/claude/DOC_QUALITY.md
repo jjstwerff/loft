@@ -12,6 +12,12 @@ commit message.
 **Fast path:** in a hurry, read [§ The rules](#the-rules) — the seven rules. The
 rest is evidence and worked examples.
 
+**Doing a review?** Load the **`doc-quality` skill** (`/doc-quality`) at the start
+of any documentation review (release doc review, a PR's doc changes, a doc-edit
+pass). It is the loadable companion to this doc — the seven rules condensed with
+the stamp-vs-pointer test — so the review applies them consistently instead of
+from memory.
+
 **When to apply.** Apply these to the comment you are **writing or editing right
 now**. Do not sweep a file to "fix its comments" during unrelated work — that
 burns effort and risks churn. The [Check](#check) is a thermometer you run on

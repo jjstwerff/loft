@@ -39,6 +39,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
+<p>True when the result is `FileResult.Ok`. Use to test a file op for success.</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -73,7 +74,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean</code></pre>
-<p>Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat). Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+<p>Filesystem stat (via file()); par-safe. Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
@@ -89,19 +90,19 @@
 </div>
 <div class="item">
 <pre><code>pub fn mtime(path: text) -&gt; integer</code></pre>
-<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters like @PLAN37 phase 07's `plans_recent` 60-day cutoff: pass the path, convert the returned seconds back to YYYY-MM-DD, and compare lexicographically against `ymd_days_ago(60)`.</p>
+<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd_days_ago(N)`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_check(path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 phase 01b — durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
+<p>Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_seal(path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
+<p>Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_persist_bind(r: hash, path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 — &quot;the hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
+<p>&quot;The hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
 <p>First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.</p>
 <p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
 <p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
@@ -109,6 +110,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult</code></pre>
+<p>Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an error variant (IsDirectory / NotFound / Other).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sync(self: File) -&gt; boolean</code></pre>

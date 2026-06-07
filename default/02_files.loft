@@ -35,6 +35,7 @@ pub enum FileResult {
   Other
 }
 
+// True when the result is `FileResult.Ok`. Use to test a file op for success.
 pub fn ok(self: FileResult) -> boolean {
   self == FileResult.Ok
 }
@@ -94,8 +95,7 @@ pub fn content(self: File) -> text {
   result += txt;
   result
 }
-// Plan-06 phase 5a: #impure(io) — reads from filesystem.  Allocates
-// the result text into worker-local stores → par-safe; host bridge
+// Par-safe: reads the file into a worker-local store; the host bridge
 // serialises filesystem access.
 #impure(io)
 // Reads the file and splits it into lines.
@@ -124,7 +124,7 @@ pub fn lines(self: File) -> vector < text > {
   }
   result
 }
-// Plan-06 phase 5a: #impure(io) — wraps content() (filesystem read).
+// Par-safe filesystem read (via content()).
 #impure(io)
 // --- Text ---
 // Splits self on every occurrence of separator and returns the parts as a vector.
@@ -155,11 +155,8 @@ pub fn split(self: text, separator: character) -> vector < text > {
 //   - separator never matches → returns `[self]`
 //   - separator at start / end → produces empty boundary entries
 //
-// Added in @PLAN37 phase 10.4 — closes a stdlib gap surfaced by
-// scan.loft's link extractor having to walk char-by-char to find
-// the `](` token because only `split(char)` existed.  Distinct
-// name from `split(text, character)` because loft doesn't allow
-// fn overloading by non-self parameter type.
+// Named `split_text` (not an overload of `split`) because loft does not
+// overload by non-self parameter type.
 
 pub fn split_text(self: text, separator: text) -> vector < text > {
   out: vector<text> = [];
@@ -232,7 +229,7 @@ pub fn file(path: text) -> File {
   }
   result
 }
-// Plan-06 phase 5a: #impure(io) — stat-equivalent filesystem read.
+// Stat-equivalent filesystem read; par-safe.
 #impure(io)
 // Use to check whether a path is accessible before reading or writing it.
 // Paths outside the project directory are always absent.
@@ -240,7 +237,7 @@ pub fn file(path: text) -> File {
 pub fn exists(path: text) -> boolean {
   file(path).format != Format.NotExists
 }
-// Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat).
+// Filesystem stat (via file()); par-safe.
 #impure(io)
 // Method form: f = file("path"); if f.exists() { ... }
 // Also callable as exists(file_obj) via the 'both' parameter name.
@@ -257,8 +254,7 @@ pub fn delete(path: text) -> FileResult {
   if OpDelete(path) { return FileResult.Ok }
   FileResult.Other
 }
-// Plan-06 phase 5a: #impure(io) — filesystem write (deletion).
-// Par-safe under D8.1: host bridge serialises filesystem mutation.
+// Par-safe filesystem write; the host bridge serialises mutations.
 #impure(io)
 // Use to rename or relocate a file within the project.
 // Both paths must stay within the project directory; the destination must
@@ -301,15 +297,13 @@ pub fn mkdir_all(path: text) -> FileResult {
 // "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback).
 // Takes a path string rather than a File handle so the native +
 // interp dispatch both use the same `n_mtime` registration.
-// Use for date-window filters like @PLAN37 phase 07's
-// `plans_recent` 60-day cutoff: pass the path, convert the
-// returned seconds back to YYYY-MM-DD, and compare
-// lexicographically against `ymd_days_ago(60)`.
+// Use for date-window filters: convert the returned seconds to YYYY-MM-DD and
+// compare lexicographically against `ymd_days_ago(N)`.
 pub fn mtime(path: text) -> integer;
 #rust"Stores::os_mtime_native(@path)"
 #impure(host_io)
 
-// @PLAN38 phase 01b — durable-store integrity check.  Returns true
+// Durable-store integrity check.  Returns true
 // iff the `.dmeta` sidecar at `<path>.dmeta` validates against the
 // main file at `<path>` (signature, header CRC, payload length,
 // payload CRC, tier_id all OK).  Returns false on any failure or
@@ -319,7 +313,7 @@ pub fn store_durable_check(path: text) -> boolean;
 #rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
 #impure(io)
 
-// @PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the
+// Write a fresh `.dmeta` sidecar capturing the
 // current main-file's byte length + CRC32 + a clean-close timestamp.
 // Returns true on success, false on any I/O error.  Call this after
 // finishing a write session; if the program crashes between the
@@ -329,7 +323,7 @@ pub fn store_durable_seal(path: text) -> boolean;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
 
-// @PLAN38 — "the hash IS the file."  Re-root the Store backing the
+// "The hash IS the file."  Re-root the Store backing the
 // given reference at a file path so mutations are durable via mmap
 // without any explicit save/load loop.
 //
@@ -355,6 +349,8 @@ pub fn store_persist_bind(r: hash, path: text) -> boolean;
 #rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an
+// error variant (IsDirectory / NotFound / Other).
 pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }
@@ -405,7 +401,7 @@ pub fn env_variable(name: text) -> text;
 #impure(host_io)
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
-// (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
+// (00:00 UTC on 1 Jan 1970). Use for timestamps and logging.
 pub fn now() -> integer;
 #impure(host_io)
 // Returns microseconds elapsed since program start (monotonic clock).
@@ -479,12 +475,9 @@ fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
 // ── Path helpers (moved from 03_text.loft so they're available
 //    before file-I/O code that wants to compose them) ─────────
 //
-// loft treats paths as plain text; this group adds the four
-// most-needed path operations as methods on text.  Same shape
-// the @PLAN35 viewer, the @PLAN37 indexer, and lib/markdown
-// each rolled their own version of (dir_of / basename /
-// resolve_relative).  Pure-loft, slash-separated.  Windows
-// backslash normalisation is out of scope for this slice.
+// loft treats paths as plain text; this group adds the most-needed path
+// operations (dir_of / basename / resolve_relative) as methods on text.
+// Pure-loft, slash-separated; Windows backslash normalisation is out of scope.
 // `starts_with` / `ends_with` are dependencies of `join` /
 // `resolve` so they also live here (was 03_text.loft).
 

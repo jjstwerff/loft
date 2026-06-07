@@ -469,6 +469,7 @@ pub fn exp(both: single) -> single {
 }
 #pure
 
+// Double-precision exp (e^v).
 pub fn exp(both: float) -> float {
   pow(E, both)
 }
@@ -480,6 +481,7 @@ pub fn ln(both: single) -> single {
 }
 #pure
 
+// Double-precision natural logarithm.
 pub fn ln(both: float) -> float {
   log(both, E)
 }
@@ -491,6 +493,7 @@ pub fn log2(both: single) -> single {
 }
 #pure
 
+// Double-precision base-2 logarithm.
 pub fn log2(both: float) -> float {
   log(both, 2.0)
 }
@@ -502,6 +505,7 @@ pub fn log10(both: single) -> single {
 }
 #pure
 
+// Double-precision base-10 logarithm.
 pub fn log10(both: float) -> float {
   log(both, 10.0)
 }
@@ -1040,8 +1044,8 @@ fn OpPanic(message: text);
 // Panics with message if test is false. Use to verify invariants during development.
 // In production mode (--production), logs an error instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
-// Plan-06 phase 5a: #impure(host_io) — assertion failures write to
-// log/stderr (host bridges serialise), so par workers may call assert.
+// Safe to call from `par` workers: failures write to the log/stderr sink,
+// which the host serialises across threads.
 pub fn assert(test: boolean, message: text, file: text, line: integer);
 #impure(host_io)
 // Immediately terminates execution with message. Use for unrecoverable error states.
@@ -1051,15 +1055,16 @@ pub fn panic(message: text, file: text, line: integer);
 #impure(host_io)
 // Write a structured log record at the chosen severity.
 // The file and line are injected by the compiler; do not pass them manually.
-// Plan-06 phase 5a: log_* are #impure(host_io) — observable side
-// effect (writes to log sink) but the host serialises calls across
-// par workers, so they're par-safe.
+// Safe to call from `par` workers: the host serialises log writes across threads.
 pub fn log_info(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at warning severity.
 pub fn log_warn(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at error severity.
 pub fn log_error(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at fatal severity.
 pub fn log_fatal(message: text, file: text, line: integer);
 #impure(host_io)
 fn OpPrint(v1: text);
@@ -1397,13 +1402,16 @@ pub struct StructField {
 // automatically.  Placed after every OpFormat* / OpAppend*
 // declaration above so format-string interpolation in the bodies
 // can resolve to the relevant built-in.  Without these impls,
-// `<T: Printable>(x: T)` rejects built-in element types with
-// "missing to_text" (plan-17 phase 03 — also restores the
-// INTERFACES.md and loft-write-skill claim that built-ins
-// satisfy Printable automatically).
+// Converts an integer to its decimal text. Built-in types define `to_text` so
+// they satisfy the `Printable` interface (used by `print`, format strings, …).
 pub fn to_text(self: integer) -> text { "{self}" }
+// Converts a float to its text representation.
 pub fn to_text(self: float) -> text { "{self}" }
+// Converts a single-precision float to its text representation.
 pub fn to_text(self: single) -> text { "{self}" }
+// Converts a boolean to "true" or "false".
 pub fn to_text(self: boolean) -> text { "{self}" }
+// Converts a character to a one-character text.
 pub fn to_text(self: character) -> text { "{self}" }
+// Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.
 pub fn to_text(self: text) -> text { self }

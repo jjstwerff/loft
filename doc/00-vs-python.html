@@ -393,7 +393,7 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Basic generic functions (pass-through, wrapping, forwarding) work out of the box. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.</p>
-<p class="down"><strong>Downside</strong> A generic function cannot perform operations on <code>T</code> — no comparison, no arithmetic, no display. Any algorithm that requires an operation must be written once per concrete type. Python's duck typing lets a single function work on any type that supports the needed operation (<code>len</code>, <code>&gt;</code>, <code>+</code>) without explicit annotation. Python 3.12 <code>TypeVar</code> and <code>Protocol</code> add optional static checking on top.</p>
+<p class="down"><strong>Downside</strong> Operations on <code>T</code> require an explicit interface bound (<code>&lt;T: Ordered&gt;</code> for comparison, <code>&lt;T: Addable&gt;</code> for arithmetic, <code>&lt;T: Printable&gt;</code> for display); unbounded <code>T</code> stays opaque. Python's duck typing lets one function work on any type that supports the needed operation (<code>len</code>, <code>&gt;</code>, <code>+</code>) with no annotation, and Python 3.12 <code>TypeVar</code>/<code>Protocol</code> add optional static checking on top.</p>
 </div>
 
 <h2 id="signatures">12. Function signatures — defaults and named args, but no *args</h2>

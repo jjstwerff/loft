@@ -123,7 +123,7 @@ fn main() {
   // are available via wildcard (`use lib::*`) or selective import.
   // Non-pub definitions are still accessible with the `lib::name` prefix.
   //
-  // **No native extension loading.** Libraries are pure `.loft` files.
-  // Native Rust extensions (`loft.toml` with `native = "..."`) are planned
-  // for a future release.
+  // **Native extensions.** A library can be pure `.loft`, or ship a Rust crate
+  // beside it: declare `native = "..."` in `loft.toml` and loft builds and links
+  // it for you. See PACKAGES.md for the build + binding model.
 }

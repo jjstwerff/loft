@@ -34,7 +34,7 @@
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Added in @PLAN37 phase 10.5 — closes a stdlib gap surfaced by scan.loft's @PLAN matcher doing `line[i+1] == 'P' &amp;&amp; line[i+2] == 'L' &amp;&amp; line[i+3] == 'A' &amp;&amp; line[i+4] == 'N'` per-char instead of `line.starts_with_at(i, &quot;PLAN&quot;)`.</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>

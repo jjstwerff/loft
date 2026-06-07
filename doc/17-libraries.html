@@ -96,7 +96,7 @@ entry = "src/mylib.loft"   override the default entry path
 <h2 id="limitations">Limitations</h2>
 <p><strong>`use` must appear before all definitions.</strong> If you write a function first and then a <code>use</code>, the compiler reports a syntax error.</p>
 <p><strong>`pub` controls import visibility.</strong> Only <code>pub</code>-marked definitions are available via wildcard (<code>use lib::*</code>) or selective import. Non-pub definitions are still accessible with the <code>lib::name</code> prefix.</p>
-<p><strong>No native extension loading.</strong> Libraries are pure <code>.loft</code> files. Native Rust extensions (<code>loft.toml</code> with <code>native = "..."</code>) are planned for a future release.</p>
+<p><strong>Native extensions.</strong> A library can be pure <code>.loft</code>, or ship a Rust crate beside it: declare <code>native = "..."</code> in <code>loft.toml</code> and loft builds and links it for you. See PACKAGES.md for the build + binding model.</p>
 <pre><code>}</code></pre>
 
   </article>

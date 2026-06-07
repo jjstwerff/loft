@@ -47,7 +47,7 @@ pub struct JsonField {
 /// }
 /// ```
 pub fn json_parse(raw: text) -> JsonValue;
-// Plan-06 phase 5a: #impure(host_io) — populates the runtime's
+// Populates the runtime's
 // per-call json_errors state (read by json_errors()).  Allocates
 // the result tree into worker-local stores → par-safe; no parent
 // state written.
@@ -58,7 +58,7 @@ pub fn json_parse(raw: text) -> JsonValue;
 /// entry carries an RFC 6901 path, a `line:col` location, and a
 /// context snippet — see Q1 in `doc/claude/QUALITY.md`.
 pub fn json_errors() -> text;
-// Plan-06 phase 5a: #impure(host_io) — observes the runtime's
+// Observes the runtime's
 // json_errors state populated by json_parse.  No parent writes.
 #impure(host_io)
 
@@ -165,7 +165,7 @@ pub fn json_bool(v: boolean) -> JsonValue;
 /// in `json_errors()` — mirrors the RFC 8259 constraint that JSON
 /// numbers must be finite.
 pub fn json_number(v: float) -> JsonValue;
-// Plan-06 phase 5a: #impure(host_io) — non-finite inputs touch
+// Non-finite inputs touch
 // json_errors state.  Otherwise pure construction into worker
 // stores.
 #impure(host_io)
@@ -209,7 +209,7 @@ pub fn json_object(fields: vector<JsonField>) -> JsonValue;
 /// `parse_type_parse` overrides the type to `reference[T]` for the
 /// caller while the stack accounting remains correct.
 pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue;
-// Plan-06 phase 5a: #impure(host_io) — populates json_errors on
+// Populates json_errors on
 // type mismatches.  Allocates the result struct into worker
 // stores → par-safe; no parent state writes.
 #impure(host_io)
