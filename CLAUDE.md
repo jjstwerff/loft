@@ -349,6 +349,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [LAVITION.md](doc/claude/LAVITION.md) | Brand + architecture + library model for lavition; two-tier brand split; loft naming history |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
+| [MOVING.md](doc/claude/MOVING.md) | One-time runbook: transfer loft into the `loft-lang` org (free-via-redirect vs gotchas, the `scripts/rewrite-org.sh` reference automation, cross-repo + library-naming cleanup) |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
 | [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail |
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases + reproducers and test references |
