@@ -125,7 +125,12 @@ impl Parser {
             &extra_call_args,
             &extra_call_types,
         );
-        ls.push(Value::Null);
+        // No-variant-matched fallback: an explicit `return null`, not a bare
+        // `Null` tail. As the tail of a value-typed (e.g. text) block the bare
+        // Null was wrapped in `Str::new(<dispatch if>)` and emitted `Str::new(())`
+        // (E0308) under --native; `Return(Null)` routes through the typed-null
+        // return path (STRING_NULL for text, i64::MIN for int, …) on both backends.
+        ls.push(Value::Return(Box::new(Value::Null)));
         self.data.definitions[fn_nr as usize].code =
             v_block(ls, self.data.def(from_nr).returned().clone(), "dynamic_fn");
         self.data.definitions[self.context as usize].variables = self.vars.clone();

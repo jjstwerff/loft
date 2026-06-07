@@ -353,6 +353,17 @@ impl Output<'_> {
                 // `let __native_tail_ret = expr; free; return __native_tail_ret;`
                 // pattern, which orders the use BEFORE the free correctly.
                 let expr = &result[idx];
+                // A void control-flow value — an `if` with a `Null` else (whose
+                // taken branch diverges via `return`), a Set/Drop, a void call —
+                // is a STATEMENT, not the block's return value. Hoisting it into
+                // `Return(expr)` produces `Str::new(())` / `().to_string()`
+                // (E0308/E0599); this is exactly the enum-dispatch shape
+                // `[if tag==a {return …}, if tag==b {return …}, return null]`.
+                // Leave it as a statement and keep the typed-null `Return(Null)`.
+                if self.is_void_value(expr.unspan()) {
+                    search_from = ret_pos + 1;
+                    continue;
+                }
                 let mut conflict = false;
                 for between in &result[idx + 1..ret_pos] {
                     if let Some(v) = freed_var(between)
