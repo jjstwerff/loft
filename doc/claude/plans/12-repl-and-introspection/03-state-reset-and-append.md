@@ -46,10 +46,31 @@ phase-02 wrapper.  A definition from one input is callable from a later input
 (correct, not yet optimized — a fresh State sidesteps the @P381 CONST_STORE
 re-lock).
 
-**Slice B — remaining.** Cross-input *variable* persistence: a persistent
-`State` (so `byte_code_from` appends + the stack region survives), the
-function-shaped `vars` seeded per input, `reset_for_repl` (preserve `stack_pos`),
-and resume-execution over the preserved frame.
+**Slice B — DONE for integers (2026-06-07).** `ReplSession` (`src/repl.rs`)
+gives cross-input *integer-variable* persistence: a variable bound in one input
+is visible to the next (`x = 1` then `x + 1`), depends on earlier ones
+(`b = a * 2`), and rebinds (`n = n + 100`).  `tests/repl_session.rs`.
+
+Mechanism (integer scope): the session keeps the stdlib-loaded parser + the
+accumulated *bindings* as source.  A binding is recorded but **not executed** —
+an unused binding's slot is elided by the allocator, so compiling it would panic;
+its value is realised when a later input *observes* it.  An observing input
+(expression / call) is wrapped in one shared-scope fn over all bindings, run with
+a fresh `State` per input (sidesteps the @P381 CONST_STORE re-lock).  `scopes::check`
+runs between parse and `byte_code` (else locals get no slot).  Correct for pure
+integer arithmetic (re-running deterministic bindings yields the same value).
+
+**Known gap — parser re-entrancy after an error.** `parse_str` returns early
+(after pass 1) on a parse error, leaving transient parser/lexer state mid-parse,
+so a clean input *after* an error currently mis-parses (a typo poisons the
+session).  `data` rolls back correctly; the fix is a parser-state reset on the
+error path.  `tests/repl_session.rs::parse_error_leaves_session_usable` is
+`#[ignore]`d pending it.
+
+**Remaining toward the general model.** Non-integer variable types; eliminating
+the re-run via the true stack-resident model (persistent `State` + `byte_code_from`
++ `reset_for_repl` preserving `stack_pos` + resume-execution); surfacing the
+evaluated result for display (phase 04).
 
 ---
 
