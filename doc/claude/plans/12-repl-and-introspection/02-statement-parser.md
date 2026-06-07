@@ -5,10 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 02 — Statement-level parser entry
 
-**Status: in progress.**  Increment 1 landed 2026-06-07 —
-`Parser::statement_incomplete` (the REPL "read more lines?" detector) +
-`tests/parser_statement.rs`.  The `parse_statement` body (session re-parse +
-rollback + `__repl_session`) is increment 2.
+**Status: in progress.**
+- **Increment 1** (2026-06-07): `Parser::statement_incomplete` — the "read more
+  lines?" detector.
+- **Increment 2** (2026-06-07): `parse_statement` + `ParseResult` for top-level
+  **definitions** (`struct`/`enum`/`fn`/`type`), via incremental append against
+  the live session, with transactional rollback (`Data::rollback_to`) on error.
+  `NeedMore` for incomplete input.  Cross-statement references work (a later
+  statement sees an earlier def).  Tests in `tests/parser_statement.rs`.
+- **Increment 3** (open): bare expressions / assignments via the `__repl_session`
+  local-persistence path (below).  Until then a bare expression returns `Error`.
 
 ## Validated constraints (2026-06-07)
 
@@ -188,12 +194,12 @@ statement, which is small.
 
 | Step | Files | Effort |
 |------|-------|--------|
-| 1. `ParseResult` enum + `parse_statement` skeleton | `src/parser/mod.rs` | XS |
-| 2. Top-level def dispatch (struct/enum/fn/type) — re-uses existing `parse_*` functions, but wrapped in transactional rollback | `src/parser/mod.rs` | S |
+| 1. `ParseResult` enum + `parse_statement` skeleton — **DONE** | `src/parser/mod.rs` | XS |
+| 2. Top-level def dispatch (struct/enum/fn/type) — **DONE** via incremental `parse_str` append (no dispatch needed; `parse_str` already routes each def shape), wrapped in transactional rollback | `src/parser/mod.rs` | S |
 | 3. Synthetic `__repl_N` fn wrapper | `src/parser/mod.rs`, `src/parser/control.rs` | S |
 | 4. `__repl_session` struct evolution (append-field-on-new-local) | `src/parser/mod.rs`, `src/parser/objects.rs` | M |
 | 5. Incomplete-input detection — **DONE** (`Parser::statement_incomplete`, a pure string scanner; the lexer had no reusable bracket-depth API) | `src/parser/mod.rs`, `tests/parser_statement.rs` | XS |
-| 6. Transactional rollback | `src/parser/mod.rs`, `src/data.rs` (snapshot helpers) | S |
+| 6. Transactional rollback — **DONE** (`Data::rollback_to`: truncate `definitions` to the pre-call count + `rebuild_indices`) | `src/parser/mod.rs`, `src/data.rs` | S |
 | 7. Tests — unit tests for each statement shape (def, expr, assign, multi-line) | `tests/parser_statement.rs` (new) | S |
 
 ## Tests

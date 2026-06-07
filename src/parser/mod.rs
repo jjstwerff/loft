@@ -9,7 +9,7 @@ use crate::data::{
     v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
-use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
+use crate::diagnostics::{DiagEntry, Diagnostics, Level, diagnostic_format};
 use crate::lexer::{LexItem, LexResult, Lexer, Link, Mode, Position};
 use crate::platform::{other_sep, sep, sep_str};
 use crate::variables::{Function, size as var_size};
@@ -365,6 +365,23 @@ fn is_camel(name: &str) -> bool {
         }
     }
     true
+}
+
+/// Outcome of [`Parser::parse_statement`] — the REPL read-eval step's parse half.
+#[derive(Debug)]
+pub enum ParseResult {
+    /// Fully parsed.  Any new top-level definition is registered in `data` and
+    /// its body IR is built, ready for codegen + execute.  `entry_def_nr` is the
+    /// newest definition's number, or `u32::MAX` when the statement added no
+    /// runnable definition.
+    Ready { entry_def_nr: u32 },
+    /// Input ends mid-construct (open bracket, unterminated string, trailing
+    /// operator).  The REPL should read another line and re-call with the
+    /// concatenated input.
+    NeedMore,
+    /// Parse failed.  `data` has been rolled back to its pre-call state; the
+    /// entries are the diagnostics this statement produced.
+    Error(Vec<DiagEntry>),
 }
 
 impl Parser {
@@ -874,6 +891,43 @@ impl Parser {
             last,
             Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '=' | '<' | '>' | ',' | '.')
         )
+    }
+
+    /// @PLN12 phase 02 — parse one REPL input against the live session.
+    ///
+    /// Reuses the parser's accumulated `data` + `database`, so a definition
+    /// from an earlier call is visible to this one.  This works because
+    /// `data.reset()` (which `parse_str` calls between its two passes) clears
+    /// only import scoping, never `definitions` — so `parse_str` *appends* the
+    /// input's new definitions to the existing stdlib + session.
+    ///
+    /// Returns [`ParseResult::NeedMore`] for input that ends mid-construct,
+    /// [`ParseResult::Error`] (with `data` rolled back) on a parse error, or
+    /// [`ParseResult::Ready`] with the new definition's number on success.
+    ///
+    /// Increment 2 handles top-level definitions (`struct`/`enum`/`fn`/`type`).
+    /// Bare expressions / assignments (the `__repl_session` local-persistence
+    /// path) arrive in a later increment.
+    pub fn parse_statement(&mut self, input: &str) -> ParseResult {
+        if Self::statement_incomplete(input) {
+            return ParseResult::NeedMore;
+        }
+        let pre_defs = self.data.definitions();
+        let pre_diag = self.diagnostics.entries().len();
+        self.parse_str(input, "<repl>", false);
+        // Only diagnostics this statement produced — `Diagnostics::level` is
+        // monotonic, so a prior error would otherwise mask a now-clean parse.
+        let produced: Vec<DiagEntry> = self.diagnostics.entries()[pre_diag..].to_vec();
+        if produced.iter().any(|e| e.level >= Level::Error) {
+            self.data.rollback_to(pre_defs);
+            return ParseResult::Error(produced);
+        }
+        let entry_def_nr = if self.data.definitions() > pre_defs {
+            self.data.definitions() - 1
+        } else {
+            u32::MAX
+        };
+        ParseResult::Ready { entry_def_nr }
     }
 
     // ********************

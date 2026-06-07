@@ -2166,6 +2166,20 @@ impl Data {
         self.use_names.insert("std".to_string(), 0);
     }
 
+    /// @PLN12 phase 02 — transactional rollback for the REPL statement parser.
+    ///
+    /// Drop every definition added since index `keep` and rebuild the derived
+    /// lookup tables (`def_names`, operators, …) from what remains, so a
+    /// statement that failed to parse leaves `Data` exactly as it was before
+    /// the attempt.  `keep` is the `definitions()` count captured before the
+    /// `parse_statement` attempt ran.
+    pub(crate) fn rollback_to(&mut self, keep: u32) {
+        if (keep as usize) < self.definitions.len() {
+            self.definitions.truncate(keep as usize);
+            self.rebuild_indices();
+        }
+    }
+
     /// @PLAN28 Step 2 (C3) — rebuild the derived lookup indices from
     /// `definitions` alone, for the startup-cache load path.
     ///
