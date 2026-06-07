@@ -7,6 +7,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status: open.**
 
+## Revised design (2026-06-07) — supersedes the bytecode-append plan below
+
+Two findings collapse this phase well below its original MH estimate:
+
+1. **Appendability already exists.** `compile::byte_code_from(state, data,
+   start_d_nr, …)` emits bytecode only for definitions `>= start_d_nr` and skips
+   the one-time init — so a new statement's code is appended with no
+   `Arc<Vec<u8>>` → `Vec<u8>` refactor.  The whole "Option A/B" section below is
+   moot.
+
+2. **Variables live on the stack; keep them there.**  The REPL session is one
+   long-lived, growing frame.  Its variable table is shaped exactly like a
+   normal function's (`vars: Function` — names + types at fixed slots from the
+   frame base), so the **existing expression codegen + execution read the slots
+   for free** — no session struct, no field-type inference, no `s.x` identifier
+   rewriting.
+
+   - A reference to a prior variable compiles to an ordinary load from its slot.
+   - **Defining a new variable is just the normal expression result** landing in
+     the next free slot; the parser allocates that slot and records the
+     name→slot/type in the persistent `vars`.
+   - The values persist on the stack across inputs; `reset_for_repl` resets only
+     `code_pos` / `call_stack`, never the variable region.
+
+So the work is: (a) a persistent function-shaped `vars` + preserved stack frame,
+seeded into the parse of each input; (b) `byte_code_from` to emit the new
+statement's code; (c) `reset_for_repl`; (d) execute from the new code offset.
+The load-bearing claim to spike first: a statement compiled against a
+pre-seeded, function-shaped `vars` reads/writes the right slots and the values
+survive a reset-and-re-enter.
+
+---
+
+## Original design (bytecode-append — NOT pursued; kept for context)
+
 ## Goal
 
 Make `State` re-runnable across REPL inputs:
