@@ -325,6 +325,12 @@ manually after completing the validation checklist below.
 
 ## Pre-Release Documentation Review
 
+> **Load the `doc-quality` skill first** (`/doc-quality`) — and at the start of
+> *any* documentation review, not just the release. It carries the comment/doc
+> rules (legible-on-contact, serve-the-reader, matches-reality + stamp-vs-pointer)
+> these steps apply; reviewing without it is how stale stamps and author-bookkeeping
+> creep back in.
+
 Run these steps before tagging a release.  **They are advisory, not blocking** —
 only the [Safety gate](#safety-gate--blocks-every-release) (crashes / memory / leaks
 / test integrity) blocks a release.  A doc-quality finding must **never** hold a bug
