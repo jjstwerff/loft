@@ -956,7 +956,7 @@ impl Parser {
 
     /// True if `input` opens with a top-level definition keyword, so it can be
     /// parsed directly rather than wrapped in a synthetic REPL fn.
-    fn starts_top_level_def(input: &str) -> bool {
+    pub(crate) fn starts_top_level_def(input: &str) -> bool {
         let word: String = input
             .trim_start()
             .chars()

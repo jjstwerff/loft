@@ -5,7 +5,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 04 — REPL shell
 
-**Status: open.**
+**Status: shipped (first cut, 2026-06-08).** `loft repl` (and a bare `loft`
+with no file/subcommand, like `python`/`node`) starts an interactive `loft>`
+prompt: definitions, bindings, and expressions evaluate against the live
+session; a bare expression's value is echoed in loft's native rendering
+(`{expr}` — `3`, `{a:1,b:2}`, `[1,2,3]`); multi-line input accumulates on
+`NeedMore`; parse errors and runtime panics (caught via `catch_unwind`, isolated
+to the per-eval database clone) don't crash the session; `:quit` / `:help` /
+`:reset` work.  Implemented on `ReplSession` (`src/repl.rs::run_repl`); prompts +
+errors go to stderr, results to stdout.  Tests: `tests/repl.rs` (subprocess) +
+`tests/repl_session.rs`.
+
+Deferred from this first cut: `rustyline` line editor + history (plain
+stdin for now), in-process result-as-`String` return (results print to stdout),
+the richer `:vars`/`:fns` commands, and the phase-05 introspection commands.
+
+## Original design (below) — pre-implementation; some APIs differ from `ReplSession`
 
 ## Goal
 

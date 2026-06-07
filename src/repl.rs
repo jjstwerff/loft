@@ -22,6 +22,89 @@ use crate::compile;
 use crate::diagnostics::{DiagEntry, Level};
 use crate::parser::Parser;
 use crate::state::State;
+use std::io::{BufRead, Write};
+use std::panic::AssertUnwindSafe;
+
+/// Run the interactive `loft>` REPL.
+///
+/// Reads inputs from `input` (one statement per line, multi-line accumulated on
+/// [`Eval::NeedMore`]) and writes the prompt, messages, and parse errors to
+/// `chrome` (stderr in the CLI).  Evaluated **results** are printed by the
+/// program itself to process stdout, so a terminal sees them and a piped caller
+/// can capture them.  Returns when input reaches EOF or the user types `:quit`.
+///
+/// A runtime panic (failed `assert`, overflow) is caught — execution runs on a
+/// throwaway clone of the database, so the session survives; the loop reports it
+/// and continues.
+///
+/// # Errors
+/// Returns an I/O error from loading the stdlib or writing to `chrome`.
+pub fn run_repl<R: BufRead, W: Write>(
+    stdlib_dir: &str,
+    mut input: R,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    let mut session = ReplSession::new(stdlib_dir)?;
+    writeln!(chrome, "loft REPL — :help for commands, :quit to exit")?;
+    let mut pending = String::new();
+    let mut line = String::new();
+    loop {
+        write!(
+            chrome,
+            "{}",
+            if pending.is_empty() {
+                "loft> "
+            } else {
+                "..... > "
+            }
+        )?;
+        chrome.flush()?;
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            break; // EOF
+        }
+        let trimmed = line.trim_end();
+        // `:`-commands are only recognised at the start of a fresh statement.
+        if pending.is_empty() && trimmed.starts_with(':') {
+            match trimmed {
+                ":quit" | ":q" => break,
+                ":help" | ":h" => {
+                    writeln!(chrome, "commands: :quit  :help  :reset")?;
+                }
+                ":reset" => {
+                    session = ReplSession::new(stdlib_dir)?;
+                    writeln!(chrome, "session reset.")?;
+                }
+                other => writeln!(chrome, "unknown command: {other}  (:help)")?,
+            }
+            continue;
+        }
+        pending.push_str(trimmed);
+        pending.push('\n');
+        let src = pending.clone();
+        // Catch a runtime panic so a bad input never kills the REPL.  AssertUnwindSafe
+        // is sound here: a panic corrupts only the per-eval database clone, never
+        // `session`'s own state.
+        match std::panic::catch_unwind(AssertUnwindSafe(|| session.eval(&src))) {
+            Ok(Eval::Ran) => pending.clear(),
+            Ok(Eval::NeedMore) => {} // keep accumulating; continuation prompt next
+            Ok(Eval::Error(diags)) => {
+                for d in diags {
+                    writeln!(chrome, "{}", d.to_string_compact())?;
+                }
+                pending.clear();
+            }
+            Err(_) => {
+                writeln!(
+                    chrome,
+                    "runtime error (session preserved; :reset to clear state)"
+                )?;
+                pending.clear();
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Outcome of evaluating one REPL input.
 #[derive(Debug)]
@@ -68,61 +151,98 @@ impl ReplSession {
     /// unchanged) on a parse error, or [`Eval::Ran`] when the statement parsed
     /// and executed.
     ///
+    /// A binding (`x = 1`) is recorded but not executed now — an unused
+    /// binding's slot is elided by the allocator, so even compiling it would
+    /// panic; its value is realised when a later input observes it.  Any other
+    /// input is an *observing* statement: it is wrapped as `println("{<input>}")`
+    /// so a bare expression's value is shown in loft's native rendering, with a
+    /// fall back to running it plain when it is a void statement (`assert`,
+    /// `print`) or otherwise can't be string-interpolated.
+    ///
     /// # Panics
     /// Propagates a runtime panic from the executed program (e.g. a failed
     /// `assert`, arithmetic overflow, or the interpreter's infinite-loop guard).
+    /// Because execution runs on a throwaway clone of the database, the session
+    /// itself survives such a panic when the caller wraps this in `catch_unwind`.
     pub fn eval(&mut self, input: &str) -> Eval {
         if Parser::statement_incomplete(input) {
             return Eval::NeedMore;
         }
-        // Build this generation: all bindings so far + this input, in one shared
-        // fn scope so earlier bindings are visible.  A fresh generation name
-        // avoids redefining the previous entry fn.
-        let is_binding = Self::binding_name(input).is_some();
-        let gen_body = format!("{}{};\n", self.body, input);
+        if Parser::starts_top_level_def(input) {
+            // A definition (struct/enum/fn/type/…): parse it as a top-level def
+            // and keep it — it persists in `data` (parse_str appends, never
+            // wipes prior defs) and is callable from later inputs.  Nothing to
+            // print or execute.
+            let pre_defs = self.parser.data.definitions();
+            let pre_diag = self.parser.diagnostics.entries().len();
+            self.parser.parse_str(input, "<repl>", false);
+            let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
+            if produced.iter().any(|e| e.level >= Level::Error) {
+                self.parser.data.rollback_to(pre_defs);
+                return Eval::Error(produced);
+            }
+            return Eval::Ran;
+        }
+        if Self::binding_name(input).is_some() {
+            // Record the binding (validate only — see the doc comment).  It is
+            // recompiled, in use, when a later input observes it.
+            let bound = format!("{}{};\n", self.body, input);
+            return match self.compile_generation(&bound, false) {
+                Ok(()) => {
+                    self.body = bound;
+                    Eval::Ran
+                }
+                Err(diags) => Eval::Error(diags),
+            };
+        }
+        // Observing: show the value.  Try the print wrapper first; if it doesn't
+        // compile (void statement, or input that breaks string interpolation),
+        // run the input plain so side effects still happen.
+        let shown = format!("{}println(\"{{{input}}}\");\n", self.body);
+        if self.compile_generation(&shown, true).is_ok() {
+            return Eval::Ran;
+        }
+        let plain = format!("{}{};\n", self.body, input);
+        match self.compile_generation(&plain, true) {
+            Ok(()) => Eval::Ran,
+            Err(diags) => Eval::Error(diags),
+        }
+    }
+
+    /// Parse one generation fn `fn replmain_N() { <gen_body> }`; when `execute`,
+    /// run it.  On a parse error rolls `data` back and returns the diagnostics.
+    /// When not executing (a binding), the generation's def is rolled back too —
+    /// it lives on only as source in `body`.
+    fn compile_generation(&mut self, gen_body: &str, execute: bool) -> Result<(), Vec<DiagEntry>> {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() {{\n{gen_body}}}\n");
-
         let pre_defs = self.parser.data.definitions();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         // Only this call's diagnostics — `Diagnostics::level` is monotonic.
         let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
         if produced.iter().any(|e| e.level >= Level::Error) {
-            // Roll `data` back to the pre-call state.  The lexer clears its
-            // diagnostics per parse_str, so this error does not leak into the
-            // next input — the session stays usable after a typo.
+            // The lexer clears its diagnostics per parse_str, so this error does
+            // not leak into the next input — the session stays usable after a typo.
             self.parser.data.rollback_to(pre_defs);
-            return Eval::Error(produced);
+            return Err(produced);
         }
         self.counter = next;
-
-        if is_binding {
-            // A binding defines a variable; its value is realised when a later
-            // input *observes* it.  Discard this generation's throwaway fn: an
-            // unused binding's slot is elided by the allocator, so even
-            // *compiling* it (byte_code walks every def) would panic.  The
-            // binding lives on as source in `body` and is recompiled — now in
-            // use — when a later input observes it; re-running deterministic
-            // integer arithmetic yields the same value.
-            self.parser.data.rollback_to(pre_defs);
-            self.body = gen_body;
-        } else {
-            // An observing statement (expression / call): every prior binding is
-            // now used, so the allocator keeps their slots.  Compile + run.  A
-            // fresh State per input sidesteps the @P381 CONST_STORE re-lock from
-            // a second byte_code on the same State (correctness over speed here).
-            // A non-binding defines no variable, so it is not persisted.
-            // scopes::check assigns slots + does lifetime analysis — the real
-            // pipeline runs it between parse and byte_code; without it locals
-            // get no slot (slot == u16::MAX) and execution underflows.
+        if execute {
+            // scopes::check assigns slots + does lifetime analysis (the real
+            // pipeline runs it between parse and byte_code; without it locals get
+            // no slot and execution underflows).  A fresh State per input
+            // sidesteps the @P381 CONST_STORE re-lock and isolates a runtime
+            // panic to the throwaway clone.
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
             state.execute_argv(&name, &self.parser.data, &[]);
+        } else {
+            self.parser.data.rollback_to(pre_defs);
         }
-        Eval::Ran
+        Ok(())
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),

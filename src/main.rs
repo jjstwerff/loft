@@ -2979,6 +2979,28 @@ fn registry_age_str(path: &std::path::Path) -> String {
 // package's `#native` crate identically to the standalone + WASM native
 // compiles (LibCI native library gate).
 
+/// @PLN12 phase 04 — resolve the stdlib dir and run the interactive REPL, then
+/// exit.  Used by `loft repl` and by a bare `loft` with no file/subcommand.
+fn start_repl() -> ! {
+    let base = project_dir();
+    let default_dir = std::path::Path::new(&base).join("default");
+    let stdlib = if default_dir.exists() {
+        default_dir.to_string_lossy().into_owned()
+    } else {
+        "default".to_string()
+    };
+    let stdin = std::io::stdin();
+    let mut stderr = std::io::stderr();
+    let code = match loft::repl::run_repl(&stdlib, stdin.lock(), &mut stderr) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("loft repl: {e}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -3315,6 +3337,11 @@ fn main() {
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
+        } else if a == "repl" || a == "--repl" {
+            // @PLN12 phase 04 — interactive `loft>` prompt.  Prompts + errors go
+            // to stderr; evaluated results print to stdout (so a terminal sees
+            // them and a pipe can capture them).
+            start_repl();
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
@@ -3964,9 +3991,10 @@ fn main() {
     }
 
     if file_name.is_empty() {
-        println!("loft: no input file specified.");
-        println!("usage: loft [options] <file>");
-        std::process::exit(1);
+        // @PLN12 phase 04 — no file and no subcommand: drop into the interactive
+        // REPL (like `python` / `node` / `irb`).  Works for a terminal and for
+        // piped input; the banner advertises `:help`.
+        start_repl();
     }
     // Resolve the script path to absolute before potentially changing directory.
     let abs_file = std::path::Path::new(&file_name)
