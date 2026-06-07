@@ -128,13 +128,7 @@ fn main() {
     sum_fmt += "0{t}0" as integer;
   }
   assert(sum_fmt == 60, "\"0{{t}}0\" as integer sum 010+020+030=60: {sum_fmt}");
-  // --- join ---
-  assert(join(["a", "b", "c"], ", ") == "a, b, c", "join three parts");
-  assert(join(["x"], "-") == "x", "join single element has no separator");
-  assert(join([], "-") == "", "join empty vector is empty string");
-  assert(join(["hello", "world"], " ") == "hello world", "join with space");
-  assert(join(["a", "b", "c"], "") == "abc", "join with empty separator");
-  assert(join(["one"], "") == "one", "join single with empty separator");
+  // join is the canonical method form `vec.join(sep)` — tested below under "join".
   // --- Text-level predicates (whole-string classify) ---
   // Note: empty string has no characters so all predicates return true (vacuous).
   assert("hello".is_alphabetic(), "text is_alphabetic: all letters");
