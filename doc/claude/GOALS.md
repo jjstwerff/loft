@@ -480,4 +480,5 @@ obligations.
   (free a vector store at its scope, decoupled from the slot).
 - [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/README.md) — Goal B's structure floor: the package-ecosystem extraction.
 - [PKG_REGISTRY.md](PKG_REGISTRY.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) — Goal B's registry on-ramp.
+- [API_SURFACE.md](API_SURFACE.md) — Goals F + B at the named-API level: verifying the language/stdlib **and** the libraries for dup/confusable/undocumented/footgun functions ([LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) is the per-library bar).
 - [ROADMAP.md](ROADMAP.md) / [PLANNING.md](PLANNING.md) — feature backlog feeding Goal C.

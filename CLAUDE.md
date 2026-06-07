@@ -346,6 +346,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [REGISTRY_RECOVERY.md](doc/claude/REGISTRY_RECOVERY.md) | Trust-root incident runbooks (A: backup intact; B: backups gone; C: key compromised) + annual drill |
 | [REGISTRY_SUBMIT.md](doc/claude/REGISTRY_SUBMIT.md) | Author-facing submission guide (5-step submit flow, releases, yanking, troubleshooting) |
 | [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) | End-to-end author narrative — `loft new` → develop → package → publish → maintain |
+| [LIBRARY_CHECKLIST.md](doc/claude/LIBRARY_CHECKLIST.md) | What a *correct* library looks like — Goals A–F + doc quality applied per-library, split `[auto]` (library-ci) / `[review]`; the registry `verified` mark is how it's administered |
+| [API_SURFACE.md](doc/claude/API_SURFACE.md) | Verifying the two prime programmer-facing surfaces (language/stdlib + libraries) for dup/confusable/undocumented/footgun fns — one `api-lint` over both targets; the stdlib is the library every program imports, so it passes LIBRARY_CHECKLIST too |
 | [LAVITION.md](doc/claude/LAVITION.md) | Brand + architecture + library model for lavition; two-tier brand split; loft naming history |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |

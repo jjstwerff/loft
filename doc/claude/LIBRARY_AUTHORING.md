@@ -113,6 +113,10 @@ present.
 
 ## 3. Pre-release checklist
 
+The mechanical `[auto]` core of the full correctness bar — see
+[LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) for the Goal-by-Goal + doc-quality
+`[review]` items and the registry `verified` administration.
+
 Before you ship a version:
 
 - [ ] All tests pass under both `loft test` and `loft --native test`.
