@@ -469,6 +469,7 @@ pub fn exp(both: single) -> single {
 }
 #pure
 
+// Double-precision exp (e^v).
 pub fn exp(both: float) -> float {
   pow(E, both)
 }
@@ -480,6 +481,7 @@ pub fn ln(both: single) -> single {
 }
 #pure
 
+// Double-precision natural logarithm.
 pub fn ln(both: float) -> float {
   log(both, E)
 }
@@ -491,6 +493,7 @@ pub fn log2(both: single) -> single {
 }
 #pure
 
+// Double-precision base-2 logarithm.
 pub fn log2(both: float) -> float {
   log(both, 2.0)
 }
@@ -502,6 +505,7 @@ pub fn log10(both: single) -> single {
 }
 #pure
 
+// Double-precision base-10 logarithm.
 pub fn log10(both: float) -> float {
   log(both, 10.0)
 }
@@ -1054,10 +1058,13 @@ pub fn panic(message: text, file: text, line: integer);
 // Safe to call from `par` workers: the host serialises log writes across threads.
 pub fn log_info(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at warning severity.
 pub fn log_warn(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at error severity.
 pub fn log_error(message: text, file: text, line: integer);
 #impure(host_io)
+// Like log_info, at fatal severity.
 pub fn log_fatal(message: text, file: text, line: integer);
 #impure(host_io)
 fn OpPrint(v1: text);
