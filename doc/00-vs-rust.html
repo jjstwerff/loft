@@ -341,7 +341,7 @@ fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T {
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Basic generic functions (<code>identity</code>, <code>pick_second</code>, wrappers) work out of the box. Collections (<code>vector&lt;T&gt;</code>, <code>hash&lt;T&gt;</code>, <code>sorted&lt;T&gt;</code>) are generic at the engine level, covering the most common need. No <code>dyn Trait</code>, <code>impl Trait</code>, or associated types to learn.</p>
-<p class="down"><strong>Downside</strong> No trait bounds — a generic function cannot constrain <code>T</code> to be comparable, printable, or hashable. Any algorithm that requires an operation on <code>T</code> (comparison, addition, display) must be written once per concrete type. There is no way for user code to define "anything sortable" without duplicating the sort logic.</p>
+<p class="down"><strong>Downside</strong> Interface bounds (<code>&lt;T: Ordered&gt;</code>, <code>&lt;T: Addable&gt;</code>, <code>&lt;T: Printable&gt;</code>) are <em>structural</em> and <em>static-dispatch only</em> — a type satisfies an interface implicitly by defining the required operators, and there are no trait objects (<code>dyn Trait</code>), associated types, or blanket impls. Rust's nominal traits and dynamic dispatch reach cases loft's static interfaces cannot.</p>
 </div>
 
 <h2 id="formatting">13. String formatting — embedded expressions</h2>

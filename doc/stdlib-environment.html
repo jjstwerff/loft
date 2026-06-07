@@ -25,10 +25,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>Returns the UTC calendar date `days` days before today, formatted as `YYYY-MM-DD`.  Reuses `src/logger.rs::days_to_ymd`.  Use for cutoff-date computation in time-window filters (e.g. &quot;P-issues closed in the last 30 days&quot;).  Negative `days` clamps to today. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  scan.loft (@PLAN37 phase 07 indexer) uses this for its per-byte tag scanner — ~5-10× speedup vs `text[i]` for pure ASCII checks.</p>
+<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ymd_days_ago(days: integer) -&gt; text</code></pre>
+<p>Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`. Use for cutoff dates in time-window filters; negative `days` clamps to today.</p>
 </div>
 <div class="item">
 <pre><code>pub fn directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>

@@ -13,7 +13,7 @@
 <article>
 <div class="item">
 <pre><code>pub fn assert(test: boolean, message: text, file: text, line: integer)</code></pre>
-<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: #impure(host_io) — assertion failures write to log/stderr (host bridges serialise), so par workers may call assert.</p>
+<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: failures write to the log/stderr sink, which the host serialises across threads.</p>
 </div>
 <div class="item">
 <pre><code>pub fn panic(message: text, file: text, line: integer)</code></pre>
@@ -21,16 +21,19 @@
 </div>
 <div class="item">
 <pre><code>pub fn log_info(message: text, file: text, line: integer)</code></pre>
-<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: log_* are #impure(host_io) — observable side effect (writes to log sink) but the host serialises calls across par workers, so they're par-safe.</p>
+<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: the host serialises log writes across threads.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_warn(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at warning severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_error(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at error severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_fatal(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at fatal severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn print(v1: text)</code></pre>

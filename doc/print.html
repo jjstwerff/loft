@@ -1171,7 +1171,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);</code></pre>
-<p>P111: constant_character() returns a character, not text "123". This assert was passing only because char == text always returned true. TODO: fix the test to match actual constant_character() semantics. assert("{l.constant_character()}" == "123", "Incorrect text literal"); The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
+<p><code>constant_character()</code> returns a <code>character</code>, so compare it as one (<code>l.constant_character() == '4'</code>), not against the text "123". The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Comments"</span>, <span class="st">"// starting comments\n123 // same line comment\n// extra comment\n4"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">comment_behind</span>(), <span class="st">"Initial comment not behind"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"starting comments"</span>, <span class="st">"Initial comment"</span>);
@@ -1330,7 +1330,7 @@ entry = "src/mylib.loft"   override the default entry path
 <h2 id="limitations">Limitations</h2>
 <p><strong>`use` must appear before all definitions.</strong> If you write a function first and then a <code>use</code>, the compiler reports a syntax error.</p>
 <p><strong>`pub` controls import visibility.</strong> Only <code>pub</code>-marked definitions are available via wildcard (<code>use lib::*</code>) or selective import. Non-pub definitions are still accessible with the <code>lib::name</code> prefix.</p>
-<p><strong>No native extension loading.</strong> Libraries are pure <code>.loft</code> files. Native Rust extensions (<code>loft.toml</code> with <code>native = "..."</code>) are planned for a future release.</p>
+<p><strong>Native extensions.</strong> A library can be pure <code>.loft</code>, or ship a Rust crate beside it: declare <code>native = "..."</code> in <code>loft.toml</code> and loft builds and links it for you. See PACKAGES.md for the build + binding model.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="18-locks">
@@ -1725,8 +1725,8 @@ elapsed_ms  = elapsed_us / 1000
 <p>A guarded arm like <code>Red if cond =&gt; ...</code> does not count as handling the <code>Red</code> variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard <code>_</code> or an unguarded arm so the compiler knows every case is covered.</p>
 <h2 id="ref-parameter-semantics">Ref-parameter semantics</h2>
 <p>Without <code>&amp;</code>, appending to a vector parameter is local — the caller's vector does not grow. With <code>&amp;</code>, the caller sees the new elements. Field-level mutations (e.g. <code>v[i].field = x</code>) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use <code>&amp;vector&lt;T&gt;</code> when the function needs to grow the vector. Use plain <code>vector&lt;T&gt;</code> when the function only reads or modifies existing elements.</p>
-<h2 id="file-i-o-assumes-utf-8">File I/O assumes UTF-8</h2>
-<p>All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.</p>
+<h2 id="text-file-reading-assumes-utf-8">Text file reading assumes UTF-8</h2>
+<p><code>lines()</code> and <code>content()</code> read a file as UTF-8 text and crash on invalid UTF-8 (a binary file, or a different encoding such as Latin-1). For binary data, set a binary format on the file — <code>f#format = LittleEndian</code> (or <code>BigEndian</code>) — and read raw bytes / integers directly (see 13-file.loft). So: read UTF-8 text in text mode, everything else in a binary format.</p>
 <h2 id="xor-is-not-exponentiation">XOR is <code>^</code>, not exponentiation</h2>
 <p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. The <code>**</code> operator (Python/Ruby exponentiation) does not exist either. Use the <code>pow()</code> function for exponentiation.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
@@ -1784,7 +1784,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
-<p>Type-mismatched fields (id: string, name: number) parse as JSON fine but the struct unwrap produces null sentinels. Schema-level diagnostics are a Q1 follow-up — for now verify the unwrap does not crash on mismatched shapes.</p>
+<p>Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap produces null sentinels; path-qualified diagnostics on the mismatch are collected in <code>json_errors</code>. Here we verify the unwrap does not crash on mismatched shapes.</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="kw">null</span>, <span class="st">"type-mismatched id becomes null: {bad.id}"</span>);</code></pre>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
@@ -2742,24 +2742,28 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn exp(both: float) -&gt; float</code></pre>
+<p>Double-precision exp (e^v).</p>
 </div>
 <div class="item">
 <pre><code>pub fn ln(both: single) -&gt; single</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn ln(both: float) -&gt; float</code></pre>
+<p>Double-precision natural logarithm.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log2(both: single) -&gt; single</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn log2(both: float) -&gt; float</code></pre>
+<p>Double-precision base-2 logarithm.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log10(both: single) -&gt; single</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn log10(both: float) -&gt; float</code></pre>
+<p>Double-precision base-10 logarithm.</p>
 </div>
 <h2 id="stdlib-min-max-clamp">min / max / clamp</h2>
 <div class="item">
@@ -2814,7 +2818,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Added in @PLAN37 phase 10.5 — closes a stdlib gap surfaced by scan.loft's @PLAN matcher doing `line[i+1] == 'P' &amp;&amp; line[i+2] == 'L' &amp;&amp; line[i+3] == 'A' &amp;&amp; line[i+4] == 'N'` per-char instead of `line.starts_with_at(i, &quot;PLAN&quot;)`.</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>
@@ -2941,7 +2945,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <h2 id="stdlib-output-and-diagnostics">Output and Diagnostics</h2>
 <div class="item">
 <pre><code>pub fn assert(test: boolean, message: text, file: text, line: integer)</code></pre>
-<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: #impure(host_io) — assertion failures write to log/stderr (host bridges serialise), so par workers may call assert.</p>
+<p>Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: failures write to the log/stderr sink, which the host serialises across threads.</p>
 </div>
 <div class="item">
 <pre><code>pub fn panic(message: text, file: text, line: integer)</code></pre>
@@ -2949,16 +2953,19 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn log_info(message: text, file: text, line: integer)</code></pre>
-<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: log_* are #impure(host_io) — observable side effect (writes to log sink) but the host serialises calls across par workers, so they're par-safe.</p>
+<p>Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: the host serialises log writes across threads.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_warn(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at warning severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_error(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at error severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log_fatal(message: text, file: text, line: integer)</code></pre>
+<p>Like log_info, at fatal severity.</p>
 </div>
 <div class="item">
 <pre><code>pub fn print(v1: text)</code></pre>
@@ -3015,22 +3022,27 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: integer) -&gt; text</code></pre>
-<p>Built-in `to_text` impls so primitives satisfy `Printable` automatically.  Placed after every OpFormat* / OpAppend* declaration above so format-string interpolation in the bodies can resolve to the relevant built-in.  Without these impls, `&lt;T: Printable&gt;(x: T)` rejects built-in element types with &quot;missing to_text&quot; (plan-17 phase 03 — also restores the INTERFACES.md and loft-write-skill claim that built-ins satisfy Printable automatically).</p>
+<p>Built-in `to_text` impls so primitives satisfy `Printable` automatically.  Placed after every OpFormat* / OpAppend* declaration above so format-string interpolation in the bodies can resolve to the relevant built-in.  Without these impls, Converts an integer to its decimal text. Built-in types define `to_text` so they satisfy the `Printable` interface (used by `print`, format strings, …).</p>
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: float) -&gt; text</code></pre>
+<p>Converts a float to its text representation.</p>
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: single) -&gt; text</code></pre>
+<p>Converts a single-precision float to its text representation.</p>
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: boolean) -&gt; text</code></pre>
+<p>Converts a boolean to &quot;true&quot; or &quot;false&quot;.</p>
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: character) -&gt; text</code></pre>
+<p>Converts a character to a one-character text.</p>
 </div>
 <div class="item">
 <pre><code>pub fn to_text(self: text) -&gt; text</code></pre>
+<p>Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.</p>
 </div>
 <h2 id="stdlib-file-system">File System</h2>
 <div class="item">
@@ -3061,6 +3073,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
+<p>True when the result is `FileResult.Ok`. Use to test a file op for success.</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -3095,7 +3108,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean</code></pre>
-<p>Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat). Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+<p>Filesystem stat (via file()); par-safe. Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
@@ -3111,19 +3124,19 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn mtime(path: text) -&gt; integer</code></pre>
-<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters like @PLAN37 phase 07's `plans_recent` 60-day cutoff: pass the path, convert the returned seconds back to YYYY-MM-DD, and compare lexicographically against `ymd_days_ago(60)`.</p>
+<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd_days_ago(N)`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_check(path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 phase 01b — durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
+<p>Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_seal(path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
+<p>Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_persist_bind(r: hash, path: text) -&gt; boolean</code></pre>
-<p>@PLAN38 — &quot;the hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
+<p>&quot;The hash IS the file.&quot;  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.</p>
 <p>First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.</p>
 <p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
 <p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
@@ -3131,6 +3144,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult</code></pre>
+<p>Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an error variant (IsDirectory / NotFound / Other).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sync(self: File) -&gt; boolean</code></pre>
@@ -3156,10 +3170,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>Returns the UTC calendar date `days` days before today, formatted as `YYYY-MM-DD`.  Reuses `src/logger.rs::days_to_ymd`.  Use for cutoff-date computation in time-window filters (e.g. &quot;P-issues closed in the last 30 days&quot;).  Negative `days` clamps to today. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  scan.loft (@PLAN37 phase 07 indexer) uses this for its per-byte tag scanner — ~5-10× speedup vs `text[i]` for pure ASCII checks.</p>
+<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ymd_days_ago(days: integer) -&gt; text</code></pre>
+<p>Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`. Use for cutoff dates in time-window filters; negative `days` clamps to today.</p>
 </div>
 <div class="item">
 <pre><code>pub fn directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
@@ -3180,7 +3195,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <h2 id="stdlib-time">Time</h2>
 <div class="item">
 <pre><code>pub fn now() -&gt; integer</code></pre>
-<p>Returns the current wall-clock time as milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC). Use for timestamps and logging.</p>
+<p>Returns the current wall-clock time as milliseconds since the Unix epoch (00:00 UTC on 1 Jan 1970). Use for timestamps and logging.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ticks() -&gt; integer</code></pre>

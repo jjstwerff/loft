@@ -489,7 +489,7 @@ fn max<T: PartialOrd>(a: T, b: T) -> T {
 
 Upside Basic generic functions (identity, pick\_second, wrappers) work out of the box. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need. No dyn Trait, impl Trait, or associated types to learn.
 
-Downside No trait bounds — a generic function cannot constrain T to be comparable, printable, or hashable. Any algorithm that requires an operation on T (comparison, addition, display) must be written once per concrete type. There is no way for user code to define "anything sortable" without duplicating the sort logic.
+Downside Interface bounds (\<T: Ordered\>, \<T: Addable\>, \<T: Printable\>) are structural and static-dispatch only — a type satisfies an interface implicitly by defining the required operators, and there are no trait objects (dyn Trait), associated types, or blanket impls. Rust's nominal traits and dynamic dispatch reach cases loft's static interfaces cannot.
 
 === String formatting — embedded expressions
 
@@ -908,7 +908,7 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
 
 Upside Basic generic functions (pass-through, wrapping, forwarding) work out of the box. Collections (vector\<T\>, hash\<T\>, sorted\<T\>) are generic at the engine level, covering the most common need without any user-visible type parameter syntax.
 
-Downside A generic function cannot perform operations on T — no comparison, no arithmetic, no display. Any algorithm that requires an operation must be written once per concrete type. Python's duck typing lets a single function work on any type that supports the needed operation (len, \>, +) without explicit annotation. Python 3.12 TypeVar and Protocol add optional static checking on top.
+Downside Operations on T require an explicit interface bound (\<T: Ordered\> for comparison, \<T: Addable\> for arithmetic, \<T: Printable\> for display); unbounded T stays opaque. Python's duck typing lets one function work on any type that supports the needed operation (len, \>, +) with no annotation, and Python 3.12 TypeVar/Protocol add optional static checking on top.
 
 === Function signatures — defaults and named args, but no \*args
 
@@ -3102,7 +3102,7 @@ fn main() {
   assert(l.matches("+"), "Incorrect add");
 ```
 
-P111: constant_character() returns a character, not text "123". This assert was passing only because char == text always returned true. TODO: fix the test to match actual constant_character() semantics. assert("{l.constant_character()}" == "123", "Incorrect text literal"); The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
+`constant_character()` returns a `character`, so compare it as one (`l.constant_character() == '4'`), not against the text "123". The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
 
 ```rust
   l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
@@ -3393,7 +3393,7 @@ By default, library names require the `libname::` prefix. You can import names d
 
 \*\*`pub` controls import visibility.\*\* Only `pub`-marked definitions are available via wildcard (`use lib::\*`) or selective import. Non-pub definitions are still accessible with the `lib::name` prefix.
 
-\*\*No native extension loading.\*\* Libraries are pure `.loft` files. Native Rust extensions (`loft.toml` with `native = "..."`) are planned for a future release.
+\*\*Native extensions.\*\* A library can be pure `.loft`, or ship a Rust crate beside it: declare `native = "..."` in `loft.toml` and loft builds and links it for you. See PACKAGES.md for the build + binding model.
 
 ```rust
 }
@@ -4142,9 +4142,9 @@ A guarded arm like `Red if cond =\> ...` does not count as handling the `Red` va
 
 Without `&`, appending to a vector parameter is local — the caller's vector does not grow. With `&`, the caller sees the new elements. Field-level mutations (e.g. `v\[i\].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&vector\<T\>` when the function needs to grow the vector. Use plain `vector\<T\>` when the function only reads or modifies existing elements.
 
-=== File I/O assumes UTF-8
+=== Text file reading assumes UTF-8
 
-All file reading in loft assumes the file content is valid UTF-8. Reading a binary file or a file in a different encoding (e.g. Latin-1) will crash the program at runtime. There is currently no way to read raw bytes. Mitigation: Only read files you know to be UTF-8. If you need to process binary data, convert it to UTF-8 externally before passing it to loft.
+`lines()` and `content()` read a file as UTF-8 text and crash on invalid UTF-8 (a binary file, or a different encoding such as Latin-1). For binary data, set a binary format on the file — `f\#format = LittleEndian` (or `BigEndian`) — and read raw bytes / integers directly (see 13-file.loft). So: read UTF-8 text in text mode, everything else in a binary format.
 
 === XOR is `^`, not exponentiation
 
@@ -4249,7 +4249,7 @@ fn main() {
   assert(u2.name == u.name, "round-trip name");
 ```
 
-Type-mismatched fields (id: string, name: number) parse as JSON fine but the struct unwrap produces null sentinels. Schema-level diagnostics are a Q1 follow-up — for now verify the unwrap does not crash on mismatched shapes.
+Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap produces null sentinels; path-qualified diagnostics on the mismatch are collected in `json_errors`. Here we verify the unwrap does not crash on mismatched shapes.
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
@@ -5577,6 +5577,8 @@ pub fn exp(both: single) -> single
 pub fn exp(both: float) -> float
 ```
 
+Double-precision exp (e^v).
+
 ```rust
 pub fn ln(both: single) -> single
 ```
@@ -5584,6 +5586,8 @@ pub fn ln(both: single) -> single
 ```rust
 pub fn ln(both: float) -> float
 ```
+
+Double-precision natural logarithm.
 
 ```rust
 pub fn log2(both: single) -> single
@@ -5593,6 +5597,8 @@ pub fn log2(both: single) -> single
 pub fn log2(both: float) -> float
 ```
 
+Double-precision base-2 logarithm.
+
 ```rust
 pub fn log10(both: single) -> single
 ```
@@ -5600,6 +5606,8 @@ pub fn log10(both: single) -> single
 ```rust
 pub fn log10(both: float) -> float
 ```
+
+Double-precision base-10 logarithm.
 
 == min / max / clamp
 
@@ -5678,7 +5686,7 @@ pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
 ```
 
 Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts\_with` / `ends\_with` moved to `02\_files.loft` so the path helpers there can call them; both still available as `text.starts\_with` / `text.ends\_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self\[pos..pos + prefix.len()\] == prefix` for the common "is this token at this offset?" pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts\_with` for the "prefix too long for input" case.
-Added in \@PLAN37 phase 10.5 — closes a stdlib gap surfaced by scan.loft's \@PLAN matcher doing `line\[i+1\] == 'P' && line\[i+2\] == 'L' && line\[i+3\] == 'A' && line\[i+4\] == 'N'` per-char instead of `line.starts\_with\_at(i, "PLAN")`.
+Faster than comparing characters one at a time for a known prefix at `pos`.
 
 ```rust
 pub fn trim(both: text) -> text[both]
@@ -5870,7 +5878,7 @@ Number of elements in a hash collection.
 pub fn assert(test: boolean, message: text, file: text, line: integer)
 ```
 
-Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: \#impure(host\_io) — assertion failures write to log/stderr (host bridges serialise), so par workers may call assert.
+Panics with message if test is false. Use to verify invariants during development. In production mode (--production), logs an error instead of aborting. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: failures write to the log/stderr sink, which the host serialises across threads.
 
 ```rust
 pub fn panic(message: text, file: text, line: integer)
@@ -5882,19 +5890,25 @@ Immediately terminates execution with message. Use for unrecoverable error state
 pub fn log_info(message: text, file: text, line: integer)
 ```
 
-Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Plan-06 phase 5a: log\_\* are \#impure(host\_io) — observable side effect (writes to log sink) but the host serialises calls across par workers, so they're par-safe.
+Write a structured log record at the chosen severity. The file and line are injected by the compiler; do not pass them manually. Safe to call from `par` workers: the host serialises log writes across threads.
 
 ```rust
 pub fn log_warn(message: text, file: text, line: integer)
 ```
 
+Like log\_info, at warning severity.
+
 ```rust
 pub fn log_error(message: text, file: text, line: integer)
 ```
 
+Like log\_info, at error severity.
+
 ```rust
 pub fn log_fatal(message: text, file: text, line: integer)
 ```
+
+Like log\_info, at fatal severity.
 
 ```rust
 pub fn print(v1: text)
@@ -5975,27 +5989,37 @@ Represents a single struct field during compile-time iteration.
 pub fn to_text(self: integer) -> text
 ```
 
-Built-in `to\_text` impls so primitives satisfy `Printable` automatically.  Placed after every OpFormat\* / OpAppend\* declaration above so format-string interpolation in the bodies can resolve to the relevant built-in.  Without these impls, `\<T: Printable\>(x: T)` rejects built-in element types with "missing to\_text" (plan-17 phase 03 — also restores the INTERFACES.md and loft-write-skill claim that built-ins satisfy Printable automatically).
+Built-in `to\_text` impls so primitives satisfy `Printable` automatically.  Placed after every OpFormat\* / OpAppend\* declaration above so format-string interpolation in the bodies can resolve to the relevant built-in.  Without these impls, Converts an integer to its decimal text. Built-in types define `to\_text` so they satisfy the `Printable` interface (used by `print`, format strings, …).
 
 ```rust
 pub fn to_text(self: float) -> text
 ```
 
+Converts a float to its text representation.
+
 ```rust
 pub fn to_text(self: single) -> text
 ```
+
+Converts a single-precision float to its text representation.
 
 ```rust
 pub fn to_text(self: boolean) -> text
 ```
 
+Converts a boolean to "true" or "false".
+
 ```rust
 pub fn to_text(self: character) -> text
 ```
 
+Converts a character to a one-character text.
+
 ```rust
 pub fn to_text(self: text) -> text
 ```
+
+Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.
 
 == File System
 
@@ -6032,6 +6056,8 @@ pub enum FileResult {
 ```rust
 pub fn ok(self: FileResult) -> boolean
 ```
+
+True when the result is `FileResult.Ok`. Use to test a file op for success.
 
 ```rust
 pub struct File {
@@ -6075,7 +6101,7 @@ pub fn exists(path: text) -> boolean
 pub fn exists(both: File) -> boolean
 ```
 
-Plan-06 phase 5a: \#impure(io) — calls file() (filesystem stat). Method form: f = file("path"); if f.exists() { ... } Also callable as exists(file\_obj) via the 'both' parameter name.
+Filesystem stat (via file()); par-safe. Method form: f = file("path"); if f.exists() { ... } Also callable as exists(file\_obj) via the 'both' parameter name.
 
 ```rust
 pub fn delete(path: text) -> FileResult
@@ -6097,25 +6123,25 @@ pub fn mkdir_all(path: text) -> FileResult
 pub fn mtime(path: text) -> integer
 ```
 
-Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters like \@PLAN37 phase 07's `plans\_recent` 60-day cutoff: pass the path, convert the returned seconds back to YYYY-MM-DD, and compare lexicographically against `ymd\_days\_ago(60)`.
+Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd\_days\_ago(N)`.
 
 ```rust
 pub fn store_durable_check(path: text) -> boolean
 ```
 
-\@PLAN38 phase 01b — durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `\<path\>.dmeta` validates against the main file at `\<path\>` (signature, header CRC, payload length, payload CRC, tier\_id all OK).  Returns false on any failure or missing file.  Pair with `store\_durable\_seal` after a clean write session to record the new state.
+Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `\<path\>.dmeta` validates against the main file at `\<path\>` (signature, header CRC, payload length, payload CRC, tier\_id all OK).  Returns false on any failure or missing file.  Pair with `store\_durable\_seal` after a clean write session to record the new state.
 
 ```rust
 pub fn store_durable_seal(path: text) -> boolean
 ```
 
-\@PLAN38 phase 01b — write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store\_durable\_check` returns false → caller rebuilds.
+Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store\_durable\_check` returns false → caller rebuilds.
 
 ```rust
 pub fn store_persist_bind(r: hash, path: text) -> boolean
 ```
 
-\@PLAN38 — "the hash IS the file."  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.
+"The hash IS the file."  Re-root the Store backing the given reference at a file path so mutations are durable via mmap without any explicit save/load loop.
 First call on a path that does NOT yet exist: serialises the current in-memory Store at the reference's slot to disk (padded to a valid ≥1024-word image with a tail free block), then mmaps it back.  Caller's existing DbRefs into that slot remain valid.
 Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.
 Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).
@@ -6124,6 +6150,8 @@ Typical dryopea-style pattern: pw = PaintedWorld { painted: hash\<PaintedHex\[q,
 ```rust
 pub fn set_file_size(self: File, size: integer) -> FileResult
 ```
+
+Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an error variant (IsDirectory / NotFound / Other).
 
 ```rust
 pub fn sync(self: File) -> boolean
@@ -6161,11 +6189,13 @@ pub fn arguments() -> vector < text >
 pub fn byte_at(self: text, i: integer) -> integer
 ```
 
-Returns the UTC calendar date `days` days before today, formatted as `YYYY-MM-DD`.  Reuses `src/logger.rs::days\_to\_ymd`.  Use for cutoff-date computation in time-window filters (e.g. "P-issues closed in the last 30 days").  Negative `days` clamps to today. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  scan.loft (\@PLAN37 phase 07 indexer) uses this for its per-byte tag scanner — ~5-10× speedup vs `text\[i\]` for pure ASCII checks.
+Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
 
 ```rust
 pub fn ymd_days_ago(days: integer) -> text
 ```
+
+Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`. Use for cutoff dates in time-window filters; negative `days` clamps to today.
 
 ```rust
 pub fn directory(v:  & text = "") -> text
@@ -6197,7 +6227,7 @@ Returns the directory containing the main source file being executed. Use to loc
 pub fn now() -> integer
 ```
 
-Returns the current wall-clock time as milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
+Returns the current wall-clock time as milliseconds since the Unix epoch (00:00 UTC on 1 Jan 1970). Use for timestamps and logging.
 
 ```rust
 pub fn ticks() -> integer
