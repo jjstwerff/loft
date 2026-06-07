@@ -5088,6 +5088,43 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         let binary = if cache_usable {
             cached_binary.clone()
         } else {
+            // Up-front toolchain check (cache miss ⇒ about to compile).  A rustc
+            // that differs from the one this loft + its rlib were built with
+            // (the LOFT_BUILD_RUSTC stamp from build.rs) can't link the SVH-locked
+            // rlib — the post-`rustup update` case.  For a DEFAULT native run,
+            // detect it here and fall back to the interpreter WITHOUT the doomed
+            // compile.  Cheap: one `rustc --version`, only on a cache miss (warm
+            // hits ran the cached binary above) and only for the default path
+            // (explicit `--native` proceeds and errors with the rebuild
+            // diagnostic).  The lazy post-compile fallback still backstops
+            // anything missed here (e.g. a matching rustc but a missing rlib).
+            if !native_requested {
+                let stamp = option_env!("LOFT_BUILD_RUSTC").unwrap_or("");
+                let live = std::process::Command::new("rustc")
+                    .arg("--version")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+                let usable = match &live {
+                    Some(v) => stamp.is_empty() || v == stamp,
+                    None => false,
+                };
+                if !usable {
+                    let reason = match &live {
+                        Some(v) => {
+                            format!("rustc changed since this loft was built ({stamp} → {v})")
+                        }
+                        None => "rustc not found".to_string(),
+                    };
+                    eprintln!(
+                        "Warning: native compilation unavailable ({reason}); falling \
+                         back to interpreter mode. Rebuild loft to restore native."
+                    );
+                    let _ = std::fs::remove_file(&emit_path);
+                    break 'native;
+                }
+            }
             // Per-process tmp path — same rationale as the emit_path
             // above: avoids races between concurrent `loft <file>`
             // invocations.  The cached path (`cached_binary` above)

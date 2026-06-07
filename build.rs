@@ -38,6 +38,23 @@ fn main() {
         .unwrap_or_default();
     println!("cargo:rustc-env=LOFT_BUILD_RUSTFLAGS={}", rustflags.trim());
 
+    // Stamp the rustc version this loft (and its rlib) was built with, so the
+    // native path can detect — up front, before a doomed compile — that the
+    // toolchain changed under it.  rlibs are SVH-locked to one rustc, so after a
+    // `rustup update` the cached rlib no longer links with the new rustc; loft
+    // compares the live `rustc --version` against this stamp and, for a default
+    // native run, falls back to the interpreter instead of attempting (and
+    // failing) the compile.  Uses cargo's `RUSTC` (the exact rustc in use).
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let rustc_version = std::process::Command::new(&rustc)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=LOFT_BUILD_RUSTC={rustc_version}");
+
     // Only re-run when the git HEAD changes or build.rs itself changes.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
@@ -45,4 +62,6 @@ fn main() {
     // …and when the build flags change, so LOFT_BUILD_RUSTFLAGS stays accurate.
     println!("cargo:rerun-if-env-changed=RUSTFLAGS");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    // …and when rustc itself changes, so LOFT_BUILD_RUSTC stays accurate.
+    println!("cargo:rerun-if-env-changed=RUSTC");
 }
