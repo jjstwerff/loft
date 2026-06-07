@@ -3160,11 +3160,11 @@ fn main() {
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
-        } else if a == "--introspect" {
-            // Plan-08 phase 01: introspection mode.  Default = emit
-            // bytecode + Rust + slots to stdout.  Sub-flags below
-            // narrow the section list, redirect per-section output
-            // to files, and filter by function name.
+        } else if a == "--introspect" || a == "introspect" {
+            // @PLN12 phase 01: introspection mode (flag or bare subcommand).
+            // Default = emit bytecode + Rust + slots + types to stdout.
+            // Sub-flags below narrow the section list, redirect per-section
+            // output to files, and filter by function name.
             introspect_mode = true;
             native_mode = false;
         } else if a == "--show-bytecode" {

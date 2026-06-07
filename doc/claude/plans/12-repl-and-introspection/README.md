@@ -67,7 +67,7 @@ operates on a fully-loaded program just like `--dump` does.
 | # | File | Status | Effort | Summary |
 |---|------|--------|--------|---------|
 | 0 | [00-baseline.md](00-baseline.md) | done | XS | Survey of existing dump APIs (`LOFT_LOG`, `--dump`, `--native-emit`, `dump_bytecode`, `dump_variables`).  Confirmed the introspection tool is a packaging job; the REPL needs three new pieces of architecture. |
-| 1 | [01-introspection-cli.md](01-introspection-cli.md) | open | S | A `--introspect <file>` (or `loft introspect <file>`) CLI flag that emits bytecode + generated Rust + slot tables to stdout (or per-flag files).  Builds on `state.dump_bytecode`, `dump_variables`, `Output::output_native`.  Optional sub-flags select a single dimension or filter to one function. |
+| 1 | [01-introspection-cli.md](01-introspection-cli.md) | shipped | S | `loft introspect <file>` / `--introspect`: emits bytecode + generated Rust + slot tables + per-fn types to stdout (or per-flag files).  Wraps `state.dump_bytecode`, `dump_variables`, `Output::output_native`.  Sub-flags select one dimension or filter to a function.  (2026-06-07: bare `introspect` subcommand added; default-stdlib filter fixed for absolute paths + synthesized internals so all sections show user code only; `tests/introspect.rs` regression guard.) |
 | 2 | [02-statement-parser.md](02-statement-parser.md) | open | M | `Parser::parse_statement(&str) -> Result<…>` entry that runs both passes on a single statement, persists `data` + `database`, and recovers gracefully from incomplete input (so multi-line blocks work).  Two-pass model adapted: first pass registers any new top-level defs; second pass parses + codegens the statement body. |
 | 3 | [03-state-reset-and-append.md](03-state-reset-and-append.md) | open | MH | (a) Make `state.bytecode` appendable across REPL inputs — replace `Arc<Vec<u8>>` with a per-statement segment registry indexed by entry-point.  (b) `State::reset_for_repl()` clears stack/call-stack but preserves `database` + already-defined fns.  (c) Const-store + string-from-const-store handling across statements (each statement's literals join the existing const store, no resets). |
 | 4 | [04-repl-shell.md](04-repl-shell.md) | open | M | Interactive `loft>` prompt.  `rustyline`-backed line editor with history.  Multi-line mode for blocks.  Each input dispatches to phase-2 parser + phase-3 incremental execution.  Result printing per loft type (integers, strings, structs).  Error recovery — REPL never crashes on user error.  `:quit`, `:reset`, `:help` builtins.  WASM browser-playground variant deferred to phase 6. |
@@ -136,7 +136,7 @@ playground, IDE integration).
 
 ## Ground rules
 
-Inherits from [doc/claude/plans/README.md](../../README.md):
+Inherits from [doc/claude/plans/README.md](../README.md):
 
 - Every phase preserves all currently-green tests.
 - No regression-now-fix-later trades.
