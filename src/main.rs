@@ -5225,26 +5225,48 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     break 'native;
                 }
             };
+            let status = output.status;
+            let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
+            // Classify a compile failure caused by the native TOOLCHAIN/cache, not
+            // by loft codegen: a stale cached rlib after a `rustc`/`rustup update`
+            // (E0514 "compiled by an incompatible version", E0460 "possibly newer
+            // version" — the common case, rlibs are SVH-locked to one rustc), the
+            // rand_core/cargo-cache staleness, an unresolvable loft/library crate
+            // (E0463 — e.g. a distributed bundle ships no rlib), or an rmeta-without-
+            // rlib dep (@P229 G3, an unbuilt package).
+            let crate_resolution_failure = (stderr_utf8.contains("E0460")
+                || stderr_utf8.contains("E0463")
+                || stderr_utf8.contains("E0514"))
+                && (stderr_utf8.contains("rand_core")
+                    || stderr_utf8.contains("possibly newer version of crate")
+                    || stderr_utf8.contains("compiled by an incompatible version")
+                    || stderr_utf8.contains("can't find crate"));
+            let rlib_format_failure =
+                stderr_utf8.contains("required to be available in rlib format");
+            // Turnkey fallback: a DEFAULT-native run (not an explicit `--native`)
+            // that fails ONLY because the native toolchain isn't usable here —
+            // loft's cached rlib is stale after a rustc update, or absent in a
+            // distributed bundle — degrades to the interpreter so the program still
+            // runs.  Keyed on the toolchain/crate failures above, never on arbitrary
+            // compile errors, so a genuine codegen bug still surfaces loudly.
+            // `--native` stays a hard error (explicit request needs the toolchain
+            // set up).  The rustc-not-found (NotFound) arm above is the sibling case.
+            if !status.success()
+                && !native_requested
+                && (crate_resolution_failure || rlib_format_failure)
+            {
+                eprintln!(
+                    "Warning: native toolchain not usable here (cached build stale \
+                     after a rustc update, or loft's runtime library unavailable); \
+                     falling back to interpreter mode. Rebuild loft to restore native."
+                );
+                let _ = std::fs::remove_file(&emit_path);
+                break 'native;
+            }
             // Relay rustc's own output to the user.
             let _ = std::io::Write::write_all(&mut std::io::stderr(), &output.stderr);
             let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
-            let status = output.status;
             if !status.success() {
-                // detect the rand_core / cargo-cache staleness and print a
-                // clear recovery hint instead of a generic codegen-bug message.
-                let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
-                let crate_resolution_failure = (stderr_utf8.contains("E0460")
-                    || stderr_utf8.contains("E0463"))
-                    && (stderr_utf8.contains("rand_core")
-                        || stderr_utf8.contains("possibly newer version of crate")
-                        || stderr_utf8.contains("can't find crate"));
-                // @P229 G3: a transitive native dep (e.g. web's `ureq`/`rustls`
-                // under `--check --lib lib`) resolved its rmeta but not its
-                // rlib — usually the package was never built, so its deps/ has
-                // no `.rlib`.  Dump the same invocation + deps listing so the
-                // missing search path / unbuilt package is visible.
-                let rlib_format_failure =
-                    stderr_utf8.contains("required to be available in rlib format");
                 if crate_resolution_failure || rlib_format_failure {
                     // Print the rustc invocation + the deps directory listing
                     // so the diagnostic shows what was actually attempted.
