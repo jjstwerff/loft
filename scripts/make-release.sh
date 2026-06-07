@@ -24,6 +24,14 @@ cd "$(dirname "$0")/.."
 
 command -v zip >/dev/null || { echo "make-release: 'zip' is required" >&2; exit 1; }
 
+# Hashing command — the per-OS runners that call this each ship a different one:
+# Linux + Git-Bash (Windows) have GNU `sha256sum`; macOS ships `shasum`.  Both
+# print the same `<hash>  <file>` line and accept `-c` to verify, so the bundle's
+# SHA256SUMS / stdlib.manifest come out identical whichever runner built it.
+# Left unquoted at the call sites on purpose so `shasum -a 256` splits into
+# command + args.
+if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
+
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
 HOST=$(rustc -vV | sed -n 's/^host: //p')
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOST")
@@ -34,9 +42,9 @@ mkdir -p "$DIST"
 # lines, so a runtime / install can verify the stdlib it loads matches the release.
 write_stdlib_manifest() {  # $1 = bundle root
   local out="$1/stdlib.manifest"
-  ( cd "$1" && sha256sum default/*.loft ) > "$out"
+  ( cd "$1" && $SHA256 default/*.loft ) > "$out"
   local combined
-  combined=$(sha256sum "$out" | cut -d' ' -f1)
+  combined=$($SHA256 "$out" | cut -d' ' -f1)
   echo "combined  $combined" >> "$out"
 }
 
@@ -84,13 +92,14 @@ The standard library lives in \`default/\` next to \`bin/\` — keep them togeth
 - Reference:   \`loft-reference.pdf\`
 - Examples:    \`examples/\` (run each with \`--interpret\`)
 
-Verify this download: \`sha256sum -c SHA256SUMS\` (and the stdlib via \`stdlib.manifest\`).
+Verify this download: \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c
+SHA256SUMS\`), and the stdlib via \`stdlib.manifest\`.
 QS
 
   write_stdlib_manifest "$stage"
-  ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs sha256sum > SHA256SUMS )
+  ( cd "$stage" && find . -type f ! -name SHA256SUMS | sort | sed 's|^\./||' | xargs $SHA256 > SHA256SUMS )
 
   ( cd "$DIST" && rm -f "$name.zip" && zip -qr "$name.zip" "$name" )
-  ( cd "$DIST" && sha256sum "$name.zip" > "$name.zip.sha256" )
+  ( cd "$DIST" && $SHA256 "$name.zip" > "$name.zip.sha256" )
   echo ">> $DIST/$name.zip  ($(du -h "$DIST/$name.zip" | cut -f1))"
 done

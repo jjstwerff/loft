@@ -18,97 +18,9 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
-### Relative file paths are now program-relative — portable "program + assets" bundles
-
-A relative file path — `file("assets/font.ttf")`, `read_file("data.bin")`,
-`delete("out.tmp")` — now resolves against **the program's own directory** (the
-source dir under `--interpret`, the executable's dir under `--native`), not the
-process working directory.  An asset addressed relative to your program loads no
-matter where the program is launched from:
-
-```loft
-f = file("assets/level1.dat");   // beside the program, wherever it runs from
-```
-
-This is what #255 needed: a bundled font worked from the source tree but vanished
-under `--native` (which runs from a temp dir), because the path resolved against
-the cwd.  **Absolute paths are never rewritten.**  Resolution is uniform across
-`file()`, `exists()`, `read_file`/`write_file`, the `File` methods,
-`delete`/`move`/`mkdir`, and image loads.
-
-**CLI tools opt back into cwd** with a one-line file-top directive — a
-*user-supplied* relative path then resolves against the working directory:
-
-```loft
-#cwd
-fn main(args: vector<text>) { data = read_file(args[1]); }
-```
-
-Per-invocation, `LOFT_PATHS=program` / `LOFT_PATHS=cwd` overrides both.
-`source_dir()` returns the anchor and now works under `--native` (was empty
-before).
-
-**Breaking change** — a program that read or wrote a relative path expecting the
-*working directory* now needs `#cwd` at the top.  The in-tree corpus that did so
-(13 file-I/O tests) was migrated in this release.
-
-### Faster startup, automatically — the program cache is on by default
-
-Running the same program again is now **~3× faster to start**: the first
-run caches the fully-parsed program (the standard library, every library
-you `use`, and your script) next to your other caches, and later runs of
-the unchanged program skip parsing entirely.  It just works — no flag to
-set.  If anything the program reads changes, the cache notices and
-re-parses, so you never get a stale result.
-
-- **Turn it off** with `LOFT_NO_CACHE=1` (e.g. for one-shot batch jobs
-  where the first-run save isn't worth it).
-- **Cap its size** with `LOFT_CACHE_MAX_MB` (default 512 MiB); the oldest
-  bundles are evicted past the limit.
-- It automatically stays **off inside `cargo run` / `cargo test`**, so
-  building the compiler never serves a stale parse.
-
-### File `+=` is now append-only — and `file.sync()` lets you flush
-
-`f += value` now **appends** to the end of the file, matching how
-`vector += [elem]` and `text += "more"` work on the other collection
-types.  Earlier writes are preserved when you re-open the file:
-
-```loft
-{f = file("log.txt"); f += "first\n";  f.sync(); }
-{f = file("log.txt"); f += "second\n"; f.sync(); }
-{f = file("log.txt"); f += "third\n";  f.sync(); }
-// Result: 19 bytes — "first\nsecond\nthird\n", not just "third\n".
-```
-
-Use `f.sync()` between log records or block boundaries to guarantee
-the buffered bytes have landed on disk before the next write is
-issued.  Returns `true` on success; on `Directory` / `NotExists` the
-call short-circuits to `false`.
-
-**Breaking change** — code that relied on `f += …` truncating the file
-on first re-open now needs to call `f.set_file_size(0)` (or
-`f#size = 0`) explicitly before the first write.  Updated call sites
-in this release: `tools/audience-demo/single_port_server.loft`,
-`lib/world/src/world.loft`, `lib/graphics/src/glb.loft`,
-`scripts/build-playground-examples.loft`.  Explicit offsets via
-`f#next = N` still overwrite at offset `N`, so the snapshot idiom
-(fixed-slot headers, overwrite-in-place) keeps working.
-
-### Interpreter no longer corrupts memory on deep recursion
-
-The interpreter's value stack now grows on demand.  Previously it was
-a fixed 8 KB buffer that never expanded, so a program that nested
-function calls deeply enough (roughly 40+ frames carrying a handful of
-locals) would silently write past the buffer and corrupt the heap —
-usually surfacing as a confusing "double free or corruption" abort
-*after* the program had finished printing its output.  Deeply
-recursive interpreted programs now run correctly (the `--native`
-backend was never affected, as it uses the real machine stack).
-
 ---
 
-## 0.8.5 — Language Maturity
+## 0.8.5 — 2026-06-07 — Language Maturity
 
 This release is about the language itself getting solid.  Closures finally
 work the way you'd expect, bounded generics carry types correctly through
@@ -295,6 +207,94 @@ html = markdown::render(source, "/tag/", "/img/", "")
   as the prioritization view.
 - Every PROBLEMS.md row now self-tags with `**@P<n>**` so the
   index unambiguously links each row to its references.
+
+### Relative file paths are now program-relative — portable "program + assets" bundles
+
+A relative file path — `file("assets/font.ttf")`, `read_file("data.bin")`,
+`delete("out.tmp")` — now resolves against **the program's own directory** (the
+source dir under `--interpret`, the executable's dir under `--native`), not the
+process working directory.  An asset addressed relative to your program loads no
+matter where the program is launched from:
+
+```loft
+f = file("assets/level1.dat");   // beside the program, wherever it runs from
+```
+
+This is what #255 needed: a bundled font worked from the source tree but vanished
+under `--native` (which runs from a temp dir), because the path resolved against
+the cwd.  **Absolute paths are never rewritten.**  Resolution is uniform across
+`file()`, `exists()`, `read_file`/`write_file`, the `File` methods,
+`delete`/`move`/`mkdir`, and image loads.
+
+**CLI tools opt back into cwd** with a one-line file-top directive — a
+*user-supplied* relative path then resolves against the working directory:
+
+```loft
+#cwd
+fn main(args: vector<text>) { data = read_file(args[1]); }
+```
+
+Per-invocation, `LOFT_PATHS=program` / `LOFT_PATHS=cwd` overrides both.
+`source_dir()` returns the anchor and now works under `--native` (was empty
+before).
+
+**Breaking change** — a program that read or wrote a relative path expecting the
+*working directory* now needs `#cwd` at the top.  The in-tree corpus that did so
+(13 file-I/O tests) was migrated in this release.
+
+### Faster startup, automatically — the program cache is on by default
+
+Running the same program again is now **~3× faster to start**: the first
+run caches the fully-parsed program (the standard library, every library
+you `use`, and your script) next to your other caches, and later runs of
+the unchanged program skip parsing entirely.  It just works — no flag to
+set.  If anything the program reads changes, the cache notices and
+re-parses, so you never get a stale result.
+
+- **Turn it off** with `LOFT_NO_CACHE=1` (e.g. for one-shot batch jobs
+  where the first-run save isn't worth it).
+- **Cap its size** with `LOFT_CACHE_MAX_MB` (default 512 MiB); the oldest
+  bundles are evicted past the limit.
+- It automatically stays **off inside `cargo run` / `cargo test`**, so
+  building the compiler never serves a stale parse.
+
+### File `+=` is now append-only — and `file.sync()` lets you flush
+
+`f += value` now **appends** to the end of the file, matching how
+`vector += [elem]` and `text += "more"` work on the other collection
+types.  Earlier writes are preserved when you re-open the file:
+
+```loft
+{f = file("log.txt"); f += "first\n";  f.sync(); }
+{f = file("log.txt"); f += "second\n"; f.sync(); }
+{f = file("log.txt"); f += "third\n";  f.sync(); }
+// Result: 19 bytes — "first\nsecond\nthird\n", not just "third\n".
+```
+
+Use `f.sync()` between log records or block boundaries to guarantee
+the buffered bytes have landed on disk before the next write is
+issued.  Returns `true` on success; on `Directory` / `NotExists` the
+call short-circuits to `false`.
+
+**Breaking change** — code that relied on `f += …` truncating the file
+on first re-open now needs to call `f.set_file_size(0)` (or
+`f#size = 0`) explicitly before the first write.  Updated call sites
+in this release: `tools/audience-demo/single_port_server.loft`,
+`lib/world/src/world.loft`, `lib/graphics/src/glb.loft`,
+`scripts/build-playground-examples.loft`.  Explicit offsets via
+`f#next = N` still overwrite at offset `N`, so the snapshot idiom
+(fixed-slot headers, overwrite-in-place) keeps working.
+
+### Interpreter no longer corrupts memory on deep recursion
+
+The interpreter's value stack now grows on demand.  Previously it was
+a fixed 8 KB buffer that never expanded, so a program that nested
+function calls deeply enough (roughly 40+ frames carrying a handful of
+locals) would silently write past the buffer and corrupt the heap —
+usually surfacing as a confusing "double free or corruption" abort
+*after* the program had finished printing its output.  Deeply
+recursive interpreted programs now run correctly (the `--native`
+backend was never affected, as it uses the real machine stack).
 
 ## 0.8.4 — 2026-04-24 — Awesome Brick Buster
 
@@ -641,7 +641,9 @@ The core language, in one place.
 
 ## Version comparison links
 
-- [Unreleased vs 0.8.3](https://github.com/loft-lang/loft/compare/v0.8.3...main)
+- [Unreleased vs 0.8.5](https://github.com/loft-lang/loft/compare/v0.8.5...main)
+- [0.8.5](https://github.com/loft-lang/loft/compare/v0.8.4...v0.8.5)
+- [0.8.4](https://github.com/loft-lang/loft/compare/v0.8.3...v0.8.4)
 - [0.8.3](https://github.com/loft-lang/loft/compare/v0.8.2...v0.8.3)
 - [0.8.2](https://github.com/loft-lang/loft/compare/v0.8.0...v0.8.2)
 - [0.8.0](https://github.com/loft-lang/loft/compare/v0.1.0...v0.8.0)
