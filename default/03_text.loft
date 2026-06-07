@@ -140,9 +140,9 @@ pub fn is_control(self: character) -> boolean;
 #pure
 // Joins parts with sep between each consecutive pair. Returns "" for an empty vector.
 // Use to build comma-separated lists, path segments, or any delimited output.
-pub fn join(parts: vector < text >, sep: text) -> text {
+pub fn join(self: vector < text >, sep: text) -> text {
   result = "";
-  for p in parts {
+  for p in self {
     if !p#first {
       result += sep;
     }

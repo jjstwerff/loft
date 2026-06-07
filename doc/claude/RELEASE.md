@@ -325,9 +325,51 @@ manually after completing the validation checklist below.
 
 ## Pre-Release Documentation Review
 
-Run these steps before tagging a release.  They are manual; treat each as a gate item.
+Run these steps before tagging a release.  **They are advisory, not blocking** —
+only the [Safety gate](#safety-gate--blocks-every-release) (crashes / memory / leaks
+/ test integrity) blocks a release.  A doc-quality finding must **never** hold a bug
+fix that unblocks users.  The lints get their teeth elsewhere: a library earns the
+registry **`verified`** mark only with clean lints, but it **releases and installs
+regardless**.  Same rule as `lint_comments.sh` — advisory by design, never fails CI.
+
+### 0 — User-visual documentation review (stdlib API + guides + comparison)
+
+The clear, **advisory** review of everything a *programmer* reads: the stdlib API
+reference, the guide pages, the comparison/perf pages, and the **flags & routines**
+(the `make help` block and CLI flags).  It is built to neither
+**gloss** (the tool visits every unit — page, example, symbol, claim — so nothing is
+skimmed) nor be **diff-scoped** (every check runs over the WHOLE corpus, so a stale
+remark from any past release surfaces now, not only what this release touched).  Run
+it every release to *see* the state and fix what's cheap — it never blocks the tag.
+Check definitions: [API_SURFACE.md § S7](API_SURFACE.md).
+
+| # | Check | Command | Status |
+|---|---|---|---|
+| 0a | **Stdlib API surface** — no missing docs, no doc-quality (plan-tag/history) violations, no duplicate `pub fn`s | `scripts/api_lint.py --check default/*.loft` → `0 active` | **[now]** |
+| 0b | **Guide-page code runs** — every example in `tests/docs/*.loft` executes on both backends (they are tests) | `make test` (the `docs` suite) | **[now]** |
+| 0c | **No stale language in prose** — temporal/hedge words (`currently`, `planned`, `for now`, `not yet`, `TODO`, `Qn`) in guide + comparison prose; each removed or justified | `api_lint --check` over the doc corpus | **[build]** — fallback: `grep -rnEi '(currently\|planned\|for now\|not yet\|TODO\|coming soon)' tests/docs/*.loft doc/*.md` |
+| 0d | **References resolve** — every `` `make <target>` `` / `--flag` named in prose is a real Makefile target / CLI flag; ([build]) every function/type/symbol too | `doc_review` (target+flag resolution) | **[now]** targets/flags · **[build]** API symbols |
+| 0g | **Flags & routines** — the `make help` block is split into clear routine groups; CLI flags grouped; no oversized undivided block | `doc_review` (corpus E, sections) | **[now]** |
+| 0e | **Capability & comparison claims** — negative claims ("no way to X") and the `00-vs-*`/`00-performance` tables rot when *other* code changes; reviewed via a per-page content-hash ratchet (re-surfaced only when the page changed, an example broke, a symbol vanished, or on a fixed every-N-release cadence) | doc-review baseline | **[build]** — fallback: manual review of `doc/00-vs-rust.html`, `doc/00-vs-python.html`, `doc/00-performance.html` + capability statements |
+| 0f | **Regenerate + eyeball** — `gendoc` completes with no warnings; spot-check pages render | `cargo run --bin gendoc` | **[now]** |
+
+**Why it won't gloss:** the unit is *page × (each example, each symbol, each listed
+claim)* — the tool lists every one and a red item can't be skipped silently.
+**First run flags everything** (empty baseline), forcing one complete pass over the
+whole surface; thereafter the ratchet re-surfaces only what changed or is scheduled,
+so coverage stays total without re-reading unchanged, still-valid prose.
+
+**Current stdlib baseline (0a):** 36 findings (15 missing docs + 21 doc-quality),
+tracked by the tool (`scripts/api_lint.py -c`) — a burn-down **goal**, not a release
+precondition (loft's own findings never block loft's release).
 
 ### Deferred for pre-external-developer releases (2026-05-15)
+
+Step 0's tooled checks (0a, 0b, 0f, and the auto parts of 0c/0d once built) run every
+release as **advisory** signals — they surface silent-wrong content (e.g. "no way to
+read raw bytes" while `byte_at` exists) regardless of external users, but like gendoc
+they *inform* the release, they do not *block* it.  Only the subjective judgment in
+0e and step 7 (topic flow) waits for external signal.
 
 Until the project has regular external-developer interactions
 that exercise the user-facing examples, **steps 5, 6, 7, and
@@ -393,6 +435,9 @@ Helpful command: `grep -rn 'src/' doc/claude/` and cross-check against `ls src/`
 Read through any doc/claude/ file that has grown since the previous release and identify passages that are longer than necessary (e.g. multi-paragraph context that can be reduced to a bullet list, repeated caveats, implementation notes already captured in CHANGELOG.md).  Shorten these in place.
 
 ### 5 — Validate user documentation against this release
+
+> The corpus-wide checks here are now the **step 0** gate (0a–0e).  This step
+> remains the *changelog-driven* cross-check: that each shipped change is reflected.
 
 For each feature and bug-fix entry in CHANGELOG.md under `[Unreleased]`:
 - Find the corresponding section in the HTML reference (a file in `tests/docs/*.loft` or `doc/`).

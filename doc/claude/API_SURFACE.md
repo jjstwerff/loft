@@ -36,6 +36,7 @@ applied at the **named-API** level: F guards the *syntax*, this guards the
 | **S4** | **No footguns** | Two adjacent params of the same type silently swap (the textbook case: C's `memset(s, c, n)` — value and count both `int`); a partial function with no bounding error returns garbage. |
 | **S5** | **Names express intent, consistently; no implementation leak** | One spelling per concept (`_to_text` everywhere, never sometimes `_to_string`); the name predicts the behaviour (not C's `strcmp()==0`-means-equal). And an **implementation constraint must never name the API** — C's `creat` lost its `e` to a 6-char linker limit, permanently. |
 | **S6** | **No brittle setup, no hidden state** | A required `init()` before `use()`, a global one call sets and another reads, a constructor that returns a half-built-but-usable object — the user must reconstruct an unseen setup contract, and getting it wrong fails *silently*. |
+| **S7** | **Docs don't go stale** | A doc that's present and clean but describes behaviour the code no longer has is *silent-wrong* — the worst kind. Bind docs to code: examples run, referenced symbols resolve, rot-prone language is flagged. Spans the `.loft` API doc comments AND the HTML guide/comparison corpus. |
 
 **S6 is the project's brittleness doctrine, with the user as the second deriver.**
 [GOALS.md § "Don't tolerate re-derivation patterns"](GOALS.md) defines brittleness
@@ -49,6 +50,18 @@ same constructive law — **remove the invariant or make its violation loud**:
 - **make violation loud** — calling out of order is a clear bounding error ("not initialized — call `init()` first"), never silent-wrong.
 
 A library passes S6 when there is **no usage sequence whose violation is silent**.
+
+**S7 is the staleness lens — and it is itself a silent-failure invariant**
+("the doc matches the code" is a model-matches-reality claim, like [Goal E](GOALS.md)).
+Presence/hygiene checks (S3/S3q) do *not* catch a clean-but-wrong doc; only binding
+the doc to the code does:
+- **examples run** — extract every code example (a doc comment, or a guide page) and execute it on both backends; behavioural drift fails loudly. loft already doctests its guide pages (`tests/docs/*.loft` are tests); the gap is the `default/*.loft` API doc comments.
+- **references resolve** — every function/type/symbol a doc names still exists in the API; likewise every `` `make <target>` `` / `--flag` in prose resolves to a real Makefile target / CLI flag (built in `doc_review`; catches the `make index-gh`-style drift). The flags & routines surface (the `make help` block, CLI flags) is itself part of the reviewed corpus and split into clear sections.
+- **rot-prone language flagged** — temporal/hedge words (`currently`, `planned`, `for now`, `not yet`, `TODO`) are staleness magnets; flag for removal or justification.
+- **fault / capability claims anchored + rechecked** — a limitation claim ("not supported", "no way to X") is the worst rot: a fix lands *elsewhere* with no local trigger, so the claim never dies. `doc_review` flags an **unanchored** fault claim (cite a live `#issue` / `INCONSISTENCIES` ref so the tracker's *closure* becomes the trigger to revisit) and re-surfaces claim pages on a version cadence. The **vs-Rust/Python comparison pages**, which have nothing to anchor to, rely on the cadence alone — re-verified every release.
+
+The per-release application of S7 across the whole user-visual corpus (stdlib +
+guides + comparison pages) is [RELEASE.md § 0 — User-visual documentation gate](RELEASE.md).
 
 **The overload caveat (load-bearing).** Raw name-collision is *not* the signal —
 a scan of today's stdlib finds 32 names defined more than once, and **nearly all
@@ -83,6 +96,10 @@ enforce what fails silently, humans judge what needs taste.
 | Footgun semantics (partial fn w/o bounding error, silent-wrong) | S4 | `[review]` |
 | Setup-order dependency: encoded in types, or merely documented? Omission loud or silent? | S6 | `[review]` |
 | Does the name + doc actually express intent | S3/S5 | `[review]` |
+| Doc examples execute on both backends (doctest) | S7 | `[auto]` |
+| Symbols named in a doc still resolve in the API | S7 | `[auto]` |
+| Temporal/hedge language in user-facing prose | S7 | `[auto]` |
+| Capability / negative claims still hold | S7 | `[review]` (scheduled recheck) |
 
 **Baseline reality** (stdlib scan, 2026-06-07): **44 of 146** user-facing
 functions have no doc comment; 0 confusable-by-underscore clusters; 32
@@ -114,12 +131,14 @@ what S6 prescribes — which is why the goals push toward good engineering, not 
 - **The `_r` variants** (`strtok_r`, `localtime_r`) are C *confessing* S6: the fix was always "take the state as a parameter." The `_r` suffix **is** the doctrine, retrofitted.
 - **Thread-local `errno`**, **`calloc`'s `count × size` overflow check**, **`qsort`/`bsearch`** (generic algorithms with no generics), and **freestanding minimalism** are all real virtues our goals must not trample.
 
-**The irreversibility argument — why the gate must be pre-publication.** C carried
+**The irreversibility argument — why the check must run pre-publication.** C carried
 `gets` from 1978 to its C11 removal in **2011**. You cannot un-ship an API; the only
-affordable time to catch an Sn violation is *before* the first release. That is the
-entire reason `api-lint` runs as a gate and the registry `verified` mark is withheld
-until a library passes — the same logic [Goal F](GOALS.md) uses for syntax (once
-ceremony ships, it can't be removed).
+affordable time to catch an Sn violation is *before* the first release. That is why
+`api-lint` runs every release as an **advisory** check (it never blocks — a lint must
+not hold a bug fix) and the registry **`verified`** mark is withheld until a library
+passes. The teeth are the badge, not the build — same shape as [Goal F](GOALS.md)'s
+stance on syntax (once ceremony ships, it can't be removed), administered without
+blocking anyone's release.
 
 ## What we need to implement
 

@@ -26,9 +26,17 @@ that fail silently; humans judge the things that need taste (legibility, fun).
 
 ## How "verified" is administered
 
-1. **`[auto]` half** — the library's `library-ci.yml` runs it on every push (both
-   backends, gold, deterministic package, `loft.toml` validity, naming, lifecycle
-   stubs). The chunk repo's green CI is the record.
+**The lints never block a release.** A library releases and installs regardless of
+api_lint / doc_review findings — only correctness (the test suite) can fail its CI.
+The **`verified` mark is the only place clean lints are required**: it gates the
+*badge*, not the library's existence. This keeps a doc-quality finding from ever
+holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI).
+
+1. **`[auto]` half** — the library's `library-ci.yml` runs the tests as a hard gate
+   (both backends, gold, deterministic package, `loft.toml` validity, naming,
+   lifecycle stubs), and runs api_lint / doc_review **advisory** (`continue-on-error`)
+   so findings are visible but non-blocking. Clean lints are required to *grant*
+   `verified`, checked at the registry PR — not to merge or release.
 2. **`[review]` half** — judged once during the **registry PR** (the human gate
    that already exists). The reviewer records the result in the package's
    `index.json` entry, next to `yanked`:
@@ -78,11 +86,21 @@ that fail silently; humans judge the things that need taste (legibility, fun).
 - [ ] `[auto]` `loft install <name>` resolves → verifies signature → installs, end-to-end.
 - [ ] `[review]` README is **legible on contact**: what it's for + a runnable first example, in the first screen.
 
-### API surface quality — `[auto]` + `[review]` (see [API_SURFACE.md](API_SURFACE.md))
+### API surface quality — `[auto]` + `[review]` (see [API_SURFACE.md](API_SURFACE.md); tool: `scripts/api_lint.py --check <lib>`)
 - [ ] `[auto]` No accidental duplicates (same name **and** signature), no confusable-name clusters, no asymmetric overload sets.
 - [ ] `[auto]` Every `pub fn` / `pub struct` documented; naming consistent (one spelling per concept).
 - [ ] `[review]` No redundant "two ways to do one job"; no same-type-param swap footguns; names express intent.
 - [ ] `[review]` No brittle setup / hidden state: no usage sequence whose violation is silent — a setup-order contract is encoded in the types, eliminated, or a loud error (never silent-wrong).
+
+### Documentation structure & section review — `[auto]` + `[review]` (tool: `scripts/doc_review.py <lib>`)
+The library is reviewed the **same way as the stdlib** — `doc_review` enumerates the
+library's own internal sections (`// --- Section ---` dividers; README `##` headings)
+and checks each as a unit. This reuses the structure the docs already have, so the
+review can't gloss (every section is a line) and a section signed off stays signed
+off until *its* text changes (content-hash ledger).
+- [ ] `[review]` The public API is **split into clear sections** — each a coherent unit a user can navigate in the rendered docs *and* a reviewer can sign off. No catch-all `(intro)` blob holding the real API. `doc_review` **red-flags any section with ≥20 public items** (`MAX_SECTION`, tunable) as too big to review or scan — split it into sub-sections.
+- [ ] `[auto]` `scripts/doc_review.py <lib>` → every section cleared: **auto** (api_lint clean + no temporal/hedge language) and **review** (signed off per section).
+- [ ] `[review]` No stale docs (see [API_SURFACE.md § S7](API_SURFACE.md)): examples run, referenced symbols resolve, no `currently`/`planned`/`for now`/`TODO` language.
 
 ### Documentation quality — `[review]` (see [DOC_QUALITY.md](DOC_QUALITY.md))
 - [ ] README: purpose + a copy-paste quick-start + the "fun-on-pickup" first path.
