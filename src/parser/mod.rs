@@ -905,16 +905,31 @@ impl Parser {
     /// [`ParseResult::Error`] (with `data` rolled back) on a parse error, or
     /// [`ParseResult::Ready`] with the new definition's number on success.
     ///
-    /// Increment 2 handles top-level definitions (`struct`/`enum`/`fn`/`type`).
-    /// Bare expressions / assignments (the `__repl_session` local-persistence
-    /// path) arrive in a later increment.
+    /// A top-level definition (`struct`/`enum`/`fn`/`type`/…) is parsed as-is.
+    /// Any other input (an expression, a call, an assignment) is wrapped in a
+    /// synthetic runnable `fn repl_<n>()` so it parses and can be executed;
+    /// `entry_def_nr` then points at that wrapper.  Locals declared in such a
+    /// statement do NOT yet persist across inputs — the `__repl_session`
+    /// local-persistence path is the remaining increment, paired with phase 03's
+    /// runtime that keeps the session instance alive.
     pub fn parse_statement(&mut self, input: &str) -> ParseResult {
         if Self::statement_incomplete(input) {
             return ParseResult::NeedMore;
         }
         let pre_defs = self.data.definitions();
         let pre_diag = self.diagnostics.entries().len();
-        self.parse_str(input, "<repl>", false);
+        let is_def = Self::starts_top_level_def(input);
+        // The wrapper's name is keyed on the pre-call def count, which is
+        // monotonic across successful statements (each commit adds ≥1 def), so
+        // it never collides; a rolled-back attempt truncates `definitions` back
+        // to `pre_defs`, freeing the number for the next statement.
+        let wrapper = format!("n_repl_{pre_defs}");
+        if is_def {
+            self.parse_str(input, "<repl>", false);
+        } else {
+            let src = format!("fn repl_{pre_defs}() {{\n{input}\n}}");
+            self.parse_str(&src, "<repl>", false);
+        }
         // Only diagnostics this statement produced — `Diagnostics::level` is
         // monotonic, so a prior error would otherwise mask a now-clean parse.
         let produced: Vec<DiagEntry> = self.diagnostics.entries()[pre_diag..].to_vec();
@@ -922,12 +937,29 @@ impl Parser {
             self.data.rollback_to(pre_defs);
             return ParseResult::Error(produced);
         }
-        let entry_def_nr = if self.data.definitions() > pre_defs {
-            self.data.definitions() - 1
-        } else {
+        // A definition isn't executed (nothing to run); a wrapped expression
+        // returns its synthetic fn, resolved by name so a lambda appended inside
+        // the body can't be mistaken for the entry point.
+        let entry_def_nr = if is_def {
             u32::MAX
+        } else {
+            self.data.def_nr(&wrapper)
         };
         ParseResult::Ready { entry_def_nr }
+    }
+
+    /// True if `input` opens with a top-level definition keyword, so it can be
+    /// parsed directly rather than wrapped in a synthetic REPL fn.
+    fn starts_top_level_def(input: &str) -> bool {
+        let word: String = input
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        matches!(
+            word.as_str(),
+            "struct" | "enum" | "fn" | "type" | "pub" | "use" | "interface" | "typedef" | "const"
+        )
     }
 
     // ********************

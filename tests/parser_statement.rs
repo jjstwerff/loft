@@ -143,3 +143,48 @@ fn later_statement_sees_earlier_def() {
     );
     assert!(p.data.def_nr("n_px") != u32::MAX);
 }
+
+// ── parse_statement (increment 3): bare expressions wrapped in a synthetic fn ──
+
+/// A bare expression parses (wrapped in a runnable synthetic fn) and returns a
+/// real entry to execute — not `u32::MAX`.
+#[test]
+fn bare_expression_wraps_into_runnable_fn() {
+    let mut p = session();
+    match p.parse_statement("1 + 2") {
+        ParseResult::Ready { entry_def_nr } => {
+            assert!(
+                entry_def_nr != u32::MAX,
+                "expression should yield a runnable entry"
+            );
+        }
+        other => panic!("expected Ready, got {other:?}"),
+    }
+}
+
+/// A call expression referencing a fn from a prior statement wraps + parses.
+#[test]
+fn call_expression_after_def() {
+    let mut p = session();
+    assert!(matches!(
+        p.parse_statement("fn dbl(x: integer) -> integer { x + x }"),
+        ParseResult::Ready { .. }
+    ));
+    match p.parse_statement("dbl(21)") {
+        ParseResult::Ready { entry_def_nr } => assert!(entry_def_nr != u32::MAX),
+        other => panic!("expected Ready, got {other:?}"),
+    }
+}
+
+/// A malformed expression rolls back cleanly (def count unchanged).
+#[test]
+fn bad_expression_rolls_back() {
+    let mut p = session();
+    let pre = p.data.definitions();
+    assert!(matches!(p.parse_statement("1 2 3"), ParseResult::Error(_)));
+    assert_eq!(
+        p.data.definitions(),
+        pre,
+        "rollback failed after bad expression"
+    );
+}
