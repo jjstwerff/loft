@@ -1,0 +1,3 @@
+// A library exporting only `px`; the `Point` type is intentionally NOT `pub`.
+struct Point { x: integer, y: integer }
+pub fn px(p: Point) -> integer { return p.x; }

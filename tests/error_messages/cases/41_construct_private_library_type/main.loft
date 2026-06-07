@@ -1,0 +1,7 @@
+// @P271: constructing a non-`pub` library type must give a clear "is private"
+// diagnostic, not a baffling `Expect token ;` at the `{`.
+use shapes;
+fn main() {
+  p = Point { x: 3, y: 4 };
+  println("{px(p)}");
+}

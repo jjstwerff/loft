@@ -921,6 +921,41 @@ impl Parser {
                 }
             }
         }
+        // #271 — a brace-construction `Name { … }` of a type that exists in a
+        // `use`d library but is NOT `pub` arrives here unresolved (only pub names
+        // import), so the `{` would otherwise trip a baffling "Expect token ;".
+        // Name the real cause instead.  Pass-2 only, to emit once.
+        // #271 — a brace-construction `Name { … }` of a type that exists in a
+        // `use`d library but is NOT `pub` arrives here unresolved (`use` only
+        // imports pub names), so the `{` would otherwise trip a baffling
+        // "Expect token ;".  Name the real cause and recover by consuming the
+        // balanced `{ … }` so neither pass cascades.  The structural error fires
+        // on pass 1 (before pass 2 runs), so emit there; recover on both passes.
+        if d_nr == u32::MAX && self.lexer.peek_token("{") && self.data.has_private_type(name) {
+            if self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "type '{name}' is private — declare it `pub` to construct it outside its library"
+                );
+            }
+            self.lexer.has_token("{");
+            let mut depth = 1u32;
+            while depth > 0 {
+                let before = self.lexer.peek().position;
+                if self.lexer.has_token("{") {
+                    depth += 1;
+                } else if self.lexer.has_token("}") {
+                    depth -= 1;
+                } else {
+                    self.lexer.cont();
+                }
+                if self.lexer.peek().position == before {
+                    break; // no forward progress (EOF) — bail rather than spin
+                }
+            }
+            return Type::Unknown(0);
+        }
         Type::Null
     }
 
