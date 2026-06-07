@@ -489,6 +489,36 @@ typst compile doc/loft-reference.typ
 
 Verify that `gendoc` completes without warnings and that the generated HTML files look correct in a browser.  Attach `loft-reference.pdf` to the GitHub release.
 
+### 10 — Per-OS binaries + stdlib checksums → registry
+
+The registry ([PKG_REGISTRY.md](PKG_REGISTRY.md)) is the trusted distribution
+point, so the toolchain itself ships through it — signed, with checksums users
+can verify offline.
+
+- **Build a release `loft` binary per supported target** (per-OS CI runners or a
+  cross toolchain):
+  - `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+  - `x86_64-apple-darwin`, `aarch64-apple-darwin`
+  - `x86_64-pc-windows-msvc`
+  - `cargo build --release --bin loft --target <triple>` (same `--lib --bin loft`
+    rlib caveat as `library-ci.yml.example` if native-compiling is exercised).
+- **Attach each binary to the GitHub release** as `loft-<version>-<triple>(.exe)`.
+- **Checksums:**
+  - sha256 of every binary.
+  - sha256 of the bundled stdlib — a manifest over `default/*.loft` (each file +
+    a combined digest), so a runtime / `loft install` can verify the stdlib it
+    loads matches the release.
+- **Publish to the registry:** add a release entry to the signed `index.json`
+  (`loft-lang/registry`) carrying, per target, the binary URL + sha256 + size, and
+  the stdlib-manifest digest; re-sign (`index.json.sig`, Ed25519) per
+  [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md) / [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).
+  Verify a clean-host `loft install` (or self-update) resolves a binary, checks its
+  signature + sha256, and the stdlib digest matches.
+
+This is `[build]` — the per-OS build matrix + the registry release-entry schema +
+the stdlib-manifest tool do not exist yet (open work; cross-link from
+PKG_REGISTRY.md § Open work).
+
 ---
 
 ## Tooling prerequisites for release verification
