@@ -118,23 +118,45 @@ The move's reference surface is **not only in loft**. The chunk repos
 to sweep its refs. GitHub's redirect covers them during the transition, so this
 is "at leisure", not "or it breaks".
 
-## Order of operations
+## Order of operations — build-and-prove the new, *then* cut over
 
-1. **Transfer** `jjstwerff/loft` → `loft-lang/loft` in the GitHub UI (needs admin
-   on the source + create-repo rights in `loft-lang`). Same for
+Treat this like a big refactor: **build the next version and prove it before you
+touch the live repo.** Crucially, the things you care about — issues, PRs, full
+history, **issue numbers**, stars, watchers — are *relocated* by the transfer, not
+removed (and the old URL redirects), so there is no "delete the old" step for the
+data. The only build-new-first work is the **infrastructure** (workflows, Pages,
+references), and the cut-over itself is a single atomic step that is
+**redirect-safe and reversible** (you can transfer back).
+
+**Phase 0 — build + prove the new infra (loft untouched, zero risk).**
+1. Create `loft-lang/.github` with the reusable `apply`/`strip`/`library-ci`
+   workflows + issue templates + labels.
+2. Set the org Actions permission policy (`issues: write` — see gotchas).
+3. **Prove it** on a *throwaway* `loft-lang` test repo: push a `Fixes #N` branch,
+   confirm the `apply` workflow fires (the prove-coverage step — never trust the
+   workflows until they've fired once on a known-live case).
+4. Prepare the **Pages custom domain** (DNS/CNAME) so the docs URL stays
+   continuous across the cut-over — the one "thing we care about" that does *not*
+   redirect.
+5. Dry-run `scripts/rewrite-org.sh --check`; settle the canonical library-naming
+   map. (No writes; just proves the rewrite is correct.)
+
+**Phase 1 — cut over (one atomic, redirect-safe, reversible step).**
+6. **Transfer** `jjstwerff/loft` → `loft-lang/loft` in the GitHub UI (admin on the
+   source + create-repo rights in `loft-lang`). Same for
    `jjstwerff/loft-registry` → `loft-lang/registry` (rename in the same step).
-2. **Org Actions permissions** — enable `issues: write` (gotchas table) so the
-   label lifecycle keeps working.
-3. **Pages** — set the custom domain (or accept the new URL).
-4. **Collaborators / secrets / branch protection** — re-establish via org teams.
-5. **Reference pass in loft** — `scripts/rewrite-org.sh`; settle the
+
+**Phase 2 — settle on the new location.**
+7. Point Pages at the prepared custom domain; confirm the site is live.
+8. Re-establish collaborators / secrets / branch protection via org teams.
+9. **Reference pass in loft** — `scripts/rewrite-org.sh`; apply the
    library-naming map; verify load-bearing code (`registry.rs`, `main.rs`,
-   `scripts/idx`).
-6. **Cross-repo sweep** — run `rewrite-org.sh` in each chunk repo + consumer;
-   land the fixes in their own commits.
-7. **Move the workflow defaults** — lift `apply`/`strip`/`library-ci` into
-   `loft-lang/.github` as org-default / reusable workflows; thin each repo to a
-   stub or rely on org defaults.
+   `scripts/idx`); commit.
+10. **Cross-repo sweep** — run `rewrite-org.sh` in each chunk repo + consumer;
+    land each in its own commit (redirect covers them meanwhile, so "at leisure").
+
+**Phase 3 — done.** Nothing to *remove*: the data moved. Leave the old name empty
+— do **not** recreate `jjstwerff/loft` (it would shadow the redirect).
 
 ## Verification checklist
 
