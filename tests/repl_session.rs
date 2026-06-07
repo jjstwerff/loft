@@ -56,13 +56,10 @@ fn parse_error_is_reported() {
     assert!(matches!(s.eval("z = 1 2 3"), Eval::Error(_)));
 }
 
-/// KNOWN GAP — full recovery after a parse error.  `parse_str` returns early
-/// (after pass 1) on an error, leaving transient parser/lexer state mid-parse,
-/// so a clean input after an error currently mis-parses.  `data` is rolled back
-/// correctly; making the parser fully re-entrant after an error is the
-/// follow-up.  See plans/12-repl-and-introspection/03-state-reset-and-append.md.
+/// Recovery after a parse error: a clean input still works.  The lexer's
+/// diagnostics are cleared per `parse_str`, so a prior error no longer
+/// re-`fill`s into the parser and poisons the next parse.
 #[test]
-#[ignore = "parser not yet re-entrant after a parse error; tracked in phase-03 doc"]
 fn parse_error_leaves_session_usable() {
     let mut s = session();
     assert!(matches!(s.eval("z = 3"), Eval::Ran));

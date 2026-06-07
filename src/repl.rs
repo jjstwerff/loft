@@ -90,13 +90,10 @@ impl ReplSession {
         // Only this call's diagnostics — `Diagnostics::level` is monotonic.
         let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
         if produced.iter().any(|e| e.level >= Level::Error) {
+            // Roll `data` back to the pre-call state.  The lexer clears its
+            // diagnostics per parse_str, so this error does not leak into the
+            // next input — the session stays usable after a typo.
             self.parser.data.rollback_to(pre_defs);
-            // KNOWN GAP: `parse_str` returns early (after pass 1) on a parse
-            // error, leaving transient parser/lexer state mid-parse, so the NEXT
-            // input can mis-parse — a parse error currently poisons the session.
-            // `data` is rolled back correctly; making the parser fully
-            // re-entrant after an error is a follow-up (a parser-state reset on
-            // the error path).  Tracked in 03-state-reset-and-append.md.
             return Eval::Error(produced);
         }
         self.counter = next;

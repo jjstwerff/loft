@@ -805,6 +805,12 @@ impl Parser {
     /// Only parse a specific string, only useful for parser tests.
     #[allow(dead_code)]
     pub fn parse_str(&mut self, text: &str, filename: &str, logging: bool) {
+        // Start each standalone parse on a fresh lexer.  `restart` resets the
+        // cursor but not the diagnostics or format-mode flags, and
+        // `Diagnostics::level` is monotonic — so reusing the lexer would leak a
+        // prior parse's errors into this one (poisoning REPL re-entrancy: a typo
+        // would make every later input mis-parse).  A new lexer is fully clean.
+        self.lexer = Lexer::default();
         self.first_pass = true;
         self.default = false;
         self.vars.logging = logging;

@@ -60,12 +60,15 @@ a fresh `State` per input (sidesteps the @P381 CONST_STORE re-lock).  `scopes::c
 runs between parse and `byte_code` (else locals get no slot).  Correct for pure
 integer arithmetic (re-running deterministic bindings yields the same value).
 
-**Known gap — parser re-entrancy after an error.** `parse_str` returns early
-(after pass 1) on a parse error, leaving transient parser/lexer state mid-parse,
-so a clean input *after* an error currently mis-parses (a typo poisons the
-session).  `data` rolls back correctly; the fix is a parser-state reset on the
-error path.  `tests/repl_session.rs::parse_error_leaves_session_usable` is
-`#[ignore]`d pending it.
+**Error recovery — FIXED (2026-06-07).** Root cause: the lexer's `restart` /
+`parse_string` reset the cursor but never cleared its `diagnostics`, and
+`Diagnostics::level` is monotonic — so after a parse error, every later
+`parse_str` re-`fill`ed the lexer's *stale* errors into the parser, and the
+session rejected clean input (a typo poisoned the session).  Fix: `parse_str`
+now clears the lexer diagnostics at its start (`Lexer::clear_diagnostics` +
+`Diagnostics::clear`).  A standalone string parse no longer inherits prior
+errors; benefits any repeated `parse_str` user, not just the REPL.
+`tests/repl_session.rs::parse_error_leaves_session_usable` passes.
 
 **Remaining toward the general model.** Non-integer variable types; eliminating
 the re-run via the true stack-resident model (persistent `State` + `byte_code_from`
