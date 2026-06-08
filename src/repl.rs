@@ -20,7 +20,7 @@
 //! refinement sits behind this same `ReplSession` API.
 
 use crate::compile;
-use crate::data::DefType;
+use crate::data::{DefType, Type};
 use crate::diagnostics::{DiagEntry, Level};
 use crate::introspect::{Options, Section};
 use crate::parser::Parser;
@@ -405,6 +405,20 @@ fn process_line<W: Write>(
     Ok(false)
 }
 
+/// Render an `f64` as a loft `float` literal — always with a decimal point so a
+/// whole number like `3` re-parses as `float`, not `integer`.  Leaves fractional
+/// / exponent / `inf` / `NaN` forms untouched.
+fn float_literal(v: f64) -> String {
+    let s = v.to_string();
+    let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
+    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
+    if has_dot_or_exp || !has_digit {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
 /// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
 /// re-reads.  Handles the escapes loft shares with JSON (`"`, `\`, newline, CR,
 /// tab); other characters pass through.  Used by the REPL.X value-snapshot to
@@ -424,6 +438,78 @@ fn escape_loft_text(raw: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Render the return value (read off `state`'s stack top) of type `ret_ty` as an
+/// own-format loft literal — the per-type half of [`ReplSession::capture_binding`].
+/// `name` is the type's loft-source name (for the `show_loft` / enum schema
+/// lookup).  Covers **every** value type:
+///
+/// - **inline** values read at their width and rendered directly: `integer`
+///   (64-bit), `single`, `float`, `boolean`, `character`, `text`, and a simple
+///   enum (an inline 1-based discriminant byte → `Enum.Variant`);
+/// - **`DbRef`-backed heap** values (struct, vector, struct-enum variant): the
+///   return is a 12-byte `DbRef` on the stack top → [`show_loft`] renders the
+///   own-format literal.
+///
+/// `None` only on an unresolved type name (a fallback to source, never reached in
+/// practice for a value the session just produced).
+fn render_capture(state: &mut State, ret_ty: &Type, name: &str) -> Option<String> {
+    match ret_ty {
+        Type::Integer(_) => Some(state.get_stack::<i64>().to_string()),
+        Type::Float => Some(float_literal(*state.get_stack::<f64>())),
+        Type::Single => Some(format!("{}f", *state.get_stack::<f32>())),
+        Type::Boolean => {
+            let v = *state.get_stack::<u8>() != 0;
+            Some(if v { "true" } else { "false" }.to_string())
+        }
+        Type::Character => char::from_u32(*state.get_stack::<u32>()).map(|c| format!("'{c}'")),
+        Type::Text(_) => Some(escape_loft_text(
+            state.get_stack::<crate::keys::Str>().str(),
+        )),
+        // Heap value backed by a `DbRef`: struct, vector, struct-enum variant.
+        // The return is a 12-byte `DbRef` on the stack top → `show_loft` renders
+        // its own-format literal (`P{a:7,b:9}`, `[10,20,30]`, …).  `name` is the
+        // loft-source type name; its schema `tp` comes from `Stores::name`.
+        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+            let tp = state.database.name(name);
+            if tp == u16::MAX {
+                return None;
+            }
+            let db = *state.get_stack::<crate::keys::DbRef>();
+            let mut out = String::new();
+            state.database.show_loft(&mut out, &db, tp);
+            Some(out)
+        }
+        // Simple enum: an inline 1-based discriminant byte → `Enum.Variant`.
+        Type::Enum(_, false, _) => {
+            let tp = state.database.name(name);
+            if tp == u16::MAX {
+                return None;
+            }
+            let disc = *state.get_stack::<u8>();
+            if disc == 0 {
+                Some("null".to_string())
+            } else {
+                Some(format!("{name}.{}", state.database.enum_val(tp, disc)))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Outcome of trying to value-snapshot a binding's RHS (REPL.X capture).
+enum Capture {
+    /// The value was captured — store `name = <this literal>`.
+    Done(String),
+    /// Not capturable (un-inferable type, cap-fn parse failure, unresolved type
+    /// name) and the RHS did **not** fault — fall back to storing the RHS as
+    /// source.
+    Skip,
+    /// The RHS **faulted** while being run to snapshot it — surface the error at
+    /// the binding and store nothing, so the effect ran once and the session is
+    /// not poisoned by a re-running source binding.
+    Failed(Vec<DiagEntry>),
 }
 
 /// Outcome of evaluating one REPL input.
@@ -593,19 +679,25 @@ impl ReplSession {
         if let Some(var) = Self::binding_name(input) {
             // REPL.X value-snapshot — run the RHS once, capture the value, and
             // store the binding as a literal (`name = 42`) so re-running `body`
-            // on every later observe does NOT repeat a side effect.  Falls back
-            // to storing the RHS as source for a non-capturable value or any
-            // failure (those re-run as before — the documented residual).
+            // on every later observe does NOT repeat a side effect.
             let rhs = input.split_once('=').map_or("", |(_, r)| r.trim());
-            if !rhs.is_empty()
-                && let Some(lit) = self.capture_binding(rhs)
-            {
-                let snap = format!("{var} = {lit}");
-                let bound = format!("{}{snap};\n", self.body);
-                if self.compile_generation(&bound, false).is_ok() {
-                    self.body = bound;
-                    self.record_input(&snap); // persist the snapshot, not the RHS
-                    return Eval::Ran;
+            if !rhs.is_empty() {
+                match self.capture_binding(rhs) {
+                    Capture::Done(lit) => {
+                        let snap = format!("{var} = {lit}");
+                        let bound = format!("{}{snap};\n", self.body);
+                        if self.compile_generation(&bound, false).is_ok() {
+                            self.body = bound;
+                            self.record_input(&snap); // persist the snapshot, not the RHS
+                            return Eval::Ran;
+                        }
+                        // (rare) the rendered literal didn't recompile — fall through.
+                    }
+                    // The RHS faulted while we snapshotted it: surface the error at
+                    // the binding and store NOTHING — the effect ran once and no
+                    // re-running source binding can poison later observes.
+                    Capture::Failed(diags) => return Eval::Error(diags),
+                    Capture::Skip => {} // not capturable — fall back to source
                 }
             }
             // Fall back: record the binding as source (validate only).  It is
@@ -687,23 +779,37 @@ impl ReplSession {
     }
 
     /// REPL.X value-snapshot — run a binding's RHS **once**, capture its value,
-    /// and render it as an own-format loft literal.  Returns the literal (so the
-    /// binding can be stored as `name = <literal>`, side-effect-free on every
-    /// later re-run of `body`), or `None` to fall back to storing the RHS as
-    /// source (the binding then re-runs as before — the documented residual).
+    /// and render it as an own-format loft literal so the binding can be stored
+    /// as `name = <literal>` (side-effect-free on every later re-run of `body`).
+    /// Returns a [`Capture`]: `Done(literal)` to store the snapshot, `Failed` if
+    /// the RHS faulted (surface the error, store nothing), or `Skip` if it is not
+    /// capturable (fall back to storing the RHS as source).
     ///
     /// Mechanism: build `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is
     /// the trailing return expression, run it on a throwaway `State`, and read
-    /// the return value off the stack top (the same place `execute_at` reads its
-    /// return).  First cut: `integer` + `text` — the common side-effecting cases
-    /// (`read_line`, `random`, `now`).  Struct/vector/enum render via `show_loft`
-    /// but need their `DbRef` read back from the frame — a deferred follow-up, so
-    /// they stay source (re-run) for now.
-    fn capture_binding(&mut self, rhs: &str) -> Option<String> {
-        let ty = self.infer_type(rhs)?;
-        if ty != "integer" && ty != "text" {
-            return None;
-        }
+    /// the value off the **stack top** — where `execute_at` reads its own return,
+    /// so no new execution entry point.  Dispatch on the value's type:
+    ///
+    /// Dispatch is on the value's exact [`Type`] (in [`render_capture`]) and
+    /// covers **every** type: inline scalars/text/simple-enum rendered directly,
+    /// and `DbRef`-backed heap values (struct, vector, struct-enum) rendered by
+    /// `show_loft` on the returned `DbRef`.  A binding whose RHS isn't a simple
+    /// `<name> = <expr>`, or whose value's type name doesn't resolve, falls back
+    /// to storing the RHS as source (re-run).
+    fn capture_binding(&mut self, rhs: &str) -> Capture {
+        // `Type::show` is a debug form: it appends a dep-tracking list
+        // (`vector<integer>["__vdb_1"]`) and wraps a struct as `ref(P)`.  The
+        // cap-fn return type and the `show_loft` schema lookup both need the
+        // loft-SOURCE name — so drop the `[...]` dep list, then unwrap `ref(...)`.
+        let Some(ty_show) = self.infer_type(rhs) else {
+            return Capture::Skip;
+        };
+        let base = ty_show.split('[').next().unwrap_or(&ty_show);
+        let ty = base
+            .strip_prefix("ref(")
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(base)
+            .to_string();
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
@@ -715,26 +821,27 @@ impl ReplSession {
             .any(|e| e.level >= Level::Error);
         if failed {
             self.parser.data.rollback_to(pre_defs);
-            return None;
+            return Capture::Skip;
         }
         self.counter = next;
+        // The value's exact type drives the stack read (the inferred type
+        // *string* above is only for the fn signature + the schema lookup).
+        let cap_d = self.parser.data.def_nr(&format!("n_{name}"));
+        let ret_ty = self.parser.data.def(cap_d).returned.clone();
         crate::scopes::check(&mut self.parser.data);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
         state.execute_argv(&name, &self.parser.data, &[]);
-        if state.database.runtime_error.take().is_some() {
+        // The RHS just ran (its side effect happened once).  A fault here is a
+        // real binding error — surface it, don't fall back to source (which would
+        // re-run the fault on every later observe and poison the session).
+        if let Some(err) = state.database.runtime_error.take() {
             self.parser.data.rollback_to(pre_defs);
-            return None;
+            return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let lit = if ty == "integer" {
-            state.get_stack::<i32>().to_string()
-        } else {
-            // `text` return is a `Str`; render a quoted+escaped loft literal.
-            let raw = state.get_stack::<crate::keys::Str>().str().to_string();
-            escape_loft_text(&raw)
-        };
+        let lit = render_capture(&mut state, &ret_ty, &ty);
         self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
-        Some(lit)
+        lit.map_or(Capture::Skip, Capture::Done)
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),

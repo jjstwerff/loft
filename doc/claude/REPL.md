@@ -141,23 +141,24 @@ use; `LOFT_LOG` still works for live execution traces (see
 
 ## How session state works (and its limits)
 
-When you bind a name to a **number or text**, the REPL runs the right-hand side
-**once** and snapshots the value — so a side effect (printing, reading input) in
-the binding happens a single time, however often you read the name later
-(`name = read_line()` prompts once). Bindings of other types — **structs and
-vectors** — aren't snapshotted yet: the REPL replays the statement, so a *pure*
-construction (no side effect) re-runs harmlessly and stays correct.
+When you bind a name to a value, the REPL runs the right-hand side **once** and
+snapshots the value — for **every** type (numbers, text, structs, vectors,
+enums) — so a side effect (printing, reading input) in the binding happens a
+single time, however often you read the name later (`name = read_line()` prompts
+once).
 
 Current limits, with their planned fixes in
 [plans/12-repl-and-introspection/](plans/12-repl-and-introspection/):
 
-- A **side effect in a struct or vector binding's** right-hand side still runs
-  again each time a later line reads it (and on each `:vars`). Number and text
-  bindings are snapshotted, so their effects run once; snapshotting the remaining
-  types is the planned follow-up (REPL.X full-type capture).
+- For a long session the REPL still **re-runs the accumulated bindings** (now all
+  side-effect-free literals) each time you observe a value, so cost grows with
+  session length. It stays *correct* (the literals are pure); the planned fix is
+  the store-resident session that keeps values without replay
+  ([plans/14-store-resident-repl-session/](plans/14-store-resident-repl-session/README.md)).
 - Auto-resume re-runs your bindings rather than restoring their stored values,
   so a non-deterministic result (`random()`, `now()`) is recomputed on resume.
-  Exact value-for-value restore is the same stack-resident model above.
+  Exact value-for-value restore is the same store-resident model
+  ([@PLN14](plans/14-store-resident-repl-session/README.md)).
 
 ## See also
 

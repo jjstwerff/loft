@@ -259,17 +259,98 @@ fn side_effecting_text_binding_runs_once() {
     assert!(out.contains("hi"), "captured text observable: {out:?}");
 }
 
-/// A **struct** binding isn't literal-capturable yet, so it falls back to storing
-/// the RHS as source — still persists and stays usable (the documented residual:
-/// a pure construction re-runs harmlessly).
+/// Heap values — **struct** and **vector** — are captured via `show_loft` on the
+/// `DbRef` return: the RHS runs **once** and the value is preserved on later
+/// observes (no repeat of the side effect).
 #[test]
-fn struct_binding_falls_back_to_source() {
+fn capture_heap_types_run_once() {
     let out = repl(
         &["repl"],
-        "struct P { a: integer, b: integer }\np = P { a: 1, b: 2 }\np.a + p.b\n:quit\n",
+        "struct P { a: integer, b: integer }\n\
+         fn mk() -> P {\n  println(\"mk\");\n  P { a: 7, b: 9 }\n}\n\
+         p = mk()\np.a + p.b\np.a + p.b\n\
+         fn vec() -> vector<integer> {\n  println(\"v!\");\n  [10, 20, 30]\n}\n\
+         w = vec()\nw[2]\nw[2]\n:quit\n",
+    );
+    assert_eq!(
+        out.matches("mk").count(),
+        1,
+        "struct RHS runs once: {out:?}"
+    );
+    assert!(out.contains("16"), "struct value preserved (7+9): {out:?}");
+    assert_eq!(
+        out.matches("v!").count(),
+        1,
+        "vector RHS runs once: {out:?}"
+    );
+    assert!(out.contains("30"), "vector value preserved (w[2]): {out:?}");
+}
+
+// ── CORRECTNESS: the capture-error wart (REPL.X) ─────────────────────────────
+
+/// A binding whose RHS **faults at capture time** must run its side effect
+/// **once** and report the error **at the binding line**, leaving the session
+/// usable.  Today capture *swallows* the fault and falls back to storing the RHS
+/// as source — so the effect repeats on every later observe and the session is
+/// poisoned (each observe re-runs the faulting RHS).  FIXED via the tri-state
+/// `Capture`: a faulting RHS surfaces its error at the binding (`Capture::Failed`)
+/// and stores nothing, so the effect runs once and no source binding re-faults.
+#[test]
+fn erroring_binding_runs_once_and_does_not_poison_session() {
+    let (out, err) = repl_full(
+        &["repl"],
+        "fn bad() -> integer { println(\"fired\"); assert(false, \"boom\"); 42 }\n\
+a = bad()\n9 + 9\n:quit\n",
+    );
+    // The side effect runs exactly once (at the binding), not once per observe.
+    assert_eq!(
+        out.matches("fired").count(),
+        1,
+        "side effect must run once, not repeat: out={out:?} err={err:?}"
+    );
+    // The session stays usable — a later observe still evaluates.
+    assert!(
+        out.contains("18"),
+        "session must stay usable after an erroring binding: out={out:?} err={err:?}"
+    );
+}
+
+/// Typed value-snapshot covers every inline scalar.  The **large integer**
+/// (> 32-bit) is the key case — it round-trips only if capture reads the return
+/// as 64-bit (`integer` is always 64-bit), so this guards against the earlier
+/// `i32` read that truncated big values.
+#[test]
+fn capture_typed_scalars() {
+    let out = repl(
+        &["repl"],
+        "big = 5000000000\nbig\nf = 2.5\nf\nb = true\nb\nc = 'x'\nc\ns = 1.5f\ns\n:quit\n",
+    );
+    assert!(out.contains("5000000000"), "64-bit integer: {out:?}");
+    assert!(out.contains("2.5"), "float: {out:?}");
+    assert!(out.contains("true"), "boolean: {out:?}");
+    assert!(out.contains('x'), "character: {out:?}");
+    assert!(out.contains("1.5"), "single: {out:?}");
+}
+
+/// A simple **enum** value is captured via its inline discriminant byte (read
+/// at width 1, mapped to `Enum.Variant`): the RHS runs **once** and the variant
+/// is preserved.  (Struct/vector capture — `DbRef` returns — is a separate stage;
+/// those still fall back to source, covered by `struct_binding_falls_back_to_source`.)
+#[test]
+fn capture_enum_runs_once() {
+    let out = repl(
+        &["repl"],
+        "enum Color { Red, Green, Blue }\n\
+         fn pick() -> Color {\n  println(\"picked\");\n  Color.Blue\n}\n\
+         c = pick()\nc == Color.Blue\nc == Color.Blue\n:quit\n",
+    );
+    assert_eq!(
+        out.matches("picked").count(),
+        1,
+        "enum RHS runs once (captured): {out:?}"
     );
     assert!(
-        out.contains('3'),
-        "struct binding persists + usable via source fallback: {out:?}"
+        out.contains("true"),
+        "enum variant preserved (Blue): {out:?}"
     );
 }

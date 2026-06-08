@@ -304,27 +304,40 @@ extension:
    `show_loft` to loft code — is deferred to step 4's capture, where it's used.)
 
 **Part II — REPL.X consumes it:**
-4–6. ✅ **Capture + wiring (DONE — scalar + text first cut).**  A simpler capture
-   than the planned `:l`-in-loft route turned out available: build
+4–6. ✅ **Capture + wiring (DONE — every inline type).**  A simpler capture than
+   the planned `:l`-in-loft route turned out available: build
    `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is the trailing return,
    run it on a throwaway `State`, and read the value off the **stack top** —
    exactly where `execute_at` reads its return (`mod.rs:2422`), so **no new
-   execution entry point**.  `ReplSession::capture_binding` (`src/repl.rs`) reads
-   an `integer` (`get_stack::<i32>`) or `text` (`get_stack::<Str>` →
-   `escape_loft_text`) return and renders the literal; `eval`'s binding branch
-   stores `name = <literal>` (and persists *that* snapshot for resume) so re-runs
-   are pure.  **Non-capturable values (struct/vector/enum) fall back to storing
-   the RHS as source** — they re-run, harmless for pure constructions (the
-   residual).  `side_effecting_binding_runs_once` /
-   `side_effecting_text_binding_runs_once` / `struct_binding_falls_back_to_source`
-   pin it; REPL.S resume + persistence unaffected.  Guards green (20 repl / 11
-   session / 684 issues; clippy + fmt clean).
+   execution entry point**.  `eval`'s binding branch then stores
+   `name = <literal>` (and persists *that* snapshot for resume) so re-runs are
+   pure.  `ReplSession::capture_binding` + the free fn `render_capture`
+   (`src/repl.rs`).
 
-   **Deferred follow-up:** full-type capture (struct/vector/enum) via reading the
-   `DbRef` return and `show_loft`-ing it — the serializer (step 3) is built for
-   it; only the typed frame-read remains.  `show_loft`'s runtime `:l` format bit
-   is likewise still unbuilt (this cut renders scalar/text directly in Rust, no
-   `:l` needed).
+   **Typed dispatch — the logical flow.**  `render_capture` matches on the
+   value's exact [`Type`] (read from the capture fn's `returned`), not the type
+   *name*, so each value is read at its true width.  Built in size/complexity
+   order:
+
+   | tier | types | read + render |
+   |---|---|---|
+   | same-width / easy | `integer` (**64-bit** — `get_stack::<i64>`; there is no `long`), `single` (`f32` → `<v>f`), `float` (`f64` → forced-decimal), `boolean` (1-byte), `character` (`u32` → `'c'`) | inline, directly |
+   | text | `text` | `Str` → quoted+escaped (`escape_loft_text`) |
+   | enum (inline) | a **simple enum** | inline 1-based discriminant byte → `enum_val` → `Enum.Variant` (`0` → `null`) |
+   | **heap (`DbRef`)** | struct / vector / struct-enum | the return **is** a 12-byte `DbRef` on the stack top (`keys.rs:202`) → `show_loft` renders the own-format literal (`P{a:7,b:9}`, `[10,20,30]`). |
+
+   **The heap-tier fix was the type *name*, not the `DbRef`** — `Type::show` is a
+   debug form (`ref(P)`, `vector<integer>["__vdb_1"]`); the cap-fn return type and
+   the `show_loft` schema lookup need the loft-source name, so `capture_binding`
+   drops the `[…]` dep list and unwraps `ref(…)`.  The `DbRef` read and `show_loft`
+   were already correct.
+
+   Tests: `capture_typed_scalars` (incl. a >32-bit integer guarding the i64
+   read), `capture_enum_runs_once`, `capture_heap_types_run_once` (struct +
+   vector), `side_effecting_binding_runs_once` / `…_text_…`.  REPL.S resume +
+   persistence unaffected; guards green (22 repl / 11 session / 684 issues;
+   clippy + fmt).  `show_loft`'s runtime `:l` format bit stays unbuilt (capture
+   renders in Rust, no `:l`).
 
 Correctness over efficiency — re-serialising per binding is fine.
 
@@ -437,6 +450,13 @@ store-resident model for resume alone — that is over-engineering.**  Ship
 text-replay auto-resume first (portable, upgrade-proof, fault-tolerant).  Build
 the store-resident image *when* you build REPL.X: then one design collapses all
 three problems and reuses the startup cache.
+
+**The build is now its own plan — `@PLN14`** ([`plans/14-store-resident-repl-session/`](../14-store-resident-repl-session/README.md)).
+The REPL.X **value-snapshot interim** above has shipped as the mitigation (effects
+run once for renderable types); @PLN14 is the bottom-up successor that stores each
+binding's value in a session store and reads it back, removing replay entirely — so
+the re-run *cost* and the resume non-determinism this interim leaves open both go
+away.
 
 ---
 
