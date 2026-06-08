@@ -726,6 +726,18 @@ impl ReplSession {
         )
     }
 
+    /// The current value of `expr` in this session, rendered as an own-format loft
+    /// literal (`"99"`, `"Point{x:3,y:4}"`) — or `None` if it doesn't evaluate.
+    /// Reuses the value-snapshot capture, so it covers every type the REPL renders.
+    /// The @PLN15 debugger uses it to read a value the user edited at a breakpoint
+    /// (`n = 99`) before writing it back into the live frame.
+    pub fn value_of(&mut self, expr: &str) -> Option<String> {
+        match self.capture_binding(expr) {
+            Capture::Done(lit) => Some(lit),
+            Capture::Skip | Capture::Failed(_) => None,
+        }
+    }
+
     /// Turn on session persistence: every later state-changing input appends to
     /// `path` (created if absent).  The interactive driver calls this after
     /// [`resume_from`](Self::resume_from); piped/test sessions never do, so they

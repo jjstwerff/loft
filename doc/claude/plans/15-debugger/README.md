@@ -16,12 +16,14 @@ reads the live frame's arguments correctly; it fires once per call and is inert 
 nothing is registered. `src/debugger.rs` (`Debugger`/`BreakHit`) + the per-op hook
 in `State::execute_argv` + `set_breakpoint_fn_line` (function-scoped) /
 `set_breakpoint_fn_entry` / `capture_break_frame` / `render_frame_local`;
-`tests/debugger.rs` (**9 tests**). **The pipeline works end-to-end:** set a
+`tests/debugger.rs` (**10 tests**). **The pipeline works end-to-end:** set a
 breakpoint → pause + capture the live frame (args **and** non-arg locals,
 liveness-gated, every value type) → **drop into a REPL and evaluate against the
 frame** (`ReplSession::seed_frame` / `from_parser` — `n + a == 21`,
-`pt.x * pt.y == 12`) → **conditional breakpoints** (`frame_holds` keeps only hits
-where a condition over the frame holds). D0 + D1 + E first-cut done. The hot loop carries one
+`pt.x * pt.y == 12`) → **conditional breakpoints** (`frame_holds`) → **suspend,
+edit a value in the REPL, resume — and execution continues with the edited value**
+(`enable_stepping` / `set_frame_value` / `value_of` / `resume`: edit `n` at a break
+→ `calc(5)` returns 990). D0 + D1 + E + F first-cut done. The hot loop carries one
 `Option::is_some` branch per op when not debugging (issues suite green — no
 regression). **Facts the slices pinned** (matrix-first paid off): a function-*entry*
 breakpoint pauses pre-prologue (slots zero), so the read point is a **body line**; a
@@ -29,10 +31,13 @@ variable sits at the frame-absolute `stack_cur.pos + args_base + vars.stack(i)` 
 *not* `get_var`'s stack-depth-relative operand; a bare line number is *unscoped*
 (matches every function), so breakpoints are function-scoped; `first_def`/`last_use`
 are *sequence* numbers (wrong unit), but `self.vars`' `code_pos → var_nr` map yields
-a usable reference-range liveness (Q6); and the **own-format literal is the D1
-bridge**, so read-eval-at-frame needs no @PLN14 store-resident env (that is the
-exact-seeding + frame-mutation upgrade). **Next**: stepping (**F**) + the terminal
-surface (**G1**) →
+a usable reference-range liveness (Q6); the **own-format literal is the D1 bridge**
+(so read-eval-at-frame needs no @PLN14 store-resident env — exact value-for-value
+seeding is the remaining upgrade); and **loft calls are *jumps*** (all execution
+state is in `State` fields), so the loop can suspend at a breakpoint and re-enter to
+resume — the basis for F's edit-and-continue. **Next**: multi-breakpoint single-line
+**stepping** (F refinement) · **B** (interpret-scope) · the **G2** browser/DAP
+surface →
 conditions (**E**).
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
@@ -135,7 +140,7 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **DONE** — captures **arguments + non-arg locals**, every value type (scalars/text inline, heap struct/vector/struct-enum via `show_loft`, simple enums by discriminant), via `render_frame_local`. Locals are **liveness-gated** by reference-range (`first_ref <= pc <= last_ref`) derived from `self.vars` (the codegen `code_pos → var_nr` map) — *safe* (a var in its read-range is necessarily assigned, never garbage) and it picks the right owner of a reused slot; the only gap is a defined-but-not-yet-read local before its first read (under-shows, never wrong). See Open question 6 (resolved). |
 | **D1** — frame → REPL bridge: seed a `ReplSession` from D0's captured frame, so evaluating at a break runs against the live locals | **First cut (the headline, working)** — `ReplSession::seed_frame` binds each captured `(name, own-format literal)` as `name = <literal>`; `ReplSession::from_parser` builds the session over the program's parser so heap values' types are in scope. Eval-at-frame works end-to-end (`n + a == 21`, `pt.x * pt.y == 12`). **No @PLN14 dependency for read-eval** — the own-format literal *is* the bridge; exact value-for-value seeding + **frame mutation / write-back** (edit a local at the break, resume with it) is the @PLN14 upgrade. |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | **First cut** — `ReplSession::frame_holds(hit, condition)` seeds the frame (D1) and `assert`s the condition; a caller keeps only the hits where it holds (break when `n > 1`) or where an invariant is violated. Post-run filter on recorded hits; an in-loop *skip* (a non-matching breakpoint never even pauses) needs the condition pre-compiled against the frame — a refinement. |
-| **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
+| **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | **First cut — incl. edit-and-continue (the hard part)** — `enable_stepping` makes a breakpoint *suspend* (the execute loop returns to the driver, mirroring `frame_yield`, with the frame in `paused_frame`); `set_frame_value` writes an edited value into the **live** frame slot; `resume` continues and **picks it up**. Proven end-to-end: edit `n` in the REPL at a break → `calc(5)` returns 990. Works because loft calls are *jumps* (all execution state is in `State` fields, so the loop is freely re-enterable). `ReplSession::value_of` extracts the edited value as an own-format literal (also the result-as-String primitive REPL.T deferred). **Refinement:** single suspension + continue; multi-breakpoint *single-line* stepping (pause at the next line) needs `debug_check` in `resume` + a skip-current-bp guard. |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | Open |
 | **G2** — browser surface: `loft-dap` protocol + web UI (gutter, variables, call stack, REPL console) — the *natural home* | Open |
 
@@ -152,9 +157,11 @@ The host-agnostic engine is A–F; the surfaces are G.
    own-format literals. The @PLN14 store-resident env is the *upgrade* (exact
    value-for-value seeding + frame mutation/write-back), not a prerequisite for
    read-eval.
-4. **F (debug API) + G1 (terminal surface)** — wrap A–E as the headless API and
-   prove it end-to-end from the **terminal** first (the REPL is already there), so
-   the engine ships useful before any browser work.
+4. **F (debug API)** — *first cut done, incl. edit-and-continue*: suspend
+   (`enable_stepping`) → edit (`set_frame_value`, fed by `value_of`) → `resume`
+   picks up the change. Refinement: multi-breakpoint single-line stepping.
+   **G1 (terminal surface)** wraps A–F as the headless API; the REPL is already the
+   front-end, so the engine ships useful before any browser work.
 5. **B (interpret-scope)** — needed for breakpoints reached through compiled code
    and for an introspectable call stack; start with "interpret from entry point,"
    refine to call-graph-reachability so unrelated code stays compiled.

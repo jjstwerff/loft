@@ -32,8 +32,16 @@ pub struct BreakHit {
 pub struct Debugger {
     /// Bytecode offsets that trigger a pause when execution reaches them.
     breakpoints: HashSet<u32>,
-    /// Frames captured at each hit, in hit order.
+    /// Frames captured at each hit, in hit order (record-and-continue mode).
     pub hits: Vec<BreakHit>,
+    /// **Stepping mode**: when set, a breakpoint *suspends* execution (the loop
+    /// returns to the driver) instead of recording-and-continuing — so a value can
+    /// be edited and `resume`d.  Off by default (record-and-continue).
+    pub stepping: bool,
+    /// The frame captured at the current suspension (stepping mode); `None` while
+    /// running.  The driver reads it, optionally writes a value back to the live
+    /// frame, and calls `State::resume`.
+    pub paused: Option<BreakHit>,
 }
 
 impl Debugger {

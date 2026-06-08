@@ -1906,18 +1906,77 @@ impl State {
         self.debug.as_deref().map_or(&[], |d| d.hits.as_slice())
     }
 
+    /// Turn on **stepping mode** (idempotent; enables debugging): a breakpoint
+    /// *suspends* execution — the run returns with the frame in
+    /// [`paused_frame`](Self::paused_frame) instead of recording-and-continuing.
+    /// Edit a value with [`set_frame_value`](Self::set_frame_value), then continue
+    /// with [`resume`](Self::resume).
+    pub fn enable_stepping(&mut self) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.stepping = true;
+        }
+    }
+
+    /// Whether execution is currently suspended at a breakpoint (stepping mode).
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.debug.as_deref().is_some_and(|d| d.paused.is_some())
+    }
+
+    /// The frame captured at the current suspension, or `None` if not paused.
+    #[must_use]
+    pub fn paused_frame(&self) -> Option<&crate::debugger::BreakHit> {
+        self.debug.as_deref().and_then(|d| d.paused.as_ref())
+    }
+
+    /// Write an integer `value` into the **live** frame's local `name` at a
+    /// suspension — the @PLN15 F write-back, so a value edited at the breakpoint is
+    /// picked up when execution `resume`s.  Returns `false` if no integer local of
+    /// that name is in the current frame.  (Integer for now; other types extend the
+    /// same way via the type-dispatched write.)
+    pub fn set_frame_value(&mut self, name: &str, value: i64, data: &crate::data::Data) -> bool {
+        let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+        if d_nr == u32::MAX {
+            return false;
+        }
+        let frame_base = self.call_stack.last().map_or(0, |f| f.args_base);
+        let off = {
+            let vars = &data.def(d_nr).variables;
+            (0..vars.count())
+                .find(|&i| vars.name(i) == name)
+                .filter(|&i| matches!(vars.tp(i), crate::data::Type::Integer(_)))
+                .map(|i| vars.stack(i))
+        };
+        let Some(off) = off else { return false };
+        let rec = self.stack_cur.rec;
+        let at = self.stack_cur.pos + frame_base + u32::from(off);
+        *self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<i64>(rec, at) = value;
+        true
+    }
+
     /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
-    /// frame.  Slice behaviour is record-and-continue; a later slice suspends here
-    /// into a REPL-at-frame.
-    fn debug_check(&mut self, pc: u32, data: &crate::data::Data) {
+    /// frame.  Returns `true` to **suspend** the loop (stepping mode — the frame is
+    /// stashed in `debug.paused` for the driver to read / edit, then `resume`);
+    /// `false` to continue (record-and-continue mode — the frame is appended to
+    /// `debug.hits`).  Always `false` when `pc` is not a breakpoint.
+    fn debug_check(&mut self, pc: u32, data: &crate::data::Data) -> bool {
         let is_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
         if !is_bp {
-            return;
+            return false;
         }
         let hit = self.capture_break_frame(pc, data);
         if let Some(d) = self.debug.as_mut() {
+            if d.stepping {
+                d.paused = Some(hit);
+                return true; // suspend the loop
+            }
             d.hits.push(hit);
         }
+        false
     }
 
     /// Read the current (topmost) frame's in-scope variables into a
@@ -2386,10 +2445,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op_pos_rt = self.code_pos;
-            // @PLN15 debugger — pause before executing the op at this offset when
-            // it is a registered breakpoint.  Inert (one branch) when not debugging.
-            if self.debug.is_some() {
-                self.debug_check(op_pos_rt, data);
+            // @PLN15 debugger — at a registered breakpoint, capture the frame (and
+            // in stepping mode, suspend: return to the driver with the frame in
+            // `debug.paused`, to be resumed via `resume`).  Inert (one branch) when
+            // not debugging.
+            if self.debug.is_some() && self.debug_check(op_pos_rt, data) {
+                return;
             }
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;

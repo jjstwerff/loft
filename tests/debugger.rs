@@ -285,6 +285,73 @@ fn conditional_breakpoint_filters_by_frame_condition() {
     );
 }
 
+/// @PLN15 F (the hard one) — change a value in the REPL at a breakpoint, then
+/// resume and continue with the changed value.  `calc(5)` is normally 50; we edit
+/// `n` to 99 at the breakpoint so it returns 990, and the program's assert
+/// (`calc(5) == 990`) then passes — proving the edit was picked up on resume.
+#[test]
+fn step_picks_up_repl_edited_value() {
+    let mut p = repl();
+    match p.parse_statement("fn calc(n: integer) -> integer {\n  n * 10\n}") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("def failed: {other:?}"),
+    }
+    let mut warm = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut warm, &mut p.data);
+    // The program asserts the EDITED result (990); false without the edit (50).
+    let entry = match p.parse_statement("assert(calc(5) == 990, \"edited n to 99\")") {
+        ParseResult::Ready { entry_def_nr } => entry_def_nr,
+        other => panic!("call failed: {other:?}"),
+    };
+    let mut state = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut state, &mut p.data);
+    let calc = p.data.def_nr("n_calc");
+    state.enable_stepping();
+    assert!(
+        state.set_breakpoint_fn_line(calc, 2, &p.data),
+        "breakpoint set"
+    );
+    let name = p
+        .data
+        .def(entry)
+        .name()
+        .strip_prefix("n_")
+        .unwrap()
+        .to_string();
+
+    // Run → suspends at calc's body (n == 5, not yet multiplied).
+    state.execute_argv(&name, &p.data, &[]);
+    assert!(state.is_paused(), "suspended at breakpoint");
+    let hit = state.paused_frame().expect("frame").clone();
+    assert!(
+        hit.locals.iter().any(|(n, v)| n == "n" && v == "5"),
+        "n == 5 at pause: {hit:?}"
+    );
+
+    // The user edits the value in a REPL seeded from the paused frame.
+    let mut s = ReplSession::new("default").expect("stdlib");
+    s.seed_frame(&hit);
+    assert!(matches!(s.eval("n = 99"), Eval::Ran), "REPL edit n = 99");
+    let edited: i64 = s.value_of("n").expect("value").parse().expect("int");
+    assert_eq!(edited, 99);
+
+    // Write the edited value back into the live frame, then resume.
+    assert!(
+        state.set_frame_value("n", edited, &p.data),
+        "write-back n = 99"
+    );
+    state.resume();
+
+    // calc(5) returned 99 * 10 == 990, so the program's assert held → no error.
+    assert!(
+        state.database.runtime_error.is_none(),
+        "edit picked up on resume (assert calc(5)==990 passed); err = {:?}",
+        state.database.runtime_error
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]
