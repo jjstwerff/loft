@@ -93,6 +93,72 @@ fn breakpoint_on_body_line_captures_argument() {
     );
 }
 
+/// A breakpoint fires on a body with **no fault-prone arithmetic op** — the bug
+/// the `line_numbers` resolution fixed.  Source spans are emitted only at
+/// `+ - * / % << >>`, so before the fix a pure `if`/constant body had no breakable
+/// offset and silently never paused.  `pick` here has neither.
+#[test]
+fn breakpoint_fires_without_arithmetic() {
+    let mut p = repl();
+    // if-bodied, all constants — no arithmetic anywhere.
+    let hits = run_with_breakpoint(
+        &mut p,
+        &["fn pick(b: boolean) -> integer {\n  if b { 111 } else { 222 }\n}"],
+        "pick(true)",
+        "pick",
+        2,
+    );
+    assert_eq!(hits.len(), 1, "if/const body breakpoint fires: {hits:?}");
+    assert_eq!(hits[0].function, "pick");
+    assert!(
+        hits[0].locals.iter().any(|(n, v)| n == "b" && v == "true"),
+        "b == true captured: {hits:?}"
+    );
+
+    // bare-variable body — `n` is the whole body, no operator.
+    let mut p2 = repl();
+    let hits2 = run_with_breakpoint(
+        &mut p2,
+        &["fn id(n: integer) -> integer {\n  n\n}"],
+        "id(42)",
+        "id",
+        2,
+    );
+    assert_eq!(hits2.len(), 1, "bare-var body breakpoint fires: {hits2:?}");
+    assert!(
+        hits2[0].locals.iter().any(|(n, v)| n == "n" && v == "42"),
+        "n == 42 captured: {hits2:?}"
+    );
+}
+
+/// `breakable_lines` reflects **every** line that emitted code (the dense
+/// `line_numbers` table), not only lines with arithmetic — so each body line of a
+/// multi-statement function is a valid breakpoint.
+#[test]
+fn breakable_lines_cover_non_arithmetic_lines() {
+    let mut p = repl();
+    match p.parse_statement("fn f(n: integer) -> integer {\n  m = n;\n  if m { 1 } else { 0 }\n}") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("def failed: {other:?}"),
+    }
+    let mut state = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut state, &mut p.data);
+    let d = p.data.def_nr("n_f");
+    // Line 2 (`m = n;`, no arithmetic) and line 3 (`if m {...}`, no arithmetic) are
+    // both breakable — neither has a fault-prone operator.
+    assert!(
+        state.set_breakpoint_fn_line(d, 2, &p.data),
+        "line 2 (assignment) breakable; breakable = {:?}",
+        state.breakable_lines()
+    );
+    assert!(
+        state.set_breakpoint_fn_line(d, 3, &p.data),
+        "line 3 (if) breakable; breakable = {:?}",
+        state.breakable_lines()
+    );
+}
+
 /// The breakpoint fires once per call — two calls, two captured frames, each with
 /// its own argument value.
 #[test]

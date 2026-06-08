@@ -169,14 +169,9 @@ the rest of the function runs with the change — the call above returns `99 * 1
 rather than `5 * 10`. Editing is for **scalar** locals; a `text` / struct / vector
 local can be read but not yet written (its slot holds a store pointer). The verbs
 also work without the leading colon (`step`, `next`, `continue`). Breakpoints
-persist across calls until `:break clear`.
-
-> **Where breakpoints land.** A breakpoint currently attaches to a source-mapped
-> bytecode op, and those are emitted at fault-prone arithmetic (`+ - * / % << >>`),
-> so a function whose reached path has no such op (a pure `if`/constant body) may
-> not pause. Give the function a normal arithmetic statement, or break on a line
-> that has one. Widening source-span coverage so every statement is breakable is
-> tracked separately.
+persist across calls until `:break clear`. Any line of a function body is a valid
+breakpoint — `:break <fn>` stops at the first body line, `<fn>:<line>` at a
+specific one.
 
 ## Introspection without the REPL
 

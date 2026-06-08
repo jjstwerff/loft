@@ -114,19 +114,22 @@ fn interactive_breakpoint_eval_expression() {
     );
 }
 
-/// @PLN15 G1 — a **non-integer** edit through the binary: flip a `boolean` local
-/// at the pause and continue.  `adjust(5, false)` returns the doubled `d == 10`;
-/// editing `neg` to true at the breakpoint negates it to `-10` on resume — proving
-/// edit-and-continue covers scalars beyond integer.  (The body opens with the
-/// arithmetic `d = n + n` so the breakpoint lands at a source-mapped op before the
-/// branch — see the source-span coverage note in the @PLN15 plan.)
+/// @PLN15 G1 — a **non-integer** edit through the binary, on a pure `if`/constant
+/// body (no arithmetic — exercises the dense `line_numbers` breakpoint resolution).
+/// `pick(true)` is normally 111; flipping `b` to false at the pause makes the
+/// resumed call print 222 — proving both edit-and-continue beyond integer and that
+/// a body with no fault-prone operator is breakable.
 #[test]
 fn interactive_breakpoint_edit_boolean() {
     let out = repl(
         &["repl"],
-        "fn adjust(n: integer, neg: boolean) -> integer {\n  d = n + n;\n  if neg { 0 - d } else { d }\n}\n:break adjust\nadjust(5, false)\nneg = true\n:continue\n:quit\n",
+        "fn pick(b: boolean) -> integer {\n  if b { 111 } else { 222 }\n}\n:break pick\npick(true)\nb = false\n:continue\n:quit\n",
     );
-    assert!(out.contains("-10"), "flipped neg → -10: {out:?}");
+    assert!(out.contains("222"), "flipped b → 222: {out:?}");
+    assert!(
+        !out.contains("111"),
+        "the un-edited 111 must not print: {out:?}"
+    );
 }
 
 /// `:quit` exits cleanly even with no input after it.

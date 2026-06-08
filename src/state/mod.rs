@@ -1856,9 +1856,12 @@ impl State {
 
     /// Register a breakpoint at source `line` **within function `d_nr`** — the
     /// correct primitive: a bare line number matches that line in *every* function
-    /// (stdlib included), so a breakpoint must be scoped to its function.  Scans
-    /// `source_spans` only within `[d_nr.code_position, next_def_start)` for a
-    /// matching line.  Returns `false` if no op in that range maps to `line`.
+    /// (stdlib included), so a breakpoint must be scoped to its function.  Scans the
+    /// dense per-line table `line_numbers` within `[d_nr.code_position, end)` for the
+    /// first op mapped to `line`.  Returns `false` if no op in that range is on
+    /// `line`.  (Uses `line_numbers`, not `source_spans`: the latter is emitted only
+    /// at fault-prone arithmetic, so a line with no such op — a pure `if`, a call, a
+    /// bare assignment — would otherwise be unbreakable.)
     pub fn set_breakpoint_fn_line(
         &mut self,
         d_nr: u32,
@@ -1871,9 +1874,9 @@ impl State {
         let start = data.def(d_nr).code_position;
         let end = start + data.def(d_nr).code_length;
         let Some(&offset) = self
-            .source_spans
+            .line_numbers
             .range(start..end)
-            .find(|(_, p)| p.line == line)
+            .find(|(_, l)| **l == line)
             .map(|(off, _)| off)
         else {
             return false;
@@ -1887,11 +1890,11 @@ impl State {
 
     /// Register a breakpoint at the **start of a named function's body** — the
     /// human-friendly form (`:break foo`).  Resolves `name` → its def → the *first*
-    /// source-mapped offset inside its bytecode (`[code_position, +code_length)`),
-    /// which is the body's first statement, **post-prologue** (args are in their
-    /// slots — unlike `set_breakpoint_fn_entry`, which pauses pre-prologue where the
-    /// frame isn't set up).  Returns `false` if `name` isn't a defined function or
-    /// its body carries no source span.
+    /// per-line offset inside its bytecode (`[code_position, +code_length)`), which
+    /// is the body's first statement, **post-prologue** (args are in their slots —
+    /// unlike `set_breakpoint_fn_entry`, which pauses pre-prologue where the frame
+    /// isn't set up; `line_numbers` entries land after any frame-setup op).  Returns
+    /// `false` if `name` isn't a defined function or its body has no line mapping.
     pub fn set_breakpoint_fn_start(&mut self, name: &str, data: &crate::data::Data) -> bool {
         let d_nr = data.def_nr(&format!("n_{name}"));
         if d_nr >= data.definitions() {
@@ -1900,7 +1903,7 @@ impl State {
         let def = data.def(d_nr);
         let (start, end) = (def.code_position, def.code_position + def.code_length);
         let Some(&offset) = self
-            .source_spans
+            .line_numbers
             .range(start..end)
             .next()
             .map(|(off, _)| off)
@@ -1915,13 +1918,27 @@ impl State {
     }
 
     /// The distinct source lines that carry a bytecode mapping — the lines a
-    /// breakpoint can pause on, sorted.
+    /// breakpoint can pause on, sorted.  Drawn from the dense `line_numbers` table
+    /// (every line with emitted code), not the sparse arithmetic-only `source_spans`.
     #[must_use]
     pub fn breakable_lines(&self) -> Vec<u32> {
-        let mut ls: Vec<u32> = self.source_spans.values().map(|p| p.line).collect();
+        let mut ls: Vec<u32> = self.line_numbers.values().copied().collect();
         ls.sort_unstable();
         ls.dedup();
         ls
+    }
+
+    /// The source line of bytecode `pc` from the dense per-line table — the nearest
+    /// `line_numbers` entry at or before `pc` (entries land on each line's first op).
+    /// `0` when no mapping precedes `pc`.  The debugger's line granularity for
+    /// stepping; distinct from [`source_loc_for`](Self::source_loc_for), which gives
+    /// a full `Position` (line+col) from the sparse fault-site `source_spans`.
+    #[must_use]
+    pub fn line_at(&self, pc: u32) -> u32 {
+        self.line_numbers
+            .range(..=pc)
+            .next_back()
+            .map_or(0, |(_, &l)| l)
     }
 
     /// The frames captured at breakpoint hits so far (empty when not debugging).
@@ -2793,11 +2810,11 @@ impl State {
     /// Resume from a suspension and stop per `mode` — the @PLN15 F step verbs
     /// ([`StepMode`](crate::debugger::StepMode)).  Drives the same re-enterable
     /// loop as [`resume`](Self::resume) but, after each op, decides whether to pause
-    /// from the current **source line** (`source_loc_for`) and **call depth**
-    /// (`call_stack.len()`) relative to where the step began.  A registered
-    /// breakpoint always pauses, whatever the mode.  Returns `true` if it paused
-    /// again (frame in [`paused_frame`](Self::paused_frame)), `false` if the program
-    /// finished.
+    /// from the current **source line** (`line_at`, the dense per-line table) and
+    /// **call depth** (`call_stack.len()`) relative to where the step began.  A
+    /// registered breakpoint always pauses, whatever the mode.  Returns `true` if it
+    /// paused again (frame in [`paused_frame`](Self::paused_frame)), `false` if the
+    /// program finished.
     pub fn debug_step(
         &mut self,
         mode: crate::debugger::StepMode,
@@ -2805,7 +2822,7 @@ impl State {
     ) -> bool {
         use crate::debugger::StepMode;
         self.database.frame_yield = false;
-        let start_line = self.source_loc_for(self.code_pos).map_or(0, |p| p.line);
+        let start_line = self.line_at(self.code_pos);
         let start_depth = self.call_stack.len();
         if let Some(d) = self.debug.as_mut() {
             d.paused = None;
@@ -2820,7 +2837,7 @@ impl State {
                 let at_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
                 let stop = at_bp || {
                     let depth = self.call_stack.len();
-                    let line = self.source_loc_for(pc).map_or(0, |p| p.line);
+                    let line = self.line_at(pc);
                     match mode {
                         StepMode::Into => depth != start_depth || line != start_line,
                         StepMode::Over => depth <= start_depth && line != start_line,
