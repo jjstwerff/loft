@@ -419,6 +419,17 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
 
 ---
 
+## Open work (routed in)
+
+- **INSP.J — JSON output mode for `loft introspect`** (machine-readable
+  bytecode / Rust / slot-table / type dumps).  Routed here from **@PLN12**
+  (REPL + introspection) on its close: machine-readable introspection is an
+  editor / IDE concern, and the LSP server is its natural consumer.  Small (S) —
+  a JSON serializer over the existing `introspect::emit_all` structures; no new
+  analysis.
+
+---
+
 ## Cross-references
 
 - [NATIVE_DEBUG.md](../../../plans/future/25-native-debug/README.md) — GDB / LLDB integration for

@@ -11,9 +11,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation. The model is established in the @PLN12
-**convergence** section ([`12-…/03-state-reset-and-append.md § Convergence`](../12-repl-and-introspection/03-state-reset-and-append.md#convergence--replx-auto-resume-and-persistence-are-one-design));
-this plan is the build.
+Open — design ready, no implementation. The model is established in
+[CONVERGENCE.md](CONVERGENCE.md) (moved here from @PLN12 on its close); this plan
+is the build. It is the successor to **@PLN12** (REPL + introspection, now
+finished): @PLN12's heavy residuals — the re-run *cost* and exact value-for-value
+resume — land here, and @PLN12's small open tail (an in-process
+result-as-`String` eval API for embedding) is absorbed as sub-arc **H** below
+(the store-resident value makes it nearly free).
 
 The @PLN12 **REPL.X value-snapshot interim** has **shipped** as the *mitigation*: a
 binding's RHS runs once and is rewritten to an own-format literal, so side-effect
@@ -33,9 +37,9 @@ re-run cost in one model.
 ## Effort + design
 
 - **Effort:** H — execution-core + store change, multi-phase.
-- **Design:** ~ — the convergence section establishes the model and proves the
-  store/mmap/cache infra exists; this plan sequences the build and names the open
-  questions.
+- **Design:** ~ — [CONVERGENCE.md](CONVERGENCE.md) establishes the model and
+  proves the store/mmap/cache infra exists; this plan sequences the build and
+  names the open questions.
 - **Last touched:** 2026-06-08
 
 ## The root the interim only masks
@@ -82,6 +86,7 @@ both backends, not when the demo runs.
 | **E** — observe / `:vars` read from the environment — **no body replay** | Open |
 | **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
 | **G** — lifetime: orphaned records on re-bind (`:reset` wipe first; GC only if it bites) | Open |
+| **H** — in-process result-as-`String` eval API (`eval(line) → rendered value`) for embedding/GUI — absorbed from @PLN12's REPL.T tail; nearly free once values are store-resident (the renderer already exists in `render_capture` / `show_loft`) | Open |
 
 ## Phase ordering
 
@@ -124,9 +129,10 @@ both backends, not when the demo runs.
 
 ## Cross-arc dependencies
 
-- **@PLN12** (REPL + introspection) — this is its REPL.X *store-resident endpoint*.
-  The value-snapshot interim ships under @PLN12; @PLN14 supersedes it. The
-  convergence section is the shared design source.
+- **@PLN12** (REPL + introspection, **finished**) — this is its REPL.X
+  *store-resident endpoint*. The value-snapshot interim shipped under @PLN12;
+  @PLN14 supersedes it and absorbs @PLN12's open tail (sub-arc H).
+  [CONVERGENCE.md](CONVERGENCE.md) (moved here from @PLN12) is the design source.
 - **@PLN11** (`Data` as a store) — same direction (store-resident records over
   in-memory structures); the session store reuses the store / mmap / startup-cache
   infrastructure @PLN11 also builds on.
@@ -136,9 +142,9 @@ both backends, not when the demo runs.
 
 ## See also
 
-- [`12-…/03-state-reset-and-append.md § Convergence`](../12-repl-and-introspection/03-state-reset-and-append.md#convergence--replx-auto-resume-and-persistence-are-one-design)
-  — the model, *why not mmap the stack*, *why the stores DO mmap*, the four
-  remaining needs (this plan builds items 1–3), and the RNG decision.
+- [CONVERGENCE.md](CONVERGENCE.md) — the model, *why not mmap the stack*, *why the
+  stores DO mmap*, the four remaining needs (this plan builds items 1–3), and the
+  RNG decision (moved here from @PLN12/03 on its close).
 - [DESIGN_DECISIONS.md § C72](../../DESIGN_DECISIONS.md) — resume restores stored
   values but deliberately **not** RNG generator state.
 - [GOALS.md § Why a language, not a store bolted onto an existing one](../../GOALS.md)
