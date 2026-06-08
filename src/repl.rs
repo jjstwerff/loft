@@ -146,11 +146,101 @@ fn run_piped<R: BufRead, W: Write>(
     Ok(())
 }
 
-/// Read input through a line editor (arrow-key history + in-line editing).  The
-/// editor owns the prompt and reads the terminal directly, so the plain `input`
-/// reader is not used here.  History persists to `~/.loft_history` across
-/// sessions (best-effort — a failure to load or save is ignored).  Ctrl-C
-/// cancels the statement in progress; Ctrl-D at an empty prompt quits.
+/// True when `s` is a plain identifier (`[A-Za-z_][A-Za-z0-9_]*`).  Keeps
+/// synthetic definition names (`main_vector<…>`, `__tuple<…>`) out of the
+/// completion list.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_plain_ident(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// The `:`-commands Tab completion offers when the line starts with `:`.
+#[cfg(not(target_arch = "wasm32"))]
+const REPL_COMMANDS: [&str; 8] = [
+    "quit", "help", "reset", "fns", "type", "bytecode", "rust", "slots",
+];
+
+/// Pure completion logic, shared by the live completer and its unit tests.
+/// Given the (pre-sorted) `names` and the cursor at byte `pos` in `line`,
+/// returns the offset where the replaced word starts and the matching
+/// candidates, in `names` order.  Completes a leading `:word` against
+/// [`REPL_COMMANDS`], otherwise the identifier under the cursor against
+/// `names`.  An empty identifier prefix yields nothing, so a stray Tab never
+/// dumps the whole name list.
+#[cfg(not(target_arch = "wasm32"))]
+fn complete_word(names: &[String], line: &str, pos: usize) -> (usize, Vec<String>) {
+    let head = &line[..pos];
+    // `:command` — only while the cursor is still inside the leading `:word`.
+    if let Some(after) = head.strip_prefix(':')
+        && !after.contains(char::is_whitespace)
+    {
+        let out = REPL_COMMANDS
+            .iter()
+            .filter(|c| c.starts_with(after))
+            .map(|c| (*c).to_string())
+            .collect();
+        return (1, out);
+    }
+    // Identifier under the cursor: walk back over identifier characters.
+    let start = head
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+        .last()
+        .map_or(pos, |(i, _)| i);
+    let prefix = &head[start..];
+    if prefix.is_empty() {
+        return (start, Vec::new());
+    }
+    let out = names
+        .iter()
+        .filter(|n| n.starts_with(prefix))
+        .cloned()
+        .collect();
+    (start, out)
+}
+
+/// rustyline glue: completes loft identifiers and `:`-commands from the live
+/// session.  `names` is refreshed by the interactive loop after each input.
+/// Hinting, highlighting, and validation use rustyline's defaults.
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplHelper {
+    names: Vec<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl rustyline::completion::Completer for ReplHelper {
+    type Candidate = String;
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        Ok(complete_word(&self.names, line, pos))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl rustyline::hint::Hinter for ReplHelper {
+    type Hint = String;
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl rustyline::highlight::Highlighter for ReplHelper {}
+#[cfg(not(target_arch = "wasm32"))]
+impl rustyline::validate::Validator for ReplHelper {}
+#[cfg(not(target_arch = "wasm32"))]
+impl rustyline::Helper for ReplHelper {}
+
+/// Read input through a line editor (arrow-key history, in-line editing, and Tab
+/// completion of session identifiers + `:`-commands).  The editor owns the
+/// prompt and reads the terminal directly, so the plain `input` reader is not
+/// used here.  History persists to `~/.loft_history` across sessions
+/// (best-effort — a failure to load or save is ignored).  Ctrl-C cancels the
+/// statement in progress; Ctrl-D at an empty prompt quits.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_interactive<W: Write>(
     stdlib_dir: &str,
@@ -158,11 +248,17 @@ fn run_interactive<W: Write>(
     chrome: &mut W,
 ) -> std::io::Result<()> {
     use rustyline::error::ReadlineError;
-    let mut rl = match rustyline::DefaultEditor::new() {
-        Ok(rl) => rl,
-        // No usable terminal after all — fall back to the plain reader.
-        Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
-    };
+    // `List` shows all candidates on an ambiguous Tab rather than cycling.
+    let config = rustyline::Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let mut rl: rustyline::Editor<ReplHelper, rustyline::history::DefaultHistory> =
+        match rustyline::Editor::with_config(config) {
+            Ok(rl) => rl,
+            // No usable terminal after all — fall back to the plain reader.
+            Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
+        };
+    rl.set_helper(Some(ReplHelper { names: Vec::new() }));
     let history = dirs::home_dir().map(|h| h.join(".loft_history"));
     if let Some(path) = &history {
         let _ = rl.load_history(path);
@@ -187,19 +283,28 @@ fn run_interactive<W: Write>(
         }
         let _ = session.enable_persistence(path);
     }
+    // Seed Tab completion with whatever resume restored, then keep it current.
+    if let Some(h) = rl.helper_mut() {
+        h.names = session.completion_names();
+    }
     let mut pending = String::new();
     loop {
         match rl.readline(prompt(&pending)) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
-                if process_line(
+                let quit = process_line(
                     line.trim_end(),
                     session,
                     &mut pending,
                     stdlib_dir,
                     session_path.as_deref(),
                     chrome,
-                )? {
+                )?;
+                // A new def or binding changes the candidate set — refresh it.
+                if let Some(h) = rl.helper_mut() {
+                    h.names = session.completion_names();
+                }
+                if quit {
                     break; // :quit
                 }
             }
@@ -595,6 +700,48 @@ impl ReplSession {
         }
     }
 
+    /// The identifiers Tab completion offers (the `:`-commands are added by the
+    /// completer itself): every global function (user + stdlib, operators
+    /// excluded), every struct/enum/base-type name, and the variables bound this
+    /// session.  Synthetic and operator definitions are filtered out by
+    /// [`is_plain_ident`].  Sorted + deduped; recomputed by the interactive loop
+    /// after each input.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn completion_names(&self) -> Vec<String> {
+        let data = &self.parser.data;
+        let mut names: Vec<String> = Vec::new();
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            match def.def_type {
+                DefType::Function => {
+                    // Operators and methods (`t_…`) aren't called by bare name.
+                    if def.is_operator() {
+                        continue;
+                    }
+                    if let Some(n) = def.name.strip_prefix("n_")
+                        && !n.starts_with("repl")
+                        && is_plain_ident(n)
+                    {
+                        names.push(n.to_string());
+                    }
+                }
+                DefType::Struct | DefType::Enum | DefType::Type if is_plain_ident(&def.name) => {
+                    names.push(def.name.clone());
+                }
+                _ => {}
+            }
+        }
+        // Variables bound this session live as binding lines in `body`.
+        for line in self.body.lines() {
+            if let Some(name) = Self::binding_name(line) {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Infer the static type of `expr` against the current session, without
     /// running it — the `:type` command.  Returns the rendered type, or `None`
     /// if it doesn't type-check.  Compile-time only: it binds `expr` to a temp
@@ -631,5 +778,58 @@ impl ReplSession {
         };
         self.parser.data.rollback_to(pre_defs); // discard the probe def
         result
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod completion_tests {
+    use super::complete_word;
+
+    /// Pre-sorted, as `completion_names` returns them.
+    fn names() -> Vec<String> {
+        ["Point", "dbl", "print", "println", "x"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn completes_identifier_prefix() {
+        let (start, out) = complete_word(&names(), "pr", 2);
+        assert_eq!(start, 0);
+        assert_eq!(out, vec!["print".to_string(), "println".to_string()]);
+    }
+
+    /// Only the word under the cursor is replaced, not the whole line.
+    #[test]
+    fn completes_word_mid_line() {
+        let line = "1 + db";
+        let (start, out) = complete_word(&names(), line, line.len());
+        assert_eq!(start, 4); // "db" begins at byte 4
+        assert_eq!(out, vec!["dbl".to_string()]);
+    }
+
+    #[test]
+    fn completes_colon_command() {
+        let (start, out) = complete_word(&names(), ":by", 3);
+        assert_eq!(start, 1); // replace after the ':'
+        assert_eq!(out, vec!["bytecode".to_string()]);
+    }
+
+    /// A `:command` with an argument falls through to identifier completion of
+    /// the argument (e.g. `:rust db` completes a fn name).
+    #[test]
+    fn colon_command_arg_completes_identifier() {
+        let line = ":rust db";
+        let (start, out) = complete_word(&names(), line, line.len());
+        assert_eq!(start, 6);
+        assert_eq!(out, vec!["dbl".to_string()]);
+    }
+
+    /// A stray Tab with no prefix offers nothing (rather than every name).
+    #[test]
+    fn empty_prefix_yields_nothing() {
+        let (_start, out) = complete_word(&names(), "1 + ", 4);
+        assert!(out.is_empty());
     }
 }

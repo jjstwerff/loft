@@ -31,7 +31,9 @@ loft> x
 Type an expression and its value prints. Type `x = …` to name a value; the name
 stays available on the next line. Press Ctrl-D (end of input) or type `:quit` to
 leave. Arrow keys recall earlier lines (history is kept in `~/.loft_history`),
-and Ctrl-C abandons the line you're typing.
+and Ctrl-C abandons the line you're typing. Press **Tab** to complete a name —
+functions and types (yours and the stdlib's) and the variables you've bound —
+or a `:command` when the line starts with `:`.
 
 ### Your session is restored next time
 

@@ -37,7 +37,8 @@ session, multi-line input is supported, and a typo or run-time error doesn't end
 the session.  Built-in commands inspect what you've defined — `:fns`,
 `:bytecode`, `:rust`, `:slots` — and `:help` lists them.
 
-The prompt has **arrow-key history and in-line editing**, and it **remembers
+The prompt has **arrow-key history, in-line editing, and Tab completion** (of
+function names, types, your variables, and `:`-commands), and it **remembers
 your session**: the next time you start it, the variables and definitions from
 last time are already there.  Start clean with `loft repl --fresh`.  See
 [doc/claude/REPL.md](doc/claude/REPL.md).

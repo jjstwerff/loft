@@ -143,6 +143,35 @@ fn resume_skips_poison_entry() {
     let _ = std::fs::remove_file(&path);
 }
 
+// ── REPL.C: Tab-completion candidates ────────────────────────────────────────
+
+/// `completion_names` covers the user's session (bound vars, defined fns) plus
+/// stdlib globals, and excludes the synthetic generation wrappers and internal
+/// `<…>`-shaped names.  The list is sorted.
+#[test]
+fn completion_names_cover_session_and_stdlib() {
+    let mut s = session();
+    assert!(matches!(s.eval("price = 10"), Eval::Ran));
+    assert!(matches!(
+        s.eval("fn tripled(n: integer) -> integer { n * 3 }"),
+        Eval::Ran
+    ));
+    let names = s.completion_names();
+    assert!(names.iter().any(|n| n == "price"), "bound var: {names:?}");
+    assert!(names.iter().any(|n| n == "tripled"), "user fn: {names:?}");
+    assert!(
+        names.iter().any(|n| n == "println"),
+        "stdlib global: {names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("replmain") || n.contains('<')),
+        "no synthetic/internal names leak in: {names:?}"
+    );
+    assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted: {names:?}");
+}
+
 /// Only state-changing inputs are persisted: an observing statement (a bare
 /// expression) is evaluated for its echo but writes nothing to the session
 /// file, so resume never re-runs it.
