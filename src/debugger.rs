@@ -15,6 +15,21 @@
 
 use std::collections::HashSet;
 
+/// The four @PLN15 F step verbs, driving
+/// [`State::debug_step`](crate::state::State::debug_step).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepMode {
+    /// Pause at the next source line, **descending into** any call on the way.
+    Into,
+    /// Run any call on the current line to completion, then pause at the next line
+    /// in the same (or a shallower) frame — **over** the call.
+    Over,
+    /// Run to the current function's return and pause in the caller — **out**.
+    Out,
+    /// Run to the next breakpoint (or program end) — **continue**.
+    Continue,
+}
+
 /// A frame captured at a breakpoint hit.
 #[derive(Debug, Clone)]
 pub struct BreakHit {

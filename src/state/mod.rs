@@ -2633,6 +2633,75 @@ impl State {
         false
     }
 
+    /// Resume from a suspension and stop per `mode` — the @PLN15 F step verbs
+    /// ([`StepMode`](crate::debugger::StepMode)).  Drives the same re-enterable
+    /// loop as [`resume`](Self::resume) but, after each op, decides whether to pause
+    /// from the current **source line** (`source_loc_for`) and **call depth**
+    /// (`call_stack.len()`) relative to where the step began.  A registered
+    /// breakpoint always pauses, whatever the mode.  Returns `true` if it paused
+    /// again (frame in [`paused_frame`](Self::paused_frame)), `false` if the program
+    /// finished.
+    pub fn debug_step(
+        &mut self,
+        mode: crate::debugger::StepMode,
+        data: &crate::data::Data,
+    ) -> bool {
+        use crate::debugger::StepMode;
+        self.database.frame_yield = false;
+        let start_line = self.source_loc_for(self.code_pos).map_or(0, |p| p.line);
+        let start_depth = self.call_stack.len();
+        if let Some(d) = self.debug.as_mut() {
+            d.paused = None;
+        }
+        let bytecode_len = self.bytecode.len() as u32;
+        // Skip the pause-check on the very first op — it is the breakpoint/line we
+        // are stepping *from*; we must execute it, not immediately re-pause.
+        let mut first = true;
+        while self.code_pos < bytecode_len {
+            if !first {
+                let pc = self.code_pos;
+                let at_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
+                let stop = at_bp || {
+                    let depth = self.call_stack.len();
+                    let line = self.source_loc_for(pc).map_or(0, |p| p.line);
+                    match mode {
+                        StepMode::Into => depth != start_depth || line != start_line,
+                        StepMode::Over => depth <= start_depth && line != start_line,
+                        StepMode::Out => depth < start_depth,
+                        StepMode::Continue => false,
+                    }
+                };
+                if stop {
+                    let hit = self.capture_break_frame(pc, data);
+                    if let Some(d) = self.debug.as_mut() {
+                        d.paused = Some(hit);
+                    }
+                    return true;
+                }
+            }
+            first = false;
+            let op = self.code::<u8>();
+            if op == 255 {
+                let ext = self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            if self.database.frame_yield {
+                return true;
+            }
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
+            }
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        self.call_stack.pop();
+        self.database.parallel_ctx = None;
+        false
+    }
+
     /// Snapshot the bytecode, text segment, and native-function library for
     /// use in a parallel worker thread.  All three are `Arc`-cloned — O(1).
     #[must_use]

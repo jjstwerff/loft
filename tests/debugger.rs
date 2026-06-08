@@ -16,6 +16,7 @@
 //! spec.
 
 use loft::compile;
+use loft::debugger::StepMode;
 use loft::parser::{ParseResult, Parser};
 use loft::repl::{Eval, ReplSession};
 use loft::state::State;
@@ -349,6 +350,96 @@ fn step_picks_up_repl_edited_value() {
         state.database.runtime_error.is_none(),
         "edit picked up on resume (assert calc(5)==990 passed); err = {:?}",
         state.database.runtime_error
+    );
+}
+
+/// Run `defs` + `call` in **stepping mode** with a breakpoint on `bp_fn` line
+/// `line`; return the `State` suspended there, for the test to drive `debug_step`.
+fn run_to_pause(p: &mut Parser, defs: &[&str], call: &str, bp_fn: &str, line: u32) -> State {
+    for def in defs {
+        match p.parse_statement(def) {
+            ParseResult::Ready { .. } => {}
+            other => panic!("def parse of {def:?} failed: {other:?}"),
+        }
+        let mut warm = State::new(p.database.clone());
+        loft::scopes::check(&mut p.data);
+        compile::byte_code(&mut warm, &mut p.data);
+    }
+    let entry = match p.parse_statement(call) {
+        ParseResult::Ready { entry_def_nr } => entry_def_nr,
+        other => panic!("call parse of {call:?} failed: {other:?}"),
+    };
+    let mut state = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut state, &mut p.data);
+    let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
+    state.enable_stepping();
+    assert!(
+        state.set_breakpoint_fn_line(d_nr, line, &p.data),
+        "breakpoint on {bp_fn}:{line}"
+    );
+    let name = p
+        .data
+        .def(entry)
+        .name()
+        .strip_prefix("n_")
+        .unwrap()
+        .to_string();
+    state.execute_argv(&name, &p.data, &[]);
+    assert!(state.is_paused(), "suspended at {bp_fn}:{line}");
+    state
+}
+
+/// `outer` calls `inner`; line 2 of `outer` is the call, line 3 reads the result.
+const NESTED: &[&str] = &[
+    "fn inner(x: integer) -> integer {\n  x + 1\n}",
+    "fn outer(n: integer) -> integer {\n  a = inner(n);\n  a + 100\n}",
+];
+
+/// Step *into*: from `outer`'s `inner(n)` line, descend into `inner`.
+#[test]
+fn step_into_descends_into_callee() {
+    let mut p = repl();
+    let mut state = run_to_pause(&mut p, NESTED, "outer(5)", "outer", 2);
+    assert_eq!(state.paused_frame().unwrap().function, "outer");
+    assert!(state.debug_step(StepMode::Into, &p.data), "still running");
+    let f = state.paused_frame().unwrap();
+    assert_eq!(f.function, "inner", "stepped into inner: {f:?}");
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "x" && v == "5"),
+        "inner's x == 5: {f:?}"
+    );
+}
+
+/// Step *over*: run `inner(n)` to completion without pausing in it, then stop at
+/// the next line in `outer` — where the result `a` is now live.
+#[test]
+fn step_over_runs_call_and_stays_in_frame() {
+    let mut p = repl();
+    let mut state = run_to_pause(&mut p, NESTED, "outer(5)", "outer", 2);
+    assert!(state.debug_step(StepMode::Over, &p.data), "still running");
+    let f = state.paused_frame().unwrap();
+    assert_eq!(
+        f.function, "outer",
+        "stayed in outer (did not descend): {f:?}"
+    );
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "a" && v == "6"),
+        "a == inner(5) == 6: {f:?}"
+    );
+}
+
+/// Step *out*: from inside `inner`, run to its return and pause back in `outer`.
+#[test]
+fn step_out_returns_to_caller() {
+    let mut p = repl();
+    let mut state = run_to_pause(&mut p, NESTED, "outer(5)", "inner", 2);
+    assert_eq!(state.paused_frame().unwrap().function, "inner");
+    assert!(state.debug_step(StepMode::Out, &p.data), "still running");
+    assert_eq!(
+        state.paused_frame().unwrap().function,
+        "outer",
+        "stepped out to outer"
     );
 }
 
