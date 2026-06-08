@@ -25,8 +25,18 @@ use crate::diagnostics::{DiagEntry, Level};
 use crate::introspect::{Options, Section};
 use crate::parser::Parser;
 use crate::state::State;
+use std::fs::File;
 use std::io::{BufRead, Write};
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
+
+/// Path to the auto-resume session file (`~/.loft_session`), or `None` if the
+/// home directory can't be located.  Shared by the interactive driver (which
+/// replays it on launch and appends new state-changing inputs to it) and the
+/// `--fresh` flag in `main` (which clears it).
+pub fn session_file_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".loft_session"))
+}
 
 /// Run the interactive `loft>` REPL.
 ///
@@ -121,7 +131,15 @@ fn run_piped<R: BufRead, W: Write>(
         if input.read_line(&mut line)? == 0 {
             break; // EOF
         }
-        if process_line(line.trim_end(), session, &mut pending, stdlib_dir, chrome)? {
+        // No session path: a piped/file/test run never persists or resumes.
+        if process_line(
+            line.trim_end(),
+            session,
+            &mut pending,
+            stdlib_dir,
+            None,
+            chrome,
+        )? {
             break; // :quit
         }
     }
@@ -149,12 +167,39 @@ fn run_interactive<W: Write>(
     if let Some(path) = &history {
         let _ = rl.load_history(path);
     }
+    // Auto-resume: replay the previous session, then append new state-changing
+    // inputs to the same file.  Interactive-only — `run_piped` (pipes, files,
+    // tests, wasm) never touches it, so captured output stays deterministic.
+    let session_path = session_file_path();
+    if let Some(path) = &session_path {
+        let stats = session.resume_from(path);
+        if stats.restored > 0 {
+            let skipped = if stats.skipped > 0 {
+                format!(" ({} skipped)", stats.skipped)
+            } else {
+                String::new()
+            };
+            writeln!(
+                chrome,
+                "restored {} statement(s) from last session{skipped}",
+                stats.restored
+            )?;
+        }
+        let _ = session.enable_persistence(path);
+    }
     let mut pending = String::new();
     loop {
         match rl.readline(prompt(&pending)) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
-                if process_line(line.trim_end(), session, &mut pending, stdlib_dir, chrome)? {
+                if process_line(
+                    line.trim_end(),
+                    session,
+                    &mut pending,
+                    stdlib_dir,
+                    session_path.as_deref(),
+                    chrome,
+                )? {
                     break; // :quit
                 }
             }
@@ -180,6 +225,7 @@ fn process_line<W: Write>(
     session: &mut ReplSession,
     pending: &mut String,
     stdlib_dir: &str,
+    session_path: Option<&Path>,
     chrome: &mut W,
 ) -> std::io::Result<bool> {
     // `:`-commands are only recognised at the start of a fresh statement.
@@ -196,6 +242,12 @@ fn process_line<W: Write>(
             )?,
             "reset" => {
                 *session = ReplSession::new(stdlib_dir)?;
+                // Clearing state clears the persisted session too, so the next
+                // launch starts clean; keep persisting to the now-empty file.
+                if let Some(path) = session_path {
+                    ReplSession::clear_session(path);
+                    let _ = session.enable_persistence(path);
+                }
                 writeln!(chrome, "session reset.")?;
             }
             "bytecode" => session.introspect(Section::Bytecode, filter),
@@ -252,6 +304,16 @@ pub enum Eval {
     Error(Vec<DiagEntry>),
 }
 
+/// How a [`ReplSession::resume_from`] replay went.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ResumeStats {
+    /// Saved entries that replayed cleanly.
+    pub restored: usize,
+    /// Entries skipped because they no longer parse/run — a stale or corrupt
+    /// line never bricks the resume.
+    pub skipped: usize,
+}
+
 /// A live REPL session: stdlib + the statements entered so far.
 pub struct ReplSession {
     parser: Parser,
@@ -260,6 +322,13 @@ pub struct ReplSession {
     body: String,
     /// Monotonic counter naming each generation's synthetic entry fn.
     counter: u32,
+    /// Append handle to the session file when persistence is on (the
+    /// interactive driver enables it; piped/test sessions leave it `None`, so
+    /// they neither read nor write any session file).
+    record: Option<File>,
+    /// True only while [`resume_from`](Self::resume_from) is feeding saved
+    /// inputs back in — suppresses re-recording them to the file.
+    replaying: bool,
 }
 
 impl ReplSession {
@@ -275,7 +344,76 @@ impl ReplSession {
             parser,
             body: String::new(),
             counter: 0,
+            record: None,
+            replaying: false,
         })
+    }
+
+    /// Turn on session persistence: every later state-changing input appends to
+    /// `path` (created if absent).  The interactive driver calls this after
+    /// [`resume_from`](Self::resume_from); piped/test sessions never do, so they
+    /// stay file-free and their output stays deterministic.
+    ///
+    /// # Errors
+    /// Returns the I/O error if `path` cannot be opened for appending.
+    pub fn enable_persistence(&mut self, path: &Path) -> std::io::Result<()> {
+        self.record = Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?,
+        );
+        Ok(())
+    }
+
+    /// Append one state-changing input to the session file, when persistence is
+    /// on and we are not mid-resume.  Entries are NUL-separated: NUL never
+    /// occurs in loft source, so a multi-line statement survives verbatim and
+    /// splits back out unambiguously.  Best-effort — a write failure is dropped
+    /// rather than allowed to break the live session.
+    fn record_input(&mut self, input: &str) {
+        if self.replaying {
+            return;
+        }
+        if let Some(f) = self.record.as_mut() {
+            let _ = f.write_all(input.as_bytes());
+            let _ = f.write_all(b"\0");
+            let _ = f.flush();
+        }
+    }
+
+    /// Replay a saved session from `path` to rebuild state, before persistence
+    /// is enabled.  Each NUL-separated entry is fed back through
+    /// [`eval`](Self::eval) with recording suppressed; an entry that no longer
+    /// parses (or panics) is skipped, never aborting the resume.  A missing file
+    /// is an empty session.  Returns how many entries were restored vs skipped.
+    pub fn resume_from(&mut self, path: &Path) -> ResumeStats {
+        let mut stats = ResumeStats::default();
+        let Ok(bytes) = std::fs::read(path) else {
+            return stats; // no prior session
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        self.replaying = true;
+        for entry in text.split('\0') {
+            if entry.trim().is_empty() {
+                continue;
+            }
+            // Same panic isolation as the live loop: a poison entry must not
+            // abort the resume.  Resume replays only defs/bindings (neither
+            // executes), so a panic here would be a parser fault, not runtime.
+            match std::panic::catch_unwind(AssertUnwindSafe(|| self.eval(entry))) {
+                Ok(Eval::Ran) => stats.restored += 1,
+                _ => stats.skipped += 1, // Error / NeedMore / panic
+            }
+        }
+        self.replaying = false;
+        stats
+    }
+
+    /// Discard the saved session at `path` (the `:reset` command and the
+    /// `--fresh` flag) so the next launch starts clean.  Best-effort.
+    pub fn clear_session(path: &Path) {
+        let _ = std::fs::remove_file(path);
     }
 
     /// Evaluate one input line/statement against the session.
@@ -314,6 +452,7 @@ impl ReplSession {
                 self.parser.data.rollback_to(pre_defs);
                 return Eval::Error(produced);
             }
+            self.record_input(input); // a def changes session state — persist it
             return Eval::Ran;
         }
         if Self::binding_name(input).is_some() {
@@ -323,6 +462,7 @@ impl ReplSession {
             return match self.compile_generation(&bound, false) {
                 Ok(()) => {
                     self.body = bound;
+                    self.record_input(input); // a binding changes state — persist it
                     Eval::Ran
                 }
                 Err(diags) => Eval::Error(diags),

@@ -153,6 +153,9 @@ fn print_help() {
     );
     println!();
     println!("Subcommands:");
+    println!("  repl                          start the interactive REPL (also: bare `loft`)");
+    println!("                                resumes your last session automatically;");
+    println!("                                --fresh starts clean (ignores the saved session)");
     println!("  check <file>                  same as --check <file>");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
@@ -2982,6 +2985,15 @@ fn registry_age_str(path: &std::path::Path) -> String {
 /// @PLN12 phase 04 — resolve the stdlib dir and run the interactive REPL, then
 /// exit.  Used by `loft repl` and by a bare `loft` with no file/subcommand.
 fn start_repl() -> ! {
+    // `--fresh` (anywhere on the command line): discard the saved session so
+    // this launch starts clean.  Handled here by an env scan so the flag needs
+    // no thread-through the arg loop, and works for both `loft repl --fresh` and
+    // a bare `loft --fresh`.  @PLN12 REPL.S — text-replay auto-resume.
+    if std::env::args().any(|a| a == "--fresh") {
+        if let Some(path) = loft::repl::session_file_path() {
+            loft::repl::ReplSession::clear_session(&path);
+        }
+    }
     let base = project_dir();
     let default_dir = std::path::Path::new(&base).join("default");
     let stdlib = if default_dir.exists() {
@@ -3342,6 +3354,10 @@ fn main() {
             // to stderr; evaluated results print to stdout (so a terminal sees
             // them and a pipe can capture them).
             start_repl();
+        } else if a == "--fresh" {
+            // @PLN12 REPL.S — recognised here only so a bare `loft --fresh`
+            // reaches the REPL instead of "unknown option"; `start_repl` reads
+            // the flag via an env scan and clears the saved session itself.
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.

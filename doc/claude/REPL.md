@@ -30,7 +30,31 @@ loft> x
 
 Type an expression and its value prints. Type `x = …` to name a value; the name
 stays available on the next line. Press Ctrl-D (end of input) or type `:quit` to
-leave.
+leave. Arrow keys recall earlier lines (history is kept in `~/.loft_history`),
+and Ctrl-C abandons the line you're typing.
+
+### Your session is restored next time
+
+Start the REPL interactively and it replays the bindings and definitions from
+your last session, so `x`, your functions, and your structs are still there:
+
+```
+$ loft
+restored 2 statement(s) from last session
+loft> dbl(x)
+84
+```
+
+The session is saved to `~/.loft_session` — only the state-changing lines, not
+the expressions you merely printed. Start clean with `loft repl --fresh`, or
+`:reset` mid-session to clear both the live state and the saved file. A saved
+line that no longer parses (say, after a loft upgrade) is skipped on replay and
+never blocks the rest.
+
+Because resume re-runs your bindings, a value drawn from `random()` or `now()`
+is produced afresh — the original stream is not reproduced (set an explicit seed
+if you need reproducibility). Auto-resume is interactive-only: piped or scripted
+input never reads or writes the session file, so captured output stays stable.
 
 ### Define things and call them
 
@@ -129,7 +153,9 @@ Current limits, with their planned fixes in
 - `:vars` (show each variable's current *value*) is not implemented yet — it
   needs a way to read a value back out of execution.  (`:type <expr>` works — it
   reads the inferred type at compile time, no execution needed.)
-- There is no line history or arrow-key editing yet; input is read plain.
+- Auto-resume re-runs your bindings rather than restoring their stored values,
+  so a non-deterministic result (`random()`, `now()`) is recomputed on resume.
+  Exact value-for-value restore is the same stack-resident model above.
 
 ## See also
 
