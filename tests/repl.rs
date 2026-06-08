@@ -98,6 +98,22 @@ fn interactive_breakpoint_edit_continue() {
     );
 }
 
+/// @PLN15 G1 — REPL-at-frame through the binary: at a pause, type an expression
+/// and it is evaluated against the live frame.  Paused in `calc` with `n == 5`,
+/// `n * 3` prints `15`; `:continue` then prints the call's own result, `50`.
+#[test]
+fn interactive_breakpoint_eval_expression() {
+    let out = repl(
+        &["repl"],
+        "fn calc(n: integer) -> integer {\n  n * 10\n}\n:break calc\ncalc(5)\nn * 3\n:continue\n:quit\n",
+    );
+    assert!(out.contains("15"), "n * 3 evaluated at the frame: {out:?}");
+    assert!(
+        out.contains("50"),
+        ":continue prints the call result: {out:?}"
+    );
+}
+
 /// `:quit` exits cleanly even with no input after it.
 #[test]
 fn quit_exits() {

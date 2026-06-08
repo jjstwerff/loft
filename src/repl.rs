@@ -433,9 +433,23 @@ fn process_line<W: Write>(
     chrome: &mut W,
 ) -> std::io::Result<bool> {
     // @PLN15 G1 — while suspended at a breakpoint, inputs drive the paused
-    // sub-mode (step verbs / value edits), not a fresh evaluation.
+    // sub-mode (step verbs / value edits / frame eval), not a fresh evaluation.
+    // A debug op runs user code (a resumed program, a frame expression); catch a
+    // runtime panic so it abandons the debug session rather than killing the REPL,
+    // mirroring the eval path below.
     if pending.is_empty() && session.is_debugging() {
-        return handle_paused(trimmed, session, chrome);
+        let outcome =
+            std::panic::catch_unwind(AssertUnwindSafe(|| handle_paused(trimmed, session, chrome)));
+        let Ok(res) = outcome else {
+            session.abort_debug();
+            writeln!(
+                chrome,
+                "runtime error in the paused run — debug session abandoned \
+                 (session preserved)"
+            )?;
+            return Ok(false);
+        };
+        return res;
     }
     // `:`-commands are only recognised at the start of a fresh statement.
     if pending.is_empty() && trimmed.starts_with(':') {
@@ -546,7 +560,8 @@ fn process_line<W: Write>(
 /// @PLN15 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
 /// resume execution (`:step`/`:s` into, `:next`/`:n` over, `:finish`/`:o` out,
 /// `:continue`/`:c` to the next breakpoint or the end); `name = <int>` edits the
-/// live frame; `:vars` re-shows the frame; `:quit`/`:q` leaves the REPL.  Returns
+/// live frame; any other expression is **evaluated against the frame** (`n * 2`,
+/// `pt.x`); `:vars` re-shows the frame; `:quit`/`:q` leaves the REPL.  Returns
 /// `Ok(true)` only to quit.  Verbs work with or without the leading colon, so a
 /// paused user can type `step` or `:step`.
 fn handle_paused<W: Write>(
@@ -565,18 +580,26 @@ fn handle_paused<W: Write>(
         "vars" => print_pause(session, chrome)?,
         "help" | "h" => writeln!(
             chrome,
-            "paused: :step(:s) into  :next(:n) over  :finish(:o) out  \
-             :continue(:c)  :vars  |  `name = <int>` edits a value  |  :quit"
+            "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
+             :vars  |  `name = <int>` edits a value  |  any expression is evaluated \
+             at the frame  |  :quit"
         )?,
         _ => match parse_int_assign(t) {
+            // `name = <int>` writes the live frame (picked up on resume).
             Some((name, value)) if session.debug_set(name, value) => {
                 print_pause(session, chrome)?;
             }
             Some((name, _)) => writeln!(chrome, "no integer local `{name}` in this frame")?,
-            None => writeln!(
-                chrome,
-                "paused — :step/:next/:finish/:continue, or `name = <int>` to edit (:help)"
-            )?,
+            // Anything else is an expression read against the frame's live values;
+            // the value prints to stdout like a normal REPL result.
+            None => match session.debug_eval(t) {
+                Some(v) => println!("{v}"),
+                None => writeln!(
+                    chrome,
+                    "couldn't evaluate `{t}` at the frame \
+                     (:step/:next/:finish/:continue, `name = <int>` to edit, :help)"
+                )?,
+            },
         },
     }
     Ok(false)
@@ -988,6 +1011,44 @@ impl ReplSession {
     /// [`StepMode::Continue`](crate::debugger::StepMode::Continue).
     pub fn debug_continue(&mut self) -> bool {
         self.debug_step(crate::debugger::StepMode::Continue)
+    }
+
+    /// Evaluate `expr` against the **current paused frame** and render its value as
+    /// an own-format loft literal (`"15"`, `"Point{x:3,y:4}"`), or `None` if it
+    /// doesn't evaluate / there is no pause.  This is the REPL-at-frame: typing an
+    /// expression at the `(dbg)` prompt reads the frame's live variables (`n * 2`,
+    /// `pt.x * pt.y`).  It reuses the D1 bridge — the frame's captured variables
+    /// render to literals, so binding them as the evaluation body and running
+    /// [`value_of`](Self::value_of) covers **every** type the frame holds.
+    ///
+    /// Read-only: it runs on a throwaway `State` (the held paused state is
+    /// untouched), and any value the user has edited with
+    /// [`debug_set`](Self::debug_set) is already reflected in the frame's literals.
+    /// The session body is swapped to the frame bindings only for this call and
+    /// always restored — even if the evaluation unwinds.
+    pub fn debug_eval(&mut self, expr: &str) -> Option<String> {
+        let prefix = {
+            let frame = self.paused.as_deref()?.paused_frame()?;
+            let mut p = String::new();
+            for (name, lit) in &frame.locals {
+                p.push_str(name);
+                p.push_str(" = ");
+                p.push_str(lit);
+                p.push_str(";\n");
+            }
+            p
+        };
+        let saved = std::mem::replace(&mut self.body, prefix);
+        let result =
+            std::panic::catch_unwind(AssertUnwindSafe(|| self.value_of(expr))).unwrap_or(None);
+        self.body = saved; // restore the real session body, panic or not
+        result
+    }
+
+    /// Abandon a paused debug session, dropping the held state — used to recover the
+    /// REPL after a debug operation panics.  The breakpoints stay set.
+    pub fn abort_debug(&mut self) {
+        self.paused = None;
     }
 
     /// Resolve + set the session's breakpoint specs on a freshly-compiled `state`

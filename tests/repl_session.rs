@@ -392,6 +392,46 @@ fn repl_interactive_step_into_and_out() {
     assert!(!s.is_debugging());
 }
 
+/// @PLN15 G1 (interactive) — the REPL-at-frame: at a pause, evaluate arbitrary
+/// expressions against the live frame (not just read a value back).  Covers a
+/// heap (struct) argument and an integer arg, reads compound expressions, and
+/// confirms a live edit is reflected in a subsequent frame eval.
+#[test]
+fn repl_interactive_eval_at_frame() {
+    let mut s = session();
+    for d in [
+        "struct Point { x: integer, y: integer }",
+        "fn area(pt: Point, k: integer) -> integer {\n  pt.x * pt.y * k\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("area");
+    assert!(matches!(
+        s.eval("area(Point { x: 3, y: 4 }, 2)"),
+        Eval::Paused
+    ));
+    // Read expressions against the frame's live variables.
+    assert_eq!(s.debug_eval("k").as_deref(), Some("2"), "bare arg");
+    assert_eq!(
+        s.debug_eval("pt.x * pt.y").as_deref(),
+        Some("12"),
+        "struct field arithmetic"
+    );
+    assert_eq!(s.debug_eval("pt.x + k").as_deref(), Some("5"), "mixed args");
+    // A live integer edit is reflected in a later frame eval.
+    assert!(s.debug_set("k", 10), "edit k");
+    assert_eq!(
+        s.debug_eval("pt.x * pt.y * k").as_deref(),
+        Some("120"),
+        "eval reflects the edit"
+    );
+    // A nonsense expression yields None, not a panic; the session stays paused.
+    assert_eq!(s.debug_eval("no_such_var + 1"), None);
+    assert!(s.is_debugging(), "still paused after a failed eval");
+    assert!(!s.debug_continue());
+}
+
 /// Without stepping enabled, breakpoints stay in **record-and-continue** mode: an
 /// observing run completes (`Eval::Ran`, not `Paused`) and the hits land in
 /// `last_hits` — the programmatic mode the conditional-breakpoint sweep relies on.
