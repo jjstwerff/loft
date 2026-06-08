@@ -112,7 +112,15 @@ pub fn parse(input: &str) -> Result<Parsed, ParseError> {
 /// chosen dialect.
 pub fn parse_with(input: &str, dialect: Dialect) -> Result<Parsed, ParseError> {
     let bytes = input.as_bytes();
-    let start = skip_ws(bytes, 0);
+    // RFC 8259 allows a parser to ignore a single leading UTF-8 BOM
+    // (`EF BB BF`).  Skip it by advancing the start index rather than
+    // re-slicing, so reported `byte_offset`s still index into `input`.
+    let bom = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else {
+        0
+    };
+    let start = skip_ws(bytes, bom);
     let mut path: Vec<String> = Vec::new();
     let res = parse_value(bytes, start, &mut path, dialect);
     let (value, mut i) = match res {
@@ -317,6 +325,19 @@ fn utf8_lead_len(b: u8) -> usize {
     }
 }
 
+/// Read exactly four hex digits of a `\uXXXX` escape starting at `pos`
+/// (the index of the first hex digit, i.e. just past the `u`) and return
+/// their value.  Errors if fewer than four bytes remain or any is not
+/// ASCII hex.
+fn parse_hex4(bytes: &[u8], pos: usize) -> Result<u32, (String, usize)> {
+    if pos + 4 > bytes.len() {
+        return Err(("truncated \\uXXXX escape".to_string(), pos));
+    }
+    let hex = std::str::from_utf8(&bytes[pos..pos + 4])
+        .map_err(|_| ("non-ASCII in \\uXXXX escape".to_string(), pos))?;
+    u32::from_str_radix(hex, 16).map_err(|_| ("invalid hex in \\uXXXX escape".to_string(), pos))
+}
+
 fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
     debug_assert_eq!(bytes[start], b'"');
     let mut i = start + 1;
@@ -340,19 +361,39 @@ fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
                     b'r' => out.push('\r'),
                     b't' => out.push('\t'),
                     b'u' => {
-                        if i + 4 >= bytes.len() {
-                            return Err(("truncated \\uXXXX escape".to_string(), i));
-                        }
-                        let hex = std::str::from_utf8(&bytes[i + 1..i + 5])
-                            .map_err(|_| ("non-ASCII in \\uXXXX escape".to_string(), i))?;
-                        let cp = u32::from_str_radix(hex, 16)
-                            .map_err(|_| ("invalid hex in \\uXXXX escape".to_string(), i))?;
-                        if let Some(c) = char::from_u32(cp) {
-                            out.push(c);
-                        } else {
+                        // `i` points at the `u`; the 4 hex digits are at i+1..i+5.
+                        let hi = parse_hex4(bytes, i + 1)?;
+                        i += 4; // consume the hex digits; i now at the last one
+                        if (0xD800..=0xDBFF).contains(&hi) {
+                            // High surrogate: a non-BMP char is encoded as a
+                            // UTF-16 pair `😀`.  Combine with a
+                            // following `\uDCxx` low surrogate; the looked-ahead
+                            // `\uDCxx` sits at i+1..i+7 (i+1=`\`, i+2=`u`).
+                            let low = if i + 2 < bytes.len()
+                                && bytes[i + 1] == b'\\'
+                                && bytes[i + 2] == b'u'
+                            {
+                                parse_hex4(bytes, i + 3)
+                                    .ok()
+                                    .filter(|lo| (0xDC00..=0xDFFF).contains(lo))
+                            } else {
+                                None
+                            };
+                            if let Some(lo) = low {
+                                let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                                out.push(char::from_u32(cp).unwrap_or('\u{fffd}'));
+                                i += 6; // consume the looked-ahead `\uDCxx`
+                            } else {
+                                // Lone/half high surrogate: replacement char.
+                                // Leave any following escape for the next pass.
+                                out.push('\u{fffd}');
+                            }
+                        } else if (0xDC00..=0xDFFF).contains(&hi) {
+                            // Lone low surrogate (no preceding high): replacement.
                             out.push('\u{fffd}');
+                        } else {
+                            out.push(char::from_u32(hi).unwrap_or('\u{fffd}'));
                         }
-                        i += 4;
                     }
                     other => return Err((format!("invalid escape \\{}", other as char), i)),
                 }
@@ -628,6 +669,64 @@ mod tests {
             panic!("expected Str")
         };
         assert_eq!(s, "→ é 😀");
+    }
+
+    /// P285 — a non-BMP character escaped as a UTF-16 surrogate pair
+    /// (`\uHI\uLO`, what Python's default `json.dumps` emits) must combine
+    /// into one scalar.  The pre-fix code decoded each half independently;
+    /// a surrogate code unit is not a scalar, so each became U+FFFD and
+    /// `😀` came back as `��`.
+    #[test]
+    fn p285_surrogate_pairs() {
+        // U+1F600 GRINNING FACE as a surrogate pair.
+        let Parsed::Str(s) = parse(r#""😀""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "😀");
+        assert_eq!(s.len(), 4);
+        // Mixed BMP escape + surrogate pair + ASCII, pair not at the end.
+        let Parsed::Str(s) = parse(r#""a→b😀c""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "a→b😀c");
+        // Lone high surrogate → one U+FFFD.
+        let Parsed::Str(s) = parse(r#""\uD83D""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "\u{fffd}");
+        // Lone low surrogate → one U+FFFD.
+        let Parsed::Str(s) = parse(r#""\uDE00""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "\u{fffd}");
+        // High surrogate followed by a non-low `\u` escape: the high half is
+        // U+FFFD, the second escape is still decoded normally ('A').
+        let Parsed::Str(s) = parse(r#""\uD83DA""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "\u{fffd}A");
+    }
+
+    /// P285 — a single leading UTF-8 BOM (`EF BB BF`) is ignored at parse
+    /// entry (RFC 8259 permits this).  A BOM-prefixed document used to fail
+    /// to parse.
+    #[test]
+    fn p285_leading_bom_skipped() {
+        let bom = "\u{feff}";
+        assert!(matches!(
+            parse(&format!("{bom}null")).unwrap(),
+            Parsed::Null
+        ));
+        let Parsed::Object(fields) = parse(&format!("{bom}{{\"a\": 1}}")).unwrap() else {
+            panic!("expected object");
+        };
+        assert_eq!(fields[0].0, "a");
+        // A BOM only counts at offset 0 — a `﻿` escape inside a string
+        // is a normal ZERO WIDTH NO-BREAK SPACE scalar, untouched.
+        let Parsed::Str(s) = parse(r#""﻿""#).unwrap() else {
+            panic!("expected Str")
+        };
+        assert_eq!(s, "\u{feff}");
     }
 
     #[test]
