@@ -708,6 +708,24 @@ impl ReplSession {
         bound
     }
 
+    /// Evaluate a boolean `condition` against a captured frame — the @PLN15 E
+    /// **conditional / test breakpoint** primitive.  Seeds the frame (D1) then
+    /// `assert`s the condition: returns `true` iff it holds, so a caller keeps only
+    /// the hits where it does ("break when `i > 3`") or where an invariant is
+    /// violated ("break when `!(balance >= 0)`").  The session is mutated
+    /// (re-seeded each call — a rebind, safe for one breakpoint's same-shaped
+    /// frames), so build it with [`from_parser`](Self::from_parser) so heap values'
+    /// types are in scope.  This filters *recorded* hits post-run; skipping the
+    /// capture in-loop (so a non-matching breakpoint never even pauses) would need
+    /// the condition pre-compiled against the frame — a later refinement.
+    pub fn frame_holds(&mut self, hit: &crate::debugger::BreakHit, condition: &str) -> bool {
+        self.seed_frame(hit);
+        matches!(
+            self.eval(&format!("assert({condition}, \"cond\")")),
+            Eval::Ran
+        )
+    }
+
     /// Turn on session persistence: every later state-changing input appends to
     /// `path` (created if absent).  The interactive driver calls this after
     /// [`resume_from`](Self::resume_from); piped/test sessions never do, so they

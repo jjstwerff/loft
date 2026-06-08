@@ -16,11 +16,12 @@ reads the live frame's arguments correctly; it fires once per call and is inert 
 nothing is registered. `src/debugger.rs` (`Debugger`/`BreakHit`) + the per-op hook
 in `State::execute_argv` + `set_breakpoint_fn_line` (function-scoped) /
 `set_breakpoint_fn_entry` / `capture_break_frame` / `render_frame_local`;
-`tests/debugger.rs` (**8 tests**). **The pipeline works end-to-end:** set a
+`tests/debugger.rs` (**9 tests**). **The pipeline works end-to-end:** set a
 breakpoint → pause + capture the live frame (args **and** non-arg locals,
 liveness-gated, every value type) → **drop into a REPL and evaluate against the
 frame** (`ReplSession::seed_frame` / `from_parser` — `n + a == 21`,
-`pt.x * pt.y == 12`). D0 + D1-first-cut done. The hot loop carries one
+`pt.x * pt.y == 12`) → **conditional breakpoints** (`frame_holds` keeps only hits
+where a condition over the frame holds). D0 + D1 + E first-cut done. The hot loop carries one
 `Option::is_some` branch per op when not debugging (issues suite green — no
 regression). **Facts the slices pinned** (matrix-first paid off): a function-*entry*
 breakpoint pauses pre-prologue (slots zero), so the read point is a **body line**; a
@@ -133,7 +134,7 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
 | **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **DONE** — captures **arguments + non-arg locals**, every value type (scalars/text inline, heap struct/vector/struct-enum via `show_loft`, simple enums by discriminant), via `render_frame_local`. Locals are **liveness-gated** by reference-range (`first_ref <= pc <= last_ref`) derived from `self.vars` (the codegen `code_pos → var_nr` map) — *safe* (a var in its read-range is necessarily assigned, never garbage) and it picks the right owner of a reused slot; the only gap is a defined-but-not-yet-read local before its first read (under-shows, never wrong). See Open question 6 (resolved). |
 | **D1** — frame → REPL bridge: seed a `ReplSession` from D0's captured frame, so evaluating at a break runs against the live locals | **First cut (the headline, working)** — `ReplSession::seed_frame` binds each captured `(name, own-format literal)` as `name = <literal>`; `ReplSession::from_parser` builds the session over the program's parser so heap values' types are in scope. Eval-at-frame works end-to-end (`n + a == 21`, `pt.x * pt.y == 12`). **No @PLN14 dependency for read-eval** — the own-format literal *is* the bridge; exact value-for-value seeding + **frame mutation / write-back** (edit a local at the break, resume with it) is the @PLN14 upgrade. |
-| **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | Open |
+| **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | **First cut** — `ReplSession::frame_holds(hit, condition)` seeds the frame (D1) and `assert`s the condition; a caller keeps only the hits where it holds (break when `n > 1`) or where an invariant is violated. Post-run filter on recorded hits; an in-loop *skip* (a non-matching breakpoint never even pauses) needs the condition pre-compiled against the frame — a refinement. |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | Open |
 | **G2** — browser surface: `loft-dap` protocol + web UI (gutter, variables, call stack, REPL console) — the *natural home* | Open |
@@ -157,8 +158,9 @@ The host-agnostic engine is A–F; the surfaces are G.
 5. **B (interpret-scope)** — needed for breakpoints reached through compiled code
    and for an introspectable call stack; start with "interpret from entry point,"
    refine to call-graph-reachability so unrelated code stays compiled.
-6. **E (conditional/test)** — thin once D1 exists: a condition is `eval` against the
-   frame env.
+6. **E (conditional/test)** — *first cut done*: `frame_holds` evals a condition
+   against the seeded frame to filter recorded hits (thin, as predicted, once D1
+   existed). In-loop skip is a refinement.
 7. **G2 (DAP + browser UI)** — the protocol adapter (`loft-dap`, scoped under
    @PLN/09-lsp LSP.3) and the web-IDE surface consume the same API as G1.
 

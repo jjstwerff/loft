@@ -254,6 +254,37 @@ fn repl_at_frame_evaluates_struct_frame() {
     );
 }
 
+/// @PLN15 E — conditional / test breakpoint: a condition evaluated against each
+/// captured frame selects which hits to keep ("break when `n > 1`").
+#[test]
+fn conditional_breakpoint_filters_by_frame_condition() {
+    let mut p = repl();
+    let hits = run_with_breakpoint(
+        &mut p,
+        &["fn step(n: integer) -> integer {\n  n * 10\n}"],
+        "step(1) + step(2) + step(3)",
+        "step",
+        2,
+    );
+    assert_eq!(hits.len(), 3, "fires per call: {hits:?}");
+    let mut s = ReplSession::from_parser(p);
+    assert_eq!(
+        hits.iter().filter(|h| s.frame_holds(h, "n > 1")).count(),
+        2,
+        "n > 1 holds for n = 2 and 3"
+    );
+    assert_eq!(
+        hits.iter().filter(|h| s.frame_holds(h, "n > 100")).count(),
+        0,
+        "n > 100 holds for none"
+    );
+    assert_eq!(
+        hits.iter().filter(|h| s.frame_holds(h, "n >= 1")).count(),
+        3,
+        "n >= 1 holds for all"
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]
