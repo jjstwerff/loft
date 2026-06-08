@@ -17,6 +17,7 @@
 
 use loft::compile;
 use loft::parser::{ParseResult, Parser};
+use loft::repl::{Eval, ReplSession};
 use loft::state::State;
 
 fn repl() -> Parser {
@@ -198,6 +199,58 @@ fn breakpoint_gates_locals_by_liveness() {
     assert!(
         !frame.iter().any(|(n, _)| n == "b"),
         "local b not-yet-live, excluded: {frame:?}"
+    );
+}
+
+/// @PLN15 D1 — the REPL-at-frame bridge: seed a session with a captured frame and
+/// evaluate an expression against its variables.  Scalar frame on a fresh session.
+#[test]
+fn repl_at_frame_evaluates_scalar_frame() {
+    let mut p = repl();
+    let hits = run_with_breakpoint(
+        &mut p,
+        &["fn calc(n: integer) -> integer {\n  a = n + 1;\n  b = a * 2;\n  b\n}"],
+        "calc(10)",
+        "calc",
+        3,
+    );
+    let hit = &hits[0]; // n = 10, a = 11
+    let mut s = ReplSession::new("default").expect("stdlib");
+    let bound = s.seed_frame(hit);
+    assert!(bound >= 2, "n and a seeded: {bound}");
+    // n + a == 21 holds → the frame variables are in scope with their live values.
+    assert!(
+        matches!(s.eval("assert(n + a == 21, \"frame eval\")"), Eval::Ran),
+        "eval over frame vars ran"
+    );
+}
+
+/// D1 over a heap frame: a struct value seeds and a field expression evaluates,
+/// when the session carries the program's type definitions (built from its parser).
+#[test]
+fn repl_at_frame_evaluates_struct_frame() {
+    let mut p = repl();
+    let hits = run_with_breakpoint(
+        &mut p,
+        &[
+            "struct Point { x: integer, y: integer }",
+            "fn area(pt: Point) -> integer {\n  pt.x * pt.y\n}",
+        ],
+        "area(Point { x: 3, y: 4 })",
+        "area",
+        2,
+    );
+    // The session must know `Point`, so build it over the program's parser.
+    let hit = hits[0].clone(); // pt = Point{x:3,y:4}
+    let mut s = ReplSession::from_parser(p);
+    let bound = s.seed_frame(&hit);
+    assert!(bound >= 1, "pt seeded: {bound}");
+    assert!(
+        matches!(
+            s.eval("assert(pt.x * pt.y == 12, \"struct frame\")"),
+            Eval::Ran
+        ),
+        "eval pt.x * pt.y ran"
     );
 }
 

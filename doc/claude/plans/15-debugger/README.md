@@ -16,19 +16,22 @@ reads the live frame's arguments correctly; it fires once per call and is inert 
 nothing is registered. `src/debugger.rs` (`Debugger`/`BreakHit`) + the per-op hook
 in `State::execute_argv` + `set_breakpoint_fn_line` (function-scoped) /
 `set_breakpoint_fn_entry` / `capture_break_frame` / `render_frame_local`;
-`tests/debugger.rs` (**6 tests**). **D0 is done:** captures arguments **and non-arg
-locals** of **every value type** — scalars/text inline, heap (struct/vector/struct-enum)
-via `show_loft`, simple enums by discriminant — with locals **liveness-gated** by
-reference-range (Q6, resolved). The hot loop carries one `Option::is_some` branch per
-op when not debugging (issues suite green — no regression). **Facts the slices
-pinned** (matrix-first paid off): a function-*entry* breakpoint pauses pre-prologue
-(slots zero), so the read point is a **body line**; a variable sits at the
-frame-absolute `stack_cur.pos + args_base + vars.stack(i)` — *not* `get_var`'s
-stack-depth-relative operand; a bare line number is *unscoped* (matches every
-function), so breakpoints are function-scoped; `first_def`/`last_use` are *sequence*
-numbers (wrong unit), but `self.vars`' `code_pos → var_nr` map yields a usable
-reference-range liveness (Q6). **Next**: the REPL-at-frame bridge (**D1**, gated on
-@PLN14) → stepping (**F**) →
+`tests/debugger.rs` (**8 tests**). **The pipeline works end-to-end:** set a
+breakpoint → pause + capture the live frame (args **and** non-arg locals,
+liveness-gated, every value type) → **drop into a REPL and evaluate against the
+frame** (`ReplSession::seed_frame` / `from_parser` — `n + a == 21`,
+`pt.x * pt.y == 12`). D0 + D1-first-cut done. The hot loop carries one
+`Option::is_some` branch per op when not debugging (issues suite green — no
+regression). **Facts the slices pinned** (matrix-first paid off): a function-*entry*
+breakpoint pauses pre-prologue (slots zero), so the read point is a **body line**; a
+variable sits at the frame-absolute `stack_cur.pos + args_base + vars.stack(i)` —
+*not* `get_var`'s stack-depth-relative operand; a bare line number is *unscoped*
+(matches every function), so breakpoints are function-scoped; `first_def`/`last_use`
+are *sequence* numbers (wrong unit), but `self.vars`' `code_pos → var_nr` map yields
+a usable reference-range liveness (Q6); and the **own-format literal is the D1
+bridge**, so read-eval-at-frame needs no @PLN14 store-resident env (that is the
+exact-seeding + frame-mutation upgrade). **Next**: stepping (**F**) + the terminal
+surface (**G1**) →
 conditions (**E**).
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
@@ -129,7 +132,7 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **B** — interpret-scope analysis: from a breakpoint set, compute the functions whose call-chain must interpret (static call-graph reachability; refine to on-demand frame-entry switching) | Open |
 | **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
 | **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **DONE** — captures **arguments + non-arg locals**, every value type (scalars/text inline, heap struct/vector/struct-enum via `show_loft`, simple enums by discriminant), via `render_frame_local`. Locals are **liveness-gated** by reference-range (`first_ref <= pc <= last_ref`) derived from `self.vars` (the codegen `code_pos → var_nr` map) — *safe* (a var in its read-range is necessarily assigned, never garbage) and it picks the right owner of a reused slot; the only gap is a defined-but-not-yet-read local before its first read (under-shows, never wrong). See Open question 6 (resolved). |
-| **D1** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from D0's captured frame, so evaluating at a break runs against the live locals (**depends on @PLN14 frame-seedable env**) | Open — the headline payoff |
+| **D1** — frame → REPL bridge: seed a `ReplSession` from D0's captured frame, so evaluating at a break runs against the live locals | **First cut (the headline, working)** — `ReplSession::seed_frame` binds each captured `(name, own-format literal)` as `name = <literal>`; `ReplSession::from_parser` builds the session over the program's parser so heap values' types are in scope. Eval-at-frame works end-to-end (`n + a == 21`, `pt.x * pt.y == 12`). **No @PLN14 dependency for read-eval** — the own-format literal *is* the bridge; exact value-for-value seeding + **frame mutation / write-back** (edit a local at the break, resume with it) is the @PLN14 upgrade. |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | Open |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | Open |
@@ -143,9 +146,11 @@ The host-agnostic engine is A–F; the surfaces are G.
 2. **D0 (frame read)** — *done*: args + non-arg locals (liveness-gated), every
    value type. Extended `capture_break_frame` / `render_frame_local`; no new
    dependency.
-3. **D1 (frame → REPL bridge)** — the payoff: a paused frame becomes an inspectable
-   REPL. Gated on @PLN14's env being seedable from an arbitrary frame (the
-   sharpening that plan now carries).
+3. **D1 (frame → REPL bridge)** — *first cut done*: a paused frame becomes an
+   inspectable REPL via `seed_frame` / `from_parser`, evaluating against the frame's
+   own-format literals. The @PLN14 store-resident env is the *upgrade* (exact
+   value-for-value seeding + frame mutation/write-back), not a prerequisite for
+   read-eval.
 4. **F (debug API) + G1 (terminal surface)** — wrap A–E as the headless API and
    prove it end-to-end from the **terminal** first (the REPL is already there), so
    the engine ships useful before any browser work.

@@ -674,6 +674,40 @@ impl ReplSession {
         })
     }
 
+    /// Build a session over an existing `parser` already loaded with a program's
+    /// definitions — used by the @PLN15 debugger to evaluate at a paused frame with
+    /// the program's types + functions in scope.  The accumulated body starts
+    /// empty; persistence is off.
+    #[must_use]
+    pub fn from_parser(parser: Parser) -> Self {
+        Self {
+            parser,
+            body: String::new(),
+            counter: 0,
+            record: None,
+            replaying: false,
+        }
+    }
+
+    /// Seed this session with a paused frame's variables (a @PLN15
+    /// [`BreakHit`](crate::debugger::BreakHit)): each captured
+    /// `(name, own-format literal)` becomes a binding `name = <literal>`, so
+    /// expressions evaluated afterwards run against the frame's live values — the
+    /// **REPL-at-frame** bridge.  It reuses the literal each value already renders
+    /// to, so it needs no store-resident environment (exact value-for-value seeding
+    /// with frame mutation is the @PLN14 upgrade).  Returns the number of variables
+    /// bound; a value whose type isn't in scope (seeding a struct on a stdlib-only
+    /// session) is skipped, not fatal.
+    pub fn seed_frame(&mut self, hit: &crate::debugger::BreakHit) -> usize {
+        let mut bound = 0;
+        for (name, literal) in &hit.locals {
+            if matches!(self.eval(&format!("{name} = {literal}")), Eval::Ran) {
+                bound += 1;
+            }
+        }
+        bound
+    }
+
     /// Turn on session persistence: every later state-changing input appends to
     /// `path` (created if absent).  The interactive driver calls this after
     /// [`resume_from`](Self::resume_from); piped/test sessions never do, so they
