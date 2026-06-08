@@ -114,6 +114,21 @@ fn interactive_breakpoint_eval_expression() {
     );
 }
 
+/// @PLN15 G1 — a **non-integer** edit through the binary: flip a `boolean` local
+/// at the pause and continue.  `adjust(5, false)` returns the doubled `d == 10`;
+/// editing `neg` to true at the breakpoint negates it to `-10` on resume — proving
+/// edit-and-continue covers scalars beyond integer.  (The body opens with the
+/// arithmetic `d = n + n` so the breakpoint lands at a source-mapped op before the
+/// branch — see the source-span coverage note in the @PLN15 plan.)
+#[test]
+fn interactive_breakpoint_edit_boolean() {
+    let out = repl(
+        &["repl"],
+        "fn adjust(n: integer, neg: boolean) -> integer {\n  d = n + n;\n  if neg { 0 - d } else { d }\n}\n:break adjust\nadjust(5, false)\nneg = true\n:continue\n:quit\n",
+    );
+    assert!(out.contains("-10"), "flipped neg → -10: {out:?}");
+}
+
 /// `:quit` exits cleanly even with no input after it.
 #[test]
 fn quit_exits() {

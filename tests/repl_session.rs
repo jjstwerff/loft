@@ -341,7 +341,7 @@ fn repl_interactive_break_edit_continue() {
         "n == 5 at the pause (pre-multiply): {f:?}"
     );
     // Edit `n` in the live frame; the frame view refreshes to the new value.
-    assert!(s.debug_set("n", 99), "write-back n = 99");
+    assert!(s.debug_set("n", "99"), "write-back n = 99");
     assert!(
         s.paused_frame()
             .unwrap()
@@ -420,7 +420,7 @@ fn repl_interactive_eval_at_frame() {
     );
     assert_eq!(s.debug_eval("pt.x + k").as_deref(), Some("5"), "mixed args");
     // A live integer edit is reflected in a later frame eval.
-    assert!(s.debug_set("k", 10), "edit k");
+    assert!(s.debug_set("k", "10"), "edit k");
     assert_eq!(
         s.debug_eval("pt.x * pt.y * k").as_deref(),
         Some("120"),
@@ -429,6 +429,39 @@ fn repl_interactive_eval_at_frame() {
     // A nonsense expression yields None, not a panic; the session stays paused.
     assert_eq!(s.debug_eval("no_such_var + 1"), None);
     assert!(s.is_debugging(), "still paused after a failed eval");
+    assert!(!s.debug_continue());
+}
+
+/// @PLN15 G1 (interactive) — edit-and-continue across **scalar types**, not just
+/// integers: a live `integer` / `float` / `boolean` local is each edited at the
+/// pause (one by literal, one by an expression evaluated against the frame), the
+/// reads reflect the edits, and a **text** local is correctly *rejected* (its slot
+/// holds a store pointer — not yet editable).
+#[test]
+fn repl_interactive_edit_scalar_types() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval(
+            "fn mix(n: integer, f: float, b: boolean, msg: text) -> float {\n  \
+             if b { n * f } else { 0.0 }\n}"
+        ),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("mix");
+    assert!(matches!(s.eval("mix(2, 1.5, true, \"hi\")"), Eval::Paused));
+    // integer (literal), float (literal), boolean (expression `!b`).
+    assert!(s.debug_set("n", "10"), "int edit");
+    assert!(s.debug_set("f", "2.0"), "float edit");
+    assert!(s.debug_set("b", "!b"), "bool expr edit (true → false)");
+    assert_eq!(s.debug_eval("n").as_deref(), Some("10"));
+    assert_eq!(s.debug_eval("f").as_deref(), Some("2.0"));
+    assert_eq!(s.debug_eval("b").as_deref(), Some("false"));
+    // A type-mismatched edit is rejected (float literal into an integer local).
+    assert!(!s.debug_set("n", "3.5"), "type-mismatched edit rejected");
+    assert_eq!(s.debug_eval("n").as_deref(), Some("10"), "n unchanged");
+    // A text local is not yet editable (store pointer) — rejected, frame intact.
+    assert!(!s.debug_set("msg", "\"bye\""), "text edit rejected");
     assert!(!s.debug_continue());
 }
 

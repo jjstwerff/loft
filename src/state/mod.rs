@@ -183,6 +183,23 @@ pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
     }
 }
 
+/// Ensure `s` — a number already formatted with `to_string` — re-parses as a loft
+/// `float`/`single`, **not** `integer`: append `.0` when it carries no decimal
+/// point, exponent, or non-digit marker (`inf`/`NaN` pass through unchanged).  The
+/// single home for the float round-trip rule — the breakpoint frame renderer
+/// ([`State::render_frame_local`]) and the REPL value snapshot (`repl::float_literal`)
+/// both go through it, so a `2.0` never renders as a bare `2` that re-types as
+/// `integer` when seeded back.
+pub(crate) fn loft_float_literal(s: &str) -> String {
+    let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
+    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
+    if has_dot_or_exp || !has_digit {
+        s.to_string()
+    } else {
+        format!("{s}.0")
+    }
+}
+
 /// Bytecode encoding: ops 0–254 are one byte.  Byte 255 is an escape
 /// prefix — the interpreter reads a second byte `ext` and dispatches
 /// `OPERATORS[255 + ext]`.  The OPERATORS table is flat; this function
@@ -1937,31 +1954,113 @@ impl State {
         self.debug.as_deref().and_then(|d| d.paused.as_ref())
     }
 
+    /// Resolve frame local `name` to its `(record, frame-absolute address, type)`
+    /// in the current suspension's frame — the shared slot lookup behind both the
+    /// frame-value reads and writes.  The address is the variable's fixed slot
+    /// (`stack_cur.pos + args_base + vars.stack(i)`), the same one
+    /// [`render_frame_local`](Self::render_frame_local) reads.  `None` if there is
+    /// no current frame or no local of that name.
+    fn frame_slot(
+        &self,
+        name: &str,
+        data: &crate::data::Data,
+    ) -> Option<(u32, u32, crate::data::Type)> {
+        let frame = self.call_stack.last()?;
+        if frame.d_nr == u32::MAX {
+            return None;
+        }
+        let vars = &data.def(frame.d_nr).variables;
+        let i = (0..vars.count()).find(|&i| vars.name(i) == name)?;
+        let at = self.stack_cur.pos + frame.args_base + u32::from(vars.stack(i));
+        Some((self.stack_cur.rec, at, vars.tp(i).clone()))
+    }
+
     /// Write an integer `value` into the **live** frame's local `name` at a
     /// suspension — the @PLN15 F write-back, so a value edited at the breakpoint is
     /// picked up when execution `resume`s.  Returns `false` if no integer local of
-    /// that name is in the current frame.  (Integer for now; other types extend the
-    /// same way via the type-dispatched write.)
+    /// that name is in the current frame.  (The typed-`i64` primitive; the REPL
+    /// edits via [`set_frame_literal`](Self::set_frame_literal), which covers every
+    /// inline scalar.)
     pub fn set_frame_value(&mut self, name: &str, value: i64, data: &crate::data::Data) -> bool {
-        let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
-        if d_nr == u32::MAX {
+        let Some((rec, at, tp)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        if !matches!(tp, crate::data::Type::Integer(_)) {
             return false;
         }
-        let frame_base = self.call_stack.last().map_or(0, |f| f.args_base);
-        let off = {
-            let vars = &data.def(d_nr).variables;
-            (0..vars.count())
-                .find(|&i| vars.name(i) == name)
-                .filter(|&i| matches!(vars.tp(i), crate::data::Type::Integer(_)))
-                .map(|i| vars.stack(i))
-        };
-        let Some(off) = off else { return false };
-        let rec = self.stack_cur.rec;
-        let at = self.stack_cur.pos + frame_base + u32::from(off);
         *self
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<i64>(rec, at) = value;
+        true
+    }
+
+    /// Write the value rendered by own-format `literal` into the **live** frame's
+    /// local `name`, **type-directed** by the local's declared type — the general
+    /// @PLN15 F edit-and-continue write the REPL uses (`f = 2.0`, `b = false`).
+    /// Covers every **inline scalar** (integer / float / single / boolean /
+    /// character); `literal` is parsed in that type's own-format form (the same
+    /// form [`render_frame_local`](Self::render_frame_local) produces, so an edited
+    /// value round-trips).  Returns `false` for an unknown local, a `literal` that
+    /// doesn't parse as the local's type (so a type-mismatched edit is rejected),
+    /// or a **text / heap** local — those hold a pointer / `DbRef` into the store,
+    /// so editing them needs the store-resident write-back (the remaining work).
+    pub fn set_frame_literal(
+        &mut self,
+        name: &str,
+        literal: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        use crate::data::Type;
+        let Some((rec, at, tp)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        let lit = literal.trim();
+        let store = self.database.store_mut(&self.stack_cur);
+        match tp {
+            Type::Integer(_) => {
+                let Ok(v) = lit.parse::<i64>() else {
+                    return false;
+                };
+                *store.addr_mut::<i64>(rec, at) = v;
+            }
+            Type::Float => {
+                let Ok(v) = lit.parse::<f64>() else {
+                    return false;
+                };
+                *store.addr_mut::<f64>(rec, at) = v;
+            }
+            Type::Single => {
+                let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
+                    return false;
+                };
+                *store.addr_mut::<f32>(rec, at) = v;
+            }
+            Type::Boolean => {
+                let v = match lit {
+                    "true" => 1u8,
+                    "false" => 0u8,
+                    _ => return false,
+                };
+                *store.addr_mut::<u8>(rec, at) = v;
+            }
+            Type::Character => {
+                // Own-format is `'c'`; take the single char between the quotes.
+                let inner = lit
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                    .unwrap_or(lit);
+                let mut cs = inner.chars();
+                let (Some(c), None) = (cs.next(), cs.next()) else {
+                    return false;
+                };
+                *store.addr_mut::<u32>(rec, at) = c as u32;
+            }
+            // Text + heap (struct / vector / enum): the slot holds a pointer / DbRef
+            // into the store — editing needs the store-resident write-back, not yet
+            // built.  Reject rather than corrupt the slot.
+            _ => return false,
+        }
         true
     }
 
@@ -2139,14 +2238,18 @@ impl State {
                 "false"
             }
             .to_string(),
-            Type::Float => self
-                .database
-                .store(&self.stack_cur)
-                .addr::<f64>(rec, at)
-                .to_string(),
+            // Force a decimal point so the literal re-parses as `float`/`single`,
+            // not `integer` (a bare `2` would re-type-infer to `integer` when the
+            // D1 bridge seeds the frame) — the same round-trip guarantee
+            // `render_capture` makes via `float_literal`.
+            Type::Float => loft_float_literal(&f64::to_string(
+                self.database.store(&self.stack_cur).addr::<f64>(rec, at),
+            )),
             Type::Single => format!(
                 "{}f",
-                self.database.store(&self.stack_cur).addr::<f32>(rec, at)
+                loft_float_literal(&f32::to_string(
+                    self.database.store(&self.stack_cur).addr::<f32>(rec, at)
+                ))
             ),
             Type::Character => {
                 char::from_u32(*self.database.store(&self.stack_cur).addr::<u32>(rec, at))

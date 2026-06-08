@@ -581,15 +581,20 @@ fn handle_paused<W: Write>(
         "help" | "h" => writeln!(
             chrome,
             "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
-             :vars  |  `name = <int>` edits a value  |  any expression is evaluated \
-             at the frame  |  :quit"
+             :vars  |  `name = <expr>` edits a scalar local  |  any expression is \
+             evaluated at the frame  |  :quit"
         )?,
-        _ => match parse_int_assign(t) {
-            // `name = <int>` writes the live frame (picked up on resume).
-            Some((name, value)) if session.debug_set(name, value) => {
+        _ => match parse_assign(t) {
+            // `name = <expr>` writes the live frame (picked up on resume); the RHS
+            // is evaluated against the frame, so an expression works too.
+            Some((name, rhs)) if session.debug_set(name, rhs) => {
                 print_pause(session, chrome)?;
             }
-            Some((name, _)) => writeln!(chrome, "no integer local `{name}` in this frame")?,
+            Some((name, _)) => writeln!(
+                chrome,
+                "couldn't set `{name}` — unknown local, or a non-scalar / \
+                 type-mismatched value (text + struct edits aren't supported yet)"
+            )?,
             // Anything else is an expression read against the frame's live values;
             // the value prints to stdout like a normal REPL result.
             None => match session.debug_eval(t) {
@@ -597,7 +602,7 @@ fn handle_paused<W: Write>(
                 None => writeln!(
                     chrome,
                     "couldn't evaluate `{t}` at the frame \
-                     (:step/:next/:finish/:continue, `name = <int>` to edit, :help)"
+                     (:step/:next/:finish/:continue, `name = <expr>` to edit, :help)"
                 )?,
             },
         },
@@ -630,11 +635,13 @@ fn step_and_report<W: Write>(
     Ok(())
 }
 
-/// Parse a `name = <integer>` edit typed at the paused prompt: a single plain
-/// identifier, `=`, then a base-10 `i64`.  `None` for anything else (an
-/// expression, `+=`, a non-integer) — only a plain integer write-back is wired
-/// for now (matching `State::set_frame_value`).
-fn parse_int_assign(s: &str) -> Option<(&str, i64)> {
+/// Parse a `name = <expr>` edit typed at the paused prompt into `(name, rhs)`: a
+/// single plain identifier on the left, `=`, a non-empty right side.  `None` for a
+/// non-assignment — a read expression, a comparison (`n == 5`, whose `rhs` would
+/// start with `=`), or a compound assign (`n += 1`, whose `lhs` isn't a bare
+/// identifier) — so those route to frame evaluation instead.  The RHS is left
+/// unparsed: [`ReplSession::debug_set`] evaluates it against the frame.
+fn parse_assign(s: &str) -> Option<(&str, &str)> {
     let (lhs, rhs) = s.split_once('=')?;
     let name = lhs.trim();
     if name.is_empty()
@@ -643,8 +650,12 @@ fn parse_int_assign(s: &str) -> Option<(&str, i64)> {
     {
         return None;
     }
-    let value: i64 = rhs.trim().parse().ok()?;
-    Some((name, value))
+    let rhs = rhs.trim();
+    // A leading `=` means the operator was `==` (a comparison), not an assignment.
+    if rhs.is_empty() || rhs.starts_with('=') {
+        return None;
+    }
+    Some((name, rhs))
 }
 
 /// Reduce `Type::show`'s debug form to the loft-source type name: drop the
@@ -660,17 +671,11 @@ fn base_type_name(show: &str) -> &str {
 }
 
 /// Render an `f64` as a loft `float` literal — always with a decimal point so a
-/// whole number like `3` re-parses as `float`, not `integer`.  Leaves fractional
-/// / exponent / `inf` / `NaN` forms untouched.
+/// whole number like `3` re-parses as `float`, not `integer`.  The f64-typed
+/// adapter over the shared round-trip rule
+/// ([`crate::state::loft_float_literal`]); the frame renderer uses the same rule.
 fn float_literal(v: f64) -> String {
-    let s = v.to_string();
-    let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
-    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
-    if has_dot_or_exp || !has_digit {
-        s
-    } else {
-        format!("{s}.0")
-    }
+    crate::state::loft_float_literal(&v.to_string())
 }
 
 /// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
@@ -974,16 +979,23 @@ impl ReplSession {
         self.paused.as_deref().and_then(State::paused_frame)
     }
 
-    /// Edit integer local `name` in the **live** paused frame (the user types
-    /// `n = 99` at the paused prompt), then refresh the frame view so a later
-    /// inspect shows the new value.  Returns `false` when not paused or no integer
-    /// local of that name is in the current frame.  The edit is picked up when the
-    /// run resumes — the @PLN15 F edit-and-continue, now driven from the REPL.
-    pub fn debug_set(&mut self, name: &str, value: i64) -> bool {
+    /// Edit scalar local `name` in the **live** paused frame to the value of `rhs`
+    /// (the user types `n = 99`, `f = 2.0`, `b = !b` at the paused prompt), then
+    /// refresh the frame view.  `rhs` is **evaluated against the frame** first (so
+    /// it may be any expression — `n + 1`, `!b` — not just a literal), then written
+    /// type-directed by the local's declared type.  Returns `false` when not paused,
+    /// `rhs` doesn't evaluate, `name` isn't a local, the value's type doesn't match
+    /// the local, or the local is text / heap (those need the store-resident
+    /// write-back, not yet built).  The edit is picked up when the run resumes — the
+    /// @PLN15 F edit-and-continue, driven from the REPL.
+    pub fn debug_set(&mut self, name: &str, rhs: &str) -> bool {
+        let Some(lit) = self.debug_eval(rhs) else {
+            return false;
+        };
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
-        let ok = state.set_frame_value(name, value, &self.parser.data);
+        let ok = state.set_frame_literal(name, &lit, &self.parser.data);
         if ok {
             state.refresh_paused_frame(&self.parser.data);
         }

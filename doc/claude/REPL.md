@@ -157,17 +157,26 @@ At the `(dbg)` prompt:
 | `:finish` (`:o`) | Run to the current function's return — **out** to the caller. |
 | `:continue` (`:c`) | Run to the next breakpoint, or to the end of the call. |
 | `:vars` | Re-show the current frame. |
-| `name = <int>` | **Edit** an integer local in the live frame; the resumed call uses the new value. |
+| `name = <expr>` | **Edit** a scalar local (`integer` / `float` / `single` / `boolean` / `character`) in the live frame; the RHS is evaluated against the frame, so `n = n + 1` and `b = !b` work. The resumed call uses the new value. |
 | *any expression* | **Evaluate** it against the frame's live variables (`n * 3`, `pt.x * pt.y`) and print the value. |
 | `:quit` (`:q`) | Leave the REPL. |
 
 The frame *is* a REPL: type any expression and it is evaluated against the paused
 variables (every type — scalars, text, structs, vectors), just like the top-level
-prompt but scoped to the function you're stopped in. Editing a value (`n = 99`)
-writes straight into the live frame, so when you `:continue` the rest of the
-function runs with the change — the call above returns `99 * 10` rather than
-`5 * 10`. The verbs also work without the leading colon (`step`, `next`,
-`continue`). Breakpoints persist across calls until `:break clear`.
+prompt but scoped to the function you're stopped in. Editing a value (`n = 99`,
+`f = 2.0`, `b = !b`) writes straight into the live frame, so when you `:continue`
+the rest of the function runs with the change — the call above returns `99 * 10`
+rather than `5 * 10`. Editing is for **scalar** locals; a `text` / struct / vector
+local can be read but not yet written (its slot holds a store pointer). The verbs
+also work without the leading colon (`step`, `next`, `continue`). Breakpoints
+persist across calls until `:break clear`.
+
+> **Where breakpoints land.** A breakpoint currently attaches to a source-mapped
+> bytecode op, and those are emitted at fault-prone arithmetic (`+ - * / % << >>`),
+> so a function whose reached path has no such op (a pure `if`/constant body) may
+> not pause. Give the function a normal arithmetic statement, or break on a line
+> that has one. Widening source-span coverage so every statement is breakable is
+> tracked separately.
 
 ## Introspection without the REPL
 
