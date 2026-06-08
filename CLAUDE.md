@@ -282,7 +282,7 @@ The consumer-gap case: when a missing language/stdlib feature a real consumer ne
 the active plan that fixes the gap directly**, then resume — so the language/stdlib gets sturdier
 and the workaround never enters shipped code. Route to a canonical home (P-issue / `## Open work`
 row in STDLIB/NATIVE/COMPILER / new lib_plans slot) when an inline fix isn't appropriate (M+, needs
-design, touches unrelated subsystems). Big deferred features get their own plan slot, never a row in
+design, touches unrelated subsystems). Big deferred features get their own [loft-lang/plans](https://github.com/loft-lang/plans) issue (`@PLN<n>` — no local plan slot), never a row in
 a parallel catalog. Full decision tree:
 [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
 

@@ -31,12 +31,13 @@ work.
 
 ## Conventions
 
-- Subdirectory names are numbered (`NN-slug`) so they sort in
-  the order they were opened.  Numbering is independent of
-  `plans/` — `lib_plans/01-foo/` is unrelated to `plans/01-bar/`.
-- A new initiative opens with an `NN-slug/README.md` stating the
-  goal, phase layout, and ground rules, plus a first phase plan
-  file (conventionally `00-<first-phase>.md`).
+- A new library initiative opens as a [`loft-lang/plans`](https://github.com/loft-lang/plans)
+  issue (`@PLN<n>`, labelled `subject:libs`) — no local slot.  A big multi-phase
+  design may add an optional local dir named for the issue (`<n>-slug/README.md`
+  stating the goal, phase layout, ground rules + a first phase file
+  `00-<first-phase>.md`); small ones live in the issue alone.
+- Existing `NN-slug/` dirs predate this and are kept as-is (numbering was
+  open-order, independent of `plans/`).
 - Every phase plan file begins with `Status: open | in-progress |
   done` so a fresh session can orient quickly.
 - When an initiative is fully closed (all phases committed, no
@@ -78,12 +79,12 @@ docs link to the library, not to the closed plan.
 
 ### Authoring a new library plan
 
-Copy [`../plans/_TEMPLATE.md`](../plans/_TEMPLATE.md) to
-`<NN>-<slug>/README.md` (next free integer in the
-`lib_plans/` counter — independent from `plans/`).  Same
-canonical shape applies; library-specific concerns
-(downstream consumer compatibility, `lib.toml` schema, etc.)
-fold into the Sub-arcs / Open questions sections.
+Open a [`loft-lang/plans`](https://github.com/loft-lang/plans) issue
+(`@PLN<n>`, labelled `subject:libs`) — the issue is the plan, no local slot.
+Use [`../plans/_TEMPLATE.md`](../plans/_TEMPLATE.md) for the issue body's shape; a
+big design may add an optional local `<n>-slug/README.md` dir.  Library-specific
+concerns (downstream consumer compatibility, `lib.toml` schema, etc.) fold into
+the Sub-arcs / Open questions sections.
 
 ## Ground rule — library plans never break downstream consumers
 
