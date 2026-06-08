@@ -2788,6 +2788,13 @@ impl Data {
             let vd = self.add_def(&name, lexer.pos(), DefType::Struct);
             // Also register globally (source=0) so other files can find it.
             self.def_names.entry((name.clone(), 0)).or_insert(vd);
+            // This synthetic wrapper is global, not owned by the file that
+            // happened to first request it.  Stamp `source = 0` so a cache
+            // reload's `rebuild_indices` (which keys `def_names` on each def's
+            // own `source`) reproduces the global `(name, 0)` binding — without
+            // it, `name_type(name, other_source)` returns `u16::MAX` after a
+            // warm start and codegen emits `OpDatabase(db_tp=u16::MAX)`.
+            self.definitions[vd as usize].source = 0;
             self.add_attribute(
                 lexer,
                 vd,
@@ -2819,8 +2826,11 @@ impl Data {
         }
         let d = self.add_def(&name, lexer.pos(), DefType::Struct);
         // Register globally (source 0) so other files referencing the
-        // same tuple shape resolve to the same def.
+        // same tuple shape resolve to the same def.  Stamp `source = 0` too so
+        // a cache reload's `rebuild_indices` reproduces the global binding (see
+        // `vector_def`).
         self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].source = 0;
         self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
         let mut indices: Vec<u16> = Vec::with_capacity(types.len());
         let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
@@ -2908,8 +2918,10 @@ impl Data {
         let d = self.add_def(&name, lexer.pos(), DefType::Struct);
         // Register globally (source 0) so every reference to
         // `Type::Function` across all source files resolves to the
-        // same synthetic struct.
+        // same synthetic struct.  Stamp `source = 0` too so a cache reload's
+        // `rebuild_indices` reproduces the global binding (see `vector_def`).
         self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].source = 0;
         self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
         // `_d_nr`: 4-byte signed integer holding the function's
         // def-nr.  The integer alias `i32` carries the `size(4)`
@@ -4016,6 +4028,43 @@ mod caller_graph_tests {
             Box::new(Value::Int(0)),
         );
         assert_eq!(d.callers_of(d_inner), vec![d_outer]);
+    }
+
+    /// Regression: the synthetic `main_vector<T>` wrapper (and its
+    /// `tuple_def` / `fn_ref_def` siblings) must be stamped `source = 0`.
+    /// A cache reload's `rebuild_indices` keys `def_names` on each def's own
+    /// `source`, so a wrapper first created under a non-zero source (a `use`d
+    /// module) used to lose its global `(name, 0)` binding on a warm start —
+    /// `name_type("main_vector<T>", other_source)` then returned `u16::MAX` and
+    /// codegen emitted `OpDatabase(db_tp=u16::MAX)` → `claim(size=0)`
+    /// "Incomplete record" (the crawler `build_walls` panic).  Stamping
+    /// `source = 0` makes the global binding survive the round-trip.
+    #[test]
+    fn synthetic_vector_wrapper_is_global_source_zero() {
+        let mut d = Data::new();
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        let foo = d.add_def("Foo", &pos, DefType::Struct);
+        let mut lexer = crate::lexer::Lexer::from_str("", "test");
+        // Register the wrapper from a NON-zero source (as if from a `use`d module).
+        d.source = 5;
+        let vd = d.vector_def(&mut lexer, &Type::Reference(foo, Vec::new()));
+        assert_eq!(
+            d.definitions[vd as usize].source, 0,
+            "main_vector<Foo> wrapper must be stamped source=0"
+        );
+        // After `rebuild_indices` (the cache-reload step) the wrapper must still
+        // resolve from a DIFFERENT source via the `(name, 0)` fallback.
+        d.rebuild_indices();
+        d.source = 7;
+        assert_ne!(
+            d.def_nr("main_vector<Foo>"),
+            u32::MAX,
+            "wrapper must resolve cross-source after rebuild_indices"
+        );
     }
 }
 

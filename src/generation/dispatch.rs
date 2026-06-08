@@ -114,8 +114,6 @@ impl Output<'_> {
                 )?;
                 self.indent(w)?;
             }
-            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
-            self.indent(w)?;
             // @P298 / @P297 (native half) — free the callee's return store
             // after the deep copy by OR-ing the `0x8000` source-free bit into
             // the OpCopyRecord type-nr (the runtime `OpCopyRecord` honours it).
@@ -134,10 +132,23 @@ impl Output<'_> {
             } else {
                 i32::from(tp_nr) | 0x8000
             };
-            // Emit the call into a temporary, then deep-copy.
+            // @P290 — evaluate the call BEFORE touching the destination.  The
+            // call's args can reference `var_{name}` itself (e.g. `g = id(g)`),
+            // and `OpDatabase` clears the destination's store IN PLACE — so the
+            // old code (`OpDatabase(var)` then the call) handed the callee an
+            // already-emptied destination.  Compute `_src` first against the
+            // live `_dst`, then re-init + deep-copy.  When `_src` lives in the
+            // destination's OWN store (the callee returned its arg — a borrowed
+            // view), clearing that store would wipe the very data we copy, so
+            // pass the reference through unchanged instead (the interpreter's
+            // PutRef path in `gen_set_first_ref_call_copy`).
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
-            write!(w, "{{ let _src = {}(cell", self.data.def(*fn_nr).name())?;
+            write!(
+                w,
+                "{{ let _dst = var_{name}; let _src = {}(cell",
+                self.data.def(*fn_nr).name()
+            )?;
             for arg in args {
                 write!(w, ", ")?;
                 if let Some(vr) = self.create_stack_var(arg) {
@@ -149,7 +160,9 @@ impl Output<'_> {
             }
             write!(
                 w,
-                "); OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }}"
+                "); if _src.store_nr == _dst.store_nr {{ var_{name} = _src; }} \
+                 else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
+                 OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;
             return Ok(());
         }
