@@ -1890,6 +1890,35 @@ impl State {
         true
     }
 
+    /// Register a breakpoint at the **start of a named function's body** — the
+    /// human-friendly form (`:break foo`).  Resolves `name` → its def → the *first*
+    /// source-mapped offset inside its bytecode (`[code_position, +code_length)`),
+    /// which is the body's first statement, **post-prologue** (args are in their
+    /// slots — unlike `set_breakpoint_fn_entry`, which pauses pre-prologue where the
+    /// frame isn't set up).  Returns `false` if `name` isn't a defined function or
+    /// its body carries no source span.
+    pub fn set_breakpoint_fn_start(&mut self, name: &str, data: &crate::data::Data) -> bool {
+        let d_nr = data.def_nr(&format!("n_{name}"));
+        if d_nr >= data.definitions() {
+            return false;
+        }
+        let def = data.def(d_nr);
+        let (start, end) = (def.code_position, def.code_position + def.code_length);
+        let Some(&offset) = self
+            .source_spans
+            .range(start..end)
+            .next()
+            .map(|(off, _)| off)
+        else {
+            return false;
+        };
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        true
+    }
+
     /// The distinct source lines that carry a bytecode mapping — the lines a
     /// breakpoint can pause on, sorted.
     #[must_use]

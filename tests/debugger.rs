@@ -578,6 +578,48 @@ fn b3_full_stack_includes_indirect_caller() {
     );
 }
 
+/// `set_breakpoint_fn_start` — break at a named function's body start (the
+/// human-friendly `:break foo` form) without supplying a line number, and read the
+/// frame correctly (post-prologue: the arg is in its slot).
+#[test]
+fn breakpoint_at_fn_body_start_by_name() {
+    let mut p = repl();
+    match p.parse_statement("fn dbl(n: integer) -> integer {\n  n + n\n}") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("def failed: {other:?}"),
+    }
+    let entry = match p.parse_statement("dbl(42)") {
+        ParseResult::Ready { entry_def_nr } => entry_def_nr,
+        other => panic!("call failed: {other:?}"),
+    };
+    let mut state = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut state, &mut p.data);
+    assert!(
+        state.set_breakpoint_fn_start("dbl", &p.data),
+        "breakpoint at dbl's body start"
+    );
+    assert!(
+        !state.set_breakpoint_fn_start("nope", &p.data),
+        "unknown fn → false"
+    );
+    let name = p
+        .data
+        .def(entry)
+        .name()
+        .strip_prefix("n_")
+        .unwrap()
+        .to_string();
+    state.execute_argv(&name, &p.data, &[]);
+    let hits = state.debug_hits();
+    assert_eq!(hits.len(), 1, "fired once: {hits:?}");
+    assert_eq!(hits[0].function, "dbl");
+    assert!(
+        hits[0].locals.iter().any(|(n, v)| n == "n" && v == "42"),
+        "n == 42 at body start (post-prologue): {hits:?}"
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]

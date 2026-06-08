@@ -251,3 +251,56 @@ fn observe_not_persisted() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ── @PLN15 G1: REPL :break command ───────────────────────────────────────────
+
+/// `add_breakpoint("dbl")` (the `:break dbl` command) breaks at the named
+/// function's body start; an observing call that runs it captures the frame into
+/// `last_hits` with the argument value.
+#[test]
+fn repl_breakpoint_by_fn_name_captures_frame() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn dbl(n: integer) -> integer { n + n }"),
+        Eval::Ran
+    ));
+    s.add_breakpoint("dbl");
+    assert_eq!(s.breakpoints(), ["dbl"]);
+    // an observing call that runs dbl fires the breakpoint
+    assert!(matches!(s.eval("dbl(21)"), Eval::Ran));
+    let hits = s.last_hits();
+    assert_eq!(hits.len(), 1, "fired once: {hits:?}");
+    assert_eq!(hits[0].function, "dbl");
+    assert!(
+        hits[0].locals.iter().any(|(n, v)| n == "n" && v == "21"),
+        "n == 21: {hits:?}"
+    );
+    // clearing removes it; a later call captures nothing
+    s.clear_breakpoints();
+    assert!(s.breakpoints().is_empty());
+    assert!(matches!(s.eval("dbl(99)"), Eval::Ran));
+    assert!(s.last_hits().is_empty(), "no breakpoint → no hits");
+}
+
+/// A `<fn>:<line>` spec breaks at a specific line; a bare-line spec is accepted
+/// (unscoped). An unknown function is skipped, not an error.
+#[test]
+fn repl_breakpoint_fn_line_and_unknown() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn step(n: integer) -> integer {\n  m = n + 1;\n  m * 2\n}"),
+        Eval::Ran
+    ));
+    s.add_breakpoint("step:2"); // the `m = n + 1` line
+    assert!(matches!(s.eval("step(4)"), Eval::Ran));
+    assert!(
+        s.last_hits().iter().any(|h| h.function == "step"),
+        "fn:line breakpoint fired: {:?}",
+        s.last_hits()
+    );
+    // an unknown function is skipped (no panic, no hit), session stays usable
+    s.clear_breakpoints();
+    s.add_breakpoint("does_not_exist");
+    assert!(matches!(s.eval("step(4)"), Eval::Ran));
+    assert!(s.last_hits().is_empty(), "unknown fn → no hit");
+}

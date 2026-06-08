@@ -112,6 +112,7 @@ Commands start with a colon:
 | `:fns` | List the functions you have defined, with their return type. |
 | `:vars` | List the variables you have bound, each with its current value. |
 | `:type <expr>` | Show the type of an expression without running it. |
+| `:break <fn>` | Set a breakpoint at the start of a function's body — also `<fn>:<line>` (a line in that function) or `<line>` (a bare line, unscoped); `:break` lists, `:break clear` removes. A later call that runs the function reports the frame (`⏸ break in <fn> \| n = 21`). |
 | `:bytecode [fn]` | Show the bytecode — all your functions, or just the named one. |
 | `:rust [fn]` | Show the Rust code loft generates for native compilation. |
 | `:slots [fn]` | Show each function's variable slot table (name, type, slot range). |

@@ -198,8 +198,8 @@ fn methods_for_type(data: &crate::data::Data, type_name: &str) -> Vec<String> {
 
 /// The `:`-commands Tab completion offers when the line starts with `:`.
 #[cfg(not(target_arch = "wasm32"))]
-const REPL_COMMANDS: [&str; 9] = [
-    "quit", "help", "reset", "fns", "vars", "type", "bytecode", "rust", "slots",
+const REPL_COMMANDS: [&str; 10] = [
+    "quit", "help", "reset", "fns", "vars", "type", "break", "bytecode", "rust", "slots",
 ];
 
 /// The completion model the live completer matches against, rebuilt by the
@@ -435,7 +435,7 @@ fn process_line<W: Write>(
             "help" | "h" => writeln!(
                 chrome,
                 "commands: :quit  :help  :reset  :fns  :vars  :type <expr>  \
-                 :bytecode [fn]  :rust [fn]  :slots [fn]"
+                 :break <fn>|<fn>:<line>|<line>  :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
                 *session = ReplSession::new(stdlib_dir)?;
@@ -467,6 +467,24 @@ fn process_line<W: Write>(
                     None => writeln!(chrome, "could not infer the type of `{expr}`")?,
                 }
             }
+            "break" => match filter.first().map(String::as_str) {
+                None if session.breakpoints().is_empty() => {
+                    writeln!(
+                        chrome,
+                        "no breakpoints (`:break <fn>` / `<fn>:<line>` to add)"
+                    )?;
+                }
+                None => writeln!(chrome, "breakpoints: {}", session.breakpoints().join(", "))?,
+                Some("clear") => {
+                    session.clear_breakpoints();
+                    writeln!(chrome, "breakpoints cleared")?;
+                }
+                Some(_) => {
+                    let spec = filter.join(" ");
+                    session.add_breakpoint(&spec);
+                    writeln!(chrome, "breakpoint set: {spec}")?;
+                }
+            },
             other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
         }
         return Ok(false);
@@ -654,6 +672,12 @@ pub struct ReplSession {
     /// True only while [`resume_from`](Self::resume_from) is feeding saved
     /// inputs back in — suppresses re-recording them to the file.
     replaying: bool,
+    /// @PLN15 G1 — breakpoint specs (`:break` command): `"foo"` (body start),
+    /// `"foo:3"` (line 3 of `foo`), `"5"` (bare line, unscoped).  Re-applied to the
+    /// fresh `State` of every observing run.
+    breakpoints: Vec<String>,
+    /// Frames captured at breakpoints during the most recent observing run.
+    last_hits: Vec<crate::debugger::BreakHit>,
 }
 
 impl ReplSession {
@@ -671,6 +695,8 @@ impl ReplSession {
             counter: 0,
             record: None,
             replaying: false,
+            breakpoints: Vec::new(),
+            last_hits: Vec::new(),
         })
     }
 
@@ -686,6 +712,8 @@ impl ReplSession {
             counter: 0,
             record: None,
             replaying: false,
+            breakpoints: Vec::new(),
+            last_hits: Vec::new(),
         }
     }
 
@@ -735,6 +763,52 @@ impl ReplSession {
         match self.capture_binding(expr) {
             Capture::Done(lit) => Some(lit),
             Capture::Skip | Capture::Failed(_) => None,
+        }
+    }
+
+    /// Add a breakpoint (the `:break` command).  Forms: `foo` (the body start of
+    /// function `foo`), `foo:3` (line 3 of `foo`), `5` (a bare line — unscoped,
+    /// matches that line in *every* function, harder to target).  Re-applied to the
+    /// fresh `State` of every later observing run.
+    pub fn add_breakpoint(&mut self, spec: &str) {
+        let spec = spec.trim().to_string();
+        if !spec.is_empty() && !self.breakpoints.contains(&spec) {
+            self.breakpoints.push(spec);
+        }
+    }
+
+    /// The breakpoint specs set this session.
+    #[must_use]
+    pub fn breakpoints(&self) -> &[String] {
+        &self.breakpoints
+    }
+
+    /// Remove all breakpoints.
+    pub fn clear_breakpoints(&mut self) {
+        self.breakpoints.clear();
+    }
+
+    /// Frames captured at breakpoints during the most recent observing run.
+    #[must_use]
+    pub fn last_hits(&self) -> &[crate::debugger::BreakHit] {
+        &self.last_hits
+    }
+
+    /// Resolve + set the session's breakpoint specs on a freshly-compiled `state`
+    /// (called by `compile_generation` before an observing run).  An unresolvable
+    /// spec (unknown fn / no such line) is skipped this run, not an error.
+    fn apply_breakpoints(&self, state: &mut State) {
+        for spec in &self.breakpoints {
+            if let Some((name, line)) = spec.split_once(':') {
+                if let Ok(l) = line.trim().parse::<u32>() {
+                    let d = self.parser.data.def_nr(&format!("n_{}", name.trim()));
+                    state.set_breakpoint_fn_line(d, l, &self.parser.data);
+                }
+            } else if let Ok(l) = spec.parse::<u32>() {
+                state.set_breakpoint_line(l);
+            } else {
+                state.set_breakpoint_fn_start(spec, &self.parser.data);
+            }
         }
     }
 
@@ -854,7 +928,7 @@ impl ReplSession {
                     Capture::Done(lit) => {
                         let snap = format!("{var} = {lit}");
                         let bound = format!("{}{snap};\n", self.body);
-                        if self.compile_generation(&bound, false).is_ok() {
+                        if self.compile_generation(&bound, false, false).is_ok() {
                             self.body = bound;
                             self.record_input(&snap); // persist the snapshot, not the RHS
                             return Eval::Ran;
@@ -871,7 +945,7 @@ impl ReplSession {
             // Fall back: record the binding as source (validate only).  It is
             // recompiled, in use, when a later input observes it.
             let bound = format!("{}{};\n", self.body, input);
-            return match self.compile_generation(&bound, false) {
+            return match self.compile_generation(&bound, false, false) {
                 Ok(()) => {
                     self.body = bound;
                     self.record_input(input);
@@ -892,11 +966,11 @@ impl ReplSession {
             "{}__replval = {input};\nprintln(\"{{__replval}}\");\n",
             self.body
         );
-        if self.compile_generation(&shown, true).is_ok() {
+        if self.compile_generation(&shown, true, true).is_ok() {
             return Eval::Ran;
         }
         let plain = format!("{}{};\n", self.body, input);
-        match self.compile_generation(&plain, true) {
+        match self.compile_generation(&plain, true, true) {
             Ok(()) => Eval::Ran,
             Err(diags) => Eval::Error(diags),
         }
@@ -906,7 +980,12 @@ impl ReplSession {
     /// run it.  On a parse error rolls `data` back and returns the diagnostics.
     /// When not executing (a binding), the generation's def is rolled back too —
     /// it lives on only as source in `body`.
-    fn compile_generation(&mut self, gen_body: &str, execute: bool) -> Result<(), Vec<DiagEntry>> {
+    fn compile_generation(
+        &mut self,
+        gen_body: &str,
+        execute: bool,
+        debug: bool,
+    ) -> Result<(), Vec<DiagEntry>> {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() {{\n{gen_body}}}\n");
@@ -931,7 +1010,24 @@ impl ReplSession {
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
+            // @PLN15 G1 — apply the session's breakpoints to this run, then report
+            // any that fired.  Only on a real observing run (`debug`), not on the
+            // value-render re-runs (`:vars`, snapshot validation).
+            if debug && !self.breakpoints.is_empty() {
+                self.apply_breakpoints(&mut state);
+            }
             state.execute_argv(&name, &self.parser.data, &[]);
+            if debug {
+                self.last_hits = state.debug_hits().to_vec();
+                for hit in &self.last_hits {
+                    let vars: Vec<String> = hit
+                        .locals
+                        .iter()
+                        .map(|(n, v)| format!("{n} = {v}"))
+                        .collect();
+                    println!("⏸ break in {} | {}", hit.function, vars.join(", "));
+                }
+            }
             // A failed `assert`, `panic(…)`, or a fault-site opcode is captured
             // here (execution stops cleanly, no Rust panic) rather than thrown —
             // surface it as an error instead of silently swallowing it.  Roll the
@@ -1250,7 +1346,7 @@ impl ReplSession {
         for n in &names {
             let _ = writeln!(gen_src, "println(\"{n} = {{{n}}}\");");
         }
-        self.compile_generation(&gen_src, true)?;
+        self.compile_generation(&gen_src, true, false)?;
         Ok(true)
     }
 
