@@ -21,8 +21,9 @@ green — no regression). **Frame-layout facts the slice pinned** (matrix-first 
 off): a function-*entry* breakpoint pauses pre-prologue (slots still zero), so the
 read point is a **body line**; a variable sits at the frame-absolute
 `stack_cur.pos + args_base + vars.stack(i)` — *not* `get_var`'s stack-depth-relative
-operand. **Next** (each its own small slice): non-arg locals with liveness-gating →
-the REPL-at-frame bridge (sub-D, gated on @PLN14) → stepping → conditions.
+operand. **Next** (each its own small slice): non-arg locals with liveness-gating
+(**D0**) → the REPL-at-frame bridge (**D1**, gated on @PLN14) → stepping (**F**) →
+conditions (**E**).
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
@@ -121,7 +122,8 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **A** — breakpoint registry + source-line → bytecode-offset map (reuse the per-op source positions the bytecode already carries) | **First cut** — line + fn-entry breakpoints via `source_spans` / `code_position` |
 | **B** — interpret-scope analysis: from a breakpoint set, compute the functions whose call-chain must interpret (static call-graph reachability; refine to on-demand frame-entry switching) | Open |
 | **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
-| **D** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from the paused frame's slot table + values (**depends on @PLN14 frame-seedable env**) | **Partial** — frame *read* done (`capture_break_frame` renders args); REPL seed + locals-with-liveness pending |
+| **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **In progress** — arguments land (`capture_break_frame` / `render_frame_local`); **next:** non-arg locals with **liveness-gating** (show a local only once its assignment has run — skip not-yet-live slots rather than read zero/garbage) + the remaining value types (heap via `show_loft`) |
+| **D1** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from D0's captured frame, so evaluating at a break runs against the live locals (**depends on @PLN14 frame-seedable env**) | Open — the headline payoff |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | Open |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | Open |
@@ -130,19 +132,23 @@ The host-agnostic engine is A–F; the surfaces are G.
 ## Phase ordering
 
 1. **A + C together** — a registry that can pause the interpreter at a line is the
-   spine; nothing is observable until execution can stop at a point.
-2. **D (frame → REPL bridge)** — the payoff: a paused frame becomes an inspectable
+   spine; nothing is observable until execution can stop at a point. *(first cut
+   landed — the tracer-bullet slice.)*
+2. **D0 (frame read)** — complete the captured frame: non-arg locals with
+   liveness-gating + the remaining value types. The smallest next increment, a
+   direct extension of the landed `capture_break_frame`; no new dependency.
+3. **D1 (frame → REPL bridge)** — the payoff: a paused frame becomes an inspectable
    REPL. Gated on @PLN14's env being seedable from an arbitrary frame (the
    sharpening that plan now carries).
-3. **F (debug API) + G1 (terminal surface)** — wrap A–E as the headless API and
+4. **F (debug API) + G1 (terminal surface)** — wrap A–E as the headless API and
    prove it end-to-end from the **terminal** first (the REPL is already there), so
    the engine ships useful before any browser work.
-4. **B (interpret-scope)** — needed for breakpoints reached through compiled code
+5. **B (interpret-scope)** — needed for breakpoints reached through compiled code
    and for an introspectable call stack; start with "interpret from entry point,"
    refine to call-graph-reachability so unrelated code stays compiled.
-5. **E (conditional/test)** — thin once D exists: a condition is `eval` against the
+6. **E (conditional/test)** — thin once D1 exists: a condition is `eval` against the
    frame env.
-6. **G2 (DAP + browser UI)** — the protocol adapter (`loft-dap`, scoped under
+7. **G2 (DAP + browser UI)** — the protocol adapter (`loft-dap`, scoped under
    @PLN/09-lsp LSP.3) and the web-IDE surface consume the same API as G1.
 
 ## Open design questions
@@ -177,7 +183,7 @@ The host-agnostic engine is A–F; the surfaces are G.
   (G1) is that REPL directly.
 - **@PLN14** (store-resident REPL session) — **load-bearing**: the breakpoint frame
   *is* the store-resident environment. @PLN14 now carries the sharpening that its
-  env must be seedable from an arbitrary live frame, not only typed bindings (sub-D
+  env must be seedable from an arbitrary live frame, not only typed bindings (sub-D1
   here consumes it).
 - **N9/C71 per-function interpret dispatch + Goal-D parity** — the interpret-scope
   switch (B) and the invisibility of interpret-on-break (parity).
