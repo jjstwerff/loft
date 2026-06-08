@@ -115,8 +115,10 @@ use; `LOFT_LOG` still works for live execution traces (see
 ## How session state works (and its limits)
 
 The REPL keeps the names you bind by re-running the statements that define them
-in one shared scope each time you ask for a value. For ordinary arithmetic this
-is exact: re-running `x = 1; y = x + 2` always gives the same `y`.
+in one shared scope each time you ask for a value. This works for values of any
+type — numbers, text, structs, vectors. As long as a statement only computes a
+value (no side effect), re-running it gives the same result: `x = 1; y = x + 2`
+always yields the same `y`, and `name = "Alice"` stays bound to `"Alice"`.
 
 Current limits, with their planned fixes in
 [plans/12-repl-and-introspection/](plans/12-repl-and-introspection/):

@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN12 phase 03 slice B — REPL session integer-variable persistence.
+//! @PLN12 phase 03 slice B — REPL session variable persistence.
 //!
 //! A variable bound in one input is visible to the next.  Each test's `assert`
 //! holding (no panic) proves the prior binding was in scope with the right
-//! value.  Integer scope only, per the slice's start.
+//! value.  Integer and text bindings both persist.
 
 use loft::repl::{Eval, ReplSession};
 
@@ -66,6 +66,19 @@ fn parse_error_leaves_session_usable() {
     assert!(matches!(s.eval("z = 1 2 3"), Eval::Error(_)));
     assert!(matches!(
         s.eval("assert(z == 3, \"z survived error\")"),
+        Eval::Ran
+    ));
+}
+
+/// Text bindings persist across inputs, the same as integers — the on-ramp
+/// case a beginner hits first (`name = "Alice"`).  Confirms persistence is not
+/// integer-only.
+#[test]
+fn text_variable_persists_across_inputs() {
+    let mut s = session();
+    assert!(matches!(s.eval("name = \"Alice\""), Eval::Ran));
+    assert!(matches!(
+        s.eval("assert(name == \"Alice\", \"name persists\")"),
         Eval::Ran
     ));
 }

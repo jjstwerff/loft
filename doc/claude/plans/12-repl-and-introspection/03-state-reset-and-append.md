@@ -46,19 +46,23 @@ phase-02 wrapper.  A definition from one input is callable from a later input
 (correct, not yet optimized — a fresh State sidesteps the @P381 CONST_STORE
 re-lock).
 
-**Slice B — DONE for integers (2026-06-07).** `ReplSession` (`src/repl.rs`)
-gives cross-input *integer-variable* persistence: a variable bound in one input
-is visible to the next (`x = 1` then `x + 1`), depends on earlier ones
-(`b = a * 2`), and rebinds (`n = n + 100`).  `tests/repl_session.rs`.
+**Slice B — DONE (2026-06-07; persists any value type).** `ReplSession`
+(`src/repl.rs`) gives cross-input *variable* persistence: a variable bound in one
+input is visible to the next (`x = 1` then `x + 1`), depends on earlier ones
+(`b = a * 2`), and rebinds (`n = n + 100`).  Built and first tested for integers,
+but the mechanism is type-agnostic — text, struct, and vector bindings persist
+too (verified in `tests/repl_session.rs`).
 
-Mechanism (integer scope): the session keeps the stdlib-loaded parser + the
-accumulated *bindings* as source.  A binding is recorded but **not executed** —
-an unused binding's slot is elided by the allocator, so compiling it would panic;
-its value is realised when a later input *observes* it.  An observing input
-(expression / call) is wrapped in one shared-scope fn over all bindings, run with
-a fresh `State` per input (sidesteps the @P381 CONST_STORE re-lock).  `scopes::check`
-runs between parse and `byte_code` (else locals get no slot).  Correct for pure
-integer arithmetic (re-running deterministic bindings yields the same value).
+Mechanism: the session keeps the stdlib-loaded parser + the accumulated
+*bindings* as source.  A binding is recorded but **not executed** — an unused
+binding's slot is elided by the allocator, so compiling it would panic; its value
+is realised when a later input *observes* it.  An observing input (expression /
+call) is wrapped in one shared-scope fn over all bindings, run with a fresh
+`State` per input (sidesteps the @P381 CONST_STORE re-lock).  `scopes::check` runs
+between parse and `byte_code` (else locals get no slot).  Re-running the bindings
+is correct as long as each RHS is deterministic and side-effect-free (any type):
+re-running yields the same value.  A side effect in a binding's RHS would repeat
+once per observation — the one real limitation, addressed by REPL.X.
 
 **Error recovery — FIXED (2026-06-07).** Root cause: the lexer's `restart` /
 `parse_string` reset the cursor but never cleared its `diagnostics`, and
@@ -70,10 +74,10 @@ now clears the lexer diagnostics at its start (`Lexer::clear_diagnostics` +
 errors; benefits any repeated `parse_str` user, not just the REPL.
 `tests/repl_session.rs::parse_error_leaves_session_usable` passes.
 
-**Remaining toward the general model.** Non-integer variable types; eliminating
-the re-run via the true stack-resident model (persistent `State` + `byte_code_from`
-+ `reset_for_repl` preserving `stack_pos` + resume-execution); surfacing the
-evaluated result for display (phase 04).
+**Remaining toward the general model.** Eliminating the re-run via the true
+stack-resident model (persistent `State` + `byte_code_from` + `reset_for_repl`
+preserving `stack_pos` + resume-execution) — REPL.X.  (Result-for-display landed
+in phase 04; cross-type persistence already works via the re-run model above.)
 
 ## REPL.X — eliminating the re-run (designed 2026-06-08, not yet built)
 
@@ -87,7 +91,9 @@ text/`DbRef` locals stored in it need lifetime handling.  The coroutine path
 already proves this — `serialise_text_args` + `drop_text_locals_in_bytes` exist
 to own text out of a saved frame and to free it without double-dropping.  Any
 frame snapshot/restore for the REPL must reuse that handling, so the safe scope
-to land *first* is integer-only locals (no text in the frame).
+to land *first* is integer-only locals (no text in the frame) — a constraint of
+*this* preserved-frame approach, not of today's re-run model, which already
+persists every type.
 
 **Approach A — checkpoint / restore / resume (keeps all types).**  Persistent
 `State`; the session is one growing `fn`.  After running through statement N,

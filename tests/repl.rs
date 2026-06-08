@@ -192,3 +192,24 @@ fn runtime_error_reported_and_recovers() {
         "session continues after error: out={out:?}"
     );
 }
+
+// ── session semantics: side-effecting bindings (REPL.X) ──────────────────────
+
+/// A binding is recorded, not executed; the accumulated body re-runs on each
+/// *observing* statement, so a side effect in a binding's RHS repeats once per
+/// later observation.  Here `a = noisy()` prints "ran" each time `a` is
+/// observed — two observations → "ran" twice.  This pins the known REPL.X
+/// limitation (plan-12 § Deferred follow-ups); when stack-resident execution
+/// lands, the side effect runs once and this expected count drops to 1.
+#[test]
+fn side_effecting_binding_reruns_per_observation() {
+    let out = repl(
+        &["repl"],
+        "fn noisy() -> integer {\n  println(\"ran\");\n  42\n}\na = noisy()\na + 0\na + 0\n:quit\n",
+    );
+    let runs = out.matches("ran").count();
+    assert_eq!(
+        runs, 2,
+        "side effect re-runs once per observation under REPL.X; got {runs} in {out:?}"
+    );
+}

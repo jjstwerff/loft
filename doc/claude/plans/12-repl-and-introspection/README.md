@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status:** SHIPPED (first cut) — phases 00–06 landed 2026-06-07/08 on the
 `repl` branch.  `loft repl` (and a bare `loft`) is an interactive prompt;
 `loft introspect` dumps a program's intermediate forms.  Follow-ups (stack-
-resident execution, non-integer scope, `:type`/`:vars`, line history) are
+resident execution, value-bearing `:vars`, line history) are
 deferred — see [§ Deferred follow-ups](#deferred-follow-ups).
 
 ## Goal
@@ -72,7 +72,7 @@ operates on a fully-loaded program just like `--dump` does.
 | 0 | [00-baseline.md](00-baseline.md) | done | XS | Survey of existing dump APIs (`LOFT_LOG`, `--dump`, `--native-emit`, `dump_bytecode`, `dump_variables`).  Confirmed the introspection tool is a packaging job; the REPL needs three new pieces of architecture. |
 | 1 | [01-introspection-cli.md](01-introspection-cli.md) | shipped | S | `loft introspect <file>` / `--introspect`: emits bytecode + generated Rust + slot tables + per-fn types to stdout (or per-flag files).  Wraps `state.dump_bytecode`, `dump_variables`, `Output::output_native`.  Sub-flags select one dimension or filter to a function.  (2026-06-07: bare `introspect` subcommand added; default-stdlib filter fixed for absolute paths + synthesized internals so all sections show user code only; `tests/introspect.rs` regression guard.) |
 | 2 | [02-statement-parser.md](02-statement-parser.md) | shipped | M | `Parser::statement_incomplete` (read-more detector) + `parse_statement` → `Ready`/`NeedMore`/`Error`: top-level defs parse in place, bare expressions wrap in a synthetic fn, parse errors roll `data` back (`Data::rollback_to`). |
-| 3 | [03-state-reset-and-append.md](03-state-reset-and-append.md) | shipped | S | The `Arc<Vec<u8>>`→`Vec<u8>` refactor proved unnecessary — `compile::byte_code_from` already appends. `ReplSession` (`src/repl.rs`) gives integer-variable persistence; error recovery fixed (fresh lexer per `parse_str`). See the doc's Revised design. Stack-resident model (no re-run) + non-integer scope remain. |
+| 3 | [03-state-reset-and-append.md](03-state-reset-and-append.md) | shipped | S | The `Arc<Vec<u8>>`→`Vec<u8>` refactor proved unnecessary — `compile::byte_code_from` already appends. `ReplSession` (`src/repl.rs`) gives variable persistence for **any value type** (integer, text, struct, vector — verified in `tests/repl_session.rs`); error recovery fixed (fresh lexer per `parse_str`). See the doc's Revised design. The stack-resident model (run-once, no re-run of side effects) remains — REPL.X. |
 | 4 | [04-repl-shell.md](04-repl-shell.md) | shipped | M | Interactive `loft>` prompt (`loft repl`, or a bare `loft`): result echo in loft's native form, multi-line input, parse-error + runtime-panic recovery, `:quit`/`:help`/`:reset`. `rustyline`/history deferred. |
 | 5 | [05-repl-introspection.md](05-repl-introspection.md) | shipped | S | `:bytecode`/`:rust`/`:slots`/`:fns` wired to phase-01 introspection. `:type <expr>` + value-bearing `:vars` deferred (need a type-only parse / result capture). |
 | 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | shipped | XS | User docs: [REPL.md](../../REPL.md), CHANGELOG, CLAUDE.md key-commands + doc index. Deferred follow-ups recorded below. |
@@ -84,7 +84,7 @@ Recorded here (not filed as GitHub issues — these are future enhancements, not
 
 | ID | Description |
 |----|-------------|
-| **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so side-effecting statements don't repeat.  Removes the integer-only/pure-computation limit (see 03 doc's Revised design). |
+| **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so a side effect in a binding's RHS doesn't repeat on each later observation.  Value persistence already works for any type; this is purely about not re-executing side effects.  `tests/repl.rs::side_effecting_binding_reruns_per_observation` pins the current re-run (two observations → effect twice); when REPL.X lands it runs once.  (See 03 doc's Revised design.) |
 | **REPL.T** | Value-bearing `:vars` (show each variable's current value) — needs a way to read a value back out of execution (a result-capture API); the same gap blocks in-process result-as-`String` return.  (`:type <expr>` shipped — compile-time type inference, no capture needed.) |
 | **REPL.E** | Line editor + history — `rustyline` (or hand-rolled) for arrow-key recall; currently input is read plain. |
 | **REPL.W** | WASM browser playground — the parse + execute machinery already runs under wasm32; the playground is a separate web UI. |
