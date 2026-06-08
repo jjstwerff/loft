@@ -549,6 +549,35 @@ fn b1_does_not_trace_indirect_callers() {
     );
 }
 
+/// @PLN15 B3 — at a breakpoint reached through an *indirect* call, the **full
+/// runtime call stack** is introspectable: `break_stack` walks the live
+/// `call_stack`, so the indirect caller `apply` appears with its locals — the very
+/// frame B1's static analysis could not link.  The runtime call path is what
+/// resolves the indirect gap.
+#[test]
+fn b3_full_stack_includes_indirect_caller() {
+    let mut p = repl();
+    let state = run_to_pause(&mut p, INDIRECT, "apply(target, 5)", "target", 2);
+    let stack = state.break_stack(&p.data);
+    // Top frame: target (where we broke), x == 5.
+    assert_eq!(stack[0].function, "target", "{stack:?}");
+    assert!(
+        stack[0].locals.iter().any(|(n, v)| n == "x" && v == "5"),
+        "target x == 5: {:?}",
+        stack[0]
+    );
+    // The indirect caller `apply` is on the runtime stack with its arg x == 5 —
+    // the frame B1 (b1_does_not_trace_indirect_callers) could not statically link.
+    let apply = stack
+        .iter()
+        .find(|f| f.function == "apply")
+        .expect("apply (the indirect caller) is on the runtime stack");
+    assert!(
+        apply.locals.iter().any(|(n, v)| n == "x" && v == "5"),
+        "apply x == 5 (indirect caller introspectable via the runtime stack): {apply:?}"
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]

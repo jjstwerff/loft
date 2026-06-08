@@ -1993,12 +1993,47 @@ impl State {
     /// and it picks the right owner of a **reused** slot (disjoint ranges, at most
     /// one contains `pc`).  It under-shows only a defined-but-not-yet-read local
     /// before its first read; that is an acceptable v1 limitation, not a hazard.
-    fn capture_break_frame(
-        &mut self,
+    fn capture_break_frame(&self, pc: u32, data: &crate::data::Data) -> crate::debugger::BreakHit {
+        let (d_nr, frame_base) = self
+            .call_stack
+            .last()
+            .map_or((u32::MAX, 0), |f| (f.d_nr, f.args_base));
+        self.capture_frame_at(d_nr, frame_base, pc, data)
+    }
+
+    /// @PLN15 B3 — capture the **full runtime call stack**, one `BreakHit` per
+    /// frame, innermost first.  The frames come from the live `call_stack`, so the
+    /// chain is exactly the one that *actually ran* — **including frames reached
+    /// via indirect (fn-ref) calls that the static call graph (B1) cannot see**.
+    /// Each frame's liveness `pc` is the breakpoint pc (top frame) or the call site
+    /// into the frame above it (`call_pos`).  Read-only — call it at a suspension.
+    #[must_use]
+    pub fn break_stack(&self, data: &crate::data::Data) -> Vec<crate::debugger::BreakHit> {
+        let n = self.call_stack.len();
+        (0..n)
+            .rev()
+            .map(|i| {
+                let frame = &self.call_stack[i];
+                let pc = if i + 1 == n {
+                    self.code_pos
+                } else {
+                    self.call_stack[i + 1].call_pos
+                };
+                self.capture_frame_at(frame.d_nr, frame.args_base, pc, data)
+            })
+            .collect()
+    }
+
+    /// Capture one frame — function `d_nr`, whose variable region starts at
+    /// `stack_cur.pos + frame_base` — with its variables live at `pc`.  Shared by
+    /// the top-frame breakpoint capture and the full-stack walk.
+    fn capture_frame_at(
+        &self,
+        d_nr: u32,
+        frame_base: u32,
         pc: u32,
         data: &crate::data::Data,
     ) -> crate::debugger::BreakHit {
-        let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
         if d_nr == u32::MAX {
             return crate::debugger::BreakHit {
                 function: "?".to_string(),
@@ -2007,10 +2042,6 @@ impl State {
         }
         let raw = data.def(d_nr).name();
         let function = raw.strip_prefix("n_").unwrap_or(raw).to_string();
-        // The frame's variable region starts at `stack_cur.pos + args_base`; each
-        // variable sits at `+ vars.stack(i)` from there (a fixed slot, independent
-        // of the working `stack_pos`).
-        let frame_base = self.call_stack.last().map_or(0, |f| f.args_base);
         let def = data.def(d_nr);
         let n = def.variables.count();
         // Per-var bytecode reference range, scanning `self.vars` within this
