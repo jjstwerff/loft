@@ -133,6 +133,38 @@ fn db_qualified_enum() {
     );
 }
 
+// ─── serializer: show_loft → own-format text → round-trip ─────────────────────
+
+/// `show_loft` emits re-parseable native loft for a struct value — type tag,
+/// qualified enum, forced-decimal float, escaped text — and that output
+/// **round-trips** back through the database parser to the same record.  This is
+/// the serializer half completing the loop (the parser fixes were steps 1–2).
+#[test]
+fn show_loft_round_trips_struct() {
+    let (mut s, tp) = data_stores();
+    let input = "{n: 42, t: \"hi\\nthere\", c: Daily, amount: 3.0}";
+    // Build the record, serialise it to own format.
+    let rec = s.database(256);
+    s.parse(input, tp, &rec);
+    let mut loft = String::new();
+    s.show_loft(&mut loft, &rec, tp);
+    // Native-loft shape: type tag, qualified enum, decimal float, escaped text.
+    assert!(loft.starts_with("Data{"), "struct type tag: {loft}");
+    assert!(loft.contains("Category.Daily"), "qualified enum: {loft}");
+    assert!(
+        loft.contains("3.0"),
+        "forced-decimal float (not `3`): {loft}"
+    );
+    assert!(loft.contains("\\n"), "escaped text: {loft}");
+    // Round-trip: show_loft output re-parses to the same record as the input.
+    let from_loft = s.parse_message(&loft, tp);
+    let from_input = s.parse_message(input, tp);
+    assert_eq!(
+        from_loft, from_input,
+        "show_loft output must round-trip to the same value: loft={loft}"
+    );
+}
+
 // ─── language-parser path: code! (re-compiles loft source) ────────────────────
 
 /// Struct **type tag** parses fine in the language (this is normal loft

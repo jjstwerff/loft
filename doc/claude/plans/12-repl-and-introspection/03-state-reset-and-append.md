@@ -293,10 +293,15 @@ extension:
    the only direction that matters).  Also flip the enum no-match default from
    variant 1 → null sentinel (graceful degradation).  Un-ignore
    `db_struct_type_tag`; add an old-dump-ambiguity regression.
-3. **`show_loft` serializer.**  The third `ShowDb` mode (① above) + `:l` format
-   bit + `Stores::show_loft`; emit `Data{…}`, `Enum.V`, **`3.0`** (forced
-   decimal), escaped text.  New round-trip test: value → `show_loft` → *each*
-   parser → equal, across the matrix.  (Now both directions exist.)
+3. ✅ **`show_loft` serializer (DONE).**  A third `ShowDb` mode (`loft` flag,
+   threaded through all construction sites) + `Stores::show_loft`, emitting
+   `TypeName{…}`, qualified `Enum.Variant`, **forced-decimal** floats (`3.0` via
+   `ensure_decimal`), JSON-escaped+quoted text, native enum-struct `V{…}`.
+   `tests/own_format_alignment.rs::show_loft_round_trips_struct` proves value →
+   `show_loft` → DB parser → equal; the language parser already accepts the same
+   forms (the `lang_*` tests).  Debug/JSON output unchanged (loft branches gated
+   on the flag); guards green.  (The runtime `:l` format bit — exposing
+   `show_loft` to loft code — is deferred to step 4's capture, where it's used.)
 
 **Part II — REPL.X consumes it:**
 4. **Capture** — serialize in loft (`"{__v:l}"`) + a `text`-return read entry.

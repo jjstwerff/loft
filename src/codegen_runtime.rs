@@ -377,6 +377,7 @@ pub fn OpFormatDatabase(
         known_type: db_tp as u16,
         pretty: db_format & 1 > 0,
         json: db_format & 2 > 0,
+        loft: false,
     }
     .write(&mut s, 0);
     output.push_str(&s);
