@@ -492,6 +492,63 @@ fn b1_interpret_set_is_transitive_callers() {
     );
 }
 
+/// The two functions whose `target` is reached only **indirectly** — `apply`
+/// invokes its fn-ref parameter `f`, so the call to `target` is a `CallRef`.
+const INDIRECT: &[&str] = &[
+    "fn target(x: integer) -> integer {\n  x + 1\n}",
+    "fn apply(f: fn(integer) -> integer, x: integer) -> integer {\n  f(x)\n}",
+];
+
+/// **Execution supports it.** A breakpoint in a function reached via an *indirect*
+/// call (a fn-ref) still fires with the frame captured — the breakpoint is an
+/// offset in the loop, agnostic to how the function was entered.  So an interpreted
+/// function reached through a fn-ref is fully debuggable (the "middle layer
+/// interpreted, called indirectly" case).
+#[test]
+fn breakpoint_fires_in_indirectly_called_fn() {
+    let mut p = repl();
+    let hits = run_with_breakpoint(&mut p, INDIRECT, "apply(target, 5)", "target", 2);
+    assert_eq!(hits.len(), 1, "fired in indirectly-called target: {hits:?}");
+    assert_eq!(hits[0].function, "target");
+    assert!(
+        hits[0].locals.iter().any(|(n, v)| n == "x" && v == "5"),
+        "x == 5: {hits:?}"
+    );
+}
+
+/// **Static analysis can't see it.** `apply` reaches `target` only through its
+/// fn-ref parameter (a `CallRef`), which carries no static target — so B1's
+/// `interpret_set(target)` does *not* include `apply`.  This is the documented
+/// limitation, and the precise reason on-demand (B3) switching is needed to
+/// interpret an indirectly-reached frame: the runtime call path is the only place
+/// the edge is visible.
+#[test]
+fn b1_does_not_trace_indirect_callers() {
+    let mut p = repl();
+    for def in INDIRECT {
+        match p.parse_statement(def) {
+            ParseResult::Ready { .. } => {}
+            other => panic!("def parse failed: {other:?}"),
+        }
+    }
+    match p.parse_statement("apply(target, 5)") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("call parse failed: {other:?}"),
+    }
+    let target = p.data.def_nr("n_target");
+    let apply = p.data.def_nr("n_apply");
+    assert!(
+        target != u32::MAX && apply != u32::MAX,
+        "both fns resolve (else the negative assert below is vacuous)"
+    );
+    let set = loft::debugger::interpret_set(&p.data, target);
+    assert!(set.contains(&target), "the breakpoint fn itself: {set:?}");
+    assert!(
+        !set.contains(&apply),
+        "apply reaches target only via CallRef → invisible to static analysis: {set:?}"
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]
