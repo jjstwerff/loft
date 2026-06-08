@@ -2352,6 +2352,15 @@ pub(crate) fn materialise_primitive_into(
                 crate::vector::vector_finish(&fields_db, &mut stores.allocations);
             }
         }
+        // `Constructor` (`Tag{…}`) is Lenient-only; the Strict `json_parse`
+        // path never produces it.  Materialise as the equivalent single-field
+        // `JObject` `{tag: body}` so the dispatcher stays exhaustive and a future
+        // lenient caller degrades sensibly rather than panicking.
+        crate::json::Parsed::Constructor(tag, tag_at, body) => {
+            let synthetic =
+                crate::json::Parsed::Object(vec![(tag.clone(), *tag_at, (**body).clone())]);
+            materialise_primitive_into(stores, slot, &synthetic);
+        }
     }
 }
 
@@ -2506,6 +2515,13 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
                 materialise_primitive_into(stores, &value_slot, child);
                 crate::vector::vector_finish(&fields_db, &mut stores.allocations);
             }
+            stores.last_json_errors.clear();
+        }
+        // `Constructor` (`Tag{…}`) is Lenient-only; this Strict path never emits
+        // it.  Materialise via the shared helper (which renders it as the
+        // equivalent single-field object) so the match stays exhaustive.
+        Ok(c @ crate::json::Parsed::Constructor(..)) => {
+            materialise_primitive_into(stores, &result, &c);
             stores.last_json_errors.clear();
         }
         Err(err) => {

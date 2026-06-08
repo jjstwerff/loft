@@ -116,6 +116,246 @@ native-call arg/return marshalling, and dividends: `:vars` + result return),
 then A for the all-types, no-recompile endpoint.  Either is a focused spike on
 the execution core — land it deliberately, not bundled with unrelated work.
 
+### Implementation-attempt findings (2026-06-08) — value-snapshot + the capture sub-problem
+
+A third, lower-risk interim emerged when sizing the build: **value-snapshot.**
+Keep today's fresh-State / re-run executor, but make the re-run *pure* — when a
+binding is entered, execute its RHS **once**, capture the value, and rewrite the
+body so the binding becomes a **literal** (`a = read_line()` → `a = "typed"`).
+Later observes re-run a body of literals → effects happen once.  No persistent
+State, no `reset_for_repl`, no frame snapshot, no CONST_STORE-lock corner — it
+fixes the *correctness* bug (repeated effects) without the preserved-frame
+hazards, for the cases whose value renders to a literal.  (It does **not**
+eliminate the re-run *cost* — that stays Approach A / loft2.)
+
+**But the load-bearing sub-problem is *value capture*, and it is more entangled
+than "a small read helper."**  Verified mechanism:
+
+- `get_var<T>(pos)` reads at `stack_cur.pos + stack_pos − pos` — **`stack_pos`-
+  relative** (src/state/mod.rs:1644).  After `execute_argv` returns, the entry
+  frame's *resting* `stack_pos` is gone (popped), so a post-hoc raw-slot read of
+  a local needs the frame top captured **mid-run**, or the value **returned** by
+  the entry fn and read at the stack top the way `execute_at_raw` does
+  (src/state/mod.rs:2657, `get_stack` + `return_size`).  `execute_argv` is void,
+  so neither exists yet — capture is net-new execution-core surface, not a helper.
+- The frame's variable region *is* `[4, stack_pos)` at fixed absolute offsets
+  while the frame is at rest — this is exactly what `parallel_join` snapshots for
+  arm workers (src/state/mod.rs:1611-1632) — so a mid-run capture is feasible;
+  the difficulty is purely *when* `stack_pos` is read.
+
+**Decision (2026-06-08) — serialize/deserialize through loft's OWN format, not
+JSON, and reuse existing machinery.**  Rather than invent value-capture surface
+(frame reads, a returned-value entry, an output sink), round-trip the value
+through loft's **own** serialization — render a value to loft-source text and
+parse it back.  This is cleaner than JSON because loft's own format *is* loft
+source: a struct/enum renders to its own constructor (which JSON's `{"a":1}`
+cannot), so the **struct/enum residual disappears** — the snapshot is
+semantically correct for *every* type, not just scalar+text+vector.
+
+**Priority: semantic correctness over efficiency.**  This path may re-serialize
+and re-parse on every binding; that is fine.  Re-running a body of own-format
+literals is pure (effects happen once at capture), which is the whole point — the
+re-run *cost* is explicitly not what REPL.X-interim optimises (that stays
+Approach A / loft2).
+
+**Investigation result (2026-06-08).** There is **no** own-format *serializer*
+that round-trips: the display walk (`Stores::show`/`show_json`,
+`src/database/format.rs:45`) drops type names and text quotes
+(`{a:1,b:2}`, bare `Alice`), so its output does not re-parse.  The **only**
+existing round-trip for runtime values is **JSON** — every struct gets
+`value.to_json()` (`src/native.rs:3189`, via `show_json`) and `Type.parse(
+json_parse(text))` (`src/parser/objects.rs:1025`), proven by
+`tests/issues.rs::q3b_struct_to_json_round_trip`.  The **parser already accepts**
+clean own-format RHS — struct constructors `Point{x:1,y:2}`
+(`src/parser/objects.rs:817,1607`), text/vector/enum literals — so *deserialize*
+of own-format is free; only the *serialize* side is missing.
+
+**Sizing correction (2026-06-08).**  `show_loft` is **not** a trivial sibling.
+`ShowDb::write` (`src/database/format.rs:638`) is one recursive traversal with an
+`if self.json {…} else {…}` at every rendering point (text, struct, enum,
+struct-enum variant, vector) and a `write_struct` that emits `{field: value}`
+with no type name.  A native-loft mode is a **third output mode threaded through
+the whole formatter** — moderate new code in a core file, not a contained
+sibling.
+
+**Decision (2026-06-08) — build the own-format serializer (`show_loft`), NOT
+JSON.**  The deciding reason is strategic, not cleanliness: loft's own format is
+**extensible with the language**, JSON is a frozen external schema.  The
+formatter already carries language-specific shapes (enum-structs render their
+variant + struct natively); an own-format serializer keeps growing alongside new
+language constructs, where a JSON round-trip would force every future construct
+through JSON's fixed grammar.  So `show_loft` is the format that *is* loft, and
+it round-trips every type into clean re-parseable native source.  The moderate
+formatter cost is accepted for this reason.
+
+### Concrete design — own-format value-snapshot (the build spec)
+
+**Invariant.** A binding's RHS side effects run **exactly once**; thereafter the
+binding is own-format loft source in `body`, so every later re-run is pure.
+
+**The three pieces.**
+
+**① `show_loft` — own-format serializer (a third `ShowDb` mode).**
+- Add `loft: bool` to `ShowDb` (`src/database/mod.rs:1353`).  Thread it through
+  all **9** construction sites: entry `show`/`show_json` (`format.rs:47,71`) →
+  `false`; runtime `io.rs:774` + `codegen_runtime.rs:372` → from a new format bit
+  (below); the 5 recursive subs (`format.rs:917,981,1054,1144,1201`) → `self.loft`.
+- Loft-mode deltas in `ShowDb::write` (`format.rs:638`) vs the JSON branch:
+  | construct | JSON | **loft** |
+  |---|---|---|
+  | struct | `{"f":v}` | `TypeName{f: v}` — prefix `types[known_type].name`; keys unquoted (free: `if self.json` is false) |
+  | text | `"esc"` | `"esc"` — same escaped+quoted form (verify loft accepts the escapes) |
+  | enum-struct variant | `{"V":{…}}` | `V{…}` — variant name + struct |
+  | simple enum | `V` | `Enum.V` — **qualified** so it re-parses unambiguously |
+  | scalar / vector / null | bare / `[…]` / `null` | identical |
+- Expose a runtime format bit `{x:l}` (`db_format & 4`) so loft code renders a
+  value to loft-source text; `Stores::show_loft(s, db, tp)` for Rust callers.
+
+**② Capture — read one `text` return (the only new execution-core surface).**
+- Serialize *inside loft* so capture is single-typed: run
+  `fn cap() -> text { <body> __v = <rhs>; "{__v:l}" }` — it returns the value's
+  loft-source **text**.  (This sidesteps reading raw scalar/`DbRef`/`Str` slots
+  by type — the program does the serialization; Rust only lifts out one `text`.)
+- Add an execute entry that reads a **`text` return** into a Rust `String` (the
+  return sits at the stack top after the run, like `execute_at_raw`'s return-read
+  `src/state/mod.rs:2657`, but for the text representation).  One primitive,
+  one type.
+
+**③ `eval` binding branch (`src/repl.rs`).**
+- Run the capture once.  On success, substitute `name = <captured-loft-src>;`
+  into `body` (replacing `name = <rhs>;`).  On **any** failure (serialize error,
+  unsupported shape) fall back to today's `name = <rhs>;` source — safe: it just
+  re-runs, repeating an effect only in the rare unrenderable case.
+
+**Edge risks → the falsification matrix (probe on `--interpret` BEFORE wiring ③).**
+For each cell: value → `:l` text → re-parse as a binding → observe → **equal**.
+- **float/single**: force a decimal point so `3.0` doesn't re-parse as `int`;
+  large/small via exponent.
+- **text**: loft string-escape vs the JSON escaper (`\n`, `"`, `\`, unicode);
+  empty text; text containing `{`/`}`.
+- **enum**: bare `V` is ambiguous → emit `Enum.V`; simple vs struct-enum variant.
+- **text-return read**: the Str-at-stack-top representation (runtime `Str` vs
+  store `text_nr`) — confirm the capture lifts the bytes correctly.
+- **null / nested struct / vector-of-struct / DbRef indirection**.
+
+**Resolution path (build order).**  Two halves — the *serialization format*
+(reusable, independent of the REPL) then the *REPL.X consumer*.  Each step is
+gated by a test that flips red→green.
+
+**North star (the *why*).**  This serialization exists for **live data-structure
+migration** — change a game's structs/enums while it runs, preserving as much
+existing data as possible.  That is a key reason loft is a *language* (not a
+store bolted onto an existing one); the purpose statement + the
+migration-survival matrix are canonical in
+[GOALS.md § Why a language, not a store bolted onto an existing one](../../GOALS.md#why-a-language-not-a-store-bolted-onto-an-existing-one).
+Every fix in this section serves "maximize what survives a schema change":
+leniency is the *feature* (it lets the schema change while old data reads); the
+only thing forbidden is silent *wrong* data (a fail-soft), never silent
+*graceful* data (default / null).
+
+**Format design principles (2026-06-08).**  The database `show`/`parse` pair is
+loft's *original* native serialization — it predates the language parser; the
+value **is** its stored record (schema-driven, `DbRef`-position-independent).
+`show_loft` is not a new format but the **type-explicit superset** of `show`
+(adds the type info a parser needs without a schema).  Two principles govern
+extension:
+
+- **One monotonically-extending format, not multiple modes.**  The loft-native
+  reader only ever *adds* accepted syntax (a strict superset each step), so a new
+  reader reads every old dump.  Keep the two dialects you have (Strict = RFC-JSON
+  interop; Lenient = loft-native); grow *Lenient*.  Modes would fork the format
+  and re-create version skew.
+- **Schema-evolution leniency is the feature; shape-mismatch fail-soft is the
+  bug.**  Unknown-key-ignored + missing-field-defaulted are what let the schema
+  evolve while old dumps read — **keep**.  But the type-tag swallowing a struct
+  (→ `{}`) and an unknown enum tag → variant 1 are *wrong data*, not graceful
+  degradation — **fix** (degrade to a null/default sentinel instead).  Leniency
+  only fires on *mismatch*, so a same-schema round-trip is already exact once the
+  bugs are gone — **no separate strict mode needed**.
+
+**Part I — the symmetric own-format (no REPL code):**
+1. ✅ **Fix B — dotted enum (DONE).**  `json.rs:parse_bare_identifier_value`
+   consumes `.`-joined segments (`Category.Daily` → one `Ident`); the
+   `walk_parsed_into` enum arm matches on the **last** segment (prefix
+   informational — lenient, not validated).  `db_qualified_enum` passes (asserts
+   `Hourly`, the 2nd variant, lands correctly — not the silent variant-1 default).
+   Guards green: `data_structures`/`data_import`/`format` + 47 json units + 684
+   `issues`.
+2. **Fix A — struct type-tag via a `Constructor` AST node** (revised by the
+   "read old dumps" requirement).  Today `json.rs:224` collapses `Tag{…}` into
+   `Object([("Tag", obj)])` — **indistinguishable** from a plain `{Tag: obj}`, so
+   a key==type-name unwrap heuristic would **misread an old dump** with a field
+   named like its type.  Fix losslessly: emit `Parsed::Constructor(tag, body)`
+   for `Tag{…}` (distinct from `Object`).  The walker then dispatches
+   unambiguously — `Parts::Struct` validates/unwraps the tag, `Parts::Enum`
+   reads it as the variant — and old dumps (plain `Object`) still read as fields.
+   Purely additive (old readers can't read `Constructor`; new readers read both —
+   the only direction that matters).  Also flip the enum no-match default from
+   variant 1 → null sentinel (graceful degradation).  Un-ignore
+   `db_struct_type_tag`; add an old-dump-ambiguity regression.
+3. **`show_loft` serializer.**  The third `ShowDb` mode (① above) + `:l` format
+   bit + `Stores::show_loft`; emit `Data{…}`, `Enum.V`, **`3.0`** (forced
+   decimal), escaped text.  New round-trip test: value → `show_loft` → *each*
+   parser → equal, across the matrix.  (Now both directions exist.)
+
+**Part II — REPL.X consumes it:**
+4. **Capture** — serialize in loft (`"{__v:l}"`) + a `text`-return read entry.
+5. **Wire `eval`'s binding branch** — substitute `name = <own-format>;`; fall
+   back to source on failure.
+6. **Flip the regression** — `side_effecting_binding_reruns_per_observation`
+   expects **once**; confirm text/struct/vector persistence still passes.
+
+Correctness over efficiency — re-serialising per binding is fine.
+
+**Out of scope.** The re-run *cost* (a long session still re-runs a body of
+literals each observe) — that stays Approach A / loft2.  This fixes correctness
+(no repeated effects), not cost.
+
+### Aligning own-format across BOTH parsers (database `parse` + language parser)
+
+own-format is loft's **symmetric native serialization** — it must round-trip
+through *both* deserializers, not just the language parser:
+
+- **Language parser** (`src/parser/`) — re-compiles `body` source; already
+  accepts `TypeName{…}`, `Enum.V`, text/vector literals.  Free.
+- **Database parser** (`Stores::parse`, `src/database/format.rs:225`) — routes
+  through `crate::json::parse_with(Dialect::Lenient)` + `walk_parsed_into`
+  (`src/database/structures.rs:475`); the **type is supplied out-of-band** (`tp`),
+  not read from the text.  Lenient **already** accepts own-format's unquoted keys
+  (`{x: 1}`) and bare-identifier enum tags (`Parsed::Ident("Red")`, dispatched to
+  an enum field by the walker).  This is the `T.parse(...)` / data-literal path.
+
+**Matrix-verified gaps (2026-06-08).**  `tests/own_format_alignment.rs` probes
+each construct through both parsers and **overturned two of three predicted
+gaps** — only **two** real fixes remain, and one is nastier than expected:
+
+| own-format construct | matrix result | fix |
+|---|---|---|
+| **struct type tag** `Data{…}` | **SILENT FAIL-SOFT (data loss)** — lenient already parses `Tag{…}` to the single-key shape `{"Data":{fields}}` (`json.rs:224`); for a *struct* target the walker drops `Data` as an unknown key (@P366) → **all-default record**, real fields lost (`tagged={}` vs `untagged={n:42,…}`).  No error, so a `parses()`-only check misses it. | `walk_parsed_into` (`structures.rs`): a single-key object whose key equals the struct's **type name** unwraps to the struct body |
+| **enum-struct** `V{…}` | **NOT A GAP** — `json.rs:224` already makes `Tag{…}` → `{"V":{…}}` and the `Parts::Enum` walker dispatches it to the variant.  ✓ | none |
+| **qualified enum** `Enum.V` (dotted Ident) | **HARD ERROR** at the `.` (byte 27) — the lenient ident scanner stops at `.` | json.rs: lenient ident accepts `A.B` segments → `Ident("Enum.V")`; walker maps by the **last** segment against the known enum |
+
+Confirmed **no-gap** by the matrix: unquoted keys, bare enum tags, escaped text
+(`"a\"b\nc\\d"`), whole-number float on the DB parser; and every construct on the
+language parser.  Open `show_loft`-side note (serializer, not parser): a float
+must render **`3.0`** not Rust's `3`, or the language parser re-reads it as `int`.
+
+**Enum qualifier — optional where inferable, reconciled.**  The serializer emits
+**qualified** `Enum.V` because the REPL re-binds `a = <value>` in a context with
+**no** inferable enum type (the language parser needs the qualifier there).  Both
+deserializers accept the qualified form, **and** still accept the bare `V` where
+the type *is* known (DB: from `tp`; language: from an inferable context) — so the
+language's "bare variant where inferable" rule is preserved; the serializer just
+always plays it safe with the qualified form.
+
+**Scope note.**  This promotes own-format from a REPL-internal trick to **loft's
+native serialization format** (`show_loft` + a Lenient-dialect deserialize),
+sitting beside the JSON pair (`show_json` + `parse`) — extensible with the
+language, the symmetric foundation for data literals + session persistence, and
+consumed by REPL.X.  It is correspondingly **larger than the REPL.X interim
+alone**: the `json.rs`/`walk_parsed_into` fixes land first (with a DB-parser
+round-trip test), then `show_loft`, then the REPL wiring.
+
 ---
 
 ## Convergence — REPL.X, auto-resume, and persistence are one design

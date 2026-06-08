@@ -540,29 +540,49 @@ impl Stores {
                 Ok(())
             }
             Parts::Struct(object) | Parts::EnumValue(_, object) => {
-                self.walk_parsed_struct(parsed, tp, to, &object, path, at)
+                // A type-tagged constructor `Type{…}` unwraps to its body for a
+                // struct target — the tag is informational (the schema fixes the
+                // type).  A plain object reads as fields directly, so old
+                // un-tagged dumps still load: this is the disambiguation a single
+                // `Constructor` node buys us over the collapsed-object shape.
+                let body = match parsed {
+                    crate::json::Parsed::Constructor(_tag, _, inner) => inner.as_ref(),
+                    other => other,
+                };
+                self.walk_parsed_struct(body, tp, to, &object, path, at)
             }
             Parts::Enum(fields) => {
-                // Three accepted shapes:
-                //   - `Parsed::Str("Tag")` / `Parsed::Ident(Tag)` — unit variant
-                //   - `Parsed::Object([("Tag", _, Object(payload))])` — variant
-                //     with payload, emitted by the Lenient parser for the
-                //     `Tag { field: value, ... }` input shape (matches the
-                //     legacy scanner's struct-enum-variant behaviour).
+                // Accepted shapes:
+                //   - `Str("Tag")` / `Ident("Tag")` / `Ident("Enum.Tag")` — unit
+                //   - `Constructor("Tag", _, body)` — variant with payload (the
+                //     `Tag { … }` shape from the Lenient parser)
+                //   - `Object([("Tag", _, body)])` — the legacy collapsed shape,
+                //     still accepted so older `{"Tag":{…}}` dumps keep loading
                 let (name, payload) = match parsed {
                     crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => {
                         (s.as_str(), None)
+                    }
+                    crate::json::Parsed::Constructor(tag, _, body) => {
+                        (tag.as_str(), Some(body.as_ref()))
                     }
                     crate::json::Parsed::Object(entries) if entries.len() == 1 => {
                         (entries[0].0.as_str(), Some(&entries[0].2))
                     }
                     _ => return Err(mismatch()),
                 };
+                // Accept a *qualified* tag (`Enum.Variant`): match on the last
+                // segment.  The schema already fixes the enum type, so the prefix
+                // is informational — the lenient dialect does not validate it.
+                let name = name.rsplit('.').next().unwrap_or(name);
                 let mut enum_tp = u16::MAX;
                 let val = if name == "null" {
                     0
                 } else {
-                    let mut v = 1;
+                    // No-match degrades to the null sentinel (0), NOT variant 1:
+                    // an unknown tag (e.g. a variant removed by a schema edit)
+                    // must read back as null, never silently as a wrong variant.
+                    // Preserve-as-much-as-possible across data-structure changes.
+                    let mut v = 0;
                     for (f_nr, f) in fields.iter().enumerate() {
                         if f.1 == name {
                             v = f_nr as i32 + 1;
