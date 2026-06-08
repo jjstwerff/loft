@@ -132,10 +132,28 @@ it runs), never catch one mid-flight: a cdylib frame's locals live in native
 registers with no safepoint metadata to reconstruct them.  The shared store gives
 the *data* for free; what's missing is the *control-state* mapping mid-cdylib.
 **This is exactly the B3-switching limitation** (and the "indirect caller already
-compiled is non-introspectable" gap).  "Interpret from entry" granularity is
-genuinely fine for live *editing* (you decide to debug a function before calling
-it); on-stack deopt — its known, well-understood name — is a later addition only if
-"attach to an already-running compiled stack and introspect upward" is ever needed.
+compiled is non-introspectable" gap).
+
+**Why loft's domain rarely needs on-stack deopt: the main loop provides re-entry.**
+lavition runs a Rust main loop that calls into loft each frame, so a function is
+**re-entered every iteration**.  Set a breakpoint → re-wire that function to
+interpret → *resume*: the current (possibly compiled) frame finishes
+un-introspected, and the **next loop iteration enters the interpreted path** and
+breaks there.  You never reconstruct the live compiled frame — the loop hands you a
+fresh interpreted entry ~one frame later.  This is precisely why HotSpot *needs*
+on-stack deopt (the JVM can't assume a method runs again) and loft's frame-loop
+domain doesn't: re-entry is free.  Edges: it assumes the program **loops** (a
+one-shot batch run re-runs instead — cheap via state continuity); the next iteration
+is the **evolved** state, not the exact frame (use a conditional breakpoint (E) to
+catch a specific invocation); and a within-iteration step-out into an
+already-compiled caller still waits one cycle.
+
+**KNOWN — deferred, not dismissed (Q7).** True on-stack deopt — introspecting a
+frame *mid-flight* without re-entry (a non-looping program, the *exact* current
+invocation, step-out into a compiled caller *now*) — remains a real, unsolved
+capability the loop only side-steps.  We may revisit it to get the general case
+fully correct; it is tricky (needs cdylib-side safepoint metadata to reconstruct
+interpreter locals from native registers — the hard part HotSpot pays for).
 
 ## Composition matrix — Stage A
 
@@ -245,6 +263,19 @@ The host-agnostic engine is A–F; the surfaces are G.
    first read: it under-shows, never reads garbage. A true def-based gate (record
    the missing scalar-write pcs) is a future refinement only if that residual
    bites.
+7. **On-stack deopt — true mid-flight introspection (KNOWN, deferred, hard).**
+   Introspecting a frame that already ran *compiled* **without** waiting for loop
+   re-entry (a non-looping program, the *exact* current invocation, or step-out into
+   a compiled caller *now*). HotSpot does it by reconstructing interpreter locals
+   from JIT **safepoint metadata**. loft's compiled path is a **native, optimized
+   Rust cdylib**, so for loft this means **inspecting the live stack of a running,
+   optimized Rust frame** — the genuinely hard part: optimized native code keeps no
+   safepoint→local map, the optimizer elides / coalesces / inlines locals, and only
+   DWARF (lossy under `-O`) describes them. The **main loop side-steps it** for
+   loft's domain — re-entry is free (see § Prior art) — so revisit only if the
+   non-loop / exact-frame case becomes load-bearing. The realistic path is then
+   **loft-emitted safepoints + debug metadata in the cdylib at known points** (the
+   HotSpot bargain), *not* general optimized-Rust-stack walking.
 
 ## Cross-arc dependencies
 
