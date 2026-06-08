@@ -135,3 +135,60 @@ fn unknown_command_is_safe() {
         "session continues after unknown cmd: {out:?}"
     );
 }
+
+// ── result echo / :type / runtime-error reporting ────────────────────────────
+
+/// Run `loft <args>` feeding `input`, return (stdout, stderr).
+fn repl_full(args: &[&str], input: &str) -> (String, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(args)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loft");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A bare string-literal expression echoes its value (the bind-then-print path,
+/// which earlier failed on the nested quotes).
+#[test]
+fn text_literal_echoes() {
+    let out = repl(&["repl"], "\"hi there\"\n:quit\n");
+    assert!(out.contains("hi there"), "text echo: {out:?}");
+}
+
+/// `:type <expr>` reports the inferred type without running the expression.
+#[test]
+fn type_command_infers() {
+    let out = repl(&["repl"], "x = 5\n:type x + 1\n:type \"hi\"\n:quit\n");
+    assert!(out.contains("integer"), "type of int expr: {out:?}");
+    assert!(out.contains("text"), "type of text expr: {out:?}");
+}
+
+/// A failed `assert` is reported (not silently swallowed) and the session keeps
+/// going — and the report is clean (no raw Rust panic backtrace).
+#[test]
+fn runtime_error_reported_and_recovers() {
+    let (out, err) = repl_full(&["repl"], "assert(false, \"boom\")\n7\n:quit\n");
+    assert!(err.contains("assertion failed"), "error reported: {err:?}");
+    assert!(
+        !err.contains("panicked at"),
+        "no raw panic backtrace: {err:?}"
+    );
+    assert!(
+        out.contains('7'),
+        "session continues after error: out={out:?}"
+    );
+}

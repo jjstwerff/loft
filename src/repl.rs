@@ -48,6 +48,12 @@ pub fn run_repl<R: BufRead, W: Write>(
 ) -> std::io::Result<()> {
     let mut session = ReplSession::new(stdlib_dir)?;
     writeln!(chrome, "loft REPL — :help for commands, :quit to exit")?;
+    // Silence the default panic handler for the duration of the loop: a runtime
+    // error inside `eval` is caught below and reported cleanly, so the user
+    // should not also see Rust's raw "thread panicked at …" backtrace.  Restored
+    // before returning.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
     let mut pending = String::new();
     let mut line = String::new();
     loop {
@@ -75,7 +81,7 @@ pub fn run_repl<R: BufRead, W: Write>(
                 "quit" | "q" => break,
                 "help" | "h" => writeln!(
                     chrome,
-                    "commands: :quit  :help  :reset  :fns  \
+                    "commands: :quit  :help  :reset  :fns  :type <expr>  \
                      :bytecode [fn]  :rust [fn]  :slots [fn]"
                 )?,
                 "reset" => {
@@ -86,6 +92,13 @@ pub fn run_repl<R: BufRead, W: Write>(
                 "rust" => session.introspect(Section::Rust, filter),
                 "slots" => session.introspect(Section::Slots, filter),
                 "fns" => session.list_fns(),
+                "type" => {
+                    let expr = filter.join(" ");
+                    match session.infer_type(&expr) {
+                        Some(t) => println!("{t}"),
+                        None => writeln!(chrome, "could not infer the type of `{expr}`")?,
+                    }
+                }
                 other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
             }
             continue;
@@ -114,6 +127,7 @@ pub fn run_repl<R: BufRead, W: Write>(
             }
         }
     }
+    std::panic::set_hook(prev_hook);
     Ok(())
 }
 
@@ -206,10 +220,18 @@ impl ReplSession {
                 Err(diags) => Eval::Error(diags),
             };
         }
-        // Observing: show the value.  Try the print wrapper first; if it doesn't
-        // compile (void statement, or input that breaks string interpolation),
-        // run the input plain so side effects still happen.
-        let shown = format!("{}println(\"{{{input}}}\");\n", self.body);
+        // Observing: show the value.  Bind it to a temp first, then print the
+        // temp — `__replval = <input>; println("{__replval}")`.  Binding first
+        // (rather than interpolating `<input>` into the format string directly)
+        // means a text result echoes too (no nested-quote breakage), and works
+        // uniformly for scalars, text, and structs.  If the input is a void
+        // statement (`assert`, `print`) the temp binds to void and this fails to
+        // compile — fall back to running the input plain so its side effects
+        // still happen.
+        let shown = format!(
+            "{}__replval = {input};\nprintln(\"{{__replval}}\");\n",
+            self.body
+        );
         if self.compile_generation(&shown, true).is_ok() {
             return Eval::Ran;
         }
@@ -250,6 +272,14 @@ impl ReplSession {
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
             state.execute_argv(&name, &self.parser.data, &[]);
+            // A failed `assert`, `panic(…)`, or a fault-site opcode is captured
+            // here (execution stops cleanly, no Rust panic) rather than thrown —
+            // surface it as an error instead of silently swallowing it.  Roll the
+            // throwaway gen back so the failed line leaves no def behind.
+            if let Some(err) = state.database.runtime_error.take() {
+                self.parser.data.rollback_to(pre_defs);
+                return Err(vec![err.to_diag_entry()]);
+            }
         } else {
             self.parser.data.rollback_to(pre_defs);
         }
@@ -315,5 +345,43 @@ impl ReplSession {
             let ret = def.returned.show(data, &def.variables);
             println!("{user} -> {ret}");
         }
+    }
+
+    /// Infer the static type of `expr` against the current session, without
+    /// running it — the `:type` command.  Returns the rendered type, or `None`
+    /// if it doesn't type-check.  Compile-time only: it binds `expr` to a temp
+    /// in a throwaway generation, reads the temp's inferred type from the
+    /// function's variable table, and rolls the probe back — no execution.
+    pub fn infer_type(&mut self, expr: &str) -> Option<String> {
+        let name = format!("replmain_{}", self.counter + 1);
+        let probe = format!("{}__t = {expr};\n", self.body);
+        let src = format!("fn {name}() {{\n{probe}}}\n");
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        let result = if failed {
+            None
+        } else {
+            let d = self.parser.data.def_nr(&format!("n_{name}"));
+            if d == u32::MAX {
+                None
+            } else {
+                let def = self.parser.data.def(d);
+                let vars = &def.variables;
+                let mut found = None;
+                for i in 0..vars.count() {
+                    if vars.name(i) == "__t" {
+                        found = Some(vars.tp(i).show(&self.parser.data, vars));
+                        break;
+                    }
+                }
+                found
+            }
+        };
+        self.parser.data.rollback_to(pre_defs); // discard the probe def
+        result
     }
 }

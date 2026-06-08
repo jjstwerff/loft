@@ -85,7 +85,7 @@ Recorded here (not filed as GitHub issues — these are future enhancements, not
 | ID | Description |
 |----|-------------|
 | **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so side-effecting statements don't repeat.  Removes the integer-only/pure-computation limit (see 03 doc's Revised design). |
-| **REPL.T** | `:type <expr>` + value-bearing `:vars` — both need a way to read a value back out of execution (a result-capture API); the same gap blocks in-process result-as-`String` return. |
+| **REPL.T** | Value-bearing `:vars` (show each variable's current value) — needs a way to read a value back out of execution (a result-capture API); the same gap blocks in-process result-as-`String` return.  (`:type <expr>` shipped — compile-time type inference, no capture needed.) |
 | **REPL.E** | Line editor + history — `rustyline` (or hand-rolled) for arrow-key recall; currently input is read plain. |
 | **REPL.W** | WASM browser playground — the parse + execute machinery already runs under wasm32; the playground is a separate web UI. |
 | **REPL.S** | Save / restore session to a `.loftrc`-style file (`:save` / `:load`). |

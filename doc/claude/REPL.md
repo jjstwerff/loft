@@ -78,6 +78,7 @@ Commands start with a colon:
 | `:quit` (`:q`) | Leave the REPL. |
 | `:reset` | Forget everything you defined; the standard library stays loaded. |
 | `:fns` | List the functions you have defined, with their return type. |
+| `:type <expr>` | Show the type of an expression without running it. |
 | `:bytecode [fn]` | Show the bytecode — all your functions, or just the named one. |
 | `:rust [fn]` | Show the Rust code loft generates for native compilation. |
 | `:slots [fn]` | Show each function's variable slot table (name, type, slot range). |
@@ -123,9 +124,9 @@ Current limits, with their planned fixes in
 - A statement with a **side effect** (printing, file I/O) would run again each
   time a later line reads a variable. The fix is the stack-resident execution
   model (phase 03 notes) that runs each new line only once.
-- `:vars` (show current values) and `:type <expr>` (show an expression's type
-  without running it) are not implemented yet — both need a way to read a value
-  back out of execution.
+- `:vars` (show each variable's current *value*) is not implemented yet — it
+  needs a way to read a value back out of execution.  (`:type <expr>` works — it
+  reads the inferred type at compile time, no execution needed.)
 - There is no line history or arrow-key editing yet; input is read plain.
 
 ## See also
