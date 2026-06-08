@@ -558,6 +558,92 @@ fn b1_interpret_set_is_transitive_callers() {
     );
 }
 
+/// @PLN15 B2 — `unmark_for_debug` switches a breakpoint's interpret-set **back to
+/// interpreted** under mixed execution: it clears the default-native mark
+/// (`def.native`) on the breakpoint fn + its transitive callers, leaving an
+/// unrelated compiled fn marked.  The compiled-vs-interpret choice is codegen-time
+/// (set `def.native` → `OpStaticCall` cdylib bridge; empty + a body → `OpCall`
+/// interpreted), so this un-mark + the standard recompile is the switch — a
+/// breakpoint can then fire in the interpreter loop.
+#[test]
+fn b2_unmark_switches_interpret_set_to_interpreted() {
+    use std::collections::HashSet;
+    let mut p = repl();
+    for def in [
+        "fn baz(n: integer) -> integer {\n  n + 1\n}",
+        "fn bar(n: integer) -> integer {\n  baz(n)\n}",
+        "fn foo(n: integer) -> integer {\n  bar(n)\n}",
+        "fn unrelated(z: integer) -> integer {\n  z * 2\n}",
+    ] {
+        match p.parse_statement(def) {
+            ParseResult::Ready { .. } => {}
+            other => panic!("def parse failed: {other:?}"),
+        }
+    }
+    let baz = p.data.def_nr("n_baz");
+    let bar = p.data.def_nr("n_bar");
+    let foo = p.data.def_nr("n_foo");
+    let unrelated = p.data.def_nr("n_unrelated");
+    assert!(
+        [baz, bar, foo, unrelated].iter().all(|&d| d != u32::MAX),
+        "all four fns defined"
+    );
+    // Simulate them being default-native (compiled cdylib dispatch).
+    let all: HashSet<u32> = [baz, bar, foo, unrelated].into_iter().collect();
+    loft::native_lib::mark_exports(&mut p.data, &all);
+    assert!(
+        !p.data.def(baz).native().is_empty(),
+        "baz starts marked (compiled)"
+    );
+    // A breakpoint in baz un-marks baz + its transitive callers (so the whole chain
+    // to the break interprets); `unrelated` can't reach baz, so it stays compiled.
+    let n = loft::debugger::unmark_for_debug(&mut p.data, baz);
+    assert_eq!(n, 3, "baz + bar + foo un-marked (transitive callers)");
+    assert!(p.data.def(baz).native().is_empty(), "baz interprets");
+    assert!(
+        p.data.def(bar).native().is_empty(),
+        "bar (direct caller) interprets"
+    );
+    assert!(
+        p.data.def(foo).native().is_empty(),
+        "foo (transitive caller) interprets"
+    );
+    assert!(
+        !p.data.def(unrelated).native().is_empty(),
+        "unrelated stays compiled — it can't reach baz"
+    );
+    // Idempotent: a second un-mark touches nothing (all already interpreted).
+    assert_eq!(loft::debugger::unmark_for_debug(&mut p.data, baz), 0);
+}
+
+/// @PLN15 B2 — a **pure-cdylib** function (no loft body) is an absolute boundary:
+/// `unmark_for_debug` leaves it marked, since there is no interpreted body to run
+/// (a breakpoint inside it can never fire).
+#[test]
+fn b2_pure_cdylib_fn_stays_an_absolute_boundary() {
+    let mut p = repl();
+    // A no-body `#native` forward declaration — pure cdylib, no interpreted body.
+    match p.parse_statement(
+        "pub fn vec_sum(data: vector<integer>) -> integer not null;\n#native \"loft_shared_x\"\n",
+    ) {
+        ParseResult::Ready { .. } => {}
+        other => panic!("native decl parse failed: {other:?}"),
+    }
+    let vs = p.data.def_nr("n_vec_sum");
+    assert!(vs != u32::MAX, "vec_sum defined");
+    assert!(
+        !p.data.def(vs).native().is_empty(),
+        "pure-cdylib fn is marked (its declared #native symbol)"
+    );
+    // Breaking "in" it un-marks nothing — there is no body to interpret.
+    let n = loft::debugger::unmark_for_debug(&mut p.data, vs);
+    assert_eq!(n, 0, "pure-cdylib fn stays compiled (absolute boundary)");
+    assert!(
+        !p.data.def(vs).native().is_empty(),
+        "still marked after unmark_for_debug"
+    );
+}
+
 /// The two functions whose `target` is reached only **indirectly** — `apply`
 /// invokes its fn-ref parameter `f`, so the call to `target` is a `CallRef`.
 const INDIRECT: &[&str] = &[

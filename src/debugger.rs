@@ -174,6 +174,39 @@ pub fn interpret_set(data: &crate::data::Data, bp_fn: u32) -> HashSet<u32> {
     set
 }
 
+/// @PLN15 B2 — switch the functions a breakpoint needs **back to interpreted**
+/// under mixed execution: clear the default-native mark (`def.native`) on every
+/// **body-bearing** function in [`interpret_set`]`(bp_fn)` (the breakpoint fn plus
+/// its transitive callers).  The next compile then routes their calls to the
+/// **interpreted** bytecode body (`OpCall`) instead of the compiled cdylib bridge
+/// (`OpStaticCall`) — and the breakpoint check lives in the interpreter loop, so a
+/// frame that ran compiled could never pause.  Returns how many functions were
+/// un-marked.
+///
+/// **Mechanism:** the compiled-vs-interpret choice is made at codegen, keyed on the
+/// callee's `def.native` (set → `OpStaticCall`; empty + a user body → `OpCall`).
+/// So the switch is *un-mark + recompile*, **not** a `library` swap — a library
+/// dispatcher (`fn(&mut Stores, &mut DbRef)`) has no `State`, so it cannot re-enter
+/// the interpreter to run a body.
+///
+/// **Body-bearing only:** a pure-cdylib function (no loft body, `code == Null`) has
+/// nothing to interpret, so it stays marked — an **absolute boundary**, a breakpoint
+/// inside it can never fire.  Idempotent (an already-interpreted fn is skipped).  The
+/// caller recompiles afterwards (the per-fn engine does this each generation); on the
+/// all-interpreted REPL every user fn is already unmarked, so this is a no-op there.
+pub fn unmark_for_debug(data: &mut crate::data::Data, bp_fn: u32) -> usize {
+    let set = interpret_set(data, bp_fn);
+    let mut count = 0;
+    for d in set {
+        let def = data.def(d);
+        if !def.native().is_empty() && *def.code() != crate::data::Value::Null {
+            data.def_mut(d).native = String::new();
+            count += 1;
+        }
+    }
+    count
+}
+
 impl Debugger {
     /// Register a bytecode offset as a breakpoint.
     pub fn add_offset(&mut self, offset: u32) {
