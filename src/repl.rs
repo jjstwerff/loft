@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN12 phase 03 — interactive REPL session (integer scope, slice B start).
+//! @PLN12 phase 03 — interactive REPL session.
 //!
 //! Holds a parser with the stdlib loaded plus the accumulated session
 //! statements.  Each [`ReplSession::eval`] appends the input to one shared
@@ -9,9 +9,10 @@
 //! the next (`x = 1` then `x + 1` sees `x`).
 //!
 //! **Scope / strategy note.**  This re-evaluates the accumulated body in a
-//! single shared scope each input.  For pure integer computation — the case
-//! this slice targets — that is behaviourally correct: re-running deterministic
-//! arithmetic yields the same values.  A statement with *side effects* (I/O)
+//! single shared scope each input.  As long as each binding's right-hand side
+//! is deterministic and side-effect-free — any value type — that is
+//! behaviourally correct: re-running yields the same values.  A statement with
+//! *side effects* (I/O)
 //! would re-run on each later input; eliminating that is the incremental,
 //! stack-resident model (compile only the new statement, keep the variable
 //! region on the stack across `reset_for_repl`) planned in
@@ -29,11 +30,16 @@ use std::panic::AssertUnwindSafe;
 
 /// Run the interactive `loft>` REPL.
 ///
-/// Reads inputs from `input` (one statement per line, multi-line accumulated on
+/// Reads inputs (one statement per line, multi-line accumulated on
 /// [`Eval::NeedMore`]) and writes the prompt, messages, and parse errors to
 /// `chrome` (stderr in the CLI).  Evaluated **results** are printed by the
 /// program itself to process stdout, so a terminal sees them and a piped caller
 /// can capture them.  Returns when input reaches EOF or the user types `:quit`.
+///
+/// When the process's stdin is an interactive terminal, input is read through a
+/// line editor (arrow-key history, in-line editing) and `input` is ignored.
+/// Otherwise — a pipe, a file, a test harness, or a wasm build — input is read
+/// plainly from `input`, so captured/piped output is byte-for-byte unchanged.
 ///
 /// A runtime panic (failed `assert`, overflow) is caught — execution runs on a
 /// throwaway clone of the database, so the session survives; the loop reports it
@@ -43,7 +49,7 @@ use std::panic::AssertUnwindSafe;
 /// Returns an I/O error from loading the stdlib or writing to `chrome`.
 pub fn run_repl<R: BufRead, W: Write>(
     stdlib_dir: &str,
-    mut input: R,
+    input: R,
     chrome: &mut W,
 ) -> std::io::Result<()> {
     let mut session = ReplSession::new(stdlib_dir)?;
@@ -51,84 +57,186 @@ pub fn run_repl<R: BufRead, W: Write>(
     // Silence the default panic handler for the duration of the loop: a runtime
     // error inside `eval` is caught below and reported cleanly, so the user
     // should not also see Rust's raw "thread panicked at …" backtrace.  Restored
-    // before returning.
+    // before returning, even if the loop exits with an I/O error.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
+    let result = run_loop(stdlib_dir, &mut session, input, chrome);
+    std::panic::set_hook(prev_hook);
+    result
+}
+
+/// Pick the input driver: the interactive line editor when stdin is a terminal,
+/// the plain reader otherwise.  wasm has no line editor, so it always reads
+/// plainly.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_loop<R: BufRead, W: Write>(
+    stdlib_dir: &str,
+    session: &mut ReplSession,
+    input: R,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        run_interactive(stdlib_dir, session, chrome)
+    } else {
+        run_piped(stdlib_dir, session, input, chrome)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn run_loop<R: BufRead, W: Write>(
+    stdlib_dir: &str,
+    session: &mut ReplSession,
+    input: R,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    run_piped(stdlib_dir, session, input, chrome)
+}
+
+/// The continuation-aware prompt: the primary prompt for a fresh statement, the
+/// dotted prompt while a multi-line statement is still open.
+fn prompt(pending: &str) -> &'static str {
+    if pending.is_empty() {
+        "loft> "
+    } else {
+        "..... > "
+    }
+}
+
+/// Read input plainly from `input`, one line at a time.  Used for pipes, files,
+/// test harnesses, and wasm — anywhere there is no interactive terminal — so the
+/// captured output stays stable.
+fn run_piped<R: BufRead, W: Write>(
+    stdlib_dir: &str,
+    session: &mut ReplSession,
+    mut input: R,
+    chrome: &mut W,
+) -> std::io::Result<()> {
     let mut pending = String::new();
     let mut line = String::new();
     loop {
-        write!(
-            chrome,
-            "{}",
-            if pending.is_empty() {
-                "loft> "
-            } else {
-                "..... > "
-            }
-        )?;
+        write!(chrome, "{}", prompt(&pending))?;
         chrome.flush()?;
         line.clear();
         if input.read_line(&mut line)? == 0 {
             break; // EOF
         }
-        let trimmed = line.trim_end();
-        // `:`-commands are only recognised at the start of a fresh statement.
-        if pending.is_empty() && trimmed.starts_with(':') {
-            let mut words = trimmed[1..].split_whitespace();
-            let cmd = words.next().unwrap_or("");
-            let filter: Vec<String> = words.map(str::to_string).collect();
-            match cmd {
-                "quit" | "q" => break,
-                "help" | "h" => writeln!(
-                    chrome,
-                    "commands: :quit  :help  :reset  :fns  :type <expr>  \
-                     :bytecode [fn]  :rust [fn]  :slots [fn]"
-                )?,
-                "reset" => {
-                    session = ReplSession::new(stdlib_dir)?;
-                    writeln!(chrome, "session reset.")?;
-                }
-                "bytecode" => session.introspect(Section::Bytecode, filter),
-                "rust" => session.introspect(Section::Rust, filter),
-                "slots" => session.introspect(Section::Slots, filter),
-                "fns" => session.list_fns(),
-                "type" => {
-                    let expr = filter.join(" ");
-                    match session.infer_type(&expr) {
-                        Some(t) => println!("{t}"),
-                        None => writeln!(chrome, "could not infer the type of `{expr}`")?,
-                    }
-                }
-                other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
-            }
-            continue;
-        }
-        pending.push_str(trimmed);
-        pending.push('\n');
-        let src = pending.clone();
-        // Catch a runtime panic so a bad input never kills the REPL.  AssertUnwindSafe
-        // is sound here: a panic corrupts only the per-eval database clone, never
-        // `session`'s own state.
-        match std::panic::catch_unwind(AssertUnwindSafe(|| session.eval(&src))) {
-            Ok(Eval::Ran) => pending.clear(),
-            Ok(Eval::NeedMore) => {} // keep accumulating; continuation prompt next
-            Ok(Eval::Error(diags)) => {
-                for d in diags {
-                    writeln!(chrome, "{}", d.to_string_compact())?;
-                }
-                pending.clear();
-            }
-            Err(_) => {
-                writeln!(
-                    chrome,
-                    "runtime error (session preserved; :reset to clear state)"
-                )?;
-                pending.clear();
-            }
+        if process_line(line.trim_end(), session, &mut pending, stdlib_dir, chrome)? {
+            break; // :quit
         }
     }
-    std::panic::set_hook(prev_hook);
     Ok(())
+}
+
+/// Read input through a line editor (arrow-key history + in-line editing).  The
+/// editor owns the prompt and reads the terminal directly, so the plain `input`
+/// reader is not used here.  History persists to `~/.loft_history` across
+/// sessions (best-effort — a failure to load or save is ignored).  Ctrl-C
+/// cancels the statement in progress; Ctrl-D at an empty prompt quits.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_interactive<W: Write>(
+    stdlib_dir: &str,
+    session: &mut ReplSession,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    use rustyline::error::ReadlineError;
+    let mut rl = match rustyline::DefaultEditor::new() {
+        Ok(rl) => rl,
+        // No usable terminal after all — fall back to the plain reader.
+        Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
+    };
+    let history = dirs::home_dir().map(|h| h.join(".loft_history"));
+    if let Some(path) = &history {
+        let _ = rl.load_history(path);
+    }
+    let mut pending = String::new();
+    loop {
+        match rl.readline(prompt(&pending)) {
+            Ok(line) => {
+                let _ = rl.add_history_entry(line.as_str());
+                if process_line(line.trim_end(), session, &mut pending, stdlib_dir, chrome)? {
+                    break; // :quit
+                }
+            }
+            // Ctrl-C drops the statement in progress and returns to a fresh prompt.
+            Err(ReadlineError::Interrupted) => pending.clear(),
+            // Ctrl-D (or any read error) ends the session.
+            Err(ReadlineError::Eof) => break,
+            Err(_) => break,
+        }
+    }
+    if let Some(path) = &history {
+        let _ = rl.save_history(path);
+    }
+    Ok(())
+}
+
+/// Process one input line against the session: dispatch a `:`-command, or feed
+/// the line into the accumulating statement and evaluate it when complete.
+/// Returns `Ok(true)` when the user asked to quit (`:quit`).  Shared by both
+/// input drivers so interactive and piped sessions behave identically.
+fn process_line<W: Write>(
+    trimmed: &str,
+    session: &mut ReplSession,
+    pending: &mut String,
+    stdlib_dir: &str,
+    chrome: &mut W,
+) -> std::io::Result<bool> {
+    // `:`-commands are only recognised at the start of a fresh statement.
+    if pending.is_empty() && trimmed.starts_with(':') {
+        let mut words = trimmed[1..].split_whitespace();
+        let cmd = words.next().unwrap_or("");
+        let filter: Vec<String> = words.map(str::to_string).collect();
+        match cmd {
+            "quit" | "q" => return Ok(true),
+            "help" | "h" => writeln!(
+                chrome,
+                "commands: :quit  :help  :reset  :fns  :type <expr>  \
+                 :bytecode [fn]  :rust [fn]  :slots [fn]"
+            )?,
+            "reset" => {
+                *session = ReplSession::new(stdlib_dir)?;
+                writeln!(chrome, "session reset.")?;
+            }
+            "bytecode" => session.introspect(Section::Bytecode, filter),
+            "rust" => session.introspect(Section::Rust, filter),
+            "slots" => session.introspect(Section::Slots, filter),
+            "fns" => session.list_fns(),
+            "type" => {
+                let expr = filter.join(" ");
+                match session.infer_type(&expr) {
+                    Some(t) => println!("{t}"),
+                    None => writeln!(chrome, "could not infer the type of `{expr}`")?,
+                }
+            }
+            other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
+        }
+        return Ok(false);
+    }
+    pending.push_str(trimmed);
+    pending.push('\n');
+    let src = pending.clone();
+    // Catch a runtime panic so a bad input never kills the REPL.  AssertUnwindSafe
+    // is sound here: a panic corrupts only the per-eval database clone, never
+    // `session`'s own state.
+    match std::panic::catch_unwind(AssertUnwindSafe(|| session.eval(&src))) {
+        Ok(Eval::Ran) => pending.clear(),
+        Ok(Eval::NeedMore) => {} // keep accumulating; continuation prompt next
+        Ok(Eval::Error(diags)) => {
+            for d in diags {
+                writeln!(chrome, "{}", d.to_string_compact())?;
+            }
+            pending.clear();
+        }
+        Err(_) => {
+            writeln!(
+                chrome,
+                "runtime error (session preserved; :reset to clear state)"
+            )?;
+            pending.clear();
+        }
+    }
+    Ok(false)
 }
 
 /// Outcome of evaluating one REPL input.
