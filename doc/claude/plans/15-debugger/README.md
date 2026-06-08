@@ -14,15 +14,20 @@ In progress — **tracer-bullet slice landed (2026-06-08)**: the riskiest unknow
 now proven *yes*. A breakpoint set on a source line pauses the interpreter there and
 reads the live frame's arguments correctly; it fires once per call and is inert when
 nothing is registered. `src/debugger.rs` (`Debugger`/`BreakHit`) + the per-op hook
-in `State::execute_argv` + `set_breakpoint_line`/`set_breakpoint_fn_entry`/
-`capture_break_frame`/`render_frame_local`; `tests/debugger.rs` (4 tests). The hot
-loop carries one `Option::is_some` branch per op when not debugging (issues suite
-green — no regression). **Frame-layout facts the slice pinned** (matrix-first paid
-off): a function-*entry* breakpoint pauses pre-prologue (slots still zero), so the
-read point is a **body line**; a variable sits at the frame-absolute
+in `State::execute_argv` + `set_breakpoint_fn_line` (function-scoped) /
+`set_breakpoint_fn_entry` / `capture_break_frame` / `render_frame_local`;
+`tests/debugger.rs` (**5 tests**). Captures arguments of **every value type** —
+scalars/text inline, heap (struct/vector/struct-enum) via `show_loft`, simple enums
+by discriminant. The hot loop carries one `Option::is_some` branch per op when not
+debugging (issues suite green — no regression). **Facts the slices pinned**
+(matrix-first paid off): a function-*entry* breakpoint pauses pre-prologue (slots
+zero), so the read point is a **body line**; a variable sits at the frame-absolute
 `stack_cur.pos + args_base + vars.stack(i)` — *not* `get_var`'s stack-depth-relative
-operand. **Next** (each its own small slice): non-arg locals with liveness-gating
-(**D0**) → the REPL-at-frame bridge (**D1**, gated on @PLN14) → stepping (**F**) →
+operand; a bare line number is *unscoped* (matches every function), so a breakpoint
+must be function-scoped; and the variable table's `first_def` is a *sequence*
+number, the wrong unit for runtime liveness (Q6). **Next**: D0's last sub-step —
+non-arg locals with liveness-gating (needs a codegen first-def/last-use *bytecode*
+offset, Q6) → the REPL-at-frame bridge (**D1**, gated on @PLN14) → stepping (**F**) →
 conditions (**E**).
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
@@ -119,10 +124,10 @@ The host-agnostic engine is A–F; the surfaces are G.
 
 | Item | Status |
 |---|---|
-| **A** — breakpoint registry + source-line → bytecode-offset map (reuse the per-op source positions the bytecode already carries) | **First cut** — line + fn-entry breakpoints via `source_spans` / `code_position` |
+| **A** — breakpoint registry + source-line → bytecode-offset map (reuse the per-op source positions the bytecode already carries) | **First cut** — **function-scoped** line breakpoints (`set_breakpoint_fn_line`, scoped to `[d_nr.code_position, next_def)` — a bare line matches that line in *every* function, stdlib included) + fn-entry, via `source_spans` / `code_position` |
 | **B** — interpret-scope analysis: from a breakpoint set, compute the functions whose call-chain must interpret (static call-graph reachability; refine to on-demand frame-entry switching) | Open |
 | **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
-| **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **In progress** — arguments land (`capture_break_frame` / `render_frame_local`); **next:** non-arg locals with **liveness-gating** (show a local only once its assignment has run — skip not-yet-live slots rather than read zero/garbage) + the remaining value types (heap via `show_loft`) |
+| **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **In progress** — arguments land **for every value type**: scalars/text inline, heap (struct/vector/struct-enum) via `show_loft`, simple enums by discriminant (`render_frame_local`). **Blocked sub-step — non-arg locals with liveness-gating:** the variable table's `first_def`/`last_use` are *sequence* numbers (IR-walk order), the **wrong unit** to compare against the runtime bytecode `code_pos`; gating a local needs a codegen-recorded **bytecode-offset** first-def/last-use (a small codegen addition — see Open question 6). Reading locals without it would show not-yet-live slots as zero/garbage, so it is deferred rather than hacked with the wrong unit. |
 | **D1** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from D0's captured frame, so evaluating at a break runs against the live locals (**depends on @PLN14 frame-seedable env**) | Open — the headline payoff |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | Open |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
@@ -175,6 +180,16 @@ The host-agnostic engine is A–F; the surfaces are G.
 5. **Coroutine reuse depth.** The suspend hook should reuse the coroutine
    frame-snapshot/restore path, not a parallel one — confirm a breakpoint pause is
    expressible as the same suspend primitive (it is a yield to the debugger).
+6. **Local liveness in bytecode units (the D0 blocker).** The variable table's
+   `first_def`/`last_use` are *sequence* numbers (set in `intervals.rs` from a
+   `seq` counter over the IR walk), not bytecode offsets — so they cannot be
+   compared to the runtime `code_pos` at a breakpoint to decide whether a local is
+   assigned yet. Resolve by recording each variable's first-def / last-use
+   **bytecode offset** during codegen (where the `Set` / `Var` ops are emitted),
+   then gate a local: show it iff `first_def_pc <= bp_pc <= last_use_pc` (which also
+   picks the right owner of a reused slot). Small codegen addition; the alternative
+   (map `bp_pc → seq`) needs a second new map and is no cheaper. Until then D0
+   captures arguments only (always live).
 
 ## Cross-arc dependencies
 

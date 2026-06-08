@@ -28,28 +28,35 @@ fn repl() -> Parser {
 /// Define `def` then run `call` with a breakpoint on source `line`, returning the
 /// captured frames.  `line` is relative to `def`'s own text (line 1 = its first
 /// line), so a body line is post-prologue — where args sit in their slots.
-fn run_with_line_breakpoint(
+fn run_with_breakpoint(
     p: &mut Parser,
-    def: &str,
+    defs: &[&str],
     call: &str,
+    bp_fn: &str,
     line: u32,
 ) -> Vec<loft::debugger::BreakHit> {
-    match p.parse_statement(def) {
-        ParseResult::Ready { .. } => {}
-        other => panic!("def parse of {def:?} failed: {other:?}"),
+    for def in defs {
+        match p.parse_statement(def) {
+            ParseResult::Ready { .. } => {}
+            other => panic!("def parse of {def:?} failed: {other:?}"),
+        }
+        let mut warm = State::new(p.database.clone());
+        compile::byte_code(&mut warm, &mut p.data);
     }
-    let mut warm = State::new(p.database.clone());
-    compile::byte_code(&mut warm, &mut p.data);
-
     let entry = match p.parse_statement(call) {
         ParseResult::Ready { entry_def_nr } => entry_def_nr,
         other => panic!("call parse of {call:?} failed: {other:?}"),
     };
     let mut state = State::new(p.database.clone());
+    // Assign slots before codegen (the REPL paths do this; bare expressions get
+    // away without it, but a struct-constructing call needs its work-ref slots).
+    loft::scopes::check(&mut p.data);
     compile::byte_code(&mut state, &mut p.data);
+    let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
+    assert!(d_nr != u32::MAX, "function {bp_fn} not defined");
     assert!(
-        state.set_breakpoint_line(line),
-        "no breakpoint offset for line {line}; breakable lines = {:?}",
+        state.set_breakpoint_fn_line(d_nr, line, &p.data),
+        "no breakpoint offset for {bp_fn} line {line}; breakable = {:?}",
         state.breakable_lines()
     );
     let name = p
@@ -68,10 +75,11 @@ fn run_with_line_breakpoint(
 #[test]
 fn breakpoint_on_body_line_captures_argument() {
     let mut p = repl();
-    let hits = run_with_line_breakpoint(
+    let hits = run_with_breakpoint(
         &mut p,
-        "fn dbl(n: integer) -> integer {\n  n + n\n}",
+        &["fn dbl(n: integer) -> integer {\n  n + n\n}"],
         "dbl(42)",
+        "dbl",
         2, // the `n + n` line
     );
     assert_eq!(hits.len(), 1, "breakpoint fired once: {hits:?}");
@@ -87,10 +95,11 @@ fn breakpoint_on_body_line_captures_argument() {
 #[test]
 fn breakpoint_fires_per_call() {
     let mut p = repl();
-    let hits = run_with_line_breakpoint(
+    let hits = run_with_breakpoint(
         &mut p,
-        "fn id(n: integer) -> integer {\n  n + 0\n}",
+        &["fn id(n: integer) -> integer {\n  n + 0\n}"],
         "id(7) + id(9)",
+        "id",
         2,
     );
     assert_eq!(hits.len(), 2, "two calls → two hits: {hits:?}");
@@ -113,10 +122,11 @@ fn breakpoint_fires_per_call() {
 #[test]
 fn breakpoint_captures_multiple_arguments() {
     let mut p = repl();
-    let hits = run_with_line_breakpoint(
+    let hits = run_with_breakpoint(
         &mut p,
-        "fn add(a: integer, b: integer) -> integer {\n  a + b\n}",
+        &["fn add(a: integer, b: integer) -> integer {\n  a + b\n}"],
         "add(40, 2)",
+        "add",
         2,
     );
     assert_eq!(hits.len(), 1, "one hit: {hits:?}");
@@ -128,6 +138,34 @@ fn breakpoint_captures_multiple_arguments() {
     assert!(
         frame.iter().any(|(n, v)| n == "b" && v == "2"),
         "b==2: {frame:?}"
+    );
+}
+
+/// A struct argument is captured as its full own-format value via `show_loft` —
+/// the frame view covers heap types, not just scalars.
+#[test]
+fn breakpoint_captures_struct_argument() {
+    let mut p = repl();
+    let hits = run_with_breakpoint(
+        &mut p,
+        &[
+            "struct Point { x: integer, y: integer }",
+            "fn area(pt: Point) -> integer {\n  pt.x * pt.y\n}",
+        ],
+        "area(Point { x: 3, y: 4 })",
+        "area",
+        2,
+    );
+    assert_eq!(hits.len(), 1, "one hit: {hits:?}");
+    let pt = hits[0]
+        .locals
+        .iter()
+        .find(|(n, _)| n == "pt")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        pt,
+        Some("Point{x:3,y:4}"),
+        "struct arg rendered via show_loft: {hits:?}"
     );
 }
 

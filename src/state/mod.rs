@@ -1859,6 +1859,41 @@ impl State {
         true
     }
 
+    /// Register a breakpoint at source `line` **within function `d_nr`** — the
+    /// correct primitive: a bare line number matches that line in *every* function
+    /// (stdlib included), so a breakpoint must be scoped to its function.  Scans
+    /// `source_spans` only within `[d_nr.code_position, next_def_start)` for a
+    /// matching line.  Returns `false` if no op in that range maps to `line`.
+    pub fn set_breakpoint_fn_line(
+        &mut self,
+        d_nr: u32,
+        line: u32,
+        data: &crate::data::Data,
+    ) -> bool {
+        if d_nr >= data.definitions() {
+            return false;
+        }
+        let start = data.def(d_nr).code_position;
+        let end = (0..data.definitions())
+            .map(|d| data.def(d).code_position)
+            .filter(|&p| p > start)
+            .min()
+            .unwrap_or(u32::MAX);
+        let Some(&offset) = self
+            .source_spans
+            .range(start..end)
+            .find(|(_, p)| p.line == line)
+            .map(|(off, _)| off)
+        else {
+            return false;
+        };
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        true
+    }
+
     /// The distinct source lines that carry a bytecode mapping — the lines a
     /// breakpoint can pause on, sorted.
     #[must_use]
@@ -1924,10 +1959,13 @@ impl State {
 
     /// Render a frame variable at frame offset `off` (its `vars.stack(i)`) of type
     /// `tp` to loft source.  Reads at the **frame-absolute** position
-    /// `stack_cur.pos + off` — the variable's fixed slot — rather than via
-    /// `get_var`, whose `pos` operand is stack-depth-relative (correct only at the
-    /// exact op the codegen emitted it for, not at an arbitrary pause).  Scalars +
-    /// text directly; other types as a `<type>` placeholder for now.
+    /// `stack_cur.pos + frame_base + off` — the variable's fixed slot — rather than
+    /// via `get_var`, whose `pos` operand is stack-depth-relative (correct only at
+    /// the exact op the codegen emitted it for, not at an arbitrary pause).  Covers
+    /// every value type: scalars + text inline, `DbRef`-backed heap values
+    /// (struct / vector / struct-enum) via [`show_loft`](crate::database::Stores),
+    /// and a simple enum via its discriminant byte — the same dispatch the REPL's
+    /// value-snapshot uses, but reading a frame slot instead of the stack top.
     fn render_frame_local(
         &self,
         frame_base: u32,
@@ -1938,20 +1976,67 @@ impl State {
         use crate::data::Type;
         let rec = self.stack_cur.rec;
         let at = self.stack_cur.pos + frame_base + u32::from(off);
-        let store = self.database.store(&self.stack_cur);
+        // Each scalar read takes a fresh `store` borrow (released at the end of the
+        // arm) so the heap arms can re-borrow `self.database` for `show_loft`.
         match tp {
-            Type::Integer(_) => store.addr::<i64>(rec, at).to_string(),
-            Type::Boolean => if *store.addr::<u8>(rec, at) != 0 {
+            Type::Integer(_) => self
+                .database
+                .store(&self.stack_cur)
+                .addr::<i64>(rec, at)
+                .to_string(),
+            Type::Boolean => if *self.database.store(&self.stack_cur).addr::<u8>(rec, at) != 0 {
                 "true"
             } else {
                 "false"
             }
             .to_string(),
-            Type::Float => store.addr::<f64>(rec, at).to_string(),
-            Type::Single => format!("{}f", store.addr::<f32>(rec, at)),
-            Type::Character => char::from_u32(*store.addr::<u32>(rec, at))
-                .map_or_else(|| "?".to_string(), |c| format!("'{c}'")),
-            Type::Text(_) => format!("{:?}", store.addr::<crate::keys::Str>(rec, at).str()),
+            Type::Float => self
+                .database
+                .store(&self.stack_cur)
+                .addr::<f64>(rec, at)
+                .to_string(),
+            Type::Single => format!(
+                "{}f",
+                self.database.store(&self.stack_cur).addr::<f32>(rec, at)
+            ),
+            Type::Character => {
+                char::from_u32(*self.database.store(&self.stack_cur).addr::<u32>(rec, at))
+                    .map_or_else(|| "?".to_string(), |c| format!("'{c}'"))
+            }
+            Type::Text(_) => format!(
+                "{:?}",
+                self.database
+                    .store(&self.stack_cur)
+                    .addr::<crate::keys::Str>(rec, at)
+                    .str()
+            ),
+            // Heap value backed by a `DbRef` in the slot: struct, vector,
+            // struct-enum variant → `show_loft` renders its own-format literal.
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                if tp_known == u16::MAX {
+                    return format!("<{tname}>");
+                }
+                let db = *self
+                    .database
+                    .store(&self.stack_cur)
+                    .addr::<crate::keys::DbRef>(rec, at);
+                let mut out = String::new();
+                self.database.show_loft(&mut out, &db, tp_known);
+                out
+            }
+            // Simple enum: an inline 1-based discriminant byte → `Enum.Variant`.
+            Type::Enum(_, false, _) => {
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                let disc = *self.database.store(&self.stack_cur).addr::<u8>(rec, at);
+                if tp_known == u16::MAX || disc == 0 {
+                    "null".to_string()
+                } else {
+                    format!("{tname}.{}", self.database.enum_val(tp_known, disc))
+                }
+            }
             other => format!("<{}>", other.name(data)),
         }
     }
