@@ -1965,6 +1965,22 @@ impl State {
         true
     }
 
+    /// Re-capture the current suspension's frame so [`paused_frame`](Self::paused_frame)
+    /// reflects a value just written with [`set_frame_value`](Self::set_frame_value) —
+    /// the user edits `n` at the paused prompt and `:vars` shows the new value.
+    /// No-op when not paused.  The pause pc is `code_pos`: the suspend hook returns
+    /// *before* executing the breakpoint op, so `code_pos` still names it (the same
+    /// pc the frame was first captured at).
+    pub fn refresh_paused_frame(&mut self, data: &crate::data::Data) {
+        if !self.is_paused() {
+            return;
+        }
+        let hit = self.capture_break_frame(self.code_pos, data);
+        if let Some(d) = self.debug.as_mut() {
+            d.paused = Some(hit);
+        }
+    }
+
     /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
     /// frame.  Returns `true` to **suspend** the loop (stepping mode — the frame is
     /// stashed in `debug.paused` for the driver to read / edit, then `resume`);

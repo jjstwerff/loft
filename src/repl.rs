@@ -67,6 +67,10 @@ pub fn run_repl<R: BufRead, W: Write>(
     chrome: &mut W,
 ) -> std::io::Result<()> {
     let mut session = ReplSession::new(stdlib_dir)?;
+    // @PLN15 G1 — the REPL is the interactive debugger surface: a breakpoint hit
+    // suspends into the paused sub-mode (inspect / edit / step), rather than the
+    // record-and-continue mode programmatic callers use.
+    session.debug_stepping(true);
     writeln!(chrome, "loft REPL — :help for commands, :quit to exit")?;
     // Silence the default panic handler for the duration of the loop: a runtime
     // error inside `eval` is caught below and reported cleanly, so the user
@@ -107,13 +111,16 @@ fn run_loop<R: BufRead, W: Write>(
     run_piped(stdlib_dir, session, input, chrome)
 }
 
-/// The continuation-aware prompt: the primary prompt for a fresh statement, the
-/// dotted prompt while a multi-line statement is still open.
-fn prompt(pending: &str) -> &'static str {
-    if pending.is_empty() {
-        "loft> "
-    } else {
+/// The continuation-aware prompt: the `(dbg)` prompt while suspended at a
+/// breakpoint (@PLN15 G1), the dotted prompt while a multi-line statement is still
+/// open, the primary prompt otherwise.
+fn prompt(pending: &str, debugging: bool) -> &'static str {
+    if !pending.is_empty() {
         "..... > "
+    } else if debugging {
+        "(dbg) "
+    } else {
+        "loft> "
     }
 }
 
@@ -129,7 +136,7 @@ fn run_piped<R: BufRead, W: Write>(
     let mut pending = String::new();
     let mut line = String::new();
     loop {
-        write!(chrome, "{}", prompt(&pending))?;
+        write!(chrome, "{}", prompt(&pending, session.is_debugging()))?;
         chrome.flush()?;
         line.clear();
         if input.read_line(&mut line)? == 0 {
@@ -381,7 +388,7 @@ fn run_interactive<W: Write>(
     }
     let mut pending = String::new();
     loop {
-        match rl.readline(prompt(&pending)) {
+        match rl.readline(prompt(&pending, session.is_debugging())) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
                 let quit = process_line(
@@ -425,6 +432,11 @@ fn process_line<W: Write>(
     session_path: Option<&Path>,
     chrome: &mut W,
 ) -> std::io::Result<bool> {
+    // @PLN15 G1 — while suspended at a breakpoint, inputs drive the paused
+    // sub-mode (step verbs / value edits), not a fresh evaluation.
+    if pending.is_empty() && session.is_debugging() {
+        return handle_paused(trimmed, session, chrome);
+    }
     // `:`-commands are only recognised at the start of a fresh statement.
     if pending.is_empty() && trimmed.starts_with(':') {
         let mut words = trimmed[1..].split_whitespace();
@@ -507,6 +519,12 @@ fn process_line<W: Write>(
     // `session`'s own state.
     match std::panic::catch_unwind(AssertUnwindSafe(|| session.eval(&src))) {
         Ok(Eval::Ran) => pending.clear(),
+        Ok(Eval::Paused) => {
+            // The run hit a breakpoint and suspended — show the frame and enter
+            // the paused sub-mode; the next inputs are routed to `handle_paused`.
+            pending.clear();
+            print_pause(session, chrome)?;
+        }
         Ok(Eval::NeedMore) => {} // keep accumulating; continuation prompt next
         Ok(Eval::Error(diags)) => {
             for d in diags {
@@ -523,6 +541,87 @@ fn process_line<W: Write>(
         }
     }
     Ok(false)
+}
+
+/// @PLN15 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
+/// resume execution (`:step`/`:s` into, `:next`/`:n` over, `:finish`/`:o` out,
+/// `:continue`/`:c` to the next breakpoint or the end); `name = <int>` edits the
+/// live frame; `:vars` re-shows the frame; `:quit`/`:q` leaves the REPL.  Returns
+/// `Ok(true)` only to quit.  Verbs work with or without the leading colon, so a
+/// paused user can type `step` or `:step`.
+fn handle_paused<W: Write>(
+    trimmed: &str,
+    session: &mut ReplSession,
+    chrome: &mut W,
+) -> std::io::Result<bool> {
+    use crate::debugger::StepMode;
+    let t = trimmed.trim();
+    match t.strip_prefix(':').unwrap_or(t) {
+        "quit" | "q" => return Ok(true),
+        "step" | "s" => step_and_report(session, StepMode::Into, chrome)?,
+        "next" | "n" => step_and_report(session, StepMode::Over, chrome)?,
+        "finish" | "o" => step_and_report(session, StepMode::Out, chrome)?,
+        "continue" | "c" => step_and_report(session, StepMode::Continue, chrome)?,
+        "vars" => print_pause(session, chrome)?,
+        "help" | "h" => writeln!(
+            chrome,
+            "paused: :step(:s) into  :next(:n) over  :finish(:o) out  \
+             :continue(:c)  :vars  |  `name = <int>` edits a value  |  :quit"
+        )?,
+        _ => match parse_int_assign(t) {
+            Some((name, value)) if session.debug_set(name, value) => {
+                print_pause(session, chrome)?;
+            }
+            Some((name, _)) => writeln!(chrome, "no integer local `{name}` in this frame")?,
+            None => writeln!(
+                chrome,
+                "paused — :step/:next/:finish/:continue, or `name = <int>` to edit (:help)"
+            )?,
+        },
+    }
+    Ok(false)
+}
+
+/// Print the current paused frame (function + its in-scope variables), or nothing
+/// when no longer paused.
+fn print_pause<W: Write>(session: &ReplSession, chrome: &mut W) -> std::io::Result<()> {
+    if let Some(f) = session.paused_frame() {
+        let vars: Vec<String> = f.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect();
+        writeln!(chrome, "⏸ paused in {} | {}", f.function, vars.join(", "))?;
+    }
+    Ok(())
+}
+
+/// Resume per `mode` and report: the new frame if it paused again, else that the
+/// run finished and the sub-mode is left.
+fn step_and_report<W: Write>(
+    session: &mut ReplSession,
+    mode: crate::debugger::StepMode,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    if session.debug_step(mode) {
+        print_pause(session, chrome)?;
+    } else {
+        writeln!(chrome, "▶ resumed — run finished")?;
+    }
+    Ok(())
+}
+
+/// Parse a `name = <integer>` edit typed at the paused prompt: a single plain
+/// identifier, `=`, then a base-10 `i64`.  `None` for anything else (an
+/// expression, `+=`, a non-integer) — only a plain integer write-back is wired
+/// for now (matching `State::set_frame_value`).
+fn parse_int_assign(s: &str) -> Option<(&str, i64)> {
+    let (lhs, rhs) = s.split_once('=')?;
+    let name = lhs.trim();
+    if name.is_empty()
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || name.chars().next().is_some_and(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let value: i64 = rhs.trim().parse().ok()?;
+    Some((name, value))
 }
 
 /// Reduce `Type::show`'s debug form to the loft-source type name: drop the
@@ -655,6 +754,13 @@ pub enum Eval {
     NeedMore,
     /// Parse error; the session is left exactly as it was before the call.
     Error(Vec<DiagEntry>),
+    /// @PLN15 G1 — the run hit a breakpoint and **suspended** (interactive
+    /// stepping is on).  The session now holds the live frame: inspect it with
+    /// [`ReplSession::paused_frame`], edit a value with
+    /// [`ReplSession::debug_set`], and resume with [`ReplSession::debug_step`] /
+    /// [`ReplSession::debug_continue`].  The observing statement finishes (and
+    /// prints its value) when the run is resumed to completion.
+    Paused,
 }
 
 /// How a [`ReplSession::resume_from`] replay went.
@@ -682,12 +788,22 @@ pub struct ReplSession {
     /// True only while [`resume_from`](Self::resume_from) is feeding saved
     /// inputs back in — suppresses re-recording them to the file.
     replaying: bool,
-    /// @PLN15 G1 — breakpoint specs (`:break` command): `"foo"` (body start),
-    /// `"foo:3"` (line 3 of `foo`), `"5"` (bare line, unscoped).  Re-applied to the
+    /// @PLN15 G1 — breakpoint specs (`:break` command), **function-scoped**:
+    /// `"foo"` (body start) or `"foo:3"` (line 3 of `foo`).  Re-applied to the
     /// fresh `State` of every observing run.
     breakpoints: Vec<String>,
-    /// Frames captured at breakpoints during the most recent observing run.
+    /// Frames captured at breakpoints during the most recent observing run
+    /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
+    /// @PLN15 G1 — **interactive stepping**: when on, an observing run that
+    /// reaches a breakpoint *suspends* into the paused sub-mode (held in `paused`)
+    /// instead of recording all hits and continuing.  The interactive driver turns
+    /// it on; programmatic/piped callers that want the full hit list leave it off.
+    stepping: bool,
+    /// @PLN15 G1 — a run suspended at a breakpoint, held across REPL inputs so the
+    /// user can inspect the frame, edit a value, and step.  `None` unless paused.
+    /// Boxed because `State` is large and the paused case is rare.
+    paused: Option<Box<State>>,
 }
 
 impl ReplSession {
@@ -707,6 +823,8 @@ impl ReplSession {
             replaying: false,
             breakpoints: Vec::new(),
             last_hits: Vec::new(),
+            stepping: false,
+            paused: None,
         })
     }
 
@@ -724,6 +842,8 @@ impl ReplSession {
             replaying: false,
             breakpoints: Vec::new(),
             last_hits: Vec::new(),
+            stepping: false,
+            paused: None,
         }
     }
 
@@ -804,6 +924,70 @@ impl ReplSession {
     #[must_use]
     pub fn last_hits(&self) -> &[crate::debugger::BreakHit] {
         &self.last_hits
+    }
+
+    /// @PLN15 G1 — turn **interactive stepping** on or off.  When on, an observing
+    /// run that reaches a breakpoint *suspends* into the paused sub-mode (rather
+    /// than recording every hit and continuing): inspect with
+    /// [`paused_frame`](Self::paused_frame), edit with [`debug_set`](Self::debug_set),
+    /// resume with [`debug_step`](Self::debug_step) / [`debug_continue`](Self::debug_continue).
+    /// The interactive REPL driver enables it; programmatic callers that want the
+    /// full hit list (e.g. a conditional-breakpoint sweep via
+    /// [`frame_holds`](Self::frame_holds)) leave it off.
+    pub fn debug_stepping(&mut self, on: bool) {
+        self.stepping = on;
+    }
+
+    /// Whether a run is currently **suspended** at a breakpoint (the paused
+    /// sub-mode is active).
+    #[must_use]
+    pub fn is_debugging(&self) -> bool {
+        self.paused.is_some()
+    }
+
+    /// The frame at the current suspension, or `None` if not paused.
+    #[must_use]
+    pub fn paused_frame(&self) -> Option<&crate::debugger::BreakHit> {
+        self.paused.as_deref().and_then(State::paused_frame)
+    }
+
+    /// Edit integer local `name` in the **live** paused frame (the user types
+    /// `n = 99` at the paused prompt), then refresh the frame view so a later
+    /// inspect shows the new value.  Returns `false` when not paused or no integer
+    /// local of that name is in the current frame.  The edit is picked up when the
+    /// run resumes — the @PLN15 F edit-and-continue, now driven from the REPL.
+    pub fn debug_set(&mut self, name: &str, value: i64) -> bool {
+        let Some(state) = self.paused.as_deref_mut() else {
+            return false;
+        };
+        let ok = state.set_frame_value(name, value, &self.parser.data);
+        if ok {
+            state.refresh_paused_frame(&self.parser.data);
+        }
+        ok
+    }
+
+    /// Resume the suspended run, stopping per `mode` (the step verbs —
+    /// [`StepMode`](crate::debugger::StepMode)).  Returns `true` if it paused again
+    /// (the new frame is in [`paused_frame`](Self::paused_frame)), `false` if the
+    /// run finished — in which case the paused sub-mode is left
+    /// ([`is_debugging`](Self::is_debugging) becomes `false`).
+    pub fn debug_step(&mut self, mode: crate::debugger::StepMode) -> bool {
+        let Some(state) = self.paused.as_deref_mut() else {
+            return false;
+        };
+        let still = state.debug_step(mode, &self.parser.data);
+        if !still {
+            self.paused = None;
+        }
+        still
+    }
+
+    /// Continue to the next breakpoint or the end of the run (the `:continue`
+    /// verb) — [`debug_step`](Self::debug_step) with
+    /// [`StepMode::Continue`](crate::debugger::StepMode::Continue).
+    pub fn debug_continue(&mut self) -> bool {
+        self.debug_step(crate::debugger::StepMode::Continue)
     }
 
     /// Resolve + set the session's breakpoint specs on a freshly-compiled `state`
@@ -981,10 +1165,15 @@ impl ReplSession {
             self.body
         );
         if self.compile_generation(&shown, true, true).is_ok() {
-            return Eval::Ran;
+            return if self.is_debugging() {
+                Eval::Paused
+            } else {
+                Eval::Ran
+            };
         }
         let plain = format!("{}{};\n", self.body, input);
         match self.compile_generation(&plain, true, true) {
+            Ok(()) if self.is_debugging() => Eval::Paused,
             Ok(()) => Eval::Ran,
             Err(diags) => Eval::Error(diags),
         }
@@ -1024,13 +1213,26 @@ impl ReplSession {
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
-            // @PLN15 G1 — apply the session's breakpoints to this run, then report
-            // any that fired.  Only on a real observing run (`debug`), not on the
-            // value-render re-runs (`:vars`, snapshot validation).
+            // @PLN15 G1 — apply the session's breakpoints to this run.  In stepping
+            // mode a hit *suspends* execution; otherwise it records-and-continues.
+            // Only on a real observing run (`debug`), not the value-render re-runs
+            // (`:vars`, snapshot validation).
             if debug && !self.breakpoints.is_empty() {
                 self.apply_breakpoints(&mut state);
+                if self.stepping {
+                    state.enable_stepping();
+                }
             }
             state.execute_argv(&name, &self.parser.data, &[]);
+            if debug && state.is_paused() {
+                // Suspended at a breakpoint (interactive stepping): hold the live
+                // state so the caller can inspect / edit / step it.  The gen def
+                // stays in `data` — its bytecode is what the held state runs — and
+                // the observing wrapper's `println` fires when the run is resumed
+                // to completion.  Return early; the run is not yet finished.
+                self.paused = Some(Box::new(state));
+                return Ok(());
+            }
             if debug {
                 self.last_hits = state.debug_hits().to_vec();
                 for hit in &self.last_hits {

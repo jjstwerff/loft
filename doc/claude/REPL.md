@@ -112,7 +112,7 @@ Commands start with a colon:
 | `:fns` | List the functions you have defined, with their return type. |
 | `:vars` | List the variables you have bound, each with its current value. |
 | `:type <expr>` | Show the type of an expression without running it. |
-| `:break <fn>` | Set a breakpoint at the start of a function's body — also `<fn>:<line>` (a line in that function). Both are *function-scoped*, the only form unique in the REPL (every input restarts line numbering under the synthetic `<repl>` file, so a bare line isn't unique; file:line is for a file-run debugger). `:break` lists, `:break clear` removes. A later call that runs the function reports the frame (`⏸ break in <fn> \| n = 21`). |
+| `:break <fn>` | Set a breakpoint at the start of a function's body — also `<fn>:<line>` (a line in that function). Both are *function-scoped*, the only form unique in the REPL (every input restarts line numbering under the synthetic `<repl>` file, so a bare line isn't unique; file:line is for a file-run debugger). `:break` lists, `:break clear` removes. The next call that reaches it **suspends** into the paused sub-mode (below). |
 | `:bytecode [fn]` | Show the bytecode — all your functions, or just the named one. |
 | `:rust [fn]` | Show the Rust code loft generates for native compilation. |
 | `:slots [fn]` | Show each function's variable slot table (name, type, slot range). |
@@ -127,6 +127,42 @@ fn n_dbl:
   ----------------------------------------------------------------------
   0    arg  n      int    0      [0, 8)       -
 ```
+
+### Paused at a breakpoint
+
+When a call reaches a breakpoint the REPL **suspends** inside that frame and the
+prompt changes to `(dbg)`. The frame's in-scope variables are shown, and you can
+inspect them, change a value, and step:
+
+```
+loft> :break calc
+breakpoint set: calc
+loft> calc(5)
+⏸ paused in calc | n = 5
+(dbg) n = 99
+⏸ paused in calc | n = 99
+(dbg) :continue
+▶ resumed — run finished
+990
+```
+
+At the `(dbg)` prompt:
+
+| Input | What it does |
+|---|---|
+| `:step` (`:s`) | Run to the next source line, **into** any call. |
+| `:next` (`:n`) | Run the current line's calls to completion, **over** them, then stop at the next line. |
+| `:finish` (`:o`) | Run to the current function's return — **out** to the caller. |
+| `:continue` (`:c`) | Run to the next breakpoint, or to the end of the call. |
+| `:vars` | Re-show the current frame. |
+| `name = <int>` | **Edit** an integer local in the live frame; the resumed call uses the new value. |
+| `:quit` (`:q`) | Leave the REPL. |
+
+Editing a value (`n = 99`) writes straight into the live frame, so when you
+`:continue` the rest of the function runs with the change — the call above returns
+`99 * 10` rather than `5 * 10`. The verbs also work without the leading colon
+(`step`, `next`, `continue`). Breakpoints persist across calls until
+`:break clear`.
 
 ## Introspection without the REPL
 

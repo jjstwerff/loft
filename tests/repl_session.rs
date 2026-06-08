@@ -7,6 +7,7 @@
 //! holding (no panic) proves the prior binding was in scope with the right
 //! value.  Integer and text bindings both persist.
 
+use loft::debugger::StepMode;
 use loft::repl::{Eval, ReplSession};
 use std::path::PathBuf;
 
@@ -310,4 +311,103 @@ fn repl_breakpoint_fn_line_and_unknown() {
     s.add_breakpoint("2");
     assert!(matches!(s.eval("step(4)"), Eval::Ran));
     assert!(s.last_hits().is_empty(), "bare line → no hit (not unique)");
+}
+
+/// @PLN15 G1 (interactive) — with stepping on, observing a call that hits a
+/// breakpoint **suspends** into the paused sub-mode; edit a value in the frame,
+/// continue, and the edit is picked up — the full pause → edit → resume cycle
+/// driven through one held session.  `calc(5)` is normally 50; editing `n` to 99
+/// makes it 990 on resume, which the program's assert then confirms.
+#[test]
+fn repl_interactive_break_edit_continue() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("calc");
+    // The assert is true only with the edit (990), false without it (50) — so a
+    // clean run proves the edited value was used.
+    assert!(matches!(
+        s.eval("assert(calc(5) == 990, \"edited\")"),
+        Eval::Paused
+    ));
+    assert!(s.is_debugging(), "suspended inside calc");
+    let f = s.paused_frame().expect("frame");
+    assert_eq!(f.function, "calc");
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "n" && v == "5"),
+        "n == 5 at the pause (pre-multiply): {f:?}"
+    );
+    // Edit `n` in the live frame; the frame view refreshes to the new value.
+    assert!(s.debug_set("n", 99), "write-back n = 99");
+    assert!(
+        s.paused_frame()
+            .unwrap()
+            .locals
+            .iter()
+            .any(|(n, v)| n == "n" && v == "99"),
+        "frame refreshed to n == 99: {:?}",
+        s.paused_frame()
+    );
+    // Continue → resumes with the edit; the run finishes and the sub-mode is left.
+    assert!(!s.debug_continue(), "run finished (no further pause)");
+    assert!(!s.is_debugging(), "back to normal mode");
+    // Breakpoints persist across runs, so calc(2) would suspend again; clear them
+    // and confirm the session evaluates normally after a debug run.
+    s.clear_breakpoints();
+    assert!(
+        matches!(s.eval("calc(2)"), Eval::Ran),
+        "session still works"
+    );
+}
+
+/// @PLN15 G1 (interactive) — the step verbs at the REPL: from `outer`'s call
+/// line, step **into** `inner`, then step **out** back to `outer`, then continue
+/// to completion — all through the held session.
+#[test]
+fn repl_interactive_step_into_and_out() {
+    let mut s = session();
+    for d in [
+        "fn inner(x: integer) -> integer {\n  x + 1\n}",
+        "fn outer(n: integer) -> integer {\n  a = inner(n);\n  a + 100\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("outer:2"); // the `a = inner(n)` line
+    assert!(matches!(s.eval("outer(5)"), Eval::Paused));
+    assert_eq!(s.paused_frame().unwrap().function, "outer");
+    assert!(s.debug_step(StepMode::Into), "into inner");
+    let f = s.paused_frame().unwrap();
+    assert_eq!(f.function, "inner", "stepped into inner: {f:?}");
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "x" && v == "5"),
+        "inner's x == 5: {f:?}"
+    );
+    assert!(s.debug_step(StepMode::Out), "out back to outer");
+    assert_eq!(s.paused_frame().unwrap().function, "outer");
+    assert!(!s.debug_continue(), "finishes");
+    assert!(!s.is_debugging());
+}
+
+/// Without stepping enabled, breakpoints stay in **record-and-continue** mode: an
+/// observing run completes (`Eval::Ran`, not `Paused`) and the hits land in
+/// `last_hits` — the programmatic mode the conditional-breakpoint sweep relies on.
+#[test]
+fn repl_breakpoints_record_when_not_stepping() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+        Eval::Ran
+    ));
+    s.add_breakpoint("calc"); // stepping NOT enabled
+    assert!(matches!(s.eval("calc(5)"), Eval::Ran), "run completes");
+    assert!(!s.is_debugging(), "never suspends without stepping");
+    assert!(
+        s.last_hits().iter().any(|h| h.function == "calc"),
+        "hit recorded: {:?}",
+        s.last_hits()
+    );
 }
