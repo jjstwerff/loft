@@ -1874,11 +1874,7 @@ impl State {
             return false;
         }
         let start = data.def(d_nr).code_position;
-        let end = (0..data.definitions())
-            .map(|d| data.def(d).code_position)
-            .filter(|&p| p > start)
-            .min()
-            .unwrap_or(u32::MAX);
+        let end = start + data.def(d_nr).code_length;
         let Some(&offset) = self
             .source_spans
             .range(start..end)
@@ -1918,16 +1914,31 @@ impl State {
         if !is_bp {
             return;
         }
-        let hit = self.capture_break_frame(data);
+        let hit = self.capture_break_frame(pc, data);
         if let Some(d) = self.debug.as_mut() {
             d.hits.push(hit);
         }
     }
 
     /// Read the current (topmost) frame's in-scope variables into a
-    /// [`BreakHit`](crate::debugger::BreakHit).  Captures arguments (live at the
-    /// pause); a later slice that breaks mid-body adds the locals assigned so far.
-    fn capture_break_frame(&mut self, data: &crate::data::Data) -> crate::debugger::BreakHit {
+    /// [`BreakHit`](crate::debugger::BreakHit) at breakpoint offset `pc`.  Captures
+    /// arguments (always live) plus the **non-argument locals that are live at
+    /// `pc`** — gated by each variable's bytecode reference range (Q6).
+    ///
+    /// Liveness is derived from `self.vars` — the codegen `code_pos → var_nr` map
+    /// (the same one `debug.rs` uses for slot dumps).  It is **read-dominated**
+    /// (every `Var` read records its pc; scalar first-assignments do not), so a
+    /// local is shown iff its **reference range** contains the breakpoint:
+    /// `first_ref <= pc <= last_ref`.  This is *safe* — a variable inside its
+    /// read-range has necessarily been assigned, so it never reads zero/garbage —
+    /// and it picks the right owner of a **reused** slot (disjoint ranges, at most
+    /// one contains `pc`).  It under-shows only a defined-but-not-yet-read local
+    /// before its first read; that is an acceptable v1 limitation, not a hazard.
+    fn capture_break_frame(
+        &mut self,
+        pc: u32,
+        data: &crate::data::Data,
+    ) -> crate::debugger::BreakHit {
         let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
         if d_nr == u32::MAX {
             return crate::debugger::BreakHit {
@@ -1941,12 +1952,37 @@ impl State {
         // variable sits at `+ vars.stack(i)` from there (a fixed slot, independent
         // of the working `stack_pos`).
         let frame_base = self.call_stack.last().map_or(0, |f| f.args_base);
+        let def = data.def(d_nr);
+        let n = def.variables.count();
+        // Per-var bytecode reference range, scanning `self.vars` within this
+        // function's bytecode span (`[code_position, +code_length)`).
+        let (start, end) = (def.code_position, def.code_position + def.code_length);
+        let mut first = vec![u32::MAX; n as usize];
+        let mut last = vec![u32::MAX; n as usize];
+        for (&bc, &v) in &self.vars {
+            if bc < start || bc >= end || v as usize >= n as usize {
+                continue;
+            }
+            let i = v as usize;
+            if first[i] == u32::MAX || bc < first[i] {
+                first[i] = bc;
+            }
+            if last[i] == u32::MAX || bc > last[i] {
+                last[i] = bc;
+            }
+        }
         // Collect (name, slot, type) first so the `data` borrow ends before the
-        // value reads below.
+        // value reads below.  Arguments are always live; a non-arg local is live
+        // iff its def precedes `pc` and `pc` is within its reference range.
         let fields: Vec<(String, u16, crate::data::Type)> = {
-            let vars = &data.def(d_nr).variables;
-            (0..vars.count())
-                .filter(|&i| vars.is_argument(i))
+            let vars = &def.variables;
+            (0..n)
+                .filter(|&i| {
+                    vars.is_argument(i)
+                        || (first[i as usize] != u32::MAX
+                            && first[i as usize] <= pc
+                            && pc <= last[i as usize])
+                })
                 .map(|i| (vars.name(i).to_string(), vars.stack(i), vars.tp(i).clone()))
                 .collect()
         };
