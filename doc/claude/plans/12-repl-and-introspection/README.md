@@ -7,8 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** SHIPPED (first cut) — phases 00–06 landed 2026-06-07/08 on the
 `repl` branch.  `loft repl` (and a bare `loft`) is an interactive prompt;
-`loft introspect` dumps a program's intermediate forms.  Follow-ups (stack-
-resident execution, value-bearing `:vars`, line history) are
+`loft introspect` dumps a program's intermediate forms.  Line editing + history
+(arrow-key recall via `rustyline`, TTY-gated) shipped 2026-06-08.  Follow-ups
+(stack-resident execution, value-bearing `:vars`, auto-resume) are
 deferred — see [§ Deferred follow-ups](#deferred-follow-ups).
 
 ## Goal
@@ -84,11 +85,11 @@ Recorded here (not filed as GitHub issues — these are future enhancements, not
 
 | ID | Description |
 |----|-------------|
-| **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so a side effect in a binding's RHS doesn't repeat on each later observation.  Value persistence already works for any type; this is purely about not re-executing side effects.  `tests/repl.rs::side_effecting_binding_reruns_per_observation` pins the current re-run (two observations → effect twice); when REPL.X lands it runs once.  (See 03 doc's Revised design.) |
+| **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so a side effect in a binding's RHS doesn't repeat on each later observation.  Value persistence already works for any type; this is purely about not re-executing side effects.  `tests/repl.rs::side_effecting_binding_reruns_per_observation` pins the current re-run (two observations → effect twice); when REPL.X lands it runs once.  (See 03 doc's Revised design + [§ Convergence](03-state-reset-and-append.md) — REPL.X, auto-resume, and persistence share one store-resident design.) |
 | **REPL.T** | Value-bearing `:vars` (show each variable's current value) — needs a way to read a value back out of execution (a result-capture API); the same gap blocks in-process result-as-`String` return.  (`:type <expr>` shipped — compile-time type inference, no capture needed.) |
-| **REPL.E** | Line editor + history — `rustyline` (or hand-rolled) for arrow-key recall; currently input is read plain. |
+| **REPL.E** | ✅ **SHIPPED (2026-06-08)** — line editor + history via `rustyline` 14 (arrow-key recall, in-line editing).  Gated on an interactive TTY (`std::io::IsTerminal`): pipes, files, tests, and wasm use the unchanged plain reader (`run_piped`), so captured output stays byte-stable.  History persists to `~/.loft_history`; Ctrl-C cancels the open statement, Ctrl-D quits.  `src/repl.rs`. |
 | **REPL.W** | WASM browser playground — the parse + execute machinery already runs under wasm32; the playground is a separate web UI. |
-| **REPL.S** | Save / restore session to a `.loftrc`-style file (`:save` / `:load`). |
+| **REPL.S** | **Auto-resume** (high beginner value) — restore the previous session on launch, no `:save` ceremony.  v1 = **text-replay**: append each state-changing input to a session file, replay it (output suppressed) on the next interactive start.  Portable, upgrade-proof, and fault-tolerant (skip a poison line, never brick the REPL; `--fresh` escape hatch); interactive-only, so piped/test runs stay deterministic.  The performant successor is the store-resident / mmap session image — see [03 doc § Convergence](03-state-reset-and-append.md); build it *with* REPL.X, not for resume alone. |
 | **REPL.C** | Tab completion of fn names, locals, struct fields. |
 | **INSP.J** | JSON output mode for `loft introspect` (machine-readable, for IDE integration). |
 
@@ -131,8 +132,12 @@ playground, IDE integration).
 - **Multi-user / networked REPL** — the prompt is single-user
   local-process only.  Browser playground (deferred to phase 6) is
   the sandboxed multi-user analogue.
-- **Save / restore session** — REPL state is process-local; no
-  persistence across launches in this plan.
+- **Save / restore session** — not in this first cut; auto-resume is the
+  deferred [REPL.S](#deferred-follow-ups) follow-up.  **Deterministic RNG
+  continuation across resume is declined** (a saved generator state would let
+  future `random()` be predicted/replayed) — see
+  [DESIGN_DECISIONS.md § C72](../../DESIGN_DECISIONS.md#c72--repl-session-resume-does-not-persist-rng-generator-state);
+  reproducible streams use explicit seeds.
 
 ## Cross-references
 

@@ -1069,6 +1069,34 @@ separate model, always AOT).
 
 ---
 
+## C72 — REPL session resume does not persist RNG generator state
+
+**Question.** Should REPL auto-resume snapshot and restore the random
+generator's internal state, so the random stream continues identically across a
+stop/resume (exact-deterministic resume)?
+
+**Evaluation.** Restoring saved RNG state makes the stream reproducible from the
+saved image: anyone who reads the session file could predict or replay future
+`random()` outputs, and a restored state re-issues values that callers assumed
+were fresh.  That is a predictability / security hazard for any use of
+randomness (tokens, nonces, shuffles), paid for a feature already covered
+another way — users who want a reproducible stream set an explicit seed
+(`random_seed`).  Drawn random *values* already restore exactly via the store
+image (they are ordinary stored values); only the generator's forward position
+is at issue.  The PCG state also lives in the `random` cdylib, not a store
+(src/ops.rs), so persisting it would be added surface, not a free side effect.
+
+**Decision.** **Closed — declined (2026-06-08).**  Resume restores stored values
+verbatim but does NOT persist or restore RNG generator state; on resume the
+generator continues fresh (re-seeded from entropy, as on any launch).
+Deterministic streams stay an explicit-seed opt-in.  This also keeps the session
+image free of generator state, narrowing what a saved image exposes.
+
+**Revisit when.** A concrete, non-security use case needs byte-identical RNG
+continuation across resume that an explicit seed cannot satisfy.
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the
