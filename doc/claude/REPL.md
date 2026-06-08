@@ -33,7 +33,13 @@ stays available on the next line. Press Ctrl-D (end of input) or type `:quit` to
 leave. Arrow keys recall earlier lines (history is kept in `~/.loft_history`),
 and Ctrl-C abandons the line you're typing. Press **Tab** to complete a name —
 functions and types (yours and the stdlib's) and the variables you've bound —
-or a `:command` when the line starts with `:`.
+or a `:command` when the line starts with `:`. After a `.`, Tab completes
+**members**: a value's methods — shown with a trailing `(` so you can see
+they're callable (`"hi".` → `starts_with(`, `length(`) — a struct variable's
+fields (`p.` → `x`, `y`), and an enum type's variants (`Color.` → `Red`,
+`Green`). (A member after an index or call result — `xs[0].` — needs type
+inference the completer doesn't run yet, so it offers nothing rather than
+guessing.)
 
 ### Your session is restored next time
 

@@ -21,10 +21,14 @@
 
 use crate::compile;
 use crate::data::{DefType, Type};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::database::Parts;
 use crate::diagnostics::{DiagEntry, Level};
 use crate::introspect::{Options, Section};
 use crate::parser::Parser;
 use crate::state::State;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, Write};
 use std::panic::AssertUnwindSafe;
@@ -157,21 +161,92 @@ fn is_plain_ident(s: &str) -> bool {
         && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
+/// True when `method` is a member a user can call as `recv.method(...)`: a plain
+/// identifier that is neither a compiler-internal (`__…`) nor an operator
+/// overload — operator methods register as `Op<Name>` (`Op` + an uppercase
+/// letter) and are invoked through the operator, not by name.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_callable_method(method: &str) -> bool {
+    is_plain_ident(method)
+        && !method.starts_with("__")
+        && !(method.len() > 2
+            && method.starts_with("Op")
+            && method.as_bytes()[2].is_ascii_uppercase())
+}
+
+/// The methods defined on the type named `type_name`, each rendered with a
+/// trailing `(` so completion shows it is callable (and the cursor lands inside
+/// the call).  Methods register under the length-prefixed name
+/// `t_<len><type_name>_<method>` — the same `Type::name` the receiver resolves
+/// to — so one `strip_prefix` recovers exactly this type's methods, for structs,
+/// text, vectors, and every base type alike.
+#[cfg(not(target_arch = "wasm32"))]
+fn methods_for_type(data: &crate::data::Data, type_name: &str) -> Vec<String> {
+    let prefix = format!("t_{}{type_name}_", type_name.len());
+    let mut out = Vec::new();
+    for d in 0..data.definitions() {
+        let def = data.def(d);
+        if def.def_type == DefType::Function
+            && let Some(method) = def.name.strip_prefix(&prefix)
+            && is_callable_method(method)
+        {
+            out.push(format!("{method}("));
+        }
+    }
+    out
+}
+
 /// The `:`-commands Tab completion offers when the line starts with `:`.
 #[cfg(not(target_arch = "wasm32"))]
 const REPL_COMMANDS: [&str; 9] = [
     "quit", "help", "reset", "fns", "vars", "type", "bytecode", "rust", "slots",
 ];
 
-/// Pure completion logic, shared by the live completer and its unit tests.
-/// Given the (pre-sorted) `names` and the cursor at byte `pos` in `line`,
-/// returns the offset where the replaced word starts and the matching
-/// candidates, in `names` order.  Completes a leading `:word` against
-/// [`REPL_COMMANDS`], otherwise the identifier under the cursor against
-/// `names`.  An empty identifier prefix yields nothing, so a stray Tab never
-/// dumps the whole name list.
+/// The completion model the live completer matches against, rebuilt by the
+/// interactive loop after each input.  `names` are the bare identifiers
+/// (globals + session variables); `members` maps a dotted receiver — a
+/// struct-typed variable to its field names, or an enum *type* name to its
+/// variant names — to the candidates valid after `receiver.`.
 #[cfg(not(target_arch = "wasm32"))]
-fn complete_word(names: &[String], line: &str, pos: usize) -> (usize, Vec<String>) {
+#[derive(Default)]
+pub struct CompletionModel {
+    /// Bare-identifier candidates: globals (user + stdlib fns, type names) and
+    /// the variables bound this session.  Sorted + deduped.
+    pub names: Vec<String>,
+    /// Dotted-access candidates keyed by receiver token: a struct variable → its
+    /// field names; an enum type name → its variant names.  Each list sorted.
+    pub members: HashMap<String, Vec<String>>,
+}
+
+/// The trailing identifier of `s` (`"1 + p"` → `"p"`), or `None` when `s` does
+/// not end in an identifier character (`"arr[0]"` → `None`).  Reads the receiver
+/// token immediately before a `.`.
+#[cfg(not(target_arch = "wasm32"))]
+fn trailing_ident(s: &str) -> Option<&str> {
+    let start = s
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+        .last()
+        .map_or(s.len(), |(i, _)| i);
+    let id = &s[start..];
+    (!id.is_empty()).then_some(id)
+}
+
+/// Pure completion logic, shared by the live completer and its unit tests.
+/// Given the `model` and the cursor at byte `pos` in `line`, returns the offset
+/// where the replaced word starts and the matching candidates.  Three contexts,
+/// in priority order:
+///
+/// - a leading `:word` → [`REPL_COMMANDS`];
+/// - `receiver.partial` (the cursor sits past a `.`) → **only** that receiver's
+///   `members`, never the global list — an unresolved receiver (`foo.`,
+///   `arr[0].`) yields nothing rather than leaking globals after the dot;
+/// - otherwise a bare identifier prefix → `model.names`.  An empty *bare* prefix
+///   yields nothing (a stray Tab never dumps the whole list), but an empty
+///   prefix right after `receiver.` lists all of that receiver's members.
+#[cfg(not(target_arch = "wasm32"))]
+fn complete_word(model: &CompletionModel, line: &str, pos: usize) -> (usize, Vec<String>) {
     let head = &line[..pos];
     // `:command` — only while the cursor is still inside the leading `:word`.
     if let Some(after) = head.strip_prefix(':')
@@ -192,10 +267,25 @@ fn complete_word(names: &[String], line: &str, pos: usize) -> (usize, Vec<String
         .last()
         .map_or(pos, |(i, _)| i);
     let prefix = &head[start..];
+    // Dotted member access: once the cursor is past a `.`, only this receiver's
+    // members are valid candidates — never the global identifier list.
+    if let Some(stem) = head[..start].strip_suffix('.') {
+        let out = trailing_ident(stem)
+            .and_then(|recv| model.members.get(recv))
+            .map(|ms| {
+                ms.iter()
+                    .filter(|m| m.starts_with(prefix))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        return (start, out);
+    }
     if prefix.is_empty() {
         return (start, Vec::new());
     }
-    let out = names
+    let out = model
+        .names
         .iter()
         .filter(|n| n.starts_with(prefix))
         .cloned()
@@ -208,7 +298,7 @@ fn complete_word(names: &[String], line: &str, pos: usize) -> (usize, Vec<String
 /// Hinting, highlighting, and validation use rustyline's defaults.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplHelper {
-    names: Vec<String>,
+    model: CompletionModel,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -220,7 +310,7 @@ impl rustyline::completion::Completer for ReplHelper {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        Ok(complete_word(&self.names, line, pos))
+        Ok(complete_word(&self.model, line, pos))
     }
 }
 
@@ -258,7 +348,9 @@ fn run_interactive<W: Write>(
             // No usable terminal after all — fall back to the plain reader.
             Err(_) => return run_piped(stdlib_dir, session, std::io::stdin().lock(), chrome),
         };
-    rl.set_helper(Some(ReplHelper { names: Vec::new() }));
+    rl.set_helper(Some(ReplHelper {
+        model: CompletionModel::default(),
+    }));
     let history = dirs::home_dir().map(|h| h.join(".loft_history"));
     if let Some(path) = &history {
         let _ = rl.load_history(path);
@@ -285,7 +377,7 @@ fn run_interactive<W: Write>(
     }
     // Seed Tab completion with whatever resume restored, then keep it current.
     if let Some(h) = rl.helper_mut() {
-        h.names = session.completion_names();
+        h.model = session.completion_model();
     }
     let mut pending = String::new();
     loop {
@@ -302,7 +394,7 @@ fn run_interactive<W: Write>(
                 )?;
                 // A new def or binding changes the candidate set — refresh it.
                 if let Some(h) = rl.helper_mut() {
-                    h.names = session.completion_names();
+                    h.model = session.completion_model();
                 }
                 if quit {
                     break; // :quit
@@ -403,6 +495,18 @@ fn process_line<W: Write>(
         }
     }
     Ok(false)
+}
+
+/// Reduce `Type::show`'s debug form to the loft-source type name: drop the
+/// `[...]` dep-tracking list, then unwrap a `ref(...)` reference wrapper
+/// (`vector<integer>["__vdb_1"]` → `vector<integer>`; `ref(P)` → `P`).  Shared by
+/// the value-snapshot capture (its cap-fn return type + `show_loft` schema
+/// lookup) and Tab completion's struct-field resolution.
+fn base_type_name(show: &str) -> &str {
+    let base = show.split('[').next().unwrap_or(show);
+    base.strip_prefix("ref(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(base)
 }
 
 /// Render an `f64` as a loft `float` literal — always with a decimal point so a
@@ -800,16 +904,11 @@ impl ReplSession {
         // `Type::show` is a debug form: it appends a dep-tracking list
         // (`vector<integer>["__vdb_1"]`) and wraps a struct as `ref(P)`.  The
         // cap-fn return type and the `show_loft` schema lookup both need the
-        // loft-SOURCE name — so drop the `[...]` dep list, then unwrap `ref(...)`.
+        // loft-SOURCE name — so reduce to the base type name.
         let Some(ty_show) = self.infer_type(rhs) else {
             return Capture::Skip;
         };
-        let base = ty_show.split('[').next().unwrap_or(&ty_show);
-        let ty = base
-            .strip_prefix("ref(")
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(base)
-            .to_string();
+        let ty = base_type_name(&ty_show).to_string();
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
@@ -942,6 +1041,114 @@ impl ReplSession {
         names
     }
 
+    /// The full completion model for the current session: the bare-identifier
+    /// [`completion_names`](Self::completion_names) plus dotted-access `members`.
+    /// A receiver's members are what may follow `receiver.`:
+    ///
+    /// - a **variable** → its type's methods (each rendered `method(` so the
+    ///   completion shows it is callable and leaves the cursor inside the call),
+    ///   plus, if the type is a struct, its field names (bare — a field names a
+    ///   value, not a call);
+    /// - an **enum type** name → its variant names (`Color.Red`, bare).
+    ///
+    /// Rebuilt by the interactive loop after each input.  `&mut` because
+    /// resolving each variable's type runs a throwaway, rolled-back
+    /// type-inference probe (no execution).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn completion_model(&mut self) -> CompletionModel {
+        let names = self.completion_names();
+        // Resolve variable types first (a `&mut` probe) before borrowing the
+        // schema immutably below.
+        let var_types = self.infer_var_types();
+        let mut members: HashMap<String, Vec<String>> = HashMap::new();
+        let data = &self.parser.data;
+        let db = &self.parser.database;
+        // Enum *type* names → their variant names (for `Color.Red` qualified
+        // access).  Struct *type* names get no members — a struct is built with
+        // `Type{…}`, not dotted — so only enums are added here.
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type == DefType::Enum && is_plain_ident(&def.name) {
+                let tp = db.name(&def.name);
+                if tp != u16::MAX
+                    && let Parts::Enum(variants) = &db.types[tp as usize].parts
+                {
+                    let mut vs: Vec<String> = variants.iter().map(|(_, n)| n.clone()).collect();
+                    vs.sort();
+                    members.insert(def.name.clone(), vs);
+                }
+            }
+        }
+        // *Variables* → their type's methods (`method(`) plus, for a struct, its
+        // fields (bare).  The type name comes from `Type::name` — the SAME name
+        // methods register under (`t_<len><name>_<method>`), so the lookup
+        // matches for structs, text, vectors, and every base type uniformly.
+        for (var, ty) in &var_types {
+            let tname = ty.name(data);
+            let mut ms: Vec<String> = methods_for_type(data, &tname);
+            let tp = db.name(&tname);
+            if tp != u16::MAX
+                && let Parts::Struct(fields) = &db.types[tp as usize].parts
+            {
+                ms.extend(fields.iter().map(|f| f.name.clone()));
+            }
+            if !ms.is_empty() {
+                ms.sort();
+                ms.dedup();
+                members.insert(var.clone(), ms);
+            }
+        }
+        CompletionModel { names, members }
+    }
+
+    /// Infer the static type of every bound variable in a *single* probe: build
+    /// `fn replmain_N() { <body> __cmpl0 = v0; … }`, read each temp's inferred
+    /// type from the function's variable table, and roll the probe back — one
+    /// parse for all variables.  Returns `var → Type` (the type indices it holds
+    /// point at definitions that predate, and so survive, the rollback); a
+    /// variable whose type can't be read is omitted.  Compile-time only —
+    /// nothing executes, so a side-effecting binding does not run here.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn infer_var_types(&mut self) -> HashMap<String, Type> {
+        use std::fmt::Write;
+        let vars = self.bound_var_names();
+        let mut out = HashMap::new();
+        if vars.is_empty() {
+            return out;
+        }
+        let name = format!("replmain_{}", self.counter + 1);
+        let mut probe = self.body.clone();
+        for (i, v) in vars.iter().enumerate() {
+            let _ = writeln!(probe, "__cmpl{i} = {v};");
+        }
+        let src = format!("fn {name}() {{\n{probe}}}\n");
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        if !failed {
+            let d = self.parser.data.def_nr(&format!("n_{name}"));
+            if d != u32::MAX {
+                let def = self.parser.data.def(d);
+                let v = &def.variables;
+                for i in 0..v.count() {
+                    if let Some(idx) = v
+                        .name(i)
+                        .strip_prefix("__cmpl")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        && let Some(src_var) = vars.get(idx)
+                    {
+                        out.insert(src_var.clone(), v.tp(i).clone());
+                    }
+                }
+            }
+        }
+        self.parser.data.rollback_to(pre_defs);
+        out
+    }
+
     /// The variables bound this session, each once in first-seen order (a rebind
     /// keeps the original position).  Derived from the binding lines accumulated
     /// in `body`.  Feeds both `:vars` and Tab completion.
@@ -1024,19 +1231,40 @@ impl ReplSession {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod completion_tests {
-    use super::complete_word;
+    use super::{CompletionModel, complete_word};
+    use std::collections::HashMap;
 
-    /// Pre-sorted, as `completion_names` returns them.
-    fn names() -> Vec<String> {
-        ["Point", "dbl", "print", "println", "x"]
+    /// A model mirroring a session with globals `Point dbl print println x`; a
+    /// struct variable `p` with a method `scale` and fields `{x, y}`; a text
+    /// variable `s` with methods `{length, starts_with}`; and an enum type
+    /// `Color{Red, Green, Blue}`.  `names` is pre-sorted, as `completion_names`
+    /// returns it; each `members` list is sorted with methods rendered `name(`,
+    /// as `completion_model` builds them.
+    fn model() -> CompletionModel {
+        let names = ["Point", "dbl", "print", "println", "x"]
             .iter()
             .map(|s| (*s).to_string())
-            .collect()
+            .collect();
+        let members = HashMap::from([
+            (
+                "p".to_string(),
+                vec!["scale(".to_string(), "x".to_string(), "y".to_string()],
+            ),
+            (
+                "s".to_string(),
+                vec!["length(".to_string(), "starts_with(".to_string()],
+            ),
+            (
+                "Color".to_string(),
+                vec!["Blue".to_string(), "Green".to_string(), "Red".to_string()],
+            ),
+        ]);
+        CompletionModel { names, members }
     }
 
     #[test]
     fn completes_identifier_prefix() {
-        let (start, out) = complete_word(&names(), "pr", 2);
+        let (start, out) = complete_word(&model(), "pr", 2);
         assert_eq!(start, 0);
         assert_eq!(out, vec!["print".to_string(), "println".to_string()]);
     }
@@ -1045,14 +1273,14 @@ mod completion_tests {
     #[test]
     fn completes_word_mid_line() {
         let line = "1 + db";
-        let (start, out) = complete_word(&names(), line, line.len());
+        let (start, out) = complete_word(&model(), line, line.len());
         assert_eq!(start, 4); // "db" begins at byte 4
         assert_eq!(out, vec!["dbl".to_string()]);
     }
 
     #[test]
     fn completes_colon_command() {
-        let (start, out) = complete_word(&names(), ":by", 3);
+        let (start, out) = complete_word(&model(), ":by", 3);
         assert_eq!(start, 1); // replace after the ':'
         assert_eq!(out, vec!["bytecode".to_string()]);
     }
@@ -1062,7 +1290,7 @@ mod completion_tests {
     #[test]
     fn colon_command_arg_completes_identifier() {
         let line = ":rust db";
-        let (start, out) = complete_word(&names(), line, line.len());
+        let (start, out) = complete_word(&model(), line, line.len());
         assert_eq!(start, 6);
         assert_eq!(out, vec!["dbl".to_string()]);
     }
@@ -1070,7 +1298,86 @@ mod completion_tests {
     /// A stray Tab with no prefix offers nothing (rather than every name).
     #[test]
     fn empty_prefix_yields_nothing() {
-        let (_start, out) = complete_word(&names(), "1 + ", 4);
+        let (_start, out) = complete_word(&model(), "1 + ", 4);
+        assert!(out.is_empty());
+    }
+
+    // ── REPL.C member completion ─────────────────────────────────────────────
+
+    /// `p.` with an empty prefix lists all of the struct variable's members —
+    /// its methods (rendered `name(`) and its fields, together and sorted.
+    #[test]
+    fn dot_lists_all_struct_members() {
+        let (start, out) = complete_word(&model(), "p.", 2);
+        assert_eq!(start, 2); // replace after the dot
+        assert_eq!(
+            out,
+            vec!["scale(".to_string(), "x".to_string(), "y".to_string()]
+        );
+    }
+
+    /// A field prefix after the dot filters to the matching field.
+    #[test]
+    fn dot_filters_struct_fields_by_prefix() {
+        let (start, out) = complete_word(&model(), "p.x", 3);
+        assert_eq!(start, 2);
+        assert_eq!(out, vec!["x".to_string()]);
+    }
+
+    /// A method completes with its trailing `(` so the user sees it is callable.
+    #[test]
+    fn dot_completes_method_with_paren() {
+        let (start, out) = complete_word(&model(), "s.st", 4);
+        assert_eq!(start, 2);
+        assert_eq!(out, vec!["starts_with(".to_string()]);
+    }
+
+    /// A non-struct receiver (here a `text` variable) still completes its
+    /// methods after the dot — `.` is never a dead end for a typed value.
+    #[test]
+    fn dot_lists_methods_for_non_struct() {
+        let (start, out) = complete_word(&model(), "s.", 2);
+        assert_eq!(start, 2);
+        assert_eq!(out, vec!["length(".to_string(), "starts_with(".to_string()]);
+    }
+
+    /// An enum *type* name completes its variants after the dot.
+    #[test]
+    fn dot_completes_enum_variants() {
+        let (start, out) = complete_word(&model(), "Color.G", 7);
+        assert_eq!(start, 6);
+        assert_eq!(out, vec!["Green".to_string()]);
+    }
+
+    /// Member completion works mid-line, replacing only the partial field.
+    #[test]
+    fn dot_completes_mid_line() {
+        let line = "1 + p.x";
+        let (start, out) = complete_word(&model(), line, line.len());
+        assert_eq!(start, 6); // the `x` after `p.`
+        assert_eq!(out, vec!["x".to_string()]);
+    }
+
+    /// A non-matching field prefix yields nothing — not a fall-through to globals.
+    #[test]
+    fn dot_unknown_field_yields_nothing() {
+        let (_start, out) = complete_word(&model(), "p.zzz", 5);
+        assert!(out.is_empty());
+    }
+
+    /// An unknown / non-struct receiver offers nothing, and never leaks the
+    /// global list after a dot (`x` is a global but must not appear here).
+    #[test]
+    fn dot_unknown_receiver_yields_nothing() {
+        let (_start, out) = complete_word(&model(), "foo.x", 5);
+        assert!(out.is_empty(), "globals must not leak after a dot: {out:?}");
+    }
+
+    /// A non-identifier receiver (index / call result) needs live inference — the
+    /// documented residual — so it yields nothing rather than guessing.
+    #[test]
+    fn dot_non_identifier_receiver_yields_nothing() {
+        let (_start, out) = complete_word(&model(), "arr[0].x", 8);
         assert!(out.is_empty());
     }
 }

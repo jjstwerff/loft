@@ -172,6 +172,66 @@ fn completion_names_cover_session_and_stdlib() {
     assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted: {names:?}");
 }
 
+/// `completion_model` resolves dotted-access members from the live schema: a
+/// struct-typed variable exposes its fields; a value of any type exposes its
+/// methods (rendered `name(`); an enum *type* exposes its variant names.  This
+/// is REPL.C member completion (the `complete_word` matching is unit-tested in
+/// `repl.rs`).
+#[test]
+fn completion_model_resolves_members_from_schema() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct Point { x: integer, y: integer }"),
+        Eval::Ran
+    ));
+    assert!(matches!(
+        s.eval("enum Color { Red, Green, Blue }"),
+        Eval::Ran
+    ));
+    assert!(matches!(s.eval("p = Point { x: 1, y: 2 }"), Eval::Ran));
+    assert!(matches!(s.eval("s = \"hi\""), Eval::Ran));
+    let model = s.completion_model();
+
+    // Struct variable → its fields (membership, not equality: a struct may also
+    // carry generated methods).
+    let p = model.members.get("p").expect("p has members");
+    assert!(
+        p.contains(&"x".to_string()) && p.contains(&"y".to_string()),
+        "struct fields present: {p:?}"
+    );
+
+    // A text variable → its methods, each with a trailing `(`.
+    let sm = model.members.get("s").expect("s has members");
+    assert!(
+        sm.contains(&"starts_with(".to_string()),
+        "text method `starts_with(` present: {sm:?}"
+    );
+    assert!(
+        sm.iter().all(|m| m.ends_with('(')),
+        "every text member is a callable method: {sm:?}"
+    );
+
+    // Enum *type* → its variants (sorted, bare — no trailing paren).
+    assert_eq!(
+        model.members.get("Color"),
+        Some(&vec![
+            "Blue".to_string(),
+            "Green".to_string(),
+            "Red".to_string()
+        ]),
+        "enum type → variant names: {:?}",
+        model.members
+    );
+
+    // Each member list is sorted (the order `complete_word` relies on).
+    for (recv, ms) in &model.members {
+        assert!(
+            ms.windows(2).all(|w| w[0] <= w[1]),
+            "members of `{recv}` sorted: {ms:?}"
+        );
+    }
+}
+
 /// Only state-changing inputs are persisted: an observing statement (a bare
 /// expression) is evaluated for its echo but writes nothing to the session
 /// file, so resume never re-runs it.
