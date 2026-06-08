@@ -49,6 +49,7 @@ pub mod crash_report;
 pub mod data;
 pub mod data_store;
 pub mod database;
+pub mod debugger;
 pub mod hash;
 pub mod ir_node;
 pub mod ir_read;

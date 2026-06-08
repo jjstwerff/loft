@@ -10,10 +10,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design, no implementation. This is the **purpose the REPL work serves**: the
-REPL is not standalone dev-tooling, it is the *interactive surface of a breakpoint
-debugger*. The plan composes three things loft already has or is building rather
-than building a debugger from scratch:
+In progress — **tracer-bullet slice landed (2026-06-08)**: the riskiest unknown is
+now proven *yes*. A breakpoint set on a source line pauses the interpreter there and
+reads the live frame's arguments correctly; it fires once per call and is inert when
+nothing is registered. `src/debugger.rs` (`Debugger`/`BreakHit`) + the per-op hook
+in `State::execute_argv` + `set_breakpoint_line`/`set_breakpoint_fn_entry`/
+`capture_break_frame`/`render_frame_local`; `tests/debugger.rs` (4 tests). The hot
+loop carries one `Option::is_some` branch per op when not debugging (issues suite
+green — no regression). **Frame-layout facts the slice pinned** (matrix-first paid
+off): a function-*entry* breakpoint pauses pre-prologue (slots still zero), so the
+read point is a **body line**; a variable sits at the frame-absolute
+`stack_cur.pos + args_base + vars.stack(i)` — *not* `get_var`'s stack-depth-relative
+operand. **Next** (each its own small slice): non-arg locals with liveness-gating →
+the REPL-at-frame bridge (sub-D, gated on @PLN14) → stepping → conditions.
+
+This is the **purpose the REPL work serves**: the REPL is not standalone
+dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
+composes three things loft already has or is building rather than building a
+debugger from scratch:
 
 - the **interpreter**, which can already step op-by-op and *suspend a frame* (the
   coroutine `yield` machinery snapshots the live stack frame);
@@ -104,10 +118,10 @@ The host-agnostic engine is A–F; the surfaces are G.
 
 | Item | Status |
 |---|---|
-| **A** — breakpoint registry + source-line → bytecode-offset map (reuse the per-op source positions the bytecode already carries) | Open |
+| **A** — breakpoint registry + source-line → bytecode-offset map (reuse the per-op source positions the bytecode already carries) | **First cut** — line + fn-entry breakpoints via `source_spans` / `code_position` |
 | **B** — interpret-scope analysis: from a breakpoint set, compute the functions whose call-chain must interpret (static call-graph reachability; refine to on-demand frame-entry switching) | Open |
-| **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | Open |
-| **D** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from the paused frame's slot table + values (**depends on @PLN14 frame-seedable env**) | Open |
+| **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
+| **D** — frame → REPL bridge: seed a `ReplSession`'s store-resident environment from the paused frame's slot table + values (**depends on @PLN14 frame-seedable env**) | **Partial** — frame *read* done (`capture_break_frame` renders args); REPL seed + locals-with-liveness pending |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | Open |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | Open |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | Open |

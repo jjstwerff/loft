@@ -148,6 +148,10 @@ pub struct State {
     /// `line_numbers` map's behaviour).
     pub(crate) source_spans: BTreeMap<u32, Position>,
     pub(crate) fn_positions: Vec<u32>,
+    /// @PLN15 debugger — present only while debugging; the execute loop pauses at
+    /// a registered breakpoint offset and captures the frame.  `None` on normal
+    /// runs (the only per-op cost is one `is_some` branch).
+    pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
     /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
@@ -247,6 +251,7 @@ impl State {
             line_numbers: BTreeMap::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
+            debug: None,
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
@@ -1805,6 +1810,152 @@ impl State {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
+    // ── @PLN15 debugger ──────────────────────────────────────────────────────
+
+    /// Turn on debugging (idempotent).  The execute loop then consults the
+    /// [`Debugger`](crate::debugger::Debugger) at each op.
+    pub fn enable_debug(&mut self) {
+        if self.debug.is_none() {
+            self.debug = Some(Box::default());
+        }
+    }
+
+    /// Register a breakpoint at the entry of function `d_nr` (its first bytecode
+    /// op).  Enables debugging if not already on.  Returns `false` if `d_nr` is
+    /// out of range.  Reads the entry offset from `def.code_position` (set during
+    /// codegen) — `State::fn_positions` is not populated until `execute_argv`
+    /// runs, so a breakpoint set before the run must consult `data` directly.
+    pub fn set_breakpoint_fn_entry(&mut self, d_nr: u32, data: &crate::data::Data) -> bool {
+        if d_nr >= data.definitions() {
+            return false;
+        }
+        let offset = data.def(d_nr).code_position;
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        true
+    }
+
+    /// Register a breakpoint at the first bytecode offset mapped to source `line`.
+    /// Returns `false` if no op maps to that line.  Reads `source_spans` (filled
+    /// during `compile::byte_code`, so it is available before the run — unlike
+    /// `fn_positions`).  A body line is the correct read point: arguments and
+    /// prior locals are in their slots there (a function-*entry* breakpoint pauses
+    /// pre-prologue, before the frame is set up, so its slots are still zero).
+    pub fn set_breakpoint_line(&mut self, line: u32) -> bool {
+        let Some(&offset) = self
+            .source_spans
+            .iter()
+            .find(|(_, p)| p.line == line)
+            .map(|(off, _)| off)
+        else {
+            return false;
+        };
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        true
+    }
+
+    /// The distinct source lines that carry a bytecode mapping — the lines a
+    /// breakpoint can pause on, sorted.
+    #[must_use]
+    pub fn breakable_lines(&self) -> Vec<u32> {
+        let mut ls: Vec<u32> = self.source_spans.values().map(|p| p.line).collect();
+        ls.sort_unstable();
+        ls.dedup();
+        ls
+    }
+
+    /// The frames captured at breakpoint hits so far (empty when not debugging).
+    #[must_use]
+    pub fn debug_hits(&self) -> &[crate::debugger::BreakHit] {
+        self.debug.as_deref().map_or(&[], |d| d.hits.as_slice())
+    }
+
+    /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
+    /// frame.  Slice behaviour is record-and-continue; a later slice suspends here
+    /// into a REPL-at-frame.
+    fn debug_check(&mut self, pc: u32, data: &crate::data::Data) {
+        let is_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
+        if !is_bp {
+            return;
+        }
+        let hit = self.capture_break_frame(data);
+        if let Some(d) = self.debug.as_mut() {
+            d.hits.push(hit);
+        }
+    }
+
+    /// Read the current (topmost) frame's in-scope variables into a
+    /// [`BreakHit`](crate::debugger::BreakHit).  Captures arguments (live at the
+    /// pause); a later slice that breaks mid-body adds the locals assigned so far.
+    fn capture_break_frame(&mut self, data: &crate::data::Data) -> crate::debugger::BreakHit {
+        let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+        if d_nr == u32::MAX {
+            return crate::debugger::BreakHit {
+                function: "?".to_string(),
+                locals: Vec::new(),
+            };
+        }
+        let raw = data.def(d_nr).name();
+        let function = raw.strip_prefix("n_").unwrap_or(raw).to_string();
+        // The frame's variable region starts at `stack_cur.pos + args_base`; each
+        // variable sits at `+ vars.stack(i)` from there (a fixed slot, independent
+        // of the working `stack_pos`).
+        let frame_base = self.call_stack.last().map_or(0, |f| f.args_base);
+        // Collect (name, slot, type) first so the `data` borrow ends before the
+        // value reads below.
+        let fields: Vec<(String, u16, crate::data::Type)> = {
+            let vars = &data.def(d_nr).variables;
+            (0..vars.count())
+                .filter(|&i| vars.is_argument(i))
+                .map(|i| (vars.name(i).to_string(), vars.stack(i), vars.tp(i).clone()))
+                .collect()
+        };
+        let locals = fields
+            .into_iter()
+            .map(|(name, off, tp)| (name, self.render_frame_local(frame_base, off, &tp, data)))
+            .collect();
+        crate::debugger::BreakHit { function, locals }
+    }
+
+    /// Render a frame variable at frame offset `off` (its `vars.stack(i)`) of type
+    /// `tp` to loft source.  Reads at the **frame-absolute** position
+    /// `stack_cur.pos + off` — the variable's fixed slot — rather than via
+    /// `get_var`, whose `pos` operand is stack-depth-relative (correct only at the
+    /// exact op the codegen emitted it for, not at an arbitrary pause).  Scalars +
+    /// text directly; other types as a `<type>` placeholder for now.
+    fn render_frame_local(
+        &self,
+        frame_base: u32,
+        off: u16,
+        tp: &crate::data::Type,
+        data: &crate::data::Data,
+    ) -> String {
+        use crate::data::Type;
+        let rec = self.stack_cur.rec;
+        let at = self.stack_cur.pos + frame_base + u32::from(off);
+        let store = self.database.store(&self.stack_cur);
+        match tp {
+            Type::Integer(_) => store.addr::<i64>(rec, at).to_string(),
+            Type::Boolean => if *store.addr::<u8>(rec, at) != 0 {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+            Type::Float => store.addr::<f64>(rec, at).to_string(),
+            Type::Single => format!("{}f", store.addr::<f32>(rec, at)),
+            Type::Character => char::from_u32(*store.addr::<u32>(rec, at))
+                .map_or_else(|| "?".to_string(), |c| format!("'{c}'")),
+            Type::Text(_) => format!("{:?}", store.addr::<crate::keys::Str>(rec, at).str()),
+            other => format!("<{}>", other.name(data)),
+        }
+    }
+
     /// Plan-07 phase 4 step 4.1 — raise a typed runtime error from a
     /// fault-site opcode (div-by-zero, OOB, null-deref, narrow cast, …).
     /// Resolves the offending pc back to a `Position` via the phase-1
@@ -2114,6 +2265,11 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op_pos_rt = self.code_pos;
+            // @PLN15 debugger — pause before executing the op at this offset when
+            // it is a registered breakpoint.  Inert (one branch) when not debugging.
+            if self.debug.is_some() {
+                self.debug_check(op_pos_rt, data);
+            }
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;
             let op = self.code::<u8>();
@@ -2349,6 +2505,7 @@ impl State {
             line_numbers: BTreeMap::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
+            debug: None,
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
