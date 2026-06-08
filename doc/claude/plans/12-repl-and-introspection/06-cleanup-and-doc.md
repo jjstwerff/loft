@@ -5,7 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 06 — Cleanup + doc + deferred follow-ups
 
-**Status: open.**
+**Status: shipped (2026-06-08).** User docs landed: new
+[REPL.md](../../REPL.md) (REPL + introspection reference), CHANGELOG entries
+under Unreleased, and CLAUDE.md key-commands + doc-index entries.  Deferred
+follow-ups are recorded in [README.md § Deferred follow-ups](README.md#deferred-follow-ups)
+(kept there rather than as GitHub issues — they are future enhancements, not
+`main` regressions).
 
 ## Goal
 
@@ -105,5 +110,5 @@ These get filed in `PROBLEMS.md` (or carried as ROADMAP items):
 
 ## See also
 
-- [README.md](README.md) — @PLAN08 index.
+- [README.md](README.md) — @PLN12 index.
 - All prior phase docs (00–05).

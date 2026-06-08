@@ -40,6 +40,66 @@ because it is worth building. Adoption is a **result, not a steering input**: re
 value reaches the people who share the idea in its own time. Every decision is
 made on two things only — staying true to the idea, and depth.
 
+### Why a language, not a store bolted onto an existing one
+
+A key reason loft is a *language* and not an in-memory data store added to Rust
+or C++: **live data-structure migration**. A programmer edits a game's structs
+and enums *while the game runs*, and the existing data survives the edit — the
+current game stays alive, and as much of its state as possible is preserved.
+
+That capability cannot be added later; it demands that **the value, its in-memory
+layout, its stored form, and its serialization are one representation.** A store
+bolted onto an existing language cannot give it — for a structural reason, not an
+effort one:
+
+- In Rust / C++ / C# a value's layout is the **compiled native layout** — fixed
+  offsets and raw pointers frozen into the binary at compile time. The type
+  system has no runtime-mutable notion of "the schema"; serialization is a
+  *second*, separate representation (serde / reflection) that mirrors the type by
+  hand and drifts from it. To migrate live data when a struct changes you must
+  serialize out, **recompile** (you cannot redefine a running program's struct),
+  and read back — and the recompile *kills the running game*, the very thing you
+  were protecting.
+- In loft the **schema is data** (`Stores.types` / `Parts`, mutable at runtime),
+  the value **is** a self-describing record against that schema (`DbRef`,
+  position-independent, name-keyed), and serialization is just reading the
+  record. Changing a struct is changing schema *data*; the existing records
+  migrate by being re-read through the new schema — name-keyed and lenient,
+  **while the game runs**, because no compiled-in layout fights it.
+
+The four things a bolt-on keeps separate — language types, runtime values, heap
+layout, wire form — are **one** representation here, and that unification has to
+be the foundation; it cannot be added on top. It is the same principle loft2
+turns on the compiler's own data (the IR *becoming* store-resident), and it is
+what makes lavition's rapid prototyping rapid: iterate the data structures
+without losing the test game's state.
+
+**What survives an edit** (the observable form — a name-keyed round-trip through
+loft's native serialization):
+
+| edit | survives? |
+|---|---|
+| add / remove / reorder a field | ✅ — missing→default, unknown→ignored, name-keyed |
+| add / remove / reorder an enum variant | ✅ — a removed variant → **null sentinel**, never a wrong variant |
+| widen a field's numeric type | ✅ — coercion |
+| **rename** a field or variant | ❌ today — reads as delete+create; the planned fix is a **migration setter** for the *old* field (declares old name + old type, body routes it to the renamed field) |
+| scalar ↔ struct / incompatible type | ⚠️ — defaults |
+
+The principle that governs every extension: **leniency is the feature, not a
+hazard** — it is what lets the schema change while old data reads. The only thing
+forbidden is silent *wrong* data (a fail-soft that fabricates a plausible value);
+silent *graceful* data (a default or a null) is exactly the preservation we want.
+
+The one real gap is **rename**, and the planned mechanism is a **migration
+setter** for the old field: a setter named for the *old* field (declaring its old
+type, so the parser knows how to read the serialized value) whose body routes the
+value to the renamed field — and which also generalizes to retype, split, or
+computed migration.  Its *absence* is the signal: an incoming field with no
+matching field **and** no setter raises a **warning** (Goal F — the consequence
+of the programmer's own rename, free to ignore), so a forgotten rename is never a
+*silent* data drop.  loft has no setter concept today, so this is a small new
+language feature — its own plan when picked up, out of scope here.
+
 The six goals below are **foundation goals**: loft must be sound (A), shipped and
 clear (B), capable (C), portable (D), predictable (E), and friction-free (F). A
 crack in the foundation becomes a crack in everything above it. The same bar holds

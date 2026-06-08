@@ -35,6 +35,23 @@ follow their own lifecycle and are deliberately out of scope here
 releases they depend on.  Their individual backlogs live in
 [PLANNING.md](PLANNING.md) and [ROADMAP.md](ROADMAP.md).
 
+## Release cadence
+
+Releases follow a **monthly rhythm**.  Each cycle has one long-lived
+branch named for its **release month**, in `YYYY-MM` form (e.g.
+`2026-07`).  All cross-theme work for the cycle lands on that branch,
+and it ships at the **start of that month** — but only once the
+language is **stable with a low bug count**.
+
+A release is gated on **stability, not a fixed feature set**: if the
+bug count is still high at the month boundary, the release slips and
+the branch keeps stabilising.  When a cycle ships, the next month's
+branch starts fresh from the new `main` tip (`2026-07` → `2026-08`).
+
+What work is in scope during a cycle (the warm feature freeze that
+began with the `2026-07` cycle) is described in
+[ROADMAP.md § Feature freeze](ROADMAP.md#feature-freeze--heading-into-the-2026-07-cycle-added-2026-06-07).
+
 ## What each milestone means
 
 **0.9.0 — Fully working loft language.**

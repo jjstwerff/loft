@@ -38,8 +38,6 @@ Per [`README.md § Three workflows`](README.md#three-workflows-for-todo-items--p
   **Primary deliverable: mechanism understanding + fix-design
   decision.**  Canonical example: `plans/finished/51-hidden-buffer-aliasing/`.
 
-All plan shapes capped at 2-3 active per `plans/`.
-
 If your TODO fits in one row of a reference-doc table with one
 sentence of design, you don't need a plan — close this template
 and add the row.
@@ -159,8 +157,10 @@ has a single concern.
 
 **On opening a new plan** (new model — full procedure in the loft-plan-workflow skill):
 1. Create the plan's [`loft-lang/plans`](https://github.com/loft-lang/plans/issues)
-   issue — its number is `@PLN<N>`.  Copy this template to a **flat**
-   `plans/<N>-<slug>/README.md` (or `lib_plans/<N>-<slug>/`), `<N>` = that issue #.
+   issue — its number is `@PLN<N>`, and the issue **is** the plan.  No local
+   slot.  Only a **big multi-phase design** adds an optional local dir, named for
+   the issue: `plans/<N>-<slug>/README.md` (or `lib_plans/<N>-<slug>/`), `<N>` =
+   the issue #, using this template's shape.  Small plans live in the issue alone.
 2. Fill in Status + Goal first; link the loft-lang issue + carry `@PLN<N>` in the body.
 3. **Label the loft-lang issue**: `plan` + `subject:*` (loft / libs / audience) +
    `status:*` (future / active / finished).  **No ROADMAP row, no plans/README table

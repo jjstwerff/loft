@@ -779,6 +779,7 @@ impl State {
             known_type: db_tp,
             pretty: format & 1 > 0,
             json: format & 2 > 0,
+            loft: false,
         }
         .write(&mut s, 0);
         s

@@ -9,7 +9,7 @@ use crate::data::{
     v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
-use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
+use crate::diagnostics::{DiagEntry, Diagnostics, Level, diagnostic_format};
 use crate::lexer::{LexItem, LexResult, Lexer, Link, Mode, Position};
 use crate::platform::{other_sep, sep, sep_str};
 use crate::variables::{Function, size as var_size};
@@ -365,6 +365,23 @@ fn is_camel(name: &str) -> bool {
         }
     }
     true
+}
+
+/// Outcome of [`Parser::parse_statement`] — the REPL read-eval step's parse half.
+#[derive(Debug)]
+pub enum ParseResult {
+    /// Fully parsed.  Any new top-level definition is registered in `data` and
+    /// its body IR is built, ready for codegen + execute.  `entry_def_nr` is the
+    /// newest definition's number, or `u32::MAX` when the statement added no
+    /// runnable definition.
+    Ready { entry_def_nr: u32 },
+    /// Input ends mid-construct (open bracket, unterminated string, trailing
+    /// operator).  The REPL should read another line and re-call with the
+    /// concatenated input.
+    NeedMore,
+    /// Parse failed.  `data` has been rolled back to its pre-call state; the
+    /// entries are the diagnostics this statement produced.
+    Error(Vec<DiagEntry>),
 }
 
 impl Parser {
@@ -788,6 +805,12 @@ impl Parser {
     /// Only parse a specific string, only useful for parser tests.
     #[allow(dead_code)]
     pub fn parse_str(&mut self, text: &str, filename: &str, logging: bool) {
+        // Start each standalone parse on a fresh lexer.  `restart` resets the
+        // cursor but not the diagnostics or format-mode flags, and
+        // `Diagnostics::level` is monotonic — so reusing the lexer would leak a
+        // prior parse's errors into this one (poisoning REPL re-entrancy: a typo
+        // would make every later input mis-parse).  A new lexer is fully clean.
+        self.lexer = Lexer::default();
         self.first_pass = true;
         self.default = false;
         self.vars.logging = logging;
@@ -812,6 +835,137 @@ impl Parser {
         self.parse_file();
         self.resolve_deferred_unknowns();
         self.diagnostics.fill(self.lexer.diagnostics());
+    }
+
+    /// @PLN12 phase 02 — does `input` end mid-construct, so a REPL should read
+    /// more lines before trying to parse it?
+    ///
+    /// Returns `true` when a bracket is still open (`(`, `[`, `{`), a `"…"`
+    /// string literal is unterminated, or the last meaningful token is a
+    /// binary / continuation operator (`1 +`, `x.`).  `//` line comments and
+    /// escaped quotes are skipped.  It is deliberately conservative: a missed
+    /// "incomplete" just produces the ordinary parse error the caller already
+    /// handles, never a crash.  Pure over the input string — no parser state.
+    #[must_use]
+    pub fn statement_incomplete(input: &str) -> bool {
+        let chars: Vec<char> = input.chars().collect();
+        let mut depth: i32 = 0;
+        let (mut in_str, mut esc) = (false, false);
+        let mut last: Option<char> = None;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if c == '\\' {
+                    esc = true;
+                } else if c == '"' {
+                    in_str = false;
+                    last = Some('"');
+                }
+                i += 1;
+                continue;
+            }
+            // `//` to end of line is a comment — skip it.
+            if c == '/' && chars.get(i + 1) == Some(&'/') {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    last = Some(c);
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    last = Some(c);
+                }
+                w if w.is_whitespace() => {}
+                other => last = Some(other),
+            }
+            i += 1;
+        }
+        if in_str || depth > 0 {
+            return true;
+        }
+        // A trailing binary / continuation operator means more is coming.
+        matches!(
+            last,
+            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '=' | '<' | '>' | ',' | '.')
+        )
+    }
+
+    /// @PLN12 phase 02 — parse one REPL input against the live session.
+    ///
+    /// Reuses the parser's accumulated `data` + `database`, so a definition
+    /// from an earlier call is visible to this one.  This works because
+    /// `data.reset()` (which `parse_str` calls between its two passes) clears
+    /// only import scoping, never `definitions` — so `parse_str` *appends* the
+    /// input's new definitions to the existing stdlib + session.
+    ///
+    /// Returns [`ParseResult::NeedMore`] for input that ends mid-construct,
+    /// [`ParseResult::Error`] (with `data` rolled back) on a parse error, or
+    /// [`ParseResult::Ready`] with the new definition's number on success.
+    ///
+    /// A top-level definition (`struct`/`enum`/`fn`/`type`/…) is parsed as-is.
+    /// Any other input (an expression, a call, an assignment) is wrapped in a
+    /// synthetic runnable `fn repl_<n>()` so it parses and can be executed;
+    /// `entry_def_nr` then points at that wrapper.  Locals declared in such a
+    /// statement do NOT yet persist across inputs — the `__repl_session`
+    /// local-persistence path is the remaining increment, paired with phase 03's
+    /// runtime that keeps the session instance alive.
+    pub fn parse_statement(&mut self, input: &str) -> ParseResult {
+        if Self::statement_incomplete(input) {
+            return ParseResult::NeedMore;
+        }
+        let pre_defs = self.data.definitions();
+        let pre_diag = self.diagnostics.entries().len();
+        let is_def = Self::starts_top_level_def(input);
+        // The wrapper's name is keyed on the pre-call def count, which is
+        // monotonic across successful statements (each commit adds ≥1 def), so
+        // it never collides; a rolled-back attempt truncates `definitions` back
+        // to `pre_defs`, freeing the number for the next statement.
+        let wrapper = format!("n_repl_{pre_defs}");
+        if is_def {
+            self.parse_str(input, "<repl>", false);
+        } else {
+            let src = format!("fn repl_{pre_defs}() {{\n{input}\n}}");
+            self.parse_str(&src, "<repl>", false);
+        }
+        // Only diagnostics this statement produced — `Diagnostics::level` is
+        // monotonic, so a prior error would otherwise mask a now-clean parse.
+        let produced: Vec<DiagEntry> = self.diagnostics.entries()[pre_diag..].to_vec();
+        if produced.iter().any(|e| e.level >= Level::Error) {
+            self.data.rollback_to(pre_defs);
+            return ParseResult::Error(produced);
+        }
+        // A definition isn't executed (nothing to run); a wrapped expression
+        // returns its synthetic fn, resolved by name so a lambda appended inside
+        // the body can't be mistaken for the entry point.
+        let entry_def_nr = if is_def {
+            u32::MAX
+        } else {
+            self.data.def_nr(&wrapper)
+        };
+        ParseResult::Ready { entry_def_nr }
+    }
+
+    /// True if `input` opens with a top-level definition keyword, so it can be
+    /// parsed directly rather than wrapped in a synthetic REPL fn.
+    pub(crate) fn starts_top_level_def(input: &str) -> bool {
+        let word: String = input
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        matches!(
+            word.as_str(),
+            "struct" | "enum" | "fn" | "type" | "pub" | "use" | "interface" | "typedef" | "const"
+        )
     }
 
     // ********************

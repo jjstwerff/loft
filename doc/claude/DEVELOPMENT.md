@@ -465,8 +465,8 @@ the open-issues fast index in PROBLEMS.md, etc.).
 | **Stdlib gap** (missing fn / method / overload that fits the existing API surface) | `## Open work` row in [STDLIB.md](STDLIB.md) | grep / read STDLIB.md `## Open work` |
 | **Compiler / language gap** (lexer / parser / typer change with surface-area implications) | P-issue row OR `## Open work` row in [COMPILER.md](COMPILER.md) | same as above |
 | **Native codegen gap** | `## Open work` row in [NATIVE.md](NATIVE.md) | NATIVE.md |
-| **New library** (independent package — process, fs_watch, regex, cache, …) | `lib_plans/future/<NN>-<slug>/README.md` slot | `ls lib_plans/future/` |
-| **Big deferred feature** (M+ scale; needs its own design + multi-phase implementation; can't reasonably inline into the discovering plan's phase) | `plans/future/<NN>-<slug>/` (core-language) OR `lib_plans/future/<NN>-<slug>/` (library) plan slot — full README with goal, phases, acceptance | `ls plans/future/`, `ls lib_plans/future/` |
+| **New library** (independent package — process, fs_watch, regex, cache, …) | a [`loft-lang/plans`](https://github.com/loft-lang/plans) issue (`@PLN<n>`, labelled `subject:libs`) | `gh issue list -R loft-lang/plans --label plan` |
+| **Big deferred feature** (M+ scale; needs its own design + multi-phase implementation; can't reasonably inline into the discovering plan's phase) | a `loft-lang/plans` issue (`@PLN<n>`) — goal, phases, acceptance in the issue body; no local plan slot | `gh issue list -R loft-lang/plans --label plan` |
 
 The in-code workaround comment is MANDATORY regardless of
 which choice (1 / 2 / 3).  Reference the canonical home so

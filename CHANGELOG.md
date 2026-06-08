@@ -18,6 +18,40 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
+### An interactive prompt — `loft repl`
+
+Run `loft` with no file (or `loft repl`) to get an interactive prompt where you
+type loft one line at a time and see the result immediately:
+
+```
+loft> x = 40 + 2
+loft> x
+42
+loft> fn dbl(n: integer) -> integer { n + n }
+loft> dbl(x)
+84
+```
+
+Names you bind stay available, functions and structs you define persist for the
+session, multi-line input is supported, and a typo or run-time error doesn't end
+the session.  Built-in commands inspect what you've defined — `:fns`, `:vars`
+(each variable with its current value), `:bytecode`, `:rust`, `:slots` — and
+`:help` lists them.
+
+The prompt has **arrow-key history, in-line editing, and Tab completion** (of
+function names, types, your variables, and `:`-commands), and it **remembers
+your session**: the next time you start it, the variables and definitions from
+last time are already there.  Start clean with `loft repl --fresh`.  See
+[doc/claude/REPL.md](doc/claude/REPL.md).
+
+### Look inside a program — `loft introspect`
+
+`loft introspect <file>` prints a program's bytecode, the Rust loft generates
+for it, per-function variable slot tables, and inferred types — side by side, in
+one command.  Sub-flags pick one view (`--show-bytecode`, `--show-rust`, …) or a
+single function (`--fn`).  This replaces hunting through `LOFT_LOG=…` dumps for
+everyday inspection.
+
 ---
 
 ## 0.8.5 — 2026-06-07 — Language Maturity

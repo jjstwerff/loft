@@ -1,0 +1,8 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Fixture for tests/introspect.rs (@PLN12 phase 01).
+fn dbl(x: integer) -> integer { x + x }
+fn test() {
+  result = dbl(21);
+  assert(result == 42, "doubled");
+}

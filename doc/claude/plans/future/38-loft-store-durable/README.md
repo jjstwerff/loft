@@ -282,11 +282,10 @@ landing 01 needs 00 underneath.  Combined effort is ~S+
    `STDLIB.md` must spell out: don't use Tier 1 for data you
    can't re-derive.
 
-**Active-plan-cap impact:** The plan stays in `plans/future/`.
+**Promotion timing:** The plan stays in `plans/future/`.
 Phases 00 + 01 land with `**Status:** Landed in <PR#>`; the
 directory promotes to `plans/38-loft-store-durable/` only when
-phase 02 (Tier 2 snapshots) starts.  Active-plan cap stays at
-2 (16-coroutine-validation, 6-audience-generative-art).
+phase 02 (Tier 2 snapshots) starts.
 
 ## Acceptance — full plan
 

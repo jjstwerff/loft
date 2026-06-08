@@ -1358,6 +1358,12 @@ pub struct ShowDb<'a> {
     pub known_type: u16,
     pub pretty: bool,
     pub json: bool,
+    /// Emit re-parseable native loft source (`TypeName{field: value}`,
+    /// `Enum.Variant`, quoted+escaped text, forced-decimal floats) instead of
+    /// debug/JSON.  Mutually exclusive with `json`.  Backs `Stores::show_loft`,
+    /// the own-format serializer that round-trips through both the database
+    /// parser and the language parser (@PLN12 REPL.X / live data migration).
+    pub loft: bool,
 }
 
 /// Structured debug dump with store/record references, depth and element limits.

@@ -153,6 +153,9 @@ fn print_help() {
     );
     println!();
     println!("Subcommands:");
+    println!("  repl                          start the interactive REPL (also: bare `loft`)");
+    println!("                                resumes your last session automatically;");
+    println!("                                --fresh starts clean (ignores the saved session)");
     println!("  check <file>                  same as --check <file>");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
@@ -2979,6 +2982,37 @@ fn registry_age_str(path: &std::path::Path) -> String {
 // package's `#native` crate identically to the standalone + WASM native
 // compiles (LibCI native library gate).
 
+/// @PLN12 phase 04 — resolve the stdlib dir and run the interactive REPL, then
+/// exit.  Used by `loft repl` and by a bare `loft` with no file/subcommand.
+fn start_repl() -> ! {
+    // `--fresh` (anywhere on the command line): discard the saved session so
+    // this launch starts clean.  Handled here by an env scan so the flag needs
+    // no thread-through the arg loop, and works for both `loft repl --fresh` and
+    // a bare `loft --fresh`.  @PLN12 REPL.S — text-replay auto-resume.
+    if std::env::args().any(|a| a == "--fresh") {
+        if let Some(path) = loft::repl::session_file_path() {
+            loft::repl::ReplSession::clear_session(&path);
+        }
+    }
+    let base = project_dir();
+    let default_dir = std::path::Path::new(&base).join("default");
+    let stdlib = if default_dir.exists() {
+        default_dir.to_string_lossy().into_owned()
+    } else {
+        "default".to_string()
+    };
+    let stdin = std::io::stdin();
+    let mut stderr = std::io::stderr();
+    let code = match loft::repl::run_repl(&stdlib, stdin.lock(), &mut stderr) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("loft repl: {e}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -3160,11 +3194,11 @@ fn main() {
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
-        } else if a == "--introspect" {
-            // Plan-08 phase 01: introspection mode.  Default = emit
-            // bytecode + Rust + slots to stdout.  Sub-flags below
-            // narrow the section list, redirect per-section output
-            // to files, and filter by function name.
+        } else if a == "--introspect" || a == "introspect" {
+            // @PLN12 phase 01: introspection mode (flag or bare subcommand).
+            // Default = emit bytecode + Rust + slots + types to stdout.
+            // Sub-flags below narrow the section list, redirect per-section
+            // output to files, and filter by function name.
             introspect_mode = true;
             native_mode = false;
         } else if a == "--show-bytecode" {
@@ -3315,6 +3349,15 @@ fn main() {
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
+        } else if a == "repl" || a == "--repl" {
+            // @PLN12 phase 04 — interactive `loft>` prompt.  Prompts + errors go
+            // to stderr; evaluated results print to stdout (so a terminal sees
+            // them and a pipe can capture them).
+            start_repl();
+        } else if a == "--fresh" {
+            // @PLN12 REPL.S — recognised here only so a bare `loft --fresh`
+            // reaches the REPL instead of "unknown option"; `start_repl` reads
+            // the flag via an env scan and clears the saved session itself.
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.
@@ -3964,9 +4007,10 @@ fn main() {
     }
 
     if file_name.is_empty() {
-        println!("loft: no input file specified.");
-        println!("usage: loft [options] <file>");
-        std::process::exit(1);
+        // @PLN12 phase 04 — no file and no subcommand: drop into the interactive
+        // REPL (like `python` / `node` / `irb`).  Works for a terminal and for
+        // piped input; the banner advertises `:help`.
+        start_repl();
     }
     // Resolve the script path to absolute before potentially changing directory.
     let abs_file = std::path::Path::new(&file_name)

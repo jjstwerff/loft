@@ -52,6 +52,29 @@ impl Stores {
             known_type: tp,
             pretty,
             json: false,
+            loft: false,
+        }
+        .write(s, 0);
+    }
+
+    /// Serialise a record to **native loft source** — `TypeName{field: value}`,
+    /// `Enum.Variant`, quoted+escaped text, forced-decimal floats, `[…]` vectors.
+    /// Reuses the same `ShowDb` schema walk as [`show`](Self::show) /
+    /// [`show_json`](Self::show_json) in its `loft` mode.  The output re-parses
+    /// through both the database parser (`Stores::parse`) and the loft language
+    /// parser, so a value round-trips to itself — the own-format serializer for
+    /// REPL value-snapshot and live data migration (@PLN12 REPL.X).
+    pub fn show_loft(&self, s: &mut String, db: &DbRef, tp: u16) {
+        self.valid(db);
+        ShowDb {
+            stores: self,
+            store: db.store_nr,
+            rec: db.rec,
+            pos: db.pos,
+            known_type: tp,
+            pretty: false,
+            json: false,
+            loft: true,
         }
         .write(s, 0);
     }
@@ -76,6 +99,7 @@ impl Stores {
             known_type: tp,
             pretty,
             json: true,
+            loft: false,
         }
         .write(s, 0);
     }
@@ -645,9 +669,19 @@ impl ShowDb<'_> {
         } else if self.known_type == 1 {
             write!(s, "{}", self.store().get_long(self.rec, self.pos)).unwrap();
         } else if self.known_type == 2 {
-            write!(s, "{}", self.store().get_single(self.rec, self.pos)).unwrap();
+            let v = self.store().get_single(self.rec, self.pos);
+            if self.loft {
+                s.push_str(&ensure_decimal(&format!("{v}")));
+            } else {
+                write!(s, "{v}").unwrap();
+            }
         } else if self.known_type == 3 {
-            write!(s, "{}", self.store().get_float(self.rec, self.pos)).unwrap();
+            let v = self.store().get_float(self.rec, self.pos);
+            if self.loft {
+                s.push_str(&ensure_decimal(&format!("{v}")));
+            } else {
+                write!(s, "{v}").unwrap();
+            }
         } else if self.known_type == 4 {
             s.push_str(if self.store().get_byte(self.rec, self.pos, 0) == 0 {
                 "false"
@@ -657,18 +691,20 @@ impl ShowDb<'_> {
         } else if self.known_type == 5 {
             let text_nr = self.store().get_u32_raw(self.rec, self.pos);
             if text_nr == 0 || text_nr >= self.store().capacity_words() {
-                if self.json {
-                    // Null text in JSON mode is `null`, not a debug
-                    // tag: a `text` field that was never assigned (or
-                    // a `<bad-text>` slot — both round to `null` in
-                    // canonical JSON output).
+                if self.json || self.loft {
+                    // Null text renders as `null` in JSON and in loft (loft has a
+                    // `null` literal) — a re-parseable absence, not the `<bad-text>`
+                    // debug tag.
                     s.push_str("null");
                 } else {
                     write!(s, "<bad-text:{text_nr}>").unwrap();
                 }
             } else {
                 let text_val = self.store().get_str(text_nr);
-                if self.json {
+                if self.json || self.loft {
+                    // loft string literals accept the same escapes as JSON
+                    // (`\"`, `\n`, `\\`, …), so the JSON escaper produces a
+                    // re-parseable loft text literal too.
                     write_json_escaped(s, text_val);
                 } else {
                     s.push('\"');
@@ -706,6 +742,12 @@ impl ShowDb<'_> {
                     } else {
                         "?"
                     };
+                    // loft qualifies a real variant as `Enum.Variant` so it
+                    // re-parses unambiguously (a bare `Variant` can't infer its
+                    // enum type in the language parser).
+                    if self.loft && v > 0 && (v as usize - 1) < vals.len() {
+                        write!(s, "{}.", self.stores.types[self.known_type as usize].name).unwrap();
+                    }
                     s.push_str(enum_val);
                     let tp_nr = if v <= 0 || (v as usize - 1) >= vals.len() {
                         u16::MAX
@@ -720,18 +762,26 @@ impl ShowDb<'_> {
                     }
                 }
                 Parts::Struct(st) => {
+                    // loft prefixes the type name → `TypeName{…}`, a re-parseable
+                    // constructor; debug/JSON emit a bare object.
+                    if self.loft {
+                        s.push_str(&self.stores.types[self.known_type as usize].name);
+                    }
                     self.write_struct(s, st, indent);
                 }
                 Parts::EnumValue(_, st) => {
-                    // wrap struct-enum variant in a discriminant
-                    // object so JSON round-trip can identify the variant.
-                    // Output: {"VariantName":{fields}} in JSON mode.
+                    // wrap struct-enum variant in a discriminant object so JSON
+                    // round-trip can identify the variant: {"VariantName":{fields}}.
                     if self.json {
                         let variant_name = &self.stores.types[self.known_type as usize].name;
                         write!(s, "{{\"{variant_name}\":").unwrap();
                         self.write_struct(s, st, indent);
                         s.push('}');
                     } else {
+                        // loft emits the variant as its own constructor `V{…}`.
+                        if self.loft {
+                            s.push_str(&self.stores.types[self.known_type as usize].name);
+                        }
                         self.write_struct(s, st, indent);
                     }
                 }
@@ -922,6 +972,7 @@ impl ShowDb<'_> {
                 known_type: fld.content,
                 pretty: self.pretty,
                 json: self.json,
+                loft: self.loft,
             };
             sub.write(s, indent + 1);
         }
@@ -986,6 +1037,7 @@ impl ShowDb<'_> {
                 known_type: content,
                 pretty: self.pretty,
                 json: self.json,
+                loft: self.loft,
             };
             sub.write(s, indent + 1);
         }
@@ -1059,6 +1111,7 @@ impl ShowDb<'_> {
                 known_type: content,
                 pretty: self.pretty,
                 json: self.json,
+                loft: self.loft,
             };
             sub.write(s, indent + 1);
         }
@@ -1149,6 +1202,7 @@ impl ShowDb<'_> {
                         known_type: jv_tp,
                         pretty: self.pretty,
                         json: true,
+                        loft: false,
                     };
                     sub.write_jsonvalue(s, indent + 1);
                 }
@@ -1206,6 +1260,7 @@ impl ShowDb<'_> {
                         known_type: jv_tp,
                         pretty: self.pretty,
                         json: true,
+                        loft: false,
                     };
                     sub.write_jsonvalue(s, indent + 1);
                 }
@@ -1226,6 +1281,22 @@ impl ShowDb<'_> {
 /// control characters per RFC 8259.  Used by `ShowDb` (json: true)
 /// so `T.to_json()` produces canonical JSON for any text field
 /// containing quotes, backslashes, or control bytes.
+/// Ensure a default-formatted float carries a decimal point or exponent, so the
+/// loft serializer emits `3.0` not `3` — the latter would re-parse as an
+/// integer and mismatch a `float`/`single` field.  Leaves `3.14`, `1e10`, and
+/// the non-numeric `inf`/`NaN` forms untouched.
+fn ensure_decimal(formatted: &str) -> String {
+    let has_dot_or_exp = formatted
+        .bytes()
+        .any(|b| b == b'.' || b == b'e' || b == b'E');
+    let has_digit = formatted.bytes().any(|b| b.is_ascii_digit());
+    if has_dot_or_exp || !has_digit {
+        formatted.to_string()
+    } else {
+        format!("{formatted}.0")
+    }
+}
+
 pub(crate) fn write_json_escaped(out: &mut String, raw: &str) {
     out.push('"');
     for ch in raw.chars() {

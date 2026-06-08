@@ -38,6 +38,8 @@ home — [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELO
 
 ```bash
 cargo run --bin loft -- myprogram.loft        # run a loft program
+cargo run --bin loft -- repl                   # interactive REPL (or bare `loft`); see REPL.md
+cargo run --bin loft -- introspect prog.loft   # bytecode + Rust + slots + types dump
 cargo run --bin loft -- --help                # CLI help
 cargo run --bin gendoc                        # regenerate doc/*.html
 make ci                                       # fmt → clippy → test (full local gate)
@@ -169,7 +171,10 @@ must be releasable. All changes land on a feature branch and reach `main` only v
 4. Branch from the tip of `main` with a **GENERAL name** (`quality-pass`, `cleanup`, `work`) so one
    long-lived branch hosts cross-theme work — new branches keep re-rebasing against a moving `main`
    and failing CI on patterns they didn't author. Only a substantial plan with its own design doc
-   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name.
+   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name. The active cycle's long-lived branch is
+   a **monthly release branch** named for its release month, `YYYY-MM` (e.g. `2026-07`); cross-theme
+   work lands there and it ships at the start of that month once the tree is stable with a low bug
+   count — see [RELEASE.md § Release cadence](doc/claude/RELEASE.md#release-cadence).
 5. Merge to `main` via a GitHub PR — never a local `git merge`.
 
 ---
@@ -277,7 +282,7 @@ The consumer-gap case: when a missing language/stdlib feature a real consumer ne
 the active plan that fixes the gap directly**, then resume — so the language/stdlib gets sturdier
 and the workaround never enters shipped code. Route to a canonical home (P-issue / `## Open work`
 row in STDLIB/NATIVE/COMPILER / new lib_plans slot) when an inline fix isn't appropriate (M+, needs
-design, touches unrelated subsystems). Big deferred features get their own plan slot, never a row in
+design, touches unrelated subsystems). Big deferred features get their own [loft-lang/plans](https://github.com/loft-lang/plans) issue (`@PLN<n>` — no local plan slot), never a row in
 a parallel catalog. Full decision tree:
 [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
 
@@ -304,6 +309,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | [LOFT.md](doc/claude/LOFT.md) | Language reference (syntax, types, operators, control flow) |
 | [STDLIB.md](doc/claude/STDLIB.md) | Stdlib API (math, text, collections, file I/O, logging, parallel) |
+| [REPL.md](doc/claude/REPL.md) | Interactive REPL (`loft repl`) + introspection (`loft introspect`): commands, result echo, session limits (@PLN12) |
 | [COMPILER.md](doc/claude/COMPILER.md) | Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode |
 | [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums; bytecode operators; State layout |
 | [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix |
@@ -334,8 +340,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
-| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives (≤2-3 active) |
-| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (≤3 active; numbering independent) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (numbering independent) |
 | [BROADENING.md](doc/claude/BROADENING.md) | Using loft beyond games (CLI, server, data), sequenced unlocks |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()`, `StackFrame`, `ArgValue` |

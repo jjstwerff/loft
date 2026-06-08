@@ -5,7 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 05 — REPL introspection commands
 
-**Status: open.**
+**Status: shipped (first cut, 2026-06-08).** The REPL `:command` dispatcher
+gains `:bytecode [fn]`, `:rust [fn]`, `:slots [fn]` (each compiles the current
+session and emits that phase-01 introspection section to stdout, optionally
+filtered to named fns) and `:fns` (lists user-defined functions + return type,
+excluding stdlib + synthetic generation wrappers).  `ReplSession::introspect` +
+`list_fns` in `src/repl.rs`; tests in `tests/repl.rs`.
+
+Deferred: `:type <expr>` (needs a type-only parse entry) and value-bearing
+`:vars` (needs result capture — the same in-process value-read gap noted in
+phase 03/04).  `:vars`/`:type` will land with that capture work.
 
 ## Goal
 

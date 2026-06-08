@@ -42,6 +42,13 @@ pub enum Parsed {
     /// `"line N:M path:X"` diagnostics on shape mismatches without
     /// re-scanning the source.  Tuple shape: `(name, key_byte_offset, value)`.
     Object(Vec<(String, usize, Parsed)>),
+    /// A type-tagged constructor `Tag { … }` (Lenient only), kept **distinct**
+    /// from `Object` so a struct type-tag (`Point{…}`) or enum-struct variant
+    /// (`Red{…}`) is unambiguous against a plain object with a field named like
+    /// the tag — the property that lets new dumps carry type tags while old
+    /// (un-tagged) dumps still read as fields.  Fields: `(tag, tag_byte_offset,
+    /// body)`, where `body` is the `{ … }` [`Parsed::Object`].
+    Constructor(String, usize, Box<Parsed>),
 }
 
 /// Input dialect selector.
@@ -221,17 +228,18 @@ fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect)
         b'{' => parse_object(bytes, i, path, dialect),
         c if dialect == Dialect::Lenient && (c.is_ascii_alphabetic() || c == b'_') => {
             let (tag, j) = parse_bare_identifier_value(bytes, i);
-            // Struct-enum-variant-with-payload shape: `Tag { fields }`.
-            // Represented as `Object([(tag_name, ident_start, Object(fields))])`
-            // — a single-entry object whose key is the variant tag.  The
-            // schema walker's Parts::Enum arm detects this shape and
-            // dispatches to the variant's EnumValue struct.  Only applies
-            // when the identifier is NOT a reserved word (null/true/false).
+            // Type-tagged constructor shape: `Tag { fields }` — a struct
+            // type-tag (`Point{…}`) or an enum-struct variant (`Red{…}`).
+            // Emitted as a distinct `Parsed::Constructor` (NOT an `Object`) so
+            // the schema walker can tell it apart from a plain object that has a
+            // field named like the tag — the disambiguation that lets new dumps
+            // carry type tags while old un-tagged dumps still read as fields.
+            // Only when the identifier is not a reserved word (null/true/false).
             if let Parsed::Ident(name) = &tag {
                 let k = skip_ws(bytes, j);
                 if k < bytes.len() && bytes[k] == b'{' {
                     let (obj, end) = parse_object(bytes, k, path, dialect)?;
-                    return Ok((Parsed::Object(vec![(name.clone(), i, obj)]), end));
+                    return Ok((Parsed::Constructor(name.clone(), i, Box::new(obj)), end));
                 }
             }
             Ok((tag, j))
@@ -254,8 +262,22 @@ fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect)
 fn parse_bare_identifier_value(bytes: &[u8], i: usize) -> (Parsed, usize) {
     let start = i;
     let mut j = i + 1;
-    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-        j += 1;
+    // First segment, then any `.`-joined segments — a *qualified* enum tag like
+    // `Color.Red`, which loft source uses everywhere (`FileResult.Ok`).  A `.` is
+    // consumed only when followed by another identifier segment, so a trailing
+    // dot or `tag.0` is left for the caller rather than swallowed.
+    loop {
+        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+            j += 1;
+        }
+        if j + 1 < bytes.len()
+            && bytes[j] == b'.'
+            && (bytes[j + 1].is_ascii_alphabetic() || bytes[j + 1] == b'_')
+        {
+            j += 1; // consume the '.', loop to take the next segment
+        } else {
+            break;
+        }
     }
     // Safe: all bytes accepted above are ASCII.
     let name = std::str::from_utf8(&bytes[start..j]).expect("ASCII identifier slice");

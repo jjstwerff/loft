@@ -372,6 +372,24 @@ fn emit_bytecode(
     config.show_all_functions = opts.all_fns;
     if !opts.fn_filter.is_empty() {
         config.show_functions = Some(opts.fn_filter.clone());
+    } else if !opts.all_fns {
+        // Match the slots/types sections: restrict to user functions.
+        // show_code already skips `default/`, but compiler-synthesized
+        // runtime helpers (`i_parse_*`) carry an empty position and a
+        // non-`n_` name, so they'd otherwise leak in.  List the user
+        // `n_` functions explicitly (show_functions is a substring
+        // include-list); empty = no user functions = empty section.
+        let user_fns: Vec<String> = (0..data.definitions())
+            .filter_map(|d| {
+                let def = data.def(d);
+                (def.def_type == DefType::Function
+                    && def.name.starts_with("n_")
+                    && !def.name.starts_with("n___lambda_")
+                    && !crate::compile::is_default_file(&def.position.file))
+                .then(|| def.name.clone())
+            })
+            .collect();
+        config.show_functions = Some(user_fns);
     }
     state
         .dump_bytecode(w, &config, data)
@@ -419,7 +437,7 @@ fn emit_slots(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
         if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
             continue;
         }
-        if !opts.all_fns && is_default_lib_path(&def.position.file) {
+        if !opts.all_fns && crate::compile::is_default_file(&def.position.file) {
             continue;
         }
         if !opts.fn_filter.is_empty()
@@ -458,7 +476,7 @@ fn emit_types(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
         if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
             continue;
         }
-        if !opts.all_fns && is_default_lib_path(&def.position.file) {
+        if !opts.all_fns && crate::compile::is_default_file(&def.position.file) {
             continue;
         }
         if !opts.fn_filter.is_empty()
@@ -511,11 +529,4 @@ fn emit_types(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
         writeln!(w)?;
     }
     Ok(())
-}
-
-/// True if `file` is inside the `default/` standard library directory.
-/// Handles both relative (`default/01_code.loft`) and absolute
-/// (`/abs/path/default/01_code.loft`) paths.
-fn is_default_lib_path(file: &str) -> bool {
-    file.starts_with("default/") || file.contains("/default/")
 }

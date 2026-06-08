@@ -325,8 +325,7 @@ pub fn show_ir_only(writer: &mut dyn Write, data: &Data, config: &LogConfig) -> 
         if is_op && !config.show_all_functions {
             continue;
         }
-        let from_default = data.def(d_nr).position().file.starts_with("default/")
-            || data.def(d_nr).position().file.starts_with("default\\");
+        let from_default = is_default_file(&data.def(d_nr).position().file);
         if from_default && !config.show_all_functions {
             continue;
         }
@@ -444,6 +443,24 @@ pub fn show_captures_summary(writer: &mut dyn Write, data: &Data) -> Result<(), 
 ///
 /// # Errors
 /// When the writer didn't accept the data.
+/// True if `file` is inside the `default/` standard library.  Handles
+/// relative paths (test dumps parse `default/` relatively) and absolute
+/// paths (the `--introspect` CLI resolves the stdlib to `<exe>/../default`),
+/// so the default-skip filter holds in both.  Mirrors
+/// `introspect::is_default_lib_path`.
+pub(crate) fn is_default_file(file: &str) -> bool {
+    file.starts_with("default/")
+        || file.starts_with("default\\")
+        || file.contains("/default/")
+        || file.contains("\\default\\")
+}
+
+/// Write the static dump (IR and/or bytecode) for the functions selected by
+/// `config` to `writer` — the engine behind `LOFT_LOG` dumps and the
+/// `--introspect` bytecode section.
+///
+/// # Errors
+/// Propagates any I/O error from writing to `writer`.
 pub fn show_code(
     writer: &mut dyn Write,
     state: &mut State,
@@ -461,8 +478,7 @@ pub fn show_code(
         if is_op && !config.show_all_functions {
             continue;
         }
-        let from_default = data.def(d_nr).position().file.starts_with("default/")
-            || data.def(d_nr).position().file.starts_with("default\\");
+        let from_default = is_default_file(&data.def(d_nr).position().file);
         if from_default && !config.show_all_functions {
             continue;
         }

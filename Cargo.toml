@@ -84,6 +84,14 @@ ed25519-dalek      = { version = "2", optional = true, default-features = false,
 [target.'cfg(unix)'.dependencies]
 libc               = "0.2"
 
+# Line editor for the interactive REPL (arrow-key history, in-line editing).
+# Non-wasm only: the browser playground supplies its own editing, and rustyline
+# does not build for wasm32.  It reads the terminal directly; piped/file/test
+# input uses the plain reader in src/repl.rs, so this never affects captured
+# output.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustyline          = "14"
+
 [dev-dependencies]
 stdext = "0.3"
 png    = "0.17"
