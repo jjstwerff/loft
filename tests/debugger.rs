@@ -443,6 +443,55 @@ fn step_out_returns_to_caller() {
     );
 }
 
+/// @PLN15 B1 — the interpret-set for a breakpoint is the breakpoint fn plus its
+/// transitive callers (so the whole stack to the break is introspectable); a
+/// function that cannot reach it is excluded.  Pure static analysis — no run.
+#[test]
+fn b1_interpret_set_is_transitive_callers() {
+    let mut p = repl();
+    for def in NESTED {
+        match p.parse_statement(def) {
+            ParseResult::Ready { .. } => {}
+            other => panic!("def parse failed: {other:?}"),
+        }
+    }
+    match p.parse_statement("fn unrelated(z: integer) -> integer {\n  z + 1\n}") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("def parse failed: {other:?}"),
+    }
+    let entry = match p.parse_statement("outer(5)") {
+        ParseResult::Ready { entry_def_nr } => entry_def_nr,
+        other => panic!("call parse failed: {other:?}"),
+    };
+    let inner = p.data.def_nr("n_inner");
+    let outer = p.data.def_nr("n_outer");
+    let unrelated = p.data.def_nr("n_unrelated");
+
+    let set = loft::debugger::interpret_set(&p.data, inner);
+    assert!(set.contains(&inner), "the breakpoint fn itself: {set:?}");
+    assert!(
+        set.contains(&outer),
+        "outer calls inner → interpret: {set:?}"
+    );
+    assert!(
+        set.contains(&entry),
+        "the wrapper calls outer → interpret: {set:?}"
+    );
+    assert!(
+        !set.contains(&unrelated),
+        "unrelated never reaches inner: {set:?}"
+    );
+
+    // The static callees of `outer` include `inner`.
+    assert!(loft::debugger::callees(&p.data, outer).contains(&inner));
+    // A breakpoint in a leaf fn pulls in no callees (inner does not call unrelated).
+    let leaf = loft::debugger::interpret_set(&p.data, unrelated);
+    assert!(
+        leaf.contains(&unrelated) && !leaf.contains(&inner),
+        "{leaf:?}"
+    );
+}
+
 /// Negative control: debugging on but no breakpoint registered → zero hits, and
 /// the program still runs (the `assert` inside proves execution completed).
 #[test]

@@ -59,6 +59,121 @@ pub struct Debugger {
     pub paused: Option<BreakHit>,
 }
 
+/// @PLN15 B1 — collect the **static** call targets in an IR body into `out`.
+///
+/// Exhaustive over every [`Value`](crate::data::Value) variant **with no `_`
+/// wildcard**: a new variant must be added here or the build breaks, so a call
+/// nested in a new construct can never be silently dropped (the under-reach hazard
+/// — a missed caller would leave its frame non-interpreted, hence
+/// non-introspectable).  Only `Value::Call` carries a static target; `CallRef` is
+/// an indirect call through a fn-ref value, unresolvable statically (a documented
+/// limitation — a breakpoint reached *only* via a fn-ref won't pull its caller in).
+fn collect_calls(value: &crate::data::Value, out: &mut HashSet<u32>) {
+    use crate::data::Value;
+    match value {
+        Value::Call(d_nr, args) => {
+            out.insert(*d_nr);
+            for a in args {
+                collect_calls(a, out);
+            }
+        }
+        Value::CallRef(_, args)
+        | Value::Insert(args)
+        | Value::Tuple(args)
+        | Value::Parallel(args) => {
+            for a in args {
+                collect_calls(a, out);
+            }
+        }
+        Value::Span(b) => collect_calls(&b.1, out),
+        Value::Set(_, inner)
+        | Value::Return(inner)
+        | Value::BreakWith(_, inner)
+        | Value::Drop(inner)
+        | Value::TuplePut(_, _, inner)
+        | Value::Yield(inner) => collect_calls(inner, out),
+        Value::If(c, t, f) => {
+            collect_calls(c, out);
+            collect_calls(t, out);
+            collect_calls(f, out);
+        }
+        Value::Iter(_, a, b, c) => {
+            collect_calls(a, out);
+            collect_calls(b, out);
+            collect_calls(c, out);
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for o in &bl.operators {
+                collect_calls(o, out);
+            }
+        }
+        Value::ParFor(pf) => {
+            collect_calls(&pf.input, out);
+            collect_calls(&pf.worker, out);
+            collect_calls(&pf.threads, out);
+            collect_calls(&pf.body, out);
+        }
+        // Leaves — no nested `Value`, nothing to collect.  Listed explicitly (no
+        // `_`) so a future variant is a compile error, not a silent miss.
+        Value::Null
+        | Value::Line(_)
+        | Value::Int(_)
+        | Value::Enum(_, _)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Var(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _)
+        | Value::FnRefDnr(_)
+        | Value::RawExpr(_) => {}
+    }
+}
+
+/// @PLN15 B1 — the functions directly called by definition `d_nr` (its static
+/// callees).
+#[must_use]
+pub fn callees(data: &crate::data::Data, d_nr: u32) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    if (d_nr as usize) < data.definitions() as usize {
+        collect_calls(&data.def(d_nr).code, &mut out);
+    }
+    out
+}
+
+/// @PLN15 B1 — the set of functions that must run **interpreted** for a breakpoint
+/// in `bp_fn` to fire with an introspectable stack: `bp_fn` itself plus every
+/// function that can **transitively reach** it (so whatever call path runs, every
+/// frame from the entry down to the breakpoint is interpreted; `bp_fn`'s *callees*
+/// may stay compiled).  A fixpoint over the static call graph: a function joins the
+/// set once any function it calls is already in it.
+#[must_use]
+pub fn interpret_set(data: &crate::data::Data, bp_fn: u32) -> HashSet<u32> {
+    let n = data.definitions();
+    let callees: Vec<HashSet<u32>> = (0..n).map(|d| callees(data, d)).collect();
+    let mut set = HashSet::new();
+    set.insert(bp_fn);
+    loop {
+        let mut added = false;
+        for (d, calls) in callees.iter().enumerate() {
+            let d = d as u32;
+            if !set.contains(&d) && calls.iter().any(|c| set.contains(c)) {
+                set.insert(d);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    set
+}
+
 impl Debugger {
     /// Register a bytecode offset as a breakpoint.
     pub fn add_offset(&mut self, offset: u32) {
