@@ -101,6 +101,42 @@ store-resident records (position-independent `DbRef`s); a conditional breakpoint
 just `eval` against that env. Hold that invariant and the debugger is a suspend
 hook + a registry + a seed bridge; lose it and it's a parallel interpreter.
 
+## Prior art — this is HotSpot's deoptimization model
+
+The architecture matches how the JVM debugs (HotSpot + JDWP/JVMTI) almost
+feature-for-feature — strong validation that the model is sound, not accidental.
+The core identity is the same: a **mixed interpreter + compiled runtime where
+debugging works by forcing the debugged code back into the interpreter**, because
+the interpreter is the only mode with breakpoint hooks and introspectable frames.
+
+| loft | Java / HotSpot |
+|---|---|
+| interpreted bytecode + compiled cdylib baseline (Goal-D parity) | interpreter + C1/C2 JIT (deopt preserves semantics) |
+| **B/B2** — switch a fn to the interpreter to break in it | JVMTI `interp_only` / deoptimization |
+| breakpoint = a check in the interpreter loop | JIT code has no hooks; the interpreter does |
+| **`break_stack`** — frames + per-frame locals | JDI `StackFrame` + `visibleVariables` |
+| **liveness reference-range** (`first_ref ≤ pc ≤ last_ref`) | LocalVariableTable scope start/length (`-g`) |
+| **`set_frame_value`** → resume | `StackFrame.setValue` → continue |
+| **`debug_step`** (line + call-depth) | JDWP step requests (INTO/OVER/OUT) |
+| **`frame_holds`** — eval a condition against the frame | conditional breakpoints (JDI expression eval) |
+| edit-and-continue / live editing (lavition) | HotSwap (`RedefineClasses`) |
+| shared store across interpreted + compiled | unified heap shared by interpreter + JIT |
+
+**The one capability loft is behind:** HotSpot can **deoptimize a frame already
+running compiled, *on the stack*** — it reconstructs interpreter frames for live
+JIT frames from debug metadata the JIT emits at safepoints (scope descriptors
+mapping registers/stack slots to interpreter locals), so it can introspect and
+step *out* through a caller that ran JIT-compiled.  loft today can only switch at
+the **call boundary** — interpret a function from its *entry* (B2 re-wires before
+it runs), never catch one mid-flight: a cdylib frame's locals live in native
+registers with no safepoint metadata to reconstruct them.  The shared store gives
+the *data* for free; what's missing is the *control-state* mapping mid-cdylib.
+**This is exactly the B3-switching limitation** (and the "indirect caller already
+compiled is non-introspectable" gap).  "Interpret from entry" granularity is
+genuinely fine for live *editing* (you decide to debug a function before calling
+it); on-stack deopt — its known, well-understood name — is a later addition only if
+"attach to an already-running compiled stack and introspect upward" is ever needed.
+
 ## Composition matrix — Stage A
 
 The load-bearing claim: *a breakpoint pauses with the correct frame, and evaluating
