@@ -159,8 +159,8 @@ fn is_plain_ident(s: &str) -> bool {
 
 /// The `:`-commands Tab completion offers when the line starts with `:`.
 #[cfg(not(target_arch = "wasm32"))]
-const REPL_COMMANDS: [&str; 8] = [
-    "quit", "help", "reset", "fns", "type", "bytecode", "rust", "slots",
+const REPL_COMMANDS: [&str; 9] = [
+    "quit", "help", "reset", "fns", "vars", "type", "bytecode", "rust", "slots",
 ];
 
 /// Pure completion logic, shared by the live completer and its unit tests.
@@ -342,7 +342,7 @@ fn process_line<W: Write>(
             "quit" | "q" => return Ok(true),
             "help" | "h" => writeln!(
                 chrome,
-                "commands: :quit  :help  :reset  :fns  :type <expr>  \
+                "commands: :quit  :help  :reset  :fns  :vars  :type <expr>  \
                  :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
@@ -359,6 +359,15 @@ fn process_line<W: Write>(
             "rust" => session.introspect(Section::Rust, filter),
             "slots" => session.introspect(Section::Slots, filter),
             "fns" => session.list_fns(),
+            "vars" => match session.show_vars() {
+                Ok(true) => {}
+                Ok(false) => writeln!(chrome, "no variables bound yet")?,
+                Err(diags) => {
+                    for d in diags {
+                        writeln!(chrome, "{}", d.to_string_compact())?;
+                    }
+                }
+            },
             "type" => {
                 let expr = filter.join(" ");
                 match session.infer_type(&expr) {
@@ -731,15 +740,51 @@ impl ReplSession {
                 _ => {}
             }
         }
-        // Variables bound this session live as binding lines in `body`.
-        for line in self.body.lines() {
-            if let Some(name) = Self::binding_name(line) {
-                names.push(name);
-            }
-        }
+        names.extend(self.bound_var_names());
         names.sort();
         names.dedup();
         names
+    }
+
+    /// The variables bound this session, each once in first-seen order (a rebind
+    /// keeps the original position).  Derived from the binding lines accumulated
+    /// in `body`.  Feeds both `:vars` and Tab completion.
+    fn bound_var_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for line in self.body.lines() {
+            if let Some(name) = Self::binding_name(line)
+                && !names.contains(&name)
+            {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Print each session variable and its current value (`name = value`, in
+    /// loft's native rendering) to stdout — the `:vars` command.  Returns
+    /// `Ok(false)` when nothing is bound (the caller reports it) or `Ok(true)`
+    /// once values are printed.  Realising the values re-runs the accumulated
+    /// body, so a side effect in a binding's RHS repeats here too (REPL.X).
+    ///
+    /// # Errors
+    /// Returns the diagnostics if realising a value raises a parse or runtime
+    /// error.
+    pub fn show_vars(&mut self) -> Result<bool, Vec<DiagEntry>> {
+        use std::fmt::Write;
+        let names = self.bound_var_names();
+        if names.is_empty() {
+            return Ok(false);
+        }
+        // Append one `println("name = {name}")` per variable after the body, so
+        // a single run renders every current value through the same path a bare
+        // expression uses.
+        let mut gen_src = self.body.clone();
+        for n in &names {
+            let _ = writeln!(gen_src, "println(\"{n} = {{{n}}}\");");
+        }
+        self.compile_generation(&gen_src, true)?;
+        Ok(true)
     }
 
     /// Infer the static type of `expr` against the current session, without

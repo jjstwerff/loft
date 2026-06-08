@@ -34,8 +34,9 @@ loft> dbl(x)
 
 Names you bind stay available, functions and structs you define persist for the
 session, multi-line input is supported, and a typo or run-time error doesn't end
-the session.  Built-in commands inspect what you've defined — `:fns`,
-`:bytecode`, `:rust`, `:slots` — and `:help` lists them.
+the session.  Built-in commands inspect what you've defined — `:fns`, `:vars`
+(each variable with its current value), `:bytecode`, `:rust`, `:slots` — and
+`:help` lists them.
 
 The prompt has **arrow-key history, in-line editing, and Tab completion** (of
 function names, types, your variables, and `:`-commands), and it **remembers

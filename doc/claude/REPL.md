@@ -104,6 +104,7 @@ Commands start with a colon:
 | `:quit` (`:q`) | Leave the REPL. |
 | `:reset` | Forget everything you defined; the standard library stays loaded. |
 | `:fns` | List the functions you have defined, with their return type. |
+| `:vars` | List the variables you have bound, each with its current value. |
 | `:type <expr>` | Show the type of an expression without running it. |
 | `:bytecode [fn]` | Show the bytecode — all your functions, or just the named one. |
 | `:rust [fn]` | Show the Rust code loft generates for native compilation. |
@@ -150,11 +151,9 @@ Current limits, with their planned fixes in
 [plans/12-repl-and-introspection/](plans/12-repl-and-introspection/):
 
 - A statement with a **side effect** (printing, file I/O) would run again each
-  time a later line reads a variable. The fix is the stack-resident execution
-  model (phase 03 notes) that runs each new line only once.
-- `:vars` (show each variable's current *value*) is not implemented yet — it
-  needs a way to read a value back out of execution.  (`:type <expr>` works — it
-  reads the inferred type at compile time, no execution needed.)
+  time a later line reads a variable — and each time you run `:vars`, which
+  realises every value by re-running the body. The fix is the stack-resident
+  execution model (phase 03 notes) that runs each new line only once.
 - Auto-resume re-runs your bindings rather than restoring their stored values,
   so a non-deterministic result (`random()`, `now()`) is recomputed on resume.
   Exact value-for-value restore is the same stack-resident model above.

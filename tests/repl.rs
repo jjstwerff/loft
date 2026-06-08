@@ -193,6 +193,32 @@ fn runtime_error_reported_and_recovers() {
     );
 }
 
+// ── :vars — value-bearing variable listing (REPL.T) ──────────────────────────
+
+/// `:vars` prints each bound variable with its current value, in loft's native
+/// rendering (text without quotes), to stdout.
+#[test]
+fn vars_command_shows_values() {
+    let out = repl(&["repl"], "x = 5\nname = \"Alice\"\n:vars\n:quit\n");
+    assert!(out.contains("x = 5"), "int var value: {out:?}");
+    assert!(out.contains("name = Alice"), "text var value: {out:?}");
+}
+
+/// `:vars` reflects the *latest* value after a rebind, not the original.
+#[test]
+fn vars_command_reflects_latest_value() {
+    let out = repl(&["repl"], "n = 5\nn = n + 100\n:vars\n:quit\n");
+    assert!(out.contains("n = 105"), "rebound value: {out:?}");
+}
+
+/// `:vars` with nothing bound reports that (to stderr), and the session
+/// continues.
+#[test]
+fn vars_command_empty_message() {
+    let (_out, err) = repl_full(&["repl"], ":vars\n1 + 1\n:quit\n");
+    assert!(err.contains("no variables"), "empty-vars message: {err:?}");
+}
+
 // ── session semantics: side-effecting bindings (REPL.X) ──────────────────────
 
 /// A binding is recorded, not executed; the accumulated body re-runs on each
