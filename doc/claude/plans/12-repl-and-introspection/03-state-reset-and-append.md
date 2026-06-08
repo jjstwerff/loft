@@ -75,6 +75,41 @@ the re-run via the true stack-resident model (persistent `State` + `byte_code_fr
 + `reset_for_repl` preserving `stack_pos` + resume-execution); surfacing the
 evaluated result for display (phase 04).
 
+## REPL.X — eliminating the re-run (designed 2026-06-08, not yet built)
+
+The re-run is structural: the session re-executes the accumulated bindings each
+time it observes a value, so a binding whose RHS has a *side effect* repeats it.
+A correct fix runs each line **once** and keeps the variable frame alive between
+inputs.  Investigation found two viable approaches and one real hazard.
+
+**Hazard (the reason this is not a quick edit).** A frame is not just bytes:
+text/`DbRef` locals stored in it need lifetime handling.  The coroutine path
+already proves this — `serialise_text_args` + `drop_text_locals_in_bytes` exist
+to own text out of a saved frame and to free it without double-dropping.  Any
+frame snapshot/restore for the REPL must reuse that handling, so the safe scope
+to land *first* is integer-only locals (no text in the frame).
+
+**Approach A — checkpoint / restore / resume (keeps all types).**  Persistent
+`State`; the session is one growing `fn`.  After running through statement N,
+checkpoint `(code_pos, stack-frame bytes, stack_pos, call_stack)`.  On input
+N+1: append it, re-`byte_code` (codegen of the unchanged prefix 1..N is
+deterministic, so the checkpoint `code_pos` stays valid), restore the frame, run
+from the checkpoint → only N+1 executes.  Foundation: the coroutine stack-bytes
+snapshot (`coroutine_create` copies from the stack store via `store.addr`).
+Risk: prefix-stability + const-store/text-local corners.
+
+**Approach B — function params + value capture (integer-scoped first).**  Each
+input is a `fn f(<prior vars>) -> <new var> { … }`; the REPL stores variable
+*values*, passes them as args, captures the return.  Each fn runs once → no
+re-run.  Needs a typed-arg/return execute entry (push args, read the return) —
+which also unblocks `:vars` and in-process result-as-`String`.  Marshalling
+beyond integers (text `DbRef`, structs) is the follow-on.
+
+**Recommendation.** Build B first for integers (bounded, reuses the
+native-call arg/return marshalling, and dividends: `:vars` + result return),
+then A for the all-types, no-recompile endpoint.  Either is a focused spike on
+the execution core — land it deliberately, not bundled with unrelated work.
+
 ---
 
 ## Original design (bytecode-append — NOT pursued; kept for context)
