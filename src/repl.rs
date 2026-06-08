@@ -405,6 +405,27 @@ fn process_line<W: Write>(
     Ok(false)
 }
 
+/// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
+/// re-reads.  Handles the escapes loft shares with JSON (`"`, `\`, newline, CR,
+/// tab); other characters pass through.  Used by the REPL.X value-snapshot to
+/// store a captured text binding as `name = "…"`.
+fn escape_loft_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Outcome of evaluating one REPL input.
 #[derive(Debug)]
 pub enum Eval {
@@ -569,14 +590,31 @@ impl ReplSession {
             self.record_input(input); // a def changes session state — persist it
             return Eval::Ran;
         }
-        if Self::binding_name(input).is_some() {
-            // Record the binding (validate only — see the doc comment).  It is
+        if let Some(var) = Self::binding_name(input) {
+            // REPL.X value-snapshot — run the RHS once, capture the value, and
+            // store the binding as a literal (`name = 42`) so re-running `body`
+            // on every later observe does NOT repeat a side effect.  Falls back
+            // to storing the RHS as source for a non-capturable value or any
+            // failure (those re-run as before — the documented residual).
+            let rhs = input.split_once('=').map_or("", |(_, r)| r.trim());
+            if !rhs.is_empty()
+                && let Some(lit) = self.capture_binding(rhs)
+            {
+                let snap = format!("{var} = {lit}");
+                let bound = format!("{}{snap};\n", self.body);
+                if self.compile_generation(&bound, false).is_ok() {
+                    self.body = bound;
+                    self.record_input(&snap); // persist the snapshot, not the RHS
+                    return Eval::Ran;
+                }
+            }
+            // Fall back: record the binding as source (validate only).  It is
             // recompiled, in use, when a later input observes it.
             let bound = format!("{}{};\n", self.body, input);
             return match self.compile_generation(&bound, false) {
                 Ok(()) => {
                     self.body = bound;
-                    self.record_input(input); // a binding changes state — persist it
+                    self.record_input(input);
                     Eval::Ran
                 }
                 Err(diags) => Eval::Error(diags),
@@ -646,6 +684,57 @@ impl ReplSession {
             self.parser.data.rollback_to(pre_defs);
         }
         Ok(())
+    }
+
+    /// REPL.X value-snapshot — run a binding's RHS **once**, capture its value,
+    /// and render it as an own-format loft literal.  Returns the literal (so the
+    /// binding can be stored as `name = <literal>`, side-effect-free on every
+    /// later re-run of `body`), or `None` to fall back to storing the RHS as
+    /// source (the binding then re-runs as before — the documented residual).
+    ///
+    /// Mechanism: build `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is
+    /// the trailing return expression, run it on a throwaway `State`, and read
+    /// the return value off the stack top (the same place `execute_at` reads its
+    /// return).  First cut: `integer` + `text` — the common side-effecting cases
+    /// (`read_line`, `random`, `now`).  Struct/vector/enum render via `show_loft`
+    /// but need their `DbRef` read back from the frame — a deferred follow-up, so
+    /// they stay source (re-run) for now.
+    fn capture_binding(&mut self, rhs: &str) -> Option<String> {
+        let ty = self.infer_type(rhs)?;
+        if ty != "integer" && ty != "text" {
+            return None;
+        }
+        let next = self.counter + 1;
+        let name = format!("replmain_{next}");
+        let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        if failed {
+            self.parser.data.rollback_to(pre_defs);
+            return None;
+        }
+        self.counter = next;
+        crate::scopes::check(&mut self.parser.data);
+        let mut state = State::new(self.parser.database.clone());
+        compile::byte_code(&mut state, &mut self.parser.data);
+        state.execute_argv(&name, &self.parser.data, &[]);
+        if state.database.runtime_error.take().is_some() {
+            self.parser.data.rollback_to(pre_defs);
+            return None;
+        }
+        let lit = if ty == "integer" {
+            state.get_stack::<i32>().to_string()
+        } else {
+            // `text` return is a `Str`; render a quoted+escaped loft literal.
+            let raw = state.get_stack::<crate::keys::Str>().str().to_string();
+            escape_loft_text(&raw)
+        };
+        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        Some(lit)
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),

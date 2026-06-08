@@ -141,19 +141,20 @@ use; `LOFT_LOG` still works for live execution traces (see
 
 ## How session state works (and its limits)
 
-The REPL keeps the names you bind by re-running the statements that define them
-in one shared scope each time you ask for a value. This works for values of any
-type — numbers, text, structs, vectors. As long as a statement only computes a
-value (no side effect), re-running it gives the same result: `x = 1; y = x + 2`
-always yields the same `y`, and `name = "Alice"` stays bound to `"Alice"`.
+When you bind a name to a **number or text**, the REPL runs the right-hand side
+**once** and snapshots the value — so a side effect (printing, reading input) in
+the binding happens a single time, however often you read the name later
+(`name = read_line()` prompts once). Bindings of other types — **structs and
+vectors** — aren't snapshotted yet: the REPL replays the statement, so a *pure*
+construction (no side effect) re-runs harmlessly and stays correct.
 
 Current limits, with their planned fixes in
 [plans/12-repl-and-introspection/](plans/12-repl-and-introspection/):
 
-- A statement with a **side effect** (printing, file I/O) would run again each
-  time a later line reads a variable — and each time you run `:vars`, which
-  realises every value by re-running the body. The fix is the stack-resident
-  execution model (phase 03 notes) that runs each new line only once.
+- A **side effect in a struct or vector binding's** right-hand side still runs
+  again each time a later line reads it (and on each `:vars`). Number and text
+  bindings are snapshotted, so their effects run once; snapshotting the remaining
+  types is the planned follow-up (REPL.X full-type capture).
 - Auto-resume re-runs your bindings rather than restoring their stored values,
   so a non-deterministic result (`random()`, `now()`) is recomputed on resume.
   Exact value-for-value restore is the same stack-resident model above.

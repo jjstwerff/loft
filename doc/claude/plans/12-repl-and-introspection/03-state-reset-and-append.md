@@ -304,11 +304,27 @@ extension:
    `show_loft` to loft code — is deferred to step 4's capture, where it's used.)
 
 **Part II — REPL.X consumes it:**
-4. **Capture** — serialize in loft (`"{__v:l}"`) + a `text`-return read entry.
-5. **Wire `eval`'s binding branch** — substitute `name = <own-format>;`; fall
-   back to source on failure.
-6. **Flip the regression** — `side_effecting_binding_reruns_per_observation`
-   expects **once**; confirm text/struct/vector persistence still passes.
+4–6. ✅ **Capture + wiring (DONE — scalar + text first cut).**  A simpler capture
+   than the planned `:l`-in-loft route turned out available: build
+   `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is the trailing return,
+   run it on a throwaway `State`, and read the value off the **stack top** —
+   exactly where `execute_at` reads its return (`mod.rs:2422`), so **no new
+   execution entry point**.  `ReplSession::capture_binding` (`src/repl.rs`) reads
+   an `integer` (`get_stack::<i32>`) or `text` (`get_stack::<Str>` →
+   `escape_loft_text`) return and renders the literal; `eval`'s binding branch
+   stores `name = <literal>` (and persists *that* snapshot for resume) so re-runs
+   are pure.  **Non-capturable values (struct/vector/enum) fall back to storing
+   the RHS as source** — they re-run, harmless for pure constructions (the
+   residual).  `side_effecting_binding_runs_once` /
+   `side_effecting_text_binding_runs_once` / `struct_binding_falls_back_to_source`
+   pin it; REPL.S resume + persistence unaffected.  Guards green (20 repl / 11
+   session / 684 issues; clippy + fmt clean).
+
+   **Deferred follow-up:** full-type capture (struct/vector/enum) via reading the
+   `DbRef` return and `show_loft`-ing it — the serializer (step 3) is built for
+   it; only the typed frame-read remains.  `show_loft`'s runtime `:l` format bit
+   is likewise still unbuilt (this cut renders scalar/text directly in Rust, no
+   `:l` needed).
 
 Correctness over efficiency — re-serialising per binding is fine.
 

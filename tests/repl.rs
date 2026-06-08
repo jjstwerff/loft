@@ -221,21 +221,55 @@ fn vars_command_empty_message() {
 
 // ── session semantics: side-effecting bindings (REPL.X) ──────────────────────
 
-/// A binding is recorded, not executed; the accumulated body re-runs on each
-/// *observing* statement, so a side effect in a binding's RHS repeats once per
-/// later observation.  Here `a = noisy()` prints "ran" each time `a` is
-/// observed — two observations → "ran" twice.  This pins the known REPL.X
-/// limitation (plan-12 § Deferred follow-ups); when stack-resident execution
-/// lands, the side effect runs once and this expected count drops to 1.
+/// REPL.X value-snapshot: a binding's RHS runs **once**, at binding time — its
+/// value is captured and stored as a literal, so later observations re-run a
+/// side-effect-free body.  `a = noisy()` prints "ran" exactly once however many
+/// times `a` is observed afterward (two observations here).  (Before REPL.X the
+/// body re-ran the RHS per observation, printing "ran" twice.)
 #[test]
-fn side_effecting_binding_reruns_per_observation() {
+fn side_effecting_binding_runs_once() {
     let out = repl(
         &["repl"],
         "fn noisy() -> integer {\n  println(\"ran\");\n  42\n}\na = noisy()\na + 0\na + 0\n:quit\n",
     );
     let runs = out.matches("ran").count();
     assert_eq!(
-        runs, 2,
-        "side effect re-runs once per observation under REPL.X; got {runs} in {out:?}"
+        runs, 1,
+        "side effect runs once at binding time under REPL.X; got {runs} in {out:?}"
+    );
+    assert!(
+        out.contains("42"),
+        "captured value still observable: {out:?}"
+    );
+}
+
+/// The same value-snapshot for a **text** RHS: the effect runs once, the captured
+/// text is observable afterward.
+#[test]
+fn side_effecting_text_binding_runs_once() {
+    let out = repl(
+        &["repl"],
+        "fn greet() -> text {\n  println(\"called\");\n  \"hi\"\n}\ng = greet()\ng\ng\n:quit\n",
+    );
+    assert_eq!(
+        out.matches("called").count(),
+        1,
+        "text RHS runs once at binding time: {out:?}"
+    );
+    assert!(out.contains("hi"), "captured text observable: {out:?}");
+}
+
+/// A **struct** binding isn't literal-capturable yet, so it falls back to storing
+/// the RHS as source — still persists and stays usable (the documented residual:
+/// a pure construction re-runs harmlessly).
+#[test]
+fn struct_binding_falls_back_to_source() {
+    let out = repl(
+        &["repl"],
+        "struct P { a: integer, b: integer }\np = P { a: 1, b: 2 }\np.a + p.b\n:quit\n",
+    );
+    assert!(
+        out.contains('3'),
+        "struct binding persists + usable via source fallback: {out:?}"
     );
 }
