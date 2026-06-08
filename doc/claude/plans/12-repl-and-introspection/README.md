@@ -5,8 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN12 — REPL + interpreter-introspection tool  ·  [loft-lang/plans#12](https://github.com/loft-lang/plans/issues/12)  ·  *(was `@PLAN08`)*
 
-**Status:** ACTIVE — promoted from `future/` 2026-06-07; the last new language
-feature before the 2026-07 warm feature freeze.  Phase 0 done; 1–6 open.
+**Status:** SHIPPED (first cut) — phases 00–06 landed 2026-06-07/08 on the
+`repl` branch.  `loft repl` (and a bare `loft`) is an interactive prompt;
+`loft introspect` dumps a program's intermediate forms.  Follow-ups (stack-
+resident execution, non-integer scope, `:type`/`:vars`, line history) are
+deferred — see [§ Deferred follow-ups](#deferred-follow-ups).
 
 ## Goal
 
@@ -68,11 +71,26 @@ operates on a fully-loaded program just like `--dump` does.
 |---|------|--------|--------|---------|
 | 0 | [00-baseline.md](00-baseline.md) | done | XS | Survey of existing dump APIs (`LOFT_LOG`, `--dump`, `--native-emit`, `dump_bytecode`, `dump_variables`).  Confirmed the introspection tool is a packaging job; the REPL needs three new pieces of architecture. |
 | 1 | [01-introspection-cli.md](01-introspection-cli.md) | shipped | S | `loft introspect <file>` / `--introspect`: emits bytecode + generated Rust + slot tables + per-fn types to stdout (or per-flag files).  Wraps `state.dump_bytecode`, `dump_variables`, `Output::output_native`.  Sub-flags select one dimension or filter to a function.  (2026-06-07: bare `introspect` subcommand added; default-stdlib filter fixed for absolute paths + synthesized internals so all sections show user code only; `tests/introspect.rs` regression guard.) |
-| 2 | [02-statement-parser.md](02-statement-parser.md) | open | M | `Parser::parse_statement(&str) -> Result<…>` entry that runs both passes on a single statement, persists `data` + `database`, and recovers gracefully from incomplete input (so multi-line blocks work).  Two-pass model adapted: first pass registers any new top-level defs; second pass parses + codegens the statement body. |
-| 3 | [03-state-reset-and-append.md](03-state-reset-and-append.md) | open | MH | (a) Make `state.bytecode` appendable across REPL inputs — replace `Arc<Vec<u8>>` with a per-statement segment registry indexed by entry-point.  (b) `State::reset_for_repl()` clears stack/call-stack but preserves `database` + already-defined fns.  (c) Const-store + string-from-const-store handling across statements (each statement's literals join the existing const store, no resets). |
-| 4 | [04-repl-shell.md](04-repl-shell.md) | open | M | Interactive `loft>` prompt.  `rustyline`-backed line editor with history.  Multi-line mode for blocks.  Each input dispatches to phase-2 parser + phase-3 incremental execution.  Result printing per loft type (integers, strings, structs).  Error recovery — REPL never crashes on user error.  `:quit`, `:reset`, `:help` builtins.  WASM browser-playground variant deferred to phase 6. |
-| 5 | [05-repl-introspection.md](05-repl-introspection.md) | open | S | REPL `:cmd` handlers that route to phase-1 introspection: `:bytecode <fn>`, `:rust [<fn>]`, `:slots [<fn>]`, `:type <expr>` (infer-only, no execute), `:vars` (currently-bound locals + values), `:reset` (drop all user-defined state, keep stdlib). |
-| 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Public docs in CLAUDE.md, README, CHANGELOG.  Deferred follow-ups: WASM browser playground (the REPL infrastructure already runs under wasm32-wasip2 in principle; the playground is a separate UI). |
+| 2 | [02-statement-parser.md](02-statement-parser.md) | shipped | M | `Parser::statement_incomplete` (read-more detector) + `parse_statement` → `Ready`/`NeedMore`/`Error`: top-level defs parse in place, bare expressions wrap in a synthetic fn, parse errors roll `data` back (`Data::rollback_to`). |
+| 3 | [03-state-reset-and-append.md](03-state-reset-and-append.md) | shipped | S | The `Arc<Vec<u8>>`→`Vec<u8>` refactor proved unnecessary — `compile::byte_code_from` already appends. `ReplSession` (`src/repl.rs`) gives integer-variable persistence; error recovery fixed (fresh lexer per `parse_str`). See the doc's Revised design. Stack-resident model (no re-run) + non-integer scope remain. |
+| 4 | [04-repl-shell.md](04-repl-shell.md) | shipped | M | Interactive `loft>` prompt (`loft repl`, or a bare `loft`): result echo in loft's native form, multi-line input, parse-error + runtime-panic recovery, `:quit`/`:help`/`:reset`. `rustyline`/history deferred. |
+| 5 | [05-repl-introspection.md](05-repl-introspection.md) | shipped | S | `:bytecode`/`:rust`/`:slots`/`:fns` wired to phase-01 introspection. `:type <expr>` + value-bearing `:vars` deferred (need a type-only parse / result capture). |
+| 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | shipped | XS | User docs: [REPL.md](../../REPL.md), CHANGELOG, CLAUDE.md key-commands + doc index. Deferred follow-ups recorded below. |
+
+## Deferred follow-ups
+
+Recorded here (not filed as GitHub issues — these are future enhancements, not
+`main` regressions):
+
+| ID | Description |
+|----|-------------|
+| **REPL.X** | Stack-resident execution — run each new line *once* over a preserved frame instead of re-running the accumulated bindings, so side-effecting statements don't repeat.  Removes the integer-only/pure-computation limit (see 03 doc's Revised design). |
+| **REPL.T** | `:type <expr>` + value-bearing `:vars` — both need a way to read a value back out of execution (a result-capture API); the same gap blocks in-process result-as-`String` return. |
+| **REPL.E** | Line editor + history — `rustyline` (or hand-rolled) for arrow-key recall; currently input is read plain. |
+| **REPL.W** | WASM browser playground — the parse + execute machinery already runs under wasm32; the playground is a separate web UI. |
+| **REPL.S** | Save / restore session to a `.loftrc`-style file (`:save` / `:load`). |
+| **REPL.C** | Tab completion of fn names, locals, struct fields. |
+| **INSP.J** | JSON output mode for `loft introspect` (machine-readable, for IDE integration). |
 
 ## Total effort
 

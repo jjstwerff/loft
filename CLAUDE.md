@@ -38,6 +38,8 @@ home — [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELO
 
 ```bash
 cargo run --bin loft -- myprogram.loft        # run a loft program
+cargo run --bin loft -- repl                   # interactive REPL (or bare `loft`); see REPL.md
+cargo run --bin loft -- introspect prog.loft   # bytecode + Rust + slots + types dump
 cargo run --bin loft -- --help                # CLI help
 cargo run --bin gendoc                        # regenerate doc/*.html
 make ci                                       # fmt → clippy → test (full local gate)
@@ -307,6 +309,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | [LOFT.md](doc/claude/LOFT.md) | Language reference (syntax, types, operators, control flow) |
 | [STDLIB.md](doc/claude/STDLIB.md) | Stdlib API (math, text, collections, file I/O, logging, parallel) |
+| [REPL.md](doc/claude/REPL.md) | Interactive REPL (`loft repl`) + introspection (`loft introspect`): commands, result echo, session limits (@PLN12) |
 | [COMPILER.md](doc/claude/COMPILER.md) | Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode |
 | [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums; bytecode operators; State layout |
 | [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix |
