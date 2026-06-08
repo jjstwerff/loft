@@ -282,8 +282,10 @@ fn repl_breakpoint_by_fn_name_captures_frame() {
     assert!(s.last_hits().is_empty(), "no breakpoint → no hits");
 }
 
-/// A `<fn>:<line>` spec breaks at a specific line; a bare-line spec is accepted
-/// (unscoped). An unknown function is skipped, not an error.
+/// A `<fn>:<line>` spec breaks at a specific line.  An unknown function is skipped,
+/// not an error.  A **bare line** isn't unique in the REPL (every input restarts
+/// line numbering under `<repl>`), so it resolves to nothing — function-scoped
+/// specs are the only unique form.
 #[test]
 fn repl_breakpoint_fn_line_and_unknown() {
     let mut s = session();
@@ -303,4 +305,9 @@ fn repl_breakpoint_fn_line_and_unknown() {
     s.add_breakpoint("does_not_exist");
     assert!(matches!(s.eval("step(4)"), Eval::Ran));
     assert!(s.last_hits().is_empty(), "unknown fn → no hit");
+    // a bare line resolves to nothing (not unique) — no hit
+    s.clear_breakpoints();
+    s.add_breakpoint("2");
+    assert!(matches!(s.eval("step(4)"), Eval::Ran));
+    assert!(s.last_hits().is_empty(), "bare line → no hit (not unique)");
 }

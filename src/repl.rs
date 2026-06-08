@@ -435,7 +435,7 @@ fn process_line<W: Write>(
             "help" | "h" => writeln!(
                 chrome,
                 "commands: :quit  :help  :reset  :fns  :vars  :type <expr>  \
-                 :break <fn>|<fn>:<line>|<line>  :bytecode [fn]  :rust [fn]  :slots [fn]"
+                 :break <fn>|<fn>:<line>  :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
                 *session = ReplSession::new(stdlib_dir)?;
@@ -481,8 +481,18 @@ fn process_line<W: Write>(
                 }
                 Some(_) => {
                     let spec = filter.join(" ");
-                    session.add_breakpoint(&spec);
-                    writeln!(chrome, "breakpoint set: {spec}")?;
+                    if spec.parse::<u32>().is_ok() {
+                        // A bare line isn't unique (same line number in every
+                        // function; the REPL has no real file).  Steer to the
+                        // function-scoped forms.
+                        writeln!(
+                            chrome,
+                            "a bare line isn't unique — use `:break <fn>` or `<fn>:<line>`"
+                        )?;
+                    } else {
+                        session.add_breakpoint(&spec);
+                        writeln!(chrome, "breakpoint set: {spec}")?;
+                    }
                 }
             },
             other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
@@ -766,10 +776,12 @@ impl ReplSession {
         }
     }
 
-    /// Add a breakpoint (the `:break` command).  Forms: `foo` (the body start of
-    /// function `foo`), `foo:3` (line 3 of `foo`), `5` (a bare line — unscoped,
-    /// matches that line in *every* function, harder to target).  Re-applied to the
-    /// fresh `State` of every later observing run.
+    /// Add a breakpoint (the `:break` command).  **Function-scoped** forms only —
+    /// `foo` (the body start of function `foo`) or `foo:3` (line 3 of `foo`) —
+    /// because that is the only form unique in the REPL (every input parses under
+    /// the synthetic file `"<repl>"` with line numbers restarting at 1, so a bare
+    /// line is not unique; `file:line` is for a file-run debugger).  Re-applied to
+    /// the fresh `State` of every later observing run.
     pub fn add_breakpoint(&mut self, spec: &str) {
         let spec = spec.trim().to_string();
         if !spec.is_empty() && !self.breakpoints.contains(&spec) {
@@ -795,8 +807,12 @@ impl ReplSession {
     }
 
     /// Resolve + set the session's breakpoint specs on a freshly-compiled `state`
-    /// (called by `compile_generation` before an observing run).  An unresolvable
-    /// spec (unknown fn / no such line) is skipped this run, not an error.
+    /// (called by `compile_generation` before an observing run).  Specs are
+    /// **function-scoped** — `<fn>:<line>` or `<fn>` (body start) — because that is
+    /// the only form unique in the REPL: every input parses under the synthetic
+    /// file `"<repl>"` with line numbers restarting at 1, so a bare or file:line
+    /// number is not unique here (file:line is for a file-run debugger).  An
+    /// unresolvable spec (unknown fn / no such line) is skipped this run, not error.
     fn apply_breakpoints(&self, state: &mut State) {
         for spec in &self.breakpoints {
             if let Some((name, line)) = spec.split_once(':') {
@@ -804,8 +820,6 @@ impl ReplSession {
                     let d = self.parser.data.def_nr(&format!("n_{}", name.trim()));
                     state.set_breakpoint_fn_line(d, l, &self.parser.data);
                 }
-            } else if let Ok(l) = spec.parse::<u32>() {
-                state.set_breakpoint_line(l);
             } else {
                 state.set_breakpoint_fn_start(spec, &self.parser.data);
             }

@@ -1837,28 +1837,6 @@ impl State {
         true
     }
 
-    /// Register a breakpoint at the first bytecode offset mapped to source `line`.
-    /// Returns `false` if no op maps to that line.  Reads `source_spans` (filled
-    /// during `compile::byte_code`, so it is available before the run — unlike
-    /// `fn_positions`).  A body line is the correct read point: arguments and
-    /// prior locals are in their slots there (a function-*entry* breakpoint pauses
-    /// pre-prologue, before the frame is set up, so its slots are still zero).
-    pub fn set_breakpoint_line(&mut self, line: u32) -> bool {
-        let Some(&offset) = self
-            .source_spans
-            .iter()
-            .find(|(_, p)| p.line == line)
-            .map(|(off, _)| off)
-        else {
-            return false;
-        };
-        self.enable_debug();
-        if let Some(dbg) = self.debug.as_mut() {
-            dbg.add_offset(offset);
-        }
-        true
-    }
-
     /// Register a breakpoint at source `line` **within function `d_nr`** — the
     /// correct primitive: a bare line number matches that line in *every* function
     /// (stdlib included), so a breakpoint must be scoped to its function.  Scans
