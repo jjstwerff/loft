@@ -61,6 +61,140 @@ Same model as cargo: `use serde;` is descriptive; the brand
 `use hex_world;` knows what the library is from the name alone; no need
 to also know what engine the script targets.
 
+## Engine runtime architecture — the Rust main loop, loft, and live programming
+
+lavition's runtime is **two cooperating layers over one shared store**:
+
+- **The main loop is Rust** — a capable native host that owns the frame cycle:
+  timing, rendering, physics, input, the platform event loop.  This is the
+  performance-critical core, and it stays native.  loft does **not** try to be
+  the main loop; Rust is better at it, and the split is deliberate.
+- **loft is the live-editable layer** — the game's scripting and, more
+  fundamentally, its **data model**.  The logic and data a developer edits while
+  iterating live in loft, where they are predictable
+  ([Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth)),
+  friction-free ([Goal F](GOALS.md#goal-f--friction-free-surface-the-language-serves-the-programmer-not-the-compiler)),
+  and — the point of this layer — **survive being edited while the game runs**.
+
+**The seam between them is the store.**  Both layers read and write **one shared
+store** — the same word-addressed, schema-driven, `DbRef`-keyed substrate.  This
+is the [C71 shared-store dispatch](NATIVE.md#n9--native-library-shared-store-dispatch-c71)
+generalised from "a native library + its interpreted caller share a store" to
+"the host loop + the script share the game's data."  There are not two
+representations kept in sync; there is one — the Rust loop ticks the world by
+reading and writing store records, and loft reads and writes the same records.
+
+```
+ ┌───────────────────── Rust main loop (native, per frame) ─────────────────────┐
+ │  input → update → physics → render → present   (capable, perf-critical core)  │
+ └─────────────┬─────────────────────────────────────────────┬──────────────────┘
+               │ reads / writes                               │ calls (per frame / on edit)
+               ▼                                              ▼
+       ┌────────────────────────── one shared store ──────────────────────────┐
+       │  schema = data (Stores.types / Parts) ·  values = DbRef records       │
+       └──────────────────────────────┬───────────────────────────────────────┘
+                                       │ reads / writes
+                                       ▼
+                        loft — game logic + data model (live-editable)
+```
+
+### Live programming — "don't break the game while you're programming it"
+
+The reason for this architecture is a single engine capability: **a developer
+edits the game while it runs, and the running game stays alive.**  That is a
+constellation, not one feature — data migration (the [GOALS.md
+purpose](GOALS.md#why-a-language-not-a-store-bolted-onto-an-existing-one)) is the
+first key node:
+
+| node | what it preserves across an edit | status |
+|---|---|---|
+| **Data continuity** | game data survives struct/enum changes — migrate, don't reset | foundation in progress (own-format serialize + schema-driven migrate) |
+| **Code continuity** | hot-swap a function body, add/remove fns + types, while running | partial — interpreted; the incremental-recompile path (`byte_code_from`) is mapped |
+| **State continuity** | the running world + session survive the edit (store-resident session image) | designed — the REPL [convergence](plans/12-repl-and-introspection/): persist + resume one store |
+| **Fault containment** | a mistake fails *recoverable*, never halts the game — see it, fix it, retry | seeded — REPL per-eval isolation; generalise to the live session |
+| **Live interface** | a console into the running game to inspect + change live state | REPL.X / `:vars` / `:type` are this node |
+
+### Where the hard part is — reference stability
+
+The serialize/parse round-trip is the *easy* half.  Integrating migration into a
+live Rust loop is mostly a **`DbRef`-stability** problem: the host loop holds
+references *into* the store across frames — entity handles, cached lookups — and
+when data migrates (records move, a struct grows), those references must stay
+valid or be **remapped**.  Keeping the host's live pointers coherent across a
+migration is the genuinely hard node, more than the text round-trip — named here
+so future migration work treats it as first-class.
+
+### Why the costs land where they do
+
+- **The loop never pays migration.**  A schema change is occasional (a developer
+  saved a file), so migration is a one-time pass costing a single frame hitch,
+  never the steady-state loop.  That is why *correctness over speed* is the right
+  call for the serialization: the loop itself is never on that path.
+- **The serialization is host-callable by construction.**  `show`/`show_loft` /
+  `parse` are `Stores` methods — Rust APIs the main loop invokes directly,
+  between frames, on a detected edit.  No bridge layer.
+- **Frame-yield already exists.**  loft yields per frame for the
+  [HTML/wasm runtime](HTML_EXPORT.md); the same contract lets a host loop
+  interleave loft execution with live-edit checks at frame boundaries.
+
+### Execution granularity — per-function interpret over a compiled baseline
+
+The editor does **not** interpret the whole program and compile it later.  The
+baseline is **everything compiled / optimized** — the libraries (graphics,
+physics, world: the *heavy* code) as native / wasm cdylibs, and most game logic
+too.  Editing flips a **single function** between tiers:
+
+1. **Edit → that function drops to the interpreter, instantly.**  Only the
+   function you mutated is interpreted; everything else stays compiled.  No
+   compile step, no roundtrip — zero-latency feedback on exactly the code in
+   flux.  (The loft interpreter is itself wasm in the browser — the
+   [wasm runtime](WASM.md) — so this needs no server.)
+2. **Server → that function swaps back to optimized wasm.**  The roundtrip
+   recompiles the one function (loft's native codegen → optimized wasm) and
+   hot-swaps it in.  Per-function throughout.
+
+```
+ baseline (always):  [ compiled libraries ]  +  [ compiled game functions ]   ← native / wasm
+                                   ▲  ▲
+                      shared-store │  │ dispatch (N9 / C71)
+                                   │  ▼
+ editing fn F:    F interpreted now ─▶ calls compiled libs over the store ─▶ near-native
+                     └─▶ server recompiles F → wasm ─▶ F swaps back to compiled ─▶ full speed
+```
+
+**Why an interpreted function stays fast: it calls *compiled* code.**  The
+function being edited is thin orchestration; the cycles live in the heavy library
+calls it makes — graphics, physics — which are **always compiled**.  Those calls
+cross the boundary as a **shared-store dispatch**
+([N9 / C71](NATIVE.md#n9--native-library-shared-store-dispatch-c71)): an
+interpreted caller and a compiled callee read and write the **same records**, so
+the crossing is a dispatch, not a copy.  **This is the prime reason the
+interpreter must run against compiled libraries** — it lets you interpret the few
+lines you are touching while the engine underneath stays native.  "Interpreted"
+means slow *for the function you're editing*, never slow *for the game*.
+
+**Parity is what makes the per-function swap sound.**  A function moving
+interpreted ↔ wasm is invisible *only because the three backends produce identical
+results* — [Goal D](GOALS.md#goal-d--cross-platform--cross-backend-parity).  Were
+they ever to disagree, the swap would silently change the running game
+mid-session — so the differential backend sweep (Goal D's Check — "identical
+output and diagnostics, zero differences") is the **enabling mechanism** for
+tiered live execution, not just a correctness gate.
+
+**The data survives every swap for free**, because code and data are separate:
+all tiers operate on the same store, so swapping a function's *backend* never
+touches the *records* it reads.
+
+**It degrades gracefully.**  The server roundtrip is asynchronous and optional:
+offline, or with the server unreachable, the edited function keeps running
+interpreted.  You lose the performance tier on that one function, never the
+ability to edit a live game.
+
+So loft's value proposition is sharpened: it does **not** win the main loop (Rust
+does) — it wins the **live-edit experience**.  Predictable memory, a
+friction-free surface, and data that survives your edits are the axis it is built
+to own.
+
 ## Library model
 
 Lavition's library landscape splits into four kinds:
