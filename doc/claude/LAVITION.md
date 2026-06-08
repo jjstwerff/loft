@@ -112,7 +112,7 @@ first key node:
 | **Code continuity** | hot-swap a function body, add/remove fns + types, while running | partial — interpreted; the incremental-recompile path (`byte_code_from`) is mapped |
 | **State continuity** | the running world + session survive the edit (store-resident session image) | designed — [@PLN14 store-resident REPL session](plans/14-store-resident-repl-session/README.md) ([convergence](plans/14-store-resident-repl-session/CONVERGENCE.md)): persist + resume one store |
 | **Fault containment** | a mistake fails *recoverable*, never halts the game — see it, fix it, retry | seeded — REPL per-eval isolation; generalise to the live session |
-| **Live interface** | a console into the running game to inspect + change live state | REPL.X / `:vars` / `:type` are this node |
+| **Live interface** | a console into the running game to inspect + change live state | the REPL (`:vars` / `:type`) is the surface; its destination is the **debugger** [@PLN15](plans/15-debugger/README.md) (browser its natural home, but terminal/embedded too) — breakpoint → switch routine + callers to interpret → drop into a REPL at that line with the live frame's bindings → optional conditional/test breaks |
 
 ### Where the hard part is — reference stability
 
