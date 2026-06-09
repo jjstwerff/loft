@@ -436,8 +436,7 @@ fn repl_interactive_eval_at_frame() {
 /// integers: a live `integer` / `float` / `boolean` local is each edited at the
 /// pause (one by literal, one by an expression evaluated against the frame), the
 /// reads reflect the edits, and a **text** argument is editable too (its `Str` slot
-/// repoints at a debugger-owned buffer — verified through the frame view, since
-/// `debug_eval` on a text *value* hits the separate value-snapshot bug @P293).
+/// repoints at a debugger-owned buffer), with `debug_eval` confirming the new value.
 #[test]
 fn repl_interactive_edit_scalar_types() {
     let mut s = session();
@@ -462,17 +461,12 @@ fn repl_interactive_edit_scalar_types() {
     assert!(!s.debug_set("n", "3.5"), "type-mismatched edit rejected");
     assert_eq!(s.debug_eval("n").as_deref(), Some("10"), "n unchanged");
     // A text argument is editable via a literal: its `Str` slot repoints at a
-    // stable buffer.  Verify through the frame view (`debug_eval` on a text *value*
-    // hits the separate value-snapshot bug @P293); the edit shows in the refreshed frame.
+    // stable buffer, and the edit is visible both in the frame view and via eval.
     assert!(s.debug_set("msg", "\"bye\""), "text arg edit");
-    assert!(
-        s.paused_frame()
-            .unwrap()
-            .locals
-            .iter()
-            .any(|(n, v)| n == "msg" && v == "\"bye\""),
-        "msg reflects edit: {:?}",
-        s.paused_frame().unwrap().locals
+    assert_eq!(
+        s.debug_eval("msg").as_deref(),
+        Some("\"bye\""),
+        "msg reflects edit"
     );
     assert!(!s.debug_continue());
 }
@@ -495,4 +489,55 @@ fn repl_breakpoints_record_when_not_stepping() {
         "hit recorded: {:?}",
         s.last_hits()
     );
+}
+
+/// @P293 — value-snapshotting a **text** binding must not crash.  Re-binding a text
+/// *variable* (`y = t`) or a *concat* (`z = t + "!"`) once double-freed the buffer
+/// the synthetic capture fn returned (the entry-fn text return borrowed a local
+/// `String` freed on teardown).  The capture now routes text through a store-resident
+/// single-element vector, so the value is snapshotted correctly and re-binding works.
+#[test]
+fn text_binding_capture_does_not_crash() {
+    let mut s = session();
+    assert!(matches!(s.eval("t = \"hi\""), Eval::Ran));
+    // bare variable read
+    assert!(matches!(s.eval("y = t"), Eval::Ran));
+    assert!(matches!(
+        s.eval("assert(y == \"hi\", \"y == t\")"),
+        Eval::Ran
+    ));
+    // concat (a borrowed work-text — the second crash shape)
+    assert!(matches!(s.eval("z = t + \"!\""), Eval::Ran));
+    assert!(matches!(
+        s.eval("assert(z == \"hi!\", \"z == t + !\")"),
+        Eval::Ran
+    ));
+    // chained rebind keeps the value
+    assert!(matches!(s.eval("w = z"), Eval::Ran));
+    assert!(matches!(
+        s.eval("assert(w == \"hi!\", \"w == z\")"),
+        Eval::Ran
+    ));
+}
+
+/// @P293 — the value-snapshot API and the debugger's eval-at-frame both render a
+/// text value (a variable, a concat, a borrowed `text[self]`) without crashing.
+#[test]
+fn value_of_renders_text_expressions() {
+    let mut s = session();
+    assert!(matches!(s.eval("msg = \"hi\""), Eval::Ran));
+    assert_eq!(s.value_of("msg").as_deref(), Some("\"hi\""));
+    assert_eq!(s.value_of("msg + \"!\"").as_deref(), Some("\"hi!\""));
+    assert_eq!(s.value_of("msg.to_uppercase()").as_deref(), Some("\"HI\""));
+    // eval-at-frame on a text argument (the @PLN15 debugger surface)
+    assert!(matches!(
+        s.eval("fn g(m: text) -> integer {\n  if m == \"x\" { 1 } else { 0 }\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("g");
+    assert!(matches!(s.eval("g(\"hi\")"), Eval::Paused));
+    assert_eq!(s.debug_eval("m").as_deref(), Some("\"hi\""));
+    assert_eq!(s.debug_eval("m + \"!\"").as_deref(), Some("\"hi!\""));
+    assert!(!s.debug_continue());
 }

@@ -1326,17 +1326,22 @@ impl ReplSession {
     /// the RHS faulted (surface the error, store nothing), or `Skip` if it is not
     /// capturable (fall back to storing the RHS as source).
     ///
-    /// Mechanism: build `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is
-    /// the trailing return expression, run it on a throwaway `State`, and read
-    /// the value off the **stack top** — where `execute_at` reads its own return,
-    /// so no new execution entry point.  Dispatch on the value's type:
+    /// Mechanism ([`capture_typed`](Self::capture_typed)): build
+    /// `fn replmain_N() -> <T> { <body> <rhs> }` so the RHS is the trailing return
+    /// expression, run it on a throwaway `State`, and read the value off the **stack
+    /// top** — where `execute_at` reads its own return, so no new execution entry
+    /// point.  Dispatch is on the value's exact [`Type`] (in [`render_capture`]) and
+    /// covers **every** type: inline scalars / simple-enum rendered directly, and
+    /// `DbRef`-backed heap values (struct, vector, struct-enum) rendered by
+    /// `show_loft` on the returned `DbRef`.
     ///
-    /// Dispatch is on the value's exact [`Type`] (in [`render_capture`]) and
-    /// covers **every** type: inline scalars/text/simple-enum rendered directly,
-    /// and `DbRef`-backed heap values (struct, vector, struct-enum) rendered by
-    /// `show_loft` on the returned `DbRef`.  A binding whose RHS isn't a simple
-    /// `<name> = <expr>`, or whose value's type name doesn't resolve, falls back
-    /// to storing the RHS as source (re-run).
+    /// **Text is the exception (@P293):** reading a text return off the entry stack
+    /// double-frees when the value borrows a local `String` the fn frees on teardown,
+    /// so a text RHS is captured via a store-resident single-element `vector<text>`
+    /// wrap (the heap path) and unwrapped — never returned bare.
+    ///
+    /// A binding whose RHS isn't a simple `<name> = <expr>`, or whose value's type
+    /// name doesn't resolve, falls back to storing the RHS as source (re-run).
     fn capture_binding(&mut self, rhs: &str) -> Capture {
         // `Type::show` is a debug form: it appends a dep-tracking list
         // (`vector<integer>["__vdb_1"]`) and wraps a struct as `ref(P)`.  The
@@ -1346,6 +1351,37 @@ impl ReplSession {
             return Capture::Skip;
         };
         let ty = base_type_name(&ty_show).to_string();
+        // @P293 — a **text** value can't be captured by returning it from a synthetic
+        // entry fn and reading the `Str` off the stack: if the value borrows a local
+        // `String` the fn frees on teardown (a bare var read, a `+` concat, an
+        // interpolation, a `text[self]` borrow), the read sees freed memory and the
+        // buffer double-frees.  A *call*-returned-owned or const-backed text happens
+        // to survive, but the borrowed cases abort the process.  Wrap text in a
+        // single-element vector instead: building the vector **copies** the bytes into
+        // store-resident memory that outlives the teardown (a `DbRef`, captured by the
+        // working heap path), then unwrap the `["…"]` back to the bare text literal.
+        // The explicit `vector<text>` element type coerces a borrowed/work text
+        // (`text["__work_N"]`, e.g. a concat) to a plain owned element.
+        if ty == "text" {
+            return match self.capture_typed(&format!("[({rhs})]"), "vector<text>") {
+                Capture::Done(lit) => lit
+                    .strip_prefix('[')
+                    .and_then(|s| s.strip_suffix(']'))
+                    .map_or(Capture::Skip, |inner| Capture::Done(inner.to_string())),
+                other => other,
+            };
+        }
+        self.capture_typed(rhs, &ty)
+    }
+
+    /// Run `fn replmain_N() -> <ty> { <body> <rhs> }` once on a throwaway `State`
+    /// and render its return value as an own-format literal — the execute-and-read
+    /// half of [`capture_binding`].  `ty` is the loft-source return type, used both
+    /// for the fn signature and (via [`render_capture`]) for the `show_loft` schema
+    /// lookup.  `Skip` if the wrapper doesn't parse/compile, `Failed` if the RHS
+    /// faulted (surface it — do not fall back to a re-running source binding), `Done`
+    /// with the literal otherwise.
+    fn capture_typed(&mut self, rhs: &str, ty: &str) -> Capture {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
@@ -1375,7 +1411,7 @@ impl ReplSession {
             self.parser.data.rollback_to(pre_defs);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let lit = render_capture(&mut state, &ret_ty, &ty);
+        let lit = render_capture(&mut state, &ret_ty, ty);
         self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
     }
