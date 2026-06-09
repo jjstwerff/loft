@@ -7,12 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **Identity:** a design sub-doc of `@PLN15` (debugger). Slug `store-journal`.
 > **Status:** design — **one uniform model** for every consumer (§ The model);
-> `Modify` slice built (`src/database/journal.rs`). Load-bearing facts **confirmed** —
-> the mutation chokepoint (§ Chokepoint) and the relocating-grow facts (probes #5a–c;
-> 5a falsified the naive "freed bytes survive" draft). Freed records are handled by
-> *snapshot-to-blob + `claim_at`* (§ Open design points). The **keystone `claim_at`** is
-> the next build slice, gated on **probe #6** — until it runs, the model is hypothesis,
-> not fact.
+> `Modify` slice + the keystone `claim_at` built (`src/database/journal.rs`,
+> `src/store.rs`). Load-bearing facts **confirmed** — the mutation chokepoint
+> (§ Chokepoint), the relocating-grow facts (probes #5a–c; 5a falsified the naive "freed
+> bytes survive" draft), and **the keystone itself (probe #6): `claim_at` is
+> position-exact and the op-log replays both directions** — predicted-to-falsify at the
+> coalesce corner, it held, and the reverse-order invariant that makes it sound is now
+> stated (§ The model). Freed records: *snapshot-to-blob + `claim_at`* (§ Open design
+> points). Remaining build: wire `Insert`/`Free` + the resize-caller pointer marks into
+> the debugger edit path (§ Phasing 3).
 
 ## Why this exists
 
@@ -281,11 +284,13 @@ half-written blob tail beyond it — the one ordering rule that separates a
 recoverable WAL from a corrupt one.
 
 **Built so far:** the `Modify` slice (in-place field/element edits, correct by
-construction — § Hot-path discipline).  **The keystone build slice is
-`claim_at(pos, size)`** (§ The model), which unlocks `Insert` + `Free` and makes
-forward/reverse replay position-exact for every consumer.  Gate it on probe #6
-(position-exactness + the bidirectional round-trip); once `claim_at` forces positions,
-probe #2's `claim`-determinism is no longer load-bearing.
+construction — § Hot-path discipline) **and the keystone `Store::claim_at(pos, size)`**
+(`src/store.rs`) — the exact-position carve that unlocks `Insert` + `Free` and makes
+forward/reverse replay position-exact for every consumer.  Probe #6 confirms it
+(position-exact + bidirectional round-trip across a coalescing-heavy sequence).  Since
+`claim_at` *forces* positions, probe #2's `claim`-determinism is no longer load-bearing.
+Still to build: the `Insert`/`Free` entry path + the resize-caller pointer marks, wired
+into the debugger edit (§ Phasing 3).
 
 ## Falsification probes (run before building)
 
@@ -331,16 +336,26 @@ The invariant rests on claims that must be *probed*, not assumed:
      (`deferred_free_pointer_flip_round_trips`).  The pointer-flip *is* the switch:
      apply re-materialises `new` then flips forward; undo re-materialises `old`
      (`claim_at` + blob restore) then flips back.
-6. **`claim_at` position-exactness + bidirectional round-trip — PENDING (the keystone,
-   the build slice).**  The whole single model rests on `claim_at(pos, size)`
-   reproducing a record at its *exact* recorded position — including a 3-way split when
-   coalescing left `pos` mid-block — so that `Insert`-apply and `Free`-revert are
-   position-exact.  The probe (mirror of probe #2, to write *with* the primitive):
-   drive a coalescing-heavy sequence of `claim`/`free`/relocate while recording, then
-   (a) forward-replay it into a fresh store via `claim_at` and assert every claimed
-   record lands at its recorded position with its recorded bytes, and (b) reverse-replay
-   it and assert the initial state returns.  *Expect to falsify* — the predecessor
-   lazy-coalesce (`coalesce_free`) is the corner most likely to leave `pos` mid-block.
+6. **`claim_at` position-exactness + bidirectional round-trip — CONFIRMED (the
+   keystone; two tests in `src/database/journal.rs`).**  The whole single model rests
+   on `claim_at(pos, size)` reproducing a record at its *exact* recorded position — so
+   `Insert`-apply and `Free`-revert are position-exact.  Predicted to falsify at the
+   coalesce corner; it held, both ways:
+   - **6a — the mid-block carve** (`claim_at_carves_a_mid_block_region`).  Frees three
+     adjacent records so one slot is *strictly mid-block* in the coalesced free block,
+     then re-claims it: `claim_at` does the full 3-way split (prefix free | claimed |
+     suffix free) and the chain still tiles.
+   - **6b — bidirectional position-exact replay** (`bidirectional_position_exact_replay`).
+     A coalescing-heavy edit (free adjacent → merge → new claims reuse the space) logged
+     as `Insert`/`Free`; **revert** restores the baseline byte-for-byte and **re-apply**
+     restores the edit.  The reverse pass exercised a real mid-block carve.
+   - **The invariant it revealed (why it can't falsify):** in reverse order, *any* claim
+     that ever touched a freed region is a later log entry, so it is reverted-to-free
+     **before** that region's `claim_at` runs — therefore `[pos, pos+size)` is always
+     free when `Free`-revert re-claims it.  The coalesce corner is handled because
+     `claim_at` carves out of whatever block covers `pos`, start or middle.
+   - **Open hardening (cheap):** a longer randomised sequence would widen the matrix; the
+     current two cover the carve geometry and the round-trip with the invariant exercised.
 
 ## Open design points
 
@@ -384,12 +399,11 @@ lavition direction (each is "see/transfer what changed in the store"):
    model.  Covers field / element edits (`pt.x = 9`, `v[i] = 5`) by construction — a
    single `Modify`, no materialisation, the cheapest heap edit.  The hot `addr_mut` path
    is untouched.
-2. **`claim_at` keystone + `Insert`/`Free` — the structural slice.**  Build
-   `claim_at(pos, size)` (the 3-way-split carve — § The model), gated on **probe #6**
-   (position-exact, bidirectional round-trip).  Then `Insert` (apply = `claim_at` +
-   write `after`; revert = `free`) and `Free` (apply = `free`; revert = `claim_at` +
-   write `before`, snapshot taken pre-`delete`).  This makes forward/reverse replay
-   position-exact for every consumer.
+2. **`claim_at` keystone — DONE** (`src/store.rs`; probe #6 confirms it).  The
+   exact-position 3-way-split carve (§ The model).  **Next in this slice:** the
+   `Insert`/`Free` entry path on `Journal` — `Insert` (apply = `claim_at` + write
+   `after`; revert = `free`) and `Free` (apply = `free`; revert = `claim_at` + write
+   `before`, snapshot taken pre-`delete`).  The keystone makes both position-exact.
 3. **Debugger heap edits — wire it in.**  `recording: Option<Journal>` on `Stores` (one
    branch on the *cold* `claim`/`delete`/`resize` paths); the explicit pointer-flip
    marks at the resize-caller sites (`vector_append` / `insert_vector` / `sorted_new` /
@@ -415,5 +429,7 @@ lavition direction (each is "see/transfer what changed in the store"):
   a live instance: a clean first draft ("freed bytes survive for undo") that probe 5a
   **falsified**, an interim *stay-claimed* fix, and — once the unbounded whole-execution
   consumer ruled out holding records resident — the settled *snapshot-to-blob +
-  `claim_at`* model (§ The model, § Open design points).  The keystone claim is still
-  unprobed (probe #6), so the model is hypothesis, not fact, until it runs.
+  `claim_at`* model (§ The model, § Open design points).  The keystone was then
+  **predicted to falsify** at the coalesce corner and **probed** (probe #6): it held,
+  and the probe surfaced the reverse-order invariant that makes it sound — the protocol
+  doing its job (a falsifiable claim, tested, with the *why* recovered).

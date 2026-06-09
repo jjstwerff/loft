@@ -659,6 +659,67 @@ impl Store {
         self.fl_validate();
     }
 
+    /// Claim the record at an **exact** position with an **exact** size (words),
+    /// carving it out of whatever free block currently covers `pos`.  Unlike
+    /// [`claim`](Self::claim) — best-fit, position chosen by the allocator — this
+    /// reproduces a *recorded* position.  It is the keystone of the @PLN15.J store
+    /// journal's position-addressed replay (`Insert`-apply and `Free`-revert): forward
+    /// and reverse replay are exact because positions are forced, not re-derived.
+    ///
+    /// `[pos, pos + size)` must lie entirely within free space.  The covering free
+    /// block `[base, bend)` (with `base <= pos`, found by walking the block chain) is
+    /// split three ways — `[base, pos)` free, `[pos, pos + size)` claimed,
+    /// `[pos + size, bend)` free.  A remainder below `MIN_FREE_TREE` keeps a valid free
+    /// header but is left untracked (coalesced later), the same rule `claim_block`
+    /// follows.
+    pub(crate) fn claim_at(&mut self, pos: u32, size: u32) -> u32 {
+        debug_assert!(!self.read_only, "claim_at on read-only store");
+        assert!(size >= 1, "claim_at: zero-size record");
+        // S28: a structural op — bump generation like claim/delete/resize.
+        self.generation = self.generation.wrapping_add(1);
+        // Walk the block chain to find the block physically covering `pos`.
+        let mut base = PRIMARY;
+        loop {
+            assert!(base < self.size, "claim_at: pos {pos} past end of store");
+            let bsz = (*self.addr::<i32>(base, 0)).unsigned_abs();
+            assert!(bsz > 0, "claim_at: zero-size block at {base}");
+            if pos < base + bsz {
+                break;
+            }
+            base += bsz;
+        }
+        let header = *self.addr::<i32>(base, 0);
+        assert!(
+            header < 0,
+            "claim_at: region at {pos} is not free (covering block {base} is claimed)"
+        );
+        let bend = base + (-header) as u32;
+        assert!(
+            pos + size <= bend,
+            "claim_at: record [{pos}, {}) overruns its free block [{base}, {bend})",
+            pos + size
+        );
+        // Detach the covering block from the free tree before re-heading it.
+        self.fl_remove(base);
+        // [base, pos) prefix stays free.
+        if base < pos {
+            *self.addr_mut::<i32>(base, 0) = -((pos - base) as i32);
+            self.fl_insert(base);
+        }
+        // [pos, pos + size) becomes the claimed record.
+        *self.addr_mut::<i32>(pos, 0) = size as i32;
+        self.claims.insert(pos);
+        // [pos + size, bend) suffix stays free.
+        let tail = pos + size;
+        if tail < bend {
+            *self.addr_mut::<i32>(tail, 0) = -((bend - tail) as i32);
+            self.fl_insert(tail);
+        }
+        #[cfg(debug_assertions)]
+        self.fl_validate();
+        pos
+    }
+
     /// Validate the store
     pub fn validate(&self, recs: u32) {
         if !cfg!(debug_assertions) {

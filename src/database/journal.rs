@@ -627,4 +627,180 @@ mod tests {
         assert_eq!(s.get_u32_raw(b, 8), 11, "pre-grow element 0 intact");
         assert_eq!(s.get_u32_raw(b, 8 + size), 22, "pre-grow element 1 intact");
     }
+
+    /// @PLN15.J probe #6a — **`claim_at` carves a record out of the MIDDLE of a free
+    /// block** (the predicted falsification corner).  A slot becomes mid-block after its
+    /// neighbours are freed and forward-coalesced; `Free`-revert must re-claim it at its
+    /// exact recorded position regardless.  Build that exact state — free C, then B
+    /// (absorbs C), then A (absorbs B+C), so `[a, d)` is one free block with `b` strictly
+    /// mid-block — then re-claim `b`.  `claim_at` must split the covering block three
+    /// ways (prefix free | claimed | suffix free) and leave a store that still tiles.
+    #[test]
+    #[allow(clippy::many_single_char_names)] // a/b/c/d are the four geometric records
+    fn claim_at_carves_a_mid_block_region() {
+        let mut s = Store::new(64);
+        let a = s.claim(3);
+        let b = s.claim(4);
+        let c = s.claim(5);
+        let d = s.claim(2);
+        assert_eq!(
+            (a + 3, b + 4, c + 5),
+            (b, c, d),
+            "A,B,C,D laid out adjacent"
+        );
+
+        let hdr = |s: &Store, p: u32| *s.addr::<i32>(p, 0);
+
+        // Free C, then B (absorbs C forward), then A (absorbs B+C) -> one free block
+        // [a, d) with b strictly in the middle.
+        s.delete(c);
+        s.delete(b);
+        s.delete(a);
+        assert_eq!(
+            hdr(&s, a),
+            -((d - a) as i32),
+            "a..d coalesced into one free block"
+        );
+
+        // Re-claim b's exact slot. Full 3-way split: [a,b) free | [b,b+4) | [b+4,d) free.
+        let got = s.claim_at(b, 4);
+        assert_eq!(got, b, "claim_at returns the requested position");
+        assert_eq!(hdr(&s, a), -((b - a) as i32), "prefix [a,b) left free");
+        assert_eq!(hdr(&s, b), 4, "record claimed at the exact recorded size");
+        assert_eq!(
+            hdr(&s, b + 4),
+            -((d - (b + 4)) as i32),
+            "suffix [b+4,d) left free"
+        );
+
+        // The reclaimed slot is usable, and the chain still tiles [PRIMARY, size).
+        s.set_u32_raw(b, 8, 0xB0B0_00FF);
+        assert_eq!(
+            s.get_u32_raw(b, 8),
+            0xB0B0_00FF,
+            "reclaimed slot is writable"
+        );
+        s.validate(0);
+    }
+
+    /// @PLN15.J probe #6b — **bidirectional position-exact replay** (THE keystone).
+    /// The whole single model rests on this: a recorded op-log, replayed by recorded
+    /// position via `claim_at`, reconstructs state exactly in *both* directions.  Run a
+    /// coalescing-heavy edit (free adjacent records → they coalesce → new claims reuse
+    /// the merged space, some landing exactly on freed slots), logging each structural
+    /// op as an `Insert`/`Free` with its position + bytes.  Then **revert** (each entry's
+    /// inverse, reverse order: `Insert`→`free`, `Free`→`claim_at`+restore) and assert the
+    /// baseline returns byte-for-byte; then **re-apply forward** via `claim_at` and assert
+    /// the edited records return.  The reverse pass is where coalescing could make a
+    /// freed record's exact slot unrecoverable — the predicted falsification.
+    #[test]
+    fn bidirectional_position_exact_replay() {
+        enum Op {
+            Insert {
+                pos: u32,
+                size: u32,
+                after: Box<[u8]>,
+            },
+            Free {
+                pos: u32,
+                size: u32,
+                before: Box<[u8]>,
+            },
+        }
+        let bytes = |w: u32| w * 8; // words -> bytes
+        // Actual claimed size from the header (claim may hand out more than requested).
+        let real_size = |s: &Store, p: u32| (*s.addr::<i32>(p, 0)) as u32;
+        let fill = |s: &mut Store, p: u32, sz: u32, tag: u32| {
+            for w in 1..sz {
+                s.set_u32_raw(p, w * 8, tag | w);
+                s.set_u32_raw(p, w * 8 + 4, tag | 0x8000 | w);
+            }
+        };
+
+        let mut s = Store::new(64);
+
+        // ---- baseline: five records with distinctive bytes ----
+        let mut base: Vec<(u32, u32)> = Vec::new(); // (pos, actual size)
+        for (i, &sz) in [2u32, 3, 2, 4, 2].iter().enumerate() {
+            let p = s.claim(sz);
+            let rsz = real_size(&s, p);
+            fill(&mut s, p, rsz, 0xBA50_0000 + ((i as u32) << 8));
+            base.push((p, rsz));
+        }
+        let baseline: Vec<Box<[u8]>> = base
+            .iter()
+            .map(|&(p, sz)| s.read_span(p, 0, bytes(sz)))
+            .collect();
+
+        // ---- the edit: free middles (coalesce), reuse the space with new claims ----
+        let mut log: Vec<Op> = Vec::new();
+        let free_rec = |s: &mut Store, log: &mut Vec<Op>, p: u32| {
+            let sz = real_size(s, p);
+            let before = s.read_span(p, 0, bytes(sz)); // BEFORE delete (probe 5a)
+            s.delete(p);
+            log.push(Op::Free {
+                pos: p,
+                size: sz,
+                before,
+            });
+        };
+        let claim_rec = |s: &mut Store, log: &mut Vec<Op>, req: u32, tag: u32| {
+            let p = s.claim(req);
+            let sz = real_size(s, p);
+            fill(s, p, sz, tag);
+            let after = s.read_span(p, 0, bytes(sz));
+            log.push(Op::Insert {
+                pos: p,
+                size: sz,
+                after,
+            });
+        };
+
+        free_rec(&mut s, &mut log, base[1].0); // free R1
+        free_rec(&mut s, &mut log, base[2].0); // free R2 (now two adjacent frees)
+        claim_rec(&mut s, &mut log, 4, 0x4E00_0000); // N0 reuses the coalesced R1+R2 space
+        free_rec(&mut s, &mut log, base[3].0); // free R3
+        claim_rec(&mut s, &mut log, 1, 0x4E10_0000); // N1
+        claim_rec(&mut s, &mut log, 3, 0x4E20_0000); // N2
+
+        // ---- revert: inverse of each entry, reverse order ----
+        for op in log.iter().rev() {
+            match op {
+                Op::Insert { pos, .. } => s.delete(*pos),
+                Op::Free { pos, size, before } => {
+                    s.claim_at(*pos, *size);
+                    s.write_span(*pos, 0, before);
+                }
+            }
+        }
+        for (&(p, sz), want) in base.iter().zip(&baseline) {
+            assert_eq!(
+                s.read_span(p, 0, bytes(sz)),
+                *want,
+                "baseline record at {p} restored byte-for-byte after revert"
+            );
+        }
+        s.validate(0);
+
+        // ---- re-apply forward via claim_at, then assert the edited records return ----
+        for op in &log {
+            match op {
+                Op::Insert { pos, size, after } => {
+                    s.claim_at(*pos, *size);
+                    s.write_span(*pos, 0, after);
+                }
+                Op::Free { pos, .. } => s.delete(*pos),
+            }
+        }
+        for op in &log {
+            if let Op::Insert { pos, size, after } = op {
+                assert_eq!(
+                    s.read_span(*pos, 0, bytes(*size)),
+                    *after,
+                    "inserted record at {pos} returns byte-for-byte after re-apply"
+                );
+            }
+        }
+        s.validate(0);
+    }
 }
