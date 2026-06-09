@@ -82,6 +82,18 @@ chokepoint, make the bad state *impossible* rather than merely absent. **Goal A*
 bug-by-bug is hopeless against this target — you reach it only by retiring whole
 classes of failure, one substrate at a time.
 
+And the bet covers more than the lines loft's authors type: a system fails through
+what it is *made of*, not only what was written for it — so the **dependency
+surface** has to be dependable too, and "assembled from parts" is where modern
+software bleeds. loft's answer is the substrate. It inherits the Rust ecosystem
+([BROADENING.md](BROADENING.md) § differentiators #4), so a **well-grounded** crate
+brings its memory safety and battle-testing *into* the stack: a bound safe-Rust
+crate cannot segfault loft the way a buggy C extension hard-crashes a Python process,
+and `cargo` gives reproducible builds where Python has wheel/ABI roulette. So
+*"never fails for software" includes never being failed by a dependency* — which is
+exactly why crates are bound **well-grounded** (the reliability filter — you inherit
+stability only from crates that have it) and one per real need, not wholesale.
+
 The cage was also *unfamiliarity*: the AS/400's gift came in a closed, proprietary
 world. So loft wears a modern, Rust-shaped surface — the on-ramp that platform never
 had. That surface is the hardest constraint, not the easiest: it constantly tempts
