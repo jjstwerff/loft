@@ -1422,6 +1422,58 @@ impl Store {
         }
     }
 
+    /// @PLN15.J — read `len` raw bytes of a record starting at byte offset `off`
+    /// (the same `(rec, off)` addressing as [`addr`](Self::addr)).  The store
+    /// change journal uses this to snapshot a record region for undo / replay.
+    #[must_use]
+    pub fn read_span(&self, rec: u32, off: u32, len: u32) -> Box<[u8]> {
+        debug_assert!(
+            Self::checked_offset(rec, off) + len as isize <= self.size as isize * 8,
+            "read_span out of bounds: rec={rec} off={off} len={len} store_size={}",
+            self.size * 8,
+        );
+        let mut out = vec![0u8; len as usize];
+        if len > 0 {
+            // SAFETY: the span is bounds-checked above; `out` holds `len` bytes.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.ptr.offset(Self::checked_offset(rec, off)),
+                    out.as_mut_ptr(),
+                    len as usize,
+                );
+            }
+        }
+        out.into_boxed_slice()
+    }
+
+    /// @PLN15.J — write `bytes` into a record at byte offset `off` — the journal's
+    /// only mutator (undo restores `before`, replay writes `after`).  A pure byte
+    /// restore: no allocator interaction, so it never moves or resizes a record.
+    /// Honors the hard `read_only` lock.
+    pub fn write_span(&mut self, rec: u32, off: u32, bytes: &[u8]) {
+        assert!(
+            !self.read_only,
+            "write_span on read-only store at rec={rec} (locked by: {})",
+            self.lock_origin
+        );
+        debug_assert!(
+            Self::checked_offset(rec, off) + bytes.len() as isize <= self.size as isize * 8,
+            "write_span out of bounds: rec={rec} off={off} len={} store_size={}",
+            bytes.len(),
+            self.size * 8,
+        );
+        if !bytes.is_empty() {
+            // SAFETY: the span is bounds-checked above; `bytes` is `bytes.len()` long.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    self.ptr.offset(Self::checked_offset(rec, off)),
+                    bytes.len(),
+                );
+            }
+        }
+    }
+
     /// Fast check whether a value looks like a valid live record.
     /// Used by `get_ref()` to detect inline data that was misinterpreted
     /// as a record pointer.  Cheaper than `HashSet` lookup — just a range

@@ -6,11 +6,13 @@
 mod allocation;
 mod format;
 mod io;
+pub mod journal;
 mod search;
 pub mod snapshot;
 mod structures;
 mod types;
 
+pub use journal::Journal;
 pub use types::Type;
 
 /// Store index reserved for compile-time constant data (vectors, long strings).
