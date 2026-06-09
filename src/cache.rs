@@ -328,14 +328,24 @@ fn loft_rlib_path() -> Option<std::path::PathBuf> {
 /// single seam the native-artifact cache — and, eventually, the library
 /// validation layer — consults; do NOT key on mtime or git-`BUILD_ID` (both miss
 /// an *uncommitted* dev rebuild, which is exactly when the stale-link bites).
-/// Returns `0` when the rlib can't be located, so callers degrade to
-/// existence-only (the prior behaviour) rather than churn.
+///
+/// Falls back to the loft **binary**'s content hash when the rlib can't be located
+/// (a `--bin`-built dev loft, whose only rlib is the *hashed* `deps/libloft-<hash>.rlib`
+/// — not the bare `libloft.rlib` [`loft_rlib_path`] looks for).  The binary is rebuilt
+/// together with the rlib, so its hash flips on the same changes: a valid staleness
+/// signal.  This matters because the old `0`-when-absent path made
+/// [`native_artifact_fingerprint_matches`] **match anything**, silently reusing a stale
+/// cdylib → the `native function not loaded` stub (the M1c viewer failure).  Only reaches
+/// `0` if neither rlib nor exe can be hashed; a source-less prebuilt install never hits
+/// this gate (it loads its committed `.so` via the prebuilt path), so the fallback can't
+/// force a doomed rebuild there.
 #[must_use]
 pub fn loft_build_fingerprint() -> u64 {
     use std::sync::OnceLock;
     static FP: OnceLock<u64> = OnceLock::new();
     *FP.get_or_init(|| {
         loft_rlib_path()
+            .or_else(|| std::env::current_exe().ok())
             .and_then(|p| file_hash(&p.to_string_lossy()))
             .map_or(0, |h| {
                 u64::from_le_bytes(h[..8].try_into().unwrap_or([0; 8]))
@@ -676,6 +686,20 @@ mod tests {
         // Memoised + content-hashed → stable within a process (the value depends
         // on whether the rlib is present in this test layout; assert determinism).
         assert_eq!(loft_build_fingerprint(), loft_build_fingerprint());
+    }
+
+    #[test]
+    fn loft_build_fingerprint_is_never_spuriously_zero() {
+        // M1c: a real fingerprint (never `0`) is what keeps the staleness gate
+        // *enabled* — `fp == 0` makes `native_artifact_fingerprint_matches` match
+        // anything, silently reusing a stale cdylib (the viewer `native function not
+        // loaded` stub).  With no rlib beside the exe it falls back to the binary's
+        // hash, so any runnable loft (exe always exists) yields a usable fingerprint.
+        assert_ne!(
+            loft_build_fingerprint(),
+            0,
+            "fingerprint must fall back to the loft binary, never degrade to 0"
+        );
     }
 
     #[test]
