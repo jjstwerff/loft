@@ -1184,6 +1184,68 @@ mod tests {
         }
     }
 
+    /// cache_verify: `compare_data` only checks the serialized `definitions` +
+    /// the Data header — NOT the DERIVED indices (`def_names` / `operators` /
+    /// `possible` / `use_names`) that a warm cache load rebuilds.  That gap is
+    /// exactly how the cross-source synthetic-wrapper bug (#290 / the crawler
+    /// `build_walls` cache panic) shipped: the dropped binding lived in
+    /// `def_names`, invisible to `compare_data`.  This asserts the rebuilt
+    /// indices match a fresh parse for the whole stdlib — surfacing any binding
+    /// the round-trip silently drops.
+    #[test]
+    fn stdlib_round_trip_preserves_derived_indices() {
+        let (fresh, loaded) = stdlib_round_trip();
+        let diff = fresh.derived_indices_diff(&loaded);
+        assert!(
+            diff.is_empty(),
+            "stdlib round-trip drops/changes {} derived-index binding(s):\n{}",
+            diff.len(),
+            diff.iter().take(40).cloned().collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    /// cache_verify: the stdlib is effectively single-source, so it cannot
+    /// exercise the cross-source class that bit us.  This parses a MULTI-source
+    /// program (an importing `main` + a `use`d lib) and asserts both the
+    /// serialized definitions AND the rebuilt derived indices survive a
+    /// materialize→read round-trip — the warm-cache contract.
+    ///
+    /// KNOWN-GAP SPEC (ignored): this currently FAILS, surfacing two more
+    /// members of the same round-trip-completeness class the wrapper bug
+    /// belonged to — both flagged by `rebuild_indices`' own "cross-source import
+    /// bindings are NOT reproduced here … a later extension" comment.  (a) a
+    /// `use lib::*` import binding — `def_names[(imported_name,
+    /// importing_source)]`, e.g. `("Point", src 0)` for a type defined in
+    /// `importlib` (src 1) — is dropped; only `(name, def.source)` survives the
+    /// rebuild.  (b) the `use_names` module map (`{"importlib": 1}`) is not
+    /// serialized, so a warm load loses module short-name → source-id.  Both are
+    /// latent warm-cache faults for any codegen by-name lookup of an imported
+    /// name.  Un-ignore once `rebuild_indices` reproduces cross-source bindings
+    /// (serialize the import graph / `use_names`, then re-derive).
+    #[test]
+    #[ignore = "cache_verify KNOWN GAP: rebuild_indices drops cross-source `use lib::*` import bindings + the use_names module map on a warm load"]
+    fn multi_source_round_trip_preserves_derived_indices() {
+        let s = std::path::MAIN_SEPARATOR;
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        p.parse(&format!("tests{s}lib{s}wildcard_import_main.loft"), false);
+        let fresh = p.data;
+        let mut ir = Stores::new();
+        let _ids = register_ir_schema(&mut ir);
+        let root = materialize_data(&mut ir, &fresh);
+        let loaded = read_data(&ir, root);
+        if let Err(diff) = compare_data(&fresh, &loaded) {
+            panic!("multi-source definitions diverged: {diff:?}");
+        }
+        let diff = fresh.derived_indices_diff(&loaded);
+        assert!(
+            diff.is_empty(),
+            "multi-source round-trip drops/changes {} derived-index binding(s):\n{}",
+            diff.len(),
+            diff.iter().take(40).cloned().collect::<Vec<_>>().join("\n")
+        );
+    }
+
     /// @PLN11 G2 / M0 — the equivalence harness wrapper (`ir_roundtrip_check`)
     /// the run path invokes under `LOFT_IR_CHECK`.  It materialises + reads back
     /// without registering the IR schema (baked offsets) and returns `Ok` when
