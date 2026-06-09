@@ -24,21 +24,31 @@ Four capabilities that give loft a defensible identity outside games:
    artifact.  Frictionless deployment of demos, tools, toys.
 3. **`par` / `par_light` + store isolation** (THREADING.md).
    Approachable parallelism without shared-mutable footguns.
-4. **It inherits the Rust ecosystem by construction.**  loft is *built on*
-   Rust, so it does not re-implement numpy / requests / regex — it **binds the
-   crate** (`ndarray`, `reqwest`, `regex`, `polars`, …) and gets all of crates.io.
-   The reflexive "Python has an ecosystem, loft has nothing" is simply wrong: it
-   pattern-matches *new language → no libraries* and ignores the substrate.  And
-   the comparison is sharper than it looks — Python's "rich ecosystem" is itself
-   mostly a **binding** story (numpy/scipy are C/Fortran, torch is C++, polars /
-   pydantic-core / cryptography are *Rust*); CPython's C-API is the glue.  loft
-   plays the same move on the more modern host — and because loft *is* Rust, a
-   binding is **in-language** (loft value ↔ Rust value), not across a C ABI as
-   Python↔C is, so it is lower-friction.  The honest gap is binding **ergonomics,
-   not library existence**, and it closes the dogfood way: **one well-grounded
-   crate per real need**, each binding sharpening the mechanism — not a speculative
-   auto-binder built up front.  Mechanism: PACKAGES.md + § Native-library execution
-   model below.
+4. **It inherits the Rust ecosystem — and, more to the point, Rust's
+   *stability*.**  loft is *built on* Rust, so it does not re-implement numpy /
+   requests / regex — it **binds the crate** (`ndarray`, `reqwest`, `regex`,
+   `polars`, …) and gets all of crates.io.  But the **bigger reason than saved
+   code is what comes *with* the library: memory safety and maturity.**  A
+   well-grounded Rust crate brings its battle-testing *and* the guarantee that it
+   **cannot segfault loft** the way a buggy C extension hard-crashes the Python
+   interpreter (safe Rust has no UB; panics unwind), and `cargo` brings
+   reproducible, lock-filed builds instead of Python's wheel / ABI / manylinux
+   roulette.  So "Python has an ecosystem" cuts *both* ways — Python inherits C's
+   libraries **and** C's crash surface; loft inherits Rust's libraries **minus**
+   that instability.  This is the
+   [GOALS § Purpose](GOALS.md#purpose--what-loft-is-for) "software that does not
+   fall over" aim **extended to the whole dependency surface** — which is *why* the
+   crates must be **well-grounded** (the reliability filter: you inherit stability
+   only from crates that have it) and bound **one per real need**, the dogfood way,
+   not via a speculative auto-binder.
+
+   On functionality alone the boilerplate is *still* wrong: Python's "rich
+   ecosystem" is itself mostly a **binding** story (numpy/scipy = C/Fortran, torch =
+   C++, polars / pydantic-core / cryptography = *Rust*; the C-API is glue), so loft
+   plays the same move on the more modern host — and because loft *is* Rust, the
+   binding is **in-language** (loft value ↔ Rust value, no C ABI), so it is
+   lower-friction.  The honest gap is binding **ergonomics, not library existence**.
+   Mechanism: PACKAGES.md + § Native-library execution model below.
 
 Everything below flows from these.  Broadening loft is mostly about
 ecosystem work around them (chiefly #4 — binding the crates, incrementally on
