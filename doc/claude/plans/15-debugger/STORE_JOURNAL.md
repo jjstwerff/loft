@@ -6,11 +6,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # 15.J — Store change journal (the live-edit substrate)
 
 > **Identity:** a design sub-doc of `@PLN15` (debugger). Slug `store-journal`.
-> **Status:** design (`Modify` slice built — `src/database/journal.rs`). Load-bearing
-> claims **confirmed** — the mutation chokepoint (§ Chokepoint), replay determinism
-> (probe #2), and the relocating-grow structural half (§ The fourth edit kind; probes
-> #5a–c, where 5a falsified the first draft and reshaped *deferred-free* into
-> *stay-claimed*).
+> **Status:** design — **one uniform model** for every consumer (§ The model);
+> `Modify` slice built (`src/database/journal.rs`). Load-bearing facts **confirmed** —
+> the mutation chokepoint (§ Chokepoint) and the relocating-grow facts (probes #5a–c;
+> 5a falsified the naive "freed bytes survive" draft). Freed records are handled by
+> *snapshot-to-blob + `claim_at`* (§ Open design points). The **keystone `claim_at`** is
+> the next build slice, gated on **probe #6** — until it runs, the model is hypothesis,
+> not fact.
 
 ## Why this exists
 
@@ -56,7 +58,9 @@ replayable.
 
 "Sufficient" is the testable part: forward-replay of an `Insert` list reproduces
 the value (and its `DbRef`) in a target store; reverse-replay restores the target
-to its pre-edit bytes.
+to its pre-edit bytes.  Replay is **position-addressed** — it drives the allocator by
+each entry's recorded position (`claim_at`), not best-fit `claim` — so the forward and
+reverse passes are exact for *any* consumer (§ The model).
 
 The invariant is deliberately phrased to keep the field-write path out of the
 hook set — see § Hot-path discipline for *why* a whole-record snapshot suffices.
@@ -149,63 +153,81 @@ edit's constructor on a build store, journal its `Insert`s with their
 per-type walker, no constructor over the suspended stack. The `(position, size)`
 is what lets replay place each record correctly even though slots get reused.
 
-## The fourth edit kind — in-place heap growth (a relocating vector resize)
+## The model — one position-addressed, reversible op log for every case
 
-The three kinds above cover scalar / whole-value / text.  A fourth is an **in-place
-grow of an existing heap collection** — `v.push(x)`, `v.insert(…)`, a keyed `sorted`
-insert — evaluated at the breakpoint against a *live* vector.  Two sub-cases, split by
-whether the backing record stays put.
+**Decision: a single model covers every case** — the bounded debugger edit, the
+cross-store transfer, *and* the unbounded whole-execution journal (time-travel).
+Where a bounded edit could get away with less (e.g. holding records claimed instead of
+freeing them), the uniform model still applies; **the extra generality is the right
+cost** — it is what lets *one* engine serve every consumer, and the unbounded journal
+forbids the shortcuts the bounded one could take (it cannot hold a whole run's freed
+records resident).
 
-A vector is a **two-level handle**: an owning `u32` cell at `(container_rec, pos)`
-holds the backing record number `vec_rec`; that record is
+Every change is a **reversible entry** in one of three ops, each self-describing by
+*physical position* and carrying the bytes its inverse needs:
+
+| op | forward (apply / redo) | inverse (revert / undo) | payload |
+|---|---|---|---|
+| **Modify** `(rec, off, len)` | write `after` | write `before` | before + after |
+| **Insert** `(pos, size)` | `claim_at(pos, size)` + write `after` | `free(pos)` | after |
+| **Free** `(pos, size)` | `free(pos)` | `claim_at(pos, size)` + write `before` | before |
+
+`apply` walks the log forward, `revert` walks it backward; each entry's inverse is
+**self-contained** — it depends only on its own recorded bytes and position, so
+reverse-replay needs no global reconstruction.  The same engine materialises a value
+into the live store (cross-store transfer), redoes, and undoes — bounded edit or whole
+run, no second mechanism.
+
+**The keystone — `claim_at(pos, size)`.**  Re-materialising a record at an *exact*
+position is what best-fit `claim` will not do (it picks the smallest fitting block).
+`claim_at` carves `[pos, pos+size)` out of the free block currently covering it —
+`fl_remove` the covering block, claim the sub-region, re-insert the `[start, pos)` and
+`[pos+size, end)` remainders as free (a **3-way split** when coalescing left `pos`
+mid-block).  At revert time the region is *guaranteed free*: every claim made after the
+original `free(pos)` is a later log entry, already reverted (freed) before we reach this
+one — so `claim_at` can always carve it.
+
+This **subsumes probe #2 and is strictly more robust.**  Probe #2 asked whether a
+cloned store's best-fit `claim` would *coincidentally* reproduce positions (so an
+`Insert` lands where its internal `DbRef`s point).  `claim_at` removes the coincidence:
+positions are **recorded and forced**, so replay no longer depends on the allocator
+staying deterministic — `fl_take_ge` could change tomorrow and replay would be
+unaffected.  Probe #2's determinism becomes a *nice-to-have*, not load-bearing.
+
+### The relocating grow, in this model
+
+`v.push(x)` against a live vector, when `Store::resize` (`store.rs:583`) cannot extend
+in place, relocates: `claim(new)` + `copy(old→new)` + `delete(old)`, then `vector.rs`
+writes the new record number into the owning `u32` cell (`vector_append:166`,
+`insert_vector:53`, `sorted_new:209`).  A vector is a two-level handle — an owning cell
+at `(container_rec, pos)` holds `vec_rec`; the record is
 `[ claim:i32 @0 | len:u32 @4 | elems @8 + i·size ]`.
 
-- **Element overwrite `v[i] = x` — a clean Modify.**  The element lives in the
-  existing backing record, so the edit writes `(vec_rec, 8 + i·size)` — one **Modify**,
-  no structural op, no pointer-flip.  The cheapest heap edit (§ Phasing 2).
+It journals as three ordinary entries:
 
-- **A grow that relocates — a pointer-flip over two conserved records.**  When
-  `Store::resize` (`store.rs:583`) cannot extend in place it **relocates**:
-  `claim(new)` + `copy(old→new)` (the data is *conserved* — copied from offset 4 on) +
-  `delete(old)`, and `vector.rs` then writes the new record number into the owning cell
-  (`vector_append:166`, `insert_vector:53`, `sorted_new:209`).
+- **Insert(new, after-bytes)** — the grown record (the `claim` structural-op hook).
+- **Modify(owning cell: old→new)** — the pointer-flip.  It goes through
+  `set_u32_raw`→`addr_mut`, the **unhooked** hot path (probe 5b), so it is marked
+  explicitly at the resize-caller sites (a closed set: `vector_append` / `insert_vector`
+  / `sorted_new` / `structures.rs`) — *observable resize*: while recording, the
+  relocation reports `(old, new)` so the caller marks the 4-byte cell.
+- **Free(old, before-bytes)** — the freed record, snapshotted to the blob.  Its
+  `before` is captured **before `delete` runs**, because a freed block's body is
+  repurposed *instantly* as a free-tree node (`FL_LEFT`@4 / `FL_RIGHT`@8, over the
+  vector's `len` + element 0 — probe 5a).  The live store then reclaims the space.
 
-The naïve journal snapshots the whole grown vector's bytes (O(N) per grow).  The
-structural half records the grow as **{ Insert(new) + Modify(owning cell: old→new) +
-deferred Free(old) }** — O(1), because the data is conserved in the two records the
-edit session keeps alive, so undo is a pointer *write*, not a byte restore.  Two facts,
-**both probed (§ Falsification probes 5a/5b)**, make it correct:
+So undo re-materialises `old` (`claim_at(old.pos)` + restore its blob bytes) and flips
+the cell back; redo re-materialises `new` and flips forward (probe 5c: the pointer-flip
+*is* the switch once both records exist).  **No record is held claimed for the
+session** — the live store stays compact even across an unbounded run, and the history
+lives in the file-backed blob where it belongs.  The earlier "stay-claimed" sketch
+was rejected for exactly this reason: it crams the history into the live store, which
+the unbounded journal cannot afford (see § Open design points).
 
-1. **Deferred free means *stay-claimed*, never "free but remember the bytes."**  The
-   allocator embeds its red-black free-tree node links *inside* freed blocks (`FL_LEFT`
-   @ offset 4, `FL_RIGHT` @ offset 8 — exactly the vector's `len` and element 0), so
-   `delete(old)` overwrites old's data **the instant it runs**; there is no window in
-   which a freed record's contents survive (probe 5a — this falsified the first draft,
-   which assumed they did).  So a **recording-mode resize keeps the old record
-   claimed**: it allocates + copies + flips the pointer but does **not** `delete(old)`,
-   recording old in a pending-free set instead.  The physical free happens only at a
-   session boundary — commit frees the olds, discard / undo frees the news.  And
-   **recording mode forces relocation** (resize never extends in place while recording)
-   so every grow has this one shape, *subtracting* the in-place-extend case — whose
-   undo would otherwise need free-tree surgery (restore the header + re-insert the
-   absorbed block) — entirely (Goal E).
-
-2. **The pointer-flip needs an explicit Modify.**  The owning-cell write goes through
-   `set_u32_raw` → `addr_mut`, the **unhooked** hot path, so the three structural-op
-   hooks never see it (probe 5b).  It is captured by an explicit mark at the
-   resize-caller sites — a closed, countable set (`vector_append` / `insert_vector` /
-   `sorted_new` / `structures.rs`) — the same explicit-mark mechanism the in-place
-   modifies use (§ Hot-path discipline), extended to "the pointer-flip after a
-   recording-mode relocation."  This is **observable resize**: while recording, the
-   relocation reports `(old, new)` so the caller can mark the 4-byte cell.
-
-The payoff (probe 5c): with both records kept claimed, **apply / redo flips the owning
-cell to `new`, revert / undo flips it back to `old` — no data snapshot either way.**
-The blob payload for the relocation is the 4-byte old/new record numbers, not the
-vector.  `Insert(new)` carries `new`'s bytes only for the *cross-store* transfer
-(build-store → live-store replay); a same-store live grow's undo never reads them.  The
-event vocabulary stays exactly `{ Modify, Insert, Free }` — "deferred" is *when* the
-Free physically executes (session boundary), not a new op.
+`v[i] = x` (no relocation) is a lone **Modify** of `(vec_rec, 8 + i·size)`; an in-place
+grow (resize extends, same `vec_rec`) is a **Modify** of the `len` field (its undo
+restores the shorter length — the trailing slack is harmless, the vector never reads
+past `len`).  Same three ops, no special cases.
 
 ## Storage model — an index store + a blob file (two artifacts)
 
@@ -232,12 +254,18 @@ where it pays, raw bytes where it does not:
 
 | field | type | meaning |
 |---|---|---|
-| `op` | u8 | `Modify` (later `Insert` / `Free`) |
+| `op` | u8 | `Modify` (built) / `Insert` / `Free` |
 | `store_nr` | u16 | target store (`Stores::allocations` index) |
-| `rec` | u32 | target record |
-| `off` | u32 | byte offset of the changed region within the record |
-| `len` | u32 | region width; `before` and `after` are each `len` bytes |
-| `blob_at` | u64 | offset in the blob: `before` at `blob_at`, `after` at `blob_at + len` |
+| `rec` | u32 | target record (for `Insert`/`Free`, the record's position) |
+| `off` | u32 | byte offset of the changed region within the record (0 for `Insert`/`Free`) |
+| `len` | u32 | region / record width |
+| `blob_at` | u64 | offset in the blob of the payload |
+
+The payload depends on the op: a **Modify** carries `before` then `after` (each `len`
+wide; `before` at `blob_at`, `after` at `blob_at + len`); an **Insert** carries only
+`after` (the new record's bytes, for forward materialisation); a **Free** carries only
+`before` (the freed record's bytes, snapshotted *before* `delete` — probe 5a — for
+reverse re-materialisation via `claim_at`).
 
 **mmap is optional, and free on the store side.** The index *is* a `Store`, so it
 inherits the store's RAM-or-mmap duality with no extra code — a throwaway debug
@@ -252,10 +280,12 @@ commit point.** Append the payload to the blob *first*, write the index entry
 half-written blob tail beyond it — the one ordering rule that separates a
 recoverable WAL from a corrupt one.
 
-**First implementation:** `Modify` only (the in-place field/element edits, correct by
-construction — § Hot-path discipline).  `Insert` / `Free` replay (whole-value) lands
-once probe #2 graduates — which it now has (`claim` is deterministic, so replay needs
-no `DbRef` remap).
+**Built so far:** the `Modify` slice (in-place field/element edits, correct by
+construction — § Hot-path discipline).  **The keystone build slice is
+`claim_at(pos, size)`** (§ The model), which unlocks `Insert` + `Free` and makes
+forward/reverse replay position-exact for every consumer.  Gate it on probe #6
+(position-exactness + the bidirectional round-trip); once `claim_at` forces positions,
+probe #2's `claim`-determinism is no longer load-bearing.
 
 ## Falsification probes (run before building)
 
@@ -285,20 +315,32 @@ The invariant rests on claims that must be *probed*, not assumed:
 4. **Revert fidelity.** After reverting a whole-heap edit, the paused frame +
    store are byte-identical to pre-edit. Probe: snapshot → edit → revert → diff.
 5. **The relocating-grow structural half — PROBED (three tests in
-   `src/database/journal.rs`).**  The "fourth edit kind" above rests on three claims,
+   `src/database/journal.rs`).**  The model's relocation entry rests on three facts,
    each with a guard test:
    - **5a — a freed block's body is immediately repurposed** (`freelist_repurposes_a_freed_blocks_body`).
-     `delete` → `fl_insert` writes the free-tree links at offsets 4/8, over the
-     vector's `len` + element 0.  **This falsified the clean first draft** ("a freed
-     record's bytes survive for undo") and forced *deferred-free = stay-claimed*.  If a
-     future allocator stopped embedding nodes in freed blocks this test would flip — and
-     the simpler "free + remember" design would become available again.
+     `delete` → `fl_insert` writes the free-tree links at offsets 4/8, over the vector's
+     `len` + element 0.  **This falsified the first draft** ("a freed record's bytes
+     survive for undo") and pins the ordering rule: a `Free` entry must snapshot
+     `before` **before `delete` runs**, never after.  (If a future allocator stopped
+     embedding nodes in freed blocks this test would flip — and a cheaper free-and-read
+     would become available.)
    - **5b — a relocating grow flips the owning u32 cell through the unhooked path**
      (`relocation_flips_the_owning_pointer`).  Confirms the structural-op hooks alone
      miss the pointer-flip, so it needs an explicit Modify at the resize-caller sites.
-   - **5c — stay-claimed makes the grow a pure pointer-flip over two conserved records**
-     (`deferred_free_pointer_flip_round_trips`).  Confirms apply/revert need no data
-     snapshot — the owning cell alone selects pre-grow vs grown, both records kept live.
+   - **5c — once both records exist, the owning cell alone selects which the value sees**
+     (`deferred_free_pointer_flip_round_trips`).  The pointer-flip *is* the switch:
+     apply re-materialises `new` then flips forward; undo re-materialises `old`
+     (`claim_at` + blob restore) then flips back.
+6. **`claim_at` position-exactness + bidirectional round-trip — PENDING (the keystone,
+   the build slice).**  The whole single model rests on `claim_at(pos, size)`
+   reproducing a record at its *exact* recorded position — including a 3-way split when
+   coalescing left `pos` mid-block — so that `Insert`-apply and `Free`-revert are
+   position-exact.  The probe (mirror of probe #2, to write *with* the primitive):
+   drive a coalescing-heavy sequence of `claim`/`free`/relocate while recording, then
+   (a) forward-replay it into a fresh store via `claim_at` and assert every claimed
+   record lands at its recorded position with its recorded bytes, and (b) reverse-replay
+   it and assert the initial state returns.  *Expect to falsify* — the predecessor
+   lazy-coalesce (`coalesce_free`) is the corner most likely to leave `pos` mid-block.
 
 ## Open design points
 
@@ -308,12 +350,16 @@ The invariant rests on claims that must be *probed*, not assumed:
 - **Reversibility — capture before+after.** Pure replay-into-live-store needs only
   `after`; undo and "show the delta" need `before` (snapshot-on-first-touch).
   Record both — it is the superset and undo is the natural live-edit companion.
-- **Don't eagerly free on whole-value replace or a relocating grow — decided:
-  stay-claimed.** Keep the old record *claimed* for the whole session so undo can flip
-  back to it; free only at session boundary (commit frees olds, discard frees news).
-  Not merely "so undo can restore it" — a freed block's body is *instantly* repurposed
-  as a free-tree node (probe 5a), so there is no "freed but still readable" state to
-  rely on. Deferred free **is** stay-claimed.
+- **Freed records — decided: snapshot to the blob + `free`, *not* stay-claimed.**  An
+  earlier sketch kept the old record *claimed* for the session (undo = pointer-flip, no
+  snapshot).  Rejected: it holds live-store space for the whole edit, which the
+  **unbounded whole-execution journal cannot afford** (a long run frees unboundedly
+  many records).  The single model instead snapshots a freed record's `before` to the
+  blob — taken *before* `delete` runs, since the body is repurposed instantly (probe
+  5a) — and frees it, so the live store stays compact and the history lives in the
+  file-backed blob.  Undo re-materialises via `claim_at(pos)` + the blob bytes.  The
+  cost (an O(record) blob write per free, vs zero for stay-claimed) is the right price
+  for one model that also serves the unbounded case.
 - **Where the journal lives.** A `recording: Option<Journal>` on `Stores`
   (off = `None`, one branch), entries global and ordered by `(store_nr, position)`
   so replay/serialise is a single ordered pass.
@@ -333,16 +379,27 @@ lavition direction (each is "see/transfer what changed in the store"):
 
 ## Phasing
 
-1. **MVP — record + apply + revert, debugger-scoped.** `recording: Option<Journal>`
-   on `Stores` (off = `None`, one branch on the *cold* `claim`/`delete`/`resize`
-   paths only); explicit `journal.touch(...)` at the debugger edit sites; capture
-   during `debug_set`; **replay Inserts into the live store** to finish heap live
-   edits; revert for undo. The hot `addr_mut` path is untouched. Probes 1–4
+1. **`Modify` slice — DONE** (`src/database/journal.rs`).  `recording: Option<Journal>`
+   shape, record + apply + revert for in-place region edits, the two-artifact storage
+   model.  Covers field / element edits (`pt.x = 9`, `v[i] = 5`) by construction — a
+   single `Modify`, no materialisation, the cheapest heap edit.  The hot `addr_mut` path
+   is untouched.
+2. **`claim_at` keystone + `Insert`/`Free` — the structural slice.**  Build
+   `claim_at(pos, size)` (the 3-way-split carve — § The model), gated on **probe #6**
+   (position-exact, bidirectional round-trip).  Then `Insert` (apply = `claim_at` +
+   write `after`; revert = `free`) and `Free` (apply = `free`; revert = `claim_at` +
+   write `before`, snapshot taken pre-`delete`).  This makes forward/reverse replay
+   position-exact for every consumer.
+3. **Debugger heap edits — wire it in.**  `recording: Option<Journal>` on `Stores` (one
+   branch on the *cold* `claim`/`delete`/`resize` paths); the explicit pointer-flip
+   marks at the resize-caller sites (`vector_append` / `insert_vector` / `sorted_new` /
+   `structures.rs`); capture during `debug_set`; **replay into the live store** to
+   finish whole-value + relocating-grow heap edits; revert for undo.  Probes 1, 3, 4
    graduate to the debugger regression suite.
-2. **Field/element edits** (`pt.x = 9`, `v[i] = 5`) — a single `Modify`, no
-   materialisation; the cheapest heap edit, lands alongside the MVP.
-3. **Whole-execution journal** — funnel the stack-frame raw writes, journal all of
-   execution → time-travel + incremental serialisation. Its own slice.
+4. **Whole-execution journal** — funnel the stack-frame raw writes, journal all of
+   execution → time-travel + incremental serialisation.  The same model, unbounded;
+   the snapshot-to-blob freed-record handling (§ Open design points) is what lets it
+   run without holding the run's freed records resident.
 
 ## See also
 
@@ -354,7 +411,9 @@ lavition direction (each is "see/transfer what changed in the store"):
 - [../../GOALS.md](../../GOALS.md) Goal E — robustness by subtraction (one owned
   home for the shared medium — here, the journal owns "what changed").
 - The **`design-protocol` skill** (via the [DESIGN_PROTOCOL.md](../../DESIGN_PROTOCOL.md)
-  stub) — the design-as-hypothesis protocol this doc follows.  § The fourth edit kind is
-  a live instance: a clean first draft ("freed bytes survive for undo"), a probe that
-  **falsified** it (5a), and the sharper invariant that replaced it (*deferred-free =
-  stay-claimed*).
+  stub) — the design-as-hypothesis protocol this doc follows.  Freed-record handling is
+  a live instance: a clean first draft ("freed bytes survive for undo") that probe 5a
+  **falsified**, an interim *stay-claimed* fix, and — once the unbounded whole-execution
+  consumer ruled out holding records resident — the settled *snapshot-to-blob +
+  `claim_at`* model (§ The model, § Open design points).  The keystone claim is still
+  unprobed (probe #6), so the model is hypothesis, not fact, until it runs.

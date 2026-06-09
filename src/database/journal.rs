@@ -585,14 +585,13 @@ mod tests {
         );
     }
 
-    /// @PLN15.J probe #5c — **deferred free = stay-claimed → the relocation is a pure
-    /// pointer-flip over two conserved records.**  If the old record is *not* freed
-    /// during the edit (it stays claimed, so the free-tree never touches it — 5a),
-    /// both the pre-grow and grown records stay valid and the owning cell alone selects
-    /// which the value sees.  So undo needs **no data snapshot** — it writes the old
-    /// record number back; redo writes the new one.  This models that design directly
-    /// (a still-claimed old beside a freshly claimed new, copy the conserved prefix,
-    /// flip, flip back) and confirms both directions read exactly.
+    /// @PLN15.J probe #5c — **once both records exist, the owning cell alone selects
+    /// which the value sees → the pointer-flip *is* the relocation switch.**  When the
+    /// pre-grow and grown records both exist, flipping the owning u32 cell is the whole
+    /// of redo (→ grown) and undo (→ pre-grow).  In the single model (STORE_JOURNAL.md
+    /// § The model) the freed `old` is snapshotted to the blob and re-materialised on
+    /// undo via `claim_at`; this probe isolates the *switch* itself — two records side
+    /// by side, flip and flip back — and confirms both directions read exactly.
     #[test]
     fn deferred_free_pointer_flip_round_trips() {
         let size = 4u32;
