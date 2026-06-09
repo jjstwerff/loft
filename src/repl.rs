@@ -990,12 +990,22 @@ impl ReplSession {
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
-        // A dotted LHS is a struct-field path edit (`pt.x`, `pt.inner.x` — nested
-        // structs are inlined, so the path resolves by summed offsets); a bare name
-        // is a whole-local edit.  A `[index]` LHS (vector element) is the element
-        // slice — not yet, so rejected rather than mis-parsed.
-        let ok = if name.contains('[') {
-            false
+        // A `[index]` LHS is a vector element edit (`v[1]`); a dotted LHS is a
+        // struct-field path edit (`pt.x`, `pt.inner.x` — nested structs are inlined, so
+        // the path resolves by summed offsets); a bare name is a whole-local edit.
+        let ok = if let Some(open) = name.find('[') {
+            // `v[i]` — bare-local vector element only for now; a dotted base
+            // (`s.items[0]`) is the nested-path-plus-index case, not yet handled.
+            let base = name[..open].trim();
+            let idx = name[open + 1..]
+                .strip_suffix(']')
+                .and_then(|s| s.trim().parse::<i64>().ok());
+            match idx {
+                Some(i) if !base.contains('.') => {
+                    state.set_frame_element(base, i, &lit, &self.parser.data)
+                }
+                _ => false,
+            }
         } else if name.contains('.') {
             let mut segs = name.split('.').map(str::trim);
             let base = segs.next().unwrap_or("");

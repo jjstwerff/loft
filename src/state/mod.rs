@@ -2304,6 +2304,56 @@ impl State {
         self.set_frame_path(base, &[field], lit, data)
     }
 
+    /// @PLN15 — live edit of a scalar vector **element** (`v[i] = x`).  The cheapest
+    /// heap edit: the element lives in the vector's backing record, so this is one
+    /// in-place scalar write — no materialisation.  Mirrors the interpreter's own
+    /// element access (`codegen_runtime.rs`): the element type is `content(vec_tp)`,
+    /// the stride is `size(elem_tp)`, and the slot is `8 + i * stride` within the
+    /// backing record.  Returns `false` (no write) on a non-vector base, a null / empty
+    /// vector, an out-of-range index, or a non-scalar element type — never writes past
+    /// the end.
+    pub fn set_frame_element(
+        &mut self,
+        base: &str,
+        index: i64,
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(base, data) else {
+            return false;
+        };
+        if !matches!(tp, crate::data::Type::Vector(_, _)) {
+            return false;
+        }
+        let vec_tp = self.database.name(&tp.name(data));
+        let elem_tp = self.database.content(vec_tp);
+        let stride = u32::from(self.database.size(elem_tp));
+        if stride == 0 {
+            return false;
+        }
+        // The frame slot holds the vector handle `DbRef`; its (rec, pos) cell holds the
+        // backing record number, and elements live at `8 + i * stride` within it.
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        if db.rec == 0 {
+            return false; // null vector
+        }
+        let vec_rec = self.database.store(&db).get_u32_raw(db.rec, db.pos);
+        if vec_rec == 0 {
+            return false; // empty vector — every index is out of range
+        }
+        let length = self.database.store(&db).get_u32_raw(vec_rec, 4);
+        let Ok(idx) = u32::try_from(index) else {
+            return false; // negative index
+        };
+        if idx >= length {
+            return false; // out of range
+        }
+        self.write_scalar_at(db.store_nr, vec_rec, 8 + idx * stride, elem_tp, lit.trim())
+    }
+
     /// Write `lit` as a scalar into record `(store_nr, rec)` at byte offset `off`,
     /// dispatched by the field's primitive type number (the `ShowDb` scalar map):
     /// 0 integer · 2 single · 3 float · 4 boolean · 6 character.  long (1) / text (5)

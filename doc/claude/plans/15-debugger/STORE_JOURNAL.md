@@ -406,9 +406,12 @@ lavition direction (each is "see/transfer what changed in the store"):
 
 1. **`Modify` slice — DONE** (`src/database/journal.rs`).  `recording: Option<Journal>`
    shape, record + apply + revert for in-place region edits, the two-artifact storage
-   model.  Covers field / element edits (`pt.x = 9`, `v[i] = 5`) by construction — a
-   single `Modify`, no materialisation, the cheapest heap edit.  The hot `addr_mut` path
-   is untouched.
+   model.  The hot `addr_mut` path is untouched.  This is the substrate behind the
+   in-place heap edits, both now **wired through the debugger**: scalar struct-field
+   paths (`pt.x = 9`, `o.inner.a = 9`) via `set_frame_path`, and scalar vector elements
+   (`v[1] = 9`) via `set_frame_element` — the cheapest heap edit, one in-place scalar
+   write at `8 + i·stride`, mirroring the interpreter's own element access, routed from
+   `debug_set` (`state/mod.rs`, `repl.rs`; tested in `tests/debugger.rs`).
 2. **`claim_at` keystone + the `Insert`/`Free` entry path — DONE** (`src/store.rs`,
    `src/database/journal.rs`).  The exact-position 3-way-split carve (§ The model), plus
    `Journal::record_insert` (apply = `claim_at` + write `after`; revert = `free`) and
@@ -425,13 +428,19 @@ lavition direction (each is "see/transfer what changed in the store"):
      store; `Stores::take_journal` drains them all into one `Journal`, tagging
      `store_nr`.  Tested by `stores_recording_drains_to_journal`; the full lib suite
      confirms the hot-path hook is inert when off.
-   - **3b — the debug-edit transfer (remaining).**  The resize-caller pointer-flip marks
-     (`vector_append` / `insert_vector` / `sorted_new` / `structures.rs`); build the
-     edit value in a *live-cloned* store with recording on so its `Insert` positions are
-     free in the live store (the `claim_at` no-remap property); **replay into the live
-     store** (`Journal::apply`) + write the frame slot to land the heap edit rejected at
-     `set_frame_literal` (`state/mod.rs`); revert for undo.  Probes 1, 3, 4 graduate to
-     the debugger regression suite.
+   - **3b — the debug-edit transfer.**
+     - **In-place element edit (`v[i] = x`) — DONE** (`set_frame_element`, `state/mod.rs`;
+       `debug_set` routing, `repl.rs`).  A pure `Modify` (no journal): resolve the
+       element type / stride from the vector type, write the scalar at `8 + i·stride`,
+       reject out-of-range / non-scalar.  Tested end-to-end (the resumed program reads
+       the edited element) in `tests/debugger.rs`.
+     - **Whole-value transfer (`pt = Point{…}`) — remaining.**  Needs a deep
+       `Stores::clone_for_edit` (preserve allocations so `Insert` positions are free in
+       the live store — the `claim_at` no-remap property), reworking the
+       `debug_eval`→`set_frame` contract to carry the captured `Journal` + root `DbRef`,
+       then **replay into the live store** (`Journal::apply`) + write the frame slot to
+       land the heap edit rejected at `set_frame_literal`; plus the resize-caller
+       pointer-flip marks for in-place `v.push`-style grows; revert for undo.
 4. **Whole-execution journal** — funnel the stack-frame raw writes, journal all of
    execution → time-travel + incremental serialisation.  The same model, unbounded;
    the snapshot-to-blob freed-record handling (§ Open design points) is what lets it

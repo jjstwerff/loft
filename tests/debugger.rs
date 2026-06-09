@@ -1063,3 +1063,57 @@ fn nested_path_edit_rejects_bad_paths() {
         "valid path after rejects"
     );
 }
+
+/// @PLN15 — live edit of a scalar vector **element** (`v[1] = 99`), picked up on
+/// resume.  The element lives in the vector's backing record, so the edit is one
+/// in-place scalar write at `8 + i*stride`; `f(...)` returns `v[1]`, so the program's
+/// assert passes only if the write landed on the right element slot.
+#[test]
+fn live_edit_vector_element_resumes_with_new_value() {
+    let mut p = repl();
+    let defs = &["fn f(v: vector<integer>) -> integer {\n  m = v[0];\n  v[1]\n}"];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(f([10, 20, 30]) == 99, \"edited v[1]\")",
+        "f",
+        2,
+    );
+    assert!(state.set_frame_element("v", 1, "99", &p.data), "edit v[1]");
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "element edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15 — vector-element edit rejections: out-of-range, negative index, a non-vector
+/// base, and an unparseable literal all return `false` (no write past the end), and a
+/// valid edit still works afterwards.
+#[test]
+fn vector_element_edit_rejects() {
+    let mut p = repl();
+    let defs = &["fn f(v: vector<integer>, n: integer) -> integer {\n  m = n;\n  v[0]\n}"];
+    let mut state = run_to_pause(&mut p, defs, "f([10, 20, 30], 7)", "f", 2);
+    assert!(
+        !state.set_frame_element("v", 5, "9", &p.data),
+        "out of range"
+    );
+    assert!(
+        !state.set_frame_element("v", -1, "9", &p.data),
+        "negative index"
+    );
+    assert!(
+        !state.set_frame_element("n", 0, "9", &p.data),
+        "non-vector base"
+    );
+    assert!(
+        !state.set_frame_element("v", 0, "notanint", &p.data),
+        "unparseable literal"
+    );
+    assert!(
+        state.set_frame_element("v", 0, "42", &p.data),
+        "valid edit after rejects"
+    );
+}
