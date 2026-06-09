@@ -5,8 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 14 — Store-resident REPL session
 
-> **Identity:** `@PLN14` — [`loft-lang/plans`](https://github.com/loft-lang/plans/issues)
-> issue (pending creation; see § See also for the ready-to-file body). Slug
+> **Identity:** `@PLN14` — [loft-lang/plans#14](https://github.com/loft-lang/plans/issues/14)
+> (`status:future` — the issue is the source of truth for lifecycle state). Slug
 > `store-resident-repl-session`.
 
 ## Status
@@ -151,5 +151,5 @@ both backends, not when the demo runs.
   — the own-format migration north star (Q2's cross-schema tool).
 - `src/store.rs` · `src/data_store.rs` · `src/cache.rs` — the mmap + content-hashed
   startup-cache infra phase F reuses.
-- **Tracker:** file as `@PLN14` on `loft-lang/plans` — body staged at
-  `/tmp/pln14_body.md`; labels `plan` · `subject:loft` · `status:future`.
+- **Tracker:** [loft-lang/plans#14](https://github.com/loft-lang/plans/issues/14)
+  (`plan` · `subject:loft` · `status:future`).
