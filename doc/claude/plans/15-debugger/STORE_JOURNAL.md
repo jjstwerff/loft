@@ -6,7 +6,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # 15.J — Store change journal (the live-edit substrate)
 
 > **Identity:** a design sub-doc of `@PLN15` (debugger). Slug `store-journal`.
-> **Status:** design (not built). Load-bearing claim **confirmed** (see § Chokepoint).
+> **Status:** design (`Modify` slice built — `src/database/journal.rs`). Load-bearing
+> claims **confirmed** — the mutation chokepoint (§ Chokepoint), replay determinism
+> (probe #2), and the relocating-grow structural half (§ The fourth edit kind; probes
+> #5a–c, where 5a falsified the first draft and reshaped *deferred-free* into
+> *stay-claimed*).
 
 ## Why this exists
 
@@ -145,6 +149,64 @@ edit's constructor on a build store, journal its `Insert`s with their
 per-type walker, no constructor over the suspended stack. The `(position, size)`
 is what lets replay place each record correctly even though slots get reused.
 
+## The fourth edit kind — in-place heap growth (a relocating vector resize)
+
+The three kinds above cover scalar / whole-value / text.  A fourth is an **in-place
+grow of an existing heap collection** — `v.push(x)`, `v.insert(…)`, a keyed `sorted`
+insert — evaluated at the breakpoint against a *live* vector.  Two sub-cases, split by
+whether the backing record stays put.
+
+A vector is a **two-level handle**: an owning `u32` cell at `(container_rec, pos)`
+holds the backing record number `vec_rec`; that record is
+`[ claim:i32 @0 | len:u32 @4 | elems @8 + i·size ]`.
+
+- **Element overwrite `v[i] = x` — a clean Modify.**  The element lives in the
+  existing backing record, so the edit writes `(vec_rec, 8 + i·size)` — one **Modify**,
+  no structural op, no pointer-flip.  The cheapest heap edit (§ Phasing 2).
+
+- **A grow that relocates — a pointer-flip over two conserved records.**  When
+  `Store::resize` (`store.rs:583`) cannot extend in place it **relocates**:
+  `claim(new)` + `copy(old→new)` (the data is *conserved* — copied from offset 4 on) +
+  `delete(old)`, and `vector.rs` then writes the new record number into the owning cell
+  (`vector_append:166`, `insert_vector:53`, `sorted_new:209`).
+
+The naïve journal snapshots the whole grown vector's bytes (O(N) per grow).  The
+structural half records the grow as **{ Insert(new) + Modify(owning cell: old→new) +
+deferred Free(old) }** — O(1), because the data is conserved in the two records the
+edit session keeps alive, so undo is a pointer *write*, not a byte restore.  Two facts,
+**both probed (§ Falsification probes 5a/5b)**, make it correct:
+
+1. **Deferred free means *stay-claimed*, never "free but remember the bytes."**  The
+   allocator embeds its red-black free-tree node links *inside* freed blocks (`FL_LEFT`
+   @ offset 4, `FL_RIGHT` @ offset 8 — exactly the vector's `len` and element 0), so
+   `delete(old)` overwrites old's data **the instant it runs**; there is no window in
+   which a freed record's contents survive (probe 5a — this falsified the first draft,
+   which assumed they did).  So a **recording-mode resize keeps the old record
+   claimed**: it allocates + copies + flips the pointer but does **not** `delete(old)`,
+   recording old in a pending-free set instead.  The physical free happens only at a
+   session boundary — commit frees the olds, discard / undo frees the news.  And
+   **recording mode forces relocation** (resize never extends in place while recording)
+   so every grow has this one shape, *subtracting* the in-place-extend case — whose
+   undo would otherwise need free-tree surgery (restore the header + re-insert the
+   absorbed block) — entirely (Goal E).
+
+2. **The pointer-flip needs an explicit Modify.**  The owning-cell write goes through
+   `set_u32_raw` → `addr_mut`, the **unhooked** hot path, so the three structural-op
+   hooks never see it (probe 5b).  It is captured by an explicit mark at the
+   resize-caller sites — a closed, countable set (`vector_append` / `insert_vector` /
+   `sorted_new` / `structures.rs`) — the same explicit-mark mechanism the in-place
+   modifies use (§ Hot-path discipline), extended to "the pointer-flip after a
+   recording-mode relocation."  This is **observable resize**: while recording, the
+   relocation reports `(old, new)` so the caller can mark the 4-byte cell.
+
+The payoff (probe 5c): with both records kept claimed, **apply / redo flips the owning
+cell to `new`, revert / undo flips it back to `old` — no data snapshot either way.**
+The blob payload for the relocation is the 4-byte old/new record numbers, not the
+vector.  `Insert(new)` carries `new`'s bytes only for the *cross-store* transfer
+(build-store → live-store replay); a same-store live grow's undo never reads them.  The
+event vocabulary stays exactly `{ Modify, Insert, Free }` — "deferred" is *when* the
+Free physically executes (session boundary), not a new op.
+
 ## Storage model — an index store + a blob file (two artifacts)
 
 The journal is **two artifacts**, split by what each part is good at — structure
@@ -222,6 +284,21 @@ The invariant rests on claims that must be *probed*, not assumed:
    `stack_cur`'s store bytes byte-identical except the edited slot.
 4. **Revert fidelity.** After reverting a whole-heap edit, the paused frame +
    store are byte-identical to pre-edit. Probe: snapshot → edit → revert → diff.
+5. **The relocating-grow structural half — PROBED (three tests in
+   `src/database/journal.rs`).**  The "fourth edit kind" above rests on three claims,
+   each with a guard test:
+   - **5a — a freed block's body is immediately repurposed** (`freelist_repurposes_a_freed_blocks_body`).
+     `delete` → `fl_insert` writes the free-tree links at offsets 4/8, over the
+     vector's `len` + element 0.  **This falsified the clean first draft** ("a freed
+     record's bytes survive for undo") and forced *deferred-free = stay-claimed*.  If a
+     future allocator stopped embedding nodes in freed blocks this test would flip — and
+     the simpler "free + remember" design would become available again.
+   - **5b — a relocating grow flips the owning u32 cell through the unhooked path**
+     (`relocation_flips_the_owning_pointer`).  Confirms the structural-op hooks alone
+     miss the pointer-flip, so it needs an explicit Modify at the resize-caller sites.
+   - **5c — stay-claimed makes the grow a pure pointer-flip over two conserved records**
+     (`deferred_free_pointer_flip_round_trips`).  Confirms apply/revert need no data
+     snapshot — the owning cell alone selects pre-grow vs grown, both records kept live.
 
 ## Open design points
 
@@ -231,8 +308,12 @@ The invariant rests on claims that must be *probed*, not assumed:
 - **Reversibility — capture before+after.** Pure replay-into-live-store needs only
   `after`; undo and "show the delta" need `before` (snapshot-on-first-touch).
   Record both — it is the superset and undo is the natural live-edit companion.
-- **Don't eagerly free on whole-value replace.** Keep the old record so undo can
-  restore it; free on edit-session discard, not at edit time.
+- **Don't eagerly free on whole-value replace or a relocating grow — decided:
+  stay-claimed.** Keep the old record *claimed* for the whole session so undo can flip
+  back to it; free only at session boundary (commit frees olds, discard frees news).
+  Not merely "so undo can restore it" — a freed block's body is *instantly* repurposed
+  as a free-tree node (probe 5a), so there is no "freed but still readable" state to
+  rely on. Deferred free **is** stay-claimed.
 - **Where the journal lives.** A `recording: Option<Journal>` on `Stores`
   (off = `None`, one branch), entries global and ordered by `(store_nr, position)`
   so replay/serialise is a single ordered pass.
@@ -272,5 +353,8 @@ lavition direction (each is "see/transfer what changed in the store"):
 - [../../DATABASE.md](../../DATABASE.md) — store allocator, `Stores`, `DbRef`.
 - [../../GOALS.md](../../GOALS.md) Goal E — robustness by subtraction (one owned
   home for the shared medium — here, the journal owns "what changed").
-- [../../DESIGN_PROTOCOL.md](../../DESIGN_PROTOCOL.md) — the design-as-hypothesis
-  protocol this doc follows (named invariant + falsification probes).
+- The **`design-protocol` skill** (via the [DESIGN_PROTOCOL.md](../../DESIGN_PROTOCOL.md)
+  stub) — the design-as-hypothesis protocol this doc follows.  § The fourth edit kind is
+  a live instance: a clean first draft ("freed bytes survive for undo"), a probe that
+  **falsified** it (5a), and the sharper invariant that replaced it (*deferred-free =
+  stay-claimed*).

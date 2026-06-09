@@ -487,4 +487,145 @@ mod tests {
         j.revert(&mut stores).unwrap();
         assert_eq!(read_i64(&stores, sn, rec, 8), 5);
     }
+
+    /// Read a u32 region via `read_span` (works on freed records too — `read_span`
+    /// bounds-checks against the whole store, not the record header).
+    fn rd_u32(s: &Store, rec: u32, off: u32) -> u32 {
+        let b = s.read_span(rec, off, 4);
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    }
+
+    /// @PLN15.J probe #5a — **a freed block's body is immediately repurposed.**  The
+    /// allocator stores its red-black free-tree node links *inside* free blocks
+    /// (`FL_LEFT` at byte offset 4, `FL_RIGHT` at offset 8 — exactly where a vector
+    /// keeps its length and first element).  So `delete(rec)` overwrites the record's
+    /// data the instant it runs.  This is the load-bearing reason the structural
+    /// half's deferred free must mean **stay-claimed**, not "free but remember the
+    /// bytes": there is no window in which a freed record's old contents are readable.
+    /// (This falsified the first draft of the design, which assumed a freed record's
+    /// bytes survived for undo.)
+    #[test]
+    fn freelist_repurposes_a_freed_blocks_body() {
+        let mut s = Store::new(64);
+        let rec = s.claim(4);
+        s.set_u32_raw(rec, 4, 0xDEAD_BEEF); // where a vector's length lives
+        s.set_u32_raw(rec, 8, 0x0BAD_F00D); // where element 0 lives
+        s.delete(rec);
+        assert_ne!(
+            rd_u32(&s, rec, 4),
+            0xDEAD_BEEF,
+            "offset 4 overwritten by the free-tree node link (FL_LEFT)",
+        );
+        assert_ne!(
+            rd_u32(&s, rec, 8),
+            0x0BAD_F00D,
+            "offset 8 overwritten by the free-tree node link (FL_RIGHT)",
+        );
+    }
+
+    /// @PLN15.J probe #5b — **a relocating grow flips the owning u32 pointer cell.**
+    /// When `resize` cannot extend in place it relocates (`claim`+`copy`+`delete`) and
+    /// `vector.rs` writes the new record number into the owning cell.  That pointer
+    /// write goes through `set_u32_raw`/`addr_mut` (the unhooked hot path), so the
+    /// journal's structural half must capture it as an explicit **Modify** of the
+    /// owning cell alongside the **Insert** of the new record — the structural ops
+    /// alone do not see it.  This boxes a vector in to force a real relocation and
+    /// confirms the cell flips and the new record carries the grown vector.
+    #[test]
+    fn relocation_flips_the_owning_pointer() {
+        use crate::keys::DbRef;
+        use crate::vector::{vector_append, vector_finish};
+
+        let size = 4u32;
+        let mut stores = vec![Store::new(64)];
+        let container = stores[0].claim(2);
+        stores[0].set_u32_raw(container, 8, 0); // empty-vector pointer cell
+        let db = DbRef {
+            store_nr: 0,
+            rec: container,
+            pos: 8,
+        };
+
+        // First append allocates the backing record; an adjacent claim pins it so the
+        // next grow cannot extend in place and is forced to relocate.
+        let slot = vector_append(&db, size, &mut stores);
+        stores[0].set_u32_raw(slot.rec, slot.pos, 7);
+        vector_finish(&db, &mut stores);
+        let _blocker = stores[0].claim(8);
+
+        let mut old_vec = stores[0].get_u32_raw(db.rec, db.pos);
+        let mut hit = None;
+        for i in 1u32..256 {
+            let slot = vector_append(&db, size, &mut stores);
+            stores[0].set_u32_raw(slot.rec, slot.pos, i * 1000 + 7);
+            vector_finish(&db, &mut stores);
+            let cur = stores[0].get_u32_raw(db.rec, db.pos);
+            if cur != old_vec {
+                hit = Some((old_vec, cur, i));
+                break;
+            }
+            old_vec = cur;
+        }
+        let (old, new, n) = hit.expect("a boxed-in grow must relocate");
+        assert_ne!(old, new, "the record relocated");
+        assert_eq!(
+            stores[0].get_u32_raw(db.rec, db.pos),
+            new,
+            "the owning cell flipped to the new record",
+        );
+        assert_eq!(
+            stores[0].get_u32_raw(new, 4),
+            n + 1,
+            "new length = elements 0..=n"
+        );
+        assert_eq!(
+            rd_u32(&stores[0], new, 8 + n * size),
+            n * 1000 + 7,
+            "last element in new"
+        );
+    }
+
+    /// @PLN15.J probe #5c — **deferred free = stay-claimed → the relocation is a pure
+    /// pointer-flip over two conserved records.**  If the old record is *not* freed
+    /// during the edit (it stays claimed, so the free-tree never touches it — 5a),
+    /// both the pre-grow and grown records stay valid and the owning cell alone selects
+    /// which the value sees.  So undo needs **no data snapshot** — it writes the old
+    /// record number back; redo writes the new one.  This models that design directly
+    /// (a still-claimed old beside a freshly claimed new, copy the conserved prefix,
+    /// flip, flip back) and confirms both directions read exactly.
+    #[test]
+    fn deferred_free_pointer_flip_round_trips() {
+        let size = 4u32;
+        let mut s = Store::new(64);
+        let container = s.claim(2);
+
+        let old = s.claim(4); // pre-grow vector: len 2, elements [11, 22]
+        s.set_u32_raw(old, 4, 2);
+        s.set_u32_raw(old, 8, 11);
+        s.set_u32_raw(old, 8 + size, 22);
+        s.set_u32_raw(container, 8, old); // owning cell -> old
+
+        let new = s.claim(8); // grown vector: len 3, elements [11, 22, 33]
+        s.copy_block(old, 8, new, 8, (2 * size) as isize); // conserve the two existing elements
+        s.set_u32_raw(new, 4, 3);
+        s.set_u32_raw(new, 8 + 2 * size, 33);
+
+        // Forward (redo / cross-store apply): flip the owning cell to new; old stays claimed.
+        s.set_u32_raw(container, 8, new);
+        let f = s.get_u32_raw(container, 8);
+        assert_eq!(s.get_u32_raw(f, 4), 3, "grown length");
+        assert_eq!(s.get_u32_raw(f, 8), 11, "conserved element 0");
+        assert_eq!(s.get_u32_raw(f, 8 + 2 * size), 33, "appended element");
+
+        // Backward (undo): flip the cell back to old — no snapshot, old is intact.
+        s.set_u32_raw(container, 8, old);
+        let b = s.get_u32_raw(container, 8);
+        assert_eq!(
+            s.get_u32_raw(b, 4),
+            2,
+            "pre-grow length restored by pointer-flip alone"
+        );
+        assert_eq!(s.get_u32_raw(b, 8), 11, "pre-grow element 0 intact");
+        assert_eq!(s.get_u32_raw(b, 8 + size), 22, "pre-grow element 1 intact");
+    }
 }
