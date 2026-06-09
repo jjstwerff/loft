@@ -250,12 +250,24 @@ makes the *visible* axes safe; the dogfood loop grows what is visible.
 
 ## Go deeper — route here, don't reinvent
 
-This skill is the **synthesis + the router**. Everything above is **tree-agnostic
-— the discipline is identical in any codebase.** The routes below are specific to
-*this* repository (loft); carrying this skill into another tree (e.g. loft2) means
-keeping the body unchanged and repointing these links at that tree's equivalents —
-its debugging policy, its design docs, its test layout. The depth lives in the
-canonical docs; read the one for your mode.
+This skill is the **synthesis + the router**, and everything above is
+**tree-agnostic — the discipline is identical in any codebase.**
+
+**The DESIGN half is its own skill — universal, not repo-specific.** When a design
+is load-bearing, run the **`design-protocol` sibling skill** (Design Protocol 1 — A
+Design Is a Testable Hypothesis): name the invariant, count the re-assertion sites,
+probe to falsify, build, validate against the written prediction. Its **§ The other
+half** covers the move one step earlier — when you cannot form a candidate invariant
+at all (an exact-invariant domain): the constructive instrument, plot the
+answer-instance and read the invariant off it. The skill is self-contained and
+tree-agnostic; the full DESIGN depth (evidence, the two failure modes, worked
+examples) lives there.
+
+**The DEBUG-method depth and the worked references are repo-specific.** The routes
+below point into *this* repository (loft); carrying this skill into another tree
+(e.g. loft2) means keeping the body + the `design-protocol` sibling unchanged and
+repointing these links at that tree's equivalents — its debugging policy, its test
+layout.
 
 - **DEBUG method** — `CLAUDE.md` § "Before fixing a non-trivial bug: build the
   boundary matrix" (the matrix-first protocol, the chokepoint-invariant rule).
@@ -263,12 +275,6 @@ canonical docs; read the one for your mode.
   axes.
 - **DEBUG mechanics (loft)** — the `loft-debug` skill: `LOFT_LOG` presets, dump
   files, `--interpret`-first seeing loop, native-env traps that fake failures.
-- **DESIGN method** — `doc/claude/DESIGN_PROTOCOL.md` (Design Protocol 1 — A
-  Design Is a Testable Hypothesis): name the invariant, count the re-assertion
-  sites, probe to falsify, build, validate against the prediction. **§ The other
-  half** covers the move one step earlier — when you cannot form a candidate at all
-  (an exact-invariant domain): the constructive instrument, plot the answer-instance
-  and read the invariant off it.
 - **DESIGN reference** — `doc/claude/DESIGN_VERIFICATION.md` § C1: the six
   verification questions (name-the-invariant, consequence/cause ratio,
   cost-of-next-case, one-home-per-fact, subtraction-not-a-guard, matched-to-domain)
