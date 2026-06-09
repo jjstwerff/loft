@@ -21,7 +21,7 @@ pub use types::Type;
 pub const CONST_STORE: u16 = 1;
 
 use crate::keys::{Content, DbRef};
-use crate::store::Store;
+use crate::store::{Store, StoreChange};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
 use std::sync::OnceLock;
@@ -674,6 +674,43 @@ impl WorkerStores {
 }
 
 impl Stores {
+    /// @PLN15.J — begin recording structural changes (claims / frees) on every heap
+    /// store, for the debugger's edit journal.  Off by default (one branch on the cold
+    /// alloc paths); turn on only for the duration of an edit, then drain with
+    /// [`take_journal`](Self::take_journal).
+    pub fn start_recording(&mut self) {
+        for store in &mut self.allocations {
+            store.start_recording();
+        }
+    }
+
+    /// @PLN15.J — stop recording and drain every store's buffered changes into one
+    /// `Journal`, tagging each with its `store_nr`.  An `Insert`'s `after` bytes are
+    /// read from the store now (flush); a `Free`'s `before` was snapshotted at delete
+    /// time.  The journal is ready to `apply` (cross-store / redo) or `revert` (undo).
+    ///
+    /// # Errors
+    /// Returns the I/O error if writing the journal's blob fails.
+    pub fn take_journal(&mut self) -> std::io::Result<Journal> {
+        let mut journal = Journal::create()?;
+        for sn in 0..self.allocations.len() {
+            let Some(changes) = self.allocations[sn].take_recording() else {
+                continue;
+            };
+            for change in changes {
+                match change {
+                    StoreChange::Insert { pos, size } => {
+                        journal.record_insert(self, sn as u16, pos, size)?;
+                    }
+                    StoreChange::Free { pos, before } => {
+                        journal.record_free(sn as u16, pos, &before)?;
+                    }
+                }
+            }
+        }
+        Ok(journal)
+    }
+
     /// Install an externally-allocated `Store` into this `Stores`'
     /// allocations table.  Returns the parent-side `store_nr`.
     ///

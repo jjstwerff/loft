@@ -107,6 +107,20 @@ impl StoreUsage {
     }
 }
 
+/// A structural change recorded on a [`Store`] while @PLN15.J edit-recording is on
+/// (see `crate::database::journal`).  A `Store` method does not know its own
+/// `store_nr`, so each store buffers its own changes and `Stores` drains them into the
+/// unified `Journal`, tagging the store index.  `Insert` keeps only the position and
+/// size — the new record's bytes are read at drain (flush); `Free` snapshots `before`
+/// at delete time, since a freed block's body is repurposed instantly (probe 5a).
+#[derive(Debug)]
+pub enum StoreChange {
+    /// A record claimed at `pos` (`size` words); replayed via `claim_at` at flush.
+    Insert { pos: u32, size: u32 },
+    /// A record freed; `before` is its bytes captured *before* the `delete`.
+    Free { pos: u32, before: Box<[u8]> },
+}
+
 // A low-level heap store: the several flags (free / read_only /
 // free_protected / borrowed) are independent state bits on the same
 // allocation, not a bundle that should become an enum.
@@ -153,6 +167,11 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
+    /// @PLN15.J — when `Some`, the structural ops (`claim` via `claim_block`, `delete`)
+    /// append a [`StoreChange`] here for the debugger's edit journal.  `None` on every
+    /// normal run, so the cold alloc paths pay one branch.  Turned on by
+    /// `Stores::start_recording`, drained by `Stores::take_journal`.
+    recording: Option<Vec<StoreChange>>,
     /// Plan-57 store-identity gate (verification builds only): the allocation-site
     /// id written by `OpStoreTag` and verified by `OpFreeRefTag`.  `0` = untagged
     /// (no verification emitted for this store).  Catches wrong-store / cross-owner
@@ -302,6 +321,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            recording: None,
             tag: 0,
             pinned: false,
             lock_origin: String::new(),
@@ -385,6 +405,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            recording: None,
             tag: 0,
             borrowed: false,
             created_at: 0,
@@ -519,6 +540,15 @@ impl Store {
             *self.addr_mut(pos, 0) = block_size; // positive = claimed
         }
         self.claims.insert(pos);
+        // @PLN15.J: record the claim while edit-recording is on.  Read the *actual*
+        // claimed size from the header (claim_block may take the whole block without
+        // splitting), so replay's `claim_at` reproduces the exact extent.
+        if self.recording.is_some() {
+            let size = (*self.addr::<i32>(pos, 0)) as u32;
+            if let Some(log) = self.recording.as_mut() {
+                log.push(StoreChange::Insert { pos, size });
+            }
+        }
         pos
     }
 
@@ -634,6 +664,15 @@ impl Store {
         // may free a record still referenced by a suspended generator.
         self.generation = self.generation.wrapping_add(1);
         self.valid(rec, 4);
+        // @PLN15.J: snapshot the record *before* delete repurposes its body as a
+        // free-tree node (probe 5a), while edit-recording is on.
+        if self.recording.is_some() {
+            let words = (*self.addr::<i32>(rec, 0)) as u32;
+            let before = self.read_span(rec, 0, words * 8);
+            if let Some(log) = self.recording.as_mut() {
+                log.push(StoreChange::Free { pos: rec, before });
+            }
+        }
         let mut claim = *self.addr::<i32>(rec, 0);
         // Coalesce with any adjacent free blocks that follow.
         while (rec + claim as u32) < self.size {
@@ -732,6 +771,20 @@ impl Store {
         #[cfg(debug_assertions)]
         self.fl_validate();
         pos
+    }
+
+    /// @PLN15.J — begin buffering structural changes for the debugger's edit journal.
+    /// No-op on a locked / freed store (those are never edit targets).
+    pub(crate) fn start_recording(&mut self) {
+        if !self.free && !self.read_only {
+            self.recording = Some(Vec::new());
+        }
+    }
+
+    /// @PLN15.J — stop recording and hand back the buffered changes (`None` if this
+    /// store was never recording).
+    pub(crate) fn take_recording(&mut self) -> Option<Vec<StoreChange>> {
+        self.recording.take()
     }
 
     /// Validate the store
@@ -952,6 +1005,7 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: false,
             created_at: 0,
@@ -983,6 +1037,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: false,
             created_at: 0,
@@ -1015,6 +1070,7 @@ impl Store {
             free_root: self.free_root,
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: true,
             created_at: 0,

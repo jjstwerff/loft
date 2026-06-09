@@ -1163,4 +1163,51 @@ mod tests {
         assert_eq!(rd(&stores, sn, new, 16), 33, "appended element");
         assert!(hdr(&stores, sn, old) < 0, "old record freed on apply");
     }
+
+    /// @PLN15.J phase 3 — the `Stores` recording drain.  Structural ops buffer per-store
+    /// while recording is on (`claim` -> `Insert`, `delete` -> `Free`); `take_journal`
+    /// drains them into one `Journal`, tagging each with its `store_nr`.  Records claimed
+    /// *before* recording started are not journaled.  Round-trips an edit (claim `n`,
+    /// free `m`): revert restores the pre-edit store, apply redoes the edit.
+    #[test]
+    fn stores_recording_drains_to_journal() {
+        let mut stores = Stores::default();
+        stores.allocations.push(Store::new(64));
+        let sn = (stores.allocations.len() - 1) as u16;
+        let si = sn as usize;
+        stores.allocations[si].free = false; // mark in-use (real heap stores are; gates recording)
+
+        // pre-existing records (claimed before recording -> not journaled).
+        let keeper = stores.allocations[si].claim(2);
+        stores.allocations[si].set_u32_raw(keeper, 8, 0xC0FF_EE01);
+        let m = stores.allocations[si].claim(3);
+        stores.allocations[si].set_u32_raw(m, 8, 0x1234_5678);
+        stores.allocations[si].set_u32_raw(m, 16, 0x9ABC_DEF0);
+
+        // record an edit: claim n (Insert), free m (Free).
+        stores.start_recording();
+        let n = stores.allocations[si].claim(4);
+        stores.allocations[si].set_u32_raw(n, 8, 0xAAAA_0001);
+        stores.allocations[si].set_u32_raw(n, 24, 0xAAAA_0002);
+        stores.allocations[si].delete(m);
+        let mut j = stores.take_journal().unwrap();
+
+        // revert -> edit undone: m re-claimed + restored, n freed, keeper intact.
+        j.revert(&mut stores).unwrap();
+        assert!(hdr(&stores, sn, n) < 0, "n freed by revert");
+        assert_eq!(rd(&stores, sn, m, 8), 0x1234_5678, "m restored");
+        assert_eq!(rd(&stores, sn, m, 16), 0x9ABC_DEF0, "m restored");
+        assert_eq!(rd(&stores, sn, keeper, 8), 0xC0FF_EE01, "keeper intact");
+
+        // apply -> redo: n re-materialised with its bytes, m freed.
+        j.apply(&mut stores).unwrap();
+        assert_eq!(rd(&stores, sn, n, 8), 0xAAAA_0001, "n bytes back");
+        assert_eq!(rd(&stores, sn, n, 24), 0xAAAA_0002, "n bytes back");
+        assert!(hdr(&stores, sn, m) < 0, "m freed by apply");
+        assert_eq!(
+            rd(&stores, sn, keeper, 8),
+            0xC0FF_EE01,
+            "keeper still intact"
+        );
+    }
 }
