@@ -16,8 +16,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > *fragmented* region; fixed (it now absorbs adjacent free blocks) and re-run clean over
 > 12 seeds × 600 ops. The reverse-order invariant that makes revert sound is stated
 > (§ The model). Freed records: *snapshot-to-blob + `claim_at`* (§ Open design points).
-> Remaining build: wire `Insert`/`Free` + the resize-caller pointer marks into the
-> debugger edit path (§ Phasing 3).
+> **Built since:** the `Insert`/`Free` entry path (`record_insert`/`record_free`,
+> `apply`/`revert` dispatch), the per-`Store` recording layer + `Stores::take_journal`
+> drain, and the in-place vector-element edit (`v[i] = x` via `set_frame_element`).
+> **Remaining:** the whole-value heap transfer (a deep `Stores::clone_for_edit` + the
+> `debug_eval`→`set_frame` contract rework + `apply` into the live store + frame-slot
+> write) and the resize-caller pointer-flip marks (§ Phasing 3b).
 
 ## Why this exists
 

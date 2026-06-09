@@ -157,7 +157,9 @@ At the `(dbg)` prompt:
 | `:finish` (`:o`) | Run to the current function's return — **out** to the caller. |
 | `:continue` (`:c`) | Run to the next breakpoint, or to the end of the call. |
 | `:vars` | Re-show the current frame. |
-| `name = <expr>` | **Edit** a scalar local (`integer` / `float` / `single` / `boolean` / `character`) in the live frame; the RHS is evaluated against the frame, so `n = n + 1` and `b = !b` work. The resumed call uses the new value. |
+| `name = <expr>` | **Edit** a local in the live frame — scalar (`integer` / `float` / `single` / `boolean` / `character`), `text`, or a simple enum. The RHS is evaluated against the frame, so `n = n + 1` and `b = !b` work. The resumed call uses the new value. |
+| `pt.x = <expr>` | **Edit** a scalar **struct field** (nested inline paths too: `pt.inner.x`). |
+| `v[i] = <expr>` | **Edit** a scalar **vector element** at index `i`. |
 | *any expression* | **Evaluate** it against the frame's live variables (`n * 3`, `pt.x * pt.y`) and print the value. |
 | `:quit` (`:q`) | Leave the REPL. |
 
@@ -166,9 +168,11 @@ variables (every type — scalars, text, structs, vectors), just like the top-le
 prompt but scoped to the function you're stopped in. Editing a value (`n = 99`,
 `f = 2.0`, `b = !b`) writes straight into the live frame, so when you `:continue`
 the rest of the function runs with the change — the call above returns `99 * 10`
-rather than `5 * 10`. Editing is for **scalar** locals; a `text` / struct / vector
-local can be read but not yet written (its slot holds a store pointer). The verbs
-also work without the leading colon (`step`, `next`, `continue`). Breakpoints
+rather than `5 * 10`. **Editable in place:** scalar / `text` / enum locals, scalar
+struct fields (`pt.x`, nested paths), and scalar vector elements (`v[i]`) — all picked
+up on `:continue`. **Not yet:** replacing a whole heap value (`pt = Point{…}`), or a
+non-scalar field / element. The verbs also work without the leading colon (`step`,
+`next`, `continue`). Breakpoints
 persist across calls until `:break clear`. Any line of a function body is a valid
 breakpoint — `:break <fn>` stops at the first body line, `<fn>:<line>` at a
 specific one.
