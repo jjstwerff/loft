@@ -13,6 +13,10 @@ Open — **Stage A done + B/C spiked on the interpreter** (2026-06-09).  The spi
 gating risk: **native lowers boolean to Rust `bool`, so tri-state is a native
 *representation* change (sub-arc E, resized to M), not a marshal tweak.**  Spike code
 reverted to keep the branch green; diff preserved as [`spike.diff`](spike.diff).
+**Semantics resolved — decision (B), 2026-06-09:** `==`/`!=` coerce (`null → false`);
+`b == null` is the sole null test.  Native design ✓ — the `u8`(storage)/`bool`(expr)
+two-form split mirrors the existing `text` String/Str `Context` split (see § Native
+backend design).
 `boolean` is today the **only** common-value scalar whose zero-value collides with
 its null sentinel (the null sentinel for `boolean` *is* `false`).  Every other
 scalar — `integer`, `float`, `text`, plain `enum` — distinguishes "zero value" from
@@ -43,9 +47,12 @@ so a `hash`/`index` map to `boolean` can express absent vs false vs true.
 > A `boolean` value that is not `not null` has **three runtime states** —
 > `false` = byte `0`, `true` = byte `1`, `null` = byte `255` — reusing the
 > byte-storage sentinel scheme plain enums and narrow ints **already** use.  The
-> third state is **preserved** by storage, assignment, copy, `==` / `!=`, and
-> `== null`; it **collapses to `false`** at the *one* truthiness chokepoint that
-> every forced context routes through.
+> third state is **preserved** by storage, assignment, copy, and field/param/return
+> passing; the **sole way to observe it is `== null`**.  It **collapses to `false`**
+> the instant it enters boolean *logic* — `if` / `while` / `assert` / `!` / `&&` /
+> `||` **and** `==` / `!=` (decision B): all coerce `null → false`, so
+> `null == false` is `true`, `null == true` is `false`, and only `b == null`
+> tests absence (exactly how `null` is tested on integer / float / text).
 
 Why this is a *consistency fix*, not a new feature: a `boolean` is stored in one
 byte (`data.rs:1055` — `Type::Boolean | Type::Enum(_, false, _) => 1`), the same
@@ -82,16 +89,17 @@ every cell is green on **both** backends and the probes graduate to
 | `if x` / `while x` / `assert(x)` | skip | run | **skip** | null coerces to false |
 | `!x` | true | false | **true** | `!null` = `!false` = true |
 | `x && y`, `x \|\| y` | logic | logic | **false-coerce** | coerce-at-context, not Kleene |
-| `x == false` | true | false | **false** | null distinguishable (the point) |
-| `x == true` | false | true | **false** | " |
-| `x == null` | false | false | **true** | the null test |
-| `x == y` (bool == bool) | raw byte | raw byte | raw byte | C4: distinguishability free if raw compare |
+| `x == false` | true | false | **true** | **B**: `==` coerces null→false |
+| `x == true` | false | true | **false** | **B**: coerce |
+| `x == null` | false | false | **true** | **B**: the sole null test (`==255`) |
+| `x == y` (bool == bool) | eq | eq | coerce | **B**: coerce both → bool, then compare (null==null → true) |
 | stored field read (nullable) | false | true | **null** | round-trips 255 |
 | stored field read (`not null`) | false | true | n/a | unchanged — 2-state |
 | nullable field **default-init** | — | — | **null** | flips from today's `false` |
 | `hash`/`index`/`sorted` map → bool | false | true | **null** | the real-consumer trigger |
-| `{x}` format / `{x:…}` | "false" | "true" | **?** | decide null rendering |
-| native `#rust fn(bool)` / `-> bool` | false | true | **false at boundary** | marshal coercion |
+| `{x}` format / `{x:…}` | "false" | "true" | **?** | decide null rendering (F) |
+| native: var / field / param / return | u8 | u8 | **u8 (255)** | **E**: storage form = `u8`; expr form = `bool` |
+| native: `if` / `!` / `&&` / `==` operand | coerce | coerce | coerce | **E**: var read coerces `u8→bool` (`==1`) in logical/compare ctx |
 | `vector<boolean>` element | false | true | **null** | byte-packed element round-trip |
 | closure capture of nullable bool | false | true | **null** | capture preserves third state |
 
@@ -155,34 +163,38 @@ forms *work*.
 | **B** — representation | nullable bool round-trips `255`; new `OpConvBoolFromNull` producer | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
 | **C** — truthiness chokepoint | `null → false` via `@v != 1` on the bounded 7-op set; generator reads bool operands as `u8` (UB fix) | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
 | **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | `null`-literal flipped in spike; `??` + `== null` open |
-| **D** — comparison + null test | `==`/`!=` distinguish `255` (raw byte — **spiked ✓**); add `== null`/`??` for boolean | Partial |
-| **E** — native rep → `u8` | **RESIZED to M, GATING**: native lowers boolean to Rust `bool` (no `255`); shared templates broke native (56 errors).  Native boolean rep must become `u8` end-to-end, in lockstep with C — not a marshal tweak.  [SPIKE.md](SPIKE.md) | Open — **critical path** |
+| **D** — `== null` + `??` + coerce-`==` | add boolean `== null` (`==255`) + `??`; flip `eq_bool`/`ne_bool` to coerce-compare (decision B) on both backends | Open |
+| **E** — native u8/bool split | **GATING, M.** `rust_type(Boolean, Variable) → "u8"`, else `"bool"` (mirrors the `text` String/Str split); coerce at the use-site seams below | Open — **critical path**, design ✓ |
 | **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
 | **G** — backward-compat scan | NARROW (per findings): unset-nullable default `false→null` + `== false` on now-null fields; scan + document | Open |
 | **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` + #256-supersession in `DESIGN_DECISIONS.md` | Open — last |
 
 ## Phase ordering
 
-1. **A first** — the matrix is the spec.  Map current behaviour at every cell on
-   both backends; the diff is the work list.  Do not design B–F until A is read.
-2. **B + C together** — representation and the coercion chokepoint are the core; a
-   `255` that stores but reads as `true` is worse than today.  Land both or neither.
-3. **D** — should be near-free if `==` is a raw byte compare (confirm in A).
-4. **E** — the native boundary is the most likely wrong-result (not clean-break)
-   site; audit every `#rust` signature touching `bool`.
-5. **F + G** — rendering + the compat scan; G gates the release call.
-6. **H** — docs, regression graduation, decision record.
+1. **A — done.**  Matrix measured (findings §); decision B set the expected column.
+2. **E with B/C** — native is the gating change and CANNOT lag the templates (shared
+   templates assume the operand type).  Land the `u8`/`bool` two-form split (E) in the
+   same change as the interpreter representation (B) + truthiness coercion (C); the
+   spike proved the interpreter half, E makes native match.
+3. **D + G256** — flip `eq_bool`/`ne_bool` to coerce-compare (both backends); add
+   boolean `== null` + `??`; retire the remaining #256 rejections.
+4. **F + G** — null rendering + the (narrow) compat scan; G gates the release call.
+5. **H** — docs, regression graduation, decision record (B + #256 supersession).
 
 ## Open design questions
 
-1. **`&&` / `||` / `!` — coerce vs Kleene.**  Recommend **coerce-at-context**
-   (`null → false`): simpler, matches "forced context", and keeps `if x`/`if !x`
-   backward-compatible.  Kleene three-valued logic (null propagates as "unknown")
-   is far more surface and contradicts the framing — decline unless A surfaces a
-   real consumer that needs it.
-2. **`== false` distinguishing null.**  Under a raw-byte compare `null == false` is
-   naturally `false` — keep it (it *is* the distinguishability win); `== null` is
-   the null test.  Decision needed only if A shows `==` is not a raw compare.
+1. **`&&` / `||` / `!` — coerce vs Kleene.**  **RESOLVED — coerce-at-context**
+   (`null → false`): simpler, matches "forced context", keeps `if x`/`if !x`
+   backward-compatible.  Kleene (null propagates as "unknown") declined.
+2. **`== false` distinguishing null — RESOLVED: decision (B), 2026-06-09.**  `==` /
+   `!=` **coerce** (`null → false`), so `null == false` is `true` and `null == null`
+   is `true`; the **sole** null test is `b == null` (`== 255`).  Chosen over (A)
+   raw-byte-distinguish because it is consistent with how `null` is tested on every
+   other type (`n == null`, never `n == 0`), keeps native's "expressions are `bool`"
+   rule carve-out-free, and matches "null collapses to false the instant it enters
+   boolean logic."  Consequence: the spike's raw-byte `eq_bool` flips to
+   coerce-compare on **both** backends (parity), and a boolean `== null` op is added
+   (G256 / D).  Graduate to `DESIGN_DECISIONS.md` + `LOFT.md` at sub-arc H.
 3. **Default-init flip under feature-freeze.**  Nullable bool field default flips
    `false → null`.  `not null` fields are unaffected (the escape hatch).  G's scan
    sizes the blast radius; the truthy idiom (`if field`) is preserved regardless.
@@ -190,6 +202,50 @@ forms *work*.
    scalars) — confirm against existing `{nullable_int}` behaviour in A.
 5. **Stack width.**  A local assigned from a nullable source (`b = h[k].flag`) must
    carry the third state — confirm the stack slot round-trips `255` (C6).
+
+## Native backend design — sub-arc E (decision B, design ✓ 2026-06-09)
+
+The spike proved the interpreter side and surfaced E as the gating risk: the
+`#rust` templates are shared, but native lowers boolean to a Rust `bool` (no room
+for `255`).  The fix is **not** "everything u8" (the spike's over-broad approach —
+56 errors); it is the **two-form** model `text` already uses, with `null` only ever
+living in the storage form:
+
+- **Storage form = `u8`** (0/1/255): locals, struct fields, vector elements,
+  **function params, function returns** — everything that persists or crosses a call
+  boundary and can therefore be `null`.
+- **Expression form = `bool`** (2-state, never `null`): the transient result of any
+  operation (`==`, `!`, `&&`, comparisons, literals).  Left untouched — this is why
+  the 56 expression sites stay valid.
+
+**Implementation seam** — `rust_type` *already* splits a type by `Context`
+(`data.rs`: `Type::Text(_) if context == Context::Variable => "String"` else
+`"Str"`).  Boolean rides the same fork:
+
+```rust
+Type::Boolean if context == &Context::Variable => "u8",  // storage form
+Type::Boolean => "bool",                                 // expression form
+```
+
+**Coercion points** (insert at the use site, like the text String↔Str wraps in
+`src/generation/emit.rs`):
+
+| Site | Coercion | Code |
+|---|---|---|
+| var read → logical/compare/`if` ctx | `u8 → bool` (lossy, intended) | `(var == 1)` |
+| `b == null` (the null test) | u8, raw | `(var == 255)` |
+| bool expr → store / param / return / var-copy | `bool → u8` | `(expr as u8)` |
+| `if` / `while` predicate (`output_test_predicate`, `emit.rs:1010`) | `u8 → bool` | `cond == 1` |
+| param decl (`mod.rs:802`) / return type (`mod.rs:817`) | type = `u8` | — |
+| `OpConvBoolFromNull` | producer | `255u8` |
+
+**Parity note (decision B):** `==` / `!=` coerce on *both* backends — so the
+interpreter's spike `eq_bool` (raw-byte compare) flips to coerce-compare
+(`(v1 == 1) == (v2 == 1)`), and native compares the two coerced `bool`s.  `null ==
+false` → `true`; `b == null` is the only distinguishing test.  The differential
+sweep (Goal D) must assert interp ≡ native on the full `{false,true,null}` × op
+matrix — the backends agreeing on the boolean's *value semantics* despite differing
+on its *Rust type* is the property E must hold.
 
 ## Over-unification guard (Design Protocol 1, step 4)
 
