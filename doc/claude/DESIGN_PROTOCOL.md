@@ -85,18 +85,76 @@ the boundary matrix is to a bug.
 
 ---
 
+## The other half — when you cannot form the invariant at all
+
+Over-reach is the failure of a design you **already have** — a candidate invariant, too clean,
+that a falsifying probe can break.  It assumes the generative step has *succeeded*.  There is a
+symmetric failure one move earlier, where it has **not**: you cannot state a candidate invariant
+at all.  Step 1 below names this state — *"a pile of cases, not a design yet"* — but treats it
+as a stop sign.  On one class of problem it is the **main event**.
+
+**Exact-invariant domains.**  In geometry, caching / serialization, hashing, store / memory
+lifetime, and protocol round-trips, the correct design is not an open space to explore — it is
+a single **construction that already exists** and must be **recovered**.  There the
+characteristic failure is not over-reach but **failing to generate the right candidate**: the
+mind reaches for an **approximation** (geometry — fit a line, bucket the angles, smooth the
+wobble) or **chases the symptom** (a store desync surfacing as three different corruptions).
+Both are *iterating toward an answer that already exists exactly* — motion that never
+converges, because the target is a point, not a region.
+
+**Same epistemics, opposite instrument.**  This is still sight, not willpower — you cannot
+*will* the invariant into view, and "think harder" does nothing for the gap.  You need better
+eyes.  But the instrument here is **constructive, not falsifying**: a falsifying probe needs a
+claim to break, and you have none.  The generative instrument is to **plot a concrete instance
+of the *answer*** — the exact target output / state for one specific input — or build the
+**cheapest thing that *produces* it** (a throwaway prototype in a scratch language, a
+round-trip test), then **read the invariant off it.**  The construction you could not name in
+the abstract is legible in one worked instance.
+
+- *Caching (in-tree).*  The startup-cache desync (`store.rs` "Incomplete record") was
+  symptom-chased across manifestations until the **target store state after a round-trip** was
+  plotted concretely; the invariant then read out at once — *the round-trip must reproduce
+  every binding identically, the synthetic vector / tuple / fn wrappers included* (stamp them
+  `source=0` so `rebuild_indices` recreates the global binding).  A one-line fix behind a large
+  discovery cost.
+- *Geometry (a consumer — the dogfood this protocol prizes).*  A hex-grid wall straightener
+  resisted eight approximations (Douglas–Peucker, PCA line-fit, angle-buckets) against an
+  *"exact, not an approximation"* spec, until the construction was drawn as a **plotted
+  end-result** (subdivide each hex into triangles; keep the band the boundary cuts, drop the
+  full-inside / full-outside ones).  It was only **pinpointable after a throwaway prototype
+  produced it** — then ported to the real language unchanged.
+
+**A sharp distinction from the bug side.**  The matrix law is *"the truth is in the class,
+invisible in the instance"* — beware acting on one instance.  This does **not** contradict
+"plot one concrete instance," because the instances are opposites: an instance of the
+**problem / symptom** is the trap (it hides the class it belongs to); an instance of the
+**answer / end-result** is the instrument (you read the invariant — and therefore the class —
+*off* it).  One misleads, the other generates.
+
+**Where this sits in the protocol.**  It runs *before* step 3's falsification, and it moves
+step 5's build *forward*: for an exact-invariant domain the build is not the last probe but the
+**first, generative** act — the construction is named *by* building the cheapest version, the
+named invariant is then probed (steps 3–4), and only then is the real one built.  Don't jump
+the gun: the cheap prototype is where the design gets **pinned**, not merely confirmed.
+
+---
+
 ## The protocol
 
 Run it when a design is **load-bearing** — an algorithm that will carry weight
 (core representation, runtime, memory, codegen, a public contract) — or when
-something *feels* fragile.  Not reflexively (see *Keep it light*).
+something *feels* fragile, **or when the domain is exact-invariant** (a
+construction to *recover*, not a space to explore — see *The other half* above).
+Not reflexively (see *Keep it light*).
 
 1. **State the design as one invariant.**  One sentence: *under what single rule
    does a case you never tested behave correctly, for the same reason the tested
    ones do?*  If you cannot name it, it is not a design yet — it is a pile of
-   cases.  (This is the difference between a matrix that is *confirmatory*
-   — evidence an invariant holds — and one that is *constitutive* — the cells are
-   the only reason it works.)
+   cases; on an exact-invariant domain the way out is **generative, not more
+   thinking** — plot a concrete instance of the *answer* and read the invariant
+   off it (*The other half* above).  Naming it is the difference between a matrix
+   that is *confirmatory* — evidence an invariant holds — and one that is
+   *constitutive* — the cells are the only reason it works.
 
 2. **Count the re-assertion sites — the prospective tell.**  How many independent
    sites must re-state the invariant for the design to be correct?  If the answer

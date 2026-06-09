@@ -11,10 +11,12 @@ description: >-
   wrote down. USE THIS whenever you are about to fix a
   non-trivial bug (especially a crash, silent corruption, or wrong result),
   design or refactor a load-bearing algorithm (core representation, runtime,
-  memory, codegen, a public contract or data format), or whenever a change feels
-  fragile or "longer than expected for what it does" — even when nobody asked
-  for rigor and the first fix looks obvious. Routes to the matrix-first debug
-  protocol and Design Protocol 1; does not replace them.
+  memory, codegen, a public contract or data format), whenever a change feels
+  fragile or "longer than expected for what it does", or when you keep reaching for
+  an approximation in an exact-invariant domain (geometry, caching, hashing,
+  round-trips) and can't pin the construction that's exactly right — even when
+  nobody asked for rigor and the first fix looks obvious. Routes to the matrix-first
+  debug protocol and Design Protocol 1; does not replace them.
 user-invocable: true
 ---
 
@@ -70,6 +72,16 @@ one level apart** — learn the column you're in, but know it's one method.
    the uses through one chokepoint and make it loud (its own § below).
    *"I can't see the root / can't name the invariant yet"* means **the
    instrument isn't finished** — never a license to act on the one case in hand.
+   When you cannot form a candidate invariant *at all* and the domain is
+   **exact** (geometry, caching, hashing, store/memory lifetime, round-trips — the
+   design is a single construction to *recover*, not a space to explore), the
+   unfinished instrument is **constructive, not falsifying**: there is no claim to
+   break, so plot a concrete instance of the *answer* (the exact target
+   output/state) — or build the cheapest thing that *produces* it — and **read the
+   invariant off it**. Mind the symmetry with step 3: an instance of the
+   **problem/symptom** is the trap (it hides its class); an instance of the
+   **answer/end-result** is the instrument (you read the class *off* it). (§ The
+   other half — `DESIGN_PROTOCOL.md`.)
 
 3. **The truth is visible in the class, invisible in the instance.** The shared
    mechanism behind a family of "different" symptoms shows up *in the matrix* and
@@ -253,7 +265,10 @@ canonical docs; read the one for your mode.
   files, `--interpret`-first seeing loop, native-env traps that fake failures.
 - **DESIGN method** — `doc/claude/DESIGN_PROTOCOL.md` (Design Protocol 1 — A
   Design Is a Testable Hypothesis): name the invariant, count the re-assertion
-  sites, probe to falsify, build, validate against the prediction.
+  sites, probe to falsify, build, validate against the prediction. **§ The other
+  half** covers the move one step earlier — when you cannot form a candidate at all
+  (an exact-invariant domain): the constructive instrument, plot the answer-instance
+  and read the invariant off it.
 - **DESIGN reference** — `doc/claude/DESIGN_VERIFICATION.md` § C1: the six
   verification questions (name-the-invariant, consequence/cause ratio,
   cost-of-next-case, one-home-per-fact, subtraction-not-a-guard, matched-to-domain)
