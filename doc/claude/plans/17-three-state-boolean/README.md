@@ -7,13 +7,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation yet.  `boolean` is today the **only**
-common-value scalar whose zero-value collides with its null sentinel (the null
-sentinel for `boolean` *is* `false`).  Every other scalar — `integer`, `float`,
-`text`, plain `enum` — distinguishes "zero value" from "absent".  This plan makes
-`boolean` join that model: three-state in data (false / true / null) unless a field
-is `not null`, with `null` collapsing to `false` at the single boolean-logic
-chokepoint.  Tracked as [@PLN17](https://github.com/loft-lang/plans/issues/17).
+Open — **Stage A characterization done** (2026-06-09); no implementation yet.
+`boolean` is today the **only** common-value scalar whose zero-value collides with
+its null sentinel (the null sentinel for `boolean` *is* `false`).  Every other
+scalar — `integer`, `float`, `text`, plain `enum` — distinguishes "zero value" from
+"absent".  Probes confirmed boolean is 2-state **at the type level**, not merely in
+storage: a deliberate **#256 guard cluster** *rejects* `null` on boolean (`null`
+literal, `return null`, `??`, `== null` all error).  This plan replaces those
+rejections with a real representation: three-state in data (false / true / null)
+unless a field is `not null`, with `null` collapsing to `false` at the single
+boolean-logic chokepoint.  Tracked as [@PLN17](https://github.com/loft-lang/plans/issues/17).
 
 ## Goal
 
@@ -91,18 +94,67 @@ Extract the **real-consumer probe** verbatim from the `hash → boolean` shape t
 agent's confusion pass hit (issue body) — real extraction catches classes the
 synthetic cells miss.
 
+## Stage A findings — current behaviour (measured 2026-06-09, `--interpret`)
+
+Probes in `/tmp/claude/bprobes/`.  The headline: boolean is already 2-state **at the
+type level**, enforced by a deliberate guard cluster — so the plan mostly *adds*
+capability rather than changing behaviour of currently-valid programs (small blast
+radius).
+
+**Calibration — `integer` is the reference model (everything boolean lacks):**
+`fn -> integer { null }` compiles; `n == null` → `true`; `n == 0` → `false`
+(distinguishable); `if n`/`!n` treat null as falsy.  Boolean is *uniquely*
+restricted.
+
+**The #256 guard cluster — boolean rejects null at parse/type time (backend-independent):**
+
+| Form | Result today | Site |
+|---|---|---|
+| `fn f() -> boolean { null }` / `return null` | **error** "Cannot use null with boolean — boolean has no null representation" | `parser/mod.rs:6127` |
+| `b ?? x` (boolean LHS) | **error** "Cannot use null coalescing '??' on boolean …" | `parser/operators.rs:1237` |
+| `b == null` | **error** "No matching operator '==' on 'boolean' and 'null'" | operator resolution |
+
+These are the single home to flip: #256 chose to *reject* null-on-boolean (make the
+collision loud); this plan supersedes that by giving boolean a real null so all three
+forms *work*.
+
+**Runtime cells — where null silently becomes false:**
+
+- Unset **nullable** field → reads `false` (`if`→else, `!nf`→true, `==false`→true,
+  `{nf}`→`"false"`).  Indistinguishable from explicit `false`.
+- **`not null`** unset field → also `false`.  → **No observable difference between
+  `boolean` and `boolean not null` today** — the plan introduces it.
+- `&&` / `||` with an unset(=false) operand behave exactly as `false`.
+- **Null record-ref projection** (`fc.on` where `fc = h["absent"]`) does **not**
+  halt — it silently returns `false` and continues.
+- The **real consumer is uncompilable today**: a `fn get(h, k) -> boolean { …; if !f
+  { return null } f.on }` accessor fails on the #256 `return null` guard — exactly
+  the `hash → boolean` blockage that motivated this plan.
+
+**Implications for the design:**
+
+1. The truthiness chokepoint fix is real and needed: `goto_false` reads the byte as
+   `!= 0` (`fill.rs:302`), so a `255` sentinel would read **true** — must coerce.
+2. `== null` / `??` / `null`-literal on boolean are **net-new surface** to add (not
+   changes to existing valid code), since they don't compile today.
+3. Backward-compat scan (sub-arc G) is *narrow*: programs relying on `bool == null`
+   or `return null`-bool don't exist (they never compiled).  The only behavioural
+   flip is unset-nullable-field default `false → null` and `== false` no longer
+   matching a now-null field.
+
 ## Sub-arcs
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — Stage A matrix | probes for every cell above, both backends; record current vs expected | Open |
-| **B** — representation | nullable bool field/element default-inits to `255`; storage + stack round-trip `255` (C5/C6) | Open — blocked on A |
-| **C** — truthiness chokepoint | `null → false` at the one forced-context site set (`OpGotoFalseWord` + peers); prove `&&`/`\|\|`/`!`/match-guard route through it (C3) | Open — blocked on A |
-| **D** — comparison + null test | `==`/`!=`/`== null` distinguish `255` (likely free if raw-byte — C4) | Open — blocked on A |
-| **E** — native marshalling | `#rust` `bool` params/returns coerce `null → false` at the boundary | Open — blocked on A |
-| **F** — format rendering | decide + implement `{nullable_bool}` output | Open |
-| **G** — backward-compat scan | grep suite + stdlib for `== false` / default-false reliance; fix or document | Open |
-| **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` decision in `DESIGN_DECISIONS.md` | Open — last |
+| **A** — Stage A matrix | probes for every cell above; record current vs expected | **Done** 2026-06-09 (see findings §) |
+| **B** — representation | nullable bool field/element default-inits to `255`; storage + stack round-trip `255` (C5/C6) | Open |
+| **C** — truthiness chokepoint | `null → false` at the one forced-context site set (`OpGotoFalseWord`/`goto_false` + peers); prove `&&`/`\|\|`/`!`/match-guard route through it (C3) | Open |
+| **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | Open |
+| **D** — comparison + null test | `==`/`!=`/`== null`/`??` distinguish `255` (raw-byte compare — C4) | Open |
+| **E** — native marshalling | `#rust` `bool` params/returns coerce `null → false` at the boundary | Open |
+| **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
+| **G** — backward-compat scan | NARROW (per findings): unset-nullable default `false→null` + `== false` on now-null fields; scan + document | Open |
+| **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` + #256-supersession in `DESIGN_DECISIONS.md` | Open — last |
 
 ## Phase ordering
 
