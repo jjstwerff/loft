@@ -2232,6 +2232,70 @@ impl Data {
         }
     }
 
+    /// Cache-verify oracle: compare the DERIVED indices (rebuilt by
+    /// `rebuild_indices` from the serialized `definitions`, and NOT themselves
+    /// serialized) against `other`.  A warm cache load rebuilds these, so any
+    /// binding the fresh parse holds that the rebuild can't reproduce — a
+    /// cross-source `def_names` entry, the `use_names` module map — is a silent
+    /// round-trip gap that `compare_data` (definitions + header only) misses.
+    /// Returns one line per divergence; empty = identical.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn derived_indices_diff(&self, other: &Self) -> Vec<String> {
+        let mut out = Vec::new();
+        let name_of = |d: &Self, v: u32| {
+            d.definitions
+                .get(v as usize)
+                .map_or("<oob>", |x| x.name.as_str())
+                .to_string()
+        };
+        for (k, v) in &self.def_names {
+            match other.def_names.get(k) {
+                None => out.push(format!(
+                    "def_names: (\"{}\", src {}) -> #{} '{}' present in FRESH, MISSING in loaded",
+                    k.0,
+                    k.1,
+                    v,
+                    name_of(self, *v)
+                )),
+                Some(ov) if ov != v => out.push(format!(
+                    "def_names: (\"{}\", src {}) fresh=#{} loaded=#{}",
+                    k.0, k.1, v, ov
+                )),
+                _ => {}
+            }
+        }
+        for (k, v) in &other.def_names {
+            if !self.def_names.contains_key(k) {
+                out.push(format!(
+                    "def_names: (\"{}\", src {}) -> #{} EXTRA in loaded (not in fresh)",
+                    k.0, k.1, v
+                ));
+            }
+        }
+        if self.operators != other.operators {
+            out.push(format!(
+                "operators map differs: fresh {} entries, loaded {} entries",
+                self.operators.len(),
+                other.operators.len()
+            ));
+        }
+        if self.possible != other.possible {
+            out.push(format!(
+                "possible map differs: fresh {} keys, loaded {} keys",
+                self.possible.len(),
+                other.possible.len()
+            ));
+        }
+        if self.use_names != other.use_names {
+            out.push(format!(
+                "use_names module map differs: fresh {:?}, loaded {:?}",
+                self.use_names, other.use_names
+            ));
+        }
+        out
+    }
+
     #[must_use]
     pub fn get_source(&self, name: &str) -> u16 {
         if let Some(nr) = self.use_names.get(name) {
