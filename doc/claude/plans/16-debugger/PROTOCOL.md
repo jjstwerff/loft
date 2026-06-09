@@ -164,19 +164,16 @@ all surfaces), not in the server.
    - Program `print` output is captured by a thread-local sink (`print_or_capture`,
      hooked in `fill.rs`) and streamed as `output` events, so it never corrupts the
      protocol on stdout.
-   - **Known limit (routed → [README § D2](README.md), elevated):** `eval` of a *bare
-     heap value* renders structs/enums (via `.to_json()`) but not bare vectors — and even
-     structs go through `.to_json()` rather than returning the value directly, because the
-     reconstruct-and-rerun capture harness faults when a synthetic fn **returns** a heap
-     value on a *clone of the paused state* (the fn-return deep-copy targets a store the
-     clone never allocated; `allocation.rs` store-index OOB). The robust end state is
-     **D2 — live-frame eval**: evaluate against the **live paused frame**'s `DbRef`s in
-     place, not a reconstruct-from-literal clone. Promoted from "a later slice" to elevated
-     by the `story`/crawler consumer, whose data is *all* `vector<struct>` — exactly where
-     this bites — and because the debugger shares the store engine with the bugs that
-     consumer hunts, so trustworthy heap eval is load-bearing there. The frame's `locals`
-     already render every value, so the variable panel is unaffected; inspect a vector's
-     elements by index/field meanwhile.
+   - **`eval` of a bare heap local — fixed by [D2](README.md) (LANDED).** A bare local
+     holding a heap value (struct / vector / collection) is read **live, in place** —
+     `show_json` renders its actual `DbRef` from the paused store, so a bare `vector` is a
+     real JSON array (was null) and a struct a JSON object, faithfully (no reconstruct,
+     no clone, no fn-return copy → no `allocation.rs` OOB; and it shows what is *in* the
+     store, never a copy — load-bearing for the `story`/crawler consumer, whose
+     `vector<struct>` data is where the old limit bit). Liveness-gated like the variables
+     panel. A heap *field path* (`eval s.fi_q`, a vector field) is the next D2 increment —
+     it still routes through the reconstruct path → null for a vector field; `eval s` shows
+     the containing struct (with the field) meanwhile.
 3. **The `--serve` WebSocket + browser client.** The same driver over a WebSocket; the
    browser shell reuses the viewer (tree + code-with-line-numbers) and adds the gutter,
    variables / watch panels, and REPL console — incremental → IDE. This is the surface the

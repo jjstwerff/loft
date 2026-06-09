@@ -134,10 +134,57 @@ fn rpc_eval_struct_as_json() {
         "{\"id\":6,\"req\":\"disconnect\"}".to_string(),
     ]);
     assert!(out.contains("\"event\":\"stopped\""), "stopped: {out}");
-    // Eval of a bare struct → JSON object via loft's inbuilt `.to_json()`.
+    // Eval of a bare struct → JSON object via the D2 live-frame read (show_json on
+    // the live DbRef).
     assert!(
         out.contains("\"value\":{\"x\":9,\"y\":2}"),
         "eval p as JSON: {out}"
+    );
+    assert!(
+        out.contains("\"event\":\"terminated\""),
+        "terminated: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// @PLN16 D2 — eval of a bare *vector* local (the case the reconstruct-eval path
+// faulted on, returning null): the live-frame read renders it straight from the store,
+// as a real JSON array — including a vector of structs.
+#[test]
+fn rpc_eval_bare_vector_live() {
+    let path = tmp_program(
+        "vec",
+        "struct Mob { hp: integer }\n\
+         fn build() -> integer {\n\
+        \x20 nums = [10, 20, 30];\n\
+        \x20 mobs = [Mob { hp: 5 }, Mob { hp: 9 }];\n\
+        \x20 total = nums[0] + mobs[0].hp;\n\
+        \x20 total\n\
+         }\n\
+         fn main() {\n  build()\n}\n",
+    );
+    let file = path.to_str().unwrap();
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        // line 5 is `total = nums[0] + mobs[0].hp;` — both locals are live (read here).
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":5}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"eval\",\"expr\":\"nums\"}".to_string(),
+        "{\"id\":5,\"req\":\"eval\",\"expr\":\"mobs\"}".to_string(),
+        "{\"id\":6,\"req\":\"continue\"}".to_string(),
+        "{\"id\":7,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(out.contains("\"event\":\"stopped\""), "stopped: {out}");
+    // The previously-failing case: a bare vector → a real JSON array, not null.
+    assert!(
+        out.contains("\"id\":4,\"ok\":true,\"value\":[10,20,30]"),
+        "eval nums as a JSON array: {out}"
+    );
+    assert!(
+        out.contains("\"id\":5,\"ok\":true,\"value\":[{\"hp\":5},{\"hp\":9}]"),
+        "eval mobs (vector of structs) as JSON: {out}"
     );
     assert!(
         out.contains("\"event\":\"terminated\""),

@@ -1718,13 +1718,35 @@ impl ReplSession {
     }
 
     /// @PLN16 phase 2 — evaluate `expr` against the paused frame and render the result
-    /// as **JSON** via the inbuilt serializer (`json_to_text`) — the form the wire
-    /// protocol's `eval` reply carries.  `None` when not paused or it doesn't evaluate.
+    /// as **JSON** — the form the wire protocol's `eval` reply carries.  A bare heap
+    /// local is read live and serialised with `show_json` (**D2**); a computed
+    /// struct/enum goes through `.to_json()`; scalars are raw JSON literals.  `None`
+    /// when not paused or it doesn't evaluate.
     pub fn debug_eval_json(&mut self, expr: &str) -> Option<String> {
         self.debug_eval_fmt(expr, true)
     }
 
     fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
+        // @PLN16 D2 — a bare local that holds a heap value (struct / vector / collection)
+        // is read **live, in place**: render its actual `DbRef` from the paused store
+        // rather than reconstructing it from a rendered literal on a clone. That is both
+        // correct (a bare `vector` faults when returned from the reconstruct-eval capture
+        // fn) and *trustworthy* — it shows what is in the store, not a copy of it, which
+        // matters when the value being inspected is the suspect in a store-lifetime bug.
+        // A non-bare expression (a path, an index, any computed form) falls through to the
+        // reconstruct path below, which handles scalars + struct-via-`.to_json()`.
+        let trimmed = expr.trim();
+        let is_bare_ident = trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if is_bare_ident
+            && let Some(state) = self.paused.as_deref()
+            && let Some(v) = state.eval_frame_heap(trimmed, json, &self.parser.data)
+        {
+            return Some(v);
+        }
         let prefix = {
             let frame = self.paused.as_deref()?.paused_frame()?;
             let mut p = String::new();

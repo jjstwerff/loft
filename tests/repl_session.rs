@@ -432,6 +432,38 @@ fn repl_interactive_eval_at_frame() {
     assert!(!s.debug_continue());
 }
 
+/// @PLN16 D2 — a **bare heap local** (struct / vector) is read **live, in place** at the
+/// pause: `show_loft` renders the actual `DbRef` from the store, with no reconstruct and
+/// no fn-return deep-copy.  A bare `vector` is the case the reconstruct-eval path could
+/// not return (it faulted), so this proves the live read both fixes it and is faithful.
+#[test]
+fn repl_interactive_eval_bare_heap_live() {
+    let mut s = session();
+    for d in [
+        "struct Mob { hp: integer }",
+        "fn run(v: vector<integer>, m: Mob) -> integer {\n  v[0] + m.hp\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("run");
+    assert!(matches!(
+        s.eval("run([10, 20, 30], Mob { hp: 7 })"),
+        Eval::Paused
+    ));
+    assert_eq!(
+        s.debug_eval("v").as_deref(),
+        Some("[10,20,30]"),
+        "bare vector — live read (the case the reconstruct path faulted on)"
+    );
+    assert_eq!(
+        s.debug_eval("m").as_deref(),
+        Some("Mob{hp:7}"),
+        "bare struct — live read"
+    );
+    assert!(!s.debug_continue());
+}
+
 /// @PLN16 M1a (interactive) — **whole-value heap edit**: replace a struct local with
 /// a freshly-constructed one at the pause (`pt = Point{...}`), then resume and observe
 /// the program use the new value.  The value is built on a throwaway State above the

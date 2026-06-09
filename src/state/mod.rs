@@ -2156,6 +2156,52 @@ impl State {
         Self::is_heap_type(&tp).then(|| tp.name(data))
     }
 
+    /// @PLN16 D2 — **live-frame read** of a bare heap local: render frame local `name`
+    /// straight from its **live `DbRef`** in the paused store — own-format
+    /// (`json=false`) or RFC-8259 JSON (`json=true`).  This is the faithful eval path:
+    /// no reconstruct, no clone, no fn-return deep-copy — `show_json` / `show_loft` read
+    /// the value where it lives, so a `vector` renders correctly (the reconstruct-eval
+    /// path faults returning one from a cloned state) **and** the read shows what is
+    /// *actually* in the store, never a copy of it — load-bearing for a consumer
+    /// hunting store-lifetime bugs where a *copy* can drop/desync a field.  `None` for
+    /// a non-heap or unknown local, so the caller falls through to the reconstruct path
+    /// for scalars / computed expressions.  Mirrors [`render_frame_local`]'s heap arm.
+    #[must_use]
+    pub fn eval_frame_heap(
+        &self,
+        name: &str,
+        json: bool,
+        data: &crate::data::Data,
+    ) -> Option<String> {
+        // Only read a local that is **live** at the pause (shown in the captured frame):
+        // an un-live heap slot holds stack garbage, and reading it as a `DbRef` would
+        // index a garbage store (the very OOB this read exists to avoid). The D0
+        // variables panel gates the same way; an un-live name falls through to the
+        // reconstruct path (which likewise lacks it → a clean `None`, never a crash).
+        if !self.frame_local_is_live(name) {
+            return None;
+        }
+        let (rec, at, tp, _is_arg) = self.frame_slot(name, data)?;
+        if !Self::is_heap_type(&tp) {
+            return None;
+        }
+        let tp_known = self.database.name(&tp.name(data));
+        if tp_known == u16::MAX {
+            return None;
+        }
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        let mut out = String::new();
+        if json {
+            self.database.show_json(&mut out, &db, tp_known, false);
+        } else {
+            self.database.show_loft(&mut out, &db, tp_known);
+        }
+        Some(out)
+    }
+
     /// @PLN16 M1a — point a **heap** frame local at an already-materialised value by
     /// writing the root `DbRef` into the live frame slot.  The value must already live
     /// in this `State`'s stores (built + grafted by the debugger's whole-value edit —
