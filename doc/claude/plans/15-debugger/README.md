@@ -254,6 +254,57 @@ The host-agnostic engine is A–F; the surfaces are G.
 7. **G2 (DAP + browser UI)** — the protocol adapter (`loft-dap`, scoped under
    @PLN/09-lsp LSP.3) and the web-IDE surface consume the same API as G1.
 
+## Path to the full debugger
+
+Where it stands: breakpoints · step into/over/out/continue · conditional breaks ·
+REPL-at-frame (read + eval any expression, every type) · live edit of every inline
+scalar, text, simple-enum, **and scalar struct fields** · the **store change
+journal** built + tested (two-file binary model, probe #2 confirmed). The remaining
+path to a complete, host-agnostic, persistable debugger, ordered by dependency.
+*Correctness is not re-argued per slice — each is built to the reliability discipline
+already homed in [GOALS.md § Purpose](../../GOALS.md#purpose--what-loft-is-for) (the
+"software that doesn't fail" aim), [DESIGN_PROTOCOL.md](../../DESIGN_PROTOCOL.md), and
+the `engineering-rigor` skill; the journal's invariant lives in
+[STORE_JOURNAL.md](STORE_JOURNAL.md).*
+
+**M1 — finish the edit surface (engine).** Make *any* value editable at a break.
+- **M1a — whole-value heap edits** (`pt = Point{…}`, vectors, struct-enums): run the
+  constructor on a build-store clone, journal its inserts, replay into the live store
+  — **no `DbRef` remap** (probe #2: `claim` is deterministic). *Unblocked now.* Home:
+  STORE_JOURNAL.md insert/free slice.
+- **M1b — vector-element + nested-path edits** (`v[i] = 5`, `pt.inner.x = 9`): extend
+  the `set_frame_field` resolver to indices and chains. Small.
+
+**M2 — undo / redo (journal-driven).** Route *every* edit path (scalar, text, enum,
+field, whole-value) through the journal so each edit is recorded; `:undo` reverts,
+`:redo` replays. Cross-cutting; the journal already does record/apply/revert.
+
+**M3 — watchpoints (data breakpoints).** Break when a value/region changes — powered
+by the per-store `generation` counter + the journal's record-change model; the
+condition reuses **E**.
+
+**M4 — persistence & time-travel (the WAL matures).**
+- **M4a — persistent journal**: `open()` + mmap + recovery (durable count,
+  trust-to-last-entry). With the data and (loft2) schema stores mmapped, this is the
+  single-level store — the AS/400 aim, referenced from GOALS, not restated here.
+- **M4b — time-travel**: a whole-execution journal (funnel the stack-frame raw
+  writes) → step *backward* by reverse-replay. Needs the per-op recording extension
+  STORE_JOURNAL flags as out of the edit-scope.
+
+**M5 — surfaces (where it lives).** All consume the unchanged A–F host-agnostic API.
+- **M5a — file-run entry** (`prog.loft:42`): the CLI file:line debugger (`file:line`
+  is unique only for file-based source — deferred from G1 for exactly that reason).
+- **M5b — G2 browser / DAP** (the *natural home*): `loft-dap` (under @PLN/09-lsp
+  LSP.3) + web UI — gutter breakpoints, variables panel, call stack, REPL console.
+- **M5c — embedded**: the lavition in-game console drives the same API in-process.
+
+**M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
+re-entry (a non-looping program, the *exact* current invocation, step-out into a
+compiled caller *now*). The main-loop re-entry side-steps it for lavition's
+frame-loop domain; the general case needs cdylib-side safepoint metadata — the hard
+part HotSpot pays for. Revisit only if the non-loop / exact-frame case becomes
+load-bearing.
+
 ## Open design questions
 
 1. **Interpret scope — static vs on-demand.** "Everything that calls that routine"

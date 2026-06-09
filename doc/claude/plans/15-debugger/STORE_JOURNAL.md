@@ -266,6 +266,9 @@ lavition direction (each is "see/transfer what changed in the store"):
 ## See also
 
 - [README.md](README.md) — the @PLN15 sub-arc table (G1 / heap live edits).
+- [../future/38-loft-store-durable/README.md](../future/38-loft-store-durable/README.md)
+  — @PLAN38 durable stores; its **Tier 3 (WAL)** builds on this journal (§ Convergence
+  there) — the persistence/mmap consumer of this substrate.
 - [../../DATABASE.md](../../DATABASE.md) — store allocator, `Stores`, `DbRef`.
 - [../../GOALS.md](../../GOALS.md) Goal E — robustness by subtraction (one owned
   home for the shared medium — here, the journal owns "what changed").
