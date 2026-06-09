@@ -1,0 +1,82 @@
+diff --git a/default/01_code.loft b/default/01_code.loft
+index 17c13ec7..1528d6d6 100644
+--- a/default/01_code.loft
++++ b/default/01_code.loft
+@@ -84,9 +84,9 @@ fn OpGoto(step: const i8);
+ fn OpGotoWord(step: const i16);
+ #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
+ fn OpGotoFalse(step: const i8, if_false: boolean);
+-#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
++#rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
+ fn OpGotoFalseWord(step: const i16, if_false: boolean);
+-#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
++#rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
+ fn OpCall(d_nr: const integer, args_size: const u16, to: const integer);
+ #rust"s.fn_call(@d_nr as u32, @args_size, @to);"
+ fn OpReturn(ret: const u16, value: const u8, discard: const u16);
+@@ -101,13 +101,13 @@ fn OpConstTrue() -> boolean;
+ fn OpConstFalse() -> boolean;
+ #rust"false"
+ fn OpCastTextFromBool(v1: boolean) -> text;
+-#rust"if @v1 {{\"true\"}} else {{\"false\"}}"
++#rust"if @v1 == 1 {{\"true\"}} else if @v1 == 255 {{\"null\"}} else {{\"false\"}}"
+ fn OpVarBool(pos: const u16) -> boolean;
+-#rust"*s.get_var::<bool>(@pos)"
++#rust"*s.get_var::<u8>(@pos)"
+ fn OpPutBool(var: const u16, value: boolean);
+ #rust"s.put_var(@var, @value);"
+ fn OpNot(v1: boolean) -> boolean;
+-#rust"!@v1"
++#rust"@v1 != 1"
+ // --- Math ---
+ // Functions for numeric computation.
+ // All trigonometric functions work in radians.
+@@ -130,6 +130,8 @@ fn OpPutCharacter(pos: const u16, value: character);
+ #rust"s.put_var(@pos, @value);"
+ fn OpConvIntFromNull() -> integer;
+ #rust"i64::MIN"
++fn OpConvBoolFromNull() -> boolean;
++#rust"255u8"
+ fn OpConvCharacterFromNull() -> character;
+ #rust"char::from(0)"
+ fn OpConvCharacterFromInt(v1: integer) -> character;
+diff --git a/src/create.rs b/src/create.rs
+index a3f53b1f..c8d5eafe 100644
+--- a/src/create.rs
++++ b/src/create.rs
+@@ -233,6 +233,12 @@ pub const OPERATORS: &[fn(&mut State)] = &["
+                         "    let v_{} = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\\0');",
+                         a.name
+                     )?;
++                } else if matches!(a.typedef, Type::Boolean) {
++                    // @PLN17 spike: booleans are tri-state (0=false, 1=true,
++                    // 255=null).  Reading the byte as `bool` is UB for 255, so read
++                    // the raw u8 — truthiness ops coerce (255 -> false) and
++                    // value-movement / comparison ops preserve it.
++                    writeln!(into, "    let v_{} = *s.get_stack::<u8>();", a.name)?;
+                 } else {
+                     writeln!(into, "    let v_{} = *s.get_stack::<{tp}>();", a.name)?;
+                 }
+diff --git a/src/parser/mod.rs b/src/parser/mod.rs
+index 1bbc1df0..fd5cf529 100644
+--- a/src/parser/mod.rs
++++ b/src/parser/mod.rs
+@@ -6120,14 +6120,10 @@ impl Parser {
+         match tp {
+             Type::Integer(_) | Type::Character => self.cl("OpConvIntFromNull", &[]),
+             Type::Boolean => {
+-                if !self.first_pass {
+-                    diagnostic!(
+-                        self.lexer,
+-                        Level::Error,
+-                        "Cannot use null with boolean — boolean has no null representation"
+-                    );
+-                }
+-                Value::Boolean(false)
++                // @PLN17 spike: boolean is tri-state (255 = null sentinel).
++                // Supersedes the #256 rejection — `null` on a boolean now emits the
++                // 255 sentinel; truthiness contexts coerce it to false.
++                self.cl("OpConvBoolFromNull", &[])
+             }
+             Type::Enum(tp, _, _) => self.cl(
+                 "OpConvEnumFromNull",

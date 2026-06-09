@@ -7,7 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Stage A characterization done** (2026-06-09); no implementation yet.
+Open — **Stage A done + B/C spiked on the interpreter** (2026-06-09).  The spike
+([SPIKE.md](SPIKE.md)) confirmed the invariant holds under construction (the
+`hash → boolean` consumer is unblocked) with a bounded 7-op change, and surfaced the
+gating risk: **native lowers boolean to Rust `bool`, so tri-state is a native
+*representation* change (sub-arc E, resized to M), not a marshal tweak.**  Spike code
+reverted to keep the branch green; diff preserved as [`spike.diff`](spike.diff).
 `boolean` is today the **only** common-value scalar whose zero-value collides with
 its null sentinel (the null sentinel for `boolean` *is* `false`).  Every other
 scalar — `integer`, `float`, `text`, plain `enum` — distinguishes "zero value" from
@@ -147,11 +152,11 @@ forms *work*.
 | Item | Concern | Status |
 |---|---|---|
 | **A** — Stage A matrix | probes for every cell above; record current vs expected | **Done** 2026-06-09 (see findings §) |
-| **B** — representation | nullable bool field/element default-inits to `255`; storage + stack round-trip `255` (C5/C6) | Open |
-| **C** — truthiness chokepoint | `null → false` at the one forced-context site set (`OpGotoFalseWord`/`goto_false` + peers); prove `&&`/`\|\|`/`!`/match-guard route through it (C3) | Open |
-| **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | Open |
-| **D** — comparison + null test | `==`/`!=`/`== null`/`??` distinguish `255` (raw-byte compare — C4) | Open |
-| **E** — native marshalling | `#rust` `bool` params/returns coerce `null → false` at the boundary | Open |
+| **B** — representation | nullable bool round-trips `255`; new `OpConvBoolFromNull` producer | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
+| **C** — truthiness chokepoint | `null → false` via `@v != 1` on the bounded 7-op set; generator reads bool operands as `u8` (UB fix) | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
+| **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | `null`-literal flipped in spike; `??` + `== null` open |
+| **D** — comparison + null test | `==`/`!=` distinguish `255` (raw byte — **spiked ✓**); add `== null`/`??` for boolean | Partial |
+| **E** — native rep → `u8` | **RESIZED to M, GATING**: native lowers boolean to Rust `bool` (no `255`); shared templates broke native (56 errors).  Native boolean rep must become `u8` end-to-end, in lockstep with C — not a marshal tweak.  [SPIKE.md](SPIKE.md) | Open — **critical path** |
 | **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
 | **G** — backward-compat scan | NARROW (per findings): unset-nullable default `false→null` + `== false` on now-null fields; scan + document | Open |
 | **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` + #256-supersession in `DESIGN_DECISIONS.md` | Open — last |
