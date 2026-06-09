@@ -2240,6 +2240,92 @@ impl State {
         true
     }
 
+    /// @PLN15.J — edit a **scalar field of a struct local** in place (`pt.x = 9`).
+    /// Resolves `base`'s `DbRef` from the frame slot, looks up `field`'s byte offset
+    /// and value-type in the struct schema, and writes the scalar directly into the
+    /// heap record — `type-directed` by the field's primitive kind.  This is a pure
+    /// in-place write (no allocation, no `DbRef` change), so it is correct by
+    /// construction like the other modify edits, and the resumed program reads the
+    /// edited field.  Returns `false` for an unknown / non-struct `base`, a null
+    /// struct, an unknown `field`, a non-scalar field (text / nested heap — the
+    /// whole-value replay slice), or a `lit` that doesn't parse as the field's type.
+    pub fn set_frame_field(
+        &mut self,
+        base: &str,
+        field: &str,
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(base, data) else {
+            return false;
+        };
+        // Only a struct (`Reference`) local has named scalar fields to edit in place.
+        if !matches!(tp, crate::data::Type::Reference(_, _)) {
+            return false;
+        }
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        if db.rec == 0 {
+            return false; // null struct
+        }
+        let tname = tp.name(data);
+        let tp_known = self.database.name(&tname);
+        let Some((position, content)) = self.database.struct_field(tp_known, field) else {
+            return false;
+        };
+        // The field is at the struct's content base (`db.pos`) plus its offset —
+        // the same address `ShowDb` reads, so a write here round-trips.
+        let fld = db.pos + u32::from(position);
+        let lit = lit.trim();
+        let store = self.database.store_mut(&db);
+        // `content` is the field's primitive type number (the `ShowDb` scalar map):
+        // 0 integer · 2 single · 3 float · 4 boolean · 6 character.  long (1) / text
+        // (5) / nested heap are the whole-value slice — rejected here.
+        match content {
+            0 => {
+                let Ok(v) = lit.parse::<i64>() else {
+                    return false;
+                };
+                *store.addr_mut::<i64>(db.rec, fld) = v;
+            }
+            2 => {
+                let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
+                    return false;
+                };
+                *store.addr_mut::<f32>(db.rec, fld) = v;
+            }
+            3 => {
+                let Ok(v) = lit.parse::<f64>() else {
+                    return false;
+                };
+                *store.addr_mut::<f64>(db.rec, fld) = v;
+            }
+            4 => {
+                let v = match lit {
+                    "true" => 1u8,
+                    "false" => 0u8,
+                    _ => return false,
+                };
+                *store.addr_mut::<u8>(db.rec, fld) = v;
+            }
+            6 => {
+                let inner = lit
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                    .unwrap_or(lit);
+                let mut cs = inner.chars();
+                let (Some(c), None) = (cs.next(), cs.next()) else {
+                    return false;
+                };
+                *store.addr_mut::<u32>(db.rec, fld) = c as u32;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Re-capture the current suspension's frame so [`paused_frame`](Self::paused_frame)
     /// reflects a value just written with [`set_frame_value`](Self::set_frame_value) —
     /// the user edits `n` at the paused prompt and `:vars` shows the new value.

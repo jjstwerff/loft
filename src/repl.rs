@@ -644,9 +644,16 @@ fn step_and_report<W: Write>(
 fn parse_assign(s: &str) -> Option<(&str, &str)> {
     let (lhs, rhs) = s.split_once('=')?;
     let name = lhs.trim();
+    // A bare local (`n`) or a struct-field path (`pt.x`) — `.` is allowed so the
+    // paused prompt can route a field edit; `debug_set` splits on it.
     if name.is_empty()
-        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        || name.chars().next().is_some_and(|c| c.is_ascii_digit())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        || name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.')
     {
         return None;
     }
@@ -983,7 +990,14 @@ impl ReplSession {
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
-        let ok = state.set_frame_literal(name, &lit, &self.parser.data);
+        // A dotted LHS (`pt.x`) is a struct-field edit; a bare name is a whole-local
+        // edit.  (A nested path `pt.inner.x` resolves only its first field today, so
+        // it is rejected — the whole-value slice covers deeper paths.)
+        let ok = if let Some((base, field)) = name.split_once('.') {
+            state.set_frame_field(base.trim(), field.trim(), &lit, &self.parser.data)
+        } else {
+            state.set_frame_literal(name, &lit, &self.parser.data)
+        };
         if ok {
             state.refresh_paused_frame(&self.parser.data);
         }

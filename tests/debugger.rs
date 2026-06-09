@@ -937,3 +937,63 @@ fn live_edit_rejects_heap_local() {
         "heap edit rejected (deferred)"
     );
 }
+
+/// @PLN15.J — **live edit of a scalar struct field** (`pt.x = 9`), picked up on
+/// resume.  Resolves the struct local's `DbRef`, looks the field offset up in the
+/// schema, and writes the scalar in place.  `area(Point{3,4})` is 12; editing
+/// `pt.x` to 5 makes it 5*4 = 20, so the program's assert passes only if the field
+/// edit was read by the resumed call.
+#[test]
+fn live_edit_struct_field_resumes_with_new_value() {
+    let mut p = repl();
+    let defs = &[
+        "struct Point { x: integer, y: integer }",
+        "fn area(pt: Point) -> integer {\n  m = pt.x;\n  pt.x * pt.y\n}",
+    ];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(area(Point{x: 3, y: 4}) == 20, \"edited pt.x to 5\")",
+        "area",
+        2,
+    );
+    assert!(
+        state.set_frame_field("pt", "x", "5", &p.data),
+        "edit scalar struct field"
+    );
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "field edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15.J — field-edit rejection cases: an unknown field, a non-struct base, and
+/// a non-scalar field all return `false` (no write, no corruption).
+#[test]
+fn field_edit_rejects_bad_targets() {
+    let mut p = repl();
+    let defs = &[
+        "struct Point { x: integer, y: integer }",
+        "fn area(pt: Point, n: integer) -> integer {\n  m = pt.x;\n  pt.x * pt.y + n\n}",
+    ];
+    let mut state = run_to_pause(&mut p, defs, "area(Point{x: 3, y: 4}, 7)", "area", 2);
+    assert!(
+        !state.set_frame_field("pt", "z", "5", &p.data),
+        "unknown field"
+    );
+    assert!(
+        !state.set_frame_field("n", "x", "5", &p.data),
+        "non-struct base"
+    );
+    assert!(
+        !state.set_frame_field("pt", "x", "notanint", &p.data),
+        "unparseable literal"
+    );
+    // a valid edit still works after the rejections
+    assert!(
+        state.set_frame_field("pt", "x", "9", &p.data),
+        "valid edit after rejects"
+    );
+}

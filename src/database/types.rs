@@ -216,6 +216,27 @@ impl Stores {
         }
     }
 
+    /// @PLN15.J — resolve a struct field by **name** to `(position, content)`:
+    /// `position` is the field's byte offset within the record (added to the
+    /// struct's `DbRef.pos`, matching the `ShowDb` read path), `content` its
+    /// value-type number.  `None` if `tp` is not a struct / has no such field.
+    /// The debugger's field edit (`pt.x = 9`) uses it to address the field in place.
+    #[must_use]
+    pub fn struct_field(&self, tp: u16, name: &str) -> Option<(u16, u16)> {
+        if tp == u16::MAX {
+            return None;
+        }
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[tp as usize].parts
+        {
+            fields
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| (f.position, f.content))
+        } else {
+            None
+        }
+    }
+
     /**
     Determine how structures are actually used.
     */

@@ -541,3 +541,35 @@ fn value_of_renders_text_expressions() {
     assert_eq!(s.debug_eval("m + \"!\"").as_deref(), Some("\"hi!\""));
     assert!(!s.debug_continue());
 }
+
+/// @PLN15.J — a **struct field** edited at the `(dbg)` prompt (`pt.x = 5`) routes
+/// through `debug_set` to the in-place field write, and the refreshed frame reflects
+/// it.  `debug_set` evaluates the RHS against the frame first, so an expression RHS
+/// (`pt.x = pt.y + 1`) works too.
+#[test]
+fn repl_interactive_edit_struct_field() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct Point { x: integer, y: integer }"),
+        Eval::Ran
+    ));
+    assert!(matches!(
+        s.eval("fn area(pt: Point) -> integer {\n  m = pt.x;\n  pt.x * pt.y\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("area");
+    assert!(matches!(s.eval("area(Point { x: 3, y: 4 })"), Eval::Paused));
+
+    assert!(s.debug_set("pt.x", "5"), "literal field edit");
+    assert_eq!(
+        s.debug_eval("pt.x").as_deref(),
+        Some("5"),
+        "field reflects edit"
+    );
+    assert!(s.debug_set("pt.y", "pt.x + 1"), "expression field edit");
+    assert_eq!(s.debug_eval("pt.y").as_deref(), Some("6"), "y = x + 1");
+    // a bad field is rejected, frame intact
+    assert!(!s.debug_set("pt.z", "9"), "unknown field rejected");
+    assert!(!s.debug_continue());
+}

@@ -55,13 +55,16 @@ overwritten without dropping the possibly-uninitialised prior slot) and text
 enum (inline discriminant byte) are now editable at a pause and picked up on resume;
 the fix also corrected the text-**local** *read* (the renderer was reading every text
 slot as a 16-byte `Str`, but a non-arg local is a 24-byte `String` — showed `""`).
-**Next**: **heap** live edits (struct / vector / struct-enum) — designed as a
-**store change journal** ([STORE_JOURNAL.md](STORE_JOURNAL.md)): record the records
-an edit creates/frees/modifies via the cold structural ops (`claim`/`delete`/`resize`,
-already `generation`-bumped) + explicit marks at the edit sites — the hot `addr_mut`
-field-write path stays unhooked — then **replay the inserts into the live store** (the
-cross-store transfer `Stores::clone` makes impossible by aliasing), with revert for
-undo. Then the **G2** browser/DAP surface · the file-run (`prog.loft:42`) entry point.
+**Scalar struct-field edits landed (2026-06-09):** `pt.x = 9` at the `(dbg)` prompt
+resolves the struct local's `DbRef`, looks the field offset up in the schema, and
+writes the scalar in place (`State::set_frame_field`; `debug_set` routes a dotted
+LHS) — the first heap-value edit, correct by construction (no allocation). The
+**store change journal** ([STORE_JOURNAL.md](STORE_JOURNAL.md)) is built and tested
+(two-file binary model: index store + blob file; modify record/apply/revert; probe #2
+confirmed). **Next**: wire the journal in for **undo** across all edit kinds · the
+**whole-value** heap edit (`pt = Point{…}`) via insert/free replay (now unblocked —
+`claim` is deterministic, so no `DbRef` remap) · vector-element + nested-path edits ·
+the **G2** browser/DAP surface · the file-run (`prog.loft:42`) entry point.
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
