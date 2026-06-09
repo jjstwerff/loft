@@ -41,6 +41,34 @@ pub struct BreakHit {
     pub locals: Vec<(String, String)>,
 }
 
+/// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are
+/// re-read after each op of a resumed run; when they differ from `last`, execution
+/// pauses.  `content` is the scalar primitive type number (the `ShowDb` map) for
+/// rendering old → new.  The region is heap-resident (a struct field / vector element),
+/// so it survives stepping and frame exit — unlike a stack local.
+#[derive(Debug, Clone)]
+pub struct Watchpoint {
+    /// The source expression the user watched (`pt.x`, `v[0]`), for display.
+    pub label: String,
+    pub store_nr: u16,
+    pub rec: u32,
+    pub off: u32,
+    pub len: u32,
+    /// Scalar primitive type number (0 integer · 2 single · 3 float · 4 boolean ·
+    /// 6 character), used to render the value.
+    pub content: u16,
+    /// The region's bytes at the last poll; a change from these is what fires.
+    pub last: Box<[u8]>,
+}
+
+/// @PLN16 M3 — a watchpoint that just fired: the label and the rendered old → new value.
+#[derive(Debug, Clone)]
+pub struct WatchHit {
+    pub label: String,
+    pub old: String,
+    pub new: String,
+}
+
 /// Debug state attached to a [`State`](crate::state::State) while debugging.
 /// Absent on normal runs.
 #[derive(Debug, Default)]
@@ -78,6 +106,11 @@ pub struct Debugger {
     pub undo_stack: Vec<crate::database::Journal>,
     /// @PLN16 M2 — undone edits available to `:redo`, newest last (see `undo_stack`).
     pub redo_stack: Vec<crate::database::Journal>,
+    /// @PLN16 M3 — active watchpoints, polled after each op of a resumed run.
+    pub watchpoints: Vec<Watchpoint>,
+    /// @PLN16 M3 — the watchpoint that fired during the most recent resume (for the
+    /// driver to report), cleared at the start of each resume.
+    pub last_watch: Option<WatchHit>,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.

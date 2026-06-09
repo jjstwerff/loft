@@ -1096,3 +1096,63 @@ fn repl_file_debugger_end_to_end() {
     assert!(text.contains("resumed"), "continues to the end: {text}");
     let _ = std::fs::remove_file(&path);
 }
+
+/// @PLN16 M3 (watchpoints) — set a watch on a struct field, resume, and the run pauses
+/// the moment a later write changes it (reporting old → new).  Proves the per-op poll
+/// in the resume loop catches an in-place heap mutation and stops one op past the write.
+#[test]
+fn repl_watchpoint_fires_on_field_change() {
+    let mut s = session();
+    for d in [
+        "struct Counter { n: integer }",
+        "fn bump(c: Counter) -> integer {\n  c.n = c.n + 1;\n  c.n = c.n + 10;\n  c.n\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("bump"); // first body line, before `c.n = c.n + 1`
+    assert!(matches!(s.eval("bump(Counter { n: 5 })"), Eval::Paused));
+    assert_eq!(s.debug_eval("c.n").as_deref(), Some("5"), "c.n starts at 5");
+    assert!(s.add_watchpoint("c.n"), "watch the field");
+    assert_eq!(s.watchpoints(), vec!["c.n".to_string()], "watch registered");
+    // Continue → the run pauses when `c.n = c.n + 1` changes it to 6.
+    assert!(s.debug_continue(), "watch fired → paused again");
+    let hit = s.take_watch_hit().expect("first watch hit");
+    assert_eq!(
+        (hit.label.as_str(), hit.old.as_str(), hit.new.as_str()),
+        ("c.n", "5", "6"),
+        "reports the change"
+    );
+    assert!(s.take_watch_hit().is_none(), "hit is taken once");
+    // Continue → `c.n = c.n + 10` fires it again (6 → 16).
+    assert!(s.debug_continue(), "second change fires the watch");
+    let hit2 = s.take_watch_hit().expect("second watch hit");
+    assert_eq!((hit2.old.as_str(), hit2.new.as_str()), ("6", "16"));
+    // Continue → no more writes; the run finishes.
+    assert!(!s.debug_continue(), "run finishes");
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 M3 — a watch on a **vector element** fires when that element is written, and
+/// an unwatchable expression (a bare local) is rejected.
+#[test]
+fn repl_watchpoint_vector_element_and_reject() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn edit(v: vector<integer>) -> integer {\n  v[0] = 99;\n  v[0]\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("edit");
+    assert!(matches!(s.eval("edit([10, 20, 30])"), Eval::Paused));
+    // A bare local is a stack slot — not a watchable region.
+    assert!(!s.add_watchpoint("v"), "bare local rejected");
+    assert!(s.add_watchpoint("v[0]"), "element watchable");
+    assert!(s.debug_continue(), "v[0] = 99 fires the watch");
+    let hit = s.take_watch_hit().expect("watch hit");
+    assert_eq!(
+        (hit.label.as_str(), hit.old.as_str(), hit.new.as_str()),
+        ("v[0]", "10", "99")
+    );
+    assert!(!s.debug_continue());
+}

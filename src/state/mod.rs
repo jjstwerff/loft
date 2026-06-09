@@ -2494,38 +2494,54 @@ impl State {
         lit: &str,
         data: &crate::data::Data,
     ) -> bool {
-        let Some((rec, at, tp, _is_arg)) = self.frame_slot(base, data) else {
+        let Some((store_nr, rec, off, content)) = self.path_region(base, fields, data) else {
             return false;
         };
+        self.write_scalar_at(store_nr, rec, off, content, lit.trim())
+    }
+
+    /// @PLN16 — resolve a struct-field path (`pt.x`, `pt.inner.x`) from the paused frame
+    /// to the heap region it occupies + its primitive type: `(store_nr, rec, off,
+    /// content)`.  Nested structs are inlined, so descending is offset addition in the
+    /// same record (the address `ShowDb` reads).  Shared by the field edit
+    /// ([`set_frame_path`](Self::set_frame_path)) and the watchpoint resolver — read-only.
+    /// `None` for a non-struct base / null struct / unknown field / non-inline
+    /// intermediate.  The leaf's `content` may be any type; the caller decides whether a
+    /// non-scalar leaf is acceptable.
+    fn path_region(
+        &self,
+        base: &str,
+        fields: &[&str],
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u16)> {
+        let (rec, at, tp, _is_arg) = self.frame_slot(base, data)?;
         // Only a struct (`Reference`) local has named fields to descend.
         if fields.is_empty() || !matches!(tp, crate::data::Type::Reference(_, _)) {
-            return false;
+            return None;
         }
         let db = *self
             .database
             .store(&self.stack_cur)
             .addr::<crate::keys::DbRef>(rec, at);
         if db.rec == 0 {
-            return false; // null struct
+            return None; // null struct
         }
         let mut tp_known = self.database.name(&tp.name(data));
         let mut off = db.pos;
         for (i, field) in fields.iter().enumerate() {
-            let Some((position, content)) = self.database.struct_field(tp_known, field) else {
-                return false;
-            };
+            let (position, content) = self.database.struct_field(tp_known, field)?;
             off += u32::from(position);
             if i + 1 == fields.len() {
-                return self.write_scalar_at(db.store_nr, db.rec, off, content, lit.trim());
+                return Some((db.store_nr, db.rec, off, content));
             }
             // Intermediate fields must be inline nested structs (summed offset, same
             // record); a vector / linked ref is the element / whole-value slice.
             if !self.database.is_struct(content) {
-                return false;
+                return None;
             }
             tp_known = content;
         }
-        false // unreachable — the leaf returns above
+        None // unreachable — the leaf returns above
     }
 
     /// Edit a single scalar struct field — the one-level case of
@@ -2555,17 +2571,33 @@ impl State {
         lit: &str,
         data: &crate::data::Data,
     ) -> bool {
-        let Some((rec, at, tp, _is_arg)) = self.frame_slot(base, data) else {
+        let Some((store_nr, rec, off, content)) = self.element_region(base, index, data) else {
             return false;
         };
+        self.write_scalar_at(store_nr, rec, off, content, lit.trim())
+    }
+
+    /// @PLN16 — resolve a vector element (`v[i]`) from the paused frame to its heap
+    /// region + element type: `(store_nr, vec_rec, 8 + i·stride, elem_tp)`.  Mirrors the
+    /// interpreter's own element access.  Shared by the element edit
+    /// ([`set_frame_element`](Self::set_frame_element)) and the watchpoint resolver —
+    /// read-only.  `None` on a non-vector base / null / empty vector / out-of-range or
+    /// negative index.
+    fn element_region(
+        &self,
+        base: &str,
+        index: i64,
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u16)> {
+        let (rec, at, tp, _is_arg) = self.frame_slot(base, data)?;
         if !matches!(tp, crate::data::Type::Vector(_, _)) {
-            return false;
+            return None;
         }
         let vec_tp = self.database.name(&tp.name(data));
         let elem_tp = self.database.content(vec_tp);
         let stride = u32::from(self.database.size(elem_tp));
         if stride == 0 {
-            return false;
+            return None;
         }
         // The frame slot holds the vector handle `DbRef`; its (rec, pos) cell holds the
         // backing record number, and elements live at `8 + i * stride` within it.
@@ -2574,20 +2606,18 @@ impl State {
             .store(&self.stack_cur)
             .addr::<crate::keys::DbRef>(rec, at);
         if db.rec == 0 {
-            return false; // null vector
+            return None; // null vector
         }
         let vec_rec = self.database.store(&db).get_u32_raw(db.rec, db.pos);
         if vec_rec == 0 {
-            return false; // empty vector — every index is out of range
+            return None; // empty vector — every index is out of range
         }
         let length = self.database.store(&db).get_u32_raw(vec_rec, 4);
-        let Ok(idx) = u32::try_from(index) else {
-            return false; // negative index
-        };
+        let idx = u32::try_from(index).ok()?;
         if idx >= length {
-            return false; // out of range
+            return None; // out of range / negative
         }
-        self.write_scalar_at(db.store_nr, vec_rec, 8 + idx * stride, elem_tp, lit.trim())
+        Some((db.store_nr, vec_rec, 8 + idx * stride, elem_tp))
     }
 
     /// Write `lit` as a scalar into record `(store_nr, rec)` at byte offset `off`,
@@ -2674,6 +2704,144 @@ impl State {
             self.edit_after(store_nr, rec, off, before);
         }
         ok
+    }
+
+    /// @PLN16 M3 — byte width of a scalar primitive type (the `ShowDb` map): 0 integer /
+    /// 3 float → 8, 2 single / 6 character → 4, 4 boolean → 1.  `None` for a non-scalar
+    /// type — watchpoints (like the scalar edits) only target a scalar region.
+    fn scalar_len(content: u16) -> Option<u32> {
+        match content {
+            0 | 3 => Some(8),
+            2 | 6 => Some(4),
+            4 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// @PLN16 M3 — render a scalar region's raw bytes as a value, for a watchpoint's
+    /// `old → new` report.  Dispatched by the primitive type number.
+    fn render_scalar_bytes(bytes: &[u8], content: u16) -> String {
+        let b4 = |b: &[u8]| <[u8; 4]>::try_from(&b[..4]).unwrap_or([0; 4]);
+        let b8 = |b: &[u8]| <[u8; 8]>::try_from(&b[..8]).unwrap_or([0; 8]);
+        match content {
+            0 if bytes.len() >= 8 => i64::from_le_bytes(b8(bytes)).to_string(),
+            2 if bytes.len() >= 4 => format!("{}f", f32::from_le_bytes(b4(bytes))),
+            3 if bytes.len() >= 8 => loft_float_literal(&f64::from_le_bytes(b8(bytes)).to_string()),
+            4 if !bytes.is_empty() => if bytes[0] == 0 { "false" } else { "true" }.to_string(),
+            6 if bytes.len() >= 4 => char::from_u32(u32::from_le_bytes(b4(bytes)))
+                .map_or_else(|| "?".to_string(), |c| format!("'{c}'")),
+            _ => "?".to_string(),
+        }
+    }
+
+    /// @PLN16 M3 — resolve a watch expression (`pt.x`, `pt.inner.x`, `v[i]`) from the
+    /// paused frame to its scalar heap region: `(store_nr, rec, off, len, content)`.
+    /// Reuses the field / element resolvers ([`path_region`](Self::path_region) /
+    /// [`element_region`](Self::element_region)).  `None` for a bare local (a stack slot
+    /// — not a stable watch target), a non-scalar leaf, or any case the edits reject.
+    fn resolve_watch_region(
+        &self,
+        expr: &str,
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u32, u16)> {
+        let (store_nr, rec, off, content) = if let Some(open) = expr.find('[') {
+            let base = expr[..open].trim();
+            if base.contains('.') {
+                return None; // `s.items[0]` (path + index) not handled
+            }
+            let idx = expr[open + 1..]
+                .strip_suffix(']')?
+                .trim()
+                .parse::<i64>()
+                .ok()?;
+            self.element_region(base, idx, data)?
+        } else if expr.contains('.') {
+            let mut segs = expr.split('.').map(str::trim);
+            let base = segs.next()?;
+            let path: Vec<&str> = segs.collect();
+            self.path_region(base, &path, data)?
+        } else {
+            return None; // a bare local lives in a stack slot — not a stable watch target
+        };
+        let len = Self::scalar_len(content)?;
+        Some((store_nr, rec, off, len, content))
+    }
+
+    /// @PLN16 M3 — set a **watchpoint** on the scalar heap region named by `expr`
+    /// (`pt.x`, `v[i]`): snapshot its current bytes and register it, so a resumed run
+    /// pauses when a later write changes it.  Returns `false` for an unwatchable
+    /// expression (a bare local, a non-scalar / null / out-of-range target).
+    pub fn add_watchpoint(&mut self, expr: &str, data: &crate::data::Data) -> bool {
+        let Some((store_nr, rec, off, len, content)) = self.resolve_watch_region(expr, data) else {
+            return false;
+        };
+        let last = self.database.allocations[store_nr as usize].read_span(rec, off, len);
+        let wp = crate::debugger::Watchpoint {
+            label: expr.trim().to_string(),
+            store_nr,
+            rec,
+            off,
+            len,
+            content,
+            last,
+        };
+        self.enable_debug();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.watchpoints.push(wp);
+        }
+        true
+    }
+
+    /// @PLN16 M3 — re-read every watchpoint's region; on the **first** that changed,
+    /// update its snapshot and return the hit (label + old → new).  Called after each op
+    /// of a resumed run ([`debug_step`](Self::debug_step)).  Skips a watch whose store
+    /// was freed (the value was deallocated) rather than reading stale memory.
+    fn poll_watchpoints(&mut self) -> Option<crate::debugger::WatchHit> {
+        let count = self.debug.as_deref().map_or(0, |d| d.watchpoints.len());
+        for i in 0..count {
+            let (store_nr, rec, off, len, content) = {
+                let w = &self.debug.as_deref()?.watchpoints[i];
+                (w.store_nr, w.rec, w.off, w.len, w.content)
+            };
+            if store_nr as usize >= self.database.allocations.len()
+                || self.database.allocations[store_nr as usize].free
+            {
+                continue;
+            }
+            let cur = self.database.allocations[store_nr as usize].read_span(rec, off, len);
+            let old = self.debug.as_deref()?.watchpoints[i].last.clone();
+            if *old != *cur {
+                let hit = crate::debugger::WatchHit {
+                    label: self.debug.as_deref()?.watchpoints[i].label.clone(),
+                    old: Self::render_scalar_bytes(&old, content),
+                    new: Self::render_scalar_bytes(&cur, content),
+                };
+                self.debug.as_deref_mut()?.watchpoints[i].last = cur;
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    /// @PLN16 M3 — the watchpoint that fired during the most recent resume, taken (and
+    /// cleared) by the driver to report it.  `None` if no watch fired.
+    pub fn take_watch_hit(&mut self) -> Option<crate::debugger::WatchHit> {
+        self.debug.as_deref_mut().and_then(|d| d.last_watch.take())
+    }
+
+    /// @PLN16 M3 — the labels of the active watchpoints, for `:watch` (list).
+    #[must_use]
+    pub fn watchpoint_labels(&self) -> Vec<String> {
+        self.debug.as_deref().map_or_else(Vec::new, |d| {
+            d.watchpoints.iter().map(|w| w.label.clone()).collect()
+        })
+    }
+
+    /// @PLN16 M3 — remove all watchpoints.
+    pub fn clear_watchpoints(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.watchpoints.clear();
+        }
     }
 
     /// Re-capture the current suspension's frame so [`paused_frame`](Self::paused_frame)
@@ -3465,16 +3633,21 @@ impl State {
             d.undo_stack.clear();
             d.redo_stack.clear();
             d.recording_edit = None;
+            // @PLN16 M3 — a fresh resume reports only watch hits it produces.
+            d.last_watch = None;
         }
         let bytecode_len = self.bytecode.len() as u32;
         // Skip the pause-check on the very first op — it is the breakpoint/line we
         // are stepping *from*; we must execute it, not immediately re-pause.
         let mut first = true;
+        // @PLN16 M3 — set when a watchpoint's region changed after an op; the next stop
+        // check pauses, so the user lands one op past the mutating write.
+        let mut watch_fired = false;
         while self.code_pos < bytecode_len {
             if !first {
                 let pc = self.code_pos;
                 let at_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
-                let stop = at_bp || {
+                let stop = at_bp || watch_fired || {
                     let depth = self.call_stack.len();
                     let line = self.line_at(pc);
                     match mode {
@@ -3508,6 +3681,13 @@ impl State {
             }
             if self.code_pos == u32::MAX {
                 break;
+            }
+            // @PLN16 M3 — poll watchpoints after each op; the first change arms a stop.
+            if !watch_fired && let Some(hit) = self.poll_watchpoints() {
+                if let Some(d) = self.debug.as_mut() {
+                    d.last_watch = Some(hit);
+                }
+                watch_fired = true;
             }
         }
         self.call_stack.pop();

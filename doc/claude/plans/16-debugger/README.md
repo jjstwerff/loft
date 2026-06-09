@@ -91,8 +91,13 @@ a per-edit `Journal` of the region(s) it overwrites; `:undo`/`:redo` revert/repl
 a fresh edit forks the timeline, and the history is per-pause-point (cleared on resume).
 **File-run debugger landed (2026-06-09, M5a):** `loft debug <file>:<line>` breaks in a
 real `.loft` file and drops into the same interactive `(dbg)` prompt — the A–F engine
-is no longer REPL-only. **Next**: **M3** watchpoints (data breakpoints) · the **G2**
-browser/DAP surface.
+is no longer REPL-only. **Watchpoints landed (2026-06-09, M3):** `:watch pt.x` /
+`:watch v[i]` — a resumed run pauses (reporting old → new) when a later write changes
+the watched scalar heap region; the per-op poll lives in the resume loop, only active
+while debugging. **Next**: the **agent / scripted surface** (M5d) and its load-bearing
+enabler **rich breakpoints** — conditional breaks (E in-loop) + tracepoints — the
+cheap, high-leverage slice that makes the debugger usable *non-interactively* (and
+catches "fails on one call in 10 000"); then the **G2** browser/DAP surface.
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
@@ -291,7 +296,8 @@ now whole heap values** (`pt = Point{…}`, vectors, struct-enums, structs with 
 via store-level adoption: `Stores::raise_floor` + `adopt_value_stores` +
 `State::set_frame_dbref`) · **undo/redo** of every edit kind (`:undo`/`:redo`, per-edit
 journals, per-pause-point) · the **file-run debugger** (`loft debug prog.loft:42` —
-break in a real file, not just the REPL) · the **store change journal** built through its core (two-file
+break in a real file, not just the REPL) · **watchpoints** (`:watch pt.x` — pause when
+a heap region changes, via the per-op poll) · the **store change journal** built through its core (two-file
 binary model; `Modify`/`Insert`/`Free` record + apply/revert; the keystone `claim_at`
 fuzz-verified — probe #6; the recording layer + `Stores` drain). The remaining path to a
 complete, host-agnostic, persistable debugger, ordered by dependency.
@@ -348,9 +354,22 @@ existing journal `record/apply/revert` with no new op. Undo is **per-pause-point
 (the revert reaches resume), `…_undo_redo_heap_kinds` (field / element / text-bearing
 struct / whole-value). User-facing reference: [REPL.md § Paused at a breakpoint](../../REPL.md).
 
-**M3 — watchpoints (data breakpoints).** Break when a value/region changes — powered
-by the per-store `generation` counter + the journal's record-change model; the
-condition reuses **E**.
+**M3 — watchpoints (data breakpoints) — LANDED (2026-06-09).** `:watch pt.x` /
+`:watch v[i]` pauses a resumed run when a later write changes the watched **scalar heap
+region**, reporting old → new. **Mechanism correction:** the per-store `generation`
+counter the design first named only fires on *structural* ops (claim/delete/resize),
+**not** in-place `addr_mut` field writes — so a field watch can't lean on it. The
+realised mechanism is a **per-op poll** in the resume loop (`debug_step`): after each
+op, re-read each watched region and pause (one op past the write) on the first that
+differs. Cheap (a few regions, only while debugging) and reuses the field/element
+region resolvers (`path_region` / `element_region`, extracted from the edits).
+`Debugger::{watchpoints, last_watch}` + `State::{add_watchpoint, poll_watchpoints,
+take_watch_hit}`; `:watch` / `:watch clear` at the prompt. Tests:
+`repl_watchpoint_fires_on_field_change` (fires twice, reports old→new),
+`repl_watchpoint_vector_element_and_reject`. **Remaining:** a whole-record / arbitrary
+store-region watch (today: scalar field / element only); a value-*predicate* watch
+(break when `x < 0`, not just on any change) folds into the **rich breakpoints** of
+M5d (the condition reuses **E**).
 
 **M4 — persistence & time-travel (the WAL matures).**
 - **M4a — persistent journal**: `open()` + mmap + recovery (durable count,
@@ -377,6 +396,60 @@ condition reuses **E**.
 - **M5b — G2 browser / DAP** (the *natural home*): `loft-dap` (under @PLN/09-lsp
   LSP.3) + web UI — gutter breakpoints, variables panel, call stack, REPL console.
 - **M5c — embedded**: the lavition in-game console drives the same API in-process.
+- **M5d — agent / scripted surface** (the headless **batch** front-end). The `(dbg)`
+  prompt (G1) and the browser (M5b) are *human* surfaces — drive-by-hand, react to
+  output. An **agent** (or any non-interactive consumer — a test, a CI gate, a script)
+  needs the inverse: **declare what to observe, run once, read a structured result.**
+  The friction it removes is the round-trip: a human steps and looks; a non-interactive
+  driver must commit a command sequence blind and re-run to react.
+
+  *The insight.* An agent does not want to *interactively step* — it wants to
+  *declaratively observe*. So this is **not** "the REPL but scripted"; it is a **batch
+  observation runner**. It adds **no new debug semantics** — every capability is the
+  same A–F engine, reached declaratively instead of interactively (Goal E: one engine,
+  now four surfaces).
+
+  *The load-bearing enabler — rich breakpoints (condition + actions), shared by every
+  surface.* A breakpoint grows two optional facets:
+  - a **condition** — `break update if entity.health < 0` breaks only when a predicate
+    over the frame holds. **Reuses E** (`frame_holds`), promoted from a post-run filter
+    to an in-loop check. (This alone is the cheapest, highest-value add — it turns
+    "fails on one call in 10 000" from un-debuggable into one stop.)
+  - an **action list + `stop` flag** — on each hit, evaluate a list of expressions and
+    emit them; `stop` pauses (a breakpoint), `!stop` continues (a **tracepoint**: a
+    non-interactive log of values at a point — *"trace `entity.x, entity.y` every time
+    `move` runs"* yields a full structured trace with zero round-trips, the agent's
+    bread and butter).
+
+  *The script.* A line-oriented DSL — the same verbs as the prompt plus the
+  rich-breakpoint forms — fed via `loft debug prog.loft --script <file>` (`-` = stdin)
+  or inline `--eval`:
+  ```
+  break update if entity.health < 0     # conditional breakpoint
+  trace move { entity.x, entity.y }     # tracepoint: emit these, continue
+  watch entity.health                   # data breakpoint (M3)
+  run                                   # run main() (or --entry <fn>) under the above
+  ```
+
+  *The output.* Structured + parseable: default a stable `EVENT label #n | k=v …` line
+  format (human + agent readable); `--format json` emits one JSON object per event (the
+  agent path — loft already has `to_json`). Events: `BREAK` · `TRACE` · `WATCH` ·
+  `DONE`. A `--max-steps` / `--max-hits` budget bounds a non-interactive run so it can
+  never hang.
+
+  *Reuse + invariant.* A thin driver over what exists: parse the script → set rich
+  breakpoints / watches on the **M5a file-run** `State` → run → serialize each hit's
+  frame + actions. **No new engine** — the same breakpoints, conditions (E), watches
+  (M3), and frame-eval (D1) the prompt uses, addressed declaratively. The invariant:
+  *anything expressible at the `(dbg)` prompt is expressible in the script, and
+  vice-versa* — the surfaces differ only in interaction model, never in capability.
+
+  *Phasing.* (1) **rich breakpoints** — condition (E in-loop) + action/tracepoint, wired
+  into the registry (A) + the suspend hook (C); **also lands at the `(dbg)` prompt**
+  (`:break … if …`, `:trace …`), so it is a shared engine capability, not agent-only.
+  (2) the **script parser + batch runner** over M5a's file-run. (3) the **structured
+  serializer** (`EVENT` + `--format json`) + the step/hit budget. Phase (1) is the
+  cheap, high-leverage slice (E already exists); (2)–(3) build the agent surface on it.
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a

@@ -261,6 +261,30 @@ starts a fresh history, because stepping reuses the frame's stack slots.
 **When to use it:** when a "what if" edit didn't pan out, or to flip between the
 original and the edited value before deciding which one to `:continue` with.
 
+#### Watchpoints — break when a value changes
+
+A breakpoint stops at a *place*; a **watchpoint** stops when a *value* changes,
+wherever that happens. `:watch <expr>` watches a scalar struct field (`pt.x`) or
+vector element (`v[i]`); on `:continue` (or any step) the run stops the moment a write
+changes it, telling you the old and new value. `:watch` lists them, `:watch clear`
+removes them.
+
+```loft
+⏸ paused in bump | c = Counter{n:5}
+(dbg) :watch c.n
+watching c.n — :continue and the run stops when it changes
+(dbg) :continue
+⏯ watchpoint: c.n changed 5 → 6
+⏸ paused in bump | c = Counter{n:6}
+```
+
+**When to use it:** the hardest debugging question — *who changed this?* Set a
+watchpoint on the field that ends up wrong and let the program run; it stops you at the
+write that did it, instead of you stepping line by line hunting for it. Watch a
+**heap** value (a struct field or vector element) — those persist; a bare local lives
+in a stack slot and isn't watchable. (Watching a whole record, or breaking only when
+the new value matches a condition, are planned.)
+
 Breakpoints persist across calls until `:break clear`. Any line of a function body
 is a valid breakpoint — `:break <fn>` stops at the first body line, `<fn>:<line>` at
 a specific one.

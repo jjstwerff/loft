@@ -660,7 +660,38 @@ fn handle_paused<W: Write>(
 ) -> std::io::Result<bool> {
     use crate::debugger::StepMode;
     let t = trimmed.trim();
-    match t.strip_prefix(':').unwrap_or(t) {
+    let cmd = t.strip_prefix(':').unwrap_or(t);
+    // @PLN16 M3 — `:watch <expr>` sets a watchpoint (a scalar `pt.x` / `v[i]`); `:watch`
+    // lists; `:watch clear` clears.  Handled before the match because it takes an arg.
+    if cmd == "watch" || cmd.starts_with("watch ") {
+        let arg = cmd.strip_prefix("watch").unwrap_or("").trim();
+        if arg.is_empty() {
+            let ws = session.watchpoints();
+            if ws.is_empty() {
+                writeln!(
+                    chrome,
+                    "no watchpoints (`:watch pt.x` / `:watch v[0]` to add)"
+                )?;
+            } else {
+                writeln!(chrome, "watchpoints: {}", ws.join(", "))?;
+            }
+        } else if arg == "clear" {
+            session.clear_watchpoints();
+            writeln!(chrome, "watchpoints cleared")?;
+        } else if session.add_watchpoint(arg) {
+            writeln!(
+                chrome,
+                "watching {arg} — :continue and the run stops when it changes"
+            )?;
+        } else {
+            writeln!(
+                chrome,
+                "can't watch `{arg}` — watch a scalar struct field (`pt.x`) or vector element (`v[i]`)"
+            )?;
+        }
+        return Ok(false);
+    }
+    match cmd {
         "quit" | "q" => return Ok(true),
         "step" | "s" => step_and_report(session, StepMode::Into, chrome)?,
         "next" | "n" => step_and_report(session, StepMode::Over, chrome)?,
@@ -684,9 +715,9 @@ fn handle_paused<W: Write>(
         "help" | "h" => writeln!(
             chrome,
             "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
-             :vars  :undo(:u)  :redo(:r)  |  `name = <expr>` edits a local (scalar / \
-             text / enum / `pt.x` / `v[i]` / whole struct/vector)  |  any expression is \
-             evaluated at the frame  |  :quit"
+             :vars  :undo(:u)  :redo(:r)  :watch <expr>  |  `name = <expr>` edits a local \
+             (scalar / text / enum / `pt.x` / `v[i]` / whole struct/vector)  |  any \
+             expression is evaluated at the frame  |  :quit"
         )?,
         _ => match parse_assign(t) {
             // `name = <expr>` writes the live frame (picked up on resume); the RHS
@@ -731,7 +762,16 @@ fn step_and_report<W: Write>(
     mode: crate::debugger::StepMode,
     chrome: &mut W,
 ) -> std::io::Result<()> {
-    if session.debug_step(mode) {
+    let paused = session.debug_step(mode);
+    // @PLN16 M3 — a watchpoint that fired during this resume is what stopped us; name it.
+    if let Some(hit) = session.take_watch_hit() {
+        writeln!(
+            chrome,
+            "⏯ watchpoint: {} changed {} → {}",
+            hit.label, hit.old, hit.new
+        )?;
+    }
+    if paused {
         print_pause(session, chrome)?;
     } else {
         writeln!(chrome, "▶ resumed — run finished")?;
@@ -1257,6 +1297,37 @@ impl ReplSession {
             state.refresh_paused_frame(&self.parser.data);
         }
         ok
+    }
+
+    /// @PLN16 M3 — set a **watchpoint** on the scalar heap region named by `expr`
+    /// (`pt.x`, `v[i]`) at the current pause: a resumed run pauses when a later write
+    /// changes it.  `false` when not paused or the expression isn't a watchable region.
+    pub fn add_watchpoint(&mut self, expr: &str) -> bool {
+        self.paused
+            .as_deref_mut()
+            .is_some_and(|s| s.add_watchpoint(expr, &self.parser.data))
+    }
+
+    /// @PLN16 M3 — the active watchpoint labels (`:watch` list).
+    #[must_use]
+    pub fn watchpoints(&self) -> Vec<String> {
+        self.paused
+            .as_deref()
+            .map_or_else(Vec::new, State::watchpoint_labels)
+    }
+
+    /// @PLN16 M3 — remove all watchpoints.
+    pub fn clear_watchpoints(&mut self) {
+        if let Some(s) = self.paused.as_deref_mut() {
+            s.clear_watchpoints();
+        }
+    }
+
+    /// @PLN16 M3 — the watchpoint that fired during the most recent resume (label +
+    /// old → new), taken so the driver reports it once.
+    #[must_use]
+    pub fn take_watch_hit(&mut self) -> Option<crate::debugger::WatchHit> {
+        self.paused.as_deref_mut().and_then(State::take_watch_hit)
     }
 
     /// @PLN16 M1a — the loft-source type name of a **heap** frame local at the current
