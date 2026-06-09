@@ -294,14 +294,38 @@ default"; the investigation separated them:
 own byte, `BOOL_MASK=1`, `sizeof` counts 1/field), so there is physical room for the
 `255` sentinel; the codegen wrapper is what collapses it.
 
-**Why it's a scoped sub-arc, not a quick fix:** making boolean field bytes `0/1/255`
-changes the *stored* representation, which entangles serialization — JSON
-(`to_json`/`parse` of a null-bool field), binary I/O (`f += bool`), and snapshots — and
-the field-value codegen is a structured `FieldValue`/`FvBool` path on both backends.  It
-belongs with the **binary-I/O validation matrix** ([plans/future/43](../future/43-binary-io-validation/README.md),
+**Attempted 2026-06-10 — design validated, reverted on corruption.**  Full diff:
+[`field-null-attempt.diff`](field-null-attempt.diff).  The right model is **plain
+enum** storage: a boolean field byte IS its `u8` form (0/1/255), preserved end-to-end
+including serialization (enums already round-trip 255).  Implemented as two new ops
+`OpGetBoolean`/`OpSetBoolean` mirroring `OpGetEnum`/`OpSetEnum`, replacing the old
+`OpGetByte`+`==1` read / `if{1}else{0}`+`OpSetByte` write.
+
+**What worked (proven):** struct **scalar** boolean fields — `S { b: null }`, `s.b =
+null`, `s.b == null` all round-trip null on **both** backends, and serialization fell
+out for free (true/false render correctly; a null field is *omitted* in JSON/format,
+exactly like every other null field).  Sites: `get_val`, `auto_deref_boxed_scalar`,
+`set_field_no_check`, the `call_to_set_op` getter→setter inversion.
+
+**The blocker:** struct fields and `vector<boolean>` **elements share the same byte
+codec**, so the change can't be scoped to struct-only.  The `vector<boolean>`
+element-**assign** path (`v[i] = x`) has *separate* codegen: the indexed-assign write +
+the `try_swap` in `operators.rs` special-case the old two-level `OpEqInt(OpGetByte(
+OpGetVector))` read shape.  With the read changed to single-level `OpGetBoolean`, that
+path emits a wrong-offset `OpSetByte(v, 1, …)` into the vector **header** → SIGSEGV /
+store corruption (caught by `tests/scripts/189`, which uses `vector<boolean> not null`
+`&self` fields).  Adding `GetBoolean` to the `try_swap` list was necessary but not
+sufficient.
+
+**To finish (the routed work):** rework the indexed-collection element-assign write
+codegen + `try_swap` to the single-level `OpGetBoolean`/`OpSetBoolean` shape *together*
+with the field codec (they're one unified heap-boolean-storage change, not separable),
+then verify the full `{false,true,null}` × {field, vector-elem, construct, assign,
+JSON, binary, snapshot} matrix on both backends.  Belongs with the **binary-I/O
+validation matrix** ([plans/future/43](../future/43-binary-io-validation/README.md),
 which already lists boolean).  The motivating `hash → boolean` consumer does **not**
 need it (its null comes from the absent-case `return null`, a local/return value that
-already works).  Route here; do not force under the current change.
+already works), so this is correctness-completeness, not a consumer blocker.
 
 ## See also
 
