@@ -48,7 +48,14 @@ genuinely multi-phase **and** benefits from its own document space.
 One model, stated once:
 
 - **Identity = the issue number** in the shared plan tracker — *not* a local
-  directory integer.  Create or find the issue first; its number is the plan's id.
+  directory integer.  **File (or find) the issue FIRST, then name the directory after
+  the number the tracker returns.**  Never pick the number by scanning existing plan
+  directories: a sibling *branch* may already hold an unmerged `<N>-<slug>/` for that
+  number (e.g. a `15-debugger/` on another branch while `main` shows only up to 14), so
+  scanning mints a duplicate that collides the moment that branch merges — and the
+  issue number, once GitHub assigns it, is immutable, so the collision is expensive to
+  unwind.  The tracker's auto-incremented issue number is the one global, collision-free
+  source of truth; the local directory tree is not.
 - **The directory is flat**: `<id>-<slug>/`.  There are **no
   `future/`/`finished/`/`deferred/` subdirectories** — lifecycle **state lives on
   the issue** (a label), not in the path.
@@ -67,8 +74,12 @@ tree's legacy specifics are in [§ Bind to your tree](#bind-to-your-tree).
 
 Use when the deliverable is a feature ship or a fix landing.
 
-1. **Identity** — create/find the tracker issue; its number is the plan's id.
-2. **Flat directory** `<id>-<slug>/`, README copied from the standard template.
+1. **Identity — claim the issue FIRST.**  Create (or find) the tracker issue *before*
+   the directory; the number it returns is the plan's id.  Do **not** derive the number
+   from the local directory tree — that misses unmerged plans on sibling branches and
+   mints colliding duplicates (see [§ A plan's identity](#a-plans-identity-is-its-tracker-issue)).
+2. **Flat directory** `<id>-<slug>/` named for the returned issue number, README copied
+   from the standard template.
 3. **Fill Status + Goal first.**  Add Sub-arcs / Phase ordering / Open questions /
    Cross-arc dependencies / See-also as the design clarifies.  Link the source
    issue(s) and carry the plan id in the body.
@@ -219,6 +230,12 @@ Hard-won and tree-independent:
     mechanism claim; the table answers "do we actually know?" honestly.
 12. **Tools as needed, not upfront.**  Add the one tool blocking progress; list it
     in `Tool gaps`; revert nice-to-haves.
+13. **Claim the issue before the directory — never number a plan by scanning local
+    dirs.**  The issue number is the identity; file it first and name the directory
+    after it.  Scanning the local tree for "the next free number" misses unmerged plans
+    on sibling branches (a `15-debugger/` on a feature branch invisible from `main`),
+    so you mint a duplicate that collides on merge — and GitHub issue numbers are
+    immutable, so it cannot be cleanly reassigned afterward.
 
 ---
 
