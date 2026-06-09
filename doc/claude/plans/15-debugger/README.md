@@ -268,12 +268,20 @@ the `engineering-rigor` skill; the journal's invariant lives in
 [STORE_JOURNAL.md](STORE_JOURNAL.md).*
 
 **M1 — finish the edit surface (engine).** Make *any* value editable at a break.
+- **M1b — nested struct-field scalar paths** (`pt.x = 9`, `pt.inner.x = 9`): **LANDED
+  (2026-06-09).** `State::set_frame_path` walks the dotted chain summing inline field
+  offsets in the same record (nested structs are flattened — the address `ShowDb`
+  reads, so the write round-trips) and writes the scalar leaf; `debug_set` splits the
+  path. Correct by construction (in-place, no allocation). Tests:
+  `live_edit_nested_struct_path_resumes_with_new_value` + rejections + interactive.
+- **M1b-vec — vector-element edits** (`v[i] = 5`): needs the vector element layout
+  verified (element stride / separate element store) before the write — its own
+  slice; `debug_set` rejects a `[` LHS until then.
 - **M1a — whole-value heap edits** (`pt = Point{…}`, vectors, struct-enums): run the
   constructor on a build-store clone, journal its inserts, replay into the live store
-  — **no `DbRef` remap** (probe #2: `claim` is deterministic). *Unblocked now.* Home:
-  STORE_JOURNAL.md insert/free slice.
-- **M1b — vector-element + nested-path edits** (`v[i] = 5`, `pt.inner.x = 9`): extend
-  the `set_frame_field` resolver to indices and chains. Small.
+  — **no `DbRef` remap** (probe #2: `claim` is deterministic). *Unblocked, but needs
+  the clone + claim-recording + replay substrate built* (STORE_JOURNAL.md insert/free
+  slice). The biggest remaining piece.
 
 **M2 — undo / redo (journal-driven).** Route *every* edit path (scalar, text, enum,
 field, whole-value) through the journal so each edit is recorded; `:undo` reverts,

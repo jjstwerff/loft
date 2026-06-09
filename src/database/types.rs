@@ -216,6 +216,15 @@ impl Stores {
         }
     }
 
+    /// @PLN15.J — is `tp` an (inline) struct?  An intermediate field in an edit
+    /// path (`pt.inner.x`) must be one: a nested struct is flattened into the parent
+    /// record, so the path resolver descends it by summing offsets in the same
+    /// record (the read path does the same — `ShowDb::write_fields`).
+    #[must_use]
+    pub fn is_struct(&self, tp: u16) -> bool {
+        tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::Struct(_))
+    }
+
     /// @PLN15.J — resolve a struct field by **name** to `(position, content)`:
     /// `position` is the field's byte offset within the record (added to the
     /// struct's `DbRef.pos`, matching the `ShowDb` read path), `content` its

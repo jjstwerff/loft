@@ -997,3 +997,69 @@ fn field_edit_rejects_bad_targets() {
         "valid edit after rejects"
     );
 }
+
+/// @PLN15.J (M1b) — live edit of a scalar at a **nested** struct path
+/// (`o.inner.a = 99`).  Nested structs are inlined, so the path resolves by summing
+/// field offsets in the same record; `f(...)` returns `o.inner.a`, so the program's
+/// assert passes only if the summed-offset write landed on the right field.
+#[test]
+fn live_edit_nested_struct_path_resumes_with_new_value() {
+    let mut p = repl();
+    let defs = &[
+        "struct Inner { a: integer, b: integer }",
+        "struct Outer { n: integer, inner: Inner }",
+        "fn f(o: Outer) -> integer {\n  m = o.n;\n  o.inner.a\n}",
+    ];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(f(Outer { n: 1, inner: Inner { a: 5, b: 6 } }) == 99, \"edited o.inner.a\")",
+        "f",
+        2,
+    );
+    assert!(
+        state.set_frame_path("o", &["inner", "a"], "99", &p.data),
+        "edit nested scalar path o.inner.a"
+    );
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "nested path edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15.J (M1b) — nested-path rejections: an unknown intermediate / leaf field and
+/// a non-scalar leaf (an inline struct) all return `false`, no write.
+#[test]
+fn nested_path_edit_rejects_bad_paths() {
+    let mut p = repl();
+    let defs = &[
+        "struct Inner { a: integer }",
+        "struct Outer { n: integer, inner: Inner }",
+        "fn f(o: Outer) -> integer {\n  m = o.n;\n  o.inner.a\n}",
+    ];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "f(Outer { n: 1, inner: Inner { a: 5 } })",
+        "f",
+        2,
+    );
+    assert!(
+        !state.set_frame_path("o", &["bogus", "a"], "9", &p.data),
+        "unknown intermediate"
+    );
+    assert!(
+        !state.set_frame_path("o", &["inner", "z"], "9", &p.data),
+        "unknown leaf"
+    );
+    assert!(
+        !state.set_frame_path("o", &["inner"], "9", &p.data),
+        "non-scalar leaf (struct)"
+    );
+    assert!(
+        state.set_frame_path("o", &["inner", "a"], "9", &p.data),
+        "valid path after rejects"
+    );
+}

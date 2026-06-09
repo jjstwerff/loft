@@ -990,11 +990,17 @@ impl ReplSession {
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
-        // A dotted LHS (`pt.x`) is a struct-field edit; a bare name is a whole-local
-        // edit.  (A nested path `pt.inner.x` resolves only its first field today, so
-        // it is rejected — the whole-value slice covers deeper paths.)
-        let ok = if let Some((base, field)) = name.split_once('.') {
-            state.set_frame_field(base.trim(), field.trim(), &lit, &self.parser.data)
+        // A dotted LHS is a struct-field path edit (`pt.x`, `pt.inner.x` — nested
+        // structs are inlined, so the path resolves by summed offsets); a bare name
+        // is a whole-local edit.  A `[index]` LHS (vector element) is the element
+        // slice — not yet, so rejected rather than mis-parsed.
+        let ok = if name.contains('[') {
+            false
+        } else if name.contains('.') {
+            let mut segs = name.split('.').map(str::trim);
+            let base = segs.next().unwrap_or("");
+            let path: Vec<&str> = segs.collect();
+            state.set_frame_path(base, &path, &lit, &self.parser.data)
         } else {
             state.set_frame_literal(name, &lit, &self.parser.data)
         };

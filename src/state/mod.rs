@@ -2240,27 +2240,29 @@ impl State {
         true
     }
 
-    /// @PLN15.J — edit a **scalar field of a struct local** in place (`pt.x = 9`).
-    /// Resolves `base`'s `DbRef` from the frame slot, looks up `field`'s byte offset
-    /// and value-type in the struct schema, and writes the scalar directly into the
-    /// heap record — `type-directed` by the field's primitive kind.  This is a pure
-    /// in-place write (no allocation, no `DbRef` change), so it is correct by
-    /// construction like the other modify edits, and the resumed program reads the
-    /// edited field.  Returns `false` for an unknown / non-struct `base`, a null
-    /// struct, an unknown `field`, a non-scalar field (text / nested heap — the
-    /// whole-value replay slice), or a `lit` that doesn't parse as the field's type.
-    pub fn set_frame_field(
+    /// @PLN15.J — edit a **scalar at a struct-field path** in place (`pt.x = 9`,
+    /// `pt.inner.x = 9`).  `base` is the struct local; `fields` is the dotted chain.
+    /// Resolves `base`'s `DbRef` from the frame slot, then walks the chain summing
+    /// each field's byte offset — a nested struct is **inlined** into the same
+    /// record, so descending is just offset addition (the same address `ShowDb`
+    /// reads, so the write round-trips), with no `DbRef`-follow.  The leaf must be a
+    /// scalar; the write is pure in-place (no allocation, no `DbRef` change), correct
+    /// by construction like the other modify edits.  Returns `false` for an
+    /// unknown / non-struct `base`, a null struct, an unknown field, an intermediate
+    /// field that is not an inline struct (a vector / linked ref — routed to the
+    /// element / whole-value slice), a non-scalar leaf, or an unparseable `lit`.
+    pub fn set_frame_path(
         &mut self,
         base: &str,
-        field: &str,
+        fields: &[&str],
         lit: &str,
         data: &crate::data::Data,
     ) -> bool {
         let Some((rec, at, tp, _is_arg)) = self.frame_slot(base, data) else {
             return false;
         };
-        // Only a struct (`Reference`) local has named scalar fields to edit in place.
-        if !matches!(tp, crate::data::Type::Reference(_, _)) {
+        // Only a struct (`Reference`) local has named fields to descend.
+        if fields.is_empty() || !matches!(tp, crate::data::Type::Reference(_, _)) {
             return false;
         }
         let db = *self
@@ -2270,37 +2272,75 @@ impl State {
         if db.rec == 0 {
             return false; // null struct
         }
-        let tname = tp.name(data);
-        let tp_known = self.database.name(&tname);
-        let Some((position, content)) = self.database.struct_field(tp_known, field) else {
-            return false;
+        let mut tp_known = self.database.name(&tp.name(data));
+        let mut off = db.pos;
+        for (i, field) in fields.iter().enumerate() {
+            let Some((position, content)) = self.database.struct_field(tp_known, field) else {
+                return false;
+            };
+            off += u32::from(position);
+            if i + 1 == fields.len() {
+                return self.write_scalar_at(db.store_nr, db.rec, off, content, lit.trim());
+            }
+            // Intermediate fields must be inline nested structs (summed offset, same
+            // record); a vector / linked ref is the element / whole-value slice.
+            if !self.database.is_struct(content) {
+                return false;
+            }
+            tp_known = content;
+        }
+        false // unreachable — the leaf returns above
+    }
+
+    /// Edit a single scalar struct field — the one-level case of
+    /// [`set_frame_path`](Self::set_frame_path).
+    pub fn set_frame_field(
+        &mut self,
+        base: &str,
+        field: &str,
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        self.set_frame_path(base, &[field], lit, data)
+    }
+
+    /// Write `lit` as a scalar into record `(store_nr, rec)` at byte offset `off`,
+    /// dispatched by the field's primitive type number (the `ShowDb` scalar map):
+    /// 0 integer · 2 single · 3 float · 4 boolean · 6 character.  long (1) / text (5)
+    /// / nested heap (≥ 7) are rejected — they belong to the whole-value slice.
+    /// `false` on a non-scalar type or a `lit` that doesn't parse.
+    fn write_scalar_at(
+        &mut self,
+        store_nr: u16,
+        rec: u32,
+        off: u32,
+        content: u16,
+        lit: &str,
+    ) -> bool {
+        let probe = crate::keys::DbRef {
+            store_nr,
+            rec,
+            pos: 0,
         };
-        // The field is at the struct's content base (`db.pos`) plus its offset —
-        // the same address `ShowDb` reads, so a write here round-trips.
-        let fld = db.pos + u32::from(position);
-        let lit = lit.trim();
-        let store = self.database.store_mut(&db);
-        // `content` is the field's primitive type number (the `ShowDb` scalar map):
-        // 0 integer · 2 single · 3 float · 4 boolean · 6 character.  long (1) / text
-        // (5) / nested heap are the whole-value slice — rejected here.
+        let store = self.database.store_mut(&probe);
         match content {
             0 => {
                 let Ok(v) = lit.parse::<i64>() else {
                     return false;
                 };
-                *store.addr_mut::<i64>(db.rec, fld) = v;
+                *store.addr_mut::<i64>(rec, off) = v;
             }
             2 => {
                 let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
                     return false;
                 };
-                *store.addr_mut::<f32>(db.rec, fld) = v;
+                *store.addr_mut::<f32>(rec, off) = v;
             }
             3 => {
                 let Ok(v) = lit.parse::<f64>() else {
                     return false;
                 };
-                *store.addr_mut::<f64>(db.rec, fld) = v;
+                *store.addr_mut::<f64>(rec, off) = v;
             }
             4 => {
                 let v = match lit {
@@ -2308,7 +2348,7 @@ impl State {
                     "false" => 0u8,
                     _ => return false,
                 };
-                *store.addr_mut::<u8>(db.rec, fld) = v;
+                *store.addr_mut::<u8>(rec, off) = v;
             }
             6 => {
                 let inner = lit
@@ -2319,7 +2359,7 @@ impl State {
                 let (Some(c), None) = (cs.next(), cs.next()) else {
                     return false;
                 };
-                *store.addr_mut::<u32>(db.rec, fld) = c as u32;
+                *store.addr_mut::<u32>(rec, off) = c as u32;
             }
             _ => return false,
         }

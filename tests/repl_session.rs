@@ -573,3 +573,41 @@ fn repl_interactive_edit_struct_field() {
     assert!(!s.debug_set("pt.z", "9"), "unknown field rejected");
     assert!(!s.debug_continue());
 }
+
+/// @PLN15.J (M1b) — a **nested** struct path edited at the `(dbg)` prompt
+/// (`o.inner.a = 9`) routes through `debug_set` → `set_frame_path` and the refreshed
+/// frame reflects it.
+#[test]
+fn repl_interactive_edit_nested_field() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct Inner { a: integer, b: integer }"),
+        Eval::Ran
+    ));
+    assert!(matches!(
+        s.eval("struct Outer { n: integer, inner: Inner }"),
+        Eval::Ran
+    ));
+    assert!(matches!(
+        s.eval("fn f(o: Outer) -> integer {\n  m = o.n;\n  o.inner.a\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("f");
+    assert!(matches!(
+        s.eval("f(Outer { n: 1, inner: Inner { a: 5, b: 6 } })"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("o.inner.a", "9"), "nested path edit");
+    assert_eq!(
+        s.debug_eval("o.inner.a").as_deref(),
+        Some("9"),
+        "nested field reflects edit"
+    );
+    assert_eq!(
+        s.debug_eval("o.inner.b").as_deref(),
+        Some("6"),
+        "sibling untouched"
+    );
+    assert!(!s.debug_continue());
+}
