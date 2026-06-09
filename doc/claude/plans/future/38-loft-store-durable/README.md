@@ -14,11 +14,11 @@ their driver consumers (TTT v5 / @PLN6 audience demo) need
 them.  Full promotion to active (`plans/38-…`) deferred until
 phase 02 begins.
 
-**Substrate update (2026-06-09):** the @PLN15 debugger landed a **revertible store
+**Substrate update (2026-06-09):** the @PLN16 debugger landed a **revertible store
 change journal** — a record-change write-ahead log
-([STORE_JOURNAL.md](../../15-debugger/STORE_JOURNAL.md)).  For Tier 3's purposes it
+([STORE_JOURNAL.md](../../16-debugger/STORE_JOURNAL.md)).  For Tier 3's purposes it
 *is* the WAL primitive; **Tier 3 (phase 03) builds on it rather than a parallel WAL**
-— see [§ Convergence](#convergence-with-the-pln15-store-change-journal-tier-3s-substrate).
+— see [§ Convergence](#convergence-with-the-pln16-store-change-journal-tier-3s-substrate).
 The "done safely" rationale is not re-argued here — it is homed in
 [GOALS.md § Purpose](../../../GOALS.md#purpose--what-loft-is-for) (the AS/400
 single-level-store / "software that doesn't fail" aim).
@@ -195,10 +195,10 @@ grouping: 1-10 ms.  Acceptable for any turn-based game; for
 60Hz action games the group-commit window keeps it
 bounded.
 
-## Convergence with the @PLN15 store change journal (Tier 3's substrate)
+## Convergence with the @PLN16 store change journal (Tier 3's substrate)
 
-@PLN15 built a **store change journal**
-([STORE_JOURNAL.md](../../15-debugger/STORE_JOURNAL.md)) — a record-change WAL that
+@PLN16 built a **store change journal**
+([STORE_JOURNAL.md](../../16-debugger/STORE_JOURNAL.md)) — a record-change WAL that
 is, for Tier 3, the same primitive.  **Tier 3 builds on it; we do not write two
 WALs.**  What landed and how it maps to this plan:
 
@@ -259,7 +259,7 @@ a coarse "whole-record" op variant for the high-rate path.
 | 1b | [Loft-callable binding for `open_durable`](01b-loft-binding.md) | XS-S | Native fns `store_durable_check(path)` + `store_durable_seal(path)` exposed in stdlib so loft consumers (training port first) can use the Phase 01 API without a Rust callback wrapper |
 | 1c | Path-backed hash binding for dryopea (shipped on `aid_dryopea`) | XS-S | Native fn `store_persist_bind(h: hash, path: text) -> boolean` — re-roots a hash's Store at a file path so mutations are durable via mmap.  Fresh-path branch snapshots current bytes with a padded tail-free-block; existing-path branch loads on-disk contents via `Store::open`.  Tests in `tests/store_persist_loft.rs` + `tests/scripts/store_persist_smoke.loft`.  STDLIB.md § "Path-backed hash storage". |
 | 2 | [Tier 2: double-buffered snapshots](02-tier-2-snapshots.md) | M | `lib/store_durable/` package; `SnapshotEvery(interval)` mode with two-file atomic rotation + `msync` discipline |
-| 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches. **Builds on the @PLN15.J store change journal** (record/apply/revert already exist) — adds fsync/group-commit + checkpoint/truncate + per-entry CRC; see [§ Convergence](#convergence-with-the-pln15-store-change-journal-tier-3s-substrate) |
+| 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches. **Builds on the @PLN16.J store change journal** (record/apply/revert already exist) — adds fsync/group-commit + checkpoint/truncate + per-entry CRC; see [§ Convergence](#convergence-with-the-pln16-store-change-journal-tier-3s-substrate) |
 | 4 | [Stress test — `kill -9` × 1000 across all tiers](04-stress-test.md) | S | `tests/store_durable_kill.rs` runs an injection harness that spawns a daemon, kills it mid-write, validates recovery semantics per tier |
 | 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLN6 audience demo design doc references Tier 3 |
 | 6 | [Closeout — DESIGN_DECISIONS + STDLIB.md + finished/](06-closeout.md) | XS | "C-… durability tier choice" decision recorded; STDLIB.md `Store::open_durable` doc; plan moves to `finished/` |
@@ -398,6 +398,6 @@ phase 02 (Tier 2 snapshots) starts.
   — the server pattern these durability tiers complement.
 - [DATABASE.md](../../../DATABASE.md) — Stores schema + DbRef
   semantics; durable stores live within this layer.
-- [plans/15-debugger/STORE_JOURNAL.md](../../15-debugger/STORE_JOURNAL.md) — the
+- [plans/16-debugger/STORE_JOURNAL.md](../../16-debugger/STORE_JOURNAL.md) — the
   store change journal: the revertible record-change WAL substrate Tier 3 builds on
   (§ Convergence).

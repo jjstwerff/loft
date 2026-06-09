@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN15.J — store change journal (two-artifact binary model).
+//! @PLN16.J — store change journal (two-artifact binary model).
 //!
 //! Records the record-level changes a debugger edit makes to the store, so the edit
 //! can be **reverted** (undo) and **replayed** (the cross-store transfer that
-//! finishes heap live edits).  Design: `doc/claude/plans/15-debugger/STORE_JOURNAL.md`.
+//! finishes heap live edits).  Design: `doc/claude/plans/16-debugger/STORE_JOURNAL.md`.
 //!
 //! Two artifacts, split by what each is good at:
 //!
@@ -386,7 +386,7 @@ mod tests {
         (stores, store_nr, rec)
     }
 
-    /// @PLN15.J probe #2 — **replay-position determinism**, the invariant the
+    /// @PLN16.J probe #2 — **replay-position determinism**, the invariant the
     /// whole-value insert/free replay rests on.  Replaying a constructor's inserts
     /// into the live store with **no `DbRef` remap** is sound *iff* `claim` is a pure
     /// function of allocator state: a store cloned from the live store, run through
@@ -586,7 +586,7 @@ mod tests {
         u32::from_le_bytes([b[0], b[1], b[2], b[3]])
     }
 
-    /// @PLN15.J probe #5a — **a freed block's body is immediately repurposed.**  The
+    /// @PLN16.J probe #5a — **a freed block's body is immediately repurposed.**  The
     /// allocator stores its red-black free-tree node links *inside* free blocks
     /// (`FL_LEFT` at byte offset 4, `FL_RIGHT` at offset 8 — exactly where a vector
     /// keeps its length and first element).  So `delete(rec)` overwrites the record's
@@ -614,7 +614,7 @@ mod tests {
         );
     }
 
-    /// @PLN15.J probe #5b — **a relocating grow flips the owning u32 pointer cell.**
+    /// @PLN16.J probe #5b — **a relocating grow flips the owning u32 pointer cell.**
     /// When `resize` cannot extend in place it relocates (`claim`+`copy`+`delete`) and
     /// `vector.rs` writes the new record number into the owning cell.  That pointer
     /// write goes through `set_u32_raw`/`addr_mut` (the unhooked hot path), so the
@@ -676,7 +676,7 @@ mod tests {
         );
     }
 
-    /// @PLN15.J probe #5c — **once both records exist, the owning cell alone selects
+    /// @PLN16.J probe #5c — **once both records exist, the owning cell alone selects
     /// which the value sees → the pointer-flip *is* the relocation switch.**  When the
     /// pre-grow and grown records both exist, flipping the owning u32 cell is the whole
     /// of redo (→ grown) and undo (→ pre-grow).  In the single model (STORE_JOURNAL.md
@@ -719,7 +719,7 @@ mod tests {
         assert_eq!(s.get_u32_raw(b, 8 + size), 22, "pre-grow element 1 intact");
     }
 
-    /// @PLN15.J probe #6a — **`claim_at` carves a record out of the MIDDLE of a free
+    /// @PLN16.J probe #6a — **`claim_at` carves a record out of the MIDDLE of a free
     /// block** (the predicted falsification corner).  A slot becomes mid-block after its
     /// neighbours are freed and forward-coalesced; `Free`-revert must re-claim it at its
     /// exact recorded position regardless.  Build that exact state — free C, then B
@@ -774,7 +774,7 @@ mod tests {
         s.validate(0);
     }
 
-    /// @PLN15.J probe #6b — **bidirectional position-exact replay** (THE keystone).
+    /// @PLN16.J probe #6b — **bidirectional position-exact replay** (THE keystone).
     /// The whole single model rests on this: a recorded op-log, replayed by recorded
     /// position via `claim_at`, reconstructs state exactly in *both* directions.  Run a
     /// coalescing-heavy edit (free adjacent records → they coalesce → new claims reuse
@@ -895,7 +895,7 @@ mod tests {
         s.validate(0);
     }
 
-    /// @PLN15.J probe #6c — **fuzzed bidirectional replay** (hardening for #6b).  A
+    /// @PLN16.J probe #6c — **fuzzed bidirectional replay** (hardening for #6b).  A
     /// deterministic PRNG drives long, varied claim/free sequences (with heavy
     /// position-reuse) over a baseline, across several seeds; each session logs
     /// `Insert`/`Free` entries, then **revert** must restore the baseline byte-for-byte
@@ -1063,7 +1063,7 @@ mod tests {
         *stores.allocations[sn as usize].addr::<i32>(rec, 0)
     }
 
-    /// @PLN15.J — `record_insert` / `record_free` round-trip on the `Journal` itself.
+    /// @PLN16.J — `record_insert` / `record_free` round-trip on the `Journal` itself.
     /// `Insert`: apply re-claims the exact position via `claim_at` + restores bytes,
     /// revert frees it.  `Free`: apply frees, revert re-claims + restores the pre-delete
     /// bytes.  A neighbouring "keeper" record must stay untouched throughout.
@@ -1110,7 +1110,7 @@ mod tests {
         );
     }
 
-    /// @PLN15.J — the **relocating-grow journal**: `{ Insert(new) + Modify(owning cell:
+    /// @PLN16.J — the **relocating-grow journal**: `{ Insert(new) + Modify(owning cell:
     /// old->new) + Free(old) }`.  This is the cross-store / heap-edit shape end to end.
     /// Build a vector handle (owning cell -> old), grow it (claim new, flip the cell,
     /// free old), journaling each op, then assert revert returns the pre-grow state and
@@ -1164,7 +1164,7 @@ mod tests {
         assert!(hdr(&stores, sn, old) < 0, "old record freed on apply");
     }
 
-    /// @PLN15.J phase 3 — the `Stores` recording drain.  Structural ops buffer per-store
+    /// @PLN16.J phase 3 — the `Stores` recording drain.  Structural ops buffer per-store
     /// while recording is on (`claim` -> `Insert`, `delete` -> `Free`); `take_journal`
     /// drains them into one `Journal`, tagging each with its `store_nr`.  Records claimed
     /// *before* recording started are not journaled.  Round-trips an edit (claim `n`,

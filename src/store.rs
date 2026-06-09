@@ -107,7 +107,7 @@ impl StoreUsage {
     }
 }
 
-/// A structural change recorded on a [`Store`] while @PLN15.J edit-recording is on
+/// A structural change recorded on a [`Store`] while @PLN16.J edit-recording is on
 /// (see `crate::database::journal`).  A `Store` method does not know its own
 /// `store_nr`, so each store buffers its own changes and `Stores` drains them into the
 /// unified `Journal`, tagging the store index.  `Insert` keeps only the position and
@@ -167,7 +167,7 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
-    /// @PLN15.J — when `Some`, the structural ops (`claim` via `claim_block`, `delete`)
+    /// @PLN16.J — when `Some`, the structural ops (`claim` via `claim_block`, `delete`)
     /// append a [`StoreChange`] here for the debugger's edit journal.  `None` on every
     /// normal run, so the cold alloc paths pay one branch.  Turned on by
     /// `Stores::start_recording`, drained by `Stores::take_journal`.
@@ -540,7 +540,7 @@ impl Store {
             *self.addr_mut(pos, 0) = block_size; // positive = claimed
         }
         self.claims.insert(pos);
-        // @PLN15.J: record the claim while edit-recording is on.  Read the *actual*
+        // @PLN16.J: record the claim while edit-recording is on.  Read the *actual*
         // claimed size from the header (claim_block may take the whole block without
         // splitting), so replay's `claim_at` reproduces the exact extent.
         if self.recording.is_some() {
@@ -664,7 +664,7 @@ impl Store {
         // may free a record still referenced by a suspended generator.
         self.generation = self.generation.wrapping_add(1);
         self.valid(rec, 4);
-        // @PLN15.J: snapshot the record *before* delete repurposes its body as a
+        // @PLN16.J: snapshot the record *before* delete repurposes its body as a
         // free-tree node (probe 5a), while edit-recording is on.
         if self.recording.is_some() {
             let words = (*self.addr::<i32>(rec, 0)) as u32;
@@ -701,7 +701,7 @@ impl Store {
     /// Claim the record at an **exact** position with an **exact** size (words),
     /// carving it out of whatever free block currently covers `pos`.  Unlike
     /// [`claim`](Self::claim) — best-fit, position chosen by the allocator — this
-    /// reproduces a *recorded* position.  It is the keystone of the @PLN15.J store
+    /// reproduces a *recorded* position.  It is the keystone of the @PLN16.J store
     /// journal's position-addressed replay (`Insert`-apply and `Free`-revert): forward
     /// and reverse replay are exact because positions are forced, not re-derived.
     ///
@@ -773,7 +773,7 @@ impl Store {
         pos
     }
 
-    /// @PLN15.J — begin buffering structural changes for the debugger's edit journal.
+    /// @PLN16.J — begin buffering structural changes for the debugger's edit journal.
     /// No-op on a locked / freed store (those are never edit targets).
     pub(crate) fn start_recording(&mut self) {
         if !self.free && !self.read_only {
@@ -781,7 +781,7 @@ impl Store {
         }
     }
 
-    /// @PLN15.J — stop recording and hand back the buffered changes (`None` if this
+    /// @PLN16.J — stop recording and hand back the buffered changes (`None` if this
     /// store was never recording).
     pub(crate) fn take_recording(&mut self) -> Option<Vec<StoreChange>> {
         self.recording.take()
@@ -1553,7 +1553,7 @@ impl Store {
         }
     }
 
-    /// @PLN15.J — read `len` raw bytes of a record starting at byte offset `off`
+    /// @PLN16.J — read `len` raw bytes of a record starting at byte offset `off`
     /// (the same `(rec, off)` addressing as [`addr`](Self::addr)).  The store
     /// change journal uses this to snapshot a record region for undo / replay.
     #[must_use]
@@ -1577,7 +1577,7 @@ impl Store {
         out.into_boxed_slice()
     }
 
-    /// @PLN15.J — write `bytes` into a record at byte offset `off` — the journal's
+    /// @PLN16.J — write `bytes` into a record at byte offset `off` — the journal's
     /// only mutator (undo restores `before`, replay writes `after`).  A pure byte
     /// restore: no allocator interaction, so it never moves or resizes a record.
     /// Honors the hard `read_only` lock.

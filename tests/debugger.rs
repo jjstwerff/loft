@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN15 debugger — vertical tracer-bullet slice.
+//! @PLN16 debugger — vertical tracer-bullet slice.
 //!
 //! The smallest end-to-end proof that the interpreter can **pause at a breakpoint
 //! and read the live frame**: set a breakpoint on a source line inside a function
@@ -269,7 +269,7 @@ fn breakpoint_gates_locals_by_liveness() {
     );
 }
 
-/// @PLN15 D1 — the REPL-at-frame bridge: seed a session with a captured frame and
+/// @PLN16 D1 — the REPL-at-frame bridge: seed a session with a captured frame and
 /// evaluate an expression against its variables.  Scalar frame on a fresh session.
 #[test]
 fn repl_at_frame_evaluates_scalar_frame() {
@@ -321,7 +321,7 @@ fn repl_at_frame_evaluates_struct_frame() {
     );
 }
 
-/// @PLN15 E — conditional / test breakpoint: a condition evaluated against each
+/// @PLN16 E — conditional / test breakpoint: a condition evaluated against each
 /// captured frame selects which hits to keep ("break when `n > 1`").
 #[test]
 fn conditional_breakpoint_filters_by_frame_condition() {
@@ -352,7 +352,7 @@ fn conditional_breakpoint_filters_by_frame_condition() {
     );
 }
 
-/// @PLN15 F (the hard one) — change a value in the REPL at a breakpoint, then
+/// @PLN16 F (the hard one) — change a value in the REPL at a breakpoint, then
 /// resume and continue with the changed value.  `calc(5)` is normally 50; we edit
 /// `n` to 99 at the breakpoint so it returns 990, and the program's assert
 /// (`calc(5) == 990`) then passes — proving the edit was picked up on resume.
@@ -509,7 +509,7 @@ fn step_out_returns_to_caller() {
     );
 }
 
-/// @PLN15 B1 — the interpret-set for a breakpoint is the breakpoint fn plus its
+/// @PLN16 B1 — the interpret-set for a breakpoint is the breakpoint fn plus its
 /// transitive callers (so the whole stack to the break is introspectable); a
 /// function that cannot reach it is excluded.  Pure static analysis — no run.
 #[test]
@@ -558,7 +558,7 @@ fn b1_interpret_set_is_transitive_callers() {
     );
 }
 
-/// @PLN15 B2 — `unmark_for_debug` switches a breakpoint's interpret-set **back to
+/// @PLN16 B2 — `unmark_for_debug` switches a breakpoint's interpret-set **back to
 /// interpreted** under mixed execution: it clears the default-native mark
 /// (`def.native`) on the breakpoint fn + its transitive callers, leaving an
 /// unrelated compiled fn marked.  The compiled-vs-interpret choice is codegen-time
@@ -616,7 +616,7 @@ fn b2_unmark_switches_interpret_set_to_interpreted() {
     assert_eq!(loft::debugger::unmark_for_debug(&mut p.data, baz), 0);
 }
 
-/// @PLN15 B2 — a **pure-cdylib** function (no loft body) is an absolute boundary:
+/// @PLN16 B2 — a **pure-cdylib** function (no loft body) is an absolute boundary:
 /// `unmark_for_debug` leaves it marked, since there is no interpreted body to run
 /// (a breakpoint inside it can never fire).
 #[test]
@@ -701,7 +701,7 @@ fn b1_does_not_trace_indirect_callers() {
     );
 }
 
-/// @PLN15 B3 — at a breakpoint reached through an *indirect* call, the **full
+/// @PLN16 B3 — at a breakpoint reached through an *indirect* call, the **full
 /// runtime call stack** is introspectable: `break_stack` walks the live
 /// `call_stack`, so the indirect caller `apply` appears with its locals — the very
 /// frame B1's static analysis could not link.  The runtime call path is what
@@ -796,7 +796,7 @@ fn debug_on_without_breakpoint_yields_no_hits() {
     }
 }
 
-/// @PLN15 G1 — **text-local read** regression.  A text *argument* is a 16-byte
+/// @PLN16 G1 — **text-local read** regression.  A text *argument* is a 16-byte
 /// `Str` borrow; a text *local* is a 24-byte owned `String`.  The frame renderer
 /// must read each at its true width — reading a local's `String` as a `Str`
 /// mis-takes the capacity word for the length and renders `""` / garbage.
@@ -825,7 +825,7 @@ fn text_local_read_shows_value() {
     );
 }
 
-/// @PLN15 G1 — **live edit of a text argument**, picked up on resume.  `greet("hi")`
+/// @PLN16 G1 — **live edit of a text argument**, picked up on resume.  `greet("hi")`
 /// is normally 0; we edit `msg` to `"BYE"` at the breakpoint so it returns 1, and
 /// the program's assert then passes — proving the `Str` slot's repoint is read by
 /// the resumed call.
@@ -853,7 +853,7 @@ fn live_edit_text_arg_resumes_with_new_value() {
     );
 }
 
-/// @PLN15 G1 — **live edit of a text local**, picked up on resume.  A text local
+/// @PLN16 G1 — **live edit of a text local**, picked up on resume.  A text local
 /// owns its `String`; the edit overwrites it (without dropping the prior — possibly
 /// uninitialised — slot value).  `make()` returns 1 only if the edited `s == "BYE"`.
 #[test]
@@ -882,7 +882,7 @@ fn live_edit_text_local_resumes_with_new_value() {
     );
 }
 
-/// @PLN15 G1 — **live edit of a simple enum**, picked up on resume.  A simple enum
+/// @PLN16 G1 — **live edit of a simple enum**, picked up on resume.  A simple enum
 /// is an inline 1-based discriminant byte; the edit parses `Enum.Variant` and writes
 /// the byte.  `pick(Color.Green)` returns 1 only after we edit `c` to `Color.Blue`.
 #[test]
@@ -911,7 +911,7 @@ fn live_edit_simple_enum_resumes_with_new_value() {
     );
 }
 
-/// @PLN15 G1 — a **heap** local (struct / vector / struct-enum) edit is rejected:
+/// @PLN16 G1 — a **heap** local (struct / vector / struct-enum) edit is rejected:
 /// reconstructing a `DbRef` value in the *live* store from a literal needs a
 /// literal→store materialiser (the remaining work), so the edit returns `false`
 /// rather than corrupt the slot.  The read still works.
@@ -938,7 +938,7 @@ fn live_edit_rejects_heap_local() {
     );
 }
 
-/// @PLN15.J — **live edit of a scalar struct field** (`pt.x = 9`), picked up on
+/// @PLN16.J — **live edit of a scalar struct field** (`pt.x = 9`), picked up on
 /// resume.  Resolves the struct local's `DbRef`, looks the field offset up in the
 /// schema, and writes the scalar in place.  `area(Point{3,4})` is 12; editing
 /// `pt.x` to 5 makes it 5*4 = 20, so the program's assert passes only if the field
@@ -969,7 +969,7 @@ fn live_edit_struct_field_resumes_with_new_value() {
     );
 }
 
-/// @PLN15.J — field-edit rejection cases: an unknown field, a non-struct base, and
+/// @PLN16.J — field-edit rejection cases: an unknown field, a non-struct base, and
 /// a non-scalar field all return `false` (no write, no corruption).
 #[test]
 fn field_edit_rejects_bad_targets() {
@@ -998,7 +998,7 @@ fn field_edit_rejects_bad_targets() {
     );
 }
 
-/// @PLN15.J (M1b) — live edit of a scalar at a **nested** struct path
+/// @PLN16.J (M1b) — live edit of a scalar at a **nested** struct path
 /// (`o.inner.a = 99`).  Nested structs are inlined, so the path resolves by summing
 /// field offsets in the same record; `f(...)` returns `o.inner.a`, so the program's
 /// assert passes only if the summed-offset write landed on the right field.
@@ -1029,7 +1029,7 @@ fn live_edit_nested_struct_path_resumes_with_new_value() {
     );
 }
 
-/// @PLN15.J (M1b) — nested-path rejections: an unknown intermediate / leaf field and
+/// @PLN16.J (M1b) — nested-path rejections: an unknown intermediate / leaf field and
 /// a non-scalar leaf (an inline struct) all return `false`, no write.
 #[test]
 fn nested_path_edit_rejects_bad_paths() {
@@ -1064,7 +1064,7 @@ fn nested_path_edit_rejects_bad_paths() {
     );
 }
 
-/// @PLN15 — live edit of a scalar vector **element** (`v[1] = 99`), picked up on
+/// @PLN16 — live edit of a scalar vector **element** (`v[1] = 99`), picked up on
 /// resume.  The element lives in the vector's backing record, so the edit is one
 /// in-place scalar write at `8 + i*stride`; `f(...)` returns `v[1]`, so the program's
 /// assert passes only if the write landed on the right element slot.
@@ -1088,7 +1088,7 @@ fn live_edit_vector_element_resumes_with_new_value() {
     );
 }
 
-/// @PLN15 — vector-element edit rejections: out-of-range, negative index, a non-vector
+/// @PLN16 — vector-element edit rejections: out-of-range, negative index, a non-vector
 /// base, and an unparseable literal all return `false` (no write past the end), and a
 /// valid edit still works afterwards.
 #[test]

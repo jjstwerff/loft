@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN15 debugger — breakpoint registry + captured-frame records.
+//! @PLN16 debugger — breakpoint registry + captured-frame records.
 //!
 //! The interpreter's execute loop (`src/state/mod.rs`) consults the optional
 //! [`Debugger`] attached to a [`State`](crate::state::State): when the program
@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-/// The four @PLN15 F step verbs, driving
+/// The four @PLN16 F step verbs, driving
 /// [`State::debug_step`](crate::state::State::debug_step).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepMode {
@@ -66,7 +66,7 @@ pub struct Debugger {
     pub edited_text: Vec<String>,
 }
 
-/// @PLN15 B1 — collect the **static** call targets in an IR body into `out`.
+/// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.
 ///
 /// Exhaustive over every [`Value`](crate::data::Value) variant **with no `_`
 /// wildcard**: a new variant must be added here or the build breaks, so a call
@@ -142,7 +142,7 @@ fn collect_calls(value: &crate::data::Value, out: &mut HashSet<u32>) {
     }
 }
 
-/// @PLN15 B1 — the functions directly called by definition `d_nr` (its static
+/// @PLN16 B1 — the functions directly called by definition `d_nr` (its static
 /// callees).
 #[must_use]
 pub fn callees(data: &crate::data::Data, d_nr: u32) -> HashSet<u32> {
@@ -153,7 +153,7 @@ pub fn callees(data: &crate::data::Data, d_nr: u32) -> HashSet<u32> {
     out
 }
 
-/// @PLN15 B1 — the set of functions that must run **interpreted** for a breakpoint
+/// @PLN16 B1 — the set of functions that must run **interpreted** for a breakpoint
 /// in `bp_fn` to fire with an introspectable stack: `bp_fn` itself plus every
 /// function that can **transitively reach** it (so whatever call path runs, every
 /// frame from the entry down to the breakpoint is interpreted; `bp_fn`'s *callees*
@@ -181,7 +181,7 @@ pub fn interpret_set(data: &crate::data::Data, bp_fn: u32) -> HashSet<u32> {
     set
 }
 
-/// @PLN15 B2 — switch the functions a breakpoint needs **back to interpreted**
+/// @PLN16 B2 — switch the functions a breakpoint needs **back to interpreted**
 /// under mixed execution: clear the default-native mark (`def.native`) on every
 /// **body-bearing** function in [`interpret_set`]`(bp_fn)` (the breakpoint fn plus
 /// its transitive callers).  The next compile then routes their calls to the

@@ -78,7 +78,7 @@ fn struct_result_echo() {
     );
 }
 
-/// @PLN15 G1 — interactive breakpoint at the REPL, end to end through the binary:
+/// @PLN16 G1 — interactive breakpoint at the REPL, end to end through the binary:
 /// `:break` a function, the call suspends into the paused sub-mode, edit a local,
 /// `:continue`, and the resumed call uses the edited value.  `calc(5)` is normally
 /// 50; editing `n` to 99 makes the resumed call print 990.
@@ -98,7 +98,7 @@ fn interactive_breakpoint_edit_continue() {
     );
 }
 
-/// @PLN15 G1 — REPL-at-frame through the binary: at a pause, type an expression
+/// @PLN16 G1 — REPL-at-frame through the binary: at a pause, type an expression
 /// and it is evaluated against the live frame.  Paused in `calc` with `n == 5`,
 /// `n * 3` prints `15`; `:continue` then prints the call's own result, `50`.
 #[test]
@@ -114,7 +114,7 @@ fn interactive_breakpoint_eval_expression() {
     );
 }
 
-/// @PLN15 G1 — a **non-integer** edit through the binary, on a pure `if`/constant
+/// @PLN16 G1 — a **non-integer** edit through the binary, on a pure `if`/constant
 /// body (no arithmetic — exercises the dense `line_numbers` breakpoint resolution).
 /// `pick(true)` is normally 111; flipping `b` to false at the pause makes the
 /// resumed call print 222 — proving both edit-and-continue beyond integer and that

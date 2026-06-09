@@ -34,7 +34,7 @@ binding's RHS runs **exactly once**, observing reads the stored value, and resum
 restores values **verbatim** — dissolving side-effect repetition, error-poison, and
 re-run cost in one model.
 
-**Design with the debugger in view ([@PLN15](../15-debugger/README.md)).** The same
+**Design with the debugger in view ([@PLN16](../16-debugger/README.md)).** The same
 environment is the *breakpoint frame*: the debugger (browser-natural, but also
 terminal/embedded) drops into a REPL whose variables are a paused frame's locals. So
 the env must be **seedable from an arbitrary live frame** (slot table + values), not
@@ -143,7 +143,7 @@ both backends, not when the demo runs.
 - **@PLN11** (`Data` as a store) — same direction (store-resident records over
   in-memory structures); the session store reuses the store / mmap / startup-cache
   infrastructure @PLN11 also builds on.
-- **[@PLN15](../15-debugger/README.md)** (debugger) — the prime consumer: the
+- **[@PLN16](../16-debugger/README.md)** (debugger) — the prime consumer: the
   breakpoint frame *is* this store-resident env (seeded from a paused frame).
   @PLN14's env shape is load-bearing for it; the frame-seedable requirement above
   comes from there.
