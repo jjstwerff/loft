@@ -11,11 +11,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > `src/store.rs`). Load-bearing facts **confirmed** — the mutation chokepoint
 > (§ Chokepoint), the relocating-grow facts (probes #5a–c; 5a falsified the naive "freed
 > bytes survive" draft), and **the keystone itself (probe #6): `claim_at` is
-> position-exact and the op-log replays both directions** — predicted-to-falsify at the
-> coalesce corner, it held, and the reverse-order invariant that makes it sound is now
-> stated (§ The model). Freed records: *snapshot-to-blob + `claim_at`* (§ Open design
-> points). Remaining build: wire `Insert`/`Free` + the resize-caller pointer marks into
-> the debugger edit path (§ Phasing 3).
+> position-exact and the op-log replays both directions**. The predicted coalesce-corner
+> falsification **landed in the fuzz pass (6c)** — `claim_at` couldn't carve a free-but-
+> *fragmented* region; fixed (it now absorbs adjacent free blocks) and re-run clean over
+> 12 seeds × 600 ops. The reverse-order invariant that makes revert sound is stated
+> (§ The model). Freed records: *snapshot-to-blob + `claim_at`* (§ Open design points).
+> Remaining build: wire `Insert`/`Free` + the resize-caller pointer marks into the
+> debugger edit path (§ Phasing 3).
 
 ## Why this exists
 
@@ -183,12 +185,16 @@ run, no second mechanism.
 
 **The keystone — `claim_at(pos, size)`.**  Re-materialising a record at an *exact*
 position is what best-fit `claim` will not do (it picks the smallest fitting block).
-`claim_at` carves `[pos, pos+size)` out of the free block currently covering it —
-`fl_remove` the covering block, claim the sub-region, re-insert the `[start, pos)` and
-`[pos+size, end)` remainders as free (a **3-way split** when coalescing left `pos`
-mid-block).  At revert time the region is *guaranteed free*: every claim made after the
-original `free(pos)` is a later log entry, already reverted (freed) before we reach this
-one — so `claim_at` can always carve it.
+`claim_at` carves `[pos, pos+size)` out of the free space covering it: find the free
+block containing `pos`, **absorb consecutive adjacent free blocks** until they span the
+region, then re-head it as `[start, pos)` free | `[pos, pos+size)` claimed |
+`[pos+size, end)` free (a 3-way split when coalescing left `pos` mid-block).  The
+absorb step is load-bearing, not cosmetic: `delete` coalesces only *forward*, so a freed
+predecessor stays a **separate** free block until lazy `coalesce_free` runs — the region
+can be entirely free yet *fragmented* across several blocks (probe #6c caught a
+single-block version failing exactly here).  At revert time the region is *guaranteed
+free*: every claim made after the original `free(pos)` is a later log entry, already
+reverted (freed) before we reach this one — so `claim_at` can always carve it.
 
 This **subsumes probe #2 and is strictly more robust.**  Probe #2 asked whether a
 cloned store's best-fit `claim` would *coincidentally* reproduce positions (so an
@@ -336,26 +342,30 @@ The invariant rests on claims that must be *probed*, not assumed:
      (`deferred_free_pointer_flip_round_trips`).  The pointer-flip *is* the switch:
      apply re-materialises `new` then flips forward; undo re-materialises `old`
      (`claim_at` + blob restore) then flips back.
-6. **`claim_at` position-exactness + bidirectional round-trip — CONFIRMED (the
-   keystone; two tests in `src/database/journal.rs`).**  The whole single model rests
-   on `claim_at(pos, size)` reproducing a record at its *exact* recorded position — so
-   `Insert`-apply and `Free`-revert are position-exact.  Predicted to falsify at the
-   coalesce corner; it held, both ways:
+6. **`claim_at` position-exactness + bidirectional round-trip — CONFIRMED, after the
+   hardening pass caught a real bug (three tests in `src/database/journal.rs`).**  The
+   whole single model rests on `claim_at(pos, size)` reproducing a record at its *exact*
+   recorded position — so `Insert`-apply and `Free`-revert are position-exact.
    - **6a — the mid-block carve** (`claim_at_carves_a_mid_block_region`).  Frees three
      adjacent records so one slot is *strictly mid-block* in the coalesced free block,
-     then re-claims it: `claim_at` does the full 3-way split (prefix free | claimed |
-     suffix free) and the chain still tiles.
+     then re-claims it: `claim_at` does the full 3-way split and the chain still tiles.
    - **6b — bidirectional position-exact replay** (`bidirectional_position_exact_replay`).
-     A coalescing-heavy edit (free adjacent → merge → new claims reuse the space) logged
-     as `Insert`/`Free`; **revert** restores the baseline byte-for-byte and **re-apply**
-     restores the edit.  The reverse pass exercised a real mid-block carve.
-   - **The invariant it revealed (why it can't falsify):** in reverse order, *any* claim
-     that ever touched a freed region is a later log entry, so it is reverted-to-free
-     **before** that region's `claim_at` runs — therefore `[pos, pos+size)` is always
-     free when `Free`-revert re-claims it.  The coalesce corner is handled because
-     `claim_at` carves out of whatever block covers `pos`, start or middle.
-   - **Open hardening (cheap):** a longer randomised sequence would widen the matrix; the
-     current two cover the carve geometry and the round-trip with the invariant exercised.
+     A coalescing-heavy edit logged as `Insert`/`Free`; **revert** restores the baseline
+     byte-for-byte and **re-apply** restores the edit.
+   - **6c — fuzzed bidirectional replay** (`bidirectional_replay_fuzz`, 12 seeds ×
+     600 ops).  **This is where the predicted coalesce-corner falsification actually
+     landed.**  6a/6b held only because their frees happened to forward-coalesce; the
+     random order produced a freed *predecessor* left as a **separate** free block (lazy
+     `coalesce_free` not yet run), so the region was free but *fragmented* — and the
+     first `claim_at` (single covering block only) failed "overruns its free block."
+     **Root:** `claim_at` mirrored `claim`'s position but not its `coalesce_free`.
+     **Fix:** `claim_at` now absorbs consecutive adjacent free blocks across the region.
+     Re-ran clean.  (It surfaced in the forward / re-apply pass; revert was already
+     robust by the reverse-order invariant below — but the same fix hardens both.)
+   - **The reverse-order invariant (why revert can't falsify):** in reverse order, *any*
+     claim that ever touched a freed region is a later log entry, reverted-to-free
+     **before** that region's `claim_at` runs — so `[pos, pos+size)` is always free when
+     `Free`-revert re-claims it (free as a *region*; `claim_at` now spans fragments).
 
 ## Open design points
 
@@ -430,6 +440,9 @@ lavition direction (each is "see/transfer what changed in the store"):
   **falsified**, an interim *stay-claimed* fix, and — once the unbounded whole-execution
   consumer ruled out holding records resident — the settled *snapshot-to-blob +
   `claim_at`* model (§ The model, § Open design points).  The keystone was then
-  **predicted to falsify** at the coalesce corner and **probed** (probe #6): it held,
-  and the probe surfaced the reverse-order invariant that makes it sound — the protocol
-  doing its job (a falsifiable claim, tested, with the *why* recovered).
+  **predicted to falsify** at the coalesce corner.  The hand-written probes (6a/6b)
+  *held* — but only because their frees happened to forward-coalesce, so they were too
+  weak to reach the predicted corner.  The **fuzz hardening (6c) hit it**: a free-but-
+  *fragmented* region `claim_at` couldn't carve.  Fixed, re-run clean.  Textbook
+  protocol: the prediction was right, the first probes were too weak to confirm it, and
+  widening the matrix is what turned the prediction into a caught bug.

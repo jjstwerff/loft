@@ -803,4 +803,165 @@ mod tests {
         }
         s.validate(0);
     }
+
+    /// @PLN15.J probe #6c — **fuzzed bidirectional replay** (hardening for #6b).  A
+    /// deterministic PRNG drives long, varied claim/free sequences (with heavy
+    /// position-reuse) over a baseline, across several seeds; each session logs
+    /// `Insert`/`Free` entries, then **revert** must restore the baseline byte-for-byte
+    /// and **re-apply** must restore the edit.  This widens what 6a/6b hand-fed —
+    /// hundreds of positions, sizes, and coalescing patterns — so `claim_at` meets
+    /// mid-block carves and freed-slot reuse it was never explicitly given.  Fixed seeds
+    /// keep any failure reproducible.
+    #[test]
+    #[allow(clippy::many_single_char_names, clippy::cast_possible_truncation)]
+    fn bidirectional_replay_fuzz() {
+        // xorshift64* — tiny, deterministic, no dependency.
+        struct Rng(u64);
+        impl Rng {
+            fn step(&mut self) -> u64 {
+                let mut x = self.0;
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                self.0 = x;
+                x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            }
+            fn below(&mut self, n: u32) -> u32 {
+                (self.step() % u64::from(n)) as u32
+            }
+        }
+        enum Op {
+            Insert {
+                pos: u32,
+                size: u32,
+                after: Box<[u8]>,
+            },
+            Free {
+                pos: u32,
+                size: u32,
+                before: Box<[u8]>,
+            },
+        }
+
+        let bytes = |w: u32| w * 8;
+        let real = |s: &Store, p: u32| (*s.addr::<i32>(p, 0)) as u32;
+        let fill = |s: &mut Store, p: u32, sz: u32, tag: &mut u32| {
+            *tag = tag.wrapping_add(1);
+            for w in 1..sz {
+                s.set_u32_raw(p, w * 8, (*tag << 12) ^ w);
+                s.set_u32_raw(p, w * 8 + 4, (*tag << 12) ^ 0x800 ^ w);
+            }
+        };
+
+        for &seed in &[
+            0x1234_5678_9ABC_DEF0u64,
+            0xDEAD_BEEF_CAFE_0001,
+            0x0F0F_0F0F_1234_5678,
+            0xA5A5_5A5A_0000_0001,
+            0x0000_0000_0000_0007,
+            0xFFFF_FFFF_FFFF_FFFE,
+            0x8000_0000_0000_0001,
+            0x0123_4567_89AB_CDEF,
+            0xCAFE_F00D_DEAD_BEEF,
+            0x5555_AAAA_3333_CCCC,
+            0x2718_2818_2845_9045,
+            0x3141_5926_5358_9793,
+        ] {
+            let mut rng = Rng(seed);
+            let mut s = Store::new(48);
+            let mut tag = 0u32;
+
+            // baseline (not logged)
+            let mut base: Vec<(u32, u32)> = Vec::new();
+            for _ in 0..6 {
+                let p = s.claim(1 + rng.below(5));
+                let sz = real(&s, p);
+                fill(&mut s, p, sz, &mut tag);
+                base.push((p, sz));
+            }
+            let baseline: Vec<Box<[u8]>> = base
+                .iter()
+                .map(|&(p, sz)| s.read_span(p, 0, bytes(sz)))
+                .collect();
+
+            // random edit: claims (Insert) and frees (Free), biased to keep growing.
+            let mut log: Vec<Op> = Vec::new();
+            let mut live: Vec<u32> = base.iter().map(|&(p, _)| p).collect();
+            for _ in 0..600 {
+                if live.len() < 3 || rng.below(100) < 55 {
+                    let p = s.claim(1 + rng.below(6));
+                    let sz = real(&s, p);
+                    fill(&mut s, p, sz, &mut tag);
+                    let after = s.read_span(p, 0, bytes(sz));
+                    log.push(Op::Insert {
+                        pos: p,
+                        size: sz,
+                        after,
+                    });
+                    live.push(p);
+                } else {
+                    let p = live.swap_remove(rng.below(live.len() as u32) as usize);
+                    let sz = real(&s, p);
+                    let before = s.read_span(p, 0, bytes(sz));
+                    s.delete(p);
+                    log.push(Op::Free {
+                        pos: p,
+                        size: sz,
+                        before,
+                    });
+                }
+            }
+            s.validate(0);
+
+            // Capture the records LIVE at end-of-edit (a position may have been
+            // claimed, freed, and re-claimed at a different size — only the final
+            // occupant is the re-apply target; a dead insert's bytes are gone).
+            let edited: Vec<(u32, u32, Box<[u8]>)> = live
+                .iter()
+                .map(|&p| {
+                    let sz = real(&s, p);
+                    (p, sz, s.read_span(p, 0, bytes(sz)))
+                })
+                .collect();
+
+            // revert -> baseline, byte-for-byte
+            for op in log.iter().rev() {
+                match op {
+                    Op::Insert { pos, .. } => s.delete(*pos),
+                    Op::Free { pos, size, before } => {
+                        s.claim_at(*pos, *size);
+                        s.write_span(*pos, 0, before);
+                    }
+                }
+            }
+            for (&(p, sz), want) in base.iter().zip(&baseline) {
+                assert_eq!(
+                    s.read_span(p, 0, bytes(sz)),
+                    *want,
+                    "seed {seed:#x}: baseline record at {p} restored after {} ops",
+                    log.len()
+                );
+            }
+            s.validate(0);
+
+            // re-apply -> edited state
+            for op in &log {
+                match op {
+                    Op::Insert { pos, size, after } => {
+                        s.claim_at(*pos, *size);
+                        s.write_span(*pos, 0, after);
+                    }
+                    Op::Free { pos, .. } => s.delete(*pos),
+                }
+            }
+            for (p, sz, want) in &edited {
+                assert_eq!(
+                    s.read_span(*p, 0, bytes(*sz)),
+                    *want,
+                    "seed {seed:#x}: live record at {p} restored on re-apply"
+                );
+            }
+            s.validate(0);
+        }
+    }
 }

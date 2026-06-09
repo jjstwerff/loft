@@ -693,14 +693,28 @@ impl Store {
             header < 0,
             "claim_at: region at {pos} is not free (covering block {base} is claimed)"
         );
-        let bend = base + (-header) as u32;
-        assert!(
-            pos + size <= bend,
-            "claim_at: record [{pos}, {}) overruns its free block [{base}, {bend})",
-            pos + size
-        );
-        // Detach the covering block from the free tree before re-heading it.
+        // The free region may be *fragmented* into several adjacent free blocks:
+        // `delete` coalesces only forward, so a freed predecessor stays a separate block
+        // until lazy `coalesce_free` runs.  Absorb consecutive free blocks (detaching
+        // each from the tree) until they span `[pos, pos + size)`.  A claimed block
+        // before then is a genuine "region not free" error.
         self.fl_remove(base);
+        let mut bend = base + (-header) as u32;
+        while bend < pos + size {
+            assert!(
+                bend < self.size,
+                "claim_at: record [{pos}, {}) runs past the store end",
+                pos + size
+            );
+            let next = *self.addr::<i32>(bend, 0);
+            assert!(
+                next < 0,
+                "claim_at: record [{pos}, {}) hits a claimed block at {bend}",
+                pos + size
+            );
+            self.fl_remove(bend);
+            bend += (-next) as u32;
+        }
         // [base, pos) prefix stays free.
         if base < pos {
             *self.addr_mut::<i32>(base, 0) = -((pos - base) as i32);
