@@ -157,6 +157,10 @@ install:
 	$(AS_USER) $(MAKE) --no-print-directory install-artifacts
 	sudo install -d /usr/local/share/loft/deps
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
+	# Prune first: `cp -r` MERGES, so a stdlib file removed/renamed upstream would
+	# linger in the installed default/ and collide (e.g. an old 02_images.loft vs a
+	# new 02_files.loft -> "Dual definition"). Replace the dir, like deps below do.
+	sudo rm -rf /usr/local/share/loft/default
 	sudo cp -r default /usr/local/share/loft/
 	sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
 	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
