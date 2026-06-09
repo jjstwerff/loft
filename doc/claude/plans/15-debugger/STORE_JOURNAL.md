@@ -145,6 +145,56 @@ edit's constructor on a build store, journal its `Insert`s with their
 per-type walker, no constructor over the suspended stack. The `(position, size)`
 is what lets replay place each record correctly even though slots get reused.
 
+## Storage model — an index store + a blob file (two artifacts)
+
+The journal is **two artifacts**, split by what each part is good at — structure
+where it pays, raw bytes where it does not:
+
+- **Blob — a plain file, always.** An append-only byte stream holding the
+  variable-length payload (the `before`/`after` bytes of each change).  No headers,
+  no allocator: appending is a bump, and a WAL never frees mid-stream, so a store's
+  record/free-list machinery would be pure overhead.  It is *always* a file
+  (`append` to write, seek + `read` to replay) — a store would force a needless
+  RAM-or-mmap dual-mode on what is fundamentally a byte stream, and "a file" is the
+  VirtFS in the browser, so the in-RAM / in-browser case still works.
+
+- **Index — a store holding one growing fixed-stride array.** One **entry per
+  change**, fixed width, appended to a single array that is the store's *only*
+  occupant.  Because nothing sits after it, growth just extends the store's tail:
+  the array never relocates within the store, element offsets stay valid, and
+  append is O(1).  No secondary index (that would promote it to a keyed collection)
+  — a plain vector, walked forward to `apply`, backward to `revert`, random-access
+  by element.
+
+**The entry (fixed 24 bytes, little-endian so it is on-disk portable):**
+
+| field | type | meaning |
+|---|---|---|
+| `op` | u8 | `Modify` (later `Insert` / `Free`) |
+| `store_nr` | u16 | target store (`Stores::allocations` index) |
+| `rec` | u32 | target record |
+| `off` | u32 | byte offset of the changed region within the record |
+| `len` | u32 | region width; `before` and `after` are each `len` bytes |
+| `blob_at` | u64 | offset in the blob: `before` at `blob_at`, `after` at `blob_at + len` |
+
+**mmap is optional, and free on the store side.** The index *is* a `Store`, so it
+inherits the store's RAM-or-mmap duality with no extra code — a throwaway debug
+session keeps it in RAM; a persisted one mmaps it.  Combined with the data stores
+(and the loft2 schema store), mmap'ing all of them is the AS/400 single-level store:
+persistent-by-default, no memory/disk seam.  The blob carries persistence on its own
+(it is a file either way).
+
+**The commit rule (load-bearing once it is two files): the index entry is the
+commit point.** Append the payload to the blob *first*, write the index entry
+*last*.  On recovery, trust the index up to its last complete element and ignore any
+half-written blob tail beyond it — the one ordering rule that separates a
+recoverable WAL from a corrupt one.
+
+**First implementation:** `Modify` only (the in-place field/element edits, correct by
+construction — § Hot-path discipline).  `Insert` / `Free` replay (whole-value) lands
+once probe #2 graduates — which it now has (`claim` is deterministic, so replay needs
+no `DbRef` remap).
+
 ## Falsification probes (run before building)
 
 The invariant rests on claims that must be *probed*, not assumed:
@@ -155,13 +205,17 @@ The invariant rests on claims that must be *probed*, not assumed:
    record set is fully captured *without* hooking `addr_mut`. Probe: grep confirms
    `addr_mut` is the sole external write accessor (so nothing creates a record off
    the `claim` path), and the debugger edit sites are a closed, countable set.
-2. **Replay-position determinism (OPEN — the key risk).** Forward-replay of an
-   `Insert` reproduces the value at a `DbRef` valid in the target *iff* the target
-   store's allocator places the record at the recorded position. We **record the
-   position explicitly** rather than trusting re-derivation, so replay *places*
-   at the recorded `(pos, size)` — but it must hold that the target slot is free
-   (or the replay claims it). Probe: build a struct on a cloned store, replay onto
-   the original, assert the `DbRef` reads back equal on both backends.
+2. **Replay-position determinism — CONFIRMED.** Forward-replay of an `Insert`
+   reproduces the value at a `DbRef` valid in the target *iff* the target store's
+   allocator places the record at the same position the build store did.  `claim`
+   is a **pure deterministic function of allocator state**: the same claim/free/
+   coalesce/grow sequence on two independent stores hands out identical positions
+   (`tests::claim_is_deterministic_from_history`), and since Rust's `HashSet` is
+   randomly seeded per construction, a match proves the `claims` set never leaks
+   into position selection.  So a store cloned from the live store, run through the
+   constructor, claims at positions that are *also* free in the live store — replay
+   is `live.claim(size)` (returns the recorded position) + `write_span`, with **no
+   `DbRef` remap**.  This unlocks the `Insert`/`Free` (whole-value) slice.
 3. **Stack/heap separation (CONFIRMED-ish).** Struct/vector construction claims
    into heap stores (`OpDatabase` → a fresh store via `claim`), distinct from the
    stack store (`stack_cur.store_nr`). Probe: a struct edit must leave
