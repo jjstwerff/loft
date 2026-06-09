@@ -40,6 +40,58 @@ because it is worth building. Adoption is a **result, not a steering input**: re
 value reaches the people who share the idea in its own time. Every decision is
 made on two things only — staying true to the idea, and depth.
 
+### The deeper aim — software you can trust and forget about
+
+The fun rests on something quieter: **a floor that does not betray you.** You can
+prototype fearlessly only because the substrate will not corrupt your data or fall
+over under an edit. So beneath "fun" sits an older aim — **software that does not
+fail for software reasons** — and it has a proof of existence.
+
+The IBM midrange machines (System/38, AS/400, today's IBM i) were *loved* by the
+people who programmed them, for an unglamorous reason: they did not fail — not the
+hardware, and, more tellingly, not the software. A program written in 1988 still
+runs unchanged on modern hardware. The database, the language, and the store were
+one dependable abstraction — something you could build a business on and then
+*forget about*. That is the feeling we lost, and the one to gain back.
+
+That dependability was structure, not luck. The system was **designed, not
+assembled**: one team built the OS, the database, the language, and the machine
+interface as a single thing, so the seams where modern software breaks — a library
+and its caller drifting apart, app objects versus database rows, a dependency three
+levels down shifting underneath — mostly did not exist. The machine enforced its own
+invariants, so whole classes of failure were *impossible by construction*, not
+caught after the fact. And backward compatibility was a contract the maker kept: the
+platform never broke its users; the cost of change was paid by the maker, not the
+customer.
+
+We lost this without noticing the price. The industry traded **designed
+integration** for **assembled-from-parts composition** — for velocity and reuse —
+and every glued-on part is a seam, and every seam a way to fail. Modern software is
+unreliable in large part because it is assembled rather than designed.
+
+loft's bet is to win that reliability back **without the cage.** The AS/400 bought
+its stability partly with lock-in — closed, proprietary, conservative. The hard,
+unsolved problem is to keep the dependability of the integrated machine while being
+**open, statically typed, and live-editable**: the heap *is* the database, the
+language woven through the store, and it still does not fall over. (That integration
+is the same one the next subsection argues from the live-migration side.) Only one
+method earns it, and it is the one this document describes — reliability **by
+construction, not by testing**: find the one invariant, enforce it at the
+chokepoint, make the bad state *impossible* rather than merely absent. **Goal A**
+(soundness) and **Goal E** (predictable memory) are this aim turned into goals;
+bug-by-bug is hopeless against this target — you reach it only by retiring whole
+classes of failure, one substrate at a time.
+
+The cage was also *unfamiliarity*: the AS/400's gift came in a closed, proprietary
+world. So loft wears a modern, Rust-shaped surface — the on-ramp that platform never
+had. That surface is the hardest constraint, not the easiest: it constantly tempts
+the matching substrate — compiled layout, a borrow checker, serialization as a
+separate representation — each of which would quietly kill the integrated,
+schema-as-data store the reliability depends on. The long, careful work is holding a
+familiar surface over an alien-but-dependable substrate, because the alternative —
+rushing to *look* like Rust — *is* Rust underneath, and loses the goal. The years
+were not overhead; they were the goal taken seriously.
+
 ### Why a language, not a store bolted onto an existing one
 
 A key reason loft is a *language* and not an in-memory data store added to Rust
