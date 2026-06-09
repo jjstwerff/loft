@@ -160,11 +160,11 @@ forms *work*.
 | Item | Concern | Status |
 |---|---|---|
 | **A** — Stage A matrix | probes for every cell above; record current vs expected | **Done** 2026-06-09 (see findings §) |
-| **B** — representation | nullable bool round-trips `255`; new `OpConvBoolFromNull` producer | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
-| **C** — truthiness chokepoint | `null → false` via `@v != 1` on the bounded 7-op set; generator reads bool operands as `u8` (UB fix) | **Spiked ✓ (interp)** 2026-06-09 — [SPIKE.md](SPIKE.md) |
+| **B** — representation | nullable bool round-trips `255`; `OpConvBoolFromNull` producer | **DONE (interp)** 2026-06-09 — design A, full matrix green; [SPIKE.md](SPIKE.md) |
+| **C** — truthiness chokepoint | `null → false` via `@v != 1`; generator reads bool operands as `u8` (UB fix) | **DONE (interp)** 2026-06-09 |
 | **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | `null`-literal flipped in spike; `??` + `== null` open |
 | **D** — `== null` + `??` + coerce-`==` | add boolean `== null` (`==255`) + `??`; flip `eq_bool`/`ne_bool` to coerce-compare (decision B) on both backends | Open |
-| **E** — native u8/bool split | **GATING, M.** `rust_type(Boolean, Variable) → "u8"`, else `"bool"` (mirrors the `text` String/Str split); coerce at the use-site seams below | Open — **critical path**, design ✓ |
+| **E** — native u8/bool split | **GATING, M.** rust_type two-form split + `narrow_int_cast` Boolean + operand-wrap + predicate-coerce all landed & proven (core compiles/runs native); ~19 stdlib `&&`/`\|\|`/scalar-i64 seams remain | **Core proven; seams routed** — [SPIKE.md](SPIKE.md) |
 | **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
 | **G** — backward-compat scan | NARROW (per findings): unset-nullable default `false→null` + `== false` on now-null fields; scan + document | Open |
 | **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` + #256-supersession in `DESIGN_DECISIONS.md` | Open — last |

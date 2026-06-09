@@ -75,6 +75,49 @@ is M-sized on its own and is the gating risk for the whole feature.
   *support*; the spike only flipped the `null`-literal guard — `??` and `== null`
   remain (sub-arc G256 / D).
 
+## Sub-arc B/C/E implementation attempt (decision A, 2026-06-09)
+
+Full diff preserved as [`impl-attempt.diff`](impl-attempt.diff).  **Interpreter:
+DONE + verified** (design A — raw `==`, truthiness coerce, `== null` falls out).
+**Native: core proven, not complete** — reverted to keep the branch green (shared
+codegen forbids a half-done commit).
+
+What is DONE and proven on the interpreter (the `impl-attempt.diff` interp half):
+- `OpConvBoolFromNull` producer; `create.rs` Boolean arm reads operand as `u8`;
+  `OpVarBool` reads `u8`; `OpGotoFalse`/`OpNot` coerce (`!= 1`); `eq_bool`/`ne_bool`
+  stay **raw** (design A → `null==false` false, `null==null` true); `OpCastTextFromBool`
+  renders `"null"`; `null(Boolean)` emits the producer.  Full `{false,true,null}` ×
+  `{==false,==true,==null,if,!,fmt}` matrix green on `--interpret`, incl. the
+  `hash → boolean` consumer.
+
+What is PROVEN for native (compiles + runs for the core):
+- `generation/mod.rs::rust_type`: `Boolean` → `u8` in Variable/Argument/Result/Reference,
+  else `bool` (the two-form split — mirrors text String/Str).
+- `calls.rs` template substitution wraps boolean operands `((expr) as u8)` (idempotent
+  for u8, 0/1 for bool) — fixes the op-template seam wholesale.
+- `narrow_int_cast` gains `Boolean => Some("u8")` — central `bool→u8` coercion at the
+  return / store / arg seams.
+- `output_test_predicate` coerces a boolean `if`/`while` test `((test) as u8) == 1`
+  (uniform for both u8 and bool tests).
+- Result: local vars, `!`, `==`, `== null`, `if`, field storage, and the
+  `hash → boolean` consumer **compile and run correctly on `--native`**.
+
+Remaining native seams (the routed work — ~19 stdlib errors, three patterns):
+1. **`&&` / `||` lowering** — native lowers these to a nested if-value expression
+   (`if a {true} else {b}`); with boolean arms now mixed `bool`/`u8` the arms
+   disagree (`if`/`else` incompatible types).  Needs the logical-lowering arms
+   normalised to one form.
+2. **`bool`/`u8` → `i64` promotion** — a native "scalar value" path defaults boolean
+   into `i64` in some positions (vector element / value emit), giving
+   `expected u8, found i64`.  Find the scalar-emit default and add a Boolean arm.
+3. A few residual `expected u8, found bool` store/arg spots `narrow_int_cast` doesn't
+   reach (non-Set assignment forms).
+
+These are concentrated in the **stdlib**'s use of `&&`/`||` over booleans, not the
+user program.  Verdict: native E is the M-sized gating piece the plan predicted;
+the approach is validated and the seams are localized — it needs a focused session,
+not a budget-pressured patch.
+
 ## Reproduce
 
 ```
