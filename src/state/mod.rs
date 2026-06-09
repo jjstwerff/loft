@@ -200,6 +200,57 @@ pub(crate) fn loft_float_literal(s: &str) -> String {
     }
 }
 
+/// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
+/// re-reads.  Escapes the characters loft shares with JSON (`"`, `\`, newline,
+/// CR, tab); other characters pass through.  The single home for the text
+/// round-trip rule: the breakpoint frame renderer
+/// ([`State::render_frame_local`]) and the REPL value snapshot
+/// (`repl::escape_loft_text`) both go through it, so a captured text reads back
+/// exactly as [`unescape_loft_text`] parses it on a live edit.
+pub(crate) fn loft_text_literal(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Parse a quoted loft `text` literal back to its bytes — the inverse of
+/// [`loft_text_literal`], used by the @PLN15 debugger to write a text edited at
+/// a breakpoint (`msg = "bye"`) back into the live frame.  Returns `None` when
+/// `lit` is not a `"…"`-quoted literal.  Unknown escapes keep the following
+/// character verbatim (lenient, matching the lexer's tolerance).
+pub(crate) fn unescape_loft_text(lit: &str) -> Option<String> {
+    let inner = lit.strip_prefix('"')?.strip_suffix('"')?;
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    Some(out)
+}
+
 /// Bytecode encoding: ops 0–254 are one byte.  Byte 255 is an escape
 /// prefix — the interpreter reads a second byte `ext` and dispatches
 /// `OPERATORS[255 + ext]`.  The OPERATORS table is flat; this function
@@ -1971,17 +2022,19 @@ impl State {
         self.debug.as_deref().and_then(|d| d.paused.as_ref())
     }
 
-    /// Resolve frame local `name` to its `(record, frame-absolute address, type)`
-    /// in the current suspension's frame — the shared slot lookup behind both the
-    /// frame-value reads and writes.  The address is the variable's fixed slot
-    /// (`stack_cur.pos + args_base + vars.stack(i)`), the same one
-    /// [`render_frame_local`](Self::render_frame_local) reads.  `None` if there is
-    /// no current frame or no local of that name.
+    /// Resolve frame local `name` to `(record, frame-absolute address, type,
+    /// is_argument)` in the current suspension's frame — the shared slot lookup
+    /// behind both the frame-value reads and writes.  The address is the variable's
+    /// fixed slot (`stack_cur.pos + args_base + vars.stack(i)`), the same one
+    /// [`render_frame_local`](Self::render_frame_local) reads.  `is_argument`
+    /// distinguishes a text **arg** (a 16-byte `Str` borrow) from a text **local**
+    /// (a 24-byte owned `String`), which the edit path writes differently.  `None`
+    /// if there is no current frame or no local of that name.
     fn frame_slot(
         &self,
         name: &str,
         data: &crate::data::Data,
-    ) -> Option<(u32, u32, crate::data::Type)> {
+    ) -> Option<(u32, u32, crate::data::Type, bool)> {
         let frame = self.call_stack.last()?;
         if frame.d_nr == u32::MAX {
             return None;
@@ -1989,7 +2042,24 @@ impl State {
         let vars = &data.def(frame.d_nr).variables;
         let i = (0..vars.count()).find(|&i| vars.name(i) == name)?;
         let at = self.stack_cur.pos + frame.args_base + u32::from(vars.stack(i));
-        Some((self.stack_cur.rec, at, vars.tp(i).clone()))
+        Some((
+            self.stack_cur.rec,
+            at,
+            vars.tp(i).clone(),
+            vars.is_argument(i),
+        ))
+    }
+
+    /// Whether `name` is a local **shown** at the current suspension — i.e. it
+    /// appears in the captured paused frame.  The text edit path gates on this so a
+    /// user can only edit a text local they can see; the memory-safety of the write
+    /// itself is handled separately (by `ptr::write`, which never drops the prior
+    /// slot value).  `false` when not paused.
+    fn frame_local_is_live(&self, name: &str) -> bool {
+        self.debug
+            .as_deref()
+            .and_then(|d| d.paused.as_ref())
+            .is_some_and(|h| h.locals.iter().any(|(n, _)| n == name))
     }
 
     /// Write an integer `value` into the **live** frame's local `name` at a
@@ -1999,7 +2069,7 @@ impl State {
     /// edits via [`set_frame_literal`](Self::set_frame_literal), which covers every
     /// inline scalar.)
     pub fn set_frame_value(&mut self, name: &str, value: i64, data: &crate::data::Data) -> bool {
-        let Some((rec, at, tp)) = self.frame_slot(name, data) else {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(name, data) else {
             return false;
         };
         if !matches!(tp, crate::data::Type::Integer(_)) {
@@ -2014,14 +2084,26 @@ impl State {
 
     /// Write the value rendered by own-format `literal` into the **live** frame's
     /// local `name`, **type-directed** by the local's declared type — the general
-    /// @PLN15 F edit-and-continue write the REPL uses (`f = 2.0`, `b = false`).
+    /// @PLN15 F edit-and-continue write the REPL uses (`f = 2.0`, `msg = "hi"`).
     /// Covers every **inline scalar** (integer / float / single / boolean /
-    /// character); `literal` is parsed in that type's own-format form (the same
-    /// form [`render_frame_local`](Self::render_frame_local) produces, so an edited
-    /// value round-trips).  Returns `false` for an unknown local, a `literal` that
-    /// doesn't parse as the local's type (so a type-mismatched edit is rejected),
-    /// or a **text / heap** local — those hold a pointer / `DbRef` into the store,
-    /// so editing them needs the store-resident write-back (the remaining work).
+    /// character), a **simple enum** (its 1-based discriminant byte), and **text**
+    /// (a text *local* overwrites its owned `String`; a text *argument* repoints its
+    /// `Str` at a stable [`Debugger`](crate::debugger::Debugger)-owned buffer).
+    /// `literal` is parsed in that type's own-format form (the same form
+    /// [`render_frame_local`](Self::render_frame_local) produces, so an edited value
+    /// round-trips).
+    ///
+    /// A **text** edit requires the local be **live** at the pause (shown in the
+    /// captured frame): overwriting a text local runs `Drop` on the old `String`, so
+    /// the slot must hold a valid one — guaranteed only once its first assignment has
+    /// run, which is exactly when the liveness gate shows it.
+    ///
+    /// Returns `false` for an unknown local, a `literal` that doesn't parse as the
+    /// local's type (a type-mismatched edit is rejected), a not-yet-live text local,
+    /// or a **heap** local (struct / vector / struct-enum): those hold a `DbRef` into
+    /// the store, and reconstructing one in the *live* store from a literal needs a
+    /// literal→store materialiser (`Stores::clone` empties `allocations`, so a value
+    /// built in the REPL's store cannot be aliased across) — the remaining work.
     pub fn set_frame_literal(
         &mut self,
         name: &str,
@@ -2029,29 +2111,37 @@ impl State {
         data: &crate::data::Data,
     ) -> bool {
         use crate::data::Type;
-        let Some((rec, at, tp)) = self.frame_slot(name, data) else {
+        let Some((rec, at, tp, is_arg)) = self.frame_slot(name, data) else {
             return false;
         };
         let lit = literal.trim();
-        let store = self.database.store_mut(&self.stack_cur);
-        match tp {
+        match &tp {
             Type::Integer(_) => {
                 let Ok(v) = lit.parse::<i64>() else {
                     return false;
                 };
-                *store.addr_mut::<i64>(rec, at) = v;
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<i64>(rec, at) = v;
             }
             Type::Float => {
                 let Ok(v) = lit.parse::<f64>() else {
                     return false;
                 };
-                *store.addr_mut::<f64>(rec, at) = v;
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<f64>(rec, at) = v;
             }
             Type::Single => {
                 let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
                     return false;
                 };
-                *store.addr_mut::<f32>(rec, at) = v;
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<f32>(rec, at) = v;
             }
             Type::Boolean => {
                 let v = match lit {
@@ -2059,7 +2149,10 @@ impl State {
                     "false" => 0u8,
                     _ => return false,
                 };
-                *store.addr_mut::<u8>(rec, at) = v;
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(rec, at) = v;
             }
             Type::Character => {
                 // Own-format is `'c'`; take the single char between the quotes.
@@ -2071,11 +2164,77 @@ impl State {
                 let (Some(c), None) = (cs.next(), cs.next()) else {
                     return false;
                 };
-                *store.addr_mut::<u32>(rec, at) = c as u32;
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u32>(rec, at) = c as u32;
             }
-            // Text + heap (struct / vector / enum): the slot holds a pointer / DbRef
-            // into the store — editing needs the store-resident write-back, not yet
-            // built.  Reject rather than corrupt the slot.
+            Type::Text(_) => {
+                // Overwriting a text local drops its old `String`, so it must be a
+                // valid (initialised) one — only true once it is live.
+                if !self.frame_local_is_live(name) {
+                    return false;
+                }
+                let Some(owned) = unescape_loft_text(lit) else {
+                    return false;
+                };
+                if is_arg {
+                    // 16-byte `Str` borrow → point it at a stable Debugger-owned buffer.
+                    let Some(dbg) = self.debug.as_mut() else {
+                        return false;
+                    };
+                    dbg.edited_text.push(owned);
+                    let Some(s) = dbg.edited_text.last() else {
+                        return false; // unreachable after push — no panic path
+                    };
+                    let new = Str {
+                        ptr: s.as_ptr(),
+                        len: s.len() as u32,
+                    };
+                    *self
+                        .database
+                        .store_mut(&self.stack_cur)
+                        .addr_mut::<Str>(rec, at) = new;
+                } else {
+                    // 24-byte owned `String`.  Use `ptr::write`, not assignment:
+                    // assignment drops the slot's prior `String`, but the liveness
+                    // gate can show a text local still at its own assignment op
+                    // (slot uninitialised — `reserve_frame` does not zero), so the
+                    // prior bytes may be garbage and dropping them is UB.
+                    // `ptr::write` overwrites without dropping; a genuinely-prior
+                    // `String`'s buffer leaks (a tiny, debug-session-only cost) and
+                    // scope-exit `OpFreeText` frees the new one.
+                    let dst: *mut String = std::ptr::from_mut(
+                        self.database
+                            .store_mut(&self.stack_cur)
+                            .addr_mut::<String>(rec, at),
+                    );
+                    // SAFETY: `dst` is the live frame slot for a text local (24-byte
+                    // `String`); `ptr::write` neither reads nor drops its prior value.
+                    unsafe {
+                        core::ptr::write(dst, owned);
+                    }
+                }
+            }
+            // Simple enum: an inline 1-based discriminant byte.  `literal` is
+            // `Enum.Variant`; take the variant after the last `.`.
+            Type::Enum(_, false, _) => {
+                let variant = lit.rsplit('.').next().unwrap_or(lit);
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                if tp_known == u16::MAX {
+                    return false;
+                }
+                let disc = self.database.to_enum(tp_known, variant);
+                if disc == 0 {
+                    return false;
+                }
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(rec, at) = disc;
+            }
+            // Heap (struct / vector / struct-enum): a `DbRef` slot — see the doc note.
             _ => return false,
         }
         true
@@ -2203,7 +2362,7 @@ impl State {
         // Collect (name, slot, type) first so the `data` borrow ends before the
         // value reads below.  Arguments are always live; a non-arg local is live
         // iff its def precedes `pc` and `pc` is within its reference range.
-        let fields: Vec<(String, u16, crate::data::Type)> = {
+        let fields: Vec<(String, u16, crate::data::Type, bool)> = {
             let vars = &def.variables;
             (0..n)
                 .filter(|&i| {
@@ -2212,12 +2371,24 @@ impl State {
                             && first[i as usize] <= pc
                             && pc <= last[i as usize])
                 })
-                .map(|i| (vars.name(i).to_string(), vars.stack(i), vars.tp(i).clone()))
+                .map(|i| {
+                    (
+                        vars.name(i).to_string(),
+                        vars.stack(i),
+                        vars.tp(i).clone(),
+                        vars.is_argument(i),
+                    )
+                })
                 .collect()
         };
         let locals = fields
             .into_iter()
-            .map(|(name, off, tp)| (name, self.render_frame_local(frame_base, off, &tp, data)))
+            .map(|(name, off, tp, is_arg)| {
+                (
+                    name,
+                    self.render_frame_local(frame_base, off, &tp, is_arg, data),
+                )
+            })
             .collect();
         crate::debugger::BreakHit { function, locals }
     }
@@ -2236,6 +2407,7 @@ impl State {
         frame_base: u32,
         off: u16,
         tp: &crate::data::Type,
+        is_arg: bool,
         data: &crate::data::Data,
     ) -> String {
         use crate::data::Type;
@@ -2272,13 +2444,38 @@ impl State {
                 char::from_u32(*self.database.store(&self.stack_cur).addr::<u32>(rec, at))
                     .map_or_else(|| "?".to_string(), |c| format!("'{c}'"))
             }
-            Type::Text(_) => format!(
-                "{:?}",
-                self.database
-                    .store(&self.stack_cur)
-                    .addr::<crate::keys::Str>(rec, at)
-                    .str()
-            ),
+            // A text **argument** is a 16-byte `Str` borrow (`OpArgText`); a text
+            // **local** is a 24-byte owned `String` (`OpVarText`).  Read each at its
+            // true width — reading a local's `String` as a `Str` mis-takes the
+            // capacity word for the length and renders garbage / `""`.
+            Type::Text(_) => {
+                let raw = if is_arg {
+                    self.database
+                        .store(&self.stack_cur)
+                        .addr::<crate::keys::Str>(rec, at)
+                        .str()
+                        .to_string()
+                } else {
+                    // `reserve_frame` does not zero locals, so a text local shown
+                    // at its own (not-yet-run) assignment op holds stack garbage.
+                    // `as_ptr()`/`len()` only read fields (no deref), so they are
+                    // safe on garbage; guard them like `Str::str` before building
+                    // the slice, rather than `.clone()` (which would deref).
+                    let s = self.database.store(&self.stack_cur).addr::<String>(rec, at);
+                    let (ptr, len) = (s.as_ptr(), s.len());
+                    if ptr.is_null() || (ptr as usize) < (1 << 16) || len > 10_000_000 {
+                        String::new()
+                    } else {
+                        // SAFETY: ptr passed the same low-address / length guard
+                        // `Str::str` uses; the bytes are valid UTF-8 (loft text).
+                        unsafe {
+                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                        }
+                        .to_string()
+                    }
+                };
+                loft_text_literal(&raw)
+            }
             // Heap value backed by a `DbRef` in the slot: struct, vector,
             // struct-enum variant → `show_loft` renders its own-format literal.
             Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {

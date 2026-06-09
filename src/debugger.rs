@@ -57,6 +57,13 @@ pub struct Debugger {
     /// running.  The driver reads it, optionally writes a value back to the live
     /// frame, and calls `State::resume`.
     pub paused: Option<BreakHit>,
+    /// Stable backing buffers for **text-argument** live edits.  A text argument's
+    /// frame slot is a 16-byte `Str` borrow (ptr + len), so an edit must point it
+    /// at bytes that outlive the edit; each edited string is kept here (owned by the
+    /// `Debugger`, which lives for the whole run) and the slot's `Str` points into
+    /// it.  A text *local* needs no entry — it owns its `String` and is overwritten
+    /// in place.  Never mutated or removed after a push, so the pointers stay valid.
+    pub edited_text: Vec<String>,
 }
 
 /// @PLN15 B1 — collect the **static** call targets in an IR body into `out`.

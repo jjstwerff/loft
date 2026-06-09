@@ -795,3 +795,145 @@ fn debug_on_without_breakpoint_yields_no_hits() {
         other => panic!("parse failed: {other:?}"),
     }
 }
+
+/// @PLN15 G1 — **text-local read** regression.  A text *argument* is a 16-byte
+/// `Str` borrow; a text *local* is a 24-byte owned `String`.  The frame renderer
+/// must read each at its true width — reading a local's `String` as a `Str`
+/// mis-takes the capacity word for the length and renders `""` / garbage.
+#[test]
+fn text_local_read_shows_value() {
+    let mut p = repl();
+    let defs = &[
+        "fn build(seed: text) -> text {\n  s = seed;\n  a = s.to_uppercase();\n  \
+         b = a;\n  c = s.to_uppercase();\n  c\n}",
+    ];
+    let state = run_to_pause(&mut p, defs, "build(\"world\")", "build", 4);
+    let f = state.paused_frame().unwrap();
+    assert!(
+        f.locals
+            .iter()
+            .any(|(n, v)| n == "seed" && v == "\"world\""),
+        "text arg seed (Str): {f:?}"
+    );
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "s" && v == "\"world\""),
+        "text local s (String): {f:?}"
+    );
+    assert!(
+        f.locals.iter().any(|(n, v)| n == "a" && v == "\"WORLD\""),
+        "text local a (String): {f:?}"
+    );
+}
+
+/// @PLN15 G1 — **live edit of a text argument**, picked up on resume.  `greet("hi")`
+/// is normally 0; we edit `msg` to `"BYE"` at the breakpoint so it returns 1, and
+/// the program's assert then passes — proving the `Str` slot's repoint is read by
+/// the resumed call.
+#[test]
+fn live_edit_text_arg_resumes_with_new_value() {
+    let mut p = repl();
+    let defs =
+        &["fn greet(msg: text) -> integer {\n  m = 0;\n  if msg == \"BYE\" { 1 } else { 0 }\n}"];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(greet(\"hi\") == 1, \"edited msg to BYE\")",
+        "greet",
+        2,
+    );
+    assert!(
+        state.set_frame_literal("msg", "\"BYE\"", &p.data),
+        "edit text arg"
+    );
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "text-arg edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15 G1 — **live edit of a text local**, picked up on resume.  A text local
+/// owns its `String`; the edit overwrites it (without dropping the prior — possibly
+/// uninitialised — slot value).  `make()` returns 1 only if the edited `s == "BYE"`.
+#[test]
+fn live_edit_text_local_resumes_with_new_value() {
+    let mut p = repl();
+    let defs = &[
+        "fn make() -> integer {\n  s = \"hi\";\n  a = s.to_uppercase();\n  \
+         if s == \"BYE\" { 1 } else { 0 }\n}",
+    ];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(make() == 1, \"edited local s to BYE\")",
+        "make",
+        3,
+    );
+    assert!(
+        state.set_frame_literal("s", "\"BYE\"", &p.data),
+        "edit text local"
+    );
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "text-local edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15 G1 — **live edit of a simple enum**, picked up on resume.  A simple enum
+/// is an inline 1-based discriminant byte; the edit parses `Enum.Variant` and writes
+/// the byte.  `pick(Color.Green)` returns 1 only after we edit `c` to `Color.Blue`.
+#[test]
+fn live_edit_simple_enum_resumes_with_new_value() {
+    let mut p = repl();
+    let defs = &[
+        "enum Color { Red, Green, Blue }",
+        "fn pick(c: Color) -> integer {\n  m = 0;\n  if c == Color.Blue { 1 } else { 0 }\n}",
+    ];
+    let mut state = run_to_pause(
+        &mut p,
+        defs,
+        "assert(pick(Color.Green) == 1, \"edited c to Blue\")",
+        "pick",
+        2,
+    );
+    assert!(
+        state.set_frame_literal("c", "Color.Blue", &p.data),
+        "edit simple enum"
+    );
+    state.resume();
+    assert!(
+        state.database.runtime_error.is_none(),
+        "enum edit picked up on resume; err = {:?}",
+        state.database.runtime_error
+    );
+}
+
+/// @PLN15 G1 — a **heap** local (struct / vector / struct-enum) edit is rejected:
+/// reconstructing a `DbRef` value in the *live* store from a literal needs a
+/// literal→store materialiser (the remaining work), so the edit returns `false`
+/// rather than corrupt the slot.  The read still works.
+#[test]
+fn live_edit_rejects_heap_local() {
+    let mut p = repl();
+    let defs = &[
+        "struct Point { x: integer, y: integer }",
+        "fn area(pt: Point) -> integer {\n  m = pt.x;\n  pt.x * pt.y\n}",
+    ];
+    let mut state = run_to_pause(&mut p, defs, "area(Point{x: 3, y: 4})", "area", 2);
+    assert!(
+        state
+            .paused_frame()
+            .unwrap()
+            .locals
+            .iter()
+            .any(|(n, v)| n == "pt" && v == "Point{x:3,y:4}"),
+        "struct read still works"
+    );
+    assert!(
+        !state.set_frame_literal("pt", "Point{x: 9, y: 9}", &p.data),
+        "heap edit rejected (deferred)"
+    );
+}

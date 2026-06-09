@@ -679,24 +679,12 @@ fn float_literal(v: f64) -> String {
 }
 
 /// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
-/// re-reads.  Handles the escapes loft shares with JSON (`"`, `\`, newline, CR,
-/// tab); other characters pass through.  Used by the REPL.X value-snapshot to
-/// store a captured text binding as `name = "…"`.
+/// re-reads.  Used by the REPL.X value-snapshot to store a captured text binding
+/// as `name = "…"`.  Delegates to the shared
+/// [`state::loft_text_literal`](crate::state::loft_text_literal) so the snapshot
+/// and the breakpoint frame renderer escape identically.
 fn escape_loft_text(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() + 2);
-    out.push('"');
-    for c in raw.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    crate::state::loft_text_literal(raw)
 }
 
 /// Render the return value (read off `state`'s stack top) of type `ret_ty` as an

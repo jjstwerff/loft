@@ -435,8 +435,9 @@ fn repl_interactive_eval_at_frame() {
 /// @PLN15 G1 (interactive) — edit-and-continue across **scalar types**, not just
 /// integers: a live `integer` / `float` / `boolean` local is each edited at the
 /// pause (one by literal, one by an expression evaluated against the frame), the
-/// reads reflect the edits, and a **text** local is correctly *rejected* (its slot
-/// holds a store pointer — not yet editable).
+/// reads reflect the edits, and a **text** argument is editable too (its `Str` slot
+/// repoints at a debugger-owned buffer — verified through the frame view, since
+/// `debug_eval` on a text *value* hits the separate value-snapshot bug @P293).
 #[test]
 fn repl_interactive_edit_scalar_types() {
     let mut s = session();
@@ -460,8 +461,19 @@ fn repl_interactive_edit_scalar_types() {
     // A type-mismatched edit is rejected (float literal into an integer local).
     assert!(!s.debug_set("n", "3.5"), "type-mismatched edit rejected");
     assert_eq!(s.debug_eval("n").as_deref(), Some("10"), "n unchanged");
-    // A text local is not yet editable (store pointer) — rejected, frame intact.
-    assert!(!s.debug_set("msg", "\"bye\""), "text edit rejected");
+    // A text argument is editable via a literal: its `Str` slot repoints at a
+    // stable buffer.  Verify through the frame view (`debug_eval` on a text *value*
+    // hits the separate value-snapshot bug @P293); the edit shows in the refreshed frame.
+    assert!(s.debug_set("msg", "\"bye\""), "text arg edit");
+    assert!(
+        s.paused_frame()
+            .unwrap()
+            .locals
+            .iter()
+            .any(|(n, v)| n == "msg" && v == "\"bye\""),
+        "msg reflects edit: {:?}",
+        s.paused_frame().unwrap().locals
+    );
     assert!(!s.debug_continue());
 }
 
