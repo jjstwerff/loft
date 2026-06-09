@@ -1968,6 +1968,63 @@ impl State {
         true
     }
 
+    /// @PLN16 M5a — register a breakpoint at **`file:line`** for the file-run debugger.
+    /// Unlike the REPL's function-scoped form, a real source file gives line numbers
+    /// that are unique within it, so the user names a line directly.  Scoped to the
+    /// **user file's** function defs (matched by `position.file`'s basename — stdlib
+    /// lives in other files, so its identical line numbers are excluded), it sets the
+    /// breakpoint in the one whose body has emitted code on `line` (reusing
+    /// [`set_breakpoint_fn_line`](Self::set_breakpoint_fn_line)).  Returns `false` when
+    /// no user-file function has a breakable op on `line`.
+    pub fn set_breakpoint_file_line(
+        &mut self,
+        file: &str,
+        line: u32,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some(want) = std::path::Path::new(file).file_name() else {
+            return false;
+        };
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type != crate::data::DefType::Function {
+                continue;
+            }
+            if std::path::Path::new(&def.position.file).file_name() != Some(want) {
+                continue;
+            }
+            if self.set_breakpoint_fn_line(d, line, data) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// @PLN16 M5a — the breakable source lines in `file` (its basename), sorted: the
+    /// lines a `file:line` breakpoint can land on.  Powers the "no breakable op on line
+    /// N — try one of these" hint in the file-run debugger.  Drawn from the dense
+    /// `line_numbers` table, scoped to the user file's function defs.
+    #[must_use]
+    pub fn breakable_lines_in_file(&self, file: &str, data: &crate::data::Data) -> Vec<u32> {
+        let Some(want) = std::path::Path::new(file).file_name() else {
+            return Vec::new();
+        };
+        let mut ls: Vec<u32> = Vec::new();
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type != crate::data::DefType::Function
+                || std::path::Path::new(&def.position.file).file_name() != Some(want)
+            {
+                continue;
+            }
+            let (start, end) = (def.code_position, def.code_position + def.code_length);
+            ls.extend(self.line_numbers.range(start..end).map(|(_, l)| *l));
+        }
+        ls.sort_unstable();
+        ls.dedup();
+        ls
+    }
+
     /// The distinct source lines that carry a bytecode mapping — the lines a
     /// breakpoint can pause on, sorted.  Drawn from the dense `line_numbers` table
     /// (every line with emitted code), not the sparse arithmetic-only `source_spans`.
@@ -2097,7 +2154,8 @@ impl State {
     /// [`Stores::adopt_value_stores`](crate::database::Stores::adopt_value_stores)).
     /// Returns `false` for an unknown or non-heap (inline) local.  The prior value's
     /// stores are left allocated — a debug-session-only leak, like the text-local edit;
-    /// freeing them + journaling the slot `Modify` is the undo (M2) slice.
+    /// **undo (M2)** restores the old `DbRef` (a journaled slot `Modify`), so it points
+    /// back at the still-allocated original (the grafted value's stores leak symmetrically).
     pub fn set_frame_dbref(
         &mut self,
         name: &str,
@@ -2110,11 +2168,112 @@ impl State {
         if !Self::is_heap_type(&tp) {
             return false;
         }
+        let store_nr = self.stack_cur.store_nr;
+        let len = std::mem::size_of::<crate::keys::DbRef>() as u32;
+        let before = self.edit_before(store_nr, rec, at, len);
         *self
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<crate::keys::DbRef>(rec, at) = db;
+        self.edit_after(store_nr, rec, at, before);
         true
+    }
+
+    /// @PLN16 M2 — whether an interactive edit's undo journal is armed (recording the
+    /// before/after bytes of the regions it overwrites).  False on non-interactive
+    /// writes, so they pay nothing.
+    fn edit_recording(&self) -> bool {
+        self.debug
+            .as_deref()
+            .is_some_and(|d| d.recording_edit.is_some())
+    }
+
+    /// @PLN16 M2 — snapshot `len` bytes of a frame/heap region *before* an edit
+    /// overwrites them — the `before` half of a journaled `Modify`.  `None` (no
+    /// snapshot, no cost) when no edit journal is armed.  Pair with
+    /// [`edit_after`](Self::edit_after) once the write has landed.
+    fn edit_before(&self, store_nr: u16, rec: u32, off: u32, len: u32) -> Option<Box<[u8]>> {
+        self.edit_recording()
+            .then(|| crate::database::Journal::snapshot(&self.database, store_nr, rec, off, len))
+    }
+
+    /// @PLN16 M2 — after an edit's write lands, record the `Modify` (the `before` from
+    /// [`edit_before`](Self::edit_before) → the region's current bytes) into the armed
+    /// journal, so the edit can be reverted (`:undo`) and replayed (`:redo`).  No-op
+    /// when `before` is `None` (not recording).
+    fn edit_after(&mut self, store_nr: u16, rec: u32, off: u32, before: Option<Box<[u8]>>) {
+        let Some(before) = before else {
+            return;
+        };
+        // `self.debug` and `self.database` are distinct fields → disjoint borrows.
+        if let Some(j) = self
+            .debug
+            .as_deref_mut()
+            .and_then(|d| d.recording_edit.as_mut())
+        {
+            let _ = j.record_modify(&self.database, store_nr, rec, off, &before);
+        }
+    }
+
+    /// @PLN16 M2 — arm a fresh per-edit journal so the next frame write records its
+    /// before/after bytes for undo.  No-op when not debugging.  A blob-file failure
+    /// leaves it disarmed (the edit still runs, just without an undo entry).
+    pub fn begin_edit_journal(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.recording_edit = crate::database::Journal::create().ok();
+        }
+    }
+
+    /// @PLN16 M2 — finish the armed edit journal: if it recorded anything, push it onto
+    /// the undo stack and clear the redo stack (a fresh edit forks the timeline);
+    /// otherwise discard it.  Returns whether an undoable edit was recorded.
+    pub fn commit_edit_journal(&mut self) -> bool {
+        let Some(d) = self.debug.as_deref_mut() else {
+            return false;
+        };
+        let Some(j) = d.recording_edit.take() else {
+            return false;
+        };
+        if j.is_empty() {
+            return false;
+        }
+        d.undo_stack.push(j);
+        d.redo_stack.clear();
+        true
+    }
+
+    /// @PLN16 M2 — drop the armed edit journal without recording (a failed edit).
+    pub fn discard_edit_journal(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.recording_edit = None;
+        }
+    }
+
+    /// @PLN16 M2 — undo the last edit at this suspension: revert its journal and move it
+    /// to the redo stack.  Returns `false` when the undo stack is empty.  Refresh the
+    /// paused frame after, so `:vars` shows the restored value.
+    pub fn debug_undo(&mut self) -> bool {
+        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
+            return false;
+        };
+        let ok = j.revert(&mut self.database).is_ok();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.redo_stack.push(j);
+        }
+        ok
+    }
+
+    /// @PLN16 M2 — redo the last undone edit: re-apply its journal and move it back to
+    /// the undo stack.  Returns `false` when the redo stack is empty.
+    pub fn debug_redo(&mut self) -> bool {
+        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
+            return false;
+        };
+        let ok = j.apply(&mut self.database).is_ok();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.undo_stack.push(j);
+        }
+        ok
     }
 
     /// Write an integer `value` into the **live** frame's local `name` at a
@@ -2170,6 +2329,25 @@ impl State {
             return false;
         };
         let lit = literal.trim();
+        // @PLN16 M2 — snapshot the slot for undo before the typed write.  Width by type
+        // (text arg = 16-byte `Str`, text local = 24-byte `String`); a heap `_` slot
+        // gets 0 here and returns below — that case is `set_frame_dbref`'s.  A failing
+        // arm returns without committing, so the snapshot is simply dropped.
+        let store_nr = self.stack_cur.store_nr;
+        let len = match &tp {
+            Type::Integer(_) | Type::Float => 8,
+            Type::Single | Type::Character => 4,
+            Type::Boolean | Type::Enum(_, false, _) => 1,
+            Type::Text(_) => {
+                if is_arg {
+                    16
+                } else {
+                    24
+                }
+            }
+            _ => 0,
+        };
+        let before = self.edit_before(store_nr, rec, at, len);
         match &tp {
             Type::Integer(_) => {
                 let Ok(v) = lit.parse::<i64>() else {
@@ -2292,6 +2470,9 @@ impl State {
             // Heap (struct / vector / struct-enum): a `DbRef` slot — see the doc note.
             _ => return false,
         }
+        // Reached only on a successful write (every failing arm returns above) — record
+        // the Modify for undo.
+        self.edit_after(store_nr, rec, at, before);
         true
     }
 
@@ -2422,53 +2603,77 @@ impl State {
         content: u16,
         lit: &str,
     ) -> bool {
+        // Width of the scalar by primitive type — also rejects the non-scalar types
+        // (long / text / heap) up front, before snapshotting for undo.
+        let len = match content {
+            0 | 3 => 8, // integer / float
+            2 | 6 => 4, // single / character
+            4 => 1,     // boolean
+            _ => return false,
+        };
+        let before = self.edit_before(store_nr, rec, off, len);
         let probe = crate::keys::DbRef {
             store_nr,
             rec,
             pos: 0,
         };
-        let store = self.database.store_mut(&probe);
-        match content {
-            0 => {
-                let Ok(v) = lit.parse::<i64>() else {
-                    return false;
-                };
-                *store.addr_mut::<i64>(rec, off) = v;
+        // Scope the store borrow so `edit_after` (which re-reads the store) can run.
+        let ok = {
+            let store = self.database.store_mut(&probe);
+            match content {
+                0 => match lit.parse::<i64>() {
+                    Ok(v) => {
+                        *store.addr_mut::<i64>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                2 => match lit.trim_end_matches('f').parse::<f32>() {
+                    Ok(v) => {
+                        *store.addr_mut::<f32>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                3 => match lit.parse::<f64>() {
+                    Ok(v) => {
+                        *store.addr_mut::<f64>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                4 => match lit {
+                    "true" => {
+                        *store.addr_mut::<u8>(rec, off) = 1;
+                        true
+                    }
+                    "false" => {
+                        *store.addr_mut::<u8>(rec, off) = 0;
+                        true
+                    }
+                    _ => false,
+                },
+                6 => {
+                    let inner = lit
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                        .unwrap_or(lit);
+                    let mut cs = inner.chars();
+                    match (cs.next(), cs.next()) {
+                        (Some(c), None) => {
+                            *store.addr_mut::<u32>(rec, off) = c as u32;
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
             }
-            2 => {
-                let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
-                    return false;
-                };
-                *store.addr_mut::<f32>(rec, off) = v;
-            }
-            3 => {
-                let Ok(v) = lit.parse::<f64>() else {
-                    return false;
-                };
-                *store.addr_mut::<f64>(rec, off) = v;
-            }
-            4 => {
-                let v = match lit {
-                    "true" => 1u8,
-                    "false" => 0u8,
-                    _ => return false,
-                };
-                *store.addr_mut::<u8>(rec, off) = v;
-            }
-            6 => {
-                let inner = lit
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''))
-                    .unwrap_or(lit);
-                let mut cs = inner.chars();
-                let (Some(c), None) = (cs.next(), cs.next()) else {
-                    return false;
-                };
-                *store.addr_mut::<u32>(rec, off) = c as u32;
-            }
-            _ => return false,
+        };
+        if ok {
+            self.edit_after(store_nr, rec, off, before);
         }
-        true
+        ok
     }
 
     /// Re-capture the current suspension's frame so [`paused_frame`](Self::paused_frame)
@@ -3254,6 +3459,12 @@ impl State {
         let start_depth = self.call_stack.len();
         if let Some(d) = self.debug.as_mut() {
             d.paused = None;
+            // @PLN16 M2 — resuming reuses frame stack slots, so an undo recorded at this
+            // suspension could write a stale slot.  Drop the undo/redo history; the next
+            // pause starts a fresh one.
+            d.undo_stack.clear();
+            d.redo_stack.clear();
+            d.recording_edit = None;
         }
         let bytecode_len = self.bytecode.len() as u32;
         // Skip the pause-check on the very first op — it is the breakpoint/line we

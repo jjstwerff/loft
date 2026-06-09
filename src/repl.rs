@@ -83,6 +83,94 @@ pub fn run_repl<R: BufRead, W: Write>(
     result
 }
 
+/// @PLN16 M5a — the **file-run debugger** (`loft debug prog.loft:42`).  Loads `file`
+/// (parsed under its real path, so breakpoints address it by `file:line`), breaks at
+/// `file:line`, auto-runs `main()` to the breakpoint, then drops into the interactive
+/// `(dbg)` prompt — the same paused engine as the REPL, reading the rest from `input`.
+///
+/// Reports cleanly and returns without entering the loop when `file` can't be
+/// read/parsed, has no `main()`, or `line` carries no breakable code (hinting the
+/// breakable lines).
+///
+/// # Errors
+/// Returns an I/O error from the input/output streams.
+pub fn run_file_debug<R: BufRead, W: Write>(
+    stdlib_dir: &str,
+    file: &str,
+    line: u32,
+    input: R,
+    chrome: &mut W,
+) -> std::io::Result<()> {
+    let mut session = ReplSession::new(stdlib_dir)?;
+    match session.load_program(file) {
+        Ok(Ok(())) => {}
+        Ok(Err(diags)) => {
+            for d in diags {
+                writeln!(chrome, "{}", d.to_string_compact())?;
+            }
+            return Ok(());
+        }
+        Err(e) => {
+            writeln!(chrome, "cannot read {file}: {e}")?;
+            return Ok(());
+        }
+    }
+    if !session.defines_function("main") {
+        writeln!(chrome, "{file} has no `main()` to run under the debugger")?;
+        return Ok(());
+    }
+    // Validate the line is breakable *before* arming, else hint the breakable lines.
+    let breakable = session.breakable_lines_in_file(file);
+    if !breakable.contains(&line) {
+        if breakable.is_empty() {
+            writeln!(chrome, "no breakable code found in {file}")?;
+        } else {
+            writeln!(
+                chrome,
+                "no breakable code at {file}:{line}. Breakable lines: {}",
+                breakable
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+        return Ok(());
+    }
+    session.debug_stepping(true);
+    session.add_file_breakpoint(file, line);
+    // Silence the raw panic handler (a resumed-run panic is caught + reported below).
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = writeln!(
+        chrome,
+        "loft debugger — break at {file}:{line}.  :help for commands, :continue to run, :quit to exit"
+    );
+    // Auto-run the entry to the breakpoint, then hand off to the interactive loop.
+    let mut pending = String::new();
+    let result = match process_line(
+        "main()",
+        &mut session,
+        &mut pending,
+        stdlib_dir,
+        None,
+        chrome,
+    ) {
+        Ok(_) => {
+            if !session.is_debugging() {
+                let _ = writeln!(
+                    chrome,
+                    "program finished without stopping at {file}:{line} (was the line reached?)"
+                );
+            }
+            run_loop(stdlib_dir, &mut session, input, chrome)
+        }
+        Err(e) => Err(e),
+    };
+    std::panic::set_hook(prev_hook);
+    result
+}
+
 /// Pick the input driver: the interactive line editor when stdin is a terminal,
 /// the plain reader otherwise.  wasm has no line editor, so it always reads
 /// plainly.
@@ -559,11 +647,12 @@ fn process_line<W: Write>(
 
 /// @PLN16 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
 /// resume execution (`:step`/`:s` into, `:next`/`:n` over, `:finish`/`:o` out,
-/// `:continue`/`:c` to the next breakpoint or the end); `name = <int>` edits the
-/// live frame; any other expression is **evaluated against the frame** (`n * 2`,
-/// `pt.x`); `:vars` re-shows the frame; `:quit`/`:q` leaves the REPL.  Returns
-/// `Ok(true)` only to quit.  Verbs work with or without the leading colon, so a
-/// paused user can type `step` or `:step`.
+/// `:continue`/`:c` to the next breakpoint or the end); `name = <expr>` edits the
+/// live frame (scalar / text / enum / `pt.x` / `v[i]` / whole struct-or-vector);
+/// `:undo`/`:u` and `:redo`/`:r` walk this suspension's edit history; any other
+/// expression is **evaluated against the frame** (`n * 2`, `pt.x`); `:vars` re-shows
+/// the frame; `:quit`/`:q` leaves the REPL.  Returns `Ok(true)` only to quit.  Verbs
+/// work with or without the leading colon, so a paused user can type `step` or `:step`.
 fn handle_paused<W: Write>(
     trimmed: &str,
     session: &mut ReplSession,
@@ -578,10 +667,25 @@ fn handle_paused<W: Write>(
         "finish" | "o" => step_and_report(session, StepMode::Out, chrome)?,
         "continue" | "c" => step_and_report(session, StepMode::Continue, chrome)?,
         "vars" => print_pause(session, chrome)?,
+        "undo" | "u" => {
+            if session.debug_undo() {
+                print_pause(session, chrome)?;
+            } else {
+                writeln!(chrome, "nothing to undo")?;
+            }
+        }
+        "redo" | "r" => {
+            if session.debug_redo() {
+                print_pause(session, chrome)?;
+            } else {
+                writeln!(chrome, "nothing to redo")?;
+            }
+        }
         "help" | "h" => writeln!(
             chrome,
             "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
-             :vars  |  `name = <expr>` edits a scalar local  |  any expression is \
+             :vars  :undo(:u)  :redo(:r)  |  `name = <expr>` edits a local (scalar / \
+             text / enum / `pt.x` / `v[i]` / whole struct/vector)  |  any expression is \
              evaluated at the frame  |  :quit"
         )?,
         _ => match parse_assign(t) {
@@ -592,8 +696,8 @@ fn handle_paused<W: Write>(
             }
             Some((name, _)) => writeln!(
                 chrome,
-                "couldn't set `{name}` — unknown local, or a non-scalar / \
-                 type-mismatched value (text + struct edits aren't supported yet)"
+                "couldn't set `{name}` — unknown local, or a value whose type doesn't \
+                 match the local"
             )?,
             // Anything else is an expression read against the frame's live values;
             // the value prints to stdout like a normal REPL result.
@@ -644,16 +748,17 @@ fn step_and_report<W: Write>(
 fn parse_assign(s: &str) -> Option<(&str, &str)> {
     let (lhs, rhs) = s.split_once('=')?;
     let name = lhs.trim();
-    // A bare local (`n`) or a struct-field path (`pt.x`) — `.` is allowed so the
-    // paused prompt can route a field edit; `debug_set` splits on it.
+    // A bare local (`n`), a struct-field path (`pt.x`), or a vector element (`v[1]`):
+    // `.`, `[`, `]` are allowed so the paused prompt can route field / element edits;
+    // `debug_set` splits on them.  A leading digit / `.` / `[` is never a valid local.
     if name.is_empty()
         || !name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '[' | ']'))
         || name
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_digit() || c == '.')
+            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | '['))
     {
         return None;
     }
@@ -815,6 +920,11 @@ pub struct ReplSession {
     /// `"foo"` (body start) or `"foo:3"` (line 3 of `foo`).  Re-applied to the
     /// fresh `State` of every observing run.
     breakpoints: Vec<String>,
+    /// @PLN16 M5a — `file:line` breakpoints for the file-run debugger (`loft debug
+    /// prog.loft:42`).  Distinct from `breakpoints` (function-scoped): a real source
+    /// file has unique line numbers, so the user names a line directly.  Re-applied to
+    /// each observing run's fresh `State` via `State::set_breakpoint_file_line`.
+    file_breakpoints: Vec<(String, u32)>,
     /// Frames captured at breakpoints during the most recent observing run
     /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
@@ -845,6 +955,7 @@ impl ReplSession {
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
+            file_breakpoints: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
@@ -864,6 +975,7 @@ impl ReplSession {
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
+            file_breakpoints: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
@@ -932,15 +1044,73 @@ impl ReplSession {
         }
     }
 
+    /// @PLN16 M5a — load a program's definitions from `src` (parsed under `filename`,
+    /// so the file-run debugger can address it by `file:line`) into this session, on
+    /// top of the stdlib already loaded.  On a parse error the session is rolled back
+    /// and the diagnostics returned.
+    ///
+    /// # Errors
+    /// Returns the error-level diagnostics if `src` does not parse.
+    pub fn load_program_str(&mut self, src: &str, filename: &str) -> Result<(), Vec<DiagEntry>> {
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(src, filename, false);
+        let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
+        if produced.iter().any(|e| e.level >= Level::Error) {
+            self.parser.data.rollback_to(pre_defs);
+            return Err(produced);
+        }
+        Ok(())
+    }
+
+    /// @PLN16 M5a — read a `.loft` file and load its definitions
+    /// ([`load_program_str`](Self::load_program_str)).  The outer `Result` is the file
+    /// read; the inner is the parse — split so the caller can word each failure.
+    ///
+    /// # Errors
+    /// Returns the I/O error if `path` cannot be read.
+    pub fn load_program(&mut self, path: &str) -> std::io::Result<Result<(), Vec<DiagEntry>>> {
+        let src = std::fs::read_to_string(path)?;
+        Ok(self.load_program_str(&src, path))
+    }
+
+    /// @PLN16 M5a — set a `file:line` breakpoint for the file-run debugger.  Stored and
+    /// re-applied to each observing run's fresh `State` via
+    /// `State::set_breakpoint_file_line`.
+    pub fn add_file_breakpoint(&mut self, file: &str, line: u32) {
+        let entry = (file.to_string(), line);
+        if !self.file_breakpoints.contains(&entry) {
+            self.file_breakpoints.push(entry);
+        }
+    }
+
+    /// @PLN16 M5a — the breakable source lines in `file` of the loaded program (compiles
+    /// it), for the file-run debugger's "no breakable op on line N — try one of these"
+    /// hint.
+    #[must_use]
+    pub fn breakable_lines_in_file(&mut self, file: &str) -> Vec<u32> {
+        crate::scopes::check(&mut self.parser.data);
+        let mut state = State::new(self.parser.database.clone());
+        compile::byte_code(&mut state, &mut self.parser.data);
+        state.breakable_lines_in_file(file, &self.parser.data)
+    }
+
+    /// @PLN16 M5a — whether the session defines a function `name` (user or stdlib).
+    #[must_use]
+    pub fn defines_function(&self, name: &str) -> bool {
+        self.parser.data.def_nr(&format!("n_{name}")) < self.parser.data.definitions()
+    }
+
     /// The breakpoint specs set this session.
     #[must_use]
     pub fn breakpoints(&self) -> &[String] {
         &self.breakpoints
     }
 
-    /// Remove all breakpoints.
+    /// Remove all breakpoints (function-scoped and `file:line`).
     pub fn clear_breakpoints(&mut self) {
         self.breakpoints.clear();
+        self.file_breakpoints.clear();
     }
 
     /// Frames captured at breakpoints during the most recent observing run.
@@ -989,6 +1159,11 @@ impl ReplSession {
         };
         if self.paused.is_none() {
             return false;
+        }
+        // @PLN16 M2 — arm the per-edit undo journal; the frame-write sites record their
+        // before/after bytes into it, and a successful edit commits it to the undo stack.
+        if let Some(state) = self.paused.as_deref_mut() {
+            state.begin_edit_journal();
         }
         // A `[index]` LHS is a vector element edit (`v[1]`); a dotted LHS is a
         // struct-field path edit (`pt.x`, `pt.inner.x` — nested structs are inlined, so
@@ -1045,7 +1220,40 @@ impl ReplSession {
                 false
             }
         };
-        if ok && let Some(state) = self.paused.as_deref_mut() {
+        if let Some(state) = self.paused.as_deref_mut() {
+            if ok {
+                // Push the recorded edit onto the undo stack; refresh the frame view.
+                state.commit_edit_journal();
+                state.refresh_paused_frame(&self.parser.data);
+            } else {
+                state.discard_edit_journal();
+            }
+        }
+        ok
+    }
+
+    /// @PLN16 M2 — undo the last interactive edit at this suspension (reverts its
+    /// journal) and refresh the frame view.  `false` when there is nothing to undo or
+    /// no pause.  The undone edit is then available via [`debug_redo`](Self::debug_redo).
+    pub fn debug_undo(&mut self) -> bool {
+        let Some(state) = self.paused.as_deref_mut() else {
+            return false;
+        };
+        let ok = state.debug_undo();
+        if ok {
+            state.refresh_paused_frame(&self.parser.data);
+        }
+        ok
+    }
+
+    /// @PLN16 M2 — redo the last undone edit (re-applies its journal) and refresh the
+    /// frame view.  `false` when there is nothing to redo or no pause.
+    pub fn debug_redo(&mut self) -> bool {
+        let Some(state) = self.paused.as_deref_mut() else {
+            return false;
+        };
+        let ok = state.debug_redo();
+        if ok {
             state.refresh_paused_frame(&self.parser.data);
         }
         ok
@@ -1188,6 +1396,10 @@ impl ReplSession {
             } else {
                 state.set_breakpoint_fn_start(spec, &self.parser.data);
             }
+        }
+        // @PLN16 M5a — file:line breakpoints (the file-run debugger).
+        for (file, line) in &self.file_breakpoints {
+            state.set_breakpoint_file_line(file, *line, &self.parser.data);
         }
     }
 
@@ -1398,7 +1610,7 @@ impl ReplSession {
             // mode a hit *suspends* execution; otherwise it records-and-continues.
             // Only on a real observing run (`debug`), not the value-render re-runs
             // (`:vars`, snapshot validation).
-            if debug && !self.breakpoints.is_empty() {
+            if debug && (!self.breakpoints.is_empty() || !self.file_breakpoints.is_empty()) {
                 self.apply_breakpoints(&mut state);
                 if self.stepping {
                     state.enable_stepping();

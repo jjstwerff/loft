@@ -618,6 +618,211 @@ fn repl_interactive_edit_whole_struct_frame_ref_and_reject() {
     assert!(!s.is_debugging());
 }
 
+/// @PLN16 M2 (interactive) — **undo/redo** mechanics on a scalar local: empty-stack
+/// no-op, undo restores the pre-edit value, redo re-applies it, a stack of edits
+/// unwinds/rewinds in order, and a fresh edit after an undo **forks** the timeline
+/// (clears redo).  All within one suspension (undo is per-pause-point).
+#[test]
+fn repl_interactive_undo_redo_scalar() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("calc");
+    assert!(matches!(s.eval("calc(5)"), Eval::Paused));
+    assert_eq!(s.debug_eval("n").as_deref(), Some("5"));
+    // Nothing recorded yet.
+    assert!(!s.debug_undo(), "nothing to undo initially");
+    assert!(!s.debug_redo(), "nothing to redo initially");
+    // One edit, undo, redo.
+    assert!(s.debug_set("n", "99"));
+    assert_eq!(s.debug_eval("n").as_deref(), Some("99"));
+    assert!(s.debug_undo(), "undo");
+    assert_eq!(s.debug_eval("n").as_deref(), Some("5"), "reverted");
+    assert!(s.debug_redo(), "redo");
+    assert_eq!(s.debug_eval("n").as_deref(), Some("99"), "re-applied");
+    // Stack of edits unwinds and rewinds in order.
+    assert!(s.debug_set("n", "7"));
+    assert!(s.debug_set("n", "8"));
+    assert_eq!(s.debug_eval("n").as_deref(), Some("8"));
+    assert!(s.debug_undo());
+    assert_eq!(s.debug_eval("n").as_deref(), Some("7"), "undo to 7");
+    assert!(s.debug_undo());
+    assert_eq!(s.debug_eval("n").as_deref(), Some("99"), "undo to 99");
+    assert!(s.debug_redo());
+    assert_eq!(s.debug_eval("n").as_deref(), Some("7"), "redo to 7");
+    // A new edit after an undo forks the timeline: the redo (→ 8) is dropped.
+    assert!(s.debug_set("n", "100"));
+    assert!(!s.debug_redo(), "fresh edit cleared the redo stack");
+    assert_eq!(s.debug_eval("n").as_deref(), Some("100"));
+    assert!(!s.debug_continue());
+}
+
+/// @PLN16 M2 (interactive) — an undo's revert reaches **resume**: edit `n` to 99,
+/// undo it, continue; the `assert(== 50)` holds only if the resumed call used the
+/// reverted `n == 5` (a failed undo would leave 99 → 990 → the assert would panic).
+#[test]
+fn repl_interactive_undo_resumes_with_reverted_value() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn calc(n: integer) -> integer {\n  n * 10\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("calc");
+    assert!(matches!(
+        s.eval("assert(calc(5) == 50, \"undone resumes to original\")"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("n", "99"));
+    assert!(s.debug_undo(), "undo the edit");
+    assert!(
+        !s.debug_continue(),
+        "finishes — assert(==50) holds with the revert"
+    );
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 M2 (interactive) — undo/redo across the **heap edit kinds**: a scalar
+/// struct field (`pt.x`), a scalar vector element (`v[i]`), a struct field on a
+/// text-bearing struct (the text must stay intact), and a **whole-value** replacement
+/// (`pt = Point{…}`).  Each reverts to its pre-edit value and re-applies — proving the
+/// journaled `Modify` (and, for whole-value, the frame-slot `DbRef` swap) round-trips.
+#[test]
+fn repl_interactive_undo_redo_heap_kinds() {
+    let mut s = session();
+    for d in [
+        "struct Point { x: integer, y: integer }",
+        "struct Tagged { name: text, n: integer }",
+        "fn field_fn(pt: Point) -> integer {\n  pt.x\n}",
+        "fn vec_fn(v: vector<integer>) -> integer {\n  v[0]\n}",
+        "fn text_fn(t: Tagged) -> integer {\n  t.n\n}",
+        "fn whole_fn(pt: Point) -> integer {\n  pt.x + pt.y\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+
+    // --- scalar struct field ---
+    s.add_breakpoint("field_fn");
+    assert!(matches!(
+        s.eval("field_fn(Point { x: 1, y: 2 })"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("pt.x", "9"));
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("9"));
+    assert!(s.debug_undo());
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("1"), "field reverted");
+    assert!(s.debug_redo());
+    assert_eq!(
+        s.debug_eval("pt.x").as_deref(),
+        Some("9"),
+        "field re-applied"
+    );
+    assert!(!s.debug_continue());
+    s.clear_breakpoints();
+
+    // --- scalar vector element ---
+    s.add_breakpoint("vec_fn");
+    assert!(matches!(s.eval("vec_fn([10, 20, 30])"), Eval::Paused));
+    assert!(s.debug_set("v[0]", "99"));
+    assert_eq!(s.debug_eval("v[0]").as_deref(), Some("99"));
+    assert!(s.debug_undo());
+    assert_eq!(
+        s.debug_eval("v[0]").as_deref(),
+        Some("10"),
+        "element reverted"
+    );
+    assert!(s.debug_redo());
+    assert_eq!(
+        s.debug_eval("v[0]").as_deref(),
+        Some("99"),
+        "element re-applied"
+    );
+    assert!(!s.debug_continue());
+    s.clear_breakpoints();
+
+    // --- scalar field on a text-bearing struct: text must survive undo/redo ---
+    s.add_breakpoint("text_fn");
+    assert!(matches!(
+        s.eval("text_fn(Tagged { name: \"a\", n: 5 })"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("t.n", "9"));
+    assert!(s.debug_undo());
+    assert_eq!(s.debug_eval("t.n").as_deref(), Some("5"), "n reverted");
+    assert_eq!(
+        s.debug_eval("t.name").as_deref(),
+        Some("\"a\""),
+        "text intact"
+    );
+    assert!(s.debug_redo());
+    assert_eq!(s.debug_eval("t.n").as_deref(), Some("9"), "n re-applied");
+    assert!(!s.debug_continue());
+    s.clear_breakpoints();
+
+    // --- whole-value replacement ---
+    s.add_breakpoint("whole_fn");
+    assert!(matches!(
+        s.eval("whole_fn(Point { x: 1, y: 2 })"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("pt", "Point { x: 10, y: 20 }"));
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("10"));
+    assert!(s.debug_undo());
+    assert_eq!(
+        s.debug_eval("pt.x").as_deref(),
+        Some("1"),
+        "whole-value reverted"
+    );
+    assert_eq!(
+        s.debug_eval("pt.y").as_deref(),
+        Some("2"),
+        "whole-value reverted"
+    );
+    assert!(s.debug_redo());
+    assert_eq!(
+        s.debug_eval("pt.x").as_deref(),
+        Some("10"),
+        "whole-value re-applied"
+    );
+    assert!(!s.debug_continue());
+}
+
+/// @PLN16 M2 (interactive) — undo/redo of a **text** edit (the trickiest case: the
+/// 16-byte `Str` slot is restored by a raw-byte `Modify`, so undo must repoint it at
+/// the original argument text and redo back at the debugger-owned buffer, with no
+/// double-free).  Edit a text argument, undo to the original, redo to the edit.
+#[test]
+fn repl_interactive_undo_redo_text() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("fn greet(msg: text) -> integer {\n  msg.len()\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("greet");
+    assert!(matches!(s.eval("greet(\"hi\")"), Eval::Paused));
+    assert_eq!(s.debug_eval("msg").as_deref(), Some("\"hi\""));
+    assert!(s.debug_set("msg", "\"hello\""), "text edit");
+    assert_eq!(s.debug_eval("msg").as_deref(), Some("\"hello\""));
+    assert!(s.debug_undo(), "undo text edit");
+    assert_eq!(
+        s.debug_eval("msg").as_deref(),
+        Some("\"hi\""),
+        "text reverted"
+    );
+    assert!(s.debug_redo(), "redo text edit");
+    assert_eq!(
+        s.debug_eval("msg").as_deref(),
+        Some("\"hello\""),
+        "text re-applied"
+    );
+    assert!(!s.debug_continue());
+}
+
 /// @PLN16 G1 (interactive) — edit-and-continue across **scalar types**, not just
 /// integers: a live `integer` / `float` / `boolean` local is each edited at the
 /// pause (one by literal, one by an expression evaluated against the frame), the
@@ -796,4 +1001,98 @@ fn repl_interactive_edit_nested_field() {
         "sibling untouched"
     );
     assert!(!s.debug_continue());
+}
+
+/// @PLN16 M5a (file-run debugger) — load a real program under its own filename, break
+/// at `file:line`, run `main()`, and pause in the right function.  Proves the file:line
+/// breakpoint resolves to the **user file's** function (not a stdlib function that
+/// happens to share the line number), reads the live local, and resumes cleanly.
+#[test]
+fn repl_file_debugger_breaks_at_file_line() {
+    let mut s = session();
+    // Line 2 (`n * 2`) is inside `helper`; line 5 calls it from `main`.
+    let prog = "fn helper(n: integer) -> integer {\n  \
+                n * 2\n}\nfn main() {\n  \
+                a = helper(21);\n  \
+                assert(a == 42, \"ok\")\n}\n";
+    assert!(
+        s.load_program_str(prog, "prog.loft").is_ok(),
+        "program loads"
+    );
+    assert!(s.defines_function("main"), "main is defined");
+    assert!(
+        s.breakable_lines_in_file("prog.loft").contains(&2),
+        "line 2 is breakable: {:?}",
+        s.breakable_lines_in_file("prog.loft")
+    );
+    s.debug_stepping(true);
+    s.add_file_breakpoint("prog.loft", 2);
+    // Running main() pauses inside helper at line 2 — scoped to prog.loft, so stdlib's
+    // own line 2 is never a breakpoint.
+    assert!(
+        matches!(s.eval("main()"), Eval::Paused),
+        "paused at prog.loft:2"
+    );
+    let f = s.paused_frame().expect("frame");
+    assert_eq!(
+        f.function, "helper",
+        "paused in the user's helper, not stdlib"
+    );
+    assert_eq!(s.debug_eval("n").as_deref(), Some("21"), "helper's live n");
+    // Continue with the original value → assert(42 == 42) holds → clean finish.
+    assert!(!s.debug_continue(), "run finishes cleanly");
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 M5a — a `file:line` with no breakable code resolves to nothing (the file-run
+/// debugger reports it + hints), and a line in a different file (the stdlib) is never
+/// matched.
+#[test]
+fn repl_file_debugger_unbreakable_line() {
+    let mut s = session();
+    let prog = "fn main() {\n  a = 1;\n  print(\"{a}\")\n}\n";
+    assert!(s.load_program_str(prog, "prog.loft").is_ok());
+    // Line 4 is the closing `}` — no emitted code → not breakable.
+    assert!(
+        !s.breakable_lines_in_file("prog.loft").contains(&4),
+        "line 4 (the `}}`) is not breakable"
+    );
+    s.debug_stepping(true);
+    s.add_file_breakpoint("prog.loft", 4);
+    // The breakpoint silently doesn't resolve, so the run finishes without pausing.
+    assert!(
+        matches!(s.eval("main()"), Eval::Ran),
+        "no pause on an unbreakable line"
+    );
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 M5a — the full `loft debug <file>:<line>` flow through `run_file_debug`:
+/// write a real `.loft` file, break at a line, auto-run `main()` to it, then drive the
+/// interactive `(dbg)` prompt from piped input (read the frame, continue, quit).  The
+/// pause announcement + frame go to the output stream; the run then resumes to the end.
+#[test]
+fn repl_file_debugger_end_to_end() {
+    let path = tmp_session("filedebug");
+    let prog = "fn helper(n: integer) -> integer {\n  \
+                n * 2\n}\nfn main() {\n  \
+                a = helper(21);\n  \
+                assert(a == 42, \"ok\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    // Piped session: read `n` at the frame, continue to the end, quit.
+    let input = std::io::Cursor::new(b"n\n:continue\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", file, 2, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("break at"),
+        "announces the breakpoint: {text}"
+    );
+    assert!(
+        text.contains("paused in helper") && text.contains("n = 21"),
+        "pauses in helper with n = 21: {text}"
+    );
+    assert!(text.contains("resumed"), "continues to the end: {text}");
+    let _ = std::fs::remove_file(&path);
 }

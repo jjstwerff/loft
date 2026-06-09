@@ -64,6 +64,20 @@ pub struct Debugger {
     /// it.  A text *local* needs no entry — it owns its `String` and is overwritten
     /// in place.  Never mutated or removed after a push, so the pointers stay valid.
     pub edited_text: Vec<String>,
+    /// @PLN16 M2 — undo/redo.  While one interactive edit runs, the before/after bytes
+    /// of every frame/heap region it overwrites are recorded here (armed by
+    /// `State::begin_edit_journal`); on success the journal moves to `undo_stack`.
+    /// `None` between edits, so non-interactive writes pay nothing.
+    pub recording_edit: Option<crate::database::Journal>,
+    /// @PLN16 M2 — edits made at the current suspension, newest last.  `:undo` reverts
+    /// the top entry onto `redo_stack`; a fresh edit forks the timeline (clears redo).
+    /// Per-edit `Journal`s — each a self-contained revert/apply unit — reuse the one
+    /// store change journal engine.  Cleared on resume (`debug_step`): stepping reuses
+    /// frame slots, so an old undo could write a stale slot — undo/redo therefore cover
+    /// edits at the *current* pause point only.
+    pub undo_stack: Vec<crate::database::Journal>,
+    /// @PLN16 M2 — undone edits available to `:redo`, newest last (see `undo_stack`).
+    pub redo_stack: Vec<crate::database::Journal>,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.

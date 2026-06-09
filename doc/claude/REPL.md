@@ -131,51 +131,174 @@ fn n_dbl:
 ### Paused at a breakpoint
 
 When a call reaches a breakpoint the REPL **suspends** inside that frame and the
-prompt changes to `(dbg)`. The frame's in-scope variables are shown, and you can
-inspect them, change a value, and step:
+prompt changes to `(dbg)`. The frame's in-scope variables are shown, and the frame
+*is* a REPL: you inspect its variables, change them, step through the code, and undo
+a change you didn't mean. The verbs work with or without the leading colon (`step` or
+`:step`).
 
-```
+```loft
 loft> :break calc
 breakpoint set: calc
 loft> calc(5)
 ⏸ paused in calc | n = 5
-(dbg) n * 3
+(dbg) n * 3                  # read: evaluate against the live frame
 15
-(dbg) n = 99
+(dbg) n = 99                # edit: write straight into the frame
 ⏸ paused in calc | n = 99
-(dbg) :continue
+(dbg) :undo                 # changed your mind — revert the edit
+⏸ paused in calc | n = 5
+(dbg) :continue             # resume; the rest of calc runs with n = 5
 ▶ resumed — run finished
-990
+50
 ```
 
-At the `(dbg)` prompt:
+Quick reference for the `(dbg)` prompt:
 
-| Input | What it does |
-|---|---|
-| `:step` (`:s`) | Run to the next source line, **into** any call. |
-| `:next` (`:n`) | Run the current line's calls to completion, **over** them, then stop at the next line. |
-| `:finish` (`:o`) | Run to the current function's return — **out** to the caller. |
-| `:continue` (`:c`) | Run to the next breakpoint, or to the end of the call. |
-| `:vars` | Re-show the current frame. |
-| `name = <expr>` | **Edit** a local in the live frame — scalar (`integer` / `float` / `single` / `boolean` / `character`), `text`, or a simple enum. The RHS is evaluated against the frame, so `n = n + 1` and `b = !b` work. The resumed call uses the new value. |
-| `pt.x = <expr>` | **Edit** a scalar **struct field** (nested inline paths too: `pt.inner.x`). |
-| `v[i] = <expr>` | **Edit** a scalar **vector element** at index `i`. |
-| *any expression* | **Evaluate** it against the frame's live variables (`n * 3`, `pt.x * pt.y`) and print the value. |
-| `:quit` (`:q`) | Leave the REPL. |
+| Input | What it does | Reach for it when |
+|---|---|---|
+| `:step` (`:s`) | Run to the next source line, **into** any call. | You want to descend into a function the current line calls. |
+| `:next` (`:n`) | Run the current line's calls to completion, **over** them, then stop at the next line. | You trust the called functions and only care about *this* function's flow. |
+| `:finish` (`:o`) | Run to the current function's return — **out** to the caller. | You've seen enough of this frame and want to pop back up. |
+| `:continue` (`:c`) | Run to the next breakpoint, or to the end of the call. | You're done stepping and want the program to run on. |
+| `:vars` | Re-show the current frame's variables. | After a few steps or edits, to re-orient. |
+| *any expression* | **Evaluate** it against the frame's live variables and print the value. | To probe state — `pt.x * pt.y`, `items.len()`, a predicate. |
+| `name = <expr>` | **Edit** a local (see *Editing live values*). | To try a "what if" without changing the source and re-running. |
+| `:undo` (`:u`) / `:redo` (`:r`) | Step **back** / **forward** through this suspension's edits. | You over-edited, or want to compare before/after on resume. |
+| `:quit` (`:q`) | Leave the REPL. | |
 
-The frame *is* a REPL: type any expression and it is evaluated against the paused
-variables (every type — scalars, text, structs, vectors), just like the top-level
-prompt but scoped to the function you're stopped in. Editing a value (`n = 99`,
-`f = 2.0`, `b = !b`) writes straight into the live frame, so when you `:continue`
-the rest of the function runs with the change — the call above returns `99 * 10`
-rather than `5 * 10`. **Editable in place:** scalar / `text` / enum locals, scalar
-struct fields (`pt.x`, nested paths), and scalar vector elements (`v[i]`) — all picked
-up on `:continue`. **Not yet:** replacing a whole heap value (`pt = Point{…}`), or a
-non-scalar field / element. The verbs also work without the leading colon (`step`,
-`next`, `continue`). Breakpoints
-persist across calls until `:break clear`. Any line of a function body is a valid
-breakpoint — `:break <fn>` stops at the first body line, `<fn>:<line>` at a
-specific one.
+#### Stepping through the code
+
+`:step` descends **into** calls; `:next` runs them to completion and steps **over**;
+`:finish` runs **out** to the caller; `:continue` runs on to the next breakpoint or
+the end. Stepping moves by **source line**, and any body line is a valid stop.
+
+```loft
+loft> :break outer:2          # break on line 2 of `outer`
+loft> outer(5)
+⏸ paused in outer | n = 5
+(dbg) :step                   # into the call on this line
+⏸ paused in inner | x = 5
+(dbg) :finish                 # back out to outer
+⏸ paused in outer | n = 5, a = 6
+(dbg) :continue
+▶ resumed — run finished
+106
+```
+
+**When to use which:** reach for `:step` to investigate a suspect callee, `:next`
+to stay at the current level and watch locals evolve line by line, `:finish` once a
+frame has told you what you need, and `:continue` to jump to the next breakpoint (set
+a *conditional* breakpoint first if you only care about one specific iteration).
+
+#### Inspecting the frame
+
+Type any expression and it is evaluated against the paused variables — every type,
+just like the top-level prompt but scoped to the function you're stopped in. `:vars`
+re-prints the whole frame.
+
+```loft
+⏸ paused in area | pt = Point{x:3,y:4}, k = 2
+(dbg) pt.x * pt.y           # struct fields
+12
+(dbg) pt.x + k              # mix locals
+5
+(dbg) :vars
+⏸ paused in area | pt = Point{x:3,y:4}, k = 2
+```
+
+**When to use it:** to confirm an assumption about live state before you step or
+edit — read a field, call a method, test a boolean — without touching the program.
+
+#### Editing live values
+
+`name = <expr>` writes straight into the live frame, and the resumed call uses the
+new value — a no-rebuild "what if". The RHS is evaluated against the frame, so
+`n = n + 1` and `b = !b` work. You can edit:
+
+- a **scalar** local (`integer` / `float` / `single` / `boolean` / `character`),
+  `text`, or a simple enum — `n = 99`, `msg = "retry"`, `state = State.Done`;
+- a scalar **struct field**, including nested inline paths — `pt.x = 9`,
+  `pt.inner.x = 0`;
+- a scalar **vector element** — `v[1] = 42`;
+- a **whole heap value** — replace the entire struct, vector, or struct-enum:
+  `pt = Point { x: 10, y: 20 }`, `v = [40, 50, 60]`.
+
+```loft
+⏸ paused in greet | pt = Point{x:3,y:4}, msg = "hi"
+(dbg) pt.x = 9                       # one scalar field
+⏸ paused in greet | pt = Point{x:9,y:4}, msg = "hi"
+(dbg) pt = Point { x: 1, y: 1 }      # the whole struct, built fresh
+⏸ paused in greet | pt = Point{x:1,y:1}, msg = "hi"
+(dbg) :continue
+▶ resumed — run finished
+```
+
+**When to use it:** to test a fix or reproduce a corner case in place — force a
+boundary value, swap in a different struct, flip a flag — then `:continue` and watch
+the consequence, all without editing and recompiling the source. **Not yet:**
+replacing a *non-scalar* field or element in place (`pt.inner = Point{…}`,
+`items[0] = Point{…}`) — rebuild the whole containing local instead.
+
+#### Undo and redo
+
+Every edit is recorded, so `:undo` reverts the last one and `:redo` re-applies it.
+A fresh edit after an `:undo` **forks** the timeline (the redo history is dropped).
+Undo/redo cover edits at the **current** pause point — resuming (`:step`/`:continue`)
+starts a fresh history, because stepping reuses the frame's stack slots.
+
+```loft
+⏸ paused in calc | n = 5
+(dbg) n = 7
+(dbg) n = 8
+(dbg) :undo                 # → 7
+⏸ paused in calc | n = 7
+(dbg) :undo                 # → 5 (the original)
+⏸ paused in calc | n = 5
+(dbg) :redo                 # → 7 again
+⏸ paused in calc | n = 7
+```
+
+**When to use it:** when a "what if" edit didn't pan out, or to flip between the
+original and the edited value before deciding which one to `:continue` with.
+
+Breakpoints persist across calls until `:break clear`. Any line of a function body
+is a valid breakpoint — `:break <fn>` stops at the first body line, `<fn>:<line>` at
+a specific one.
+
+## Debugging a file
+
+You don't have to retype your code into the REPL to debug it. Point the debugger
+straight at a source file:
+
+```loft
+loft debug prog.loft:12
+```
+
+This loads `prog.loft`, sets a breakpoint at **line 12**, runs `main()`, and stops
+there — dropping you into the exact same `(dbg)` prompt as above (inspect, edit,
+step, `:undo`, `:continue`). Inside a real file line numbers are unique, so you name
+the line directly (no need for the REPL's `<fn>:<line>` form).
+
+```loft
+$ loft debug prog.loft:12
+loft debugger — break at prog.loft:12.  :help for commands, :continue to run, :quit to exit
+⏸ paused in update | dt = 0.016, entity = Entity{x:4,y:7}
+(dbg) entity.x
+4
+(dbg) entity.x = 0          # try a what-if
+(dbg) :continue
+▶ resumed — run finished
+```
+
+**When to use it:** this is the everyday way to debug — you have a `.loft` program
+and a line you're suspicious of. Set the breakpoint there, run, and poke at the live
+state. If the line isn't breakable (a blank line, a bare `}`), the debugger says so
+and lists the lines that are.
+
+**Notes.** The program is entered through `main()`. To read a local whose name is a
+step verb (`n`, `s`, `c`, `u`, …), use `:vars` or an expression (`n + 0`) — a bare
+verb word steps. The breakpoint is scoped to *your* file, so the standard library's
+identical line numbers are never caught.
 
 ## Introspection without the REPL
 

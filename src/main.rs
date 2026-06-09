@@ -156,6 +156,10 @@ fn print_help() {
     println!("  repl                          start the interactive REPL (also: bare `loft`)");
     println!("                                resumes your last session automatically;");
     println!("                                --fresh starts clean (ignores the saved session)");
+    println!("  debug <file>:<line>           run <file> under the debugger, breaking at <line>");
+    println!(
+        "                                (inspect/edit/step the live frame; :help at the prompt)"
+    );
     println!("  check <file>                  same as --check <file>");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
@@ -3013,6 +3017,49 @@ fn start_repl() -> ! {
     std::process::exit(code);
 }
 
+/// @PLN16 M5a — `loft debug <file>:<line>`: load the file, break at `file:line`, run
+/// `main()` to the breakpoint, and drop into the interactive `(dbg)` prompt.  Reads its
+/// `<file>:<line>` argument by scanning the command line (so it needs no thread-through
+/// the arg loop), the same way `start_repl` reads `--fresh`.
+fn run_file_debugger() -> ! {
+    let args: Vec<String> = std::env::args().collect();
+    let target = args
+        .iter()
+        .position(|a| a == "debug")
+        .and_then(|p| args.get(p + 1));
+    let Some(target) = target else {
+        eprintln!("usage: loft debug <file>:<line>");
+        std::process::exit(2);
+    };
+    // `rsplit_once` so a path that itself contains a colon (e.g. a Windows drive) keeps
+    // it; the last `:` separates the line number.
+    let Some((file, line_s)) = target.rsplit_once(':') else {
+        eprintln!("usage: loft debug <file>:<line>  (missing `:<line>`)");
+        std::process::exit(2);
+    };
+    let Ok(line) = line_s.parse::<u32>() else {
+        eprintln!("loft debug: not a line number: {line_s:?}");
+        std::process::exit(2);
+    };
+    let base = project_dir();
+    let default_dir = std::path::Path::new(&base).join("default");
+    let stdlib = if default_dir.exists() {
+        default_dir.to_string_lossy().into_owned()
+    } else {
+        "default".to_string()
+    };
+    let stdin = std::io::stdin();
+    let mut stderr = std::io::stderr();
+    let code = match loft::repl::run_file_debug(&stdlib, file, line, stdin.lock(), &mut stderr) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("loft debug: {e}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -3354,6 +3401,11 @@ fn main() {
             // to stderr; evaluated results print to stdout (so a terminal sees
             // them and a pipe can capture them).
             start_repl();
+        } else if a == "debug" {
+            // @PLN16 M5a — `loft debug <file>:<line>` — interpreter-mode debugger on a
+            // real source file: break at the line, drop into the interactive `(dbg)`
+            // prompt (inspect / edit / step / undo).
+            run_file_debugger();
         } else if a == "--fresh" {
             // @PLN12 REPL.S — recognised here only so a bare `loft --fresh`
             // reaches the REPL instead of "unknown option"; `start_repl` reads
