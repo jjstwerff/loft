@@ -444,6 +444,15 @@ M5d (the condition reuses **E**).
   *anything expressible at the `(dbg)` prompt is expressible in the script, and
   vice-versa* — the surfaces differ only in interaction model, never in capability.
 
+  *The contract.* The script is sugar over a JSON request/response + event **wire
+  protocol** — the one interface the agent (`--rpc`), the browser (`--serve`), and a
+  future DAP editor all speak. It is designed in full, *before* any server code, in
+  [PROTOCOL.md](PROTOCOL.md): one message per `(dbg)` capability, no UI-only or
+  agent-only message, the server a thin serialiser over the engine. The browser surface
+  (M5b) is then "the same protocol with a UI," reusing the viewer
+  ([14-viewer-lsp-bridge](../../lib_plans/future/14-viewer-lsp-bridge/README.md)'s
+  local-sidecar pattern) for the shell.
+
   *Phasing.* (1) **rich breakpoints** — condition (E in-loop) + action/tracepoint, wired
   into the registry (A) + the suspend hook (C); **also lands at the `(dbg)` prompt**
   (`:break … if …`, `:trace …`), so it is a shared engine capability, not agent-only.
@@ -527,6 +536,10 @@ load-bearing.
 
 ## See also
 
+- [PROTOCOL.md](PROTOCOL.md) — the **debug wire protocol**: the one JSON
+  request/response + event contract every surface speaks (agent over `--rpc`, browser
+  over `--serve`, a future editor over DAP). The load-bearing design for M5d + M5b,
+  fixed before any server code so both clients are built against a stable interface.
 - [STORE_JOURNAL.md](STORE_JOURNAL.md) — the store change journal: the substrate
   for **full (heap) live edits** + undo, designed hot-path-free, and reusable for
   incremental serialisation / time-travel / state continuity.
