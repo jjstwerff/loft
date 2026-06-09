@@ -227,7 +227,16 @@ impl Output<'_> {
                         write!(w, ", ")?;
                     }
                     let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
+                    // @PLN17: a boolean tuple element is stored u8 (slot type);
+                    // wrap `((elem) as u8)` so a `bool` sub-expression fits the slot.
+                    let elem_is_bool = matches!(self.infer_type(e), Some(Type::Boolean));
+                    if elem_is_bool {
+                        write!(w, "((")?;
+                    }
                     self.output_code_node(w, e)?;
+                    if elem_is_bool {
+                        write!(w, ") as u8)")?;
+                    }
                     // Wrap a text-returning element with `.to_string()` so it
                     // fits a `String`-typed tuple slot (skip a Text literal — its
                     // own arm appends `.to_string()` via the same flag).
@@ -945,6 +954,17 @@ impl Output<'_> {
                 (r != Type::Void).then_some(r)
             }
             ValueType::If => self.infer_type(node.if_then()),
+            // @PLN17: resolve a tuple element's type so a boolean element used as
+            // a predicate (`if t.1`) gets the `output_test_predicate` u8->bool
+            // coercion (and typed-null defaults are correct for tuple elements).
+            ValueType::TupleGet => {
+                let var = node.tupleget_var();
+                let idx = node.tupleget_idx() as usize;
+                match self.data.def(self.def_nr).variables.tp(var) {
+                    Type::Tuple(elems) => elems.get(idx).cloned(),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -1019,9 +1039,18 @@ impl Output<'_> {
                     | Type::Enum(_, true, _)
             ),
         );
+        // @PLN17: a boolean test may emit as `u8` (var / call / field — storage
+        // form) or `bool` (comparison / `!` / `&&` result — expression form).
+        // `((test) as u8) == 1` is the uniform truthiness coercion: idempotent for
+        // a u8 (255 -> false, 1 -> true, 0 -> false), and 0/1 for a bool.
+        let is_boolean = matches!(self.infer_type(IrNode::Native(test)), Some(Type::Boolean));
         if heap_dbref {
             self.output_code_inner(w, test)?;
             write!(w, ".rec != 0")
+        } else if is_boolean {
+            write!(w, "((")?;
+            self.output_code_inner(w, test)?;
+            write!(w, ") as u8) == 1")
         } else {
             self.output_code_inner(w, test)
         }
@@ -1081,6 +1110,15 @@ impl Output<'_> {
             && (matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
                 || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
+        // @PLN17: a boolean if-expression (e.g. the `&&` / `||` lowering
+        // `if a {b} else {false}`) has arms that may be `u8` (a var/call — storage
+        // form) or `bool` (a literal/comparison — expression form), which don't
+        // unify.  Wrap both arms `((arm) as u8)` so the if-expression is uniformly
+        // `u8`; the consumer (predicate / store / operand) coerces from there.
+        let bool_unify = !b_true
+            && !b_false
+            && !matches!(false_v, Value::Null)
+            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Boolean));
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
         // braces for if-arms regardless of inner expression form, so even if
@@ -1092,6 +1130,8 @@ impl Output<'_> {
             write!(w, " ")?;
         } else if text_unify {
             write!(w, " {{&*(")?;
+        } else if bool_unify {
+            write!(w, " {{((")?;
         } else {
             write!(w, " {{")?;
         }
@@ -1106,6 +1146,8 @@ impl Output<'_> {
             write!(w, ").to_string()}} else ")?;
         } else if text_unify {
             write!(w, ")}} else ")?;
+        } else if bool_unify {
+            write!(w, ") as u8)}} else ")?;
         } else if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
         } else {
@@ -1115,6 +1157,8 @@ impl Output<'_> {
             write!(w, "{{(")?;
         } else if text_unify {
             write!(w, "{{&*(")?;
+        } else if bool_unify {
+            write!(w, "{{((")?;
         } else if !b_false {
             write!(w, "{{")?;
         }
@@ -1132,6 +1176,8 @@ impl Output<'_> {
             write!(w, ").to_string()}}")?;
         } else if text_unify {
             write!(w, ")}}")?;
+        } else if bool_unify {
+            write!(w, ") as u8)}}")?;
         } else if !b_false {
             write!(w, "}}")?;
         }

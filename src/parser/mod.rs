@@ -6120,14 +6120,10 @@ impl Parser {
         match tp {
             Type::Integer(_) | Type::Character => self.cl("OpConvIntFromNull", &[]),
             Type::Boolean => {
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Cannot use null with boolean — boolean has no null representation"
-                    );
-                }
-                Value::Boolean(false)
+                // @PLN17 spike: boolean is tri-state (255 = null sentinel).
+                // Supersedes the #256 rejection — `null` on a boolean now emits the
+                // 255 sentinel; truthiness contexts coerce it to false.
+                self.cl("OpConvBoolFromNull", &[])
             }
             Type::Enum(tp, _, _) => self.cl(
                 "OpConvEnumFromNull",

@@ -7,7 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Stage A done + B/C spiked on the interpreter** (2026-06-09).  The spike
+**SHIPPED on the `booleans` branch (2026-06-10) — design A, both backends.**  Tri-state
+boolean (false=0 / true=1 / null=255) is implemented and verified: the interpreter and
+`--native` produce byte-identical results across the `{false,true,null}` × `{==false,
+==true, ==null, if, !, &&, ||, fmt, hash→bool, tuple, vector, param, return}` matrix, and
+the full suite is **2156/2157** (the lone failure, `markdown_renderer`, is a pre-existing
+sandbox `cc`-link env limitation — the interpreted viewer can't build its cdylibs here;
+markdown renders correctly on `--native` and `starts_with` works on `--interpret`).
+History (Stage A characterization, the decision-A reversal, the B/C interpreter spike)
+is in [SPIKE.md](SPIKE.md).  The spike
 ([SPIKE.md](SPIKE.md)) confirmed the invariant holds under construction (the
 `hash → boolean` consumer is unblocked) with a bounded 7-op change, and surfaced the
 gating risk: **native lowers boolean to Rust `bool`, so tri-state is a native
@@ -164,7 +172,7 @@ forms *work*.
 | **C** — truthiness chokepoint | `null → false` via `@v != 1`; generator reads bool operands as `u8` (UB fix) | **DONE (interp)** 2026-06-09 |
 | **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | `null`-literal flipped in spike; `??` + `== null` open |
 | **D** — `== null` + `??` + coerce-`==` | add boolean `== null` (`==255`) + `??`; flip `eq_bool`/`ne_bool` to coerce-compare (decision B) on both backends | Open |
-| **E** — native u8/bool split | **GATING, M.** rust_type two-form split + `narrow_int_cast` Boolean + operand-wrap + predicate-coerce all landed & proven (core compiles/runs native); ~19 stdlib `&&`/`\|\|`/scalar-i64 seams remain | **Core proven; seams routed** — [SPIKE.md](SPIKE.md) |
+| **E** — native u8/bool split | rust_type two-form split + `narrow_int_cast` + operand-wrap + predicate-coerce + if-arm `bool_unify` + FFI/runtime-helper (`n_assert`/`n_set_store_lock`/`n_json_bool`/extern-decl/direct-call) + tuple-element coercions | **DONE** 2026-06-10 — suite 2156/2157 |
 | **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
 | **G** — backward-compat scan | NARROW (per findings): unset-nullable default `false→null` + `== false` on now-null fields; scan + document | Open |
 | **H** — docs + graduate | LOFT.md null table; graduate probes to `tests/scripts/`; record `&&`/`!` + #256-supersession in `DESIGN_DECISIONS.md` | Open — last |

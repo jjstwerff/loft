@@ -2366,7 +2366,9 @@ pub fn n_json_null(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
 }
 
 /// json_bool(v) — allocate a JsonValue set to the JBool variant.
-pub fn n_json_bool(cell: &std::cell::UnsafeCell<Stores>, v: bool) -> DbRef {
+pub fn n_json_bool(cell: &std::cell::UnsafeCell<Stores>, v: u8) -> DbRef {
+    // @PLN17: boolean storage form is u8; canonicalise to 0/1 for the JBool byte.
+    let v = v == 1;
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let result = crate::native::jv_alloc(stores);
     let pos = result.pos;
@@ -2566,9 +2568,10 @@ pub fn n_get_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) -> bool 
 
 /// Lock or unlock the store that owns the record pointed to by `r`.
 /// Bytecode equivalent: `n_set_store_lock` in `src/native.rs`.
-pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: bool) {
+pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: u8) {
+    // @PLN17: boolean storage form is u8 (0/1/255); locked iff the true byte (1).
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    if locked {
+    if locked == 1 {
         stores.lock_store(&r);
     } else {
         stores.unlock_store(&r);

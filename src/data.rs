@@ -3622,6 +3622,10 @@ impl Data {
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",
+            // @PLN17: boolean is tri-state in storage (0/1/255).  The variable
+            // form holds the raw byte (`u8`, null-capable); the expression form is
+            // a 2-state `bool`.  Mirrors the text String/Str Context split above.
+            Type::Boolean if context == &Context::Variable => "u8",
             Type::Boolean => "bool",
             Type::Float => "f64",
             Type::Single => "f32",

@@ -84,9 +84,9 @@ fn OpGoto(step: const i8);
 fn OpGotoWord(step: const i16);
 #rust"s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;"
 fn OpGotoFalse(step: const i8, if_false: boolean);
-#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
+#rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpGotoFalseWord(step: const i16, if_false: boolean);
-#rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
+#rust"if @if_false != 1 {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpCall(d_nr: const integer, args_size: const u16, to: const integer);
 #rust"s.fn_call(@d_nr as u32, @args_size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
@@ -101,13 +101,13 @@ fn OpConstTrue() -> boolean;
 fn OpConstFalse() -> boolean;
 #rust"false"
 fn OpCastTextFromBool(v1: boolean) -> text;
-#rust"if @v1 {{\"true\"}} else {{\"false\"}}"
+#rust"if @v1 == 1 {{\"true\"}} else if @v1 == 255 {{\"null\"}} else {{\"false\"}}"
 fn OpVarBool(pos: const u16) -> boolean;
-#rust"*s.get_var::<bool>(@pos)"
+#rust"*s.get_var::<u8>(@pos)"
 fn OpPutBool(var: const u16, value: boolean);
 #rust"s.put_var(@var, @value);"
 fn OpNot(v1: boolean) -> boolean;
-#rust"!@v1"
+#rust"@v1 != 1"
 // --- Math ---
 // Functions for numeric computation.
 // All trigonometric functions work in radians.
@@ -130,6 +130,8 @@ fn OpPutCharacter(pos: const u16, value: character);
 #rust"s.put_var(@pos, @value);"
 fn OpConvIntFromNull() -> integer;
 #rust"i64::MIN"
+fn OpConvBoolFromNull() -> boolean;
+#rust"255u8"
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
 fn OpConvCharacterFromInt(v1: integer) -> character;
