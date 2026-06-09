@@ -79,11 +79,30 @@
 # units — these targets are clean/release builds, not the interactive edit
 # loop, so there is no cost.
 ifneq ($(shell command -v sccache 2>/dev/null),)
+# Only when NOT root.  sccache binds its server per-user on 127.0.0.1:4226;
+# a root build (e.g. under `sudo make install`) cannot reach the invoking
+# user's server and dies with "failed to read response header".  The build
+# never runs as root anyway — `install` drops it back to the user via
+# AS_USER below — so disabling the wrapper for the root parent is harmless.
+ifneq ($(shell id -u),0)
 export RUSTC_WRAPPER := sccache
 export CARGO_INCREMENTAL := 0
 endif
+endif
 
-.PHONY: ci-miri all check-targets doctor install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+# `make install` writes the binary to /usr/local (needs root) but the compile
+# must NOT run as root: sccache is per-user (see above) and a root build would
+# leave target/ owned by root, breaking the next ordinary `make`.  When invoked
+# as `sudo make install` we are root with SUDO_USER set — AS_USER drops the
+# build back to that user; the file-copy steps in `install` stay root.  Empty
+# for a normal `make install`, where the build already runs as the user and the
+# copy steps escalate with their own `sudo`.
+AS_USER :=
+ifeq ($(shell id -u),0)
+AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
+endif
+
+.PHONY: ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -122,7 +141,10 @@ check-targets:
 doctor:
 	@bash scripts/doctor.sh
 
-install: check-targets all
+# Compile every artifact that lands in /usr/local.  Runs as the unprivileged
+# user (see AS_USER) — never root — so sccache and target/ ownership stay
+# correct even under `sudo make install`.
+install-artifacts: check-targets all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
 	# W1.1: browser WASM target for --html export
 	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
@@ -130,8 +152,15 @@ install: check-targets all
 	# of each crate — no binary-only duplicates (e.g. libloading) that cause
 	# StableCrateId collisions during native compilation.
 	cargo build --release --lib --no-default-features --features mmap,random,threading --target-dir target/install-lib
+
+install:
+	$(AS_USER) $(MAKE) --no-print-directory install-artifacts
 	sudo install -d /usr/local/share/loft/deps
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
+	# Prune first: `cp -r` MERGES, so a stdlib file removed/renamed upstream would
+	# linger in the installed default/ and collide (e.g. an old 02_images.loft vs a
+	# new 02_files.loft -> "Dual definition"). Replace the dir, like deps below do.
+	sudo rm -rf /usr/local/share/loft/default
 	sudo cp -r default /usr/local/share/loft/
 	sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
 	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
