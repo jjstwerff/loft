@@ -1156,3 +1156,58 @@ fn repl_watchpoint_vector_element_and_reject() {
     );
     assert!(!s.debug_continue());
 }
+
+/// @PLN16 rich-bp — a **conditional breakpoint** (`:break f if n == 3`) breaks only on
+/// the call where the condition holds, silently auto-resuming past the others — the
+/// "fails on one call in N" case.
+#[test]
+fn repl_conditional_breakpoint_breaks_only_when_true() {
+    let mut s = session();
+    for d in [
+        "fn f(n: integer) -> integer {\n  n + 100\n}",
+        "fn run() -> integer {\n  f(1);\n  f(2);\n  f(3);\n  f(4)\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("f if n == 3");
+    // f(1)/f(2) auto-resume (condition false); the run suspends at f(3).
+    assert!(
+        matches!(s.eval("run()"), Eval::Paused),
+        "paused only at f(3)"
+    );
+    assert_eq!(
+        s.debug_eval("n").as_deref(),
+        Some("3"),
+        "broke at the matching call"
+    );
+    // f(4)'s condition is false → no further break → the run finishes.
+    assert!(!s.debug_continue(), "no further break");
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 rich-bp — a **tracepoint** (`:trace f n`) logs the expression on each hit and
+/// **continues** (never pauses); the emitted lines are collected for the driver.
+#[test]
+fn repl_tracepoint_logs_and_continues() {
+    let mut s = session();
+    for d in [
+        "fn f(n: integer) -> integer {\n  n + 100\n}",
+        "fn run() -> integer {\n  f(1);\n  f(2)\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_tracepoint("f n");
+    // The tracepoint logs n at each f call and the run continues to the end.
+    assert!(
+        matches!(s.eval("run()"), Eval::Ran),
+        "a tracepoint never pauses"
+    );
+    assert!(!s.is_debugging());
+    assert_eq!(
+        s.take_trace_output(),
+        vec!["n = 1".to_string(), "n = 2".to_string()],
+        "logged both calls"
+    );
+}

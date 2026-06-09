@@ -549,7 +549,8 @@ fn process_line<W: Write>(
             "help" | "h" => writeln!(
                 chrome,
                 "commands: :quit  :help  :reset  :fns  :vars  :type <expr>  \
-                 :break <fn>|<fn>:<line>  :bytecode [fn]  :rust [fn]  :slots [fn]"
+                 :break <fn>[:<line>] [if <cond>]  :trace <fn> <expr>,…  \
+                 :bytecode [fn]  :rust [fn]  :slots [fn]"
             )?,
             "reset" => {
                 *session = ReplSession::new(stdlib_dir)?;
@@ -609,6 +610,13 @@ fn process_line<W: Write>(
                     }
                 }
             },
+            // @PLN16 rich-bp — `:trace <fn>[:<line>] <expr>, <expr>` sets a tracepoint:
+            // on each hit it logs the expressions and the run continues (no pause).
+            "trace" => {
+                let spec = filter.join(" ");
+                session.add_tracepoint(&spec);
+                writeln!(chrome, "tracepoint set: {spec}")?;
+            }
             other => writeln!(chrome, "unknown command: :{other}  (:help)")?,
         }
         return Ok(false);
@@ -620,11 +628,15 @@ fn process_line<W: Write>(
     // is sound here: a panic corrupts only the per-eval database clone, never
     // `session`'s own state.
     match std::panic::catch_unwind(AssertUnwindSafe(|| session.eval(&src))) {
-        Ok(Eval::Ran) => pending.clear(),
+        Ok(Eval::Ran) => {
+            pending.clear();
+            print_trace(session, chrome)?; // @PLN16 rich-bp — tracepoints fired this run
+        }
         Ok(Eval::Paused) => {
             // The run hit a breakpoint and suspended — show the frame and enter
             // the paused sub-mode; the next inputs are routed to `handle_paused`.
             pending.clear();
+            print_trace(session, chrome)?;
             print_pause(session, chrome)?;
         }
         Ok(Eval::NeedMore) => {} // keep accumulating; continuation prompt next
@@ -763,6 +775,7 @@ fn step_and_report<W: Write>(
     chrome: &mut W,
 ) -> std::io::Result<()> {
     let paused = session.debug_step(mode);
+    print_trace(session, chrome)?;
     // @PLN16 M3 — a watchpoint that fired during this resume is what stopped us; name it.
     if let Some(hit) = session.take_watch_hit() {
         writeln!(
@@ -775,6 +788,16 @@ fn step_and_report<W: Write>(
         print_pause(session, chrome)?;
     } else {
         writeln!(chrome, "▶ resumed — run finished")?;
+    }
+    Ok(())
+}
+
+/// @PLN16 rich-bp — print the tracepoint emissions from the most recent resume, one
+/// `⤳ <label> | k = v …` line per hit-batch (a tracepoint logs and the run continues).
+fn print_trace<W: Write>(session: &mut ReplSession, chrome: &mut W) -> std::io::Result<()> {
+    let lines = session.take_trace_output();
+    if !lines.is_empty() {
+        writeln!(chrome, "⤳ trace | {}", lines.join(", "))?;
     }
     Ok(())
 }
@@ -853,23 +876,35 @@ fn escape_loft_text(raw: &str) -> String {
 ///
 /// `None` only on an unresolved type name (a fallback to source, never reached in
 /// practice for a value the session just produced).
-fn render_capture(state: &mut State, ret_ty: &Type, name: &str) -> Option<String> {
+fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> Option<String> {
     match ret_ty {
         Type::Integer(_) => Some(state.get_stack::<i64>().to_string()),
         Type::Float => Some(float_literal(*state.get_stack::<f64>())),
+        // own-format `2f` isn't valid JSON; drop the suffix for `json`.
+        Type::Single if json => Some(state.get_stack::<f32>().to_string()),
         Type::Single => Some(format!("{}f", *state.get_stack::<f32>())),
         Type::Boolean => {
             let v = *state.get_stack::<u8>() != 0;
             Some(if v { "true" } else { "false" }.to_string())
         }
-        Type::Character => char::from_u32(*state.get_stack::<u32>()).map(|c| format!("'{c}'")),
+        // own-format `'c'` isn't valid JSON; emit a JSON string for `json`.
+        Type::Character => char::from_u32(*state.get_stack::<u32>()).map(|c| {
+            if json {
+                format!("\"{c}\"")
+            } else {
+                format!("'{c}'")
+            }
+        }),
         Type::Text(_) => Some(escape_loft_text(
             state.get_stack::<crate::keys::Str>().str(),
         )),
-        // Heap value backed by a `DbRef`: struct, vector, struct-enum variant.
-        // The return is a 12-byte `DbRef` on the stack top → `show_loft` renders
-        // its own-format literal (`P{a:7,b:9}`, `[10,20,30]`, …).  `name` is the
-        // loft-source type name; its schema `tp` comes from `Stores::name`.
+        // Heap value backed by a `DbRef`: struct, vector, struct-enum variant.  The
+        // return is a 12-byte `DbRef` on the stack top; `json` selects the inbuilt
+        // serializer — `show_json` (RFC 8259, `{"x":3}`, the generic value→JSON walk
+        // that backs `T.to_json()`) for the wire protocol, `show_loft` (own-format
+        // `P{a:7,b:9}`) for the REPL.  (Not `json_to_text`: that one serializes loft's
+        // `JValue` JSON-AST type, so an arbitrary struct misreads its first field as a
+        // discriminant.)  Both need the schema index `tp` from `Stores::name`.
         Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
             let tp = state.database.name(name);
             if tp == u16::MAX {
@@ -877,7 +912,11 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str) -> Option<String
             }
             let db = *state.get_stack::<crate::keys::DbRef>();
             let mut out = String::new();
-            state.database.show_loft(&mut out, &db, tp);
+            if json {
+                state.database.show_json(&mut out, &db, tp, false);
+            } else {
+                state.database.show_loft(&mut out, &db, tp);
+            }
             Some(out)
         }
         // Simple enum: an inline 1-based discriminant byte → `Enum.Variant`.
@@ -889,6 +928,8 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str) -> Option<String
             let disc = *state.get_stack::<u8>();
             if disc == 0 {
                 Some("null".to_string())
+            } else if json {
+                Some(format!("\"{name}.{}\"", state.database.enum_val(tp, disc)))
             } else {
                 Some(format!("{name}.{}", state.database.enum_val(tp, disc)))
             }
@@ -941,6 +982,68 @@ pub struct ResumeStats {
     pub skipped: usize,
 }
 
+/// @PLN16 rich-bp — where a breakpoint sits: a function-scoped spec (`"foo"` body
+/// start, `"foo:3"` line 3 of foo) or a `file:line` (the file-run debugger).
+#[derive(Clone, PartialEq)]
+enum BpLocation {
+    Function(String),
+    File(String, u32),
+}
+
+/// @PLN16 rich-bp — a breakpoint with optional **condition** (break only when an
+/// expression over the frame holds — reuses E) and **tracepoint actions** (expressions
+/// emitted on each hit).  `stop` = pause (a breakpoint) vs continue (a tracepoint:
+/// emit the actions and run on).  This is the unit the wire protocol's `setBreakpoints`
+/// carries; the prompt sets it via `:break <loc> [if <cond>]` / `:trace <loc> <exprs>`.
+#[derive(Clone, PartialEq)]
+struct BreakSpec {
+    location: BpLocation,
+    condition: Option<String>,
+    actions: Vec<String>,
+    stop: bool,
+}
+
+impl BreakSpec {
+    /// Render the spec the way the user typed it, for the `:break` list.
+    fn describe(&self) -> String {
+        let mut s = match &self.location {
+            BpLocation::Function(l) => l.clone(),
+            BpLocation::File(f, n) => format!("{f}:{n}"),
+        };
+        if let Some(c) = &self.condition {
+            s.push_str(" if ");
+            s.push_str(c);
+        }
+        if !self.stop {
+            s.push_str(" { ");
+            s.push_str(&self.actions.join(", "));
+            s.push_str(" }");
+        }
+        s
+    }
+}
+
+/// @PLN16 rich-bp — split a `:break` spec into its location and optional `if <cond>`
+/// (e.g. `foo:3 if c.n < 0` → `("foo:3", Some("c.n < 0"))`).
+fn parse_break_spec(spec: &str) -> (String, Option<String>) {
+    if let Some(idx) = spec.find(" if ") {
+        let cond = spec[idx + 4..].trim();
+        if !cond.is_empty() {
+            return (spec[..idx].trim().to_string(), Some(cond.to_string()));
+        }
+    }
+    (spec.trim().to_string(), None)
+}
+
+/// @PLN16 rich-bp — the per-offset metadata `resolve_pause` consults after a hit:
+/// rebuilt by `apply_breakpoints` keyed on the resolved bytecode offset.
+#[derive(Clone, Default)]
+struct BpMeta {
+    condition: Option<String>,
+    actions: Vec<String>,
+    stop: bool,
+}
+
 /// A live REPL session: stdlib + the statements entered so far.
 pub struct ReplSession {
     parser: Parser,
@@ -956,15 +1059,16 @@ pub struct ReplSession {
     /// True only while [`resume_from`](Self::resume_from) is feeding saved
     /// inputs back in — suppresses re-recording them to the file.
     replaying: bool,
-    /// @PLN16 G1 — breakpoint specs (`:break` command), **function-scoped**:
-    /// `"foo"` (body start) or `"foo:3"` (line 3 of `foo`).  Re-applied to the
-    /// fresh `State` of every observing run.
-    breakpoints: Vec<String>,
-    /// @PLN16 M5a — `file:line` breakpoints for the file-run debugger (`loft debug
-    /// prog.loft:42`).  Distinct from `breakpoints` (function-scoped): a real source
-    /// file has unique line numbers, so the user names a line directly.  Re-applied to
-    /// each observing run's fresh `State` via `State::set_breakpoint_file_line`.
-    file_breakpoints: Vec<(String, u32)>,
+    /// @PLN16 — every breakpoint + tracepoint (function-scoped and `file:line`), each
+    /// with its optional condition / tracepoint actions.  Re-applied to the fresh
+    /// `State` of every observing run by [`apply_breakpoints`](Self::apply_breakpoints).
+    breakpoints: Vec<BreakSpec>,
+    /// @PLN16 rich-bp — resolved bytecode-offset → metadata for the current run, built
+    /// by `apply_breakpoints` and read by `resolve_pause` when a hit lands.
+    bp_meta: std::collections::HashMap<u32, BpMeta>,
+    /// @PLN16 rich-bp — tracepoint emissions from the most recent resume, drained by the
+    /// driver (printed at the prompt, an `output` event over the wire protocol).
+    trace_output: Vec<String>,
     /// Frames captured at breakpoints during the most recent observing run
     /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
@@ -995,7 +1099,8 @@ impl ReplSession {
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
-            file_breakpoints: Vec::new(),
+            bp_meta: std::collections::HashMap::new(),
+            trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
@@ -1015,7 +1120,8 @@ impl ReplSession {
             record: None,
             replaying: false,
             breakpoints: Vec::new(),
-            file_breakpoints: Vec::new(),
+            bp_meta: std::collections::HashMap::new(),
+            trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
@@ -1065,10 +1171,64 @@ impl ReplSession {
     /// The @PLN16 debugger uses it to read a value the user edited at a breakpoint
     /// (`n = 99`) before writing it back into the live frame.
     pub fn value_of(&mut self, expr: &str) -> Option<String> {
-        match self.capture_binding(expr) {
+        self.value_of_fmt(expr, false)
+    }
+
+    /// Like [`value_of`](Self::value_of) but `json` selects how a value is rendered:
+    /// the wire protocol shows data as JSON, the REPL shows own-format (`P{a:7}`).
+    ///
+    /// For `json` a struct / struct-enum is serialised through loft's inbuilt
+    /// `.to_json()` (a *text* result — `{"x":9}`), tried first via [`capture_json`].
+    /// That is deliberate, not just for the JSON shape: returning a bare heap value
+    /// from the synthetic capture fn faults on a cloned paused state (the fn-return
+    /// deep-copy targets a store the clone never allocated), whereas a text result
+    /// copies safely.  `.to_json()` parse-fails for scalars / text / bare vectors, so
+    /// those fall through to [`capture_binding`] — scalars render as raw JSON there,
+    /// a bare vector has no `.to_json()` and yields `None` (eval its elements instead).
+    fn value_of_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
+        if json && let Some(j) = self.capture_json(expr) {
+            return Some(j);
+        }
+        match self.capture_binding(expr, json) {
             Capture::Done(lit) => Some(lit),
             Capture::Skip | Capture::Failed(_) => None,
         }
+    }
+
+    /// Serialise `expr` to JSON via loft's inbuilt `.to_json()` method, captured as
+    /// **raw** text (no surrounding quotes — the result already *is* JSON).  Returns
+    /// `None` when the type has no `.to_json()` (scalars, text, bare vectors) or the
+    /// run faults — the caller then falls back to the own-renderer path.  See
+    /// [`value_of_fmt`] for why text-not-heap-value matters on a paused clone.
+    fn capture_json(&mut self, expr: &str) -> Option<String> {
+        let next = self.counter + 1;
+        let name = format!("replmain_{next}");
+        let src = format!(
+            "fn {name}() -> text {{\n{}({expr}).to_json()\n}}\n",
+            self.body
+        );
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        if failed {
+            self.parser.data.rollback_to(pre_defs); // type has no `.to_json()`
+            return None;
+        }
+        self.counter = next;
+        crate::scopes::check(&mut self.parser.data);
+        let mut state = State::new(self.parser.database.clone());
+        compile::byte_code(&mut state, &mut self.parser.data);
+        state.execute_argv(&name, &self.parser.data, &[]);
+        let out = if state.database.runtime_error.take().is_some() {
+            None
+        } else {
+            Some(state.get_stack::<crate::keys::Str>().str().to_string())
+        };
+        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        out
     }
 
     /// Add a breakpoint (the `:break` command).  **Function-scoped** forms only —
@@ -1078,9 +1238,46 @@ impl ReplSession {
     /// line is not unique; `file:line` is for a file-run debugger).  Re-applied to
     /// the fresh `State` of every later observing run.
     pub fn add_breakpoint(&mut self, spec: &str) {
-        let spec = spec.trim().to_string();
-        if !spec.is_empty() && !self.breakpoints.contains(&spec) {
-            self.breakpoints.push(spec);
+        let (loc, condition) = parse_break_spec(spec.trim());
+        if loc.is_empty() {
+            return;
+        }
+        self.push_breakpoint(BreakSpec {
+            location: BpLocation::Function(loc),
+            condition,
+            actions: Vec::new(),
+            stop: true,
+        });
+    }
+
+    /// @PLN16 rich-bp — set a **tracepoint** (`:trace <loc> <expr>, <expr>`): on each
+    /// hit, evaluate the comma-separated expressions, emit them, and **continue** (no
+    /// pause) — a non-interactive log of values at a point.  `<loc>` is function-scoped
+    /// like `:break`.
+    pub fn add_tracepoint(&mut self, spec: &str) {
+        let Some((loc, rest)) = spec.trim().split_once(char::is_whitespace) else {
+            return; // need both a location and at least one expression
+        };
+        let actions: Vec<String> = rest
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if loc.is_empty() || actions.is_empty() {
+            return;
+        }
+        self.push_breakpoint(BreakSpec {
+            location: BpLocation::Function(loc.to_string()),
+            condition: None,
+            actions,
+            stop: false,
+        });
+    }
+
+    /// Append a breakpoint spec, skipping an exact duplicate.
+    fn push_breakpoint(&mut self, bp: BreakSpec) {
+        if !self.breakpoints.contains(&bp) {
+            self.breakpoints.push(bp);
         }
     }
 
@@ -1118,10 +1315,38 @@ impl ReplSession {
     /// re-applied to each observing run's fresh `State` via
     /// `State::set_breakpoint_file_line`.
     pub fn add_file_breakpoint(&mut self, file: &str, line: u32) {
-        let entry = (file.to_string(), line);
-        if !self.file_breakpoints.contains(&entry) {
-            self.file_breakpoints.push(entry);
-        }
+        self.push_breakpoint(BreakSpec {
+            location: BpLocation::File(file.to_string(), line),
+            condition: None,
+            actions: Vec::new(),
+            stop: true,
+        });
+    }
+
+    /// @PLN16 phase 2 — the wire protocol's `setBreakpoints` unit: a `file:line`
+    /// breakpoint with an optional condition (break only when it holds) and tracepoint
+    /// actions (`stop:false` → log the expressions and continue).
+    pub fn add_file_breakpoint_rich(
+        &mut self,
+        file: &str,
+        line: u32,
+        condition: Option<String>,
+        actions: Vec<String>,
+        stop: bool,
+    ) {
+        self.push_breakpoint(BreakSpec {
+            location: BpLocation::File(file.to_string(), line),
+            condition,
+            actions,
+            stop,
+        });
+    }
+
+    /// @PLN16 phase 2 — run `input` as an observing statement (the RPC `run` request),
+    /// returning whether it suspended at a breakpoint (vs ran to completion).
+    pub fn eval_observe(&mut self, input: &str) -> bool {
+        let _ = self.eval(input);
+        self.is_debugging()
     }
 
     /// @PLN16 M5a — the breakable source lines in `file` of the loaded program (compiles
@@ -1141,16 +1366,16 @@ impl ReplSession {
         self.parser.data.def_nr(&format!("n_{name}")) < self.parser.data.definitions()
     }
 
-    /// The breakpoint specs set this session.
+    /// The breakpoint + tracepoint specs set this session, rendered for display.
     #[must_use]
-    pub fn breakpoints(&self) -> &[String] {
-        &self.breakpoints
+    pub fn breakpoints(&self) -> Vec<String> {
+        self.breakpoints.iter().map(BreakSpec::describe).collect()
     }
 
-    /// Remove all breakpoints (function-scoped and `file:line`).
+    /// Remove all breakpoints + tracepoints (function-scoped and `file:line`).
     pub fn clear_breakpoints(&mut self) {
         self.breakpoints.clear();
-        self.file_breakpoints.clear();
+        self.bp_meta.clear();
     }
 
     /// Frames captured at breakpoints during the most recent observing run.
@@ -1395,6 +1620,22 @@ impl ReplSession {
     /// run finished — in which case the paused sub-mode is left
     /// ([`is_debugging`](Self::is_debugging) becomes `false`).
     pub fn debug_step(&mut self, mode: crate::debugger::StepMode) -> bool {
+        self.trace_output.clear();
+        if self.paused.is_none() {
+            return false;
+        }
+        if !self.resume_continue_with(mode) {
+            return false;
+        }
+        // @PLN16 rich-bp — honour the condition / tracepoint of whatever we stopped at.
+        self.resolve_pause();
+        self.is_debugging()
+    }
+
+    /// Raw resume by `mode` (the engine `debug_step`, no condition/tracepoint
+    /// resolution — that is [`resolve_pause`](Self::resolve_pause)'s job).  Returns
+    /// whether still paused.
+    fn resume_continue_with(&mut self, mode: crate::debugger::StepMode) -> bool {
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
@@ -1403,6 +1644,53 @@ impl ReplSession {
             self.paused = None;
         }
         still
+    }
+
+    /// @PLN16 rich-bp — after a pause, honour the breakpoint's facets: a conditional
+    /// break whose condition is false auto-resumes; a tracepoint evaluates its actions
+    /// (collected into `trace_output`) and auto-resumes; loop until a real stop or the
+    /// run finishes.  Leaves `self.paused` reflecting the outcome.
+    fn resolve_pause(&mut self) {
+        loop {
+            let off = match self.paused.as_deref() {
+                Some(s) => s.paused_at_breakpoint(),
+                None => return, // run finished
+            };
+            let Some(off) = off else {
+                return; // a step / watch pause is a real stop
+            };
+            let Some(meta) = self.bp_meta.get(&off).cloned() else {
+                return; // a plain breakpoint with no metadata: stop
+            };
+            // Conditional break: a false condition auto-resumes.
+            if let Some(cond) = &meta.condition
+                && self.debug_eval(cond).as_deref() != Some("true")
+            {
+                if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
+                    return;
+                }
+                continue;
+            }
+            // Tracepoint (stop = false): emit the actions and continue.
+            if !meta.stop {
+                for a in &meta.actions {
+                    let v = self.debug_eval(a).unwrap_or_else(|| "?".to_string());
+                    self.trace_output.push(format!("{a} = {v}"));
+                }
+                if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
+                    return;
+                }
+                continue;
+            }
+            return; // real stop (condition held / no condition, stop = true)
+        }
+    }
+
+    /// @PLN16 rich-bp — drain the tracepoint emissions from the most recent resume (the
+    /// driver prints them; the wire protocol sends them as `output` events).
+    #[must_use]
+    pub fn take_trace_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.trace_output)
     }
 
     /// Continue to the next breakpoint or the end of the run (the `:continue`
@@ -1426,6 +1714,17 @@ impl ReplSession {
     /// The session body is swapped to the frame bindings only for this call and
     /// always restored — even if the evaluation unwinds.
     pub fn debug_eval(&mut self, expr: &str) -> Option<String> {
+        self.debug_eval_fmt(expr, false)
+    }
+
+    /// @PLN16 phase 2 — evaluate `expr` against the paused frame and render the result
+    /// as **JSON** via the inbuilt serializer (`json_to_text`) — the form the wire
+    /// protocol's `eval` reply carries.  `None` when not paused or it doesn't evaluate.
+    pub fn debug_eval_json(&mut self, expr: &str) -> Option<String> {
+        self.debug_eval_fmt(expr, true)
+    }
+
+    fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
         let prefix = {
             let frame = self.paused.as_deref()?.paused_frame()?;
             let mut p = String::new();
@@ -1438,8 +1737,8 @@ impl ReplSession {
             p
         };
         let saved = std::mem::replace(&mut self.body, prefix);
-        let result =
-            std::panic::catch_unwind(AssertUnwindSafe(|| self.value_of(expr))).unwrap_or(None);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| self.value_of_fmt(expr, json)))
+            .unwrap_or(None);
         self.body = saved; // restore the real session body, panic or not
         result
     }
@@ -1457,21 +1756,38 @@ impl ReplSession {
     /// file `"<repl>"` with line numbers restarting at 1, so a bare or file:line
     /// number is not unique here (file:line is for a file-run debugger).  An
     /// unresolvable spec (unknown fn / no such line) is skipped this run, not error.
-    fn apply_breakpoints(&self, state: &mut State) {
+    fn apply_breakpoints(&mut self, state: &mut State) {
+        let mut metas: Vec<(u32, BpMeta)> = Vec::new();
         for spec in &self.breakpoints {
-            if let Some((name, line)) = spec.split_once(':') {
-                if let Ok(l) = line.trim().parse::<u32>() {
-                    let d = self.parser.data.def_nr(&format!("n_{}", name.trim()));
-                    state.set_breakpoint_fn_line(d, l, &self.parser.data);
+            let offset = match &spec.location {
+                BpLocation::Function(loc) => {
+                    if let Some((name, line)) = loc.split_once(':') {
+                        line.trim().parse::<u32>().ok().and_then(|l| {
+                            let d = self.parser.data.def_nr(&format!("n_{}", name.trim()));
+                            state.set_breakpoint_fn_line(d, l, &self.parser.data)
+                        })
+                    } else {
+                        state.set_breakpoint_fn_start(loc, &self.parser.data)
+                    }
                 }
-            } else {
-                state.set_breakpoint_fn_start(spec, &self.parser.data);
+                BpLocation::File(file, line) => {
+                    state.set_breakpoint_file_line(file, *line, &self.parser.data)
+                }
+            };
+            // @PLN16 rich-bp — record offset → (condition, actions, stop) so the pause
+            // resolver can honour a conditional break / tracepoint at this offset.
+            if let Some(off) = offset {
+                metas.push((
+                    off,
+                    BpMeta {
+                        condition: spec.condition.clone(),
+                        actions: spec.actions.clone(),
+                        stop: spec.stop,
+                    },
+                ));
             }
         }
-        // @PLN16 M5a — file:line breakpoints (the file-run debugger).
-        for (file, line) in &self.file_breakpoints {
-            state.set_breakpoint_file_line(file, *line, &self.parser.data);
-        }
+        self.bp_meta = metas.into_iter().collect();
     }
 
     /// Turn on session persistence: every later state-changing input appends to
@@ -1586,7 +1902,7 @@ impl ReplSession {
             // on every later observe does NOT repeat a side effect.
             let rhs = input.split_once('=').map_or("", |(_, r)| r.trim());
             if !rhs.is_empty() {
-                match self.capture_binding(rhs) {
+                match self.capture_binding(rhs, false) {
                     Capture::Done(lit) => {
                         let snap = format!("{var} = {lit}");
                         let bound = format!("{}{snap};\n", self.body);
@@ -1681,12 +1997,13 @@ impl ReplSession {
             // mode a hit *suspends* execution; otherwise it records-and-continues.
             // Only on a real observing run (`debug`), not the value-render re-runs
             // (`:vars`, snapshot validation).
-            if debug && (!self.breakpoints.is_empty() || !self.file_breakpoints.is_empty()) {
+            if debug && !self.breakpoints.is_empty() {
                 self.apply_breakpoints(&mut state);
                 if self.stepping {
                     state.enable_stepping();
                 }
             }
+            self.trace_output.clear();
             state.execute_argv(&name, &self.parser.data, &[]);
             if debug && state.is_paused() {
                 // Suspended at a breakpoint (interactive stepping): hold the live
@@ -1695,6 +2012,10 @@ impl ReplSession {
                 // the observing wrapper's `println` fires when the run is resumed
                 // to completion.  Return early; the run is not yet finished.
                 self.paused = Some(Box::new(state));
+                // @PLN16 rich-bp — a conditional break may not really stop here, and a
+                // tracepoint emits + continues; resolve before handing back to the caller
+                // (which checks `is_debugging()` to decide Paused vs Ran).
+                self.resolve_pause();
                 return Ok(());
             }
             if debug {
@@ -1745,7 +2066,7 @@ impl ReplSession {
     ///
     /// A binding whose RHS isn't a simple `<name> = <expr>`, or whose value's type
     /// name doesn't resolve, falls back to storing the RHS as source (re-run).
-    fn capture_binding(&mut self, rhs: &str) -> Capture {
+    fn capture_binding(&mut self, rhs: &str, json: bool) -> Capture {
         // `Type::show` is a debug form: it appends a dep-tracking list
         // (`vector<integer>["__vdb_1"]`) and wraps a struct as `ref(P)`.  The
         // cap-fn return type and the `show_loft` schema lookup both need the
@@ -1766,7 +2087,7 @@ impl ReplSession {
         // The explicit `vector<text>` element type coerces a borrowed/work text
         // (`text["__work_N"]`, e.g. a concat) to a plain owned element.
         if ty == "text" {
-            return match self.capture_typed(&format!("[({rhs})]"), "vector<text>") {
+            return match self.capture_typed(&format!("[({rhs})]"), "vector<text>", json) {
                 Capture::Done(lit) => lit
                     .strip_prefix('[')
                     .and_then(|s| s.strip_suffix(']'))
@@ -1774,7 +2095,7 @@ impl ReplSession {
                 other => other,
             };
         }
-        self.capture_typed(rhs, &ty)
+        self.capture_typed(rhs, &ty, json)
     }
 
     /// Run `fn replmain_N() -> <ty> { <body> <rhs> }` once on a throwaway `State`
@@ -1784,7 +2105,7 @@ impl ReplSession {
     /// lookup.  `Skip` if the wrapper doesn't parse/compile, `Failed` if the RHS
     /// faulted (surface it — do not fall back to a re-running source binding), `Done`
     /// with the literal otherwise.
-    fn capture_typed(&mut self, rhs: &str, ty: &str) -> Capture {
+    fn capture_typed(&mut self, rhs: &str, ty: &str, json: bool) -> Capture {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
@@ -1814,7 +2135,7 @@ impl ReplSession {
             self.parser.data.rollback_to(pre_defs);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let lit = render_capture(&mut state, &ret_ty, ty);
+        let lit = render_capture(&mut state, &ret_ty, ty, json);
         self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
     }

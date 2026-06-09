@@ -1918,25 +1918,22 @@ impl State {
         d_nr: u32,
         line: u32,
         data: &crate::data::Data,
-    ) -> bool {
+    ) -> Option<u32> {
         if d_nr >= data.definitions() {
-            return false;
+            return None;
         }
         let start = data.def(d_nr).code_position;
         let end = start + data.def(d_nr).code_length;
-        let Some(&offset) = self
+        let &offset = self
             .line_numbers
             .range(start..end)
             .find(|(_, l)| **l == line)
-            .map(|(off, _)| off)
-        else {
-            return false;
-        };
+            .map(|(off, _)| off)?;
         self.enable_debug();
         if let Some(dbg) = self.debug.as_mut() {
             dbg.add_offset(offset);
         }
-        true
+        Some(offset)
     }
 
     /// Register a breakpoint at the **start of a named function's body** — the
@@ -1946,26 +1943,23 @@ impl State {
     /// unlike `set_breakpoint_fn_entry`, which pauses pre-prologue where the frame
     /// isn't set up; `line_numbers` entries land after any frame-setup op).  Returns
     /// `false` if `name` isn't a defined function or its body has no line mapping.
-    pub fn set_breakpoint_fn_start(&mut self, name: &str, data: &crate::data::Data) -> bool {
+    pub fn set_breakpoint_fn_start(&mut self, name: &str, data: &crate::data::Data) -> Option<u32> {
         let d_nr = data.def_nr(&format!("n_{name}"));
         if d_nr >= data.definitions() {
-            return false;
+            return None;
         }
         let def = data.def(d_nr);
         let (start, end) = (def.code_position, def.code_position + def.code_length);
-        let Some(&offset) = self
+        let &offset = self
             .line_numbers
             .range(start..end)
             .next()
-            .map(|(off, _)| off)
-        else {
-            return false;
-        };
+            .map(|(off, _)| off)?;
         self.enable_debug();
         if let Some(dbg) = self.debug.as_mut() {
             dbg.add_offset(offset);
         }
-        true
+        Some(offset)
     }
 
     /// @PLN16 M5a — register a breakpoint at **`file:line`** for the file-run debugger.
@@ -1981,10 +1975,8 @@ impl State {
         file: &str,
         line: u32,
         data: &crate::data::Data,
-    ) -> bool {
-        let Some(want) = std::path::Path::new(file).file_name() else {
-            return false;
-        };
+    ) -> Option<u32> {
+        let want = std::path::Path::new(file).file_name()?;
         for d in 0..data.definitions() {
             let def = data.def(d);
             if def.def_type != crate::data::DefType::Function {
@@ -1993,11 +1985,11 @@ impl State {
             if std::path::Path::new(&def.position.file).file_name() != Some(want) {
                 continue;
             }
-            if self.set_breakpoint_fn_line(d, line, data) {
-                return true;
+            if let Some(off) = self.set_breakpoint_fn_line(d, line, data) {
+                return Some(off);
             }
         }
-        false
+        None
     }
 
     /// @PLN16 M5a — the breakable source lines in `file` (its basename), sorted: the
@@ -2077,6 +2069,22 @@ impl State {
     #[must_use]
     pub fn paused_frame(&self) -> Option<&crate::debugger::BreakHit> {
         self.debug.as_deref().and_then(|d| d.paused.as_ref())
+    }
+
+    /// @PLN16 rich-bp — the bytecode offset of the current pause **iff** it is at a
+    /// registered breakpoint (so the driver can look up its condition / tracepoint),
+    /// else `None` (a step or watch pause is always a real stop).  The pause pc is
+    /// `code_pos`: the suspend hook returns *before* executing the breakpoint op.
+    #[must_use]
+    pub fn paused_at_breakpoint(&self) -> Option<u32> {
+        if !self.is_paused() {
+            return None;
+        }
+        let pc = self.code_pos;
+        self.debug
+            .as_deref()
+            .filter(|d| d.is_breakpoint(pc))
+            .map(|_| pc)
     }
 
     /// Resolve frame local `name` to `(record, frame-absolute address, type,

@@ -112,7 +112,8 @@ Commands start with a colon:
 | `:fns` | List the functions you have defined, with their return type. |
 | `:vars` | List the variables you have bound, each with its current value. |
 | `:type <expr>` | Show the type of an expression without running it. |
-| `:break <fn>` | Set a breakpoint at the start of a function's body — also `<fn>:<line>` (a line in that function). Both are *function-scoped*, the only form unique in the REPL (every input restarts line numbering under the synthetic `<repl>` file, so a bare line isn't unique; file:line is for a file-run debugger). `:break` lists, `:break clear` removes. The next call that reaches it **suspends** into the paused sub-mode (below). |
+| `:break <fn>` | Set a breakpoint at the start of a function's body — also `<fn>:<line>` (a line in that function), or `<fn> if <cond>` / `<fn>:<line> if <cond>` (a **conditional** breakpoint: break only when `<cond>` holds at the frame). Both are *function-scoped*, the only form unique in the REPL (every input restarts line numbering under the synthetic `<repl>` file, so a bare line isn't unique; file:line is for a file-run debugger). `:break` lists, `:break clear` removes. The next call that reaches it **suspends** into the paused sub-mode (below). |
+| `:trace <fn> <expr>,…` | Set a **tracepoint**: on each hit, log the comma-separated expressions and **continue** (never pauses). A non-interactive log of values at a point. |
 | `:bytecode [fn]` | Show the bytecode — all your functions, or just the named one. |
 | `:rust [fn]` | Show the Rust code loft generates for native compilation. |
 | `:slots [fn]` | Show each function's variable slot table (name, type, slot range). |
@@ -127,6 +128,36 @@ fn n_dbl:
   ----------------------------------------------------------------------
   0    arg  n      int    0      [0, 8)       -
 ```
+
+### Conditional breakpoints and tracepoints
+
+A plain breakpoint stops on *every* call. When a bug only shows up on *one* call —
+the classic "fails once in 10 000" — add a **condition**: the run only suspends when
+the predicate over the frame is true, silently running past the rest.
+
+```loft
+loft> :break update if entity.health < 0
+breakpoint set: update if entity.health < 0
+loft> game_loop()
+⏸ paused in update | entity = Entity{health:-3,…}
+```
+
+A **tracepoint** is the opposite of a stop: on each hit it logs some expressions and
+keeps running, giving you a value trace without pausing — the non-interactive way to
+watch state evolve over a whole run.
+
+```loft
+loft> :trace move { x, y }
+tracepoint set: move { x, y }
+loft> game_loop()
+⤳ trace | x = 4, y = 7, x = 5, y = 7, x = 6, y = 7
+42
+```
+
+**When to use which:** a *condition* when you know the bad state but not which call
+produces it (break there and inspect); a *tracepoint* when you want to see how a value
+changes across many calls without stepping. Both reach for the same frame-evaluation as
+the `(dbg)` prompt — they're "the breakpoint, but it decides whether to stop."
 
 ### Paused at a breakpoint
 

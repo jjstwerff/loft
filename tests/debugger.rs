@@ -58,7 +58,7 @@ fn run_with_breakpoint(
     let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
     assert!(d_nr != u32::MAX, "function {bp_fn} not defined");
     assert!(
-        state.set_breakpoint_fn_line(d_nr, line, &p.data),
+        state.set_breakpoint_fn_line(d_nr, line, &p.data).is_some(),
         "no breakpoint offset for {bp_fn} line {line}; breakable = {:?}",
         state.breakable_lines()
     );
@@ -148,12 +148,12 @@ fn breakable_lines_cover_non_arithmetic_lines() {
     // Line 2 (`m = n;`, no arithmetic) and line 3 (`if m {...}`, no arithmetic) are
     // both breakable — neither has a fault-prone operator.
     assert!(
-        state.set_breakpoint_fn_line(d, 2, &p.data),
+        state.set_breakpoint_fn_line(d, 2, &p.data).is_some(),
         "line 2 (assignment) breakable; breakable = {:?}",
         state.breakable_lines()
     );
     assert!(
-        state.set_breakpoint_fn_line(d, 3, &p.data),
+        state.set_breakpoint_fn_line(d, 3, &p.data).is_some(),
         "line 3 (if) breakable; breakable = {:?}",
         state.breakable_lines()
     );
@@ -377,7 +377,7 @@ fn step_picks_up_repl_edited_value() {
     let calc = p.data.def_nr("n_calc");
     state.enable_stepping();
     assert!(
-        state.set_breakpoint_fn_line(calc, 2, &p.data),
+        state.set_breakpoint_fn_line(calc, 2, &p.data).is_some(),
         "breakpoint set"
     );
     let name = p
@@ -441,7 +441,7 @@ fn run_to_pause(p: &mut Parser, defs: &[&str], call: &str, bp_fn: &str, line: u3
     let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
     state.enable_stepping();
     assert!(
-        state.set_breakpoint_fn_line(d_nr, line, &p.data),
+        state.set_breakpoint_fn_line(d_nr, line, &p.data).is_some(),
         "breakpoint on {bp_fn}:{line}"
     );
     let name = p
@@ -748,11 +748,11 @@ fn breakpoint_at_fn_body_start_by_name() {
     loft::scopes::check(&mut p.data);
     compile::byte_code(&mut state, &mut p.data);
     assert!(
-        state.set_breakpoint_fn_start("dbl", &p.data),
+        state.set_breakpoint_fn_start("dbl", &p.data).is_some(),
         "breakpoint at dbl's body start"
     );
     assert!(
-        !state.set_breakpoint_fn_start("nope", &p.data),
+        state.set_breakpoint_fn_start("nope", &p.data).is_none(),
         "unknown fn → false"
     );
     let name = p

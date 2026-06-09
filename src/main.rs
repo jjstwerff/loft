@@ -3023,12 +3023,34 @@ fn start_repl() -> ! {
 /// the arg loop), the same way `start_repl` reads `--fresh`.
 fn run_file_debugger() -> ! {
     let args: Vec<String> = std::env::args().collect();
+    let base = project_dir();
+    let default_dir = std::path::Path::new(&base).join("default");
+    let stdlib = if default_dir.exists() {
+        default_dir.to_string_lossy().into_owned()
+    } else {
+        "default".to_string()
+    };
+    // @PLN16 M5d phase 2 — `loft debug --rpc`: the NDJSON wire-protocol server on stdio.
+    // The file is supplied by the `launch` request, so no `<file>:<line>` target is
+    // needed; the protocol owns stdout, program output rides `output` events.
+    if args.iter().any(|a| a == "--rpc") {
+        let stdin = std::io::stdin();
+        let mut stdout = std::io::stdout();
+        let code = match loft::rpc::run_rpc(&stdlib, stdin.lock(), &mut stdout) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("loft debug --rpc: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     let target = args
         .iter()
         .position(|a| a == "debug")
         .and_then(|p| args.get(p + 1));
     let Some(target) = target else {
-        eprintln!("usage: loft debug <file>:<line>");
+        eprintln!("usage: loft debug <file>:<line>  (or: loft debug --rpc)");
         std::process::exit(2);
     };
     // `rsplit_once` so a path that itself contains a colon (e.g. a Windows drive) keeps
@@ -3040,13 +3062,6 @@ fn run_file_debugger() -> ! {
     let Ok(line) = line_s.parse::<u32>() else {
         eprintln!("loft debug: not a line number: {line_s:?}");
         std::process::exit(2);
-    };
-    let base = project_dir();
-    let default_dir = std::path::Path::new(&base).join("default");
-    let stdlib = if default_dir.exists() {
-        default_dir.to_string_lossy().into_owned()
-    } else {
-        "default".to_string()
     };
     let stdin = std::io::stdin();
     let mut stderr = std::io::stderr();
