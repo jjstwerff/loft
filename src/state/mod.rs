@@ -148,7 +148,7 @@ pub struct State {
     /// `line_numbers` map's behaviour).
     pub(crate) source_spans: BTreeMap<u32, Position>,
     pub(crate) fn_positions: Vec<u32>,
-    /// @PLN15 debugger — present only while debugging; the execute loop pauses at
+    /// @PLN16 debugger — present only while debugging; the execute loop pauses at
     /// a registered breakpoint offset and captures the frame.  `None` on normal
     /// runs (the only per-op cost is one `is_some` branch).
     pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
@@ -225,7 +225,7 @@ pub(crate) fn loft_text_literal(raw: &str) -> String {
 }
 
 /// Parse a quoted loft `text` literal back to its bytes — the inverse of
-/// [`loft_text_literal`], used by the @PLN15 debugger to write a text edited at
+/// [`loft_text_literal`], used by the @PLN16 debugger to write a text edited at
 /// a breakpoint (`msg = "bye"`) back into the live frame.  Returns `None` when
 /// `lit` is not a `"…"`-quoted literal.  Unknown escapes keep the following
 /// character verbatim (lenient, matching the lexer's tolerance).
@@ -1878,7 +1878,7 @@ impl State {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
-    // ── @PLN15 debugger ──────────────────────────────────────────────────────
+    // ── @PLN16 debugger ──────────────────────────────────────────────────────
 
     /// Turn on debugging (idempotent).  The execute loop then consults the
     /// [`Debugger`](crate::debugger::Debugger) at each op.
@@ -2062,8 +2062,63 @@ impl State {
             .is_some_and(|h| h.locals.iter().any(|(n, _)| n == name))
     }
 
+    /// Whether a frame local's declared type is a **heap** value — a `DbRef` slot
+    /// (struct / vector / struct-enum / collection), as opposed to an inline scalar,
+    /// text, or simple enum.
+    fn is_heap_type(tp: &crate::data::Type) -> bool {
+        use crate::data::Type;
+        matches!(
+            tp,
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _)
+        )
+    }
+
+    /// @PLN16 M1a — if frame local `name` holds a **heap** value (a `DbRef` slot:
+    /// struct / vector / struct-enum / collection), its loft-source type name — so a
+    /// constructor of the same type can be built and grafted in.  `None` for an inline
+    /// scalar / text / simple-enum local (edited in place by
+    /// [`set_frame_literal`](Self::set_frame_literal)) or an unknown local.  Routes the
+    /// debugger's whole-value heap edit.
+    #[must_use]
+    pub fn frame_heap_type(&self, name: &str, data: &crate::data::Data) -> Option<String> {
+        let (_, _, tp, _) = self.frame_slot(name, data)?;
+        Self::is_heap_type(&tp).then(|| tp.name(data))
+    }
+
+    /// @PLN16 M1a — point a **heap** frame local at an already-materialised value by
+    /// writing the root `DbRef` into the live frame slot.  The value must already live
+    /// in this `State`'s stores (built + grafted by the debugger's whole-value edit —
+    /// [`Stores::adopt_value_stores`](crate::database::Stores::adopt_value_stores)).
+    /// Returns `false` for an unknown or non-heap (inline) local.  The prior value's
+    /// stores are left allocated — a debug-session-only leak, like the text-local edit;
+    /// freeing them + journaling the slot `Modify` is the undo (M2) slice.
+    pub fn set_frame_dbref(
+        &mut self,
+        name: &str,
+        db: crate::keys::DbRef,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        if !Self::is_heap_type(&tp) {
+            return false;
+        }
+        *self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<crate::keys::DbRef>(rec, at) = db;
+        true
+    }
+
     /// Write an integer `value` into the **live** frame's local `name` at a
-    /// suspension — the @PLN15 F write-back, so a value edited at the breakpoint is
+    /// suspension — the @PLN16 F write-back, so a value edited at the breakpoint is
     /// picked up when execution `resume`s.  Returns `false` if no integer local of
     /// that name is in the current frame.  (The typed-`i64` primitive; the REPL
     /// edits via [`set_frame_literal`](Self::set_frame_literal), which covers every
@@ -2084,7 +2139,7 @@ impl State {
 
     /// Write the value rendered by own-format `literal` into the **live** frame's
     /// local `name`, **type-directed** by the local's declared type — the general
-    /// @PLN15 F edit-and-continue write the REPL uses (`f = 2.0`, `msg = "hi"`).
+    /// @PLN16 F edit-and-continue write the REPL uses (`f = 2.0`, `msg = "hi"`).
     /// Covers every **inline scalar** (integer / float / single / boolean /
     /// character), a **simple enum** (its 1-based discriminant byte), and **text**
     /// (a text *local* overwrites its owned `String`; a text *argument* repoints its
@@ -2240,7 +2295,7 @@ impl State {
         true
     }
 
-    /// @PLN15.J — edit a **scalar at a struct-field path** in place (`pt.x = 9`,
+    /// @PLN16.J — edit a **scalar at a struct-field path** in place (`pt.x = 9`,
     /// `pt.inner.x = 9`).  `base` is the struct local; `fields` is the dotted chain.
     /// Resolves `base`'s `DbRef` from the frame slot, then walks the chain summing
     /// each field's byte offset — a nested struct is **inlined** into the same
@@ -2304,7 +2359,7 @@ impl State {
         self.set_frame_path(base, &[field], lit, data)
     }
 
-    /// @PLN15 — live edit of a scalar vector **element** (`v[i] = x`).  The cheapest
+    /// @PLN16 — live edit of a scalar vector **element** (`v[i] = x`).  The cheapest
     /// heap edit: the element lives in the vector's backing record, so this is one
     /// in-place scalar write — no materialisation.  Mirrors the interpreter's own
     /// element access (`codegen_runtime.rs`): the element type is `content(vec_tp)`,
@@ -2475,7 +2530,7 @@ impl State {
         self.capture_frame_at(d_nr, frame_base, pc, data)
     }
 
-    /// @PLN15 B3 — capture the **full runtime call stack**, one `BreakHit` per
+    /// @PLN16 B3 — capture the **full runtime call stack**, one `BreakHit` per
     /// frame, innermost first.  The frames come from the live `call_stack`, so the
     /// chain is exactly the one that *actually ran* — **including frames reached
     /// via indirect (fn-ref) calls that the static call graph (B1) cannot see**.
@@ -2992,7 +3047,7 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op_pos_rt = self.code_pos;
-            // @PLN15 debugger — at a registered breakpoint, capture the frame (and
+            // @PLN16 debugger — at a registered breakpoint, capture the frame (and
             // in stepping mode, suspend: return to the driver with the frame in
             // `debug.paused`, to be resumed via `resume`).  Inert (one branch) when
             // not debugging.
@@ -3180,7 +3235,7 @@ impl State {
         false
     }
 
-    /// Resume from a suspension and stop per `mode` — the @PLN15 F step verbs
+    /// Resume from a suspension and stop per `mode` — the @PLN16 F step verbs
     /// ([`StepMode`](crate::debugger::StepMode)).  Drives the same re-enterable
     /// loop as [`resume`](Self::resume) but, after each op, decides whether to pause
     /// from the current **source line** (`line_at`, the dense per-line table) and

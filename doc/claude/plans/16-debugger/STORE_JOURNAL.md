@@ -3,9 +3,9 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 15.J — Store change journal (the live-edit substrate)
+# 16.J — Store change journal (the live-edit substrate)
 
-> **Identity:** a design sub-doc of `@PLN15` (debugger). Slug `store-journal`.
+> **Identity:** a design sub-doc of `@PLN16` (debugger). Slug `store-journal`.
 > **Status:** design — **one uniform model** for every consumer (§ The model);
 > `Modify` slice + the keystone `claim_at` built (`src/database/journal.rs`,
 > `src/store.rs`). Load-bearing facts **confirmed** — the mutation chokepoint
@@ -19,9 +19,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **Built since:** the `Insert`/`Free` entry path (`record_insert`/`record_free`,
 > `apply`/`revert` dispatch), the per-`Store` recording layer + `Stores::take_journal`
 > drain, and the in-place vector-element edit (`v[i] = x` via `set_frame_element`).
-> **Remaining:** the whole-value heap transfer (a deep `Stores::clone_for_edit` + the
-> `debug_eval`→`set_frame` contract rework + `apply` into the live store + frame-slot
-> write) and the resize-caller pointer-flip marks (§ Phasing 3b).
+> **Whole-value heap edits (`pt = Point{…}`) landed (2026-06-09) — via store-level
+> adoption, not journal `Insert` replay** (construction makes a whole new store per
+> value, which the recording can't see and `State::new` can't build over a clone-of-live;
+> see § Phasing 3b): `Stores::raise_floor` + `adopt_value_stores` + `State::set_frame_dbref`,
+> no `DbRef` remap. **Remaining for the journal proper:** undo wired through the journal
+> (M2) and the resize-caller pointer-flip marks (§ Phasing 3b).
 
 ## Why this exists
 
@@ -438,13 +441,27 @@ lavition direction (each is "see/transfer what changed in the store"):
        element type / stride from the vector type, write the scalar at `8 + i·stride`,
        reject out-of-range / non-scalar.  Tested end-to-end (the resumed program reads
        the edited element) in `tests/debugger.rs`.
-     - **Whole-value transfer (`pt = Point{…}`) — remaining.**  Needs a deep
-       `Stores::clone_for_edit` (preserve allocations so `Insert` positions are free in
-       the live store — the `claim_at` no-remap property), reworking the
-       `debug_eval`→`set_frame` contract to carry the captured `Journal` + root `DbRef`,
-       then **replay into the live store** (`Journal::apply`) + write the frame slot to
-       land the heap edit rejected at `set_frame_literal`; plus the resize-caller
-       pointer-flip marks for in-place `v.push`-style grows; revert for undo.
+     - **Whole-value transfer (`pt = Point{…}`) — LANDED (2026-06-09), via store-level
+       adoption, NOT journal `Insert` replay.**  The journal's "replay the constructor's
+       `Insert`s into the live store" model (§ The three edit kinds, § The model) does
+       **not** fit how loft allocates: construction makes a *whole new store per value*
+       (`database_named`), not records inserted into an existing store — and a store born
+       after `start_recording` has `recording: None`, so those claims are never
+       journaled; `State::new` additionally forces the stack / `CONST_STORE` to slots
+       0/1, so a constructor cannot be built over a populated clone-of-live.  The
+       realised transfer is therefore **whole-store**: build the value on a throwaway
+       `State` whose store high-water is raised above the live store's
+       (`Stores::raise_floor`) so its value-stores land on slots **free in live**, then
+       graft those whole stores into the live store at their coinciding slots
+       (`Stores::adopt_value_stores`) — **no `DbRef` remap** (the same no-remap property
+       `claim_at` was built to give, realised at *store* granularity instead of record
+       granularity) — and repoint the frame slot (`State::set_frame_dbref`).  The
+       `claim_at` / `Insert` / `Free` journal substrate stays load-bearing for the
+       in-place edits, **undo** (M2), the resize-caller pointer-flip marks
+       (`v.push`-style grows), and the unbounded whole-execution journal.  Tests:
+       `tests/repl_session.rs` (`repl_interactive_edit_whole_struct`,
+       `…_whole_value_matrix` — nested-inlined struct / vector / struct-with-text,
+       `…_frame_ref_and_reject`).
 4. **Whole-execution journal** — funnel the stack-frame raw writes, journal all of
    execution → time-travel + incremental serialisation.  The same model, unbounded;
    the snapshot-to-blob freed-record handling (§ Open design points) is what lets it
@@ -452,7 +469,7 @@ lavition direction (each is "see/transfer what changed in the store"):
 
 ## See also
 
-- [README.md](README.md) — the @PLN15 sub-arc table (G1 / heap live edits).
+- [README.md](README.md) — the @PLN16 sub-arc table (G1 / heap live edits).
 - [../future/38-loft-store-durable/README.md](../future/38-loft-store-durable/README.md)
   — @PLAN38 durable stores; its **Tier 3 (WAL)** builds on this journal (§ Convergence
   there) — the persistence/mmap consumer of this substrate.

@@ -3,10 +3,13 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 15 — Debugger (interpreter-mode; host-agnostic engine, browser its natural home)
+# 16 — Debugger (interpreter-mode; host-agnostic engine, browser its natural home)
 
-> **Identity:** `@PLN15` — [`loft-lang/plans`](https://github.com/loft-lang/plans/issues)
-> issue (pending creation). Slug `debugger`.
+> **Identity:** `@PLN16` — [`loft-lang/plans#16`](https://github.com/loft-lang/plans/issues/16).
+> Slug `debugger`. (Drafted as `@PLN15`; that number went to
+> [#15 cross-branch record references](https://github.com/loft-lang/plans/issues/15) —
+> the issue tracker is the source of truth, so this plan was renumbered to its claimed
+> issue.)
 
 ## Status
 
@@ -63,16 +66,28 @@ LHS) — the first heap-value edit, correct by construction (no allocation).
 the element type / stride from the vector type and writes the scalar at `8 + i·stride`
 (`State::set_frame_element`, mirroring the interpreter's own element access; `debug_set`
 routes a `[` LHS), verified end-to-end (the resumed program reads the edited element).
-The **store change journal** ([STORE_JOURNAL.md](STORE_JOURNAL.md)) is now built through
+The **store change journal** ([STORE_JOURNAL.md](STORE_JOURNAL.md)) is built through
 its core: the two-file binary model (index store + blob file), `Modify`/`Insert`/`Free`
 record + `apply`/`revert`, the keystone **`claim_at`** (exact-position re-materialisation,
 fuzz-verified — probe #6, 12 seeds × 600 ops), and the **recording layer** (per-`Store`
 change buffer → `Stores::take_journal` drains to one journal, one cold-path branch when
-off). **Next**: the **whole-value** heap edit (`pt = Point{…}`) — build the value in a
-deep `Stores::clone_for_edit` with recording on, `Journal::apply` the captured inserts
-into the live store, write the frame slot (no `DbRef` remap — `claim_at` forces
-positions) · journal-driven **undo** across all edit kinds · the **G2** browser/DAP
-surface · the file-run (`prog.loft:42`) entry point.
+off). **Whole-value heap edits landed (2026-06-09):** `pt = Point{…}` (and vectors,
+struct-enums, structs with a text field) now replace a heap local at a pause. The
+mechanism is **store-level adoption**, *not* the journal's record-`Insert` replay the
+design first sketched — because construction allocates a **whole new store per value**
+(`database_named`), which the per-store recording never captures (a store born after
+`start_recording` has `recording: None`) and which `State::new` cannot build over a
+clone-of-live (it forces the stack / `CONST_STORE` to slots 0/1). Instead: `debug_eval`
+resolves the RHS against the frame to a self-contained own-format literal;
+`materialize_heap_value` builds that literal on a **throwaway `State`** whose store
+high-water is raised above the live store's (`Stores::raise_floor`), so every value-store
+lands on a slot **free in live**; those whole stores are grafted into the paused State at
+their coinciding slots (`Stores::adopt_value_stores`) with **no `DbRef` remap** (root +
+internal graph keep their slot numbers), and the frame slot is repointed
+(`State::set_frame_dbref`). The suspended frame is never touched (separate State, separate
+stack). The `claim_at`/journal substrate stays for the in-place edits, **undo**, and the
+relocating-grow. **Next**: journal-driven **undo** across all edit kinds (M2) · the
+**G2** browser/DAP surface · the file-run (`prog.loft:42`) entry point.
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
@@ -229,7 +244,7 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **D1** — frame → REPL bridge: seed a `ReplSession` from D0's captured frame, so evaluating at a break runs against the live locals | **First cut (the headline, working)** — `ReplSession::seed_frame` binds each captured `(name, own-format literal)` as `name = <literal>`; `ReplSession::from_parser` builds the session over the program's parser so heap values' types are in scope. Eval-at-frame works end-to-end (`n + a == 21`, `pt.x * pt.y == 12`). **No @PLN14 dependency for read-eval** — the own-format literal *is* the bridge; exact value-for-value seeding + **frame mutation / write-back** (edit a local at the break, resume with it) is the @PLN14 upgrade. |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | **First cut** — `ReplSession::frame_holds(hit, condition)` seeds the frame (D1) and `assert`s the condition; a caller keeps only the hits where it holds (break when `n > 1`) or where an invariant is violated. Post-run filter on recorded hits; an in-loop *skip* (a non-matching breakpoint never even pauses) needs the condition pre-compiled against the frame — a refinement. |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | **DONE (first cut) — incl. edit-and-continue (the hard part)**. `enable_stepping` makes a breakpoint *suspend* (the execute loop returns to the driver, mirroring `frame_yield`, with the frame in `paused_frame`). `debug_step(StepMode)` resumes with **into / over / out / continue** by tracking the **source line** + **call depth** per op (*into* = next line at any depth; *over* = run a deeper call to completion, stop at the next line in the same/shallower frame; *out* = run to the frame's return). `set_frame_value` writes an edited value into the **live** frame slot; `resume` / `debug_step` then **picks it up**. Proven: edit `n` at a break → `calc(5)` returns 990; step *into* `inner`, *over* the call (result live), *out* to the caller. Works because loft calls are *jumps* (all execution state is in `State` fields, so the loop is freely re-enterable). `ReplSession::value_of` extracts the edited value (also the result-as-String primitive REPL.T deferred). |
-| **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | **Interactive pause/step/edit landed** — the REPL `:break` command (**function-scoped**: `<fn>` body start via `State::set_breakpoint_fn_start`, or `<fn>:<line>`; `:break` lists / `clear` removes) and the **paused sub-mode**: when interactive stepping is on (the REPL driver enables it), the next call that reaches a breakpoint **suspends** — the live `State` is held on the session (`ReplSession::paused`), the prompt becomes `(dbg)`, and the frame is shown. At the pause: `:step`/`:next`/`:finish`/`:continue` (→ `debug_step`/`StepMode`), `name = <int>` edits the live frame (`debug_set` → `set_frame_value` + `refresh_paused_frame`), `:vars` re-shows it. On `:continue` to completion the observing statement prints its (edited) value. **The pause is a full REPL-at-frame:** any expression typed at `(dbg)` is evaluated against the live frame (`ReplSession::debug_eval` — swaps the session body to the frame's literal bindings and runs `value_of`, so it covers every type: `n * 3`, `pt.x * pt.y`, struct/vector reads), reusing the D1 bridge. New `Eval::Paused`; `ReplSession::debug_stepping/is_debugging/paused_frame/debug_set/debug_step/debug_continue/debug_eval/abort_debug`; `handle_paused` in `process_line` (wrapped in `catch_unwind` — a panic in the paused run abandons the debug session, never kills the REPL). Proven end-to-end through the binary (`tests/repl.rs::interactive_breakpoint_edit_continue` → `990`; `interactive_breakpoint_eval_expression`: `n * 3` → `15`) plus `tests/repl_session.rs` (`repl_interactive_break_edit_continue`, `repl_interactive_step_into_and_out`, `repl_interactive_eval_at_frame`). **Edit-and-continue covers every inline scalar** (`integer`/`float`/`single`/`boolean`/`character`) via `State::set_frame_literal` (type-directed parse + write, shared `frame_slot` lookup); `debug_set` evaluates the RHS against the frame first, so `n = n + 1` / `b = !b` work, and a type-mismatched edit is rejected. **Text + simple-enum live edits also land** (`set_frame_literal` `Type::Text` / `Type::Enum(_,false,_)` arms): a text **local** overwrites its owned `String` via `ptr::write` (no drop of the possibly-uninitialised prior slot — `reserve_frame` does not zero), a text **argument** repoints its 16-byte `Str` at a `Debugger::edited_text` buffer (stable for the run), and a simple enum writes its inline discriminant byte; gated on the local being shown at the pause. The same change fixed the text-**local** *read* (the renderer read every text slot as a `Str`, but a non-arg local is a 24-byte `String` — showed `""`), with a guarded read so an uninitialised local slot never crashes. **Scalar struct-field paths (`pt.x`) and scalar vector elements (`v[i]`) are now editable** (`set_frame_path` / `set_frame_element`, both in-place writes); a **whole-value** heap edit (`pt = Point{…}`) is still rejected (it needs the journal cross-store transfer — see Remaining G1). Surfaced + fixed a latent round-trip bug: `render_frame_local` rendered a `float` `2.0` as bare `"2"` (re-typing as `integer` when the D1 seed re-binds it) — both it and `repl::float_literal` now share `state::loft_float_literal`. Covered by `tests/repl_session.rs::repl_interactive_edit_scalar_types` + `tests/repl.rs::interactive_breakpoint_edit_boolean`. **Record-and-continue stays** the off-stepping default (`last_hits`) for programmatic / conditional-breakpoint sweeps. **Why fn-scoped:** a bare or file:line number is *not* unique in the REPL — every input parses under the synthetic file `"<repl>"` with line numbers restarting at 1, so only the function is a unique anchor (a bare line is rejected with guidance). **`file:line` is unique only for file-based source** → it lands with the **file-run debugger** (a CLI entry point — break at `prog.loft:42`), a later slice. **Remaining G1:** the **whole-value** heap edit (`pt = Point{…}`, a fresh struct / vector / struct-enum built in the REPL store, which `Stores::clone` empties so it can't be aliased across). The store change journal ([STORE_JOURNAL.md](STORE_JOURNAL.md)) is built through its core for exactly this (record inserts via the cold structural ops, replay into the live store, hot `addr_mut` unhooked — `claim_at` forces positions so no `DbRef` remap); what remains is a deep `Stores::clone_for_edit` + reworking the `debug_eval`→`set_frame` contract to carry the captured journal + root `DbRef`. Plus the file-run (`prog.loft:42`) entry point. **`debug_eval` on a *text* frame value now works** — the pre-existing REPL value-snapshot crash ([#293](https://github.com/loft-lang/loft/issues/293), fixed) double-freed when capturing a text value that borrowed a local `String`; the snapshot now routes text through a store-resident `vector<text>` wrap (`ReplSession::capture_typed`), so text edits accept any expression RHS. |
+| **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | **Interactive pause/step/edit landed** — the REPL `:break` command (**function-scoped**: `<fn>` body start via `State::set_breakpoint_fn_start`, or `<fn>:<line>`; `:break` lists / `clear` removes) and the **paused sub-mode**: when interactive stepping is on (the REPL driver enables it), the next call that reaches a breakpoint **suspends** — the live `State` is held on the session (`ReplSession::paused`), the prompt becomes `(dbg)`, and the frame is shown. At the pause: `:step`/`:next`/`:finish`/`:continue` (→ `debug_step`/`StepMode`), `name = <int>` edits the live frame (`debug_set` → `set_frame_value` + `refresh_paused_frame`), `:vars` re-shows it. On `:continue` to completion the observing statement prints its (edited) value. **The pause is a full REPL-at-frame:** any expression typed at `(dbg)` is evaluated against the live frame (`ReplSession::debug_eval` — swaps the session body to the frame's literal bindings and runs `value_of`, so it covers every type: `n * 3`, `pt.x * pt.y`, struct/vector reads), reusing the D1 bridge. New `Eval::Paused`; `ReplSession::debug_stepping/is_debugging/paused_frame/debug_set/debug_step/debug_continue/debug_eval/abort_debug`; `handle_paused` in `process_line` (wrapped in `catch_unwind` — a panic in the paused run abandons the debug session, never kills the REPL). Proven end-to-end through the binary (`tests/repl.rs::interactive_breakpoint_edit_continue` → `990`; `interactive_breakpoint_eval_expression`: `n * 3` → `15`) plus `tests/repl_session.rs` (`repl_interactive_break_edit_continue`, `repl_interactive_step_into_and_out`, `repl_interactive_eval_at_frame`). **Edit-and-continue covers every inline scalar** (`integer`/`float`/`single`/`boolean`/`character`) via `State::set_frame_literal` (type-directed parse + write, shared `frame_slot` lookup); `debug_set` evaluates the RHS against the frame first, so `n = n + 1` / `b = !b` work, and a type-mismatched edit is rejected. **Text + simple-enum live edits also land** (`set_frame_literal` `Type::Text` / `Type::Enum(_,false,_)` arms): a text **local** overwrites its owned `String` via `ptr::write` (no drop of the possibly-uninitialised prior slot — `reserve_frame` does not zero), a text **argument** repoints its 16-byte `Str` at a `Debugger::edited_text` buffer (stable for the run), and a simple enum writes its inline discriminant byte; gated on the local being shown at the pause. The same change fixed the text-**local** *read* (the renderer read every text slot as a `Str`, but a non-arg local is a 24-byte `String` — showed `""`), with a guarded read so an uninitialised local slot never crashes. **Scalar struct-field paths (`pt.x`) and scalar vector elements (`v[i]`) are now editable** (`set_frame_path` / `set_frame_element`, both in-place writes); a **whole-value** heap edit (`pt = Point{…}`, vectors, struct-enums, structs with text) now lands too, via **store-level adoption** (`materialize_heap_value` → `Stores::raise_floor` + `adopt_value_stores` + `State::set_frame_dbref`; see the Status note + M1a). Surfaced + fixed a latent round-trip bug: `render_frame_local` rendered a `float` `2.0` as bare `"2"` (re-typing as `integer` when the D1 seed re-binds it) — both it and `repl::float_literal` now share `state::loft_float_literal`. Covered by `tests/repl_session.rs::repl_interactive_edit_scalar_types` + `tests/repl.rs::interactive_breakpoint_edit_boolean`. **Record-and-continue stays** the off-stepping default (`last_hits`) for programmatic / conditional-breakpoint sweeps. **Why fn-scoped:** a bare or file:line number is *not* unique in the REPL — every input parses under the synthetic file `"<repl>"` with line numbers restarting at 1, so only the function is a unique anchor (a bare line is rejected with guidance). **`file:line` is unique only for file-based source** → it lands with the **file-run debugger** (a CLI entry point — break at `prog.loft:42`), a later slice. **Whole-value heap edit — LANDED (2026-06-09):** `pt = Point{…}` (and vectors, struct-enums, structs with text) replace a heap local at a pause via **store-level adoption** rather than the journal record-`Insert` replay the design first sketched — construction allocates a *whole new store per value* (`database_named`), which the per-store recording never captures and which `State::new` can't build over a clone-of-live, so the journal-apply path does not fit. The realised path: `debug_eval` → self-contained literal → `materialize_heap_value` builds it on a throwaway `State` with its store high-water raised above live's (`Stores::raise_floor`, value-stores land on live-free slots) → graft the whole value-stores at coinciding slots (`Stores::adopt_value_stores`, **no `DbRef` remap**) → repoint the frame slot (`State::set_frame_dbref`); the suspended frame is untouched. **Remaining G1:** the file-run (`prog.loft:42`) entry point. **`debug_eval` on a *text* frame value now works** — the pre-existing REPL value-snapshot crash ([#293](https://github.com/loft-lang/loft/issues/293), fixed) double-freed when capturing a text value that borrowed a local `String`; the snapshot now routes text through a store-resident `vector<text>` wrap (`ReplSession::capture_typed`), so text edits accept any expression RHS. |
 | **G1-span** — **breakpoint line resolution** (surfaced + **FIXED** during G1) | **DONE.** Breakpoints resolved against the sparse `source_spans` (emitted only at fault-prone arithmetic `+ - * / % << >>`), so a body with no such op (pure `if`/constant, a bare-var return, a plain assignment) had no breakable offset and silently never paused.  **Fix:** resolve against the dense **`line_numbers`** table instead — `code_pos → line`, emitted before the first op of *every* source line and **post-prologue** (lands after any `ReserveFrame`).  `set_breakpoint_fn_line` / `set_breakpoint_fn_start` / `breakable_lines` now use it, and stepping's per-op line uses a new `State::line_at` (was the sparse `source_loc_for`).  `source_spans` stays for runtime-error `file:line:col`.  Every body line is now breakable (`tests/debugger.rs::breakpoint_fires_without_arithmetic`, `breakable_lines_cover_non_arithmetic_lines`; the piped `interactive_breakpoint_edit_boolean` breaks a pure-`if` body).  **Method note:** the earlier "doesn't fire even at `code_position`" reading was a **stale-binary artifact** — `cargo build --release --lib` doesn't rebuild the `loft` *binary*, so the manual REPL probes ran old code; a fresh `--bin loft` build confirmed the fix. |
 | **G2** — browser surface: `loft-dap` protocol + web UI (gutter, variables, call stack, REPL console) — the *natural home* | Open |
 
@@ -266,11 +281,13 @@ The host-agnostic engine is A–F; the surfaces are G.
 
 Where it stands: breakpoints · step into/over/out/continue · conditional breaks ·
 REPL-at-frame (read + eval any expression, every type) · live edit of every inline
-scalar, text, simple-enum, **scalar struct-field paths, and scalar vector elements** ·
-the **store change journal** built through its core (two-file binary model;
-`Modify`/`Insert`/`Free` record + apply/revert; the keystone `claim_at` fuzz-verified —
-probe #6; the recording layer + `Stores` drain). The remaining path to a complete,
-host-agnostic, persistable debugger, ordered by dependency.
+scalar, text, simple-enum, **scalar struct-field paths, scalar vector elements, and
+now whole heap values** (`pt = Point{…}`, vectors, struct-enums, structs with text —
+via store-level adoption: `Stores::raise_floor` + `adopt_value_stores` +
+`State::set_frame_dbref`) · the **store change journal** built through its core (two-file
+binary model; `Modify`/`Insert`/`Free` record + apply/revert; the keystone `claim_at`
+fuzz-verified — probe #6; the recording layer + `Stores` drain). The remaining path to a
+complete, host-agnostic, persistable debugger, ordered by dependency.
 *Correctness is not re-argued per slice — each is built to the reliability discipline
 already homed in [GOALS.md § Purpose](../../GOALS.md#purpose--what-loft-is-for) (the
 "software that doesn't fail" aim), [DESIGN_PROTOCOL.md](../../DESIGN_PROTOCOL.md), and
@@ -291,15 +308,22 @@ the `engineering-rigor` skill; the journal's invariant lives in
   end-to-end (the resumed program reads the edited element) + rejection cases
   (out-of-range / negative / non-vector / non-scalar). Tests:
   `live_edit_vector_element_resumes_with_new_value`, `vector_element_edit_rejects`.
-- **M1a — whole-value heap edits** (`pt = Point{…}`, vectors, struct-enums): run the
-  constructor on a build-store clone, journal its inserts, replay into the live store
-  — **no `DbRef` remap** (`claim_at` forces positions; the no-remap property is
-  fuzz-verified, probe #6). *Substrate now mostly built* — `Modify`/`Insert`/`Free` +
-  `apply`/`revert`, `claim_at`, the recording layer + `Stores::take_journal` drain are
-  done and tested. **Remaining**: a deep `Stores::clone_for_edit` (preserve allocations
-  so insert positions are free in the live store) + reworking the `debug_eval`→
-  `set_frame` contract to carry the captured journal + root `DbRef`. The biggest
-  remaining piece.
+- **M1a — whole-value heap edits** (`pt = Point{…}`, vectors, struct-enums, structs
+  with text): **LANDED (2026-06-09).** Built **store-level**, not via the journal's
+  record-`Insert` replay: construction makes a *whole new store per value*
+  (`database_named`) that the per-store recording can't see and that `State::new` can't
+  build over a clone-of-live, so the journal-apply path the design sketched does not
+  fit. The realised flow — `debug_eval` → self-contained literal → build it on a
+  throwaway `State` with its store high-water raised above live's
+  (`Stores::raise_floor`, so value-stores land on live-free slots) → graft the whole
+  value-stores in at their coinciding slots (`Stores::adopt_value_stores`, **no `DbRef`
+  remap**) → repoint the frame slot (`State::set_frame_dbref`). The suspended frame is
+  untouched (separate State + stack). Tests: `repl_interactive_edit_whole_struct`,
+  `…_whole_value_matrix` (nested-inlined struct · vector · struct-with-text — each
+  resumes with the edit and leaves a second heap local intact), `…_frame_ref_and_reject`
+  (constructor over live frame fields + clean rejection of an unresolvable / mistyped
+  RHS). The `claim_at`/journal substrate stays load-bearing for the in-place edits,
+  undo (M2), and the relocating-grow.
 
 **M2 — undo / redo (journal-driven).** Route *every* edit path (scalar, text, enum,
 field, whole-value) through the journal so each edit is recorded; `:undo` reverts,
@@ -411,5 +435,5 @@ load-bearing.
 - [lib_plans/future/09-lsp/](../../lib_plans/future/09-lsp/README.md) — `loft-dap`
   (LSP.3) protocol; [plans/future/25-native-debug/](../future/25-native-debug/README.md)
   — the native-mode complement.
-- **Tracker:** to be filed as `@PLN15` on `loft-lang/plans`; labels `plan` ·
-  `subject:loft` · `status:future`.
+- **Tracker:** [`loft-lang/plans#16`](https://github.com/loft-lang/plans/issues/16);
+  labels `plan` · `subject:loft` · `status:active`.

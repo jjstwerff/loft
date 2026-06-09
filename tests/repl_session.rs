@@ -253,7 +253,7 @@ fn observe_not_persisted() {
     let _ = std::fs::remove_file(&path);
 }
 
-// ── @PLN15 G1: REPL :break command ───────────────────────────────────────────
+// ── @PLN16 G1: REPL :break command ───────────────────────────────────────────
 
 /// `add_breakpoint("dbl")` (the `:break dbl` command) breaks at the named
 /// function's body start; an observing call that runs it captures the frame into
@@ -313,7 +313,7 @@ fn repl_breakpoint_fn_line_and_unknown() {
     assert!(s.last_hits().is_empty(), "bare line → no hit (not unique)");
 }
 
-/// @PLN15 G1 (interactive) — with stepping on, observing a call that hits a
+/// @PLN16 G1 (interactive) — with stepping on, observing a call that hits a
 /// breakpoint **suspends** into the paused sub-mode; edit a value in the frame,
 /// continue, and the edit is picked up — the full pause → edit → resume cycle
 /// driven through one held session.  `calc(5)` is normally 50; editing `n` to 99
@@ -363,7 +363,7 @@ fn repl_interactive_break_edit_continue() {
     );
 }
 
-/// @PLN15 G1 (interactive) — the step verbs at the REPL: from `outer`'s call
+/// @PLN16 G1 (interactive) — the step verbs at the REPL: from `outer`'s call
 /// line, step **into** `inner`, then step **out** back to `outer`, then continue
 /// to completion — all through the held session.
 #[test]
@@ -392,7 +392,7 @@ fn repl_interactive_step_into_and_out() {
     assert!(!s.is_debugging());
 }
 
-/// @PLN15 G1 (interactive) — the REPL-at-frame: at a pause, evaluate arbitrary
+/// @PLN16 G1 (interactive) — the REPL-at-frame: at a pause, evaluate arbitrary
 /// expressions against the live frame (not just read a value back).  Covers a
 /// heap (struct) argument and an integer arg, reads compound expressions, and
 /// confirms a live edit is reflected in a subsequent frame eval.
@@ -432,7 +432,193 @@ fn repl_interactive_eval_at_frame() {
     assert!(!s.debug_continue());
 }
 
-/// @PLN15 G1 (interactive) — edit-and-continue across **scalar types**, not just
+/// @PLN16 M1a (interactive) — **whole-value heap edit**: replace a struct local with
+/// a freshly-constructed one at the pause (`pt = Point{...}`), then resume and observe
+/// the program use the new value.  The value is built on a throwaway State above the
+/// live store's high-water and grafted into the paused stores with no `DbRef` remap.
+/// `use_pt(Point{1,2})` is normally 3; editing `pt` to `{10,20}` makes it 30, so a
+/// clean continue (the `assert(==30)` holds) proves the resumed program read the edit.
+#[test]
+fn repl_interactive_edit_whole_struct() {
+    let mut s = session();
+    for d in [
+        "struct Point { x: integer, y: integer }",
+        "fn use_pt(pt: Point) -> integer {\n  pt.x + pt.y\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("use_pt");
+    assert!(matches!(
+        s.eval("assert(use_pt(Point { x: 1, y: 2 }) == 30, \"edited\")"),
+        Eval::Paused
+    ));
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("1"), "pre-edit pt.x");
+    // The whole-struct edit: build a fresh Point and point the frame local at it.
+    assert!(
+        s.debug_set("pt", "Point { x: 10, y: 20 }"),
+        "whole-struct edit"
+    );
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("10"), "edited pt.x");
+    assert_eq!(s.debug_eval("pt.y").as_deref(), Some("20"), "edited pt.y");
+    // Continue → the assert(==30) holds only with the edit, so a clean finish proves
+    // the resumed program used the materialised value.
+    assert!(
+        !s.debug_continue(),
+        "finishes — assert(==30) holds with the edit"
+    );
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 M1a (interactive) — the heap-edit **matrix**: nested (inlined) struct, a
+/// vector local, and a struct with a text field.  Each shape is built fresh at the
+/// pause and read back via `debug_eval`; a second untouched heap local in the same
+/// frame is asserted intact, proving the graft leaves the suspended frame's other
+/// values alone (store-level adoption above the high-water, not a frame rewrite).
+#[test]
+fn repl_interactive_edit_whole_value_matrix() {
+    let mut s = session();
+    for d in [
+        "struct Point { x: integer, y: integer }",
+        "struct Line { a: Point, b: Point }",
+        "struct Tagged { name: text, n: integer }",
+        // Two heap locals: `lead` is edited, `keep` must stay intact across the edit.
+        "fn shapes(ln: Line, keep: Point) -> integer {\n  ln.a.x + keep.x\n}",
+        "fn vecfn(v: vector<integer>, keep: Point) -> integer {\n  v[0] + keep.x\n}",
+        "fn textfn(t: Tagged, keep: Point) -> integer {\n  t.n + keep.x\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+
+    // --- nested (inlined) struct ---
+    s.add_breakpoint("shapes");
+    assert!(matches!(
+        s.eval("shapes(Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }, Point { x: 7, y: 8 })"),
+        Eval::Paused
+    ));
+    assert!(
+        s.debug_set(
+            "ln",
+            "Line { a: Point { x: 100, y: 2 }, b: Point { x: 3, y: 4 } }"
+        ),
+        "nested struct edit"
+    );
+    assert_eq!(
+        s.debug_eval("ln.a.x").as_deref(),
+        Some("100"),
+        "nested field"
+    );
+    assert_eq!(
+        s.debug_eval("keep.x").as_deref(),
+        Some("7"),
+        "other local intact"
+    );
+    assert!(!s.debug_continue());
+    s.clear_breakpoints();
+
+    // --- vector ---
+    s.add_breakpoint("vecfn");
+    assert!(matches!(
+        s.eval("vecfn([10, 20, 30], Point { x: 7, y: 8 })"),
+        Eval::Paused
+    ));
+    assert!(s.debug_set("v", "[40, 50, 60]"), "vector edit");
+    assert_eq!(
+        s.debug_eval("v[0]").as_deref(),
+        Some("40"),
+        "edited element"
+    );
+    assert_eq!(
+        s.debug_eval("v[2]").as_deref(),
+        Some("60"),
+        "edited element"
+    );
+    assert_eq!(
+        s.debug_eval("keep.x").as_deref(),
+        Some("7"),
+        "other local intact"
+    );
+    assert!(!s.debug_continue());
+    s.clear_breakpoints();
+
+    // --- struct with a text field ---
+    s.add_breakpoint("textfn");
+    assert!(matches!(
+        s.eval("textfn(Tagged { name: \"a\", n: 5 }, Point { x: 7, y: 8 })"),
+        Eval::Paused
+    ));
+    assert!(
+        s.debug_set("t", "Tagged { name: \"hello\", n: 9 }"),
+        "struct-with-text edit"
+    );
+    assert_eq!(
+        s.debug_eval("t.n").as_deref(),
+        Some("9"),
+        "edited scalar field"
+    );
+    assert_eq!(
+        s.debug_eval("t.name").as_deref(),
+        Some("\"hello\""),
+        "edited text field"
+    );
+    assert_eq!(
+        s.debug_eval("keep.x").as_deref(),
+        Some("7"),
+        "other local intact"
+    );
+    assert!(!s.debug_continue());
+}
+
+/// @PLN16 M1a (interactive) — a whole-value heap edit whose constructor **references
+/// frame locals** (`Point{x: pt.y, y: pt.x}` swaps the live fields), and clean
+/// **rejection** of a malformed / type-mismatched heap edit (no corruption; the
+/// session stays paused and usable).  The frame-reference path proves `debug_eval`
+/// resolves the RHS against the frame to a self-contained literal before the build.
+#[test]
+fn repl_interactive_edit_whole_struct_frame_ref_and_reject() {
+    let mut s = session();
+    for d in [
+        "struct Point { x: integer, y: integer }",
+        "fn use_pt(pt: Point) -> integer {\n  pt.x * 10 + pt.y\n}",
+    ] {
+        assert!(matches!(s.eval(d), Eval::Ran), "def {d:?}");
+    }
+    s.debug_stepping(true);
+    s.add_breakpoint("use_pt");
+    // use_pt(Point{3,4}) = 34; swapping to Point{4,3} gives 43.
+    assert!(matches!(
+        s.eval("assert(use_pt(Point { x: 3, y: 4 }) == 43, \"swapped\")"),
+        Eval::Paused
+    ));
+    // Constructor references the live frame fields (resolved by debug_eval).
+    assert!(
+        s.debug_set("pt", "Point { x: pt.y, y: pt.x }"),
+        "frame-referencing whole-struct edit"
+    );
+    assert_eq!(s.debug_eval("pt.x").as_deref(), Some("4"), "swapped x");
+    assert_eq!(s.debug_eval("pt.y").as_deref(), Some("3"), "swapped y");
+    // An unknown reference (rejected when `debug_eval` can't resolve the RHS) and a
+    // type-mismatched RHS (rejected when the typed build won't compile) are both clean
+    // — no write, the value stays the swapped one, the session stays paused.  (A
+    // partial constructor like `Point{x:1}` is *valid* loft — y defaults — so it is
+    // not a rejection case.)
+    assert!(!s.debug_set("pt", "no_such_local"), "unknown ref rejected");
+    assert!(!s.debug_set("pt", "42"), "scalar-for-struct rejected");
+    assert_eq!(
+        s.debug_eval("pt.x").as_deref(),
+        Some("4"),
+        "unchanged after reject"
+    );
+    assert!(s.is_debugging(), "still paused after rejects");
+    assert!(
+        !s.debug_continue(),
+        "finishes — assert(==43) holds with the swap"
+    );
+    assert!(!s.is_debugging());
+}
+
+/// @PLN16 G1 (interactive) — edit-and-continue across **scalar types**, not just
 /// integers: a live `integer` / `float` / `boolean` local is each edited at the
 /// pause (one by literal, one by an expression evaluated against the frame), the
 /// reads reflect the edits, and a **text** argument is editable too (its `Str` slot
@@ -529,7 +715,7 @@ fn value_of_renders_text_expressions() {
     assert_eq!(s.value_of("msg").as_deref(), Some("\"hi\""));
     assert_eq!(s.value_of("msg + \"!\"").as_deref(), Some("\"hi!\""));
     assert_eq!(s.value_of("msg.to_uppercase()").as_deref(), Some("\"HI\""));
-    // eval-at-frame on a text argument (the @PLN15 debugger surface)
+    // eval-at-frame on a text argument (the @PLN16 debugger surface)
     assert!(matches!(
         s.eval("fn g(m: text) -> integer {\n  if m == \"x\" { 1 } else { 0 }\n}"),
         Eval::Ran
@@ -542,7 +728,7 @@ fn value_of_renders_text_expressions() {
     assert!(!s.debug_continue());
 }
 
-/// @PLN15.J — a **struct field** edited at the `(dbg)` prompt (`pt.x = 5`) routes
+/// @PLN16.J — a **struct field** edited at the `(dbg)` prompt (`pt.x = 5`) routes
 /// through `debug_set` to the in-place field write, and the refreshed frame reflects
 /// it.  `debug_set` evaluates the RHS against the frame first, so an expression RHS
 /// (`pt.x = pt.y + 1`) works too.
@@ -574,7 +760,7 @@ fn repl_interactive_edit_struct_field() {
     assert!(!s.debug_continue());
 }
 
-/// @PLN15.J (M1b) — a **nested** struct path edited at the `(dbg)` prompt
+/// @PLN16.J (M1b) — a **nested** struct path edited at the `(dbg)` prompt
 /// (`o.inner.a = 9`) routes through `debug_set` → `set_frame_path` and the refreshed
 /// frame reflects it.
 #[test]

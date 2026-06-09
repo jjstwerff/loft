@@ -67,7 +67,7 @@ pub fn run_repl<R: BufRead, W: Write>(
     chrome: &mut W,
 ) -> std::io::Result<()> {
     let mut session = ReplSession::new(stdlib_dir)?;
-    // @PLN15 G1 — the REPL is the interactive debugger surface: a breakpoint hit
+    // @PLN16 G1 — the REPL is the interactive debugger surface: a breakpoint hit
     // suspends into the paused sub-mode (inspect / edit / step), rather than the
     // record-and-continue mode programmatic callers use.
     session.debug_stepping(true);
@@ -112,7 +112,7 @@ fn run_loop<R: BufRead, W: Write>(
 }
 
 /// The continuation-aware prompt: the `(dbg)` prompt while suspended at a
-/// breakpoint (@PLN15 G1), the dotted prompt while a multi-line statement is still
+/// breakpoint (@PLN16 G1), the dotted prompt while a multi-line statement is still
 /// open, the primary prompt otherwise.
 fn prompt(pending: &str, debugging: bool) -> &'static str {
     if !pending.is_empty() {
@@ -432,7 +432,7 @@ fn process_line<W: Write>(
     session_path: Option<&Path>,
     chrome: &mut W,
 ) -> std::io::Result<bool> {
-    // @PLN15 G1 — while suspended at a breakpoint, inputs drive the paused
+    // @PLN16 G1 — while suspended at a breakpoint, inputs drive the paused
     // sub-mode (step verbs / value edits / frame eval), not a fresh evaluation.
     // A debug op runs user code (a resumed program, a frame expression); catch a
     // runtime panic so it abandons the debug session rather than killing the REPL,
@@ -557,7 +557,7 @@ fn process_line<W: Write>(
     Ok(false)
 }
 
-/// @PLN15 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
+/// @PLN16 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
 /// resume execution (`:step`/`:s` into, `:next`/`:n` over, `:finish`/`:o` out,
 /// `:continue`/`:c` to the next breakpoint or the end); `name = <int>` edits the
 /// live frame; any other expression is **evaluated against the frame** (`n * 2`,
@@ -777,7 +777,7 @@ pub enum Eval {
     NeedMore,
     /// Parse error; the session is left exactly as it was before the call.
     Error(Vec<DiagEntry>),
-    /// @PLN15 G1 — the run hit a breakpoint and **suspended** (interactive
+    /// @PLN16 G1 — the run hit a breakpoint and **suspended** (interactive
     /// stepping is on).  The session now holds the live frame: inspect it with
     /// [`ReplSession::paused_frame`], edit a value with
     /// [`ReplSession::debug_set`], and resume with [`ReplSession::debug_step`] /
@@ -811,19 +811,19 @@ pub struct ReplSession {
     /// True only while [`resume_from`](Self::resume_from) is feeding saved
     /// inputs back in — suppresses re-recording them to the file.
     replaying: bool,
-    /// @PLN15 G1 — breakpoint specs (`:break` command), **function-scoped**:
+    /// @PLN16 G1 — breakpoint specs (`:break` command), **function-scoped**:
     /// `"foo"` (body start) or `"foo:3"` (line 3 of `foo`).  Re-applied to the
     /// fresh `State` of every observing run.
     breakpoints: Vec<String>,
     /// Frames captured at breakpoints during the most recent observing run
     /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
-    /// @PLN15 G1 — **interactive stepping**: when on, an observing run that
+    /// @PLN16 G1 — **interactive stepping**: when on, an observing run that
     /// reaches a breakpoint *suspends* into the paused sub-mode (held in `paused`)
     /// instead of recording all hits and continuing.  The interactive driver turns
     /// it on; programmatic/piped callers that want the full hit list leave it off.
     stepping: bool,
-    /// @PLN15 G1 — a run suspended at a breakpoint, held across REPL inputs so the
+    /// @PLN16 G1 — a run suspended at a breakpoint, held across REPL inputs so the
     /// user can inspect the frame, edit a value, and step.  `None` unless paused.
     /// Boxed because `State` is large and the paused case is rare.
     paused: Option<Box<State>>,
@@ -852,7 +852,7 @@ impl ReplSession {
     }
 
     /// Build a session over an existing `parser` already loaded with a program's
-    /// definitions — used by the @PLN15 debugger to evaluate at a paused frame with
+    /// definitions — used by the @PLN16 debugger to evaluate at a paused frame with
     /// the program's types + functions in scope.  The accumulated body starts
     /// empty; persistence is off.
     #[must_use]
@@ -870,7 +870,7 @@ impl ReplSession {
         }
     }
 
-    /// Seed this session with a paused frame's variables (a @PLN15
+    /// Seed this session with a paused frame's variables (a @PLN16
     /// [`BreakHit`](crate::debugger::BreakHit)): each captured
     /// `(name, own-format literal)` becomes a binding `name = <literal>`, so
     /// expressions evaluated afterwards run against the frame's live values — the
@@ -889,7 +889,7 @@ impl ReplSession {
         bound
     }
 
-    /// Evaluate a boolean `condition` against a captured frame — the @PLN15 E
+    /// Evaluate a boolean `condition` against a captured frame — the @PLN16 E
     /// **conditional / test breakpoint** primitive.  Seeds the frame (D1) then
     /// `assert`s the condition: returns `true` iff it holds, so a caller keeps only
     /// the hits where it does ("break when `i > 3`") or where an invariant is
@@ -910,7 +910,7 @@ impl ReplSession {
     /// The current value of `expr` in this session, rendered as an own-format loft
     /// literal (`"99"`, `"Point{x:3,y:4}"`) — or `None` if it doesn't evaluate.
     /// Reuses the value-snapshot capture, so it covers every type the REPL renders.
-    /// The @PLN15 debugger uses it to read a value the user edited at a breakpoint
+    /// The @PLN16 debugger uses it to read a value the user edited at a breakpoint
     /// (`n = 99`) before writing it back into the live frame.
     pub fn value_of(&mut self, expr: &str) -> Option<String> {
         match self.capture_binding(expr) {
@@ -949,7 +949,7 @@ impl ReplSession {
         &self.last_hits
     }
 
-    /// @PLN15 G1 — turn **interactive stepping** on or off.  When on, an observing
+    /// @PLN16 G1 — turn **interactive stepping** on or off.  When on, an observing
     /// run that reaches a breakpoint *suspends* into the paused sub-mode (rather
     /// than recording every hit and continuing): inspect with
     /// [`paused_frame`](Self::paused_frame), edit with [`debug_set`](Self::debug_set),
@@ -982,17 +982,23 @@ impl ReplSession {
     /// `rhs` doesn't evaluate, `name` isn't a local, the value's type doesn't match
     /// the local, or the local is text / heap (those need the store-resident
     /// write-back, not yet built).  The edit is picked up when the run resumes — the
-    /// @PLN15 F edit-and-continue, driven from the REPL.
+    /// @PLN16 F edit-and-continue, driven from the REPL.
     pub fn debug_set(&mut self, name: &str, rhs: &str) -> bool {
         let Some(lit) = self.debug_eval(rhs) else {
             return false;
         };
-        let Some(state) = self.paused.as_deref_mut() else {
+        if self.paused.is_none() {
             return false;
-        };
+        }
         // A `[index]` LHS is a vector element edit (`v[1]`); a dotted LHS is a
         // struct-field path edit (`pt.x`, `pt.inner.x` — nested structs are inlined, so
-        // the path resolves by summed offsets); a bare name is a whole-local edit.
+        // the path resolves by summed offsets); a bare name is a whole-local edit
+        // (inline in place, or — for a heap value — a freshly-built value grafted into
+        // the live stores).  Each branch takes its own short borrow of the paused
+        // state so the heap path can re-enter `self` to build the value.
+        // `paused` is `Some` (guarded above), so each branch's `let Some` binds — the
+        // `else` is only there to keep the borrow short (a fresh borrow per branch so
+        // the heap path can re-enter `self` to build the value).
         let ok = if let Some(open) = name.find('[') {
             // `v[i]` — bare-local vector element only for now; a dotted base
             // (`s.items[0]`) is the nested-path-plus-index case, not yet handled.
@@ -1000,6 +1006,9 @@ impl ReplSession {
             let idx = name[open + 1..]
                 .strip_suffix(']')
                 .and_then(|s| s.trim().parse::<i64>().ok());
+            let Some(state) = self.paused.as_deref_mut() else {
+                return false;
+            };
             match idx {
                 Some(i) if !base.contains('.') => {
                     state.set_frame_element(base, i, &lit, &self.parser.data)
@@ -1010,14 +1019,95 @@ impl ReplSession {
             let mut segs = name.split('.').map(str::trim);
             let base = segs.next().unwrap_or("");
             let path: Vec<&str> = segs.collect();
+            let Some(state) = self.paused.as_deref_mut() else {
+                return false;
+            };
             state.set_frame_path(base, &path, &lit, &self.parser.data)
         } else {
-            state.set_frame_literal(name, &lit, &self.parser.data)
+            // Inline scalar / text / simple-enum edits in place; a heap local
+            // (struct / vector / struct-enum) needs the value **materialised** in the
+            // live store and the slot repointed at it (@PLN16 M1a).
+            let inplace = match self.paused.as_deref_mut() {
+                Some(state) => state.set_frame_literal(name, &lit, &self.parser.data),
+                None => return false,
+            };
+            if inplace {
+                true
+            } else if let Some(ty) = self.frame_heap_type(name) {
+                match self.materialize_heap_value(&ty, &lit) {
+                    Some(root) => match self.paused.as_deref_mut() {
+                        Some(state) => state.set_frame_dbref(name, root, &self.parser.data),
+                        None => false,
+                    },
+                    None => false,
+                }
+            } else {
+                false
+            }
         };
-        if ok {
+        if ok && let Some(state) = self.paused.as_deref_mut() {
             state.refresh_paused_frame(&self.parser.data);
         }
         ok
+    }
+
+    /// @PLN16 M1a — the loft-source type name of a **heap** frame local at the current
+    /// pause (struct / vector / struct-enum / collection — a `DbRef` slot), or `None`
+    /// when not paused or the local is inline / unknown.  Routes the whole-value edit.
+    fn frame_heap_type(&self, name: &str) -> Option<String> {
+        self.paused
+            .as_deref()?
+            .frame_heap_type(name, &self.parser.data)
+    }
+
+    /// @PLN16 M1a — build the self-contained own-format heap literal `lit` (loft type
+    /// `ty`) into the live paused stores and return its root `DbRef`.  The constructor
+    /// runs on a **throwaway build `State`** whose store high-water is raised above the
+    /// live stores' ([`Stores::raise_floor`](crate::database::Stores::raise_floor)), so
+    /// every value-store it claims sits on a slot FREE in the live store; those stores
+    /// are then grafted into the paused State with **no `DbRef` remap** (slots
+    /// coincide — [`Stores::adopt_value_stores`](crate::database::Stores::adopt_value_stores)).
+    /// The suspended frame is never touched (a separate State, a separate stack).
+    /// `None` when not paused, the wrapper doesn't compile, or the constructor faults.
+    fn materialize_heap_value(&mut self, ty: &str, lit: &str) -> Option<crate::keys::DbRef> {
+        let live_top = self.paused.as_deref()?.database.high_water();
+        let next = self.counter + 1;
+        let name = format!("replmain_{next}");
+        let src = format!("fn {name}() -> {ty} {{\n{lit}\n}}\n");
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        if failed {
+            self.parser.data.rollback_to(pre_defs);
+            return None;
+        }
+        self.counter = next;
+        crate::scopes::check(&mut self.parser.data);
+        let mut build = State::new(self.parser.database.clone());
+        compile::byte_code(&mut build, &mut self.parser.data);
+        // Force the value above BOTH stores' high-water → its slots are free in live.
+        let floor = live_top.max(build.database.high_water());
+        build.database.raise_floor(floor);
+        build.execute_argv(&name, &self.parser.data, &[]);
+        let root = if build.database.runtime_error.take().is_some() {
+            None
+        } else {
+            // The root `DbRef` is the function's return on the build stack top; its
+            // store_nr is in `[floor, build.max)`, valid in live after the graft.
+            let db = *build.get_stack::<crate::keys::DbRef>();
+            match self.paused.as_deref_mut() {
+                Some(live) => {
+                    live.database.adopt_value_stores(&mut build.database, floor);
+                    Some(db)
+                }
+                None => None,
+            }
+        };
+        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        root
     }
 
     /// Resume the suspended run, stopping per `mode` (the step verbs —
@@ -1304,7 +1394,7 @@ impl ReplSession {
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
-            // @PLN15 G1 — apply the session's breakpoints to this run.  In stepping
+            // @PLN16 G1 — apply the session's breakpoints to this run.  In stepping
             // mode a hit *suspends* execution; otherwise it records-and-continues.
             // Only on a real observing run (`debug`), not the value-render re-runs
             // (`:vars`, snapshot validation).
