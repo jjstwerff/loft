@@ -409,17 +409,23 @@ lavition direction (each is "see/transfer what changed in the store"):
    model.  Covers field / element edits (`pt.x = 9`, `v[i] = 5`) by construction — a
    single `Modify`, no materialisation, the cheapest heap edit.  The hot `addr_mut` path
    is untouched.
-2. **`claim_at` keystone — DONE** (`src/store.rs`; probe #6 confirms it).  The
-   exact-position 3-way-split carve (§ The model).  **Next in this slice:** the
-   `Insert`/`Free` entry path on `Journal` — `Insert` (apply = `claim_at` + write
-   `after`; revert = `free`) and `Free` (apply = `free`; revert = `claim_at` + write
-   `before`, snapshot taken pre-`delete`).  The keystone makes both position-exact.
-3. **Debugger heap edits — wire it in.**  `recording: Option<Journal>` on `Stores` (one
-   branch on the *cold* `claim`/`delete`/`resize` paths); the explicit pointer-flip
-   marks at the resize-caller sites (`vector_append` / `insert_vector` / `sorted_new` /
-   `structures.rs`); capture during `debug_set`; **replay into the live store** to
-   finish whole-value + relocating-grow heap edits; revert for undo.  Probes 1, 3, 4
-   graduate to the debugger regression suite.
+2. **`claim_at` keystone + the `Insert`/`Free` entry path — DONE** (`src/store.rs`,
+   `src/database/journal.rs`).  The exact-position 3-way-split carve (§ The model), plus
+   `Journal::record_insert` (apply = `claim_at` + write `after`; revert = `free`) and
+   `record_free` (apply = `free`; revert = `claim_at` + write `before`, snapshot taken
+   pre-`delete`).  `apply`/`revert` dispatch on the op.  Tested by
+   `insert_and_free_round_trip` and `relocation_insert_modify_free_round_trips` (the
+   full `{ Insert + Modify + Free }` relocation shape, both directions).
+3. **Debugger heap edits — wire it in (in progress).**  Remaining: `recording` on the
+   stores (a per-`Store` change buffer that `Stores` drains into the unified `Journal` —
+   `Store` methods don't know their own `store_nr`, so a back-reference is out; one
+   branch on the *cold* `claim`/`delete`/`resize` paths when off); the explicit
+   pointer-flip marks at the resize-caller sites (`vector_append` / `insert_vector` /
+   `sorted_new` / `structures.rs`); build the edit value in a *live-cloned* store with
+   recording on so its `Insert` positions are free in the live store (probe #2 / the
+   `claim_at` no-remap property); **replay into the live store** + write the frame slot
+   to finish the heap edit rejected at `set_frame_literal` (`state/mod.rs`); revert for
+   undo.  Probes 1, 3, 4 graduate to the debugger regression suite.
 4. **Whole-execution journal** — funnel the stack-frame raw writes, journal all of
    execution → time-travel + incremental serialisation.  The same model, unbounded;
    the snapshot-to-blob freed-record handling (§ Open design points) is what lets it

@@ -34,9 +34,15 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-/// `Modify` op tag — an in-place region change.  `Insert`/`Free` (whole-value
-/// replay) get `1`/`2` when that slice lands.
+/// `Modify` op tag — an in-place region change (payload: `before` then `after`).
 const OP_MODIFY: u8 = 0;
+/// `Insert` op tag — a whole record claimed at a recorded position (payload: `after`,
+/// the new record's bytes).  apply = `claim_at` + write; revert = `delete`.
+const OP_INSERT: u8 = 1;
+/// `Free` op tag — a whole record freed (payload: `before`, snapshotted *before* the
+/// `delete` repurposes the block — probe 5a).  apply = `delete`; revert = `claim_at` +
+/// write.
+const OP_FREE: u8 = 2;
 
 /// Bytes per index entry — fixed stride so the array is random-access and the store
 /// holds it as one flat vector.
@@ -251,32 +257,117 @@ impl Journal {
         Ok(())
     }
 
-    /// Replay every change **forward** (redo / cross-store apply): write each
-    /// region's `after` bytes, in record order.
+    /// Record a whole-record **insert**: a record just claimed at `rec` (`size_words`
+    /// words) and filled.  Its `after` bytes — the new record's final content for
+    /// forward materialisation — are read from the store now.  apply re-claims the
+    /// exact position via `claim_at` and writes them; revert frees the record.  This is
+    /// the cross-store transfer half: replaying an edit's inserts into the live store.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the blob append fails.
+    pub fn record_insert(
+        &mut self,
+        stores: &Stores,
+        store_nr: u16,
+        rec: u32,
+        size_words: u32,
+    ) -> io::Result<()> {
+        let len = size_words * 8;
+        let after = stores.allocations[store_nr as usize].read_span(rec, 0, len);
+        let blob_at = self.blob.append(&after)?; // FIRST — payload durable before the entry
+        self.push(Entry {
+            op: OP_INSERT,
+            store_nr,
+            rec,
+            off: 0,
+            len,
+            blob_at,
+        });
+        Ok(())
+    }
+
+    /// Record a whole-record **free**: `before` is the record's bytes snapshotted
+    /// *before* `delete` runs (a freed block's body is repurposed instantly — probe
+    /// 5a, so the snapshot must precede the delete).  apply frees the record; revert
+    /// re-claims it at the same position via `claim_at` and restores `before`.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the blob append fails.
+    pub fn record_free(&mut self, store_nr: u16, rec: u32, before: &[u8]) -> io::Result<()> {
+        let len = before.len() as u32;
+        let blob_at = self.blob.append(before)?;
+        self.push(Entry {
+            op: OP_FREE,
+            store_nr,
+            rec,
+            off: 0,
+            len,
+            blob_at,
+        });
+        Ok(())
+    }
+
+    /// Replay every change **forward** (redo / cross-store apply), in record order:
+    /// `Modify` writes its `after`; `Insert` re-claims the exact position (`claim_at`)
+    /// and writes the new bytes; `Free` deletes the record.
     ///
     /// # Errors
     /// Returns the I/O error if a blob read fails.
+    ///
+    /// # Panics
+    /// Panics on an unknown op tag in the index — a corrupt or forward-incompatible
+    /// journal (our own writes only ever use `Modify`/`Insert`/`Free`).
     pub fn apply(&mut self, stores: &mut Stores) -> io::Result<()> {
         for i in 0..self.count {
             let e = self.entry(i);
-            let after = self
-                .blob
-                .read(e.blob_at + u64::from(e.len), e.len as usize)?;
-            stores.allocations[e.store_nr as usize].write_span(e.rec, e.off, &after);
+            let store = &mut stores.allocations[e.store_nr as usize];
+            match e.op {
+                OP_MODIFY => {
+                    let after = self
+                        .blob
+                        .read(e.blob_at + u64::from(e.len), e.len as usize)?;
+                    store.write_span(e.rec, e.off, &after);
+                }
+                OP_INSERT => {
+                    let after = self.blob.read(e.blob_at, e.len as usize)?;
+                    store.claim_at(e.rec, e.len / 8);
+                    store.write_span(e.rec, 0, &after);
+                }
+                OP_FREE => store.delete(e.rec),
+                other => panic!("journal apply: unknown op {other}"),
+            }
         }
         Ok(())
     }
 
-    /// Replay every change **backward** (undo): write each region's `before` bytes,
-    /// in reverse order, so overlapping edits restore to the exact pre-edit bytes.
+    /// Replay every change **backward** (undo), in reverse order — each entry's inverse:
+    /// `Modify` writes its `before`; `Insert` deletes the record; `Free` re-claims the
+    /// exact position (`claim_at`) and restores the freed bytes.  Reverse order makes
+    /// overlapping edits restore to the exact pre-edit bytes.
     ///
     /// # Errors
     /// Returns the I/O error if a blob read fails.
+    ///
+    /// # Panics
+    /// Panics on an unknown op tag in the index — a corrupt or forward-incompatible
+    /// journal (our own writes only ever use `Modify`/`Insert`/`Free`).
     pub fn revert(&mut self, stores: &mut Stores) -> io::Result<()> {
         for i in (0..self.count).rev() {
             let e = self.entry(i);
-            let before = self.blob.read(e.blob_at, e.len as usize)?;
-            stores.allocations[e.store_nr as usize].write_span(e.rec, e.off, &before);
+            let store = &mut stores.allocations[e.store_nr as usize];
+            match e.op {
+                OP_MODIFY => {
+                    let before = self.blob.read(e.blob_at, e.len as usize)?;
+                    store.write_span(e.rec, e.off, &before);
+                }
+                OP_INSERT => store.delete(e.rec),
+                OP_FREE => {
+                    let before = self.blob.read(e.blob_at, e.len as usize)?;
+                    store.claim_at(e.rec, e.len / 8);
+                    store.write_span(e.rec, 0, &before);
+                }
+                other => panic!("journal revert: unknown op {other}"),
+            }
         }
         Ok(())
     }
@@ -963,5 +1054,113 @@ mod tests {
             }
             s.validate(0);
         }
+    }
+
+    fn rd(stores: &Stores, sn: u16, rec: u32, off: u32) -> u32 {
+        stores.allocations[sn as usize].get_u32_raw(rec, off)
+    }
+    fn hdr(stores: &Stores, sn: u16, rec: u32) -> i32 {
+        *stores.allocations[sn as usize].addr::<i32>(rec, 0)
+    }
+
+    /// @PLN15.J — `record_insert` / `record_free` round-trip on the `Journal` itself.
+    /// `Insert`: apply re-claims the exact position via `claim_at` + restores bytes,
+    /// revert frees it.  `Free`: apply frees, revert re-claims + restores the pre-delete
+    /// bytes.  A neighbouring "keeper" record must stay untouched throughout.
+    #[test]
+    fn insert_and_free_round_trip() {
+        let (mut stores, sn, keeper) = store_with_record(2);
+        stores.allocations[sn as usize].set_u32_raw(keeper, 8, 0xC0FF_EE01);
+        let n = stores.allocations[sn as usize].claim(3);
+        stores.allocations[sn as usize].set_u32_raw(n, 8, 0x1111_2222);
+        stores.allocations[sn as usize].set_u32_raw(n, 16, 0x3333_4444);
+
+        // --- Insert(n) ---
+        let mut j = Journal::create().unwrap();
+        j.record_insert(&stores, sn, n, 3).unwrap();
+        j.revert(&mut stores).unwrap();
+        assert!(hdr(&stores, sn, n) < 0, "Insert reverted -> record freed");
+        assert_eq!(rd(&stores, sn, keeper, 8), 0xC0FF_EE01, "keeper untouched");
+        j.apply(&mut stores).unwrap();
+        assert_eq!(hdr(&stores, sn, n), 3, "re-claimed at the exact size");
+        assert_eq!(rd(&stores, sn, n, 8), 0x1111_2222, "byte 8 restored");
+        assert_eq!(rd(&stores, sn, n, 16), 0x3333_4444, "byte 16 restored");
+
+        // --- Free(n) ---
+        let before = stores.allocations[sn as usize].read_span(n, 0, 24);
+        let mut jf = Journal::create().unwrap();
+        jf.record_free(sn, n, &before).unwrap();
+        stores.allocations[sn as usize].delete(n);
+        assert!(hdr(&stores, sn, n) < 0, "Free -> record freed");
+        jf.revert(&mut stores).unwrap();
+        assert_eq!(
+            hdr(&stores, sn, n),
+            3,
+            "Free reverted -> re-claimed at size"
+        );
+        assert_eq!(
+            rd(&stores, sn, n, 8),
+            0x1111_2222,
+            "Free revert restores bytes"
+        );
+        assert_eq!(
+            rd(&stores, sn, keeper, 8),
+            0xC0FF_EE01,
+            "keeper still untouched"
+        );
+    }
+
+    /// @PLN15.J — the **relocating-grow journal**: `{ Insert(new) + Modify(owning cell:
+    /// old->new) + Free(old) }`.  This is the cross-store / heap-edit shape end to end.
+    /// Build a vector handle (owning cell -> old), grow it (claim new, flip the cell,
+    /// free old), journaling each op, then assert revert returns the pre-grow state and
+    /// apply returns the grown state — owning cell + record bytes both exact.
+    #[test]
+    fn relocation_insert_modify_free_round_trips() {
+        let (mut stores, sn, container) = store_with_record(2);
+
+        // pre-grow: owning cell (container, 8) -> old; old is a len-2 "vector".
+        let old = stores.allocations[sn as usize].claim(3);
+        stores.allocations[sn as usize].set_u32_raw(old, 4, 2); // length
+        stores.allocations[sn as usize].set_u32_raw(old, 8, 11);
+        stores.allocations[sn as usize].set_u32_raw(old, 12, 22);
+        stores.allocations[sn as usize].set_u32_raw(container, 8, old);
+
+        // grow: claim new (len 3), conserve + append, flip the cell, free old —
+        // journaling Insert(new) + Modify(cell) + Free(old) in that order.
+        let mut j = Journal::create().unwrap();
+        let new = stores.allocations[sn as usize].claim(5);
+        stores.allocations[sn as usize].set_u32_raw(new, 4, 3);
+        stores.allocations[sn as usize].set_u32_raw(new, 8, 11);
+        stores.allocations[sn as usize].set_u32_raw(new, 12, 22);
+        stores.allocations[sn as usize].set_u32_raw(new, 16, 33);
+        j.record_insert(&stores, sn, new, 5).unwrap();
+
+        let cell_before = stores.allocations[sn as usize].read_span(container, 8, 4);
+        stores.allocations[sn as usize].set_u32_raw(container, 8, new); // the pointer-flip
+        j.record_modify(&stores, sn, container, 8, &cell_before)
+            .unwrap();
+
+        let old_before = stores.allocations[sn as usize].read_span(old, 0, 24);
+        j.record_free(sn, old, &old_before).unwrap();
+        stores.allocations[sn as usize].delete(old);
+
+        // revert -> pre-grow: cell -> old, old restored, new freed.
+        j.revert(&mut stores).unwrap();
+        assert_eq!(
+            rd(&stores, sn, container, 8),
+            old,
+            "cell flipped back to old"
+        );
+        assert_eq!(rd(&stores, sn, old, 4), 2, "old length restored");
+        assert_eq!(rd(&stores, sn, old, 12), 22, "old element restored");
+        assert!(hdr(&stores, sn, new) < 0, "new record freed on revert");
+
+        // apply -> grown: cell -> new, new present, old freed.
+        j.apply(&mut stores).unwrap();
+        assert_eq!(rd(&stores, sn, container, 8), new, "cell flipped to new");
+        assert_eq!(rd(&stores, sn, new, 4), 3, "new length");
+        assert_eq!(rd(&stores, sn, new, 16), 33, "appended element");
+        assert!(hdr(&stores, sn, old) < 0, "old record freed on apply");
     }
 }
