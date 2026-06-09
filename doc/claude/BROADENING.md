@@ -13,7 +13,7 @@ instead of reactively.
 
 ## Loft's genuine differentiators
 
-Three capabilities that give loft a defensible identity outside games:
+Four capabilities that give loft a defensible identity outside games:
 
 1. **Store-based heap as a language-level database.**  Data-heavy
    apps (servers, CRUD tools, ETL) feel coherent in a way
@@ -24,9 +24,25 @@ Three capabilities that give loft a defensible identity outside games:
    artifact.  Frictionless deployment of demos, tools, toys.
 3. **`par` / `par_light` + store isolation** (THREADING.md).
    Approachable parallelism without shared-mutable footguns.
+4. **It inherits the Rust ecosystem by construction.**  loft is *built on*
+   Rust, so it does not re-implement numpy / requests / regex — it **binds the
+   crate** (`ndarray`, `reqwest`, `regex`, `polars`, …) and gets all of crates.io.
+   The reflexive "Python has an ecosystem, loft has nothing" is simply wrong: it
+   pattern-matches *new language → no libraries* and ignores the substrate.  And
+   the comparison is sharper than it looks — Python's "rich ecosystem" is itself
+   mostly a **binding** story (numpy/scipy are C/Fortran, torch is C++, polars /
+   pydantic-core / cryptography are *Rust*); CPython's C-API is the glue.  loft
+   plays the same move on the more modern host — and because loft *is* Rust, a
+   binding is **in-language** (loft value ↔ Rust value), not across a C ABI as
+   Python↔C is, so it is lower-friction.  The honest gap is binding **ergonomics,
+   not library existence**, and it closes the dogfood way: **one well-grounded
+   crate per real need**, each binding sharpening the mechanism — not a speculative
+   auto-binder built up front.  Mechanism: PACKAGES.md + § Native-library execution
+   model below.
 
 Everything below flows from these.  Broadening loft is mostly about
-ecosystem work around them, not language rework.
+ecosystem work around them (chiefly #4 — binding the crates, incrementally on
+need), not language rework.
 
 ---
 
@@ -37,9 +53,9 @@ ecosystem work around them, not language rework.
 | **CLI scripting / tooling** | Strong — readable syntax, static types, good error locality | Fast startup (CS.C1/C2/C3 const store + stdlib `.loftc`); stdlib for regex, shell, env, path, glob; single-binary installer |
 | **Server-side web** | Very strong — store maps naturally to request/session/DB model; JSON landed | `server` library (lib_plans/future/08-server/README.md), async / non-blocking I/O, route helpers, migrations story |
 | **Embedded-DB DSL** | Unique — nothing else has store + language co-designed | Mostly packaging and "SQLite + scripting as one thing" narrative; the tech exists |
-| **Data / ETL** | Good — iterators, parallel-for, DbRef, JSON | CSV/Parquet, decimal/BigInt, date/time, streaming file ops |
+| **Data / ETL** | Good — iterators, parallel-for, DbRef, JSON | CSV/Parquet, decimal/BigInt, date/time, streaming — all **bindable Rust crates** (`csv`, `arrow`, `rust_decimal`, `chrono`), not missing libraries |
 | **Educational language** | Good — Python-like surface, strong types, good diagnostics | Playground (Web IDE planned), tutorial content |
-| **Scientific / analytics** | Weak — uphill vs Python ecosystem | DataFrame, BLAS, plotting; pursue only if a killer differentiator emerges |
+| **Scientific / analytics** | Bindable — Rust's numerical stack (`ndarray`, `nalgebra`, `polars`, `plotters`) wraps directly; **not** an ecosystem gap | binding ergonomics + the interactive / notebook / viz + community layer (that, not library *existence*, is Python's real moat here); pursue head-on only if a killer differentiator emerges |
 | **Embedded MCU** | Not realistic near-term | Out of scope; C54.F keeps 32-bit SBCs viable as a floor, not a target |
 
 Games remain a flagship demo (onboarding, Web IDE, visual appeal) but
