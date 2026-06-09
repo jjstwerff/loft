@@ -94,10 +94,19 @@ real `.loft` file and drops into the same interactive `(dbg)` prompt — the A�
 is no longer REPL-only. **Watchpoints landed (2026-06-09, M3):** `:watch pt.x` /
 `:watch v[i]` — a resumed run pauses (reporting old → new) when a later write changes
 the watched scalar heap region; the per-op poll lives in the resume loop, only active
-while debugging. **Next**: the **agent / scripted surface** (M5d) and its load-bearing
-enabler **rich breakpoints** — conditional breaks (E in-loop) + tracepoints — the
-cheap, high-leverage slice that makes the debugger usable *non-interactively* (and
-catches "fails on one call in 10 000"); then the **G2** browser/DAP surface.
+while debugging. **Rich breakpoints landed (2026-06-09, M5d phase 1):** conditional
+breakpoints (`:break f if c.n < 0` — break only when a predicate over the frame holds,
+reusing E in a driver-side resolve loop) + **tracepoints** (`:trace f x, y` — log the
+expressions on each hit and continue, no pause). Both catch "fails on one call in
+10 000". The unified `BreakSpec` (location + condition + actions + stop) is the unit the
+wire protocol's `setBreakpoints` carries. **`--rpc` debug server landed (2026-06-09, M5d
+phase 2):** `loft debug --rpc` — the NDJSON stdio driver over the engine (`src/rpc.rs`),
+a thin serialiser over `ReplSession` speaking the [wire protocol](PROTOCOL.md); requests
+parse via loft's inbuilt JSON, `eval` values serialise via `.to_json()`, program output
+streams as `output` events. The *agent* surface is real (`tests/rpc.rs` drives a full
+session over a pipe). **Next**: the **`--serve` WebSocket + browser** (M5b/M5e) — the
+editor + run/test buttons + suite runner + debugger + compiler/program console IDE,
+reusing the viewer shell over the same protocol.
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
@@ -252,6 +261,7 @@ The host-agnostic engine is A–F; the surfaces are G.
 | **C** — suspend hook: the bytecode loop pauses at a breakpoint offset and exposes the live frame (reuse the coroutine frame-snapshot machinery) | **First cut** — synchronous in-loop hook (record-and-continue); true suspend/resume for stepping is the enhancement |
 | **D0** — frame read: capture the paused frame's variables (name → rendered value) from its slot table | **DONE** — captures **arguments + non-arg locals**, every value type (scalars/text inline, heap struct/vector/struct-enum via `show_loft`, simple enums by discriminant), via `render_frame_local`. Locals are **liveness-gated** by reference-range (`first_ref <= pc <= last_ref`) derived from `self.vars` (the codegen `code_pos → var_nr` map) — *safe* (a var in its read-range is necessarily assigned, never garbage) and it picks the right owner of a reused slot; the only gap is a defined-but-not-yet-read local before its first read (under-shows, never wrong). See Open question 6 (resolved). |
 | **D1** — frame → REPL bridge: seed a `ReplSession` from D0's captured frame, so evaluating at a break runs against the live locals | **First cut (the headline, working)** — `ReplSession::seed_frame` binds each captured `(name, own-format literal)` as `name = <literal>`; `ReplSession::from_parser` builds the session over the program's parser so heap values' types are in scope. Eval-at-frame works end-to-end (`n + a == 21`, `pt.x * pt.y == 12`). **No @PLN14 dependency for read-eval** — the own-format literal *is* the bridge; exact value-for-value seeding + **frame mutation / write-back** (edit a local at the break, resume with it) is the @PLN14 upgrade. |
+| **D2** — *live-frame* eval (the D1 upgrade): evaluate against the paused frame's **live bindings**, not a reconstruction of it from rendered own-format literals | **Open — elevated priority (dogfood-driven).** D1 re-seeds a *new* session from each local's rendered literal and runs the expression on a **clone** of the paused state. That round-trips scalars / field-access perfectly (what every shipped test uses), but is fragile for a *bare heap value*: the synthetic capture fn that **returns** a `vector` / `struct` faults when its fn-return deep-copy targets a store the clone never allocated (`allocation.rs` OOB — itself a member of the store-lifetime family, [#248](https://github.com/loft-lang/loft/issues/248)). The `--rpc` server routes struct / enum eval through `.to_json()` to dodge it; a **bare `vector` still yields null**. The robust fix evaluates against the live frame's actual `DbRef`s in place — no reconstruct, no clone. **Why elevated:** the `story` / crawler roguelike — the debugger's real consumer — is *all* `vector<struct>`, exactly the shape this limit bites, and the debugger *shares the store engine* with the very bugs that consumer hunts, so live-frame eval is **trust-critical for it, not polish**. The frame **variables panel** (D0, live-frame render) is unaffected — inspection works today; only ad-hoc `eval <bare-heap-var>` waits on D2. |
 | **E** — conditional / test breakpoints: an expression/assertion evaluated in the frame env decides whether to break | **First cut** — `ReplSession::frame_holds(hit, condition)` seeds the frame (D1) and `assert`s the condition; a caller keeps only the hits where it holds (break when `n > 1`) or where an invariant is violated. Post-run filter on recorded hits; an in-loop *skip* (a non-matching breakpoint never even pauses) needs the condition pre-compiled against the frame — a refinement. |
 | **F** — stepping + resume verbs (step over / into / out, continue) driving the bytecode loop — exposed as the **host-agnostic debug API** that all surfaces call | **DONE (first cut) — incl. edit-and-continue (the hard part)**. `enable_stepping` makes a breakpoint *suspend* (the execute loop returns to the driver, mirroring `frame_yield`, with the frame in `paused_frame`). `debug_step(StepMode)` resumes with **into / over / out / continue** by tracking the **source line** + **call depth** per op (*into* = next line at any depth; *over* = run a deeper call to completion, stop at the next line in the same/shallower frame; *out* = run to the frame's return). `set_frame_value` writes an edited value into the **live** frame slot; `resume` / `debug_step` then **picks it up**. Proven: edit `n` at a break → `calc(5)` returns 990; step *into* `inner`, *over* the call (result live), *out* to the caller. Works because loft calls are *jumps* (all execution state is in `State` fields, so the loop is freely re-enterable). `ReplSession::value_of` extracts the edited value (also the result-as-String primitive REPL.T deferred). |
 | **G1** — terminal / CLI surface: drop into the **shipped REPL** at a paused frame (the near-free headless front-end) | **Interactive pause/step/edit landed** — the REPL `:break` command (**function-scoped**: `<fn>` body start via `State::set_breakpoint_fn_start`, or `<fn>:<line>`; `:break` lists / `clear` removes) and the **paused sub-mode**: when interactive stepping is on (the REPL driver enables it), the next call that reaches a breakpoint **suspends** — the live `State` is held on the session (`ReplSession::paused`), the prompt becomes `(dbg)`, and the frame is shown. At the pause: `:step`/`:next`/`:finish`/`:continue` (→ `debug_step`/`StepMode`), `name = <int>` edits the live frame (`debug_set` → `set_frame_value` + `refresh_paused_frame`), `:vars` re-shows it. On `:continue` to completion the observing statement prints its (edited) value. **The pause is a full REPL-at-frame:** any expression typed at `(dbg)` is evaluated against the live frame (`ReplSession::debug_eval` — swaps the session body to the frame's literal bindings and runs `value_of`, so it covers every type: `n * 3`, `pt.x * pt.y`, struct/vector reads), reusing the D1 bridge. New `Eval::Paused`; `ReplSession::debug_stepping/is_debugging/paused_frame/debug_set/debug_step/debug_continue/debug_eval/abort_debug`; `handle_paused` in `process_line` (wrapped in `catch_unwind` — a panic in the paused run abandons the debug session, never kills the REPL). Proven end-to-end through the binary (`tests/repl.rs::interactive_breakpoint_edit_continue` → `990`; `interactive_breakpoint_eval_expression`: `n * 3` → `15`) plus `tests/repl_session.rs` (`repl_interactive_break_edit_continue`, `repl_interactive_step_into_and_out`, `repl_interactive_eval_at_frame`). **Edit-and-continue covers every inline scalar** (`integer`/`float`/`single`/`boolean`/`character`) via `State::set_frame_literal` (type-directed parse + write, shared `frame_slot` lookup); `debug_set` evaluates the RHS against the frame first, so `n = n + 1` / `b = !b` work, and a type-mismatched edit is rejected. **Text + simple-enum live edits also land** (`set_frame_literal` `Type::Text` / `Type::Enum(_,false,_)` arms): a text **local** overwrites its owned `String` via `ptr::write` (no drop of the possibly-uninitialised prior slot — `reserve_frame` does not zero), a text **argument** repoints its 16-byte `Str` at a `Debugger::edited_text` buffer (stable for the run), and a simple enum writes its inline discriminant byte; gated on the local being shown at the pause. The same change fixed the text-**local** *read* (the renderer read every text slot as a `Str`, but a non-arg local is a 24-byte `String` — showed `""`), with a guarded read so an uninitialised local slot never crashes. **Scalar struct-field paths (`pt.x`) and scalar vector elements (`v[i]`) are now editable** (`set_frame_path` / `set_frame_element`, both in-place writes); a **whole-value** heap edit (`pt = Point{…}`, vectors, struct-enums, structs with text) now lands too, via **store-level adoption** (`materialize_heap_value` → `Stores::raise_floor` + `adopt_value_stores` + `State::set_frame_dbref`; see the Status note + M1a). Surfaced + fixed a latent round-trip bug: `render_frame_local` rendered a `float` `2.0` as bare `"2"` (re-typing as `integer` when the D1 seed re-binds it) — both it and `repl::float_literal` now share `state::loft_float_literal`. Covered by `tests/repl_session.rs::repl_interactive_edit_scalar_types` + `tests/repl.rs::interactive_breakpoint_edit_boolean`. **Record-and-continue stays** the off-stepping default (`last_hits`) for programmatic / conditional-breakpoint sweeps. **Why fn-scoped:** a bare or file:line number is *not* unique in the REPL — every input parses under the synthetic file `"<repl>"` with line numbers restarting at 1, so only the function is a unique anchor (a bare line is rejected with guidance). **`file:line` is unique only for file-based source** → it lands with the **file-run debugger** (a CLI entry point — break at `prog.loft:42`), a later slice. **Whole-value heap edit — LANDED (2026-06-09):** `pt = Point{…}` (and vectors, struct-enums, structs with text) replace a heap local at a pause via **store-level adoption** rather than the journal record-`Insert` replay the design first sketched — construction allocates a *whole new store per value* (`database_named`), which the per-store recording never captures and which `State::new` can't build over a clone-of-live, so the journal-apply path does not fit. The realised path: `debug_eval` → self-contained literal → `materialize_heap_value` builds it on a throwaway `State` with its store high-water raised above live's (`Stores::raise_floor`, value-stores land on live-free slots) → graft the whole value-stores at coinciding slots (`Stores::adopt_value_stores`, **no `DbRef` remap**) → repoint the frame slot (`State::set_frame_dbref`); the suspended frame is untouched. **File-run debugger landed (2026-06-09, M5a):** `loft debug <file>:<line>` (`run_file_debug` + `State::set_breakpoint_file_line`) debugs a real file with the same `(dbg)` prompt — G1 is complete. **`debug_eval` on a *text* frame value now works** — the pre-existing REPL value-snapshot crash ([#293](https://github.com/loft-lang/loft/issues/293), fixed) double-freed when capturing a text value that borrowed a local `String`; the snapshot now routes text through a store-resident `vector<text>` wrap (`ReplSession::capture_typed`), so text edits accept any expression RHS. |
@@ -270,7 +280,10 @@ The host-agnostic engine is A–F; the surfaces are G.
    inspectable REPL via `seed_frame` / `from_parser`, evaluating against the frame's
    own-format literals. The @PLN14 store-resident env is the *upgrade* (exact
    value-for-value seeding + frame mutation/write-back), not a prerequisite for
-   read-eval.
+   read-eval. **D2 (live-frame eval)** is its named, **elevated** open upgrade —
+   eval against the frame's live `DbRef`s instead of a reconstruct-from-literal clone
+   (which yields null on a bare `vector`); promoted by the `story`/crawler consumer,
+   whose `vector<struct>` data is exactly where the limit bites.
 4. **F (debug API)** — *done*: suspend (`enable_stepping`) → step into/over/out
    (`debug_step`) → edit (`set_frame_value`, fed by `value_of`) → resume picks up
    the change. **G1 (terminal surface)** wraps A–F as the headless API; the REPL is
@@ -453,12 +466,49 @@ M5d (the condition reuses **E**).
   ([14-viewer-lsp-bridge](../../lib_plans/future/14-viewer-lsp-bridge/README.md)'s
   local-sidecar pattern) for the shell.
 
-  *Phasing.* (1) **rich breakpoints** — condition (E in-loop) + action/tracepoint, wired
-  into the registry (A) + the suspend hook (C); **also lands at the `(dbg)` prompt**
-  (`:break … if …`, `:trace …`), so it is a shared engine capability, not agent-only.
-  (2) the **script parser + batch runner** over M5a's file-run. (3) the **structured
-  serializer** (`EVENT` + `--format json`) + the step/hit budget. Phase (1) is the
-  cheap, high-leverage slice (E already exists); (2)–(3) build the agent surface on it.
+  *Phasing.* (1) **rich breakpoints — LANDED (2026-06-09).** A unified `BreakSpec`
+  (location + condition + actions + stop); `:break <loc> [if <cond>]` (conditional) and
+  `:trace <loc> <exprs>` (tracepoint) at the prompt; a driver-side `ReplSession::
+  resolve_pause` loop that, after each hit, evaluates the condition against the frame
+  (reusing `debug_eval` = E) and auto-resumes if false, or for a tracepoint evaluates +
+  emits the actions and continues — so the engine pauses at the offset and the driver
+  (which has the parser) decides. `State::{set_breakpoint_* → Option<offset>,
+  paused_at_breakpoint}`; tests `repl_conditional_breakpoint_breaks_only_when_true`,
+  `repl_tracepoint_logs_and_continues`. It is a shared engine capability, not
+  agent-only. (2) **the `--rpc` server — LANDED (2026-06-09).** `src/rpc.rs` +
+  `loft debug --rpc`: the NDJSON stdio driver, a thin serialiser over `ReplSession`
+  (one message ⇄ one engine method). Requests parse through loft's inbuilt JSON
+  (`crate::json::parse`); `eval` values serialise through loft's inbuilt serializer
+  (struct/enum `.to_json()` → JSON object, scalars → raw JSON). Program `print` is
+  captured by a thread-local sink (`print_or_capture`, hooked in `fill.rs`) and streamed
+  as `output` events so it never corrupts the protocol on stdout. `tests/rpc.rs` drives
+  the whole set over a pipe (launch → setBreakpoints incl. `condition` → run → `stopped`
+  → eval → continue → `output` → `terminated`); proven end-to-end through the binary.
+  *Known limit (routed → **D2**, elevated):* `eval` of a bare heap value covers
+  structs/enums (via `.to_json()`) but not bare vectors — the reconstruct-and-rerun
+  capture harness faults when a synthetic fn *returns* a heap value on a clone of the
+  paused state; the robust end state is **D2 — live-frame eval** (above), promoted by the
+  `story`/crawler consumer whose `vector<struct>` data is exactly where it bites (the
+  frame's `locals` already render every value, so inspection is unaffected). (3) the
+  **`--serve` WebSocket + browser** build the surfaces on it — see M5e.
+
+- **M5e — the server-backed IDE** (the *lavition editor*) — **design:
+  [IDE.md](IDE.md).** The browser surface grown from "debugger UI" into a usable IDE:
+  **editor**, **Run / Test / Suite** buttons, the **debugger inside**, and a **dual
+  console** (compiler diagnostics + program output). Its defining property is that there
+  is **no interpreter in the browser** — the real engine runs locally and the actual game
+  renders in a **native OpenGL window**; the browser is a thin view that edits source,
+  shows debug state, and sends intents. That is not a limitation but the *enabler*: a real
+  game (GPU, native speed, the whole filesystem, the real test suite, breakpoints in the
+  running game, hot-swap a function over the shared store) is impossible in a serverless
+  WASM sandbox ([`07-web-ide`](../../lib_plans/future/07-web-ide/README.md), a separate
+  product) and natural once the engine is local. It **extends the protocol** with a
+  workspace layer (`listFiles`/`readFile`/`writeFile`/`compile`/`runTests`/`runSuite`/
+  `launchGame`/`reload`), same one-message-⇄-one-method invariant, reusing the plan-35
+  viewer shell. Six slices (foundation `--serve`+shell+Run → compiler console → editor →
+  debugger UI → test/suite runners → the game loop with native OpenGL + live hot-swap);
+  slices 1–5 are a usable IDE for any loft program, slice 6 is the lavition payoff. This
+  is [`live-prototyping`](../../GOALS.md) made literal — see [LAVITION.md](../../LAVITION.md).
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a

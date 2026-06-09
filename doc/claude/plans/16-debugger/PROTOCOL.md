@@ -148,23 +148,52 @@ all surfaces), not in the server.
 
 ## Phasing
 
-1. **Rich breakpoints (engine).** `condition` (E in-loop) + `log`/`stop` (tracepoint),
-   wired into the registry (A) + suspend hook (C), and surfaced at the `(dbg)` prompt.
-   The protocol already names them, so this fills in capability behind a fixed contract.
-2. **The `--rpc` server.** The NDJSON stdio driver over the engine — the smallest
-   end-to-end slice, and the one that makes the **agent** surface real. Validate the
-   whole message set here (it needs no browser).
+1. **Rich breakpoints (engine) — LANDED (2026-06-09).** `condition` (E, via a
+   driver-side resolve loop) + `log`/`stop` (tracepoint), surfaced at the `(dbg)` prompt
+   (`:break … if …`, `:trace …`).  The protocol already named them, so this filled in
+   capability behind a fixed contract — `setBreakpoints`'s `condition` / `log` / `stop`
+   map straight onto the unified `BreakSpec` the prompt now sets.
+2. **The `--rpc` server — LANDED (2026-06-09).** The NDJSON stdio driver over the engine
+   (`src/rpc.rs`, `loft debug --rpc`) — the smallest end-to-end slice, and the one that
+   makes the **agent** surface real. The whole message set is validated here with no
+   browser: `tests/rpc.rs` drives launch → setBreakpoints (incl. `condition`) → run →
+   `stopped` → eval → continue → `output` → `terminated` over an in-memory pipe.
+   - Requests parse through loft's **inbuilt JSON parser** (`crate::json::parse`); an
+     `eval` value serialises through loft's **inbuilt serializer** — a struct/enum via
+     its `.to_json()` method (a JSON object), scalars as raw JSON literals.
+   - Program `print` output is captured by a thread-local sink (`print_or_capture`,
+     hooked in `fill.rs`) and streamed as `output` events, so it never corrupts the
+     protocol on stdout.
+   - **Known limit (routed → [README § D2](README.md), elevated):** `eval` of a *bare
+     heap value* renders structs/enums (via `.to_json()`) but not bare vectors — and even
+     structs go through `.to_json()` rather than returning the value directly, because the
+     reconstruct-and-rerun capture harness faults when a synthetic fn **returns** a heap
+     value on a *clone of the paused state* (the fn-return deep-copy targets a store the
+     clone never allocated; `allocation.rs` store-index OOB). The robust end state is
+     **D2 — live-frame eval**: evaluate against the **live paused frame**'s `DbRef`s in
+     place, not a reconstruct-from-literal clone. Promoted from "a later slice" to elevated
+     by the `story`/crawler consumer, whose data is *all* `vector<struct>` — exactly where
+     this bites — and because the debugger shares the store engine with the bugs that
+     consumer hunts, so trustworthy heap eval is load-bearing there. The frame's `locals`
+     already render every value, so the variable panel is unaffected; inspect a vector's
+     elements by index/field meanwhile.
 3. **The `--serve` WebSocket + browser client.** The same driver over a WebSocket; the
    browser shell reuses the viewer (tree + code-with-line-numbers) and adds the gutter,
-   variables / watch panels, and REPL console — incremental → IDE.
+   variables / watch panels, and REPL console — incremental → IDE. This is the surface the
+   "editor + run/test buttons + suite runner + debugger + compiler/program console" vision
+   builds on; it adds a **workspace layer** (file IO, `compile`, `runTests`/`runSuite`,
+   `launchGame`/`reload`) on the same envelope and invariant. Full design: **[IDE.md](IDE.md)**
+   (M5e — the lavition editor; native OpenGL game window, no browser interpreter).
 
-Step 2 is the contract's proving ground: if the agent can drive a full debug session
-over `--rpc`, the browser is "the same messages with a UI."
+Step 2 was the contract's proving ground: the agent can drive a full debug session over
+`--rpc`, so the browser is "the same messages with a UI."
 
 ## See also
 
 - [README.md](README.md) — the @PLN16 sub-arc table; **M5d** (agent / scripted surface)
   is the consumer this protocol serves, **M5b** is the browser.
+- [IDE.md](IDE.md) — **M5e**: the server-backed IDE (the lavition editor) that extends
+  this protocol with the workspace layer and builds the browser surface on it.
 - [REPL.md](../../REPL.md) — the `(dbg)` prompt whose capabilities this protocol mirrors
   message-for-message.
 - [lib_plans/future/14-viewer-lsp-bridge/](../../lib_plans/future/14-viewer-lsp-bridge/README.md)
