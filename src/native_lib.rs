@@ -817,6 +817,27 @@ pub fn build_shared_cdylib(
     Ok(so)
 }
 
+/// Derive the auto-native cdylib crate stem from a package directory.
+///
+/// The stem becomes the cdylib's crate name (rustc derives the crate name from the
+/// source-file stem when no `--crate-name` is given), so every character must be
+/// valid in a Rust identifier.  A registry dir carries a dotted version
+/// (`glb-0.1.0`): rustc maps `-`→`_` itself but rejects the surviving `.`, so map
+/// **every** non-`[A-Za-z0-9_]` char to `_` — enforcing the full invalid-character
+/// class, not just `-`/`.`.  The constant `loft_auto_` prefix guarantees the leading
+/// character is alphabetic (a crate name may not start with a digit).  (#294)
+#[must_use]
+pub fn auto_cdylib_stem(pkg_dir: &str) -> String {
+    let raw = std::path::Path::new(pkg_dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("lib");
+    format!(
+        "loft_auto_{}",
+        raw.replace(|c: char| !(c.is_ascii_alphanumeric() || c == '_'), "_")
+    )
+}
+
 /// @PLN11 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
 /// at `pkg_dir` should run this invocation, and build its cdylib only when warranted.
 ///
@@ -852,13 +873,7 @@ pub fn cached_or_build_shared_cdylib(
     export_set: &HashSet<u32>,
     pkg_dir: &str,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let stem = format!(
-        "loft_auto_{}",
-        std::path::Path::new(pkg_dir)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("lib")
-    );
+    let stem = auto_cdylib_stem(pkg_dir);
     let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
     let so = out_dir.join(platform_cdylib_name(&stem));
     let fp = crate::cache::loft_build_fingerprint();

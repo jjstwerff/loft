@@ -1005,3 +1005,47 @@ fn f3_body_bearing_marked_fn_dispatch_vs_interpret() {
          correct, which is exactly why output-parity tests can't catch this)"
     );
 }
+
+/// #294 — the auto-native cdylib stem is the crate name rustc derives from the
+/// source-file stem, so it MUST be a valid Rust identifier.  A registry dir
+/// carries a dotted version (`glb-0.1.0`); rustc maps `-`→`_` itself but rejects
+/// the surviving `.`.  Pins the exact reproducer plus the full invariant: for any
+/// directory name the stem is `[A-Za-z0-9_]*` with an alphabetic leading char.
+#[test]
+fn auto_cdylib_stem_is_a_valid_crate_identifier() {
+    use loft::native_lib::auto_cdylib_stem;
+
+    // The exact #294 reproducer: dotted version must not survive into the name.
+    assert_eq!(
+        auto_cdylib_stem("/home/u/.loft/registry/glb-0.1.0"),
+        "loft_auto_glb_0_1_0"
+    );
+
+    // A plain (un-versioned) dir name is unchanged apart from the prefix.
+    assert_eq!(auto_cdylib_stem("/some/where/datalib"), "loft_auto_datalib");
+
+    // The invariant holds for every shape — multi-dot versions, pre-release
+    // suffixes, and other non-identifier punctuation all collapse to `_`.
+    for dir in [
+        "glb-0.1.0",
+        "my.lib-1.2.3-rc.4",
+        "weird+name@v2",
+        "trailing-slash/",
+        "",
+    ] {
+        let stem = auto_cdylib_stem(dir);
+        assert!(
+            stem.starts_with("loft_auto_"),
+            "stem must keep the alphabetic prefix: {stem:?}"
+        );
+        let first = stem.chars().next().unwrap();
+        assert!(
+            first.is_ascii_alphabetic(),
+            "a crate name may not start with a digit: {stem:?}"
+        );
+        assert!(
+            stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "every char must be valid in a Rust identifier: {stem:?}"
+        );
+    }
+}
