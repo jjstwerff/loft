@@ -103,7 +103,8 @@ every cell is green on **both** backends and the probes graduate to
 | `x == y` (bool == bool) | eq | eq | coerce | **B**: coerce both → bool, then compare (null==null → true) |
 | stored field read (nullable) | false | true | **null** | round-trips 255 |
 | stored field read (`not null`) | false | true | n/a | unchanged — 2-state |
-| nullable field **default-init** | — | — | **null** | flips from today's `false` |
+| nullable field **default-init (omitted)** | false | true | **false** | UNCHANGED — omitted fields default to the zero value for *every* type (int→0, text→"", bool→false); not null.  Verified consistent across types |
+| **explicit** null in a field (`S{b:null}` / `s.b=null`) | false | true | **false (gap)** | should be null — see Open follow-up below |
 | `hash`/`index`/`sorted` map → bool | false | true | **null** | the real-consumer trigger |
 | `{x}` format / `{x:…}` | "false" | "true" | **?** | decide null rendering (F) |
 | native: var / field / param / return | u8 | u8 | **u8 (255)** | **E**: storage form = `u8`; expr form = `bool` |
@@ -274,6 +275,33 @@ the build is what proves the chokepoint actually covers them with one mechanism.
   H must record the boolean-`!` semantics so the two read as one coherent story.
 - The S-tier **collection-validation** plan (`plans/future/20`) overlaps the
   `hash/index/sorted → bool` matrix rows — coordinate the keyed-collection cells.
+
+## Open follow-up — null *stored in* a boolean field (not the unset default)
+
+Investigated 2026-06-10.  Two things were conflated under "unset nullable field
+default"; the investigation separated them:
+
+- **Unset/omitted fields default to the zero value for EVERY type** (int→0, text→"",
+  float→0.0, bool→false) — verified on both backends.  Boolean is already consistent;
+  there is nothing to fix here.
+- **A boolean field cannot *hold* null** even when set explicitly: `S { b: null }` and
+  `s.b = null` collapse to `false`, whereas an integer field holds null (`i: null` →
+  `i == null` is true).  This IS a real inconsistency.
+
+**Cause (localized):** the boolean field-access codegen forces 0/1 — write emits
+`OpSetByte(rec, fld, if val { 1 } else { 0 })`, read emits `OpEqInt(OpGetByte(…), 1)`
+(introspect on `S{b:null}`).  The field byte is full-width (each boolean field owns its
+own byte, `BOOL_MASK=1`, `sizeof` counts 1/field), so there is physical room for the
+`255` sentinel; the codegen wrapper is what collapses it.
+
+**Why it's a scoped sub-arc, not a quick fix:** making boolean field bytes `0/1/255`
+changes the *stored* representation, which entangles serialization — JSON
+(`to_json`/`parse` of a null-bool field), binary I/O (`f += bool`), and snapshots — and
+the field-value codegen is a structured `FieldValue`/`FvBool` path on both backends.  It
+belongs with the **binary-I/O validation matrix** ([plans/future/43](../future/43-binary-io-validation/README.md),
+which already lists boolean).  The motivating `hash → boolean` consumer does **not**
+need it (its null comes from the absent-case `return null`, a local/return value that
+already works).  Route here; do not force under the current change.
 
 ## See also
 
