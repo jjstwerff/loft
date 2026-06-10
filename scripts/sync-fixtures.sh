@@ -77,11 +77,22 @@ EOF
 #   names.  Doc-only divergence (no source/test logic differs).  When the
 #   chunk repos ship tags carrying the renumber, drop these lines and bump
 #   PINNED_REFS instead.
+#
+# - shapes/README.md, imaging/README.md, web/README.md — org move
+#   (MOVING.md): the in-repo rewrite of `github.com/jjstwerff/loft` →
+#   `github.com/loft-lang/loft` updated one @PLAN12 link in each committed
+#   fixture, but the pinned upstream tags still carry the old org URL.
+#   Doc-only divergence (a single README link per package; no source/test
+#   logic differs).  When the chunk repos ship tags carrying the new org
+#   URL, drop these lines and bump PINNED_REFS instead.
 LOCAL_PATCHES=$(cat <<'EOF'
 hex_world/tests/hex_world.loft
 hex_world/README.md
 hex_world/src/hex_world.loft
 gridmesh/README.md
+shapes/README.md
+imaging/README.md
+web/README.md
 EOF
 )
 
