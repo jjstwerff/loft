@@ -222,6 +222,43 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
                 Err(e) => out.push(resp_err(id, &e.to_string())),
             }
         }
+        "launchGame" => {
+            // @PLN16 M5e slice 6 — launch the file as a real `loft` child process (its frame
+            // loop / future native window must not block this loop); output arrives via
+            // `gameStatus` polls.
+            match session.launch_game(text(&parsed, "file").unwrap_or("")) {
+                Ok(()) => out.push(resp_ok(id, "")),
+                Err(e) => out.push(resp_err(id, &e)),
+            }
+        }
+        "gameStatus" => match session.game_status() {
+            Some((running, chunk, exit)) => {
+                let mut extra = format!("\"running\":{running}");
+                if !chunk.is_empty() {
+                    let _ = std::fmt::Write::write_fmt(
+                        &mut extra,
+                        format_args!(",\"output\":{}", esc(&chunk)),
+                    );
+                }
+                if let Some(code) = exit {
+                    let _ =
+                        std::fmt::Write::write_fmt(&mut extra, format_args!(",\"exit\":{code}"));
+                }
+                out.push(resp_ok(id, &extra));
+            }
+            None => out.push(resp_ok(id, "\"running\":false")),
+        },
+        "stopGame" => match session.stop_game() {
+            Some(chunk) => {
+                let extra = if chunk.is_empty() {
+                    String::new()
+                } else {
+                    format!("\"output\":{}", esc(&chunk))
+                };
+                out.push(resp_ok(id, &extra));
+            }
+            None => out.push(resp_err(id, "no game is running")),
+        },
         "setBreakpoints" => {
             set_breakpoints(session, &parsed);
             out.push(resp_ok(id, ""));

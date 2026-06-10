@@ -395,7 +395,7 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
-<div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="suite" title="Run the package suite (tests/*.loft beside the nearest loft.toml)">✓✓ Suite</button><button id="save" disabled>Save</button><span id="dirty"></span>
+<div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="suite" title="Run the package suite (tests/*.loft beside the nearest loft.toml)">✓✓ Suite</button><button id="game" title="Launch as a game: a real loft process of its own (native window once the graphics lib lands)">🎮 Game</button><button id="save" disabled>Save</button><span id="dirty"></span>
   <span id="steps"><button id="cont" disabled title="Continue (to next breakpoint)">⏵</button><button id="over" disabled title="Step over">↷</button><button id="into" disabled title="Step into">↓</button><button id="out" disabled title="Step out">↑</button></span>
   <span id="status">connecting…</span></div>
 <div id="main">
@@ -598,6 +598,38 @@ function finishTests(m) {
   $("tsum").textContent = (m.failed === 0 ? (m.passed + "/" + total + " passed") : (m.failed + " of " + total + " failed")) + files;
   $("tsum").className = m.failed === 0 ? "ok" : "bad";
 }
+// ── game launcher (slice 6) — a real loft child process; output arrives via polls ──
+// Deliberately NOT disabled while paused: the game is its own process and never touches
+// the paused session, so comparing a running game against a frozen frame is fine.
+let gameTimer = 0;
+function setGameUi(running) { $("game").textContent = running ? "■ Stop game" : "🎮 Game"; }
+function pollGame() {
+  sendCb("gameStatus", {}, m => {
+    if (m.output) $("out").textContent += m.output;
+    if (m.running) { gameTimer = setTimeout(pollGame, 500); }
+    else {
+      setGameUi(false); gameTimer = 0;
+      $("out").textContent += "\n— game exited" + (m.exit !== undefined ? " (code " + m.exit + ")" : "") + " —\n";
+    }
+  });
+}
+function gameClick() {
+  if (!ws || ws.readyState !== 1) return;
+  if (gameTimer) {                                 // running → stop
+    clearTimeout(gameTimer); gameTimer = 0;
+    sendCb("stopGame", {}, m => {
+      if (m.output) $("out").textContent += m.output;
+      $("out").textContent += "\n— game stopped —\n"; setGameUi(false);
+    });
+    return;
+  }
+  if (isDirty()) persist();                        // the game runs what you see
+  sendCb("launchGame", {file: FILE}, m => {
+    if (!m.ok) { $("out").textContent += "\n[game] " + (m.error || "launch failed") + "\n"; return; }
+    setGameUi(true); $("out").textContent += "\n— game launched —\n";
+    gameTimer = setTimeout(pollGame, 300);
+  });
+}
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/ws");
   ws.onopen = () => { $("status").textContent = "connected"; send("launch", {file: FILE}); send("compile", {file: FILE}); };
@@ -638,6 +670,7 @@ $("run").onclick = () => {
 };
 $("test").onclick = () => startTests("runTests");
 $("suite").onclick = () => startTests("runSuite");
+$("game").onclick = gameClick;
 const ti = $("replin");
 ti.addEventListener("input", () => autosize(ti));
 ti.addEventListener("keydown", e => {

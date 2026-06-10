@@ -266,6 +266,26 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    it.* Engine: the graphics runtime ([`02-graphics`](../../lib_plans/future/02-graphics/README.md)) +
    shared-store per-fn dispatch (N9/C71) — this slice is where the IDE *becomes the engine
    editor*.
+   - **6a — the game-process layer LANDED (2026-06-10).** `launchGame {file}` spawns the
+     file as a **real `loft` child process** (with the session's `--lib` dirs; the binary is
+     the serve process's own executable, `LOFT_BIN` overriding for tests) — a frame loop /
+     native window must never block the single-threaded serve loop, so a game is a process,
+     not an in-session run. stdout/stderr are pumped by drain threads into a shared buffer;
+     `gameStatus` polls drain it in chunks and report exit (the slot then clears, freeing a
+     relaunch); `stopGame` kills the child (only ever the one this session spawned). One game
+     at a time. UI: a **🎮 Game** toggle (launch ↔ ■ Stop), output into the Program pane via a
+     500 ms poll; deliberately usable while paused (the game is its own process). Test:
+     `serve_ws_game_launch_streams_and_stops` (finite game → output + `exit:0`; infinite loop
+     → killed). This transport is exactly what the GL window uses the day the graphics lib
+     lands — launching a windowed game is the same child process.
+   - **6b — `reload` hot-swap + 6c — breakpoint-in-game: DEFERRED, dependencies named.**
+     Both need substrate that does not exist on this branch: the **graphics runtime**
+     (`lib/graphics` is untracked here — its sources live on another line of work) and the
+     **C71/N9 per-fn interpret-on-compiled-baseline execution model over a shared store**
+     ([DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md) — a design, not yet a build).
+     Faking either (e.g. "hot-swap" by full restart) would ship the workaround as the
+     feature. **Trigger to resume:** lib/graphics landing on the working branch, or the C71
+     execution model getting its own build plan.
 
 Slices 1–5 make a usable IDE for a **self-contained** loft program (the stdlib is its only
 dependency); slice 6 is the lavition payoff. They land in order; 1 is the prerequisite for

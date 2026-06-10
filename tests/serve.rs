@@ -495,3 +495,75 @@ fn serve_ws_run_suite_runs_package_tests() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn serve_ws_game_launch_streams_and_stops() {
+    // @PLN16 M5e slice 6 — the game-process layer: `launchGame` spawns the file as a real
+    // `loft` child process, `gameStatus` polls drain its output and report exit, `stopGame`
+    // kills a running one.  The child binary comes from LOFT_BIN (here: the built loft —
+    // in production the serve process IS the loft binary, so current_exe is used).
+    let loft_bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft");
+    if !loft_bin.exists() {
+        eprintln!("skipping: {} not built", loft_bin.display());
+        return;
+    }
+    // SAFETY: process-global env write; no other serve test reads LOFT_BIN, and the value
+    // is constant for the whole test process, so a concurrent reader still sees a valid path.
+    unsafe { std::env::set_var("LOFT_BIN", &loft_bin) };
+    let path = tmp_program(
+        "game",
+        "fn main() {\n  for i in 0..3 {\n    print(\"frame {i}\");\n  }\n}\n",
+    );
+    let file = path.to_string_lossy().into_owned();
+    let port = 18791;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"launchGame\",\"file\":\"{file}\"}}"),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
+    // Poll until the game exits (bounded), accumulating drained output.
+    let mut all = String::new();
+    let mut exited = false;
+    for i in 0..40 {
+        std::thread::sleep(Duration::from_millis(100));
+        ws_send(
+            ws.get_ref(),
+            &format!("{{\"id\":{},\"req\":\"gameStatus\"}}", 10 + i),
+        );
+        let r = ws_recv(&mut ws);
+        all.push_str(&r);
+        if r.contains("\"running\":false") {
+            exited = true;
+            break;
+        }
+    }
+    assert!(exited, "game ran to completion: {all}");
+    assert!(
+        all.contains("frame 0") && all.contains("frame 2"),
+        "game output streamed through gameStatus: {all}"
+    );
+    assert!(all.contains("\"exit\":0"), "exit code reported: {all}");
+
+    // An infinite-loop game is killed by stopGame.
+    let loop_path = tmp_program(
+        "gameloop",
+        "fn main() {\n  i = 0;\n  while true {\n    i = i + 1;\n  }\n}\n",
+    );
+    let loop_file = loop_path.to_string_lossy().into_owned();
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":2,\"req\":\"launchGame\",\"file\":\"{loop_file}\"}}"),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "loop launch ok");
+    ws_send(ws.get_ref(), "{\"id\":3,\"req\":\"stopGame\"}");
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "stop ok");
+    ws_send(ws.get_ref(), "{\"id\":4,\"req\":\"gameStatus\"}");
+    assert!(
+        ws_recv(&mut ws).contains("\"running\":false"),
+        "stopped game reports not running"
+    );
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&loop_path);
+}

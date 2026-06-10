@@ -1004,6 +1004,26 @@ pub struct TestRun {
     pub line: u32,
 }
 
+/// @PLN16 M5e slice 6 — pump a child pipe into `buf` on a detached thread, line by line.
+/// Keeps the game's stdout/stderr flowing (an undrained pipe fills and stalls the child at
+/// its next print); the thread ends when the pipe closes (game exit / kill).
+fn drain_pipe<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+    buf: &std::sync::Arc<std::sync::Mutex<String>>,
+) {
+    let Some(p) = pipe else { return };
+    let buf = std::sync::Arc::clone(buf);
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(p);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            let mut g = buf.lock().unwrap();
+            g.push_str(&line);
+            g.push('\n');
+        }
+    });
+}
+
 /// Extract a readable message from a caught panic payload.
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     payload
@@ -1132,6 +1152,18 @@ pub struct ReplSession {
     /// rejects every `writeFile`.  Single-file for now; a workspace-root form lands with
     /// multi-file editing.
     workspace_file: Option<std::path::PathBuf>,
+    /// @PLN16 M5e slice 6 — the running **game child process** (`launchGame`), if any.
+    /// A game is a real `loft` run in its own process — its frame loop (and, once the
+    /// graphics library lands, its native window) must not block the serve loop.
+    game: Option<GameProc>,
+}
+
+/// @PLN16 M5e slice 6 — a launched game: the child process + its drained output.
+/// stdout/stderr are pumped by detached threads into one shared buffer (a pipe left
+/// undrained would fill and stall the game at its next print).
+struct GameProc {
+    child: std::process::Child,
+    output: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
 impl ReplSession {
@@ -1157,6 +1189,7 @@ impl ReplSession {
             stepping: false,
             paused: None,
             workspace_file: None,
+            game: None,
         })
     }
 
@@ -1197,6 +1230,7 @@ impl ReplSession {
             stepping: false,
             paused: None,
             workspace_file: None,
+            game: None,
         }
     }
 
@@ -1664,6 +1698,83 @@ impl ReplSession {
             }
             _ => Err("path is outside the editable file".to_string()),
         }
+    }
+
+    /// @PLN16 M5e slice 6 — launch `file` as a **game**: a real `loft` run in its own child
+    /// process (with the session's `--lib` dirs), so its frame loop — and, once the graphics
+    /// library lands on this branch, its native window — never blocks the serve loop.
+    /// stdout/stderr are drained into a buffer the poll-based [`game_status`](Self::game_status)
+    /// hands back in chunks.  The binary is this process's own executable (`loft debug --serve`
+    /// IS the loft binary); `LOFT_BIN` overrides it for tests, whose `current_exe` is the test
+    /// harness.  One game at a time: launching over a live game is refused (stop it first).
+    ///
+    /// # Errors
+    /// A message when a game is already running or the spawn fails.
+    pub fn launch_game(&mut self, file: &str) -> Result<(), String> {
+        if let Some(g) = &mut self.game
+            && matches!(g.child.try_wait(), Ok(None))
+        {
+            return Err("a game is already running — stop it first".to_string());
+        }
+        let bin = std::env::var_os("LOFT_BIN").map_or_else(
+            || std::env::current_exe().map_err(|e| format!("cannot locate loft binary: {e}")),
+            |b| Ok(std::path::PathBuf::from(b)),
+        )?;
+        let mut cmd = std::process::Command::new(bin);
+        cmd.arg(file);
+        for d in &self.parser.lib_dirs {
+            cmd.arg("--lib").arg(d);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("cannot launch game: {e}"))?;
+        let output = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        drain_pipe(child.stdout.take(), &output);
+        drain_pipe(child.stderr.take(), &output);
+        self.game = Some(GameProc { child, output });
+        Ok(())
+    }
+
+    /// The running game's state: `(still running, output drained since the last call,
+    /// exit code if it ended)`.  `None` when no game was launched.  When the game has
+    /// ended the slot is cleared, so the next [`launch_game`](Self::launch_game) is free.
+    pub fn game_status(&mut self) -> Option<(bool, String, Option<i32>)> {
+        let g = self.game.as_mut()?;
+        let chunk = std::mem::take(
+            &mut *g
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        match g.child.try_wait() {
+            Ok(None) => Some((true, chunk, None)),
+            Ok(Some(status)) => {
+                self.game = None;
+                Some((false, chunk, status.code()))
+            }
+            Err(_) => {
+                self.game = None;
+                Some((false, chunk, None))
+            }
+        }
+    }
+
+    /// Stop the running game (kill the child this session spawned — never any other
+    /// process).  Returns the output drained since the last poll, or `None` when no game
+    /// is running.
+    pub fn stop_game(&mut self) -> Option<String> {
+        let mut g = self.game.take()?;
+        let _ = g.child.kill();
+        let _ = g.child.wait();
+        Some(std::mem::take(
+            &mut *g
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ))
     }
 
     /// @PLN16 M5a — set a `file:line` breakpoint for the file-run debugger.  Stored and
