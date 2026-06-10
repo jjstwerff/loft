@@ -1380,6 +1380,16 @@ impl ReplSession {
     /// Returns the I/O error if `path` cannot be read.
     pub fn load_program(&mut self, path: &str) -> std::io::Result<Result<(), Vec<DiagEntry>>> {
         let src = std::fs::read_to_string(path)?;
+        // Reset to a pristine stdlib (+ the session's `--lib` dirs) parser before loading, so
+        // a **re-launch is idempotent**: `load_program_str` is additive, and re-parsing a
+        // `use`-program over an already-loaded one re-loads its libraries → "Cannot redefine".
+        // Both callers (the file-run debugger and the rpc/serve `launch`) want a *fresh* whole-
+        // program load, not an append — the REPL's incremental path is `eval`, not this.
+        let lib_dirs = std::mem::take(&mut self.parser.lib_dirs);
+        let mut parser = Parser::new();
+        parser.lib_dirs = lib_dirs;
+        parser.parse_dir(&self.stdlib_dir, true, false)?;
+        self.parser = parser;
         Ok(self.load_program_str(&src, path))
     }
 

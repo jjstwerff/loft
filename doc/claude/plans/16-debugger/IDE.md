@@ -300,11 +300,15 @@ so the served file can `use` libraries: a program that `use`s `plainlib` **launc
 parser (the clean single-parse `loft --tests` uses) and calls `execute_argv` with the **bare**
 function name (it prepends `n_` itself — a double-prefix was making every native call an
 "Unknown definition"). Tests: `serve_ws_run_tests_reports_pass_and_fail`, manual `--lib`
-probes. **Still open before library dev is real:** (1) **re-load idempotency** — `load_program`
-is additive, so re-launching a `use`-program duplicates its libraries ("Cannot redefine 'banner'");
-the **Run** button works *once* for a library program, then needs a session reset. This is a
-pre-existing `load_program` bug (no-`use` programs re-launch fine), now the top blocker. (2)
-**`loft.toml` auto-resolution** (so deps resolve without explicit `--lib`) and (3) **multi-file
+probes. **Re-load idempotency FIXED (2026-06-10):** `load_program` was additive, so
+re-launching a `use`-program re-loaded its libraries → "Cannot redefine 'banner'" (the **Run**
+button worked only *once* for a library program). It now **resets to a pristine stdlib + libs
+parser before loading**, so a re-launch is a clean whole-program load — re-launching a
+`use`-program twice both succeed, and a re-launch picks up the latest on-disk edit (verified).
+Both callers (file-run debugger, rpc/serve `launch`) want fresh-load semantics; the REPL's
+incremental path is `eval`, untouched. (Trade-off: re-parses the small stdlib per launch; a
+baseline-parser cache is the perf follow-up.) **Still open before library dev is real:**
+**`loft.toml` auto-resolution** (so deps resolve without explicit `--lib`) and **multi-file
 navigation**.
 
 ## The REPL panel — a prime, context-switching element
