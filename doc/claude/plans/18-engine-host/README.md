@@ -87,6 +87,19 @@ only spreads the joysticks and screens around the room:
     delay becomes a tunable that defaults toward zero, not toward smooth.
   - The quick UDP channel (05a) serves this goal directly: no retransmit stalls, no
     in-order head-of-line — a stale-but-late pose is *discarded*, never waited for.
+  - **The keystone: the advance-collision-forecast protocol** (already prototyped —
+    @PLAN50's `forecast_test.loft`: the server detects imminent bounces *ahead of
+    time*; the measured open question is how often an input change inside the
+    lookahead window invalidates the forecast). Forecasting converts latency into
+    **lookahead**: a forecast event (`bounce at t+Δ at X`) is broadcast *before its
+    effect time*, so clients schedule it and render it **at the right instant** —
+    effectively zero perceived latency exactly where latency is *felt* most in an
+    arcade game (collisions, hits). Continuous motion is covered by
+    newest-state/extrapolation (above); **discontinuities are covered by
+    forecast-ahead events**, with a correction sent on invalidation (the Q2
+    invalidation rate is what bounds how often a correction flickers). This is
+    loft-side *meaning* over the kernel — it needs the event class + timestamps, not
+    the parked snapshot ring — so it rides phases 01/05a, not 06.
 - **Two participation tiers — and the phone is the on-ramp, not the end goal.** The
   **full arcade seat** is a *native client*: a real screen, real input (gamepad /
   keyboard / cabinet stick), full rendering — that is what the experience is designed
