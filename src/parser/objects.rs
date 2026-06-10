@@ -417,7 +417,8 @@ impl Parser {
             Type::Text(_) => ("OpGetText", false),
             Type::Character => ("OpGetCharacter", false),
             Type::Enum(_, false, _) => ("OpGetEnum", false),
-            Type::Boolean => ("OpGetByte", true),
+            // @PLN17: byte-stored boolean read, preserving 0/1/255 (like enum).
+            Type::Boolean => ("OpGetBoolean", false),
             _ => return t,
         };
         let op_d_nr = self.data.def_nr(op_name);

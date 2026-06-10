@@ -2755,34 +2755,20 @@ impl Parser {
     /// no wrapper — the `DbRef` IS the value.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
-        let (op_name, extra) = match tp {
-            Type::Integer(_) => ("OpGetInt", None),
-            Type::Float => ("OpGetFloat", None),
-            Type::Single => ("OpGetSingle", None),
-            Type::Text(_) => ("OpGetText", None),
-            Type::Boolean => ("OpGetByte", Some(true)),
+        let op_name = match tp {
+            Type::Integer(_) => "OpGetInt",
+            Type::Float => "OpGetFloat",
+            Type::Single => "OpGetSingle",
+            Type::Text(_) => "OpGetText",
+            // @PLN17: byte-stored boolean read, preserving 0/1/255 (like enum).
+            Type::Boolean => "OpGetBoolean",
             _ => return code, // reference/struct types: no wrapper needed
         };
         let d = data.def_nr(op_name);
         if d == u32::MAX {
             return code;
         }
-        let val = if extra.is_some() {
-            // Boolean: GetByte + compare to 1
-            Value::Call(d, vec![code, p, Value::Int(0)])
-        } else {
-            Value::Call(d, vec![code, p])
-        };
-        if extra.is_some() {
-            let d_eq = data.def_nr("OpEqInt");
-            if d_eq == u32::MAX {
-                val
-            } else {
-                Value::Call(d_eq, vec![val, Value::Int(1)])
-            }
-        } else {
-            val
-        }
+        Value::Call(d, vec![code, p])
     }
 
     /// Resolve named arguments into positional slots, then delegate to `call_nr`.
@@ -2981,10 +2967,8 @@ impl Parser {
                 }
             }
             Type::Enum(_, false, _) => self.cl("OpGetEnum", &[code, p]),
-            Type::Boolean => {
-                let val = self.cl("OpGetByte", &[code, p, Value::Int(0)]);
-                self.cl("OpEqInt", &[val, Value::Int(1)])
-            }
+            // @PLN17: byte-stored boolean read, preserving 0/1/255 (like enum).
+            Type::Boolean => self.cl("OpGetBoolean", &[code, p]),
             Type::Float => self.cl("OpGetFloat", &[code, p]),
             Type::Single => self.cl("OpGetSingle", &[code, p]),
             // A `vector<character>` element read had no `get_val` arm (only the
@@ -3566,10 +3550,9 @@ impl Parser {
                     Value::Int(i32::from(self.data.def(nr).known_type())),
                 ],
             ),
-            Type::Boolean => {
-                let v = v_if(val_code, Value::Int(1), Value::Int(0));
-                self.cl("OpSetByte", &[ref_code, pos_val, Value::Int(0), v])
-            }
+            // @PLN17: store the boolean's u8 form (0/1/255) directly, like enum —
+            // the old `if val {1} else {0}` forced 0/1 and dropped the null sentinel.
+            Type::Boolean => self.cl("OpSetBoolean", &[ref_code, pos_val, val_code]),
             Type::Float => self.cl("OpSetFloat", &[ref_code, pos_val, val_code]),
             Type::Single => self.cl("OpSetSingle", &[ref_code, pos_val, val_code]),
             Type::Text(_) => self.cl("OpSetText", &[ref_code, pos_val, val_code]),

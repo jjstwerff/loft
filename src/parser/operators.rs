@@ -404,6 +404,8 @@ impl Parser {
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
             "OpGetEnum" => self.cl("OpSetEnum", &[args[0].clone(), args[1].clone(), code]),
+            // @PLN17: byte-stored boolean write, storing the u8 form 0/1/255 directly.
+            "OpGetBoolean" => self.cl("OpSetBoolean", &[args[0].clone(), args[1].clone(), code]),
             "OpGetShort" => self.cl(
                 "OpSetShort",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
@@ -998,6 +1000,10 @@ impl Parser {
                 | "GetSingle"
                 | "GetFloat"
                 | "GetEnum"
+                // @PLN17: byte-stored boolean field/element read (single-level
+                // wrap of OpGetVector), so the inner OpGetVector swaps to its
+                // mutable form for `v[i] = bool` — same as GetEnum.
+                | "GetBoolean"
                 | "GetCharacter"
                 | "GetField"
                 | "GetDbRef"

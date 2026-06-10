@@ -7,13 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**SHIPPED on the `booleans` branch (2026-06-10) — design A, both backends.**  Tri-state
-boolean (false=0 / true=1 / null=255) is implemented and verified: the interpreter and
-`--native` produce byte-identical results across the `{false,true,null}` × `{==false,
-==true, ==null, if, !, &&, ||, fmt, hash→bool, tuple, vector, param, return}` matrix, and
-the full suite is **2156/2157** (the lone failure, `markdown_renderer`, is a pre-existing
-sandbox `cc`-link env limitation — the interpreted viewer can't build its cdylibs here;
-markdown renders correctly on `--native` and `starts_with` works on `--interpret`).
+**SHIPPED on the `booleans` branch (2026-06-10) — design A, both backends, full support.**
+Tri-state boolean (false=0 / true=1 / null=255) is implemented and verified: the
+interpreter and `--native` produce byte-identical results across the `{false,true,null}`
+× `{==false, ==true, ==null, if, !, &&, ||, fmt, hash→bool, tuple, vector, param, return,
+struct-field, vector-element, construct, assign, closure-capture, JSON}` matrix.  Heap
+storage (struct fields + vector/keyed elements) holds null too — see the field/element §
+below.  The full suite is **2155/2157** (the 2 misses are sandbox build-env flakes —
+`rustls`/cdylib rlib unavailable under parallel load, and the flaky interpreted-viewer
+`markdown_renderer` — all pass standalone).
 History (Stage A characterization, the decision-A reversal, the B/C interpreter spike)
 is in [SPIKE.md](SPIKE.md).  The spike
 ([SPIKE.md](SPIKE.md)) confirmed the invariant holds under construction (the
@@ -276,56 +278,42 @@ the build is what proves the chokepoint actually covers them with one mechanism.
 - The S-tier **collection-validation** plan (`plans/future/20`) overlaps the
   `hash/index/sorted → bool` matrix rows — coordinate the keyed-collection cells.
 
-## Open follow-up — null *stored in* a boolean field (not the unset default)
+## Null *stored in* a boolean field / element — DONE 2026-06-10
 
-Investigated 2026-06-10.  Two things were conflated under "unset nullable field
-default"; the investigation separated them:
+Heap-stored booleans (struct fields AND vector/keyed-collection elements) now hold and
+distinguish all three states, byte-identical on both backends.  `S { b: null }`,
+`s.b = null`, `v += [null_bool]`, `v[i] = null_bool` all round-trip null; `== null`
+distinguishes it; `false`/`true` are unaffected.
+
+**Two things were conflated under "unset nullable field default"** — the investigation
+separated them:
 
 - **Unset/omitted fields default to the zero value for EVERY type** (int→0, text→"",
-  float→0.0, bool→false) — verified on both backends.  Boolean is already consistent;
-  there is nothing to fix here.
-- **A boolean field cannot *hold* null** even when set explicitly: `S { b: null }` and
-  `s.b = null` collapse to `false`, whereas an integer field holds null (`i: null` →
-  `i == null` is true).  This IS a real inconsistency.
+  float→0.0, bool→false) — verified, consistent, *not a bug*.  (A null field also
+  *serializes* as omitted, so round-trips back to the zero value — uniform across types.)
+- **An explicitly-set null in a boolean field/element** used to collapse to `false`
+  (the real inconsistency) — now fixed.
 
-**Cause (localized):** the boolean field-access codegen forces 0/1 — write emits
-`OpSetByte(rec, fld, if val { 1 } else { 0 })`, read emits `OpEqInt(OpGetByte(…), 1)`
-(introspect on `S{b:null}`).  The field byte is full-width (each boolean field owns its
-own byte, `BOOL_MASK=1`, `sizeof` counts 1/field), so there is physical room for the
-`255` sentinel; the codegen wrapper is what collapses it.
+**The model — boolean storage IS plain-enum storage.**  A boolean field byte holds its
+`u8` form (`0`=false, `1`=true, `255`=null), read/written directly like a plain enum, so
+it inherits enum's end-to-end null handling (incl. serialization — enums already
+round-trip `255`).  Two new ops `OpGetBoolean`/`OpSetBoolean` mirror `OpGetEnum`/
+`OpSetEnum`, replacing the old `OpGetByte`+`==1` read and `if{1}else{0}`+`OpSetByte`
+write that forced 0/1.
 
-**Attempted 2026-06-10 — design validated, reverted on corruption.**  Full diff:
-[`field-null-attempt.diff`](field-null-attempt.diff).  The right model is **plain
-enum** storage: a boolean field byte IS its `u8` form (0/1/255), preserved end-to-end
-including serialization (enums already round-trip 255).  Implemented as two new ops
-`OpGetBoolean`/`OpSetBoolean` mirroring `OpGetEnum`/`OpSetEnum`, replacing the old
-`OpGetByte`+`==1` read / `if{1}else{0}`+`OpSetByte` write.
+**Sites changed:** `get_val` + `auto_deref_boxed_scalar` (field/cell read), the
+`wrap_vector_get_val` element read, `set_field_no_check` (construct/append write), the
+`call_to_set_op` getter→setter inversion + `try_swap` list (`GetBoolean`).  The key
+fix that unblocked vector elements: **deleting the obsolete boolean special-case in
+`collections.rs`** that destructured the old two-level `OpEqInt(OpGetByte(OpGetVector))`
+read shape and emitted a wrong-offset `OpSetByte` into the vector header (SIGSEGV,
+caught by `tests/scripts/189`).  With the read now single-level, boolean elements flow
+through the *same* generic path enums use.
 
-**What worked (proven):** struct **scalar** boolean fields — `S { b: null }`, `s.b =
-null`, `s.b == null` all round-trip null on **both** backends, and serialization fell
-out for free (true/false render correctly; a null field is *omitted* in JSON/format,
-exactly like every other null field).  Sites: `get_val`, `auto_deref_boxed_scalar`,
-`set_field_no_check`, the `call_to_set_op` getter→setter inversion.
-
-**The blocker:** struct fields and `vector<boolean>` **elements share the same byte
-codec**, so the change can't be scoped to struct-only.  The `vector<boolean>`
-element-**assign** path (`v[i] = x`) has *separate* codegen: the indexed-assign write +
-the `try_swap` in `operators.rs` special-case the old two-level `OpEqInt(OpGetByte(
-OpGetVector))` read shape.  With the read changed to single-level `OpGetBoolean`, that
-path emits a wrong-offset `OpSetByte(v, 1, …)` into the vector **header** → SIGSEGV /
-store corruption (caught by `tests/scripts/189`, which uses `vector<boolean> not null`
-`&self` fields).  Adding `GetBoolean` to the `try_swap` list was necessary but not
-sufficient.
-
-**To finish (the routed work):** rework the indexed-collection element-assign write
-codegen + `try_swap` to the single-level `OpGetBoolean`/`OpSetBoolean` shape *together*
-with the field codec (they're one unified heap-boolean-storage change, not separable),
-then verify the full `{false,true,null}` × {field, vector-elem, construct, assign,
-JSON, binary, snapshot} matrix on both backends.  Belongs with the **binary-I/O
-validation matrix** ([plans/future/43](../future/43-binary-io-validation/README.md),
-which already lists boolean).  The motivating `hash → boolean` consumer does **not**
-need it (its null comes from the absent-case `return null`, a local/return value that
-already works), so this is correctness-completeness, not a consumer blocker.
+**Serialization:** true/false render correctly; a null boolean field is *omitted* in
+JSON/format (like every other null field).  Full suite green (2155/2157; the 2 misses
+are sandbox build-env flakes — `rustls` rlib unavailable for cdylib builds under
+parallel load — that pass standalone).
 
 ## See also
 

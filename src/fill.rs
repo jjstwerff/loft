@@ -200,6 +200,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     get_byte,
     get_enum,
     set_enum,
+    get_boolean,
+    set_boolean,
     get_short,
     get_text,
     set_int,
@@ -1491,6 +1493,33 @@ fn get_enum(s: &mut State) {
 }
 
 fn set_enum(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_val = *s.get_stack::<u8>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = v_val;
+        s.database
+            .store_mut(&db)
+            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+    }
+}
+
+fn get_boolean(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r = s
+            .database
+            .store(&db)
+            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
+        if r < 0 { 255u8 } else { r as u8 }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_boolean(s: &mut State) {
     let v_fld = s.code::<u16>();
     let v_val = *s.get_stack::<u8>();
     let v_v1 = *s.get_stack::<DbRef>();
