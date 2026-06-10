@@ -192,3 +192,48 @@ fn rpc_eval_bare_vector_live() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// @PLN16 M5e slice 2 — `compile` checks a file (no run, no load) and emits a structured
+// `diagnostics` event with errors AND warnings (the compiler-console feed).
+#[test]
+fn rpc_compile_emits_structured_diagnostics() {
+    // `X = 5` is clean but warns (UPPER_CASE reserved for constants) — proves warnings
+    // surface here even though `launch`/run treat the program as runnable.
+    let path = tmp_program("warn", "fn main() {\n  X = 5;\n  print(\"{X}\")\n}\n");
+    let file = path.to_str().unwrap();
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
+        "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(out.contains("\"id\":1,\"ok\":true"), "compile ok: {out}");
+    assert!(
+        out.contains("\"event\":\"diagnostics\""),
+        "a diagnostics event: {out}"
+    );
+    assert!(
+        out.contains("\"line\":2,\"col\":6,\"level\":\"warning\""),
+        "structured warning at line 2:6: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// A file with an error compiles to an `error`-level diagnostic (and is not loaded).
+#[test]
+fn rpc_compile_reports_errors() {
+    // A call to an undefined function is an error the two-pass parser catches.
+    let path = tmp_program("err", "fn main() {\n  no_such_function()\n}\n");
+    let file = path.to_str().unwrap();
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
+        "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"event\":\"diagnostics\""),
+        "a diagnostics event: {out}"
+    );
+    assert!(
+        out.contains("\"level\":\"error\""),
+        "an error-level diagnostic: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

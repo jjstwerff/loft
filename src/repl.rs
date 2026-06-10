@@ -1311,6 +1311,24 @@ impl ReplSession {
         Ok(self.load_program_str(&src, path))
     }
 
+    /// @PLN16 M5e slice 2 — **check** `path` and return ALL its diagnostics (errors AND
+    /// warnings), leaving the session unchanged.  Unlike [`load_program`](Self::load_program)
+    /// — which keeps the program on success and surfaces only *error*-level diagnostics —
+    /// this always rolls back: a pure compiler-console feed, callable repeatedly (each edit,
+    /// before/after a `launch`) without duplicating definitions.
+    ///
+    /// # Errors
+    /// Returns the I/O error if `path` cannot be read.
+    pub fn compile(&mut self, path: &str) -> std::io::Result<Vec<DiagEntry>> {
+        let src = std::fs::read_to_string(path)?;
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, path, false);
+        let produced = self.parser.diagnostics.entries()[pre_diag..].to_vec();
+        self.parser.data.rollback_to(pre_defs);
+        Ok(produced)
+    }
+
     /// @PLN16 M5a — set a `file:line` breakpoint for the file-run debugger.  Stored and
     /// re-applied to each observing run's fresh `State` via
     /// `State::set_breakpoint_file_line`.

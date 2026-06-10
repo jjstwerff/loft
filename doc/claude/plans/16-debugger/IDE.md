@@ -187,10 +187,17 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    transport + one console.* (Slice 1 shows the source inline rather than via a `/file`
    endpoint — the editor/`readFile` path is slice 3.) The live game loop (slice 6) is why
    this is a WebSocket, not request/response — it needs bidirectional server-push.
-2. **Compiler console — `compile` + `diagnostics`.** A `compile` message returns
-   diagnostics; the Compiler console lists them; inline squiggles + gutter markers on the
-   editor (the 14-bridge R2 drawing). *The dual console is complete.* Engine:
-   `load_program` already produces diagnostics — expose them as a structured event.
+2. **Compiler console — `compile` + `diagnostics` — LANDED (2026-06-10).** A `compile`
+   request (`ReplSession::compile` — parse-check, no run, no load; rolls back so it's
+   repeatable) emits a structured `diagnostics` event (`{file, items:[{line, col, level,
+   message}]}`) carrying **errors *and* warnings** (`load_program` drops warnings on
+   success — `compile` is the console feed that keeps them). The shell gains the **dual
+   console**: a Compiler pane that lists diagnostics (click → scroll to the line) over the
+   Program pane, and the source is now **line-numbered** so a diagnostic marks its row
+   (red/amber gutter). The shell `launch`es + `compile`s on connect and re-`compile`s on
+   Run. *The dual console is complete.* (Full inline squiggles are the later 14-bridge R2
+   drawing; slice 2 ships the list + a per-line gutter marker.) Tests:
+   `tests/rpc.rs::rpc_compile_*` (warn + error), `tests/serve.rs::serve_ws_compile_streams_diagnostics`.
 3. **Editor — editable pane + `writeFile` + save/reload.** Make the code pane editable;
    `writeFile` saves to disk (sandboxed); a re-`run`/`compile` picks it up. *You can now
    edit and re-run without leaving the browser.* The one new write capability + its sandbox.
@@ -216,6 +223,80 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
 
 Slices 1–5 make a usable IDE for any loft program (CLI tools, servers, libraries); slice 6
 is the lavition payoff. They land in order; 1 is the prerequisite for all.
+
+## The REPL panel — a prime, context-switching element
+
+A **REPL is a prime element** of the shell, always present so you can try things out at any
+moment — and its **context follows execution state**:
+
+- **Top-level** (idle / running, not paused): evaluate against the session top level —
+  define a function, run a statement, eval an expression (`ReplSession::eval` + `value_of`,
+  the normal REPL). This is the default.
+- **Frame** (paused at a breakpoint): the context **switches to the debugger** — evaluate
+  against the live paused frame (`debug_eval` = D1/D2), so the same input box now inspects
+  and computes over the frame's locals.
+- Leaving the breakpoint (continue / terminate → back to top level) **switches it back**.
+
+**History is per context.** The top-level history persists for the session; each debug
+context (one pause) gets its **own** history, **discarded when that context ends** — so
+breakpoint experiments never pollute the top-level history, and a new pause starts clean.
+
+*Protocol:* one `replEval` request routes by paused-state on the server (frame eval when
+paused, top-level otherwise) and replies `{ok, value?, context:"top"|"frame", more?}`.
+Program `print` during an eval streams as `output` events (the shared sink); the `context`
+field + the existing `stopped` / `terminated` events are what the shell uses to switch the
+prompt's context badge and its history buffer. The one correctness pin: **each input runs
+exactly once** — `eval` already has side effects, so an expression's value must be rendered
+from that run, not a second one (mirror the terminal REPL's parse-then-route of statement
+vs expression).
+
+*Multi-line input — a live, fully-editable buffer; server-authoritative completeness.* The
+input is an auto-growing `<textarea>` you can **edit freely until the input is finished** —
+**nothing is locked line-by-line** the way a terminal is. The whole buffer stays live, so you
+can move the cursor up and fix an *earlier* line at any point before submitting. That is safe
+because **`NeedMore` is non-mutating**: while the input is incomplete the engine commits
+nothing, so every intermediate Enter is a no-op on the session and there is no half-applied
+state to corrupt by going back to edit. The rules:
+
+- **Enter at the end of the buffer = a submit-attempt** — the browser sends the *current full
+  buffer*; the server runs `eval`. If it's incomplete (open brace, unterminated string,
+  trailing operator) the reply is `{ok, more:true}` (the **`NeedMore`** signal) and the
+  browser simply drops to a new line (a `…` continuation badge) and keeps the buffer editable;
+  when the buffer is complete the value comes back and is echoed + cleared + pushed to history
+  as **one** entry.
+- **Enter in the middle of the buffer inserts a newline** — you're editing, not finishing.
+- **Shift+Enter** forces a newline anywhere; **Ctrl/Cmd+Enter** force-submits the buffer;
+  **Escape** abandons it (the partials were non-mutating, so nothing to undo).
+
+The browser **never parses loft** — the engine owns "is this complete?", so the buffer is
+correct for every construct (string braces, the `{{ }}` escaping) with no duplicated grammar
+to drift, and each submit-attempt re-sends the *whole* (possibly re-edited) buffer, so the
+server stays stateless across continuations and only the final complete buffer mutates. The
+per-attempt round-trip is a sub-millisecond local call. Pasting a multi-line definition +
+Enter just works (the buffer is complete → runs once).
+
+*Error lines must point at the user's line — a fix the REPL panel needs.* Diagnostics are
+already structured (line / col), so the panel can mark the offending REPL line exactly like
+the compiler console — **but only after one correctness fix.** `eval` reports the right line
+for a **definition** (it parses the input directly under `<repl>`), but for a **bare
+expression / binding / statement** it wraps the input *after a textual replay of the session
+body* (`fn replmain_N() -> … { <body> <input> }`, the D1 bridge), so the engine's diagnostic
+line is relative to that wrapped source — **offset** from the user's input (measured: a
+1-line `zzz + 1` reported `2:8`, `badvar` reported `3:2`; the offset varies with session
+state). The clean fix lives **in the REPL eval path, which knows exactly how many prefix
+lines it prepended**: subtract that prefix-line count from each diagnostic's `line` (clamp
+≥ 1) before returning, so `replEval`'s reply carries **input-relative** lines and the browser
+marks the right one with no guessing. (Long-term, the **@PLN14 store-resident env** removes
+the textual body prefix entirely → correct lines for free; the subtraction is the bridge
+until then.) The **column** is best-effort — the parser reports where it *noticed* the error,
+not always the token start (`notavar` at col 3 surfaced as col 14) — so the panel anchors on
+the line (a reliable gutter mark + message) and treats a precise column underline as a bonus.
+
+*Engine basis — shipped:* both halves exist (top-level `eval`/`value_of`, frame
+`debug_eval`); the new code is the context-routing `replEval` wrapper (incl. the line-offset
+fix above) + the shell panel + the per-context history. *Slot:* the panel + top-level REPL
+stand alone (land any time after slice 1); the frame-context switch completes alongside
+**slice 4** (debugger UI). It is the PROTOCOL.md "REPL console," made context-aware.
 
 ## Dogfood driver — the `story` / crawler roguelike
 

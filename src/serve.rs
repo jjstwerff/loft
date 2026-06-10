@@ -312,61 +312,106 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     out
 }
 
-// ── the browser shell (slice 1: source view + Run + Program console) ─────────────────
+// ── the browser shell (slice 1 + 2: line-numbered source, Run, dual console) ─────────
 
-/// Build the minimal IDE shell for `file`: its `source` in a read-only code pane, a Run
-/// button, and a Program console.  The page opens a WebSocket, `launch`es the file, and on
-/// **Run** sends `run` and appends each `output` event to the console.
+/// Build the IDE shell for `file`: its `source` in a line-numbered read-only pane, a Run
+/// button, and the **dual console** — a Compiler pane (diagnostics) over a Program pane
+/// (stdout).  The page opens a WebSocket, `launch`es + `compile`s the file on connect, marks
+/// diagnostic lines in the source, and on **Run** streams the program's output.  Built by
+/// token-replacement (not `format!`) so the CSS/JS braces stay literal.
 fn render_shell(file: &str, source: &str) -> String {
-    let src = html_escape(source);
-    let file_js = js_string(file);
-    format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
-<link rel="icon" href="data:,"><title>loft · {title}</title>
+    SHELL_TEMPLATE
+        .replace("__TITLE__", &html_escape(file))
+        .replace("__SOURCE_ROWS__", &render_source_lines(source))
+        .replace("__FILE_JS__", &js_string(file))
+}
+
+/// Render `source` as line-numbered rows (`<div id="L<n>">`), so a diagnostic at line *n*
+/// can mark its row and the gutter shows line numbers.
+fn render_source_lines(source: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for (i, line) in source.lines().enumerate() {
+        let n = i + 1;
+        let _ = write!(
+            out,
+            "<div class=\"row\" id=\"L{n}\"><span class=\"gut\">{n}</span><span class=\"ln\">{}</span></div>",
+            html_escape(line)
+        );
+    }
+    out
+}
+
+const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="icon" href="data:,"><title>loft · __TITLE__</title>
 <style>
-  :root {{ color-scheme: light dark; }}
-  body {{ margin:0; font:14px/1.5 system-ui,sans-serif; }}
-  #bar {{ padding:8px 12px; border-bottom:1px solid #8884; display:flex; gap:12px; align-items:center; }}
-  #bar button {{ font:inherit; padding:4px 12px; cursor:pointer; }}
-  #status {{ opacity:.7; }}
-  #main {{ display:grid; grid-template-columns:1fr 1fr; height:calc(100vh - 41px); }}
-  pre {{ margin:0; padding:12px; overflow:auto; font:13px/1.45 ui-monospace,monospace; }}
-  #code {{ border-right:1px solid #8884; white-space:pre; }}
-  #pane {{ display:flex; flex-direction:column; min-height:0; }}
-  #pane h2 {{ margin:0; padding:6px 12px; font-size:12px; opacity:.6; border-bottom:1px solid #8884; text-transform:uppercase; letter-spacing:.05em; }}
-  #out {{ flex:1; }}
+  :root { color-scheme: light dark; }
+  body { margin:0; font:14px/1.5 system-ui,sans-serif; }
+  #bar { padding:8px 12px; border-bottom:1px solid #8884; display:flex; gap:12px; align-items:center; }
+  #bar button { font:inherit; padding:4px 12px; cursor:pointer; }
+  #status { opacity:.7; }
+  #main { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; height:calc(100vh - 41px); }
+  #code { grid-row:1 / 3; border-right:1px solid #8884; overflow:auto; padding:8px 0; font:13px/1.45 ui-monospace,monospace; }
+  .row { display:flex; white-space:pre; }
+  .row .gut { width:3em; text-align:right; padding-right:.8em; opacity:.4; user-select:none; flex:none; }
+  .row .ln { flex:1; padding-right:12px; }
+  .row.error { box-shadow:inset 3px 0 #e53935; background:#e5393522; }
+  .row.warning { box-shadow:inset 3px 0 #f9a825; background:#f9a82522; }
+  .pane { display:flex; flex-direction:column; min-height:0; }
+  .pane h2 { margin:0; padding:6px 12px; font-size:12px; opacity:.6; border-bottom:1px solid #8884; text-transform:uppercase; letter-spacing:.05em; }
+  .body { flex:1; overflow:auto; margin:0; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; white-space:pre-wrap; }
+  #diags .d { cursor:pointer; padding:2px 0; }
+  #diags .d.error { color:#e53935; } #diags .d.warning { color:#b8860b; }
+  #diags .d .loc { opacity:.55; margin-right:.6em; }
+  #diags .none { opacity:.45; }
 </style></head><body>
 <div id="bar"><button id="run">▶ Run</button><span id="status">connecting…</span></div>
 <div id="main">
-  <pre id="code">{src}</pre>
-  <div id="pane"><h2>Program</h2><pre id="out"></pre></div>
+  <div id="code">__SOURCE_ROWS__</div>
+  <div class="pane"><h2>Compiler</h2><div id="diags" class="body"></div></div>
+  <div class="pane"><h2>Program</h2><pre id="out" class="body"></pre></div>
 </div>
 <script>
-const FILE = {file_js};
+const FILE = __FILE_JS__;
 const $ = id => document.getElementById(id);
 let ws, mid = 0;
-function connect() {{
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function row(n) { return document.getElementById("L" + n); }
+function clearDiags() {
+  document.querySelectorAll("#code .row.error, #code .row.warning").forEach(r => r.classList.remove("error", "warning"));
+  $("diags").innerHTML = "";
+}
+function showDiags(items) {
+  clearDiags();
+  if (!items.length) { $("diags").innerHTML = '<div class="none">no problems</div>'; return; }
+  for (const it of items) {
+    const lvl = (it.level === "error" || it.level === "fatal") ? "error" : "warning";
+    const r = row(it.line); if (r) r.classList.add(lvl);
+    const d = document.createElement("div");
+    d.className = "d " + lvl;
+    d.innerHTML = '<span class="loc">' + it.line + ':' + it.col + '</span>' + esc(it.message);
+    d.onclick = () => { const rr = row(it.line); if (rr) rr.scrollIntoView({block: "center"}); };
+    $("diags").appendChild(d);
+  }
+}
+function connect() {
   ws = new WebSocket("ws://" + location.host + "/ws");
-  ws.onopen = () => {{ $("status").textContent = "connected"; send("launch", {{file: FILE}}); }};
-  ws.onclose = () => {{ $("status").textContent = "disconnected"; }};
-  ws.onerror = () => {{ $("status").textContent = "error"; }};
-  ws.onmessage = ev => {{
-    let m; try {{ m = JSON.parse(ev.data); }} catch {{ return; }}
-    if (m.event === "output") $("out").textContent += m.text;
-    else if (m.event === "stopped") $("out").textContent += "\n⏸ stopped in " + ((m.frame||{{}}).function || "?") + "\n";
+  ws.onopen = () => { $("status").textContent = "connected"; send("launch", {file: FILE}); send("compile", {file: FILE}); };
+  ws.onclose = () => { $("status").textContent = "disconnected"; };
+  ws.onerror = () => { $("status").textContent = "error"; };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.event === "diagnostics") showDiags(m.items || []);
+    else if (m.event === "output") $("out").textContent += m.text;
+    else if (m.event === "stopped") $("out").textContent += "\n⏸ stopped in " + ((m.frame || {}).function || "?") + "\n";
     else if (m.event === "terminated") $("out").textContent += "\n— done —\n";
     else if (m.ok === false && m.error) $("out").textContent += "\n[error] " + m.error + "\n";
-  }};
-}}
-function send(req, extra) {{ ws.send(JSON.stringify(Object.assign({{id: ++mid, req}}, extra))); }}
-$("run").onclick = () => {{ if (!ws || ws.readyState !== 1) return; $("out").textContent = ""; send("run", {{}}); }};
-connect();
-</script></body></html>"#,
-        title = html_escape(file),
-        src = src,
-        file_js = file_js,
-    )
+  };
 }
+function send(req, extra) { ws.send(JSON.stringify(Object.assign({id: ++mid, req}, extra))); }
+$("run").onclick = () => { if (!ws || ws.readyState !== 1) return; $("out").textContent = ""; send("compile", {file: FILE}); send("run", {}); };
+connect();
+</script></body></html>"##;
 
 /// HTML-escape `<`, `>`, `&` for embedding text in element content.
 fn html_escape(s: &str) -> String {

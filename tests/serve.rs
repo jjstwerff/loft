@@ -168,3 +168,24 @@ fn serve_ws_launch_run_streams_output() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn serve_ws_compile_streams_diagnostics() {
+    // @PLN16 M5e slice 2 — compile over the websocket → a structured `diagnostics` event.
+    let path = tmp_program("diag", "fn main() {\n  X = 5;\n  print(\"{X}\")\n}\n");
+    let file = path.to_string_lossy().into_owned();
+    let port = 18783;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
+    );
+    let msgs = recv_until(&mut ws, 4, |m| m.contains("\"event\":\"diagnostics\""));
+    let all = msgs.join("\n");
+    assert!(
+        all.contains("\"event\":\"diagnostics\"") && all.contains("\"level\":\"warning\""),
+        "a warning diagnostic streamed over the websocket: {all}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

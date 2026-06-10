@@ -114,6 +114,18 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
             Ok(Err(diags)) => out.push(resp_err(id, &diags_msg(&diags))),
             Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
         },
+        "compile" => {
+            // @PLN16 M5e slice 2 — the compiler-console feed: check the file (no run, no
+            // load) and emit its diagnostics (errors + warnings) as a structured event.
+            let file = text(&parsed, "file").unwrap_or("");
+            match session.compile(file) {
+                Ok(diags) => {
+                    out.push(resp_ok(id, ""));
+                    out.push(diagnostics_event(file, &diags));
+                }
+                Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
+            }
+        }
         "setBreakpoints" => {
             set_breakpoints(session, &parsed);
             out.push(resp_ok(id, ""));
@@ -343,6 +355,41 @@ fn event(name: &str, body: &str) -> String {
         format!("{{\"event\":\"{name}\"}}")
     } else {
         format!("{{\"event\":\"{name}\",{body}}}")
+    }
+}
+
+/// @PLN16 M5e slice 2 — the compiler console's feed: a `diagnostics` event listing the
+/// file's diagnostics (errors + warnings), each structured (line / col / level / message)
+/// so the editor can mark them and the console can list them.  Emitted even when the list
+/// is empty, so a re-compile clears stale markers.
+fn diagnostics_event(file: &str, diags: &[crate::diagnostics::DiagEntry]) -> String {
+    let items = diags
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"line\":{},\"col\":{},\"level\":{},\"message\":{}}}",
+                d.line,
+                d.col,
+                esc(level_str(d.level)),
+                esc(&d.message)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    event(
+        "diagnostics",
+        &format!("\"file\":{},\"items\":[{items}]", esc(file)),
+    )
+}
+
+/// The protocol spelling of a diagnostic [`Level`](crate::diagnostics::Level).
+fn level_str(level: crate::diagnostics::Level) -> &'static str {
+    use crate::diagnostics::Level;
+    match level {
+        Level::Debug => "debug",
+        Level::Warning => "warning",
+        Level::Error => "error",
+        Level::Fatal => "fatal",
     }
 }
 
