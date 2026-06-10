@@ -73,6 +73,20 @@ only spreads the joysticks and screens around the room:
   *without* prediction, rollback, reconciliation, or lag compensation — the
   single-machine illusion holds because the network is effectively a long controller
   cable. The thin-client model is not a limitation here; it **is** the goal.
+- **Minimal latency is a goal in its own right** (the user's call, 2026-06-10) —
+  short-term accuracy is appreciated, **latency wins when they conflict**. Concretely:
+  - The **latency budget is dominated by self-inflicted waits, not the wire**: tick
+    wait (an input arriving just after a tick waits a full interval — up to 33 ms at
+    30 Hz, dwarfing ~1 ms LAN RTT), broadcast batching, client frame pacing. The
+    phase-00 stamp chain is this goal's instrument — every wait phase measured, then
+    minimized (send immediately after the tick; apply inputs at drain time; late-latch
+    the freshest state into the render; `TCP_NODELAY` on the WS path).
+  - **The interpolation trade flips**: smoothing renders the *past* (@PLAN50's Hermite
+    work buys accuracy at 1–2 ticks of display lag). Under this goal the client
+    renders the **newest state** (or forward-extrapolates) by default; interpolation
+    delay becomes a tunable that defaults toward zero, not toward smooth.
+  - The quick UDP channel (05a) serves this goal directly: no retransmit stalls, no
+    in-order head-of-line — a stale-but-late pose is *discarded*, never waited for.
 - **Two participation tiers — and the phone is the on-ramp, not the end goal.** The
   **full arcade seat** is a *native client*: a real screen, real input (gamepad /
   keyboard / cabinet stick), full rendering — that is what the experience is designed
