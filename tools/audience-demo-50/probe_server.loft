@@ -14,6 +14,11 @@
 //
 // Wire format (text, per @PLN6 framing convention "msg_id:payload"):
 //   client → server   1:cid,x,y,z         INPUT (probe carries position)
+//   client → server   4:t0                ECHO request (@PLN18 00c stamp chain;
+//                                         t0 = client clock µs)
+//   server → client   5:t0,t1,t5          ECHO reply, sent AT THE NEXT TICK so it
+//                                         rides the same tick-wait as game data
+//                                         (t1 = server clock at drain, t5 = at send)
 //   server → client   2:plane_id,seq,x,y,z  POSE
 //   server → client   3:plane_id          EXIT (peer left your sight)
 //
@@ -53,12 +58,21 @@ struct Vis {
   peers: vector<SightEntry>,
 }
 
+// @PLN18 00c — one pending turn-around echo: who asked, their t0 (verbatim),
+// and the server clock when the request was DRAINED (t1).
+struct EchoReq {
+  cid: integer not null,
+  t0:  text not null,
+  t1:  integer not null,
+}
+
 struct World {
   planes:       hash<Plane[cid]>,
   vis:          hash<Vis[cid]>,
   srv:          server::Server,
   last_tick_us: integer not null,
   tick:         integer not null,
+  echoes:       vector<EchoReq>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -138,11 +152,23 @@ fn broadcast_tick(world: World) {
   }
   // Each plane's sequence number ticks once per broadcast tick.
   for bt_q in world.planes { bt_q.seq = bt_q.seq + 1; }
+  // @PLN18 00c — flush pending echoes with the send-time stamp (t5).  Sent after
+  // the poses so the echo experiences a full tick's queue position, like a pose.
+  for er in world.echoes {
+    world.srv.send_to(er.cid, "5:{er.t0},{er.t1},{ticks()}");
+  }
+  world.echoes = [];
 }
 
 // ── Message dispatch ────────────────────────────────────────────────────
 
 fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
+  // @PLN18 00c — ECHO request: stamp t1 (server clock at drain) and queue the
+  // reply for the NEXT tick, so it traverses the same tick-wait game data does.
+  if msg_id == 4 {
+    world.echoes += [EchoReq { cid: cid, t0: payload, t1: ticks() }];
+    return;
+  }
   if msg_id != 1 { return; }
   parts = parse_input(payload);
   if !parts.ok { return; }
@@ -173,6 +199,7 @@ fn main() {
     srv:          srv,
     last_tick_us: ticks(),
     tick:         0,
+    echoes:       [],
   };
 
   while true {
