@@ -811,6 +811,7 @@ pub(crate) fn run_tests(
                             declared: HashSet::new(),
                             active_pre_eval: std::collections::HashMap::new(),
                             reachable: HashSet::new(),
+                            dup_fn_names: HashSet::new(),
                             loop_stack: Vec::new(),
                             next_format_count: 0,
                             yield_collect: false,

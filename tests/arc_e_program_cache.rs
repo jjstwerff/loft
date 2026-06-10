@@ -188,3 +188,68 @@ fn cwd_directive_survives_warm_load() {
     let _ = std::fs::remove_file(&script);
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+/// #310 — a program whose library carries a native cdylib (`[library]
+/// native = "<stem>"`) must dlopen it on WARM runs too.  The registration
+/// (`pending_native_libs`) is parse-time state, and the warm load skips
+/// parsing — pre-fix it received an empty list, left the panic stubs wired,
+/// and every cached run died at the first `#native` call ("native function
+/// not loaded").  The fix persists `nlib <stem> <pkg_dir>` manifest lines and
+/// re-resolves them at warm load (cold-equal freshness semantics).
+#[test]
+fn program_cache_warm_keeps_native_libs() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_arce_nlib_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "use native_pkg;\n\nfn main() {\n    r = ext_add_one(41);\n    print(\"r={r}\\n\");\n}\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_arce_nlib_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    let run_lib = |cache: Option<&std::path::Path>| {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg("--lib")
+            .arg(workspace_root().join("tests/lib"))
+            .arg(&script)
+            .current_dir(workspace_root())
+            .env_remove("LOFT_STDLIB_CACHE");
+        if let Some(dir) = cache {
+            cmd.env("LOFT_PROGRAM_CACHE", "1")
+                .env("XDG_CACHE_HOME", dir);
+        } else {
+            cmd.env_remove("LOFT_PROGRAM_CACHE");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // Cache-off baseline (also auto-builds the fixture cdylib if needed).
+    let (ok_off, out_off, err_off) = run_lib(None);
+    assert!(ok_off, "cache-off failed: {out_off}\n{err_off}");
+    assert!(out_off.contains("r=42"), "off output: {out_off}");
+
+    // Cold writes the bundle + manifest (with the nlib registration).
+    let (ok_cold, out_cold, err_cold) = run_lib(Some(&cache_dir));
+    assert!(ok_cold, "cold failed: {out_cold}\n{err_cold}");
+    assert!(out_cold.contains("r=42"), "cold output: {out_cold}");
+
+    // Warm must dlopen the cdylib again — pre-#310 this panicked with
+    // "native function not loaded".
+    let (ok_warm, out_warm, err_warm) = run_lib(Some(&cache_dir));
+    assert!(
+        ok_warm,
+        "warm run lost the native-lib registration (#310): {out_warm}\n{err_warm}"
+    );
+    assert!(out_warm.contains("r=42"), "warm output: {out_warm}");
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}

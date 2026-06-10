@@ -365,6 +365,46 @@ pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
     reachable
 }
 
+/// Function names carried by MORE than one Function/Dynamic def.  Two modules
+/// may export the same `pub fn` name — `Data` scopes defs by `(name, source)`,
+/// but emitted Rust is one flat namespace, so such names need a disambiguated
+/// identifier (#305: rustc E0428 "defined multiple times").
+#[must_use]
+pub fn duplicate_fn_names(data: &Data) -> HashSet<String> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut dups = HashSet::new();
+    for d in 0..data.definitions() {
+        let def = data.def(d);
+        if !matches!(def.def_type(), DefType::Function | DefType::Dynamic) {
+            continue;
+        }
+        if !seen.insert(def.name()) {
+            dups.insert(def.name().to_string());
+        }
+    }
+    dups
+}
+
+/// The Rust identifier emitted for function `def`.  Unique names keep their
+/// bare ident (stable existing output); a name in `dups` gets a short content
+/// hash of its defining FILE appended — two same-named fns can only come from
+/// different files (the parser rejects an in-file redefinition), so the pair
+/// (name, defining file) is unique program-wide.
+#[must_use]
+pub fn disambiguated_fn_ident(dups: &HashSet<String>, def: &crate::data::Definition) -> String {
+    let name = def.name();
+    if !dups.contains(name) {
+        return name.to_string();
+    }
+    // FNV-1a over the defining file path — deterministic across runs.
+    let mut h: u32 = 0x811c_9dc5;
+    for b in def.position().file.bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{name}_m{h:08x}")
+}
+
 /// Use this to drive Rust code generation from a compiled loft program.
 /// It bundles the read-only compile-time data with the mutable emission state
 /// so that individual emits functions don't need to pass both separately.
@@ -386,6 +426,11 @@ pub struct Output<'a> {
     pub active_pre_eval: HashMap<usize, String>,
     /// Set of reachable `def_nrs` for native output (populated by `output_native_reachable`).
     pub reachable: HashSet<u32>,
+    /// Function names defined by MORE than one def (two modules may export the
+    /// same `pub fn` — scoped by source in `Data`, but flat in emitted Rust).
+    /// Populated at the generation entries; [`Output::fn_ident`] consults it so
+    /// collision members get a disambiguated identifier (#305: E0428).
+    pub dup_fn_names: HashSet<String>,
     /// Stack of enclosing loop scope ids, innermost last.
     /// Used to emit Rust labeled breaks for `Value::Break(n)` with n > 0.
     pub loop_stack: Vec<u16>,
@@ -711,6 +756,15 @@ enum BareIo {
 }
 
 impl Output<'_> {
+    /// The Rust identifier this generation emits for function `def` — the bare
+    /// name unless it collides across modules (see [`disambiguated_fn_ident`]).
+    /// Every site that writes a fn definition OR a call to one must go through
+    /// this (#305).
+    #[must_use]
+    pub fn fn_ident(&self, def: &crate::data::Definition) -> String {
+        disambiguated_fn_ident(&self.dup_fn_names, def)
+    }
+
     /// Use this before emitting indented output lines.
     /// # Errors
     /// When the output cannot be written
@@ -902,6 +956,7 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
+        self.dup_fn_names = duplicate_fn_names(self.data);
         // P269 — populate reachability from `n_main` so the unimplemented-
         // native check (`output_function`'s `todo!()`-emit branches) can
         // distinguish "reachable AND unimpl" (compile_error!, fail at
@@ -1058,6 +1113,7 @@ extern crate loft;"
         till: u32,
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
+        self.dup_fn_names = duplicate_fn_names(self.data);
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
         Self::emit_file_header(w, self.data, self.wasm_browser, &reachable)?;
@@ -2283,7 +2339,11 @@ extern crate loft;"
         if !def.position().file.is_empty() {
             writeln!(w, "// loft:{}:{}", def.position().file, def.position().line)?;
         }
-        write!(w, "fn {}(cell: &std::cell::UnsafeCell<Stores>", def.name())?;
+        write!(
+            w,
+            "fn {}(cell: &std::cell::UnsafeCell<Stores>",
+            self.fn_ident(def)
+        )?;
         for a in def.attributes() {
             let tp = rust_type(&a.typedef, &Context::Argument);
             write!(w, ", mut var_{}: {tp}", sanitize(&a.name))?;

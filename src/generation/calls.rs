@@ -86,7 +86,7 @@ impl Output<'_> {
         } else {
             crate::codegen_runtime::Abi::Cell
         };
-        write!(w, "{}(", def_fn.name())?;
+        write!(w, "{}(", self.fn_ident(def_fn))?;
         let mut first_arg = true;
         if matches!(abi, crate::codegen_runtime::Abi::Cell) {
             write!(w, "cell")?;

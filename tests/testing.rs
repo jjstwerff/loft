@@ -445,6 +445,7 @@ impl Test {
             declared: Default::default(),
             active_pre_eval: Default::default(),
             reachable: Default::default(),
+            dup_fn_names: Default::default(),
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
