@@ -436,3 +436,62 @@ fn serve_ws_run_tests_reports_pass_and_fail() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn serve_ws_run_suite_runs_package_tests() {
+    // @PLN16 M5e slice 5 — `runSuite` is the PACKAGE-aware runner (`loft test` semantics):
+    // walk up from the served file to the nearest loft.toml, put the manifest's src/ on the
+    // import path, and run every tests/*.loft.  Each testResult carries its `file`; the
+    // summary carries the file count.  A start point with no loft.toml upward is refused.
+    let root = std::env::temp_dir().join(format!("loft_suitepkg_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(
+        root.join("loft.toml"),
+        "[package]\nname = \"suitepkg\"\nversion = \"0.1.0\"\n\n[library]\nentry = \"src/suitepkg.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/suitepkg.loft"),
+        "pub fn triple(n: integer) -> integer {\n  n * 3\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tests/a_math.loft"),
+        "use suitepkg::*;\nfn test_triple() {\n  assert(triple(7) == 21, \"triple\");\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tests/b_more.loft"),
+        "use suitepkg::*;\nfn test_wrong() {\n  assert(triple(1) == 999, \"deliberately fails\");\n}\n",
+    )
+    .unwrap();
+    let entry = root
+        .join("src/suitepkg.loft")
+        .to_string_lossy()
+        .into_owned();
+    let port = 18790;
+    start_server(port, entry.clone());
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"runSuite\",\"file\":\"{entry}\"}}"),
+    );
+    let all = recv_until(&mut ws, 8, |m| m.contains("\"event\":\"testSummary\"")).join("\n");
+    assert!(
+        all.contains(
+            "\"name\":\"test_triple\",\"passed\":true,\"line\":2,\"file\":\"a_math.loft\""
+        ),
+        "a_math's test passes with its file tag: {all}"
+    );
+    assert!(
+        all.contains("\"file\":\"b_more.loft\"") && all.contains("deliberately fails"),
+        "b_more's failure carries file + message: {all}"
+    );
+    assert!(
+        all.contains("\"event\":\"testSummary\",\"passed\":1,\"failed\":1,\"files\":2"),
+        "summary counts across both files: {all}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

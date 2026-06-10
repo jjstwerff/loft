@@ -190,6 +190,38 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
                 Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
             }
         }
+        "runSuite" => {
+            // @PLN16 M5e slice 5 — the PACKAGE suite (`loft test` semantics): walk up from
+            // `file` to the nearest loft.toml, run every tests/*.loft.  Each result event
+            // carries its `file` so the panel can group; the summary adds the file count.
+            let file = text(&parsed, "file").unwrap_or("");
+            let _ = capture_take();
+            match session.run_suite(file) {
+                Ok(by_file) => {
+                    let _ = capture_take();
+                    out.push(resp_ok(id, ""));
+                    let (mut pass_count, mut fail_count) = (0u32, 0u32);
+                    let files = by_file.len();
+                    for (fname, results) in &by_file {
+                        for t in results {
+                            if t.passed {
+                                pass_count += 1;
+                            } else {
+                                fail_count += 1;
+                            }
+                            out.push(test_result_event_in(t, fname));
+                        }
+                    }
+                    out.push(event(
+                        "testSummary",
+                        &format!(
+                            "\"passed\":{pass_count},\"failed\":{fail_count},\"files\":{files}"
+                        ),
+                    ));
+                }
+                Err(e) => out.push(resp_err(id, &e.to_string())),
+            }
+        }
         "setBreakpoints" => {
             set_breakpoints(session, &parsed);
             out.push(resp_ok(id, ""));
@@ -455,14 +487,25 @@ fn diagnostics_event(file: &str, diags: &[crate::diagnostics::DiagEntry]) -> Str
 /// the failure message when it failed), so the browser's test panel can list it and a
 /// failing row can jump to its line.
 fn test_result_event(t: &crate::repl::TestRun) -> String {
+    test_result_event_in(t, "")
+}
+
+/// [`test_result_event`] carrying the test's **file** — the suite runner's form, so the
+/// panel can group results per test file (empty `file` = single-file run, field omitted).
+fn test_result_event_in(t: &crate::repl::TestRun, file: &str) -> String {
     let msg = t
         .message
         .as_deref()
         .map_or(String::new(), |m| format!(",\"message\":{}", esc(m)));
+    let in_file = if file.is_empty() {
+        String::new()
+    } else {
+        format!(",\"file\":{}", esc(file))
+    };
     event(
         "testResult",
         &format!(
-            "\"name\":{},\"passed\":{},\"line\":{}{msg}",
+            "\"name\":{},\"passed\":{},\"line\":{}{in_file}{msg}",
             esc(&t.name),
             t.passed,
             t.line

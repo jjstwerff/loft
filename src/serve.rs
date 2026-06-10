@@ -395,7 +395,7 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
-<div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="save" disabled>Save</button><span id="dirty"></span>
+<div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="suite" title="Run the package suite (tests/*.loft beside the nearest loft.toml)">✓✓ Suite</button><button id="save" disabled>Save</button><span id="dirty"></span>
   <span id="steps"><button id="cont" disabled title="Continue (to next breakpoint)">⏵</button><button id="over" disabled title="Step over">↷</button><button id="into" disabled title="Step into">↓</button><button id="out" disabled title="Step out">↑</button></span>
   <span id="status">connecting…</span></div>
 <div id="main">
@@ -482,7 +482,7 @@ function markCurrentLine(n) {
 function setPaused(on, frame) {                              // the run/paused state machine
   paused = on;
   for (const b of ["cont", "over", "into", "out"]) $(b).disabled = !on;
-  $("run").disabled = on;                                   // can't relaunch mid-pause — Continue/step first
+  for (const b of ["run", "test", "suite"]) $(b).disabled = on;   // no relaunch / test run over a live frame — Continue/step first
   $("dbg").hidden = !on;
   if (on) {
     setCtx("frame");
@@ -571,26 +571,31 @@ function onReplReply(m) {
   pending = null; histIdx = -1;
   const t = $("replin"); t.value = ""; autosize(t);
 }
-// ── test runner — Test button → runTests → testResult* → testSummary ──
-function runTests() {
-  if (!ws || ws.readyState !== 1) return;
+// ── test runner — Test (this file) / Suite (the package's tests/*) → testResult* → testSummary ──
+function startTests(req) {
+  if (!ws || ws.readyState !== 1 || paused) return;
   if (isDirty()) persist();                      // save first so the tests run the buffer
   $("tlist").innerHTML = ""; $("tsum").textContent = "running…"; $("tsum").className = "";
   $("tests").hidden = false;
-  send("runTests", {file: FILE});
+  send(req, {file: FILE});
 }
 function addTestRow(m) {
   const row = document.createElement("div"); row.className = "t " + (m.passed ? "pass" : "fail");
-  let html = '<span class="ti">' + (m.passed ? "✓" : "✗") + '</span><span class="tn">' + esc(m.name) + '</span>';
+  // A suite result carries its test file; a single-file run omits it (this buffer).
+  const label = (m.file ? m.file + " · " : "") + m.name;
+  let html = '<span class="ti">' + (m.passed ? "✓" : "✗") + '</span><span class="tn">' + esc(label) + '</span>';
   if (m.message) html += '<span class="tm">' + esc(m.message) + '</span>';
   row.innerHTML = html;
-  if (!m.passed) { row.classList.add("clickable"); row.title = "jump to line " + m.line; row.onclick = () => gotoLine(m.line); }
+  // Click-to-jump targets THIS buffer, so only single-file failures jump (a suite
+  // failure lives in another file; multi-file navigation is a later slice).
+  if (!m.passed && !m.file) { row.classList.add("clickable"); row.title = "jump to line " + m.line; row.onclick = () => gotoLine(m.line); }
   $("tlist").appendChild(row);
 }
 function finishTests(m) {
   const total = m.passed + m.failed;
-  if (!total) { $("tlist").innerHTML = '<div class="none">no tests in this file</div>'; }
-  $("tsum").textContent = m.failed === 0 ? (m.passed + "/" + total + " passed") : (m.failed + " of " + total + " failed");
+  if (!total) { $("tlist").innerHTML = '<div class="none">no tests found</div>'; }
+  const files = m.files !== undefined ? " · " + m.files + " file" + (m.files === 1 ? "" : "s") : "";
+  $("tsum").textContent = (m.failed === 0 ? (m.passed + "/" + total + " passed") : (m.failed + " of " + total + " failed")) + files;
   $("tsum").className = m.failed === 0 ? "ok" : "bad";
 }
 function connect() {
@@ -631,7 +636,8 @@ $("run").onclick = () => {
   send("compile", {file: FILE});                  // refresh the compiler console
   runAfterLaunch = send("launch", {file: FILE});  // reload; run() fires only if this launch is ok
 };
-$("test").onclick = runTests;
+$("test").onclick = () => startTests("runTests");
+$("suite").onclick = () => startTests("runSuite");
 const ti = $("replin");
 ti.addEventListener("input", () => autosize(ti));
 ti.addEventListener("keydown", e => {

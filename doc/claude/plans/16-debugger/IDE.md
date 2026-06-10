@@ -246,9 +246,17 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
      the editor. Smoke-verified the served shell (`id="test"`/`tests`/`tlist`, `runTests`/
      `addTestRow`/`finishTests`); the protocol is covered by
      `serve_ws_run_tests_reports_pass_and_fail`.
-   - **Pending — `runSuite`.** It **must be the PACKAGE-aware runner** (`loft test` — reads
-     `loft.toml`, resolves deps), NOT "run every `.loft` in a dir" — and it is **blocked on the
-     dependency-resolution gap** in § Library vs project below.
+   - **`runSuite` LANDED (2026-06-10) — the PACKAGE-aware runner** (`loft test` semantics, not
+     a dir sweep): `ReplSession::run_suite` walks up from the served file to the nearest
+     `loft.toml`, puts the manifest `entry`'s `src/` on the import path (+ the package's
+     parent dir when it has dependencies, so siblings resolve), and runs every `tests/*.loft`
+     through the per-file runner (`run_file_tests_with`). Each `testResult` carries its
+     **`file`**; the `testSummary` adds `files`. No `loft.toml` upward → a clean error naming
+     that, never a guess. UI: a **✓✓ Suite** button; rows show `file · name`; the summary adds
+     the file count; click-to-jump stays single-file (a suite failure lives in another file —
+     multi-file navigation is the later slice). Test:
+     `serve_ws_run_suite_runs_package_tests` (a fixture package with 2 test files, pass+fail
+     across them). *Slice 5 is complete.*
 6. **The game loop (lavition) — `launchGame` + `reload` (hot-swap) + debug the running
    game.** **Game ▶** launches the program in a **native OpenGL window** (the `make game`
    host); editing a function + **Reload** hot-swaps just that function into the running

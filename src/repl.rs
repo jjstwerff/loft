@@ -1425,6 +1425,17 @@ impl ReplSession {
     /// # Errors
     /// Returns the I/O error if `path` cannot be read.
     pub fn run_file_tests(&mut self, path: &str) -> std::io::Result<Vec<TestRun>> {
+        self.run_file_tests_with(path, &[])
+    }
+
+    /// [`run_file_tests`](Self::run_file_tests) with extra `use`-import dirs appended after
+    /// the session's own — how [`run_suite`](Self::run_suite) injects the package's `src/`
+    /// (+ sibling-deps parent) for each test file without mutating the session.
+    fn run_file_tests_with(
+        &mut self,
+        path: &str,
+        extra_lib_dirs: &[String],
+    ) -> std::io::Result<Vec<TestRun>> {
         // A **fresh** parser — stdlib + the file + the session's `--lib` dirs — is the clean
         // single-parse the CLI runner uses; the persistent session's accumulated parser state
         // does not run a bare test function (every native call faults "Unknown definition").
@@ -1435,6 +1446,11 @@ impl ReplSession {
             .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
         let mut parser = Parser::new();
         parser.lib_dirs.clone_from(&self.parser.lib_dirs);
+        for d in extra_lib_dirs {
+            if !parser.lib_dirs.contains(d) {
+                parser.lib_dirs.push(d.clone());
+            }
+        }
         parser.parse_dir(&self.stdlib_dir, true, false)?;
         let pre_diag = parser.diagnostics.entries().len();
         let parse_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1540,6 +1556,82 @@ impl ReplSession {
                 message,
                 line,
             });
+        }
+        Ok(out)
+    }
+
+    /// @PLN16 M5e slice 5 — run the **package suite**: the `loft test` semantics, in-session.
+    /// Walks up from `start` (the served file) to the nearest `loft.toml`, mirrors the CLI's
+    /// package setup — the manifest `entry`'s `src/` dir joins the import path, plus the
+    /// package's **parent** dir when it has dependencies (so sibling packages resolve) — and
+    /// runs every `tests/*.loft` through the per-file runner.  Returns `(file name, results)`
+    /// per test file.  Deliberately **package-aware, not a directory sweep**: a suite is
+    /// defined by its manifest, so a missing `loft.toml` is an error naming what's missing,
+    /// never a guess.
+    ///
+    /// # Errors
+    /// `NotFound` when no `loft.toml` exists upward from `start`, or the package has no
+    /// `tests/` directory; other I/O errors from reading the test files.
+    pub fn run_suite(&mut self, start: &str) -> std::io::Result<Vec<(String, Vec<TestRun>)>> {
+        use std::io::{Error, ErrorKind};
+        // Find the package root: the nearest ancestor of `start` holding a loft.toml.
+        let abs = std::fs::canonicalize(start).unwrap_or_else(|_| std::path::PathBuf::from(start));
+        let mut root = if abs.is_dir() {
+            Some(abs.as_path())
+        } else {
+            abs.parent()
+        };
+        while let Some(dir) = root {
+            if dir.join("loft.toml").exists() {
+                break;
+            }
+            root = dir.parent();
+        }
+        let Some(root) = root else {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("no loft.toml found upward from {start} — runSuite needs a package"),
+            ));
+        };
+        // The CLI's package setup (`loft test`): manifest entry → src/ on the import path;
+        // the parent dir too when dependencies exist (sibling packages).
+        let manifest = crate::manifest::read_manifest(&root.join("loft.toml").to_string_lossy())
+            .unwrap_or_default();
+        let entry = manifest.entry.unwrap_or_else(|| "src".to_string());
+        let src_dir = std::path::Path::new(&entry)
+            .parent()
+            .map_or_else(|| "src".to_string(), |p| p.to_string_lossy().into_owned());
+        let mut lib_dirs = vec![root.join(&src_dir).to_string_lossy().into_owned()];
+        if !manifest.dependencies.is_empty()
+            && let Some(parent) = root.parent()
+        {
+            lib_dirs.push(parent.to_string_lossy().into_owned());
+        }
+        // Every tests/*.loft, in name order (stable output for the panel).
+        let tests_dir = root.join("tests");
+        if !tests_dir.is_dir() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("package {} has no tests/ directory", root.display()),
+            ));
+        }
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&tests_dir)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            })
+            .collect();
+        files.sort();
+        let mut out = Vec::with_capacity(files.len());
+        for f in files {
+            let name = f.file_name().map_or_else(
+                || f.to_string_lossy().into_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let results = self.run_file_tests_with(&f.to_string_lossy(), &lib_dirs)?;
+            out.push((name, results));
         }
         Ok(out)
     }
