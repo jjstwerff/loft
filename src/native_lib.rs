@@ -587,6 +587,11 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
 /// (an unhashed `target/<prof>/libloft.rlib`, or `deps/`) and an integration test
 /// (a hashed `libloft-<hash>.rlib` in the test binary's `deps/`).  Returns the
 /// chosen rlib path and the `deps/` dir to add to the link search path.
+///
+/// The deps-first preference must stay aligned with `cache::rlib_candidates`
+/// (#304): the fingerprint that validates a built cdylib has to hash the same
+/// rlib this function links, or a cdylib gets validated against one loft and
+/// built against another.
 #[must_use]
 pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();

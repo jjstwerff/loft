@@ -298,13 +298,8 @@ pub fn file_hash(path: &str) -> Option<[u8; 32]> {
 fn loft_rlib_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
-    for cand in [
-        exe_dir.join("libloft.rlib"),
-        exe_dir.join("deps").join("libloft.rlib"),
-    ] {
-        if cand.exists() {
-            return Some(cand);
-        }
+    if let Some(found) = rlib_candidates(exe_dir).into_iter().find(|c| c.exists()) {
+        return Some(found);
     }
     if exe_dir.file_name().is_some_and(|n| n == "bin") {
         let share = exe_dir
@@ -317,6 +312,27 @@ fn loft_rlib_path() -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// Candidate `libloft.rlib` locations for a loft binary at `exe_dir`, most
+/// authoritative first.
+///
+/// `deps/libloft.rlib` MUST come before the uplifted `<profile>/libloft.rlib`
+/// (#304): the deps copy is what every binary links and what
+/// `native_lib::find_loft_rlib` hands to cdylib builds, while the uplifted copy
+/// is only refreshed by an explicit `cargo build --lib`.  `cargo test` rebuilds
+/// the lib (dev-dep-unified features) into `deps/` and re-uplifts the *binary*
+/// but NOT the rlib, so after any `src/` change the uplifted copy describes a
+/// loft that no longer exists.  Fingerprinting that stale file made
+/// [`loft_build_fingerprint`] validate native cdylibs against a different rlib
+/// than they are built against — the full-`make test` viewer crash.  The
+/// uplifted path stays as a fallback for trees without `deps/` (e.g. a
+/// hand-copied binary + rlib pair).
+fn rlib_candidates(exe_dir: &std::path::Path) -> [std::path::PathBuf; 2] {
+    [
+        exe_dir.join("deps").join("libloft.rlib"),
+        exe_dir.join("libloft.rlib"),
+    ]
 }
 
 /// @PLN11 Arc N / N0 — the canonical fingerprint of THIS loft build, for
@@ -679,6 +695,19 @@ mod tests {
             "a 0-fp write must not overwrite the existing stamp"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rlib_candidates_prefer_deps_over_uplifted() {
+        // #304 — the fingerprint must hash `deps/libloft.rlib` (the copy every
+        // binary links and `native_lib::find_loft_rlib` builds cdylibs against),
+        // not the uplifted `<profile>/libloft.rlib`: `cargo test` rewrites the
+        // deps copy and the binary but leaves the uplifted copy stale, so the
+        // old uplifted-first order validated cdylibs against a dead loft build.
+        let exe_dir = std::path::Path::new("target/release");
+        let [first, second] = rlib_candidates(exe_dir);
+        assert_eq!(first, exe_dir.join("deps").join("libloft.rlib"));
+        assert_eq!(second, exe_dir.join("libloft.rlib"));
     }
 
     #[test]

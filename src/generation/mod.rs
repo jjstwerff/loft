@@ -843,6 +843,19 @@ extern crate loft;"
             writeln!(w, "}}")?;
         } else {
             // Emit extern crate declarations for native packages.
+            //
+            // KNOWN LIMITATION (#307): this emits an extern for EVERY native
+            // package in `data`, not just the ones the emitted reachable set
+            // calls.  For a library cdylib built inside a multi-package
+            // program (the viewer: markdown + server + web) the unreferenced
+            // externs make rustc fail (E0463: no `--extern` supplied for them)
+            // and the library silently interprets.  Do NOT "fix" this by simply
+            // supplying the rlib paths or filtering to reachable packages until
+            // the auto-native dispatch divergences are resolved: once the
+            // markdown cdylib actually builds, native dispatch produces wrong
+            // results (missing heading slugs) and a codegen slot panic
+            // ("Incorrect var ... on n_main") — #307 has the probes and the
+            // two reverted candidate fixes.
             for (crate_name, _) in &data.native_packages {
                 let ident = crate_name.replace('-', "_");
                 writeln!(w, "extern crate {ident};")?;
