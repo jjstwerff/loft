@@ -67,6 +67,17 @@ stays WS — meaning-code never branches on transport.  The phase-04 connector
 kernel auto-performs the hello, so for native seats the selection is automatic
 end-to-end with zero client code either.
 
+**Priority keyframes** (the class table's discontinuity rule, landed
+2026-06-10 with the phase-04 work): `keyframe(cid, msg)` promotes ONE sample
+of a sync kind to must-deliver — it rides the reliable channel `S:`-framed in
+the SAME seq space as the datagrams, so a bound connector's slots keep total
+order across both carriers (an in-flight older datagram is discarded as
+stale) and an unbound web client just gets the plain message it always gets.
+The promotion DECISION (what counts as a bounce/teleport) is meaning;
+delivery is mechanics.  Proven under a TOTAL datagram blackout
+(`engine_host_connector::keyframes_survive_total_datagram_loss`): with 100 %
+injected drop, only the promoted samples arrive.
+
 ## Acceptance
 
 `tests/engine_host_udp.rs` (end-to-end, real sockets): cookie read from the

@@ -68,7 +68,6 @@ const UDP_MAX_DATAGRAM: usize = 1200;
 struct UdpPath {
     addr: SocketAddr,
     last_seen_us: i64,
-    out_seq: i64,
 }
 
 /// One inbound conflation slot: the newest `S:` datagram from this peer for
@@ -92,6 +91,10 @@ struct ClientNet {
     /// The UDP handshake cookie for this WS session ("" = no UDP listener).
     cookie: String,
     path: Option<UdpPath>,
+    /// One outbound seq space per peer for ALL sync-channel sends — datagrams
+    /// AND keyframes — so the receiver's slots totally order them even when
+    /// the carriers race (a keyframe on TCP vs in-flight datagrams).
+    out_seq: i64,
     /// Conflation slots, one per `msg_id` this client has sent (newest per
     /// sender PER MESSAGE KIND — two sync kinds never collapse each other).
     slots: Vec<SyncSlot>,
@@ -102,6 +105,7 @@ impl ClientNet {
         ClientNet {
             cookie,
             path: None,
+            out_seq: 0,
             slots: Vec::new(),
         }
     }
@@ -498,7 +502,6 @@ fn pump_udp(k: &mut Kernel) {
                 k.net[cid].path = Some(UdpPath {
                     addr: from,
                     last_seen_us: now,
-                    out_seq: 0,
                 });
                 let _ = udp.send_to(format!("A:{cid}").as_bytes(), from);
             }
@@ -687,10 +690,11 @@ pub fn n_kernel_tick_due(stores: &mut Stores, stack: &mut DbRef) {
 fn deliver(k: &mut Kernel, cid: usize, msg: &str, sync: bool) -> bool {
     if sync
         && let Some(net) = k.net.get_mut(cid)
-        && let (Some(path), Some(udp)) = (net.path.as_mut(), k.udp.as_ref())
+        && let Some(addr) = net.path.as_ref().map(|p| p.addr)
+        && let Some(udp) = k.udp.as_ref()
     {
-        path.out_seq += 1;
-        let dgram = format!("S:{}:{msg}", path.out_seq);
+        net.out_seq += 1;
+        let dgram = format!("S:{}:{msg}", net.out_seq);
         if dgram.len() > UDP_MAX_DATAGRAM {
             if !k.warned_oversize {
                 k.warned_oversize = true;
@@ -703,7 +707,7 @@ fn deliver(k: &mut Kernel, cid: usize, msg: &str, sync: bool) -> bool {
             }
             return false;
         }
-        return udp.send_to(dgram.as_bytes(), path.addr).is_ok();
+        return udp.send_to(dgram.as_bytes(), addr).is_ok();
     }
     // Event class, or no UDP path: the reliable channel.
     let Some(Some(stream)) = k.conns.get_mut(cid) else {
@@ -800,6 +804,44 @@ pub fn n_kernel_sync_class_keyed(stores: &mut Stores, stack: &mut DbRef) {
     SYNC_IDS.with(|s| {
         s.borrow_mut().insert(msg_id, true);
     });
+}
+
+/// Deliver one PRIORITY KEYFRAME — a sync-stream sample promoted to
+/// must-deliver (the class table's discontinuity rule: a bounce must not be
+/// lost the way a smooth sample may be).  Rides the reliable channel, stamped
+/// in the SAME seq space as the datagrams so the receiver's slots totally
+/// order the two carriers: a bound connector gets an `S:`-framed WS frame
+/// (it lands in the conflation slots, and any in-flight OLDER datagram is
+/// then discarded as stale); an unbound peer (a web page) gets the plain
+/// message — which is already its normal delivery.  WHAT counts as a
+/// discontinuity is meaning; only delivery is mechanics.
+fn deliver_keyframe(k: &mut Kernel, cid: usize, msg: &str) -> bool {
+    let Some(net) = k.net.get_mut(cid) else {
+        return false;
+    };
+    let framed = if net.path.is_some() {
+        net.out_seq += 1;
+        Some(format!("S:{}:{msg}", net.out_seq))
+    } else {
+        None
+    };
+    let Some(Some(stream)) = k.conns.get_mut(cid) else {
+        return false;
+    };
+    let wire = framed.as_deref().unwrap_or(msg);
+    if write_frame(stream, 0x1, wire.as_bytes()).is_err() {
+        disconnect(k, cid);
+        return false;
+    }
+    true
+}
+
+/// `kernel_keyframe(cid, msg) -> boolean` — see `deliver_keyframe`.
+pub fn n_kernel_keyframe(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    let cid = *stores.get::<i64>(stack);
+    let ok = with_kernel(|k| deliver_keyframe(k, cid as usize, &msg)).unwrap_or(false);
+    stores.put(stack, ok);
 }
 
 /// `sync_next() -> boolean` — load the next dirty conflation slot (newest
@@ -1022,11 +1064,21 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
 pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
     let n = with_client(|c| {
         let mut added = 0i64;
-        // WS frames: events from the server.
+        // WS frames: events from the server — except `S:`-framed keyframes,
+        // which are promoted sync samples riding the reliable channel in the
+        // datagram seq space: they conflate (the tick reads the newest, and
+        // an in-flight older datagram becomes stale), never queue.
         while c.alive {
             match read_frame(&mut c.conn) {
                 FrameRead::None => break,
                 FrameRead::Text(payload) => {
+                    if let Some(rest) = payload.strip_prefix("S:")
+                        && let Some((seq_s, body)) = rest.split_once(':')
+                        && let Ok(seq) = seq_s.parse::<i64>()
+                    {
+                        conflate_slot(&mut c.slots, seq, body);
+                        continue;
+                    }
                     c.events.push_back(Event {
                         cid: 0,
                         kind: 1,

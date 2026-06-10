@@ -96,6 +96,15 @@ pub fn sync_class(msg_id: integer);
 pub fn sync_class_keyed(msg_id: integer);
 #native "n_kernel_sync_class_keyed"
 
+// PRIORITY KEYFRAME: promote ONE sample of a sync kind to must-deliver — the
+// discontinuity rule (a bounce/teleport must arrive even when datagrams
+// drop).  Same seq space as the datagrams, so the receiver keeps total order
+// and an in-flight older sample is discarded as stale.  WHAT counts as a
+// discontinuity is yours; delivery is the kernel's.  (Listener-side: the
+// authority owns discontinuities; client input is already reliable.)
+pub fn keyframe(cid: integer, msg: text) -> boolean;
+#native "n_kernel_keyframe"
+
 // Drain the inbound conflation slots: each call loads the NEWEST unread state
 // from one client (stale/reordered datagrams were already discarded by the
 // kernel).  Drain inside `on_tick` — that reads the freshest data that arrived

@@ -146,7 +146,7 @@ sync — see Prior art):
 | Class | Examples | Delivery | Drain rule at the tick |
 |---|---|---|---|
 | **Short events** | input, control, world deltas | every one matters | queue → drain **to empty** |
-| **Fixed-rate state sync** | 30 Hz poses, health bars | latest-value; loss fine, `seq`-numbered | **conflate to newest per sender**; a discontinuity (bounce) promotes a sample to a must-deliver event (priority keyframe) |
+| **Fixed-rate state sync** | 30 Hz poses, health bars | latest-value; loss fine, `seq`-numbered | **conflate to newest per sender**; a discontinuity (bounce) promotes a sample to a must-deliver event (priority keyframe — `keyframe(cid, msg)`, LANDED 2026-06-10: same seq space, reliable carrier, blackout-proven) |
 | **Long loads** | assets, snapshots, wasm modules | complete-or-nothing | **byte/time-budgeted** ingest, accumulate invisibly, publish on completion as an event |
 
 ### The loop side
