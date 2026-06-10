@@ -2258,6 +2258,21 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+/// Resolve a `[library] native = "<stem>"` registration to a loadable cdylib
+/// path: a pre-built `<pkg_dir>/native/<libname>` wins, else build (or reuse a
+/// fingerprint-fresh build of) the package's native crate via
+/// [`auto_build_native`].  The ONE home for this resolution — the parser's two
+/// manifest paths and the warm startup-cache load (#310) all derive from it,
+/// so a cached run re-checks cdylib freshness exactly like a cold parse.
+pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
+    let filename = platform_lib_name(stem);
+    let prebuilt = format!("{pkg_dir}/native/{filename}");
+    if std::path::Path::new(&prebuilt).exists() {
+        return Some(prebuilt);
+    }
+    auto_build_native(pkg_dir, stem)
+}
+
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     use std::path::PathBuf;
     // P244-windows fix #2 (2026-05-12): use PathBuf::join, not

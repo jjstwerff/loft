@@ -95,13 +95,23 @@ fn hex32(key: &[u8; 32]) -> String {
     s
 }
 
-/// On a valid match, returns `Some(program_relative)` — the parse-time path-
-/// resolution mode (the `#cwd` directive's effect) persisted in the manifest,
-/// which a warm load cannot re-derive because it skips parsing.  `None` on a
-/// miss: absent manifest, stale build signature, or any source drifted since
-/// the bundle was written.
+/// Parse-time state a warm load cannot re-derive (it skips parsing), read back
+/// from the manifest on a valid hit.
 #[cfg(feature = "mmap")]
-fn manifest_program_relative(manifest: &std::path::Path) -> Option<bool> {
+struct ManifestState {
+    /// The `#cwd` directive's resolved path-resolution mode.
+    program_relative: bool,
+    /// `[library] native` registrations: `(stem, pkg_dir)` per native cdylib
+    /// the parse registered (#310 — re-resolved at warm load so a cached run
+    /// dlopens the same libraries, with cold-equal freshness checks).
+    native_lib_regs: Vec<(String, String)>,
+}
+
+/// On a valid match, returns the parse-time [`ManifestState`] persisted in the
+/// manifest.  `None` on a miss: absent manifest, stale build signature, or any
+/// source drifted since the bundle was written.
+#[cfg(feature = "mmap")]
+fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
     let text = std::fs::read_to_string(manifest).ok()?;
     let mut lines = text.lines();
     // @PLN11 G2/M6 — the first line pins THIS build's signature.  A binary
@@ -122,6 +132,16 @@ fn manifest_program_relative(manifest: &std::path::Path) -> Option<bool> {
         program_relative = rest != "0";
         next = lines.next();
     }
+    // Optional `nlib <stem> <pkg_dir>` headers (#310): one per `[library]
+    // native` registration the parse performed.  A stem is a Rust crate stem
+    // (no spaces), so the remainder after the second space is the package dir
+    // verbatim — directories may contain spaces.
+    let mut native_lib_regs = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("nlib ")) {
+        let (stem, pkg_dir) = rest.split_once(' ')?;
+        native_lib_regs.push((stem.to_string(), pkg_dir.to_string()));
+        next = lines.next();
+    }
     // Remaining lines: `<hexhash> <path>` for every parsed source.
     let mut any = false;
     let mut cur = next;
@@ -133,7 +153,11 @@ fn manifest_program_relative(manifest: &std::path::Path) -> Option<bool> {
         }
         cur = lines.next();
     }
-    any.then_some(program_relative) // an empty source list is not a valid hit
+    // An empty source list is not a valid hit.
+    any.then_some(ManifestState {
+        program_relative,
+        native_lib_regs,
+    })
 }
 
 /// Whole-program warm load: if a valid bundle exists for `script_abspath` and
@@ -147,9 +171,23 @@ pub fn warm_load_program(
     store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
 ) -> bool {
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
-    let Some(program_relative) = manifest_program_relative(&manifest) else {
+    let Some(state) = manifest_state(&manifest) else {
         return false;
     };
+    // #310 — re-resolve the parse-time `[library] native` registrations the
+    // warm load skips, BEFORE committing to the bundle: each cdylib gets the
+    // same prebuilt-or-auto-build freshness check a cold parse runs (a loft
+    // rebuild still triggers the package rebuild).  Any failure → treat the
+    // whole thing as a cache miss and let the cold path report it.
+    let mut native_libs = Vec::new();
+    for (stem, pkg_dir) in &state.native_lib_regs {
+        let Some(path) = crate::extensions::resolve_native_lib(pkg_dir, stem) else {
+            return false;
+        };
+        if !native_libs.contains(&path) {
+            native_libs.push(path);
+        }
+    }
     // @PLN11 Arc N / N1 — touch-on-use: a warm hit marks the bundle recently-used
     // so the idle-TTL GC keeps actively-run programs and ages out one-offs.
     crate::cache::touch_now(&bundle);
@@ -183,7 +221,12 @@ pub fn warm_load_program(
         // paths program-relative instead of cwd-relative, silently reading the
         // wrong base (e.g. the indexer scanning nothing).  `source_dir` needs no
         // such restore — main.rs sets it every run from the script path.
-        p.database.program_relative = program_relative;
+        p.database.program_relative = state.program_relative;
+        // #310 — restore the native-cdylib registrations: without these,
+        // `extensions::load_all` gets an empty list on warm runs and every
+        // `#native` call hits the "native function not loaded" stub.
+        p.pending_native_libs = native_libs;
+        p.native_lib_regs = state.native_lib_regs;
     }
     loaded
 }
@@ -207,6 +250,11 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     // @PLN11 — persist the parse-time path-resolution mode (the `#cwd` directive's
     // resolved effect) so a warm load (which skips parsing) can restore it.
     let _ = writeln!(lines, "prel {}", u8::from(p.database.program_relative));
+    // #310 — persist each `[library] native` registration so a warm load can
+    // re-resolve (and freshness-check) the cdylibs the parse registered.
+    for (stem, pkg_dir) in &p.native_lib_regs {
+        let _ = writeln!(lines, "nlib {stem} {pkg_dir}");
+    }
     for path in &paths {
         let Some(h) = crate::cache::file_hash(path) else {
             return; // an unreadable source → don't cache (would never validate)
