@@ -1,5 +1,28 @@
 # Phase 07 — the browser kernel: the same loft script on a phone
 
+> **Status (2026-06-10): slices 1+2+5 SHIPPED** (+ the time seam re-opened
+> and closed for real).  `src/engine_host.rs` now compiles on every target:
+> the pure machinery is shared, the socket half is `cfg`-native, and the
+> browser kernel lives as the `browser` submodule — every `n_kernel_*`
+> client symbol registered under the SAME name in the wasm build
+> (`native.rs::KERNEL_FUNCTIONS_WASM`), so `lib/engine_host` is shared
+> verbatim.  `run_client` gained the per-turn `kernel_client_frame()` yield
+> (no-op native, frame-yield in browser); `default_host()` landed (browser =
+> page origin via `origin_host`; native = `LOFT_HOST`/loopback); the async
+> WS open is bridged by `ws_ready` + an outbox (sends queue until open —
+> the ordered carrier keeps semantics).  **The build also completed the
+> routing symmetry**: inbound WS frames now class-route on BOTH receive
+> paths (server pump + connector), so a phone's sync sends land in the
+> server's slots exactly like a native seat's datagrams — `conflate_ws`
+> (ordered carrier: arrival order is the seq, one out-seq counter across
+> carriers so the bind transition never reads stale).  TWO pre-existing
+> time bugs found + fixed during the audit-then-build: `doc/loft-rt.js`
+> defaulted `time_ticks` to 0 (now real µs; `fakeTicks` still overrides)
+> and `doc/loft-gl.js` returned MILLISECONDS where loft expects µs (a
+> 1000× clock bug in browser GL games).  Bundle rebuilt (`make wasm`).
+> REMAINING: the one-script chromium differential (the acceptance), touch
+> input (~10 lines of loft-gl.js), the real-phone probe.
+
 **Goal.** A phone (or any browser) runs the SAME loft client script a native
 seat runs — `run_client`, `sync_class`, `client_sync_next`, unchanged — with
 the kernel underneath swapped for the browser's own machinery.  The phone is

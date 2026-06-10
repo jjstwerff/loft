@@ -480,7 +480,9 @@ export function createHost(tree = { '/': {} }, options = {}) {
 
     // ── time ──────────────────────────────────────────────────────────────────
     time_now:   () => options.fakeTime  ?? Date.now(),
-    time_ticks: () => options.fakeTicks ?? 0,
+    // Real µs by default (the browser kernel's tick grid); `fakeTicks`
+    // still overrides for deterministic harnesses.
+    time_ticks: () => options.fakeTicks ?? Math.round(performance.now() * 1000),
 
     // ── environment ───────────────────────────────────────────────────────────
     env_variable: (name) => options.env?.[name] ?? null,
@@ -546,6 +548,15 @@ export function createHost(tree = { '/': {} }, options = {}) {
     wsOpen(slot);
     return id;
   };
+  // Is the socket open?  The browser kernel buffers sends until this is 1
+  // (a native connect blocks until upgraded; the same contract, async).
+  host.ws_ready = (id) => {
+    const ws = sockets[id];
+    return ws && ws.readyState === 1 ? 1 : 0;
+  };
+  // The serving origin's host — engine_host::default_host() on a phone is
+  // the cabinet that served the page.
+  host.origin_host = () => (globalThis.location && location.hostname) || "127.0.0.1";
   host.ws_send = (id, msg, binary) => {
     const slot = wsConns[id];
     if (!slot || !slot.ready) return 0;

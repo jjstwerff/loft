@@ -508,6 +508,40 @@ pub fn host_ws_connect(url: &str) -> i32 {
     }
 }
 
+/// Is slot `id` an OPEN socket?  The browser kernel buffers sends until 1
+/// (a native connect blocks until upgraded — same contract, async form).
+#[allow(dead_code)]
+pub fn host_ws_ready(id: i32) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&id.into());
+        host_call("ws_ready", &args)
+            .as_f64()
+            .is_some_and(|n| n as i32 == 1)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = id;
+        false
+    }
+}
+
+/// The serving origin's hostname — `engine_host::default_host()` on a phone
+/// is the cabinet that served the page.
+#[allow(dead_code)]
+pub fn host_origin_host() -> String {
+    #[cfg(feature = "wasm")]
+    {
+        host_call("origin_host", &js_sys::Array::new())
+            .as_string()
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        "127.0.0.1".to_string()
+    }
+}
+
 /// Send `msg` on slot `id`.  `binary=true` ships an opcode-2 frame;
 /// `binary=false` ships opcode-1 (text).  Returns 1 on success, 0 if
 /// the slot is in backoff / disconnected.

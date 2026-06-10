@@ -224,6 +224,20 @@ pub fn client_sync_payload() -> text {
 pub fn client_udp_bound() -> boolean;
 #native "n_kernel_client_udp_bound"
 
+fn kernel_client_frame();
+#native
+
+// The host a client connects to when the script doesn't choose: the page's
+// serving origin in a browser (the cabinet that handed out the QR), the
+// LOFT_HOST env (else loopback) on a native seat — so ONE script runs on
+// both without even the address differing.
+fn kernel_default_host() -> text;
+#native
+
+pub fn default_host() -> text {
+  kernel_default_host()
+}
+
 // The connector loop: pump → budgeted event drain → tick when due → idle.
 // Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
 // once the server connection closes — the kind-2 disconnect event reaches
@@ -255,5 +269,9 @@ pub fn run_client(host: text, port: integer, tick_interval_us: integer,
     if work == 0 {
       kernel_client_idle(2000);
     }
+    // The per-turn yield point: a no-op on native; in a browser it hands the
+    // tab back to the event loop (resumed next animation frame).  Lives here
+    // in the SHARED loop so scripts never know which kernel runs them.
+    kernel_client_frame();
   }
 }

@@ -86,7 +86,6 @@ pub mod platform;
 pub mod state;
 
 pub mod compile;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod engine_host;
 pub mod extensions;
 #[cfg(not(target_arch = "wasm32"))]

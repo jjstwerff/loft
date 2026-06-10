@@ -159,7 +159,7 @@ export function initLoftGL(canvas) {
 
     // Time — milliseconds since epoch (used by loft ticks())
     time_now() { return Date.now(); },
-    time_ticks() { return performance.now(); },
+    time_ticks() { return Math.round(performance.now() * 1000); }, // µs — ticks()'s unit (was ms: a 1000× clock bug)
 
     // Window lifecycle
     gl_create_window(w, h, _title) {

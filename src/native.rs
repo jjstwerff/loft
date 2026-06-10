@@ -249,12 +249,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // transport negotiation is kernel-internal, invisible to loft code.)
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_udp_bound", crate::engine_host::n_kernel_udp_bound),
-    #[cfg(not(target_arch = "wasm32"))]
+    // Pure (no sockets): registered on EVERY target — the browser kernel
+    // reads the same wire-schema table.
     (
         "n_kernel_sync_class",
         crate::engine_host::n_kernel_sync_class,
     ),
-    #[cfg(not(target_arch = "wasm32"))]
     (
         "n_kernel_sync_class_keyed",
         crate::engine_host::n_kernel_sync_class_keyed,
@@ -334,6 +334,16 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     (
         "n_kernel_client_udp_bound",
         crate::engine_host::n_kernel_client_udp_bound,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_frame",
+        crate::engine_host::n_kernel_client_frame,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_default_host_dest",
+        crate::engine_host::n_kernel_default_host_dest,
     ),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
@@ -574,6 +584,74 @@ fn n_byte_at(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, i64::from(result));
 }
 
+/// @PLN18 phase 07 — the BROWSER kernel: the connector role's natives over
+/// the browser's own machinery, registered under the SAME symbols as the
+/// native connector so `lib/engine_host` (and every script over it) is
+/// shared verbatim — the script is the contract, the kernel is swappable.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
+    (
+        "n_kernel_connect",
+        crate::engine_host::browser::n_kernel_connect,
+    ),
+    (
+        "n_kernel_client_pump",
+        crate::engine_host::browser::n_kernel_client_pump,
+    ),
+    (
+        "n_kernel_client_alive",
+        crate::engine_host::browser::n_kernel_client_alive,
+    ),
+    (
+        "n_kernel_client_next_event",
+        crate::engine_host::browser::n_kernel_client_next_event,
+    ),
+    (
+        "n_kernel_client_event_kind",
+        crate::engine_host::browser::n_kernel_client_event_kind,
+    ),
+    (
+        "n_kernel_client_event_payload_dest",
+        crate::engine_host::browser::n_kernel_client_event_payload_dest,
+    ),
+    (
+        "n_kernel_client_tick_due",
+        crate::engine_host::browser::n_kernel_client_tick_due,
+    ),
+    (
+        "n_kernel_client_idle",
+        crate::engine_host::browser::n_kernel_client_idle,
+    ),
+    (
+        "n_kernel_client_send",
+        crate::engine_host::browser::n_kernel_client_send,
+    ),
+    (
+        "n_kernel_client_sync_next",
+        crate::engine_host::browser::n_kernel_client_sync_next,
+    ),
+    (
+        "n_kernel_client_sync_seq",
+        crate::engine_host::browser::n_kernel_client_sync_seq,
+    ),
+    (
+        "n_kernel_client_sync_payload_dest",
+        crate::engine_host::browser::n_kernel_client_sync_payload_dest,
+    ),
+    (
+        "n_kernel_client_udp_bound",
+        crate::engine_host::browser::n_kernel_client_udp_bound,
+    ),
+    (
+        "n_kernel_client_frame",
+        crate::engine_host::browser::n_kernel_client_frame,
+    ),
+    (
+        "n_kernel_default_host_dest",
+        crate::engine_host::browser::n_kernel_default_host_dest,
+    ),
+];
+
 pub fn init(state: &mut State) {
     for (name, implement) in FUNCTIONS {
         state.static_fn(name, *implement);
@@ -583,6 +661,11 @@ pub fn init(state: &mut State) {
     // cdylib (which the browser can't load).
     #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
     for (name, implement) in WEB_FUNCTIONS_WASM {
+        state.static_fn(name, *implement);
+    }
+    // @PLN18 phase 07 — the browser kernel (see KERNEL_FUNCTIONS_WASM).
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    for (name, implement) in KERNEL_FUNCTIONS_WASM {
         state.static_fn(name, *implement);
     }
 }
