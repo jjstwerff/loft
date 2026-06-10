@@ -2861,6 +2861,15 @@ impl State {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn generate_var(&mut self, stack: &mut Stack, variable: u16) -> Type {
+        if stack.function.stack(variable) > stack.position
+            && std::env::var("LOFT_VAR_PANIC_IR").is_ok()
+        {
+            eprintln!(
+                "[generate_var] IR of {}:\n{:?}",
+                stack.data.def(stack.def_nr).name(),
+                stack.data.def(stack.def_nr).code()
+            );
+        }
         assert!(
             stack.function.stack(variable) <= stack.position,
             "Incorrect var {}[{}] versus {} on {}",

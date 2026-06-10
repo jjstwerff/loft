@@ -1427,6 +1427,19 @@ impl Parser {
             ) {
                 self.vars.set_skip_free(tmp);
             }
+            // #319 — heap-DbRef ncc temps need a function-entry `Set(tmp,
+            // Null)` (the work-ref preamble) to reserve their stack slot:
+            // their only Set lives inside the ncc block, which the Zone-2
+            // slot scan does not walk.  Shapes whose assigned-var deps reach
+            // the temp got a slot via scan_set's dep-prefix; a subject whose
+            // dep chain is broken (e.g. a comprehension-built vector) did
+            // not — "Incorrect var __ncc_N[65535]" at codegen.
+            if matches!(
+                lhs_type,
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            ) {
+                self.vars.register_work_ref(tmp);
+            }
             let set_tmp = v_set(tmp, code.clone());
             let null_check = null_check_builder(self, &Value::Var(tmp));
             let mut true_branch = Value::Var(tmp);

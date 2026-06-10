@@ -464,6 +464,17 @@ impl Parser {
                 ls.insert(0, v_set(shadow, Value::Var(original)));
             }
             for r in self.vars.work_references() {
+                if std::env::var("LOFT_TRACE_PREAMBLE").is_ok() {
+                    eprintln!(
+                        "[preamble] pass1={} r={r} name={} arg={} inline={} deps={:?} chb={}",
+                        self.first_pass,
+                        self.vars.name(r),
+                        self.vars.is_argument(r),
+                        self.vars.is_inline_ref(r),
+                        self.vars.tp(r).depend(),
+                        self.vars.is_caller_hidden_buf(r),
+                    );
+                }
                 if !self.vars.is_argument(r)
                     && !self.vars.is_inline_ref(r)
                     // @PLAN51 Cluster IV: also null-init caller-side hidden-
@@ -474,8 +485,12 @@ impl Parser {
                     // first_def") and codegen panics at codegen.rs:2529.
                     // Empty-dep refs still take this path (the original
                     // arm); caller_hidden_buf is the additional gate.
+                    // #319: `__ncc_N` heap-DbRef temps likewise — their only
+                    // Set is inside the ncc block, so they need the preamble
+                    // init regardless of their dep list.
                     && (self.vars.tp(r).depend().is_empty()
-                        || self.vars.is_caller_hidden_buf(r))
+                        || self.vars.is_caller_hidden_buf(r)
+                        || self.vars.name(r).starts_with("__ncc_"))
                 {
                     ls.insert(0, v_set(r, Value::Null));
                 }
@@ -1370,18 +1385,40 @@ use a separate collection or add after the loop"
                 let elm_tp_clone = (**elm_tp).clone();
                 // @P314 — narrow-aware element type (see `append_elem_tp`).
                 let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
-                // when the RHS is anything other than a plain Var read
-                // it may alias the destination (e.g.
-                // `s.v = pop_tail(s.v, 1)` where the helper reads the
-                // destination).  The OpClearVector that follows would wipe
-                // that data before OpAppendVector can copy it.  Capture the
-                // RHS into a fresh local first so its storage is independent
-                // of the clear.  For Var reads this is unnecessary —
-                // reading a Var doesn't re-execute anything.
-                if matches!(code, Value::Var(_)) {
+                // When the RHS may alias the destination, the OpClearVector
+                // below would wipe that data before OpAppendVector can copy
+                // it — capture the RHS into a fresh local first so its
+                // storage is independent of the clear.  Two aliasing shapes:
+                // - a non-Var RHS (e.g. `s.v = pop_tail(s.v, 1)`), and
+                // - #320: a Var that BORROWS the destination (`w = s.v;
+                //   w += [43]; s.v = w` — w and the field share one store;
+                //   clear+append emptied the field).  A borrow is visible in
+                //   the var's type deps; only a dep-free (owned) var is
+                //   provably alias-free and may take the direct fast path.
+                let owned_var_rhs = matches!(
+                    code.unspan(),
+                    Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()
+                );
+                if owned_var_rhs {
                     let clear = self.cl("OpClearVector", std::slice::from_ref(to));
                     let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
                     *code = Value::Insert(vec![clear, append]);
+                } else if matches!(code.unspan(), Value::Var(_)) {
+                    // Borrowed Var: a synthetic `Set(tmp, Var(w))` would alias
+                    // again (it bypasses the parse-time vector deep-copy
+                    // lowering) — build the temp as a fresh empty vector and
+                    // element-append the borrow into it BEFORE the clear.
+                    let rhs_saved = code.clone();
+                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+                    let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
+                    let init_tmp = v_set(tmp, Value::Null);
+                    let fill_tmp = self.cl(
+                        "OpAppendVector",
+                        &[Value::Var(tmp), rhs_saved, rec_tp.clone()],
+                    );
+                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
+                    *code = Value::Insert(vec![init_tmp, fill_tmp, clear, append]);
                 } else {
                     let rhs_saved = code.clone();
                     let tmp = self.vars.unique("_p154_rhs", f_type, &mut self.lexer);

@@ -194,7 +194,13 @@ pub struct Variable {
 pub struct Function {
     pub name: String,
     pub file: String,
-    unique: u16,
+    /// Per-prefix counters for `unique()` temp names (`_<prefix>_<n>`).
+    /// Per-PREFIX (not one shared counter) so a temp family created on only
+    /// one parser pass (e.g. a second-pass-only lowering temp) cannot shift
+    /// the numbering of every OTHER family between passes — a shifted name
+    /// re-resolves to a pass-1 var of a different TYPE in `add_variable`
+    /// (#320's frame-drift: an integer-typed `__ncc_N` holding a DbRef).
+    unique: HashMap<String, u16>,
     pub(crate) current_loop: u16,
     loops: Vec<Iterator>,
     variables: Vec<Variable>,
@@ -257,7 +263,7 @@ impl Function {
         Function {
             name: name.to_string(),
             file: file.to_string(),
-            unique: 0,
+            unique: HashMap::new(),
             current_loop: u16::MAX,
             loops: Vec::new(),
             work_text: 0,
@@ -378,8 +384,8 @@ impl Function {
     pub fn append(&mut self, other: &mut Function) {
         self.current_loop = u16::MAX;
         self.logging = other.logging;
-        self.unique = 0;
-        other.unique = 0;
+        self.unique.clear();
+        other.unique.clear();
         self.loops.clear();
         self.loops.append(&mut other.loops);
         self.variables.clear();
@@ -414,7 +420,7 @@ impl Function {
             name: other.name.clone(),
             file: other.file.clone(),
             current_loop: u16::MAX,
-            unique: 0,
+            unique: HashMap::new(),
             loops: other.loops.clone(),
             variables: other.variables.clone(),
             work_text: 0,
@@ -975,8 +981,10 @@ impl Function {
     }
 
     pub fn unique(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
-        self.unique += 1;
-        self.add_variable(&format!("_{name}_{}", self.unique), type_def, lexer)
+        let ctr = self.unique.entry(name.to_string()).or_insert(0);
+        *ctr += 1;
+        let nr = *ctr;
+        self.add_variable(&format!("_{name}_{nr}"), type_def, lexer)
     }
 
     pub fn add_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
@@ -1218,6 +1226,16 @@ impl Function {
     /// work-refs receive a `Set(r, Null)` IR regardless of their typedef's
     /// dep list — without it, the slot allocator skips them ("no first_def")
     /// and codegen panics with "Incorrect var __ref_N[65535]".
+    /// #319 — add an existing var to the work-ref set so `parse_code`'s
+    /// preamble null-init reserves its stack slot.  Used for heap-DbRef
+    /// `__ncc_N` temps: their only `Set` lives inside the ncc block (an
+    /// operand position the Zone-2 slot scan does not walk), so without a
+    /// hoisted `Set(v, Null)` the slot allocator skips them ("no first_def")
+    /// and codegen panics with "Incorrect var __ncc_N[65535]".
+    pub fn register_work_ref(&mut self, var_nr: u16) {
+        self.work_refs.insert(var_nr);
+    }
+
     pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
         if (var_nr as usize) < self.variables.len() {
             self.variables[var_nr as usize].caller_hidden_buf = true;
