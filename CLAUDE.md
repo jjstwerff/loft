@@ -332,7 +332,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | Closed/historical bug archive (FIXED rows = regression record; `###` entries = design refs) |
 | [QUALITY.md](doc/claude/QUALITY.md) | Open programmer-biting issues, active sprint, designs, compiler blockers, landing order. See § Open work table |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing declined features |
-| [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) | Design Protocol 1 — a design is a testable hypothesis: name the invariant, count re-assertion sites, probe each load-bearing claim to falsify, validate against the prediction (graduated from DESIGN_VERIFICATION C1; fires on load-bearing designs) |
+| [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) | Design Protocol 1 — a design is a testable hypothesis: name the invariant, count re-assertion sites, probe each load-bearing claim to falsify, validate against the prediction (graduated from DESIGN_VERIFICATION C1; fires on load-bearing designs). **Now the self-contained `design-protocol` skill** (`.claude/skills/design-protocol/`, the DESIGN-mode sibling of `engineering-rigor`); this doc is a stub anchor |
 | [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) | Concerns to check a load-bearing design against (append-only; C1 brittleness-over-bugs — GRADUATED → DESIGN_PROTOCOL.md) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies |

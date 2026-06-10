@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Display/debug formatting: `show`, `show_value`, `dump` functions.
 
-use crate::database::{DumpDb, Field, Parts, ShowDb, Stores};
+use crate::database::{Field, Parts, ShowDb, Stores};
 use crate::keys::{self, DbRef};
 use crate::store::Store;
 use crate::vector;
@@ -53,6 +53,10 @@ impl Stores {
             pretty,
             json: false,
             loft: false,
+            dump: false,
+            compact: false,
+            max_depth: u16::MAX,
+            max_elements: u16::MAX,
         }
         .write(s, 0);
     }
@@ -75,6 +79,40 @@ impl Stores {
             pretty: false,
             json: false,
             loft: true,
+            dump: false,
+            compact: false,
+            max_depth: u16::MAX,
+            max_elements: u16::MAX,
+        }
+        .write(s, 0);
+    }
+
+    /// `show_loft` bounded to `max_depth` nesting levels and `max_elements` per vector —
+    /// the clean re-parseable literal, but truncated (`{…}` / `…+N`) so a big struct
+    /// doesn't flood.  Backs the debugger's variables panel (a glance, not the whole heap);
+    /// the full value is still one `eval` away.  `u16::MAX` for either = unlimited.
+    pub fn show_loft_bounded(
+        &self,
+        s: &mut String,
+        db: &DbRef,
+        tp: u16,
+        max_depth: u16,
+        max_elements: u16,
+    ) {
+        self.valid(db);
+        ShowDb {
+            stores: self,
+            store: db.store_nr,
+            rec: db.rec,
+            pos: db.pos,
+            known_type: tp,
+            pretty: false,
+            json: false,
+            loft: true,
+            dump: false,
+            compact: false,
+            max_depth,
+            max_elements,
         }
         .write(s, 0);
     }
@@ -100,6 +138,10 @@ impl Stores {
             pretty,
             json: true,
             loft: false,
+            dump: false,
+            compact: false,
+            max_depth: u16::MAX,
+            max_elements: u16::MAX,
         }
         .write(s, 0);
     }
@@ -660,6 +702,11 @@ impl ShowDb<'_> {
     When the database is not correct.
     */
     pub fn write(&self, s: &mut String, indent: u16) {
+        if self.dump {
+            // Trace form (`#store.rec` references + truncation) — its own emission rules.
+            self.write_dump(s, indent);
+            return;
+        }
         if self.rec == 0 {
             write!(s, "null").unwrap();
             return;
@@ -683,10 +730,11 @@ impl ShowDb<'_> {
                 write!(s, "{v}").unwrap();
             }
         } else if self.known_type == 4 {
-            s.push_str(if self.store().get_byte(self.rec, self.pos, 0) == 0 {
-                "false"
-            } else {
-                "true"
+            // 255 = @PLN17's three-state-boolean null sentinel (C73); inert for two-state.
+            s.push_str(match self.store().get_byte(self.rec, self.pos, 0) {
+                0 => "false",
+                255 => "null",
+                _ => "true",
             });
         } else if self.known_type == 5 {
             let text_nr = self.store().get_u32_raw(self.rec, self.pos);
@@ -874,6 +922,14 @@ impl ShowDb<'_> {
     }
 
     fn write_struct(&self, s: &mut String, fields: &[Field], indent: u16) {
+        // Bounded render (the debugger's variables glance): stop descending past the depth
+        // limit.  In loft mode the type name is already emitted, so this reads `TypeName{...}`.
+        // Never fires for the round-tripping serializers (they pass `max_depth == u16::MAX`),
+        // so `show_loft` / `to_json` output stays byte-identical.
+        if indent >= self.max_depth {
+            s.push_str("{...}");
+            return;
+        }
         // P54 Q3 second half — when serialising in JSON pretty mode,
         // ALWAYS use the multi-line shape regardless of the type's
         // `complex` flag.  `complex` is set on collection types
@@ -973,6 +1029,10 @@ impl ShowDb<'_> {
                 pretty: self.pretty,
                 json: self.json,
                 loft: self.loft,
+                dump: self.dump,
+                compact: self.compact,
+                max_depth: self.max_depth,
+                max_elements: self.max_elements,
             };
             sub.write(s, indent + 1);
         }
@@ -992,6 +1052,13 @@ impl ShowDb<'_> {
             rec: self.rec,
             pos: self.pos,
         };
+        // Bounded render: a vector past the depth limit collapses to `[...]` (debugger
+        // glance).  Unlimited (`max_depth == u16::MAX`) never triggers, so round-trip output
+        // is unchanged.
+        if indent >= self.max_depth {
+            s.push_str("[...]");
+            return;
+        }
         let complex = self.pretty && self.stores.types[content as usize].complex;
         s.push('[');
         if matches!(
@@ -1003,12 +1070,20 @@ impl ShowDb<'_> {
         }
         let mut pos = i32::MAX;
         let mut first_elm = true;
+        let mut count: u32 = 0;
         loop {
             if data.rec == 0 {
                 break;
             }
             let rec = self.stores.next(&data, &mut pos, self.known_type);
             if rec.rec == 0 {
+                break;
+            }
+            // Bounded render: stop after `max_elements` and mark the tail.  `count` is `u32`
+            // (never wraps) and the guard is gated on a finite limit, so the unlimited
+            // serializers emit every element exactly as before.
+            if self.max_elements != u16::MAX && count >= u32::from(self.max_elements) {
+                s.push_str(",...");
                 break;
             }
             if first_elm {
@@ -1038,8 +1113,13 @@ impl ShowDb<'_> {
                 pretty: self.pretty,
                 json: self.json,
                 loft: self.loft,
+                dump: self.dump,
+                compact: self.compact,
+                max_depth: self.max_depth,
+                max_elements: self.max_elements,
             };
             sub.write(s, indent + 1);
+            count += 1;
         }
         if self.pretty {
             s.push(' ');
@@ -1112,6 +1192,10 @@ impl ShowDb<'_> {
                 pretty: self.pretty,
                 json: self.json,
                 loft: self.loft,
+                dump: self.dump,
+                compact: self.compact,
+                max_depth: self.max_depth,
+                max_elements: self.max_elements,
             };
             sub.write(s, indent + 1);
         }
@@ -1203,6 +1287,10 @@ impl ShowDb<'_> {
                         pretty: self.pretty,
                         json: true,
                         loft: false,
+                        dump: self.dump,
+                        compact: self.compact,
+                        max_depth: self.max_depth,
+                        max_elements: self.max_elements,
                     };
                     sub.write_jsonvalue(s, indent + 1);
                 }
@@ -1261,6 +1349,10 @@ impl ShowDb<'_> {
                         pretty: self.pretty,
                         json: true,
                         loft: false,
+                        dump: self.dump,
+                        compact: self.compact,
+                        max_depth: self.max_depth,
+                        max_elements: self.max_elements,
                     };
                     sub.write_jsonvalue(s, indent + 1);
                 }
@@ -1325,17 +1417,21 @@ impl Stores {
     #[must_use]
     pub fn dump_data(&self, db: &DbRef, tp: u16, max_depth: u16, max_elements: u16) -> String {
         let mut s = String::new();
-        DumpDb {
+        ShowDb {
             stores: self,
             store: db.store_nr,
             rec: db.rec,
             pos: db.pos,
             known_type: tp,
+            pretty: false,
+            json: false,
+            loft: false,
+            dump: true,
+            compact: false,
             max_depth,
             max_elements,
-            compact: false,
         }
-        .write(&mut s, 0, 0);
+        .write(&mut s, 0);
         s
     }
 
@@ -1343,32 +1439,47 @@ impl Stores {
     #[must_use]
     pub fn dump_compact(&self, db: &DbRef, tp: u16, max_depth: u16, max_elements: u16) -> String {
         let mut s = String::new();
-        DumpDb {
+        ShowDb {
             stores: self,
             store: db.store_nr,
             rec: db.rec,
             pos: db.pos,
             known_type: tp,
+            pretty: false,
+            json: false,
+            loft: false,
+            dump: true,
+            compact: true,
             max_depth,
             max_elements,
-            compact: true,
         }
-        .write(&mut s, 0, 0);
+        .write(&mut s, 0);
         s
     }
 }
 
-impl DumpDb<'_> {
-    fn store(&self) -> &Store {
-        let r = DbRef {
-            store_nr: self.store,
-            rec: 0,
-            pos: 0,
-        };
-        self.stores.store(&r)
+impl ShowDb<'_> {
+    /// A child walker carrying *this* walker's mode + limits — the one place the dump
+    /// recursion constructs a sub-record (so every field/element inherits `dump`, `compact`,
+    /// and the depth/element limits).
+    fn dump_child(&self, rec: u32, pos: u32, known_type: u16) -> ShowDb<'_> {
+        ShowDb {
+            stores: self.stores,
+            store: self.store,
+            rec,
+            pos,
+            known_type,
+            pretty: false,
+            json: false,
+            loft: false,
+            dump: true,
+            compact: self.compact,
+            max_depth: self.max_depth,
+            max_elements: self.max_elements,
+        }
     }
 
-    fn sep(&self, s: &mut String, level: u16) {
+    fn dump_sep(&self, s: &mut String, level: u16) {
         if self.compact {
             s.push(' ');
         } else {
@@ -1379,8 +1490,9 @@ impl DumpDb<'_> {
         }
     }
 
-    /// Write the dump to string `s` at the given indent level and depth.
-    pub fn write(&self, s: &mut String, indent: u16, depth: u16) {
+    /// The **dump** mode (the old `DumpDb`): the structured trace form with `#store.rec`
+    /// references and depth/element truncation.  `indent` doubles as the nesting depth.
+    pub fn write_dump(&self, s: &mut String, indent: u16) {
         if self.rec == 0 {
             s.push_str("null");
             return;
@@ -1396,10 +1508,11 @@ impl DumpDb<'_> {
             1 => write!(s, "{}l", self.store().get_long(self.rec, self.pos)).unwrap(), // long
             2 => write!(s, "{}f", self.store().get_single(self.rec, self.pos)).unwrap(), // single
             3 => write!(s, "{}", self.store().get_float(self.rec, self.pos)).unwrap(), // float
-            4 => s.push_str(if self.store().get_byte(self.rec, self.pos, 0) == 0 {
-                "false"
-            } else {
-                "true"
+            // 255 = @PLN17's three-state-boolean null sentinel (C73); inert for two-state.
+            4 => s.push_str(match self.store().get_byte(self.rec, self.pos, 0) {
+                0 => "false",
+                255 => "null",
+                _ => "true",
             }),
             5 => {
                 // text
@@ -1421,13 +1534,13 @@ impl DumpDb<'_> {
                 }
             }
             tp if (tp as usize) < self.stores.types.len() => {
-                self.write_typed(s, indent, depth);
+                self.write_dump_typed(s, indent);
             }
             tp => write!(s, "?type({tp})").unwrap(),
         }
     }
 
-    fn write_typed(&self, s: &mut String, indent: u16, depth: u16) {
+    fn write_dump_typed(&self, s: &mut String, indent: u16) {
         match &self.stores.types[self.known_type as usize].parts.clone() {
             Parts::Enum(vals) => {
                 let v = self.store().get_byte(self.rec, self.pos, 0);
@@ -1448,18 +1561,18 @@ impl DumpDb<'_> {
                     && let Parts::EnumValue(_, st) = &self.stores.types[tp_nr as usize].parts
                 {
                     s.push(' ');
-                    self.write_struct(s, st, indent, depth);
+                    self.write_dump_struct(s, st, indent);
                 }
             }
             Parts::Struct(st) | Parts::EnumValue(_, st) => {
-                self.write_struct(s, st, indent, depth);
+                self.write_dump_struct(s, st, indent);
             }
             Parts::Vector(tp)
             | Parts::Sorted(tp, _)
             | Parts::Array(tp)
             | Parts::Ordered(tp, _)
             | Parts::Index(tp, _, _) => {
-                self.write_list(s, *tp, indent, depth);
+                self.write_dump_list(s, *tp, indent);
             }
             Parts::Hash(_, _) | Parts::Spacial(_, _) => {
                 // Hash and Spacial don't support sequential next() — show count only.
@@ -1528,10 +1641,10 @@ impl DumpDb<'_> {
         }
     }
 
-    fn write_struct(&self, s: &mut String, fields: &[Field], indent: u16, depth: u16) {
+    fn write_dump_struct(&self, s: &mut String, fields: &[Field], indent: u16) {
         // Show store:record reference
         write!(s, "#{}.{}", self.store, self.rec).unwrap();
-        if depth >= self.max_depth {
+        if indent >= self.max_depth {
             s.push_str(" {...}");
             return;
         }
@@ -1553,26 +1666,17 @@ impl DumpDb<'_> {
                 s.push(',');
             }
             first = false;
-            self.sep(s, indent + 1);
+            self.dump_sep(s, indent + 1);
             s.push_str(&fld.name);
             s.push_str(": ");
-            DumpDb {
-                stores: self.stores,
-                store: self.store,
-                rec: self.rec,
-                pos: self.pos + u32::from(fld.position),
-                known_type: fld.content,
-                max_depth: self.max_depth,
-                max_elements: self.max_elements,
-                compact: self.compact,
-            }
-            .write(s, indent + 1, depth + 1);
+            self.dump_child(self.rec, self.pos + u32::from(fld.position), fld.content)
+                .write_dump(s, indent + 1);
         }
-        self.sep(s, indent);
+        self.dump_sep(s, indent);
         s.push('}');
     }
 
-    fn write_list(&self, s: &mut String, content: u16, indent: u16, depth: u16) {
+    fn write_dump_list(&self, s: &mut String, content: u16, indent: u16) {
         let data = DbRef {
             store_nr: self.store,
             rec: self.rec,
@@ -1585,7 +1689,7 @@ impl DumpDb<'_> {
             0
         };
         write!(s, "#{}.{}", self.store, vec_rec).unwrap();
-        if depth >= self.max_depth {
+        if indent >= self.max_depth {
             let len = vector::length_vector(&data, &self.stores.allocations);
             write!(s, " [{len} items...]").unwrap();
             return;
@@ -1602,7 +1706,7 @@ impl DumpDb<'_> {
                 break;
             }
             if count >= self.max_elements {
-                self.sep(s, indent + 1);
+                self.dump_sep(s, indent + 1);
                 let remaining =
                     vector::length_vector(&data, &self.stores.allocations) as u16 - count;
                 write!(s, "...{remaining} more").unwrap();
@@ -1611,21 +1715,12 @@ impl DumpDb<'_> {
             if count > 0 {
                 s.push(',');
             }
-            self.sep(s, indent + 1);
-            DumpDb {
-                stores: self.stores,
-                store: self.store,
-                rec: rec.rec,
-                pos: rec.pos,
-                known_type: content,
-                max_depth: self.max_depth,
-                max_elements: self.max_elements,
-                compact: self.compact,
-            }
-            .write(s, indent + 1, depth + 1);
+            self.dump_sep(s, indent + 1);
+            self.dump_child(rec.rec, rec.pos, content)
+                .write_dump(s, indent + 1);
             count += 1;
         }
-        self.sep(s, indent);
+        self.dump_sep(s, indent);
         s.push(']');
     }
 }

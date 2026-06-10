@@ -78,6 +78,60 @@ fn struct_result_echo() {
     );
 }
 
+/// @PLN16 G1 — interactive breakpoint at the REPL, end to end through the binary:
+/// `:break` a function, the call suspends into the paused sub-mode, edit a local,
+/// `:continue`, and the resumed call uses the edited value.  `calc(5)` is normally
+/// 50; editing `n` to 99 makes the resumed call print 990.
+#[test]
+fn interactive_breakpoint_edit_continue() {
+    let out = repl(
+        &["repl"],
+        "fn calc(n: integer) -> integer {\n  n * 10\n}\n:break calc\ncalc(5)\nn = 99\n:continue\n:quit\n",
+    );
+    assert!(
+        out.contains("990"),
+        "edited n=99 → calc prints 990: {out:?}"
+    );
+    assert!(
+        !out.contains("50"),
+        "the un-edited result 50 must not print: {out:?}"
+    );
+}
+
+/// @PLN16 G1 — REPL-at-frame through the binary: at a pause, type an expression
+/// and it is evaluated against the live frame.  Paused in `calc` with `n == 5`,
+/// `n * 3` prints `15`; `:continue` then prints the call's own result, `50`.
+#[test]
+fn interactive_breakpoint_eval_expression() {
+    let out = repl(
+        &["repl"],
+        "fn calc(n: integer) -> integer {\n  n * 10\n}\n:break calc\ncalc(5)\nn * 3\n:continue\n:quit\n",
+    );
+    assert!(out.contains("15"), "n * 3 evaluated at the frame: {out:?}");
+    assert!(
+        out.contains("50"),
+        ":continue prints the call result: {out:?}"
+    );
+}
+
+/// @PLN16 G1 — a **non-integer** edit through the binary, on a pure `if`/constant
+/// body (no arithmetic — exercises the dense `line_numbers` breakpoint resolution).
+/// `pick(true)` is normally 111; flipping `b` to false at the pause makes the
+/// resumed call print 222 — proving both edit-and-continue beyond integer and that
+/// a body with no fault-prone operator is breakable.
+#[test]
+fn interactive_breakpoint_edit_boolean() {
+    let out = repl(
+        &["repl"],
+        "fn pick(b: boolean) -> integer {\n  if b { 111 } else { 222 }\n}\n:break pick\npick(true)\nb = false\n:continue\n:quit\n",
+    );
+    assert!(out.contains("222"), "flipped b → 222: {out:?}");
+    assert!(
+        !out.contains("111"),
+        "the un-edited 111 must not print: {out:?}"
+    );
+}
+
 /// `:quit` exits cleanly even with no input after it.
 #[test]
 fn quit_exits() {

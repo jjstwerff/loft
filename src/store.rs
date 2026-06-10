@@ -107,6 +107,20 @@ impl StoreUsage {
     }
 }
 
+/// A structural change recorded on a [`Store`] while @PLN16.J edit-recording is on
+/// (see `crate::database::journal`).  A `Store` method does not know its own
+/// `store_nr`, so each store buffers its own changes and `Stores` drains them into the
+/// unified `Journal`, tagging the store index.  `Insert` keeps only the position and
+/// size — the new record's bytes are read at drain (flush); `Free` snapshots `before`
+/// at delete time, since a freed block's body is repurposed instantly (probe 5a).
+#[derive(Debug)]
+pub enum StoreChange {
+    /// A record claimed at `pos` (`size` words); replayed via `claim_at` at flush.
+    Insert { pos: u32, size: u32 },
+    /// A record freed; `before` is its bytes captured *before* the `delete`.
+    Free { pos: u32, before: Box<[u8]> },
+}
+
 // A low-level heap store: the several flags (free / read_only /
 // free_protected / borrowed) are independent state bits on the same
 // allocation, not a bundle that should become an enum.
@@ -153,6 +167,11 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
+    /// @PLN16.J — when `Some`, the structural ops (`claim` via `claim_block`, `delete`)
+    /// append a [`StoreChange`] here for the debugger's edit journal.  `None` on every
+    /// normal run, so the cold alloc paths pay one branch.  Turned on by
+    /// `Stores::start_recording`, drained by `Stores::take_journal`.
+    recording: Option<Vec<StoreChange>>,
     /// Plan-57 store-identity gate (verification builds only): the allocation-site
     /// id written by `OpStoreTag` and verified by `OpFreeRefTag`.  `0` = untagged
     /// (no verification emitted for this store).  Catches wrong-store / cross-owner
@@ -302,6 +321,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            recording: None,
             tag: 0,
             pinned: false,
             lock_origin: String::new(),
@@ -385,6 +405,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: 0,
+            recording: None,
             tag: 0,
             borrowed: false,
             created_at: 0,
@@ -519,6 +540,15 @@ impl Store {
             *self.addr_mut(pos, 0) = block_size; // positive = claimed
         }
         self.claims.insert(pos);
+        // @PLN16.J: record the claim while edit-recording is on.  Read the *actual*
+        // claimed size from the header (claim_block may take the whole block without
+        // splitting), so replay's `claim_at` reproduces the exact extent.
+        if self.recording.is_some() {
+            let size = (*self.addr::<i32>(pos, 0)) as u32;
+            if let Some(log) = self.recording.as_mut() {
+                log.push(StoreChange::Insert { pos, size });
+            }
+        }
         pos
     }
 
@@ -634,6 +664,15 @@ impl Store {
         // may free a record still referenced by a suspended generator.
         self.generation = self.generation.wrapping_add(1);
         self.valid(rec, 4);
+        // @PLN16.J: snapshot the record *before* delete repurposes its body as a
+        // free-tree node (probe 5a), while edit-recording is on.
+        if self.recording.is_some() {
+            let words = (*self.addr::<i32>(rec, 0)) as u32;
+            let before = self.read_span(rec, 0, words * 8);
+            if let Some(log) = self.recording.as_mut() {
+                log.push(StoreChange::Free { pos: rec, before });
+            }
+        }
         let mut claim = *self.addr::<i32>(rec, 0);
         // Coalesce with any adjacent free blocks that follow.
         while (rec + claim as u32) < self.size {
@@ -657,6 +696,95 @@ impl Store {
         self.needs_coalesce = true;
         #[cfg(debug_assertions)]
         self.fl_validate();
+    }
+
+    /// Claim the record at an **exact** position with an **exact** size (words),
+    /// carving it out of whatever free block currently covers `pos`.  Unlike
+    /// [`claim`](Self::claim) — best-fit, position chosen by the allocator — this
+    /// reproduces a *recorded* position.  It is the keystone of the @PLN16.J store
+    /// journal's position-addressed replay (`Insert`-apply and `Free`-revert): forward
+    /// and reverse replay are exact because positions are forced, not re-derived.
+    ///
+    /// `[pos, pos + size)` must lie entirely within free space.  The covering free
+    /// block `[base, bend)` (with `base <= pos`, found by walking the block chain) is
+    /// split three ways — `[base, pos)` free, `[pos, pos + size)` claimed,
+    /// `[pos + size, bend)` free.  A remainder below `MIN_FREE_TREE` keeps a valid free
+    /// header but is left untracked (coalesced later), the same rule `claim_block`
+    /// follows.
+    pub(crate) fn claim_at(&mut self, pos: u32, size: u32) -> u32 {
+        debug_assert!(!self.read_only, "claim_at on read-only store");
+        assert!(size >= 1, "claim_at: zero-size record");
+        // S28: a structural op — bump generation like claim/delete/resize.
+        self.generation = self.generation.wrapping_add(1);
+        // Walk the block chain to find the block physically covering `pos`.
+        let mut base = PRIMARY;
+        loop {
+            assert!(base < self.size, "claim_at: pos {pos} past end of store");
+            let bsz = (*self.addr::<i32>(base, 0)).unsigned_abs();
+            assert!(bsz > 0, "claim_at: zero-size block at {base}");
+            if pos < base + bsz {
+                break;
+            }
+            base += bsz;
+        }
+        let header = *self.addr::<i32>(base, 0);
+        assert!(
+            header < 0,
+            "claim_at: region at {pos} is not free (covering block {base} is claimed)"
+        );
+        // The free region may be *fragmented* into several adjacent free blocks:
+        // `delete` coalesces only forward, so a freed predecessor stays a separate block
+        // until lazy `coalesce_free` runs.  Absorb consecutive free blocks (detaching
+        // each from the tree) until they span `[pos, pos + size)`.  A claimed block
+        // before then is a genuine "region not free" error.
+        self.fl_remove(base);
+        let mut bend = base + (-header) as u32;
+        while bend < pos + size {
+            assert!(
+                bend < self.size,
+                "claim_at: record [{pos}, {}) runs past the store end",
+                pos + size
+            );
+            let next = *self.addr::<i32>(bend, 0);
+            assert!(
+                next < 0,
+                "claim_at: record [{pos}, {}) hits a claimed block at {bend}",
+                pos + size
+            );
+            self.fl_remove(bend);
+            bend += (-next) as u32;
+        }
+        // [base, pos) prefix stays free.
+        if base < pos {
+            *self.addr_mut::<i32>(base, 0) = -((pos - base) as i32);
+            self.fl_insert(base);
+        }
+        // [pos, pos + size) becomes the claimed record.
+        *self.addr_mut::<i32>(pos, 0) = size as i32;
+        self.claims.insert(pos);
+        // [pos + size, bend) suffix stays free.
+        let tail = pos + size;
+        if tail < bend {
+            *self.addr_mut::<i32>(tail, 0) = -((bend - tail) as i32);
+            self.fl_insert(tail);
+        }
+        #[cfg(debug_assertions)]
+        self.fl_validate();
+        pos
+    }
+
+    /// @PLN16.J — begin buffering structural changes for the debugger's edit journal.
+    /// No-op on a locked / freed store (those are never edit targets).
+    pub(crate) fn start_recording(&mut self) {
+        if !self.free && !self.read_only {
+            self.recording = Some(Vec::new());
+        }
+    }
+
+    /// @PLN16.J — stop recording and hand back the buffered changes (`None` if this
+    /// store was never recording).
+    pub(crate) fn take_recording(&mut self) -> Option<Vec<StoreChange>> {
+        self.recording.take()
     }
 
     /// Validate the store
@@ -877,6 +1005,7 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: false,
             created_at: 0,
@@ -908,6 +1037,7 @@ impl Store {
             free_root: 0,
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: false,
             created_at: 0,
@@ -940,6 +1070,7 @@ impl Store {
             free_root: self.free_root,
             needs_coalesce: false,
             generation: self.generation,
+            recording: None,
             tag: self.tag,
             borrowed: true,
             created_at: 0,
@@ -1419,6 +1550,58 @@ impl Store {
         unsafe {
             let p = self.ptr.offset(rec as isize * 8 + 8);
             std::slice::from_raw_parts_mut(p, size)
+        }
+    }
+
+    /// @PLN16.J — read `len` raw bytes of a record starting at byte offset `off`
+    /// (the same `(rec, off)` addressing as [`addr`](Self::addr)).  The store
+    /// change journal uses this to snapshot a record region for undo / replay.
+    #[must_use]
+    pub fn read_span(&self, rec: u32, off: u32, len: u32) -> Box<[u8]> {
+        debug_assert!(
+            Self::checked_offset(rec, off) + len as isize <= self.size as isize * 8,
+            "read_span out of bounds: rec={rec} off={off} len={len} store_size={}",
+            self.size * 8,
+        );
+        let mut out = vec![0u8; len as usize];
+        if len > 0 {
+            // SAFETY: the span is bounds-checked above; `out` holds `len` bytes.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.ptr.offset(Self::checked_offset(rec, off)),
+                    out.as_mut_ptr(),
+                    len as usize,
+                );
+            }
+        }
+        out.into_boxed_slice()
+    }
+
+    /// @PLN16.J — write `bytes` into a record at byte offset `off` — the journal's
+    /// only mutator (undo restores `before`, replay writes `after`).  A pure byte
+    /// restore: no allocator interaction, so it never moves or resizes a record.
+    /// Honors the hard `read_only` lock.
+    pub fn write_span(&mut self, rec: u32, off: u32, bytes: &[u8]) {
+        assert!(
+            !self.read_only,
+            "write_span on read-only store at rec={rec} (locked by: {})",
+            self.lock_origin
+        );
+        debug_assert!(
+            Self::checked_offset(rec, off) + bytes.len() as isize <= self.size as isize * 8,
+            "write_span out of bounds: rec={rec} off={off} len={} store_size={}",
+            bytes.len(),
+            self.size * 8,
+        );
+        if !bytes.is_empty() {
+            // SAFETY: the span is bounds-checked above; `bytes` is `bytes.len()` long.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    self.ptr.offset(Self::checked_offset(rec, off)),
+                    bytes.len(),
+                );
+            }
         }
     }
 

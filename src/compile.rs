@@ -286,13 +286,23 @@ fn register_native_stubs(state: &mut State, data: &Data) {
             continue;
         }
         stub_syms.insert(sym.to_string());
-        // Register a stub that panics with a descriptive message.
+        // Register a stub that panics with an **actionable** message.  Reaching it
+        // means a `#native` function's cdylib symbol could not be resolved at load
+        // (`wire_native_fns` left the stub in place), so calling it aborts.  The cause
+        // is almost always a missing or **stale** native cdylib — most often one built
+        // against a *different* `libloft.rlib` (an auto-native library self-rebuilds when
+        // the rlib changes; a hand-written `lib/<name>/native/` cdylib does **not**, so it
+        // silently rots into this stub).  Name the fix, not the internal API: a generic
+        // "call extensions::load_all() first" cost a multi-hour investigation once.
+        // (A single generic stub — a `fn` pointer can't capture the symbol.)
         let stub: fn(&mut Stores, &mut DbRef) = {
-            // We can't capture sym_owned in a fn pointer, so use a single
-            // generic stub.  The State tracks which library index maps to
-            // which name, so the panic message comes from the dispatch side.
             |_stores: &mut Stores, _db: &mut DbRef| {
-                panic!("native function not loaded — call extensions::load_all() first");
+                panic!(
+                    "native function not loaded: its library's native cdylib is missing or \
+                     stale (commonly: built against a different libloft.rlib). Rebuild the \
+                     native libraries with `make rebuild-native-cdylibs` — or `cargo build \
+                     --release` in the library's `native/` dir — then re-run."
+                );
             }
         };
         state.static_fn(sym, stub);

@@ -13,7 +13,7 @@ instead of reactively.
 
 ## Loft's genuine differentiators
 
-Three capabilities that give loft a defensible identity outside games:
+Four capabilities that give loft a defensible identity outside games:
 
 1. **Store-based heap as a language-level database.**  Data-heavy
    apps (servers, CRUD tools, ETL) feel coherent in a way
@@ -24,9 +24,35 @@ Three capabilities that give loft a defensible identity outside games:
    artifact.  Frictionless deployment of demos, tools, toys.
 3. **`par` / `par_light` + store isolation** (THREADING.md).
    Approachable parallelism without shared-mutable footguns.
+4. **It inherits the Rust ecosystem — and, more to the point, Rust's
+   *stability*.**  loft is *built on* Rust, so it does not re-implement numpy /
+   requests / regex — it **binds the crate** (`ndarray`, `reqwest`, `regex`,
+   `polars`, …) and gets all of crates.io.  But the **bigger reason than saved
+   code is what comes *with* the library: memory safety and maturity.**  A
+   well-grounded Rust crate brings its battle-testing *and* the guarantee that it
+   **cannot segfault loft** the way a buggy C extension hard-crashes the Python
+   interpreter (safe Rust has no UB; panics unwind), and `cargo` brings
+   reproducible, lock-filed builds instead of Python's wheel / ABI / manylinux
+   roulette.  So "Python has an ecosystem" cuts *both* ways — Python inherits C's
+   libraries **and** C's crash surface; loft inherits Rust's libraries **minus**
+   that instability.  This is the
+   [GOALS § Purpose](GOALS.md#purpose--what-loft-is-for) "software that does not
+   fall over" aim **extended to the whole dependency surface** — which is *why* the
+   crates must be **well-grounded** (the reliability filter: you inherit stability
+   only from crates that have it) and bound **one per real need**, the dogfood way,
+   not via a speculative auto-binder.
+
+   On functionality alone the boilerplate is *still* wrong: Python's "rich
+   ecosystem" is itself mostly a **binding** story (numpy/scipy = C/Fortran, torch =
+   C++, polars / pydantic-core / cryptography = *Rust*; the C-API is glue), so loft
+   plays the same move on the more modern host — and because loft *is* Rust, the
+   binding is **in-language** (loft value ↔ Rust value, no C ABI), so it is
+   lower-friction.  The honest gap is binding **ergonomics, not library existence**.
+   Mechanism: PACKAGES.md + § Native-library execution model below.
 
 Everything below flows from these.  Broadening loft is mostly about
-ecosystem work around them, not language rework.
+ecosystem work around them (chiefly #4 — binding the crates, incrementally on
+need), not language rework.
 
 ---
 
@@ -37,9 +63,9 @@ ecosystem work around them, not language rework.
 | **CLI scripting / tooling** | Strong — readable syntax, static types, good error locality | Fast startup (CS.C1/C2/C3 const store + stdlib `.loftc`); stdlib for regex, shell, env, path, glob; single-binary installer |
 | **Server-side web** | Very strong — store maps naturally to request/session/DB model; JSON landed | `server` library (lib_plans/future/08-server/README.md), async / non-blocking I/O, route helpers, migrations story |
 | **Embedded-DB DSL** | Unique — nothing else has store + language co-designed | Mostly packaging and "SQLite + scripting as one thing" narrative; the tech exists |
-| **Data / ETL** | Good — iterators, parallel-for, DbRef, JSON | CSV/Parquet, decimal/BigInt, date/time, streaming file ops |
+| **Data / ETL** | Good — iterators, parallel-for, DbRef, JSON | CSV/Parquet, decimal/BigInt, date/time, streaming — all **bindable Rust crates** (`csv`, `arrow`, `rust_decimal`, `chrono`), not missing libraries |
 | **Educational language** | Good — Python-like surface, strong types, good diagnostics | Playground (Web IDE planned), tutorial content |
-| **Scientific / analytics** | Weak — uphill vs Python ecosystem | DataFrame, BLAS, plotting; pursue only if a killer differentiator emerges |
+| **Scientific / analytics** | Bindable — Rust's numerical stack (`ndarray`, `nalgebra`, `polars`, `plotters`) wraps directly; **not** an ecosystem gap | binding ergonomics + the interactive / notebook / viz + community layer (that, not library *existence*, is Python's real moat here); pursue head-on only if a killer differentiator emerges |
 | **Embedded MCU** | Not realistic near-term | Out of scope; C54.F keeps 32-bit SBCs viable as a floor, not a target |
 
 Games remain a flagship demo (onboarding, Web IDE, visual appeal) but

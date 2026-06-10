@@ -22,10 +22,11 @@
 //!     `<blockquote>`; blank `> ` line separates blockquotes
 //!   - UTF-8 em-dash `—` (3 bytes) NOT widened to `———` (P272)
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,8 +40,28 @@ fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
+/// Drain a child pipe into a shared buffer on its own thread, line by line — so a slow
+/// (still-running) viewer's output is captured incrementally and a crashed viewer's full
+/// output is captured before its pipe hits EOF.  Read back by `diagnose` on failure.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Arc<Mutex<String>> {
+    let buf = Arc::new(Mutex::new(String::new()));
+    if let Some(p) = pipe {
+        let b = Arc::clone(&buf);
+        thread::spawn(move || {
+            for line in BufReader::new(p).lines() {
+                let Ok(line) = line else { break };
+                let mut g = b.lock().unwrap();
+                g.push_str(&line);
+                g.push('\n');
+            }
+        });
+    }
+    buf
+}
+
 struct ViewerGuard {
     child: Option<Child>,
+    stderr: Arc<Mutex<String>>,
 }
 
 impl ViewerGuard {
@@ -54,8 +75,35 @@ impl ViewerGuard {
             .current_dir(project_root())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = cmd.spawn().expect("failed to spawn loft viewer");
-        ViewerGuard { child: Some(child) }
+        let mut child = cmd.spawn().expect("failed to spawn loft viewer");
+        let stderr = drain(child.stderr.take());
+        ViewerGuard {
+            child: Some(child),
+            stderr,
+        }
+    }
+
+    /// Why did the viewer fail to serve?  Distinguishes a CRASH (e.g. a stale native cdylib
+    /// → `native function not loaded`, whose stderr is captured here) from a SLOW /
+    /// load-starved start (process still alive, no error output) — so the failure names its
+    /// own cause instead of leaving a bare empty body to chase.
+    fn diagnose(&mut self) -> String {
+        let alive = matches!(self.child.as_mut().map(Child::try_wait), Some(Ok(None)));
+        let err = self.stderr.lock().unwrap().clone();
+        let err = err.trim();
+        format!(
+            "viewer {}\n--- viewer stderr ---\n{}\n---------------------",
+            if alive {
+                "STILL RUNNING (slow / load-starved start — not a crash; check host load)"
+            } else {
+                "EXITED (crashed — the stderr below names the cause, e.g. a stale native cdylib)"
+            },
+            if err.is_empty() {
+                "(no stderr captured)"
+            } else {
+                err
+            },
+        )
     }
 
     fn wait_listening(&self, port: u16) -> bool {
@@ -114,11 +162,14 @@ fn markdown_renderer_pins_high_impact_features() {
         eprintln!("skipping: {} not built", loft_bin().display());
         return;
     }
-    let _guard = ViewerGuard::spawn();
+    let mut viewer = ViewerGuard::spawn();
     // Note: viewer ignores LOFT_VIEW_PORT today; uses hard-coded 8765.
     let port = 8765u16;
-    if !_guard.wait_listening(port) {
-        panic!("viewer did not start listening on {port} within 15s");
+    if !viewer.wait_listening(port) {
+        panic!(
+            "viewer did not start listening on {port} within 15s\n{}",
+            viewer.diagnose()
+        );
     }
     // Under a loaded CI host (many parallel native-build tests spawning rustc),
     // the interpreted viewer can accept the TCP connection before it is ready to
@@ -135,6 +186,17 @@ fn markdown_renderer_pins_high_impact_features() {
         }
         b
     };
+
+    // The page never arrived within the deadline.  Name *why* — a crash (stale cdylib, a
+    // panic) vs a slow / load-starved start — instead of asserting on a bare empty body
+    // (which is how this masqueraded as a cdylib problem before).  The feature assertions
+    // below then only fire on a *real* rendering regression, with a non-empty body.
+    if !body.contains("<h1 id=") {
+        panic!(
+            "viewer never served the rendered page within 15s.\n{}\nbody so far: {body:.300}",
+            viewer.diagnose()
+        );
+    }
 
     // Each assertion captures one feature so the failure message
     // names exactly which markdown construct broke.

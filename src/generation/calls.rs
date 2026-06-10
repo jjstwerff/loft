@@ -326,6 +326,13 @@ impl Output<'_> {
         // (`crate::loft_host_print`, `crate::wasm`) are the generated cdylib's
         // OWN items, so they correctly stay `crate::` and are left untouched.
         res = res.replace("crate::store::", "loft::store::");
+        // Same @P361 rewrite for the `print` capture hook: `OpPrint`'s native branch
+        // calls `crate::rpc::print_or_capture` (the interpreter's debug-output sink).
+        // In a generated native binary `crate::` is the binary's own root (no `rpc`
+        // module), so qualify it `loft::` — loft is linked as an extern crate and the
+        // fn is `pub`.  At native runtime no debug sink is active, so it returns false
+        // and the `print!` runs unchanged.
+        res = res.replace("crate::rpc::", "loft::rpc::");
         // @P321b — `OpSetText` with a NULL value must store the null pointer
         // (offset 0), matching the interpreter (which reads it back as null).
         // The generic template does `@val.to_string()` + `set_str`, which

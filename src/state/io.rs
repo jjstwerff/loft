@@ -780,6 +780,10 @@ impl State {
             pretty: format & 1 > 0,
             json: format & 2 > 0,
             loft: false,
+            dump: false,
+            compact: false,
+            max_depth: u16::MAX,
+            max_elements: u16::MAX,
         }
         .write(&mut s, 0);
         s

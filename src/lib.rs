@@ -49,6 +49,7 @@ pub mod crash_report;
 pub mod data;
 pub mod data_store;
 pub mod database;
+pub mod debugger;
 pub mod hash;
 pub mod ir_node;
 pub mod ir_read;
@@ -87,6 +88,8 @@ pub mod state;
 pub mod compile;
 pub mod extensions;
 pub mod repl;
+pub mod rpc;
+pub mod serve;
 pub mod startup_cache;
 // @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
 // at the crate root so generated native code can write

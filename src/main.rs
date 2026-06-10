@@ -156,6 +156,10 @@ fn print_help() {
     println!("  repl                          start the interactive REPL (also: bare `loft`)");
     println!("                                resumes your last session automatically;");
     println!("                                --fresh starts clean (ignores the saved session)");
+    println!("  debug <file>:<line>           run <file> under the debugger, breaking at <line>");
+    println!(
+        "                                (inspect/edit/step the live frame; :help at the prompt)"
+    );
     println!("  check <file>                  same as --check <file>");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
@@ -3013,6 +3017,118 @@ fn start_repl() -> ! {
     std::process::exit(code);
 }
 
+/// Collect every `--lib <dir>` import path from `args`, canonicalised (so a relative dir
+/// resolves against the launch cwd) and de-duplicated.  Shared by the debugger's `--rpc`
+/// and `--serve` servers so the debugged file can `use` libraries — the `use`-resolution
+/// the normal run path's `--lib` handling already gives a plain `loft <file>` run.
+fn collect_lib_dirs(args: &[String]) -> Vec<String> {
+    let mut dirs = Vec::new();
+    let mut i = 0;
+    while i + 1 < args.len() {
+        if args[i] == "--lib" {
+            let raw = &args[i + 1];
+            let abs = std::fs::canonicalize(raw)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| raw.clone());
+            if !dirs.contains(&abs) {
+                dirs.push(abs);
+            }
+            i += 1;
+        }
+        i += 1;
+    }
+    dirs
+}
+
+/// @PLN16 M5a — `loft debug <file>:<line>`: load the file, break at `file:line`, run
+/// `main()` to the breakpoint, and drop into the interactive `(dbg)` prompt.  Reads its
+/// `<file>:<line>` argument by scanning the command line (so it needs no thread-through
+/// the arg loop), the same way `start_repl` reads `--fresh`.
+fn run_file_debugger() -> ! {
+    let args: Vec<String> = std::env::args().collect();
+    let base = project_dir();
+    let default_dir = std::path::Path::new(&base).join("default");
+    let stdlib = if default_dir.exists() {
+        default_dir.to_string_lossy().into_owned()
+    } else {
+        "default".to_string()
+    };
+    // Explicit `--lib <dir>` import paths so the debugged file can `use` libraries (not
+    // just the stdlib) — the same `use`-resolution the normal run path has.
+    let lib_dirs = collect_lib_dirs(&args);
+    // @PLN16 M5d phase 2 — `loft debug --rpc`: the NDJSON wire-protocol server on stdio.
+    // The file is supplied by the `launch` request, so no `<file>:<line>` target is
+    // needed; the protocol owns stdout, program output rides `output` events.
+    if args.iter().any(|a| a == "--rpc") {
+        let stdin = std::io::stdin();
+        let mut stdout = std::io::stdout();
+        let code = match loft::rpc::run_rpc(&stdlib, &lib_dirs, stdin.lock(), &mut stdout) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("loft debug --rpc: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+    // @PLN16 M5e slice 1 — `loft debug <file> --serve [--port <n>]`: the browser IDE
+    // foundation (HTTP shell + WebSocket protocol).  The file is the `debug` target;
+    // default port 8770 (distinct from the plan-35 viewer's 8765).
+    if args.iter().any(|a| a == "--serve") {
+        let port = args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|p| args.get(p + 1))
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(8770);
+        let file = args
+            .iter()
+            .position(|a| a == "debug")
+            .and_then(|p| args.get(p + 1))
+            .filter(|a| !a.starts_with('-'));
+        let Some(file) = file else {
+            eprintln!("usage: loft debug <file> --serve [--port <n>]");
+            std::process::exit(2);
+        };
+        let code = match loft::serve::run_serve(&stdlib, &lib_dirs, port, file) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("loft debug --serve: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+    let target = args
+        .iter()
+        .position(|a| a == "debug")
+        .and_then(|p| args.get(p + 1));
+    let Some(target) = target else {
+        eprintln!("usage: loft debug <file>:<line>  (or: loft debug --rpc / --serve)");
+        std::process::exit(2);
+    };
+    // `rsplit_once` so a path that itself contains a colon (e.g. a Windows drive) keeps
+    // it; the last `:` separates the line number.
+    let Some((file, line_s)) = target.rsplit_once(':') else {
+        eprintln!("usage: loft debug <file>:<line>  (missing `:<line>`)");
+        std::process::exit(2);
+    };
+    let Ok(line) = line_s.parse::<u32>() else {
+        eprintln!("loft debug: not a line number: {line_s:?}");
+        std::process::exit(2);
+    };
+    let stdin = std::io::stdin();
+    let mut stderr = std::io::stderr();
+    let code = match loft::repl::run_file_debug(&stdlib, file, line, stdin.lock(), &mut stderr) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("loft debug: {e}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -3354,6 +3470,11 @@ fn main() {
             // to stderr; evaluated results print to stdout (so a terminal sees
             // them and a pipe can capture them).
             start_repl();
+        } else if a == "debug" {
+            // @PLN16 M5a — `loft debug <file>:<line>` — interpreter-mode debugger on a
+            // real source file: break at the line, drop into the interactive `(dbg)`
+            // prompt (inspect / edit / step / undo).
+            run_file_debugger();
         } else if a == "--fresh" {
             // @PLN12 REPL.S — recognised here only so a bare `loft --fresh`
             // reaches the REPL instead of "unknown option"; `start_repl` reads

@@ -330,6 +330,73 @@ impl Stores {
         }
     }
 
+    /// @PLN16 M1a — the lowest store-slot index guaranteed unused: above every
+    /// allocated slot *and* the `max` watermark.  A value built at or above this floor
+    /// occupies slots that are free here, which is what lets the debugger's whole-value
+    /// heap edit graft it in with **no `DbRef` remap**.
+    #[must_use]
+    pub fn high_water(&self) -> u16 {
+        (self.allocations.len() as u16).max(self.max)
+    }
+
+    /// @PLN16 M1a — force this (throwaway *build*) `Stores`' next store allocations to
+    /// land at slot `floor` and above.  Pads `allocations` to `floor` with in-use
+    /// placeholders and marks every slot below `floor` in-use, so [`find_free_slot`]
+    /// returns `floor` and `database_named` pushes there.  Used by the debugger heap
+    /// edit so the value's stores occupy slots that are free in the *live* paused
+    /// store, enabling the no-remap graft ([`adopt_value_stores`](Self::adopt_value_stores)).
+    /// The placeholders are never read — the edit's literal is self-contained, so the
+    /// constructor only touches its own (real, recompiled) const stores and the new
+    /// value-stores — they exist only so the slot indices line up.
+    pub fn raise_floor(&mut self, floor: u16) {
+        while (self.allocations.len() as u16) < floor {
+            let mut placeholder = Store::new(2);
+            placeholder.free = false; // in-use marker; bytes are never read
+            self.allocations.push(placeholder);
+        }
+        // Clearing every free bit makes `find_free_slot` return `max`; setting `max =
+        // floor` (== allocations.len()) makes the next claim a push at exactly `floor`.
+        self.free_bits.clear();
+        self.max = floor;
+        if self.max > self.peak {
+            self.peak = self.max;
+        }
+    }
+
+    /// @PLN16 M1a — graft the value-stores a debugger heap edit built on `build` into
+    /// this (live paused) `Stores`.  `build` raised its floor above this store's
+    /// high-water then constructed the new value there, so every value-store sits on a
+    /// slot that is **free here** — the move needs no `DbRef` remap (the root and its
+    /// whole internal graph keep their slot numbers, valid here unchanged).
+    ///
+    /// Each in-use `build` slot in `[floor, build.max)` is moved here at the same index
+    /// (its `Drop` defused by swapping in a freed sentinel); a slot `build` claimed then
+    /// freed mid-construction is skipped (it is free here too).  Slots below `floor`
+    /// that this store lacks are padded with free sentinels so indices line up.
+    pub fn adopt_value_stores(&mut self, build: &mut Stores, floor: u16) {
+        let top = build.allocations.len() as u16;
+        while (self.allocations.len() as u16) < top {
+            let idx = self.allocations.len() as u16;
+            self.allocations.push(Store::new_freed_sentinel());
+            self.set_free_bit(idx); // a slot this store never had is free here
+        }
+        for slot in floor..top {
+            let si = slot as usize;
+            if build.allocations[si].free {
+                continue; // a transient the constructor claimed then freed
+            }
+            let moved = std::mem::replace(&mut build.allocations[si], Store::new_freed_sentinel());
+            self.allocations[si] = moved;
+            self.clear_free_bit(slot);
+            if slot + 1 > self.max {
+                self.max = slot + 1;
+                if self.max > self.peak {
+                    self.peak = self.max;
+                }
+            }
+        }
+    }
+
     /// Collect a description for every leaked store at program exit.
     ///
     /// Mirrors `State::collect_store_leaks` (which operates on the

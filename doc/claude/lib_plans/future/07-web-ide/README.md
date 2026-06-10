@@ -9,6 +9,15 @@ The Loft interpreter runs as a WebAssembly module compiled from the existing
 Rust source; the IDE shell is plain ES-module JavaScript with no build step
 required to open and use `index.html`.
 
+> **Not the lavition editor.**  This is the *serverless* IDE — a zero-install
+> demo/teaching playground where the interpreter runs in the browser as WASM.
+> The *server-backed* IDE (the working tool you build a **game** with — native
+> OpenGL window, the real filesystem, the whole test suite, the debugger inside,
+> hot-swap over the shared store) is a **different product**:
+> [@PLN16 M5e — IDE.md](../../../plans/16-debugger/IDE.md).  They share only the
+> WASM build and the editor grammar; a real game cannot run in this sandbox, which
+> is exactly why M5e keeps the engine local.
+
 ### Goals
 
 | Goal | Notes |

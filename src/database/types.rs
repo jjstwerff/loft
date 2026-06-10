@@ -216,6 +216,36 @@ impl Stores {
         }
     }
 
+    /// @PLN16.J — is `tp` an (inline) struct?  An intermediate field in an edit
+    /// path (`pt.inner.x`) must be one: a nested struct is flattened into the parent
+    /// record, so the path resolver descends it by summing offsets in the same
+    /// record (the read path does the same — `ShowDb::write_fields`).
+    #[must_use]
+    pub fn is_struct(&self, tp: u16) -> bool {
+        tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::Struct(_))
+    }
+
+    /// @PLN16.J — resolve a struct field by **name** to `(position, content)`:
+    /// `position` is the field's byte offset within the record (added to the
+    /// struct's `DbRef.pos`, matching the `ShowDb` read path), `content` its
+    /// value-type number.  `None` if `tp` is not a struct / has no such field.
+    /// The debugger's field edit (`pt.x = 9`) uses it to address the field in place.
+    #[must_use]
+    pub fn struct_field(&self, tp: u16, name: &str) -> Option<(u16, u16)> {
+        if tp == u16::MAX {
+            return None;
+        }
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[tp as usize].parts
+        {
+            fields
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| (f.position, f.content))
+        } else {
+            None
+        }
+    }
+
     /**
     Determine how structures are actually used.
     */

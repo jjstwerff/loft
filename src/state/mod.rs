@@ -148,6 +148,10 @@ pub struct State {
     /// `line_numbers` map's behaviour).
     pub(crate) source_spans: BTreeMap<u32, Position>,
     pub(crate) fn_positions: Vec<u32>,
+    /// @PLN16 debugger — present only while debugging; the execute loop pauses at
+    /// a registered breakpoint offset and captures the frame.  `None` on normal
+    /// runs (the only per-op cost is one `is_some` branch).
+    pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
     /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
@@ -177,6 +181,74 @@ pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
         rec: pos,
         pos: u32::from(arg),
     }
+}
+
+/// Ensure `s` — a number already formatted with `to_string` — re-parses as a loft
+/// `float`/`single`, **not** `integer`: append `.0` when it carries no decimal
+/// point, exponent, or non-digit marker (`inf`/`NaN` pass through unchanged).  The
+/// single home for the float round-trip rule — the breakpoint frame renderer
+/// ([`State::render_frame_local`]) and the REPL value snapshot (`repl::float_literal`)
+/// both go through it, so a `2.0` never renders as a bare `2` that re-types as
+/// `integer` when seeded back.
+pub(crate) fn loft_float_literal(s: &str) -> String {
+    let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
+    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
+    if has_dot_or_exp || !has_digit {
+        s.to_string()
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
+/// re-reads.  Escapes the characters loft shares with JSON (`"`, `\`, newline,
+/// CR, tab); other characters pass through.  The single home for the text
+/// round-trip rule: the breakpoint frame renderer
+/// ([`State::render_frame_local`]) and the REPL value snapshot
+/// (`repl::escape_loft_text`) both go through it, so a captured text reads back
+/// exactly as [`unescape_loft_text`] parses it on a live edit.
+pub(crate) fn loft_text_literal(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Parse a quoted loft `text` literal back to its bytes — the inverse of
+/// [`loft_text_literal`], used by the @PLN16 debugger to write a text edited at
+/// a breakpoint (`msg = "bye"`) back into the live frame.  Returns `None` when
+/// `lit` is not a `"…"`-quoted literal.  Unknown escapes keep the following
+/// character verbatim (lenient, matching the lexer's tolerance).
+pub(crate) fn unescape_loft_text(lit: &str) -> Option<String> {
+    let inner = lit.strip_prefix('"')?.strip_suffix('"')?;
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    Some(out)
 }
 
 /// Bytecode encoding: ops 0–254 are one byte.  Byte 255 is an escape
@@ -247,6 +319,7 @@ impl State {
             line_numbers: BTreeMap::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
+            debug: None,
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
@@ -1805,6 +1878,1314 @@ impl State {
         self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
+    // ── @PLN16 debugger ──────────────────────────────────────────────────────
+
+    /// Turn on debugging (idempotent).  The execute loop then consults the
+    /// [`Debugger`](crate::debugger::Debugger) at each op.
+    pub fn enable_debug(&mut self) {
+        if self.debug.is_none() {
+            self.debug = Some(Box::default());
+        }
+    }
+
+    /// Register a breakpoint at the entry of function `d_nr` (its first bytecode
+    /// op).  Enables debugging if not already on.  Returns `false` if `d_nr` is
+    /// out of range.  Reads the entry offset from `def.code_position` (set during
+    /// codegen) — `State::fn_positions` is not populated until `execute_argv`
+    /// runs, so a breakpoint set before the run must consult `data` directly.
+    pub fn set_breakpoint_fn_entry(&mut self, d_nr: u32, data: &crate::data::Data) -> bool {
+        if d_nr >= data.definitions() {
+            return false;
+        }
+        let offset = data.def(d_nr).code_position;
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        true
+    }
+
+    /// Register a breakpoint at source `line` **within function `d_nr`** — the
+    /// correct primitive: a bare line number matches that line in *every* function
+    /// (stdlib included), so a breakpoint must be scoped to its function.  Scans the
+    /// dense per-line table `line_numbers` within `[d_nr.code_position, end)` for the
+    /// first op mapped to `line`.  Returns `false` if no op in that range is on
+    /// `line`.  (Uses `line_numbers`, not `source_spans`: the latter is emitted only
+    /// at fault-prone arithmetic, so a line with no such op — a pure `if`, a call, a
+    /// bare assignment — would otherwise be unbreakable.)
+    pub fn set_breakpoint_fn_line(
+        &mut self,
+        d_nr: u32,
+        line: u32,
+        data: &crate::data::Data,
+    ) -> Option<u32> {
+        if d_nr >= data.definitions() {
+            return None;
+        }
+        let start = data.def(d_nr).code_position;
+        let end = start + data.def(d_nr).code_length;
+        let &offset = self
+            .line_numbers
+            .range(start..end)
+            .find(|(_, l)| **l == line)
+            .map(|(off, _)| off)?;
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        Some(offset)
+    }
+
+    /// Register a breakpoint at the **start of a named function's body** — the
+    /// human-friendly form (`:break foo`).  Resolves `name` → its def → the *first*
+    /// per-line offset inside its bytecode (`[code_position, +code_length)`), which
+    /// is the body's first statement, **post-prologue** (args are in their slots —
+    /// unlike `set_breakpoint_fn_entry`, which pauses pre-prologue where the frame
+    /// isn't set up; `line_numbers` entries land after any frame-setup op).  Returns
+    /// `false` if `name` isn't a defined function or its body has no line mapping.
+    pub fn set_breakpoint_fn_start(&mut self, name: &str, data: &crate::data::Data) -> Option<u32> {
+        let d_nr = data.def_nr(&format!("n_{name}"));
+        if d_nr >= data.definitions() {
+            return None;
+        }
+        let def = data.def(d_nr);
+        let (start, end) = (def.code_position, def.code_position + def.code_length);
+        let &offset = self
+            .line_numbers
+            .range(start..end)
+            .next()
+            .map(|(off, _)| off)?;
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        Some(offset)
+    }
+
+    /// @PLN16 M5a — register a breakpoint at **`file:line`** for the file-run debugger.
+    /// Unlike the REPL's function-scoped form, a real source file gives line numbers
+    /// that are unique within it, so the user names a line directly.  Scoped to the
+    /// **user file's** function defs (matched by `position.file`'s basename — stdlib
+    /// lives in other files, so its identical line numbers are excluded), it sets the
+    /// breakpoint in the one whose body has emitted code on `line` (reusing
+    /// [`set_breakpoint_fn_line`](Self::set_breakpoint_fn_line)).  Returns `false` when
+    /// no user-file function has a breakable op on `line`.
+    pub fn set_breakpoint_file_line(
+        &mut self,
+        file: &str,
+        line: u32,
+        data: &crate::data::Data,
+    ) -> Option<u32> {
+        let want = std::path::Path::new(file).file_name()?;
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type != crate::data::DefType::Function {
+                continue;
+            }
+            if std::path::Path::new(&def.position.file).file_name() != Some(want) {
+                continue;
+            }
+            if let Some(off) = self.set_breakpoint_fn_line(d, line, data) {
+                return Some(off);
+            }
+        }
+        None
+    }
+
+    /// @PLN16 M5a — the breakable source lines in `file` (its basename), sorted: the
+    /// lines a `file:line` breakpoint can land on.  Powers the "no breakable op on line
+    /// N — try one of these" hint in the file-run debugger.  Drawn from the dense
+    /// `line_numbers` table, scoped to the user file's function defs.
+    #[must_use]
+    pub fn breakable_lines_in_file(&self, file: &str, data: &crate::data::Data) -> Vec<u32> {
+        let Some(want) = std::path::Path::new(file).file_name() else {
+            return Vec::new();
+        };
+        let mut ls: Vec<u32> = Vec::new();
+        for d in 0..data.definitions() {
+            let def = data.def(d);
+            if def.def_type != crate::data::DefType::Function
+                || std::path::Path::new(&def.position.file).file_name() != Some(want)
+            {
+                continue;
+            }
+            let (start, end) = (def.code_position, def.code_position + def.code_length);
+            ls.extend(self.line_numbers.range(start..end).map(|(_, l)| *l));
+        }
+        ls.sort_unstable();
+        ls.dedup();
+        ls
+    }
+
+    /// The distinct source lines that carry a bytecode mapping — the lines a
+    /// breakpoint can pause on, sorted.  Drawn from the dense `line_numbers` table
+    /// (every line with emitted code), not the sparse arithmetic-only `source_spans`.
+    #[must_use]
+    pub fn breakable_lines(&self) -> Vec<u32> {
+        let mut ls: Vec<u32> = self.line_numbers.values().copied().collect();
+        ls.sort_unstable();
+        ls.dedup();
+        ls
+    }
+
+    /// The source line of bytecode `pc` from the dense per-line table — the nearest
+    /// `line_numbers` entry at or before `pc` (entries land on each line's first op).
+    /// `0` when no mapping precedes `pc`.  The debugger's line granularity for
+    /// stepping; distinct from [`source_loc_for`](Self::source_loc_for), which gives
+    /// a full `Position` (line+col) from the sparse fault-site `source_spans`.
+    #[must_use]
+    pub fn line_at(&self, pc: u32) -> u32 {
+        self.line_numbers
+            .range(..=pc)
+            .next_back()
+            .map_or(0, |(_, &l)| l)
+    }
+
+    /// The frames captured at breakpoint hits so far (empty when not debugging).
+    #[must_use]
+    pub fn debug_hits(&self) -> &[crate::debugger::BreakHit] {
+        self.debug.as_deref().map_or(&[], |d| d.hits.as_slice())
+    }
+
+    /// Turn on **stepping mode** (idempotent; enables debugging): a breakpoint
+    /// *suspends* execution — the run returns with the frame in
+    /// [`paused_frame`](Self::paused_frame) instead of recording-and-continuing.
+    /// Edit a value with [`set_frame_value`](Self::set_frame_value), then continue
+    /// with [`resume`](Self::resume).
+    pub fn enable_stepping(&mut self) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.stepping = true;
+        }
+    }
+
+    /// Whether execution is currently suspended at a breakpoint (stepping mode).
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.debug.as_deref().is_some_and(|d| d.paused.is_some())
+    }
+
+    /// The frame captured at the current suspension, or `None` if not paused.
+    #[must_use]
+    pub fn paused_frame(&self) -> Option<&crate::debugger::BreakHit> {
+        self.debug.as_deref().and_then(|d| d.paused.as_ref())
+    }
+
+    /// The source line the current suspension is stopped **on**, or `None` if not paused
+    /// (or the line is unknown).  `code_pos` is the op about to execute, so `line_at` gives
+    /// the line the debugger is parked on.  Unlike
+    /// [`paused_at_breakpoint`](Self::paused_at_breakpoint) this is set for a **step** pause
+    /// too — it doesn't require a registered breakpoint at the stop — which is what lets the
+    /// browser debugger move its current-line marker as you step.
+    #[must_use]
+    pub fn paused_line(&self) -> Option<u32> {
+        if !self.is_paused() {
+            return None;
+        }
+        let line = self.line_at(self.code_pos);
+        (line != 0).then_some(line)
+    }
+
+    /// @PLN16 rich-bp — the bytecode offset of the current pause **iff** it is at a
+    /// registered breakpoint (so the driver can look up its condition / tracepoint),
+    /// else `None` (a step or watch pause is always a real stop).  The pause pc is
+    /// `code_pos`: the suspend hook returns *before* executing the breakpoint op.
+    #[must_use]
+    pub fn paused_at_breakpoint(&self) -> Option<u32> {
+        if !self.is_paused() {
+            return None;
+        }
+        let pc = self.code_pos;
+        self.debug
+            .as_deref()
+            .filter(|d| d.is_breakpoint(pc))
+            .map(|_| pc)
+    }
+
+    /// Resolve frame local `name` to `(record, frame-absolute address, type,
+    /// is_argument)` in the current suspension's frame — the shared slot lookup
+    /// behind both the frame-value reads and writes.  The address is the variable's
+    /// fixed slot (`stack_cur.pos + args_base + vars.stack(i)`), the same one
+    /// [`render_frame_local`](Self::render_frame_local) reads.  `is_argument`
+    /// distinguishes a text **arg** (a 16-byte `Str` borrow) from a text **local**
+    /// (a 24-byte owned `String`), which the edit path writes differently.  `None`
+    /// if there is no current frame or no local of that name.
+    fn frame_slot(
+        &self,
+        name: &str,
+        data: &crate::data::Data,
+    ) -> Option<(u32, u32, crate::data::Type, bool)> {
+        let frame = self.call_stack.last()?;
+        if frame.d_nr == u32::MAX {
+            return None;
+        }
+        let vars = &data.def(frame.d_nr).variables;
+        let i = (0..vars.count()).find(|&i| vars.name(i) == name)?;
+        let at = self.stack_cur.pos + frame.args_base + u32::from(vars.stack(i));
+        Some((
+            self.stack_cur.rec,
+            at,
+            vars.tp(i).clone(),
+            vars.is_argument(i),
+        ))
+    }
+
+    /// Whether `name` is a local **shown** at the current suspension — i.e. it
+    /// appears in the captured paused frame.  The text edit path gates on this so a
+    /// user can only edit a text local they can see; the memory-safety of the write
+    /// itself is handled separately (by `ptr::write`, which never drops the prior
+    /// slot value).  `false` when not paused.
+    fn frame_local_is_live(&self, name: &str) -> bool {
+        self.debug
+            .as_deref()
+            .and_then(|d| d.paused.as_ref())
+            .is_some_and(|h| h.locals.iter().any(|(n, _)| n == name))
+    }
+
+    /// Whether a frame local's declared type is a **heap** value — a `DbRef` slot
+    /// (struct / vector / struct-enum / collection), as opposed to an inline scalar,
+    /// text, or simple enum.
+    fn is_heap_type(tp: &crate::data::Type) -> bool {
+        use crate::data::Type;
+        matches!(
+            tp,
+            Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _)
+        )
+    }
+
+    /// @PLN16 M1a — if frame local `name` holds a **heap** value (a `DbRef` slot:
+    /// struct / vector / struct-enum / collection), its loft-source type name — so a
+    /// constructor of the same type can be built and grafted in.  `None` for an inline
+    /// scalar / text / simple-enum local (edited in place by
+    /// [`set_frame_literal`](Self::set_frame_literal)) or an unknown local.  Routes the
+    /// debugger's whole-value heap edit.
+    #[must_use]
+    pub fn frame_heap_type(&self, name: &str, data: &crate::data::Data) -> Option<String> {
+        let (_, _, tp, _) = self.frame_slot(name, data)?;
+        Self::is_heap_type(&tp).then(|| tp.name(data))
+    }
+
+    /// @PLN16 D2 — **live-frame read** of a bare heap local: render frame local `name`
+    /// straight from its **live `DbRef`** in the paused store — own-format
+    /// (`json=false`) or RFC-8259 JSON (`json=true`).  This is the faithful eval path:
+    /// no reconstruct, no clone, no fn-return deep-copy — `show_json` / `show_loft` read
+    /// the value where it lives, so a `vector` renders correctly (the reconstruct-eval
+    /// path faults returning one from a cloned state) **and** the read shows what is
+    /// *actually* in the store, never a copy of it — load-bearing for a consumer
+    /// hunting store-lifetime bugs where a *copy* can drop/desync a field.  `None` for
+    /// a non-heap or unknown local, so the caller falls through to the reconstruct path
+    /// for scalars / computed expressions.  Mirrors [`render_frame_local`]'s heap arm.
+    #[must_use]
+    pub fn eval_frame_heap(
+        &self,
+        name: &str,
+        json: bool,
+        data: &crate::data::Data,
+    ) -> Option<String> {
+        // Only read a local that is **live** at the pause (shown in the captured frame):
+        // an un-live heap slot holds stack garbage, and reading it as a `DbRef` would
+        // index a garbage store (the very OOB this read exists to avoid). The D0
+        // variables panel gates the same way; an un-live name falls through to the
+        // reconstruct path (which likewise lacks it → a clean `None`, never a crash).
+        if !self.frame_local_is_live(name) {
+            return None;
+        }
+        let (rec, at, tp, _is_arg) = self.frame_slot(name, data)?;
+        if !Self::is_heap_type(&tp) {
+            return None;
+        }
+        let tp_known = self.database.name(&tp.name(data));
+        if tp_known == u16::MAX {
+            return None;
+        }
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        let mut out = String::new();
+        if json {
+            self.database.show_json(&mut out, &db, tp_known, false);
+        } else {
+            self.database.show_loft(&mut out, &db, tp_known);
+        }
+        Some(out)
+    }
+
+    /// @PLN16 M1a — point a **heap** frame local at an already-materialised value by
+    /// writing the root `DbRef` into the live frame slot.  The value must already live
+    /// in this `State`'s stores (built + grafted by the debugger's whole-value edit —
+    /// [`Stores::adopt_value_stores`](crate::database::Stores::adopt_value_stores)).
+    /// Returns `false` for an unknown or non-heap (inline) local.  The prior value's
+    /// stores are left allocated — a debug-session-only leak, like the text-local edit;
+    /// **undo (M2)** restores the old `DbRef` (a journaled slot `Modify`), so it points
+    /// back at the still-allocated original (the grafted value's stores leak symmetrically).
+    pub fn set_frame_dbref(
+        &mut self,
+        name: &str,
+        db: crate::keys::DbRef,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        if !Self::is_heap_type(&tp) {
+            return false;
+        }
+        let store_nr = self.stack_cur.store_nr;
+        let len = std::mem::size_of::<crate::keys::DbRef>() as u32;
+        let before = self.edit_before(store_nr, rec, at, len);
+        *self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<crate::keys::DbRef>(rec, at) = db;
+        self.edit_after(store_nr, rec, at, before);
+        true
+    }
+
+    /// @PLN16 M2 — whether an interactive edit's undo journal is armed (recording the
+    /// before/after bytes of the regions it overwrites).  False on non-interactive
+    /// writes, so they pay nothing.
+    fn edit_recording(&self) -> bool {
+        self.debug
+            .as_deref()
+            .is_some_and(|d| d.recording_edit.is_some())
+    }
+
+    /// @PLN16 M2 — snapshot `len` bytes of a frame/heap region *before* an edit
+    /// overwrites them — the `before` half of a journaled `Modify`.  `None` (no
+    /// snapshot, no cost) when no edit journal is armed.  Pair with
+    /// [`edit_after`](Self::edit_after) once the write has landed.
+    fn edit_before(&self, store_nr: u16, rec: u32, off: u32, len: u32) -> Option<Box<[u8]>> {
+        self.edit_recording()
+            .then(|| crate::database::Journal::snapshot(&self.database, store_nr, rec, off, len))
+    }
+
+    /// @PLN16 M2 — after an edit's write lands, record the `Modify` (the `before` from
+    /// [`edit_before`](Self::edit_before) → the region's current bytes) into the armed
+    /// journal, so the edit can be reverted (`:undo`) and replayed (`:redo`).  No-op
+    /// when `before` is `None` (not recording).
+    fn edit_after(&mut self, store_nr: u16, rec: u32, off: u32, before: Option<Box<[u8]>>) {
+        let Some(before) = before else {
+            return;
+        };
+        // `self.debug` and `self.database` are distinct fields → disjoint borrows.
+        if let Some(j) = self
+            .debug
+            .as_deref_mut()
+            .and_then(|d| d.recording_edit.as_mut())
+        {
+            let _ = j.record_modify(&self.database, store_nr, rec, off, &before);
+        }
+    }
+
+    /// @PLN16 M2 — arm a fresh per-edit journal so the next frame write records its
+    /// before/after bytes for undo.  No-op when not debugging.  A blob-file failure
+    /// leaves it disarmed (the edit still runs, just without an undo entry).
+    pub fn begin_edit_journal(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.recording_edit = crate::database::Journal::create().ok();
+        }
+    }
+
+    /// @PLN16 M2 — finish the armed edit journal: if it recorded anything, push it onto
+    /// the undo stack and clear the redo stack (a fresh edit forks the timeline);
+    /// otherwise discard it.  Returns whether an undoable edit was recorded.
+    pub fn commit_edit_journal(&mut self) -> bool {
+        let Some(d) = self.debug.as_deref_mut() else {
+            return false;
+        };
+        let Some(j) = d.recording_edit.take() else {
+            return false;
+        };
+        if j.is_empty() {
+            return false;
+        }
+        d.undo_stack.push(j);
+        d.redo_stack.clear();
+        true
+    }
+
+    /// @PLN16 M2 — drop the armed edit journal without recording (a failed edit).
+    pub fn discard_edit_journal(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.recording_edit = None;
+        }
+    }
+
+    /// @PLN16 M2 — undo the last edit at this suspension: revert its journal and move it
+    /// to the redo stack.  Returns `false` when the undo stack is empty.  Refresh the
+    /// paused frame after, so `:vars` shows the restored value.
+    pub fn debug_undo(&mut self) -> bool {
+        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
+            return false;
+        };
+        let ok = j.revert(&mut self.database).is_ok();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.redo_stack.push(j);
+        }
+        ok
+    }
+
+    /// @PLN16 M2 — redo the last undone edit: re-apply its journal and move it back to
+    /// the undo stack.  Returns `false` when the redo stack is empty.
+    pub fn debug_redo(&mut self) -> bool {
+        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
+            return false;
+        };
+        let ok = j.apply(&mut self.database).is_ok();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.undo_stack.push(j);
+        }
+        ok
+    }
+
+    /// Write an integer `value` into the **live** frame's local `name` at a
+    /// suspension — the @PLN16 F write-back, so a value edited at the breakpoint is
+    /// picked up when execution `resume`s.  Returns `false` if no integer local of
+    /// that name is in the current frame.  (The typed-`i64` primitive; the REPL
+    /// edits via [`set_frame_literal`](Self::set_frame_literal), which covers every
+    /// inline scalar.)
+    pub fn set_frame_value(&mut self, name: &str, value: i64, data: &crate::data::Data) -> bool {
+        let Some((rec, at, tp, _is_arg)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        if !matches!(tp, crate::data::Type::Integer(_)) {
+            return false;
+        }
+        *self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<i64>(rec, at) = value;
+        true
+    }
+
+    /// Write the value rendered by own-format `literal` into the **live** frame's
+    /// local `name`, **type-directed** by the local's declared type — the general
+    /// @PLN16 F edit-and-continue write the REPL uses (`f = 2.0`, `msg = "hi"`).
+    /// Covers every **inline scalar** (integer / float / single / boolean /
+    /// character), a **simple enum** (its 1-based discriminant byte), and **text**
+    /// (a text *local* overwrites its owned `String`; a text *argument* repoints its
+    /// `Str` at a stable [`Debugger`](crate::debugger::Debugger)-owned buffer).
+    /// `literal` is parsed in that type's own-format form (the same form
+    /// [`render_frame_local`](Self::render_frame_local) produces, so an edited value
+    /// round-trips).
+    ///
+    /// A **text** edit requires the local be **live** at the pause (shown in the
+    /// captured frame): overwriting a text local runs `Drop` on the old `String`, so
+    /// the slot must hold a valid one — guaranteed only once its first assignment has
+    /// run, which is exactly when the liveness gate shows it.
+    ///
+    /// Returns `false` for an unknown local, a `literal` that doesn't parse as the
+    /// local's type (a type-mismatched edit is rejected), a not-yet-live text local,
+    /// or a **heap** local (struct / vector / struct-enum): those hold a `DbRef` into
+    /// the store, and reconstructing one in the *live* store from a literal needs a
+    /// literal→store materialiser (`Stores::clone` empties `allocations`, so a value
+    /// built in the REPL's store cannot be aliased across) — the remaining work.
+    pub fn set_frame_literal(
+        &mut self,
+        name: &str,
+        literal: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        use crate::data::Type;
+        let Some((rec, at, tp, is_arg)) = self.frame_slot(name, data) else {
+            return false;
+        };
+        let lit = literal.trim();
+        // @PLN16 M2 — snapshot the slot for undo before the typed write.  Width by type
+        // (text arg = 16-byte `Str`, text local = 24-byte `String`); a heap `_` slot
+        // gets 0 here and returns below — that case is `set_frame_dbref`'s.  A failing
+        // arm returns without committing, so the snapshot is simply dropped.
+        let store_nr = self.stack_cur.store_nr;
+        let len = match &tp {
+            Type::Integer(_) | Type::Float => 8,
+            Type::Single | Type::Character => 4,
+            Type::Boolean | Type::Enum(_, false, _) => 1,
+            Type::Text(_) => {
+                if is_arg {
+                    16
+                } else {
+                    24
+                }
+            }
+            _ => 0,
+        };
+        let before = self.edit_before(store_nr, rec, at, len);
+        match &tp {
+            Type::Integer(_) => {
+                let Ok(v) = lit.parse::<i64>() else {
+                    return false;
+                };
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<i64>(rec, at) = v;
+            }
+            Type::Float => {
+                let Ok(v) = lit.parse::<f64>() else {
+                    return false;
+                };
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<f64>(rec, at) = v;
+            }
+            Type::Single => {
+                let Ok(v) = lit.trim_end_matches('f').parse::<f32>() else {
+                    return false;
+                };
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<f32>(rec, at) = v;
+            }
+            Type::Boolean => {
+                let v = match lit {
+                    "true" => 1u8,
+                    "false" => 0u8,
+                    _ => return false,
+                };
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(rec, at) = v;
+            }
+            Type::Character => {
+                // Own-format is `'c'`; take the single char between the quotes.
+                let inner = lit
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                    .unwrap_or(lit);
+                let mut cs = inner.chars();
+                let (Some(c), None) = (cs.next(), cs.next()) else {
+                    return false;
+                };
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u32>(rec, at) = c as u32;
+            }
+            Type::Text(_) => {
+                // Overwriting a text local drops its old `String`, so it must be a
+                // valid (initialised) one — only true once it is live.
+                if !self.frame_local_is_live(name) {
+                    return false;
+                }
+                let Some(owned) = unescape_loft_text(lit) else {
+                    return false;
+                };
+                if is_arg {
+                    // 16-byte `Str` borrow → point it at a stable Debugger-owned buffer.
+                    let Some(dbg) = self.debug.as_mut() else {
+                        return false;
+                    };
+                    dbg.edited_text.push(owned);
+                    let Some(s) = dbg.edited_text.last() else {
+                        return false; // unreachable after push — no panic path
+                    };
+                    let new = Str {
+                        ptr: s.as_ptr(),
+                        len: s.len() as u32,
+                    };
+                    *self
+                        .database
+                        .store_mut(&self.stack_cur)
+                        .addr_mut::<Str>(rec, at) = new;
+                } else {
+                    // 24-byte owned `String`.  Use `ptr::write`, not assignment:
+                    // assignment drops the slot's prior `String`, but the liveness
+                    // gate can show a text local still at its own assignment op
+                    // (slot uninitialised — `reserve_frame` does not zero), so the
+                    // prior bytes may be garbage and dropping them is UB.
+                    // `ptr::write` overwrites without dropping; a genuinely-prior
+                    // `String`'s buffer leaks (a tiny, debug-session-only cost) and
+                    // scope-exit `OpFreeText` frees the new one.
+                    let dst: *mut String = std::ptr::from_mut(
+                        self.database
+                            .store_mut(&self.stack_cur)
+                            .addr_mut::<String>(rec, at),
+                    );
+                    // SAFETY: `dst` is the live frame slot for a text local (24-byte
+                    // `String`); `ptr::write` neither reads nor drops its prior value.
+                    unsafe {
+                        core::ptr::write(dst, owned);
+                    }
+                }
+            }
+            // Simple enum: an inline 1-based discriminant byte.  `literal` is
+            // `Enum.Variant`; take the variant after the last `.`.
+            Type::Enum(_, false, _) => {
+                let variant = lit.rsplit('.').next().unwrap_or(lit);
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                if tp_known == u16::MAX {
+                    return false;
+                }
+                let disc = self.database.to_enum(tp_known, variant);
+                if disc == 0 {
+                    return false;
+                }
+                *self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<u8>(rec, at) = disc;
+            }
+            // Heap (struct / vector / struct-enum): a `DbRef` slot — see the doc note.
+            _ => return false,
+        }
+        // Reached only on a successful write (every failing arm returns above) — record
+        // the Modify for undo.
+        self.edit_after(store_nr, rec, at, before);
+        true
+    }
+
+    /// @PLN16.J — edit a **scalar at a struct-field path** in place (`pt.x = 9`,
+    /// `pt.inner.x = 9`).  `base` is the struct local; `fields` is the dotted chain.
+    /// Resolves `base`'s `DbRef` from the frame slot, then walks the chain summing
+    /// each field's byte offset — a nested struct is **inlined** into the same
+    /// record, so descending is just offset addition (the same address `ShowDb`
+    /// reads, so the write round-trips), with no `DbRef`-follow.  The leaf must be a
+    /// scalar; the write is pure in-place (no allocation, no `DbRef` change), correct
+    /// by construction like the other modify edits.  Returns `false` for an
+    /// unknown / non-struct `base`, a null struct, an unknown field, an intermediate
+    /// field that is not an inline struct (a vector / linked ref — routed to the
+    /// element / whole-value slice), a non-scalar leaf, or an unparseable `lit`.
+    pub fn set_frame_path(
+        &mut self,
+        base: &str,
+        fields: &[&str],
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((store_nr, rec, off, content)) = self.path_region(base, fields, data) else {
+            return false;
+        };
+        self.write_scalar_at(store_nr, rec, off, content, lit.trim())
+    }
+
+    /// @PLN16 — resolve a struct-field path (`pt.x`, `pt.inner.x`) from the paused frame
+    /// to the heap region it occupies + its primitive type: `(store_nr, rec, off,
+    /// content)`.  Nested structs are inlined, so descending is offset addition in the
+    /// same record (the address `ShowDb` reads).  Shared by the field edit
+    /// ([`set_frame_path`](Self::set_frame_path)) and the watchpoint resolver — read-only.
+    /// `None` for a non-struct base / null struct / unknown field / non-inline
+    /// intermediate.  The leaf's `content` may be any type; the caller decides whether a
+    /// non-scalar leaf is acceptable.
+    fn path_region(
+        &self,
+        base: &str,
+        fields: &[&str],
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u16)> {
+        let (rec, at, tp, _is_arg) = self.frame_slot(base, data)?;
+        // Only a struct (`Reference`) local has named fields to descend.
+        if fields.is_empty() || !matches!(tp, crate::data::Type::Reference(_, _)) {
+            return None;
+        }
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        if db.rec == 0 {
+            return None; // null struct
+        }
+        let mut tp_known = self.database.name(&tp.name(data));
+        let mut off = db.pos;
+        for (i, field) in fields.iter().enumerate() {
+            let (position, content) = self.database.struct_field(tp_known, field)?;
+            off += u32::from(position);
+            if i + 1 == fields.len() {
+                return Some((db.store_nr, db.rec, off, content));
+            }
+            // Intermediate fields must be inline nested structs (summed offset, same
+            // record); a vector / linked ref is the element / whole-value slice.
+            if !self.database.is_struct(content) {
+                return None;
+            }
+            tp_known = content;
+        }
+        None // unreachable — the leaf returns above
+    }
+
+    /// Edit a single scalar struct field — the one-level case of
+    /// [`set_frame_path`](Self::set_frame_path).
+    pub fn set_frame_field(
+        &mut self,
+        base: &str,
+        field: &str,
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        self.set_frame_path(base, &[field], lit, data)
+    }
+
+    /// @PLN16 — live edit of a scalar vector **element** (`v[i] = x`).  The cheapest
+    /// heap edit: the element lives in the vector's backing record, so this is one
+    /// in-place scalar write — no materialisation.  Mirrors the interpreter's own
+    /// element access (`codegen_runtime.rs`): the element type is `content(vec_tp)`,
+    /// the stride is `size(elem_tp)`, and the slot is `8 + i * stride` within the
+    /// backing record.  Returns `false` (no write) on a non-vector base, a null / empty
+    /// vector, an out-of-range index, or a non-scalar element type — never writes past
+    /// the end.
+    pub fn set_frame_element(
+        &mut self,
+        base: &str,
+        index: i64,
+        lit: &str,
+        data: &crate::data::Data,
+    ) -> bool {
+        let Some((store_nr, rec, off, content)) = self.element_region(base, index, data) else {
+            return false;
+        };
+        self.write_scalar_at(store_nr, rec, off, content, lit.trim())
+    }
+
+    /// @PLN16 — resolve a vector element (`v[i]`) from the paused frame to its heap
+    /// region + element type: `(store_nr, vec_rec, 8 + i·stride, elem_tp)`.  Mirrors the
+    /// interpreter's own element access.  Shared by the element edit
+    /// ([`set_frame_element`](Self::set_frame_element)) and the watchpoint resolver —
+    /// read-only.  `None` on a non-vector base / null / empty vector / out-of-range or
+    /// negative index.
+    fn element_region(
+        &self,
+        base: &str,
+        index: i64,
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u16)> {
+        let (rec, at, tp, _is_arg) = self.frame_slot(base, data)?;
+        if !matches!(tp, crate::data::Type::Vector(_, _)) {
+            return None;
+        }
+        let vec_tp = self.database.name(&tp.name(data));
+        let elem_tp = self.database.content(vec_tp);
+        let stride = u32::from(self.database.size(elem_tp));
+        if stride == 0 {
+            return None;
+        }
+        // The frame slot holds the vector handle `DbRef`; its (rec, pos) cell holds the
+        // backing record number, and elements live at `8 + i * stride` within it.
+        let db = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<crate::keys::DbRef>(rec, at);
+        if db.rec == 0 {
+            return None; // null vector
+        }
+        let vec_rec = self.database.store(&db).get_u32_raw(db.rec, db.pos);
+        if vec_rec == 0 {
+            return None; // empty vector — every index is out of range
+        }
+        let length = self.database.store(&db).get_u32_raw(vec_rec, 4);
+        let idx = u32::try_from(index).ok()?;
+        if idx >= length {
+            return None; // out of range / negative
+        }
+        Some((db.store_nr, vec_rec, 8 + idx * stride, elem_tp))
+    }
+
+    /// Write `lit` as a scalar into record `(store_nr, rec)` at byte offset `off`,
+    /// dispatched by the field's primitive type number (the `ShowDb` scalar map):
+    /// 0 integer · 2 single · 3 float · 4 boolean · 6 character.  long (1) / text (5)
+    /// / nested heap (≥ 7) are rejected — they belong to the whole-value slice.
+    /// `false` on a non-scalar type or a `lit` that doesn't parse.
+    fn write_scalar_at(
+        &mut self,
+        store_nr: u16,
+        rec: u32,
+        off: u32,
+        content: u16,
+        lit: &str,
+    ) -> bool {
+        // Width of the scalar by primitive type — also rejects the non-scalar types
+        // (long / text / heap) up front, before snapshotting for undo.
+        let len = match content {
+            0 | 3 => 8, // integer / float
+            2 | 6 => 4, // single / character
+            4 => 1,     // boolean
+            _ => return false,
+        };
+        let before = self.edit_before(store_nr, rec, off, len);
+        let probe = crate::keys::DbRef {
+            store_nr,
+            rec,
+            pos: 0,
+        };
+        // Scope the store borrow so `edit_after` (which re-reads the store) can run.
+        let ok = {
+            let store = self.database.store_mut(&probe);
+            match content {
+                0 => match lit.parse::<i64>() {
+                    Ok(v) => {
+                        *store.addr_mut::<i64>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                2 => match lit.trim_end_matches('f').parse::<f32>() {
+                    Ok(v) => {
+                        *store.addr_mut::<f32>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                3 => match lit.parse::<f64>() {
+                    Ok(v) => {
+                        *store.addr_mut::<f64>(rec, off) = v;
+                        true
+                    }
+                    Err(_) => false,
+                },
+                4 => match lit {
+                    "true" => {
+                        *store.addr_mut::<u8>(rec, off) = 1;
+                        true
+                    }
+                    "false" => {
+                        *store.addr_mut::<u8>(rec, off) = 0;
+                        true
+                    }
+                    _ => false,
+                },
+                6 => {
+                    let inner = lit
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                        .unwrap_or(lit);
+                    let mut cs = inner.chars();
+                    match (cs.next(), cs.next()) {
+                        (Some(c), None) => {
+                            *store.addr_mut::<u32>(rec, off) = c as u32;
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        };
+        if ok {
+            self.edit_after(store_nr, rec, off, before);
+        }
+        ok
+    }
+
+    /// @PLN16 M3 — byte width of a scalar primitive type (the `ShowDb` map): 0 integer /
+    /// 3 float → 8, 2 single / 6 character → 4, 4 boolean → 1.  `None` for a non-scalar
+    /// type — watchpoints (like the scalar edits) only target a scalar region.
+    fn scalar_len(content: u16) -> Option<u32> {
+        match content {
+            0 | 3 => Some(8),
+            2 | 6 => Some(4),
+            4 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// @PLN16 M3 — render a scalar region's raw bytes as a value, for a watchpoint's
+    /// `old → new` report.  Dispatched by the primitive type number.
+    fn render_scalar_bytes(bytes: &[u8], content: u16) -> String {
+        let b4 = |b: &[u8]| <[u8; 4]>::try_from(&b[..4]).unwrap_or([0; 4]);
+        let b8 = |b: &[u8]| <[u8; 8]>::try_from(&b[..8]).unwrap_or([0; 8]);
+        match content {
+            0 if bytes.len() >= 8 => i64::from_le_bytes(b8(bytes)).to_string(),
+            2 if bytes.len() >= 4 => format!("{}f", f32::from_le_bytes(b4(bytes))),
+            3 if bytes.len() >= 8 => loft_float_literal(&f64::from_le_bytes(b8(bytes)).to_string()),
+            4 if !bytes.is_empty() => if bytes[0] == 0 { "false" } else { "true" }.to_string(),
+            6 if bytes.len() >= 4 => char::from_u32(u32::from_le_bytes(b4(bytes)))
+                .map_or_else(|| "?".to_string(), |c| format!("'{c}'")),
+            _ => "?".to_string(),
+        }
+    }
+
+    /// @PLN16 M3 — resolve a watch expression (`pt.x`, `pt.inner.x`, `v[i]`) from the
+    /// paused frame to its scalar heap region: `(store_nr, rec, off, len, content)`.
+    /// Reuses the field / element resolvers ([`path_region`](Self::path_region) /
+    /// [`element_region`](Self::element_region)).  `None` for a bare local (a stack slot
+    /// — not a stable watch target), a non-scalar leaf, or any case the edits reject.
+    fn resolve_watch_region(
+        &self,
+        expr: &str,
+        data: &crate::data::Data,
+    ) -> Option<(u16, u32, u32, u32, u16)> {
+        let (store_nr, rec, off, content) = if let Some(open) = expr.find('[') {
+            let base = expr[..open].trim();
+            if base.contains('.') {
+                return None; // `s.items[0]` (path + index) not handled
+            }
+            let idx = expr[open + 1..]
+                .strip_suffix(']')?
+                .trim()
+                .parse::<i64>()
+                .ok()?;
+            self.element_region(base, idx, data)?
+        } else if expr.contains('.') {
+            let mut segs = expr.split('.').map(str::trim);
+            let base = segs.next()?;
+            let path: Vec<&str> = segs.collect();
+            self.path_region(base, &path, data)?
+        } else {
+            return None; // a bare local lives in a stack slot — not a stable watch target
+        };
+        let len = Self::scalar_len(content)?;
+        Some((store_nr, rec, off, len, content))
+    }
+
+    /// @PLN16 M3 — set a **watchpoint** on the scalar heap region named by `expr`
+    /// (`pt.x`, `v[i]`): snapshot its current bytes and register it, so a resumed run
+    /// pauses when a later write changes it.  Returns `false` for an unwatchable
+    /// expression (a bare local, a non-scalar / null / out-of-range target).
+    pub fn add_watchpoint(&mut self, expr: &str, data: &crate::data::Data) -> bool {
+        let Some((store_nr, rec, off, len, content)) = self.resolve_watch_region(expr, data) else {
+            return false;
+        };
+        let last = self.database.allocations[store_nr as usize].read_span(rec, off, len);
+        let wp = crate::debugger::Watchpoint {
+            label: expr.trim().to_string(),
+            store_nr,
+            rec,
+            off,
+            len,
+            content,
+            last,
+        };
+        self.enable_debug();
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.watchpoints.push(wp);
+        }
+        true
+    }
+
+    /// @PLN16 M3 — re-read every watchpoint's region; on the **first** that changed,
+    /// update its snapshot and return the hit (label + old → new).  Called after each op
+    /// of a resumed run ([`debug_step`](Self::debug_step)).  Skips a watch whose store
+    /// was freed (the value was deallocated) rather than reading stale memory.
+    fn poll_watchpoints(&mut self) -> Option<crate::debugger::WatchHit> {
+        let count = self.debug.as_deref().map_or(0, |d| d.watchpoints.len());
+        for i in 0..count {
+            let (store_nr, rec, off, len, content) = {
+                let w = &self.debug.as_deref()?.watchpoints[i];
+                (w.store_nr, w.rec, w.off, w.len, w.content)
+            };
+            if store_nr as usize >= self.database.allocations.len()
+                || self.database.allocations[store_nr as usize].free
+            {
+                continue;
+            }
+            let cur = self.database.allocations[store_nr as usize].read_span(rec, off, len);
+            let old = self.debug.as_deref()?.watchpoints[i].last.clone();
+            if *old != *cur {
+                let hit = crate::debugger::WatchHit {
+                    label: self.debug.as_deref()?.watchpoints[i].label.clone(),
+                    old: Self::render_scalar_bytes(&old, content),
+                    new: Self::render_scalar_bytes(&cur, content),
+                };
+                self.debug.as_deref_mut()?.watchpoints[i].last = cur;
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    /// @PLN16 M3 — the watchpoint that fired during the most recent resume, taken (and
+    /// cleared) by the driver to report it.  `None` if no watch fired.
+    pub fn take_watch_hit(&mut self) -> Option<crate::debugger::WatchHit> {
+        self.debug.as_deref_mut().and_then(|d| d.last_watch.take())
+    }
+
+    /// @PLN16 M3 — the labels of the active watchpoints, for `:watch` (list).
+    #[must_use]
+    pub fn watchpoint_labels(&self) -> Vec<String> {
+        self.debug.as_deref().map_or_else(Vec::new, |d| {
+            d.watchpoints.iter().map(|w| w.label.clone()).collect()
+        })
+    }
+
+    /// @PLN16 M3 — remove all watchpoints.
+    pub fn clear_watchpoints(&mut self) {
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.watchpoints.clear();
+        }
+    }
+
+    /// Re-capture the current suspension's frame so [`paused_frame`](Self::paused_frame)
+    /// reflects a value just written with [`set_frame_value`](Self::set_frame_value) —
+    /// the user edits `n` at the paused prompt and `:vars` shows the new value.
+    /// No-op when not paused.  The pause pc is `code_pos`: the suspend hook returns
+    /// *before* executing the breakpoint op, so `code_pos` still names it (the same
+    /// pc the frame was first captured at).
+    pub fn refresh_paused_frame(&mut self, data: &crate::data::Data) {
+        if !self.is_paused() {
+            return;
+        }
+        let hit = self.capture_break_frame(self.code_pos, data);
+        if let Some(d) = self.debug.as_mut() {
+            d.paused = Some(hit);
+        }
+    }
+
+    /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
+    /// frame.  Returns `true` to **suspend** the loop (stepping mode — the frame is
+    /// stashed in `debug.paused` for the driver to read / edit, then `resume`);
+    /// `false` to continue (record-and-continue mode — the frame is appended to
+    /// `debug.hits`).  Always `false` when `pc` is not a breakpoint.
+    fn debug_check(&mut self, pc: u32, data: &crate::data::Data) -> bool {
+        let is_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
+        if !is_bp {
+            return false;
+        }
+        let hit = self.capture_break_frame(pc, data);
+        if let Some(d) = self.debug.as_mut() {
+            if d.stepping {
+                d.paused = Some(hit);
+                return true; // suspend the loop
+            }
+            d.hits.push(hit);
+        }
+        false
+    }
+
+    /// Read the current (topmost) frame's in-scope variables into a
+    /// [`BreakHit`](crate::debugger::BreakHit) at breakpoint offset `pc`.  Captures
+    /// arguments (always live) plus the **non-argument locals that are live at
+    /// `pc`** — gated by each variable's bytecode reference range (Q6).
+    ///
+    /// Liveness is derived from `self.vars` — the codegen `code_pos → var_nr` map
+    /// (the same one `debug.rs` uses for slot dumps).  It is **read-dominated**
+    /// (every `Var` read records its pc; scalar first-assignments do not), so a
+    /// local is shown iff its **reference range** contains the breakpoint:
+    /// `first_ref <= pc <= last_ref`.  This is *safe* — a variable inside its
+    /// read-range has necessarily been assigned, so it never reads zero/garbage —
+    /// and it picks the right owner of a **reused** slot (disjoint ranges, at most
+    /// one contains `pc`).  It under-shows only a defined-but-not-yet-read local
+    /// before its first read; that is an acceptable v1 limitation, not a hazard.
+    fn capture_break_frame(&self, pc: u32, data: &crate::data::Data) -> crate::debugger::BreakHit {
+        let (d_nr, frame_base) = self
+            .call_stack
+            .last()
+            .map_or((u32::MAX, 0), |f| (f.d_nr, f.args_base));
+        self.capture_frame_at(d_nr, frame_base, pc, data)
+    }
+
+    /// @PLN16 B3 — capture the **full runtime call stack**, one `BreakHit` per
+    /// frame, innermost first.  The frames come from the live `call_stack`, so the
+    /// chain is exactly the one that *actually ran* — **including frames reached
+    /// via indirect (fn-ref) calls that the static call graph (B1) cannot see**.
+    /// Each frame's liveness `pc` is the breakpoint pc (top frame) or the call site
+    /// into the frame above it (`call_pos`).  Read-only — call it at a suspension.
+    #[must_use]
+    pub fn break_stack(&self, data: &crate::data::Data) -> Vec<crate::debugger::BreakHit> {
+        let n = self.call_stack.len();
+        (0..n)
+            .rev()
+            .map(|i| {
+                let frame = &self.call_stack[i];
+                let pc = if i + 1 == n {
+                    self.code_pos
+                } else {
+                    self.call_stack[i + 1].call_pos
+                };
+                self.capture_frame_at(frame.d_nr, frame.args_base, pc, data)
+            })
+            .collect()
+    }
+
+    /// Capture one frame — function `d_nr`, whose variable region starts at
+    /// `stack_cur.pos + frame_base` — with its variables live at `pc`.  Shared by
+    /// the top-frame breakpoint capture and the full-stack walk.
+    fn capture_frame_at(
+        &self,
+        d_nr: u32,
+        frame_base: u32,
+        pc: u32,
+        data: &crate::data::Data,
+    ) -> crate::debugger::BreakHit {
+        if d_nr == u32::MAX {
+            return crate::debugger::BreakHit {
+                function: "?".to_string(),
+                locals: Vec::new(),
+            };
+        }
+        let raw = data.def(d_nr).name();
+        let function = raw.strip_prefix("n_").unwrap_or(raw).to_string();
+        let def = data.def(d_nr);
+        let n = def.variables.count();
+        // Per-var bytecode reference range, scanning `self.vars` within this
+        // function's bytecode span (`[code_position, +code_length)`).
+        let (start, end) = (def.code_position, def.code_position + def.code_length);
+        let mut first = vec![u32::MAX; n as usize];
+        let mut last = vec![u32::MAX; n as usize];
+        for (&bc, &v) in &self.vars {
+            if bc < start || bc >= end || v as usize >= n as usize {
+                continue;
+            }
+            let i = v as usize;
+            if first[i] == u32::MAX || bc < first[i] {
+                first[i] = bc;
+            }
+            if last[i] == u32::MAX || bc > last[i] {
+                last[i] = bc;
+            }
+        }
+        // Collect (name, slot, type) first so the `data` borrow ends before the
+        // value reads below.  Arguments are always live; a non-arg local is live
+        // iff its def precedes `pc` and `pc` is within its reference range.
+        let fields: Vec<(String, u16, crate::data::Type, bool)> = {
+            let vars = &def.variables;
+            (0..n)
+                .filter(|&i| {
+                    vars.is_argument(i)
+                        || (first[i as usize] != u32::MAX
+                            && first[i as usize] <= pc
+                            && pc <= last[i as usize])
+                })
+                .map(|i| {
+                    (
+                        vars.name(i).to_string(),
+                        vars.stack(i),
+                        vars.tp(i).clone(),
+                        vars.is_argument(i),
+                    )
+                })
+                .collect()
+        };
+        let locals = fields
+            .into_iter()
+            .map(|(name, off, tp, is_arg)| {
+                (
+                    name,
+                    self.render_frame_local(frame_base, off, &tp, is_arg, data),
+                )
+            })
+            .collect();
+        crate::debugger::BreakHit { function, locals }
+    }
+
+    /// Render a frame variable at frame offset `off` (its `vars.stack(i)`) of type
+    /// `tp` to loft source.  Reads at the **frame-absolute** position
+    /// `stack_cur.pos + frame_base + off` — the variable's fixed slot — rather than
+    /// via `get_var`, whose `pos` operand is stack-depth-relative (correct only at
+    /// the exact op the codegen emitted it for, not at an arbitrary pause).  Covers
+    /// every value type: scalars + text inline, `DbRef`-backed heap values
+    /// (struct / vector / struct-enum) via [`show_loft`](crate::database::Stores),
+    /// and a simple enum via its discriminant byte — the same dispatch the REPL's
+    /// value-snapshot uses, but reading a frame slot instead of the stack top.
+    fn render_frame_local(
+        &self,
+        frame_base: u32,
+        off: u16,
+        tp: &crate::data::Type,
+        is_arg: bool,
+        data: &crate::data::Data,
+    ) -> String {
+        use crate::data::Type;
+        let rec = self.stack_cur.rec;
+        let at = self.stack_cur.pos + frame_base + u32::from(off);
+        // Each scalar read takes a fresh `store` borrow (released at the end of the
+        // arm) so the heap arms can re-borrow `self.database` for `show_loft`.
+        match tp {
+            Type::Integer(_) => self
+                .database
+                .store(&self.stack_cur)
+                .addr::<i64>(rec, at)
+                .to_string(),
+            // 255 is @PLN17's three-state-boolean null sentinel (C73); rendering it as
+            // "null" is inert pre-merge (two-state writes only 0/1) and correct after.
+            Type::Boolean => match *self.database.store(&self.stack_cur).addr::<u8>(rec, at) {
+                0 => "false",
+                255 => "null",
+                _ => "true",
+            }
+            .to_string(),
+            // Force a decimal point so the literal re-parses as `float`/`single`,
+            // not `integer` (a bare `2` would re-type-infer to `integer` when the
+            // D1 bridge seeds the frame) — the same round-trip guarantee
+            // `render_capture` makes via `float_literal`.
+            Type::Float => loft_float_literal(&f64::to_string(
+                self.database.store(&self.stack_cur).addr::<f64>(rec, at),
+            )),
+            Type::Single => format!(
+                "{}f",
+                loft_float_literal(&f32::to_string(
+                    self.database.store(&self.stack_cur).addr::<f32>(rec, at)
+                ))
+            ),
+            Type::Character => {
+                char::from_u32(*self.database.store(&self.stack_cur).addr::<u32>(rec, at))
+                    .map_or_else(|| "?".to_string(), |c| format!("'{c}'"))
+            }
+            // A text **argument** is a 16-byte `Str` borrow (`OpArgText`); a text
+            // **local** is a 24-byte owned `String` (`OpVarText`).  Read each at its
+            // true width — reading a local's `String` as a `Str` mis-takes the
+            // capacity word for the length and renders garbage / `""`.
+            Type::Text(_) => {
+                let raw = if is_arg {
+                    self.database
+                        .store(&self.stack_cur)
+                        .addr::<crate::keys::Str>(rec, at)
+                        .str()
+                        .to_string()
+                } else {
+                    // `reserve_frame` does not zero locals, so a text local shown
+                    // at its own (not-yet-run) assignment op holds stack garbage.
+                    // `as_ptr()`/`len()` only read fields (no deref), so they are
+                    // safe on garbage; guard them like `Str::str` before building
+                    // the slice, rather than `.clone()` (which would deref).
+                    let s = self.database.store(&self.stack_cur).addr::<String>(rec, at);
+                    let (ptr, len) = (s.as_ptr(), s.len());
+                    if ptr.is_null() || (ptr as usize) < (1 << 16) || len > 10_000_000 {
+                        String::new()
+                    } else {
+                        // SAFETY: ptr passed the same low-address / length guard
+                        // `Str::str` uses; the bytes are valid UTF-8 (loft text).
+                        unsafe {
+                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                        }
+                        .to_string()
+                    }
+                };
+                loft_text_literal(&raw)
+            }
+            // Heap value backed by a `DbRef` in the slot: struct, vector,
+            // struct-enum variant → `show_loft` renders its own-format literal.
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                if tp_known == u16::MAX {
+                    return format!("<{tname}>");
+                }
+                let db = *self
+                    .database
+                    .store(&self.stack_cur)
+                    .addr::<crate::keys::DbRef>(rec, at);
+                let mut out = String::new();
+                // Bounded glance for the variables panel so a big struct/vector doesn't
+                // flood it (the LOFT_DUMP_DEPTH/ELEMENTS trace defaults); the full value is
+                // one `eval` away via `eval_frame_heap`, which stays unbounded.
+                self.database
+                    .show_loft_bounded(&mut out, &db, tp_known, 2, 8);
+                out
+            }
+            // Simple enum: an inline 1-based discriminant byte → `Enum.Variant`.
+            Type::Enum(_, false, _) => {
+                let tname = tp.name(data);
+                let tp_known = self.database.name(&tname);
+                let disc = *self.database.store(&self.stack_cur).addr::<u8>(rec, at);
+                if tp_known == u16::MAX || disc == 0 {
+                    "null".to_string()
+                } else {
+                    format!("{tname}.{}", self.database.enum_val(tp_known, disc))
+                }
+            }
+            other => format!("<{}>", other.name(data)),
+        }
+    }
+
     /// Plan-07 phase 4 step 4.1 — raise a typed runtime error from a
     /// fault-site opcode (div-by-zero, OOB, null-deref, narrow cast, …).
     /// Resolves the offending pc back to a `Position` via the phase-1
@@ -2114,6 +3495,13 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op_pos_rt = self.code_pos;
+            // @PLN16 debugger — at a registered breakpoint, capture the frame (and
+            // in stepping mode, suspend: return to the driver with the frame in
+            // `debug.paused`, to be resumed via `resume`).  Inert (one branch) when
+            // not debugging.
+            if self.debug.is_some() && self.debug_check(op_pos_rt, data) {
+                return;
+            }
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;
             let op = self.code::<u8>();
@@ -2295,6 +3683,93 @@ impl State {
         false
     }
 
+    /// Resume from a suspension and stop per `mode` — the @PLN16 F step verbs
+    /// ([`StepMode`](crate::debugger::StepMode)).  Drives the same re-enterable
+    /// loop as [`resume`](Self::resume) but, after each op, decides whether to pause
+    /// from the current **source line** (`line_at`, the dense per-line table) and
+    /// **call depth** (`call_stack.len()`) relative to where the step began.  A
+    /// registered breakpoint always pauses, whatever the mode.  Returns `true` if it
+    /// paused again (frame in [`paused_frame`](Self::paused_frame)), `false` if the
+    /// program finished.
+    pub fn debug_step(
+        &mut self,
+        mode: crate::debugger::StepMode,
+        data: &crate::data::Data,
+    ) -> bool {
+        use crate::debugger::StepMode;
+        self.database.frame_yield = false;
+        let start_line = self.line_at(self.code_pos);
+        let start_depth = self.call_stack.len();
+        if let Some(d) = self.debug.as_mut() {
+            d.paused = None;
+            // @PLN16 M2 — resuming reuses frame stack slots, so an undo recorded at this
+            // suspension could write a stale slot.  Drop the undo/redo history; the next
+            // pause starts a fresh one.
+            d.undo_stack.clear();
+            d.redo_stack.clear();
+            d.recording_edit = None;
+            // @PLN16 M3 — a fresh resume reports only watch hits it produces.
+            d.last_watch = None;
+        }
+        let bytecode_len = self.bytecode.len() as u32;
+        // Skip the pause-check on the very first op — it is the breakpoint/line we
+        // are stepping *from*; we must execute it, not immediately re-pause.
+        let mut first = true;
+        // @PLN16 M3 — set when a watchpoint's region changed after an op; the next stop
+        // check pauses, so the user lands one op past the mutating write.
+        let mut watch_fired = false;
+        while self.code_pos < bytecode_len {
+            if !first {
+                let pc = self.code_pos;
+                let at_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
+                let stop = at_bp || watch_fired || {
+                    let depth = self.call_stack.len();
+                    let line = self.line_at(pc);
+                    match mode {
+                        StepMode::Into => depth != start_depth || line != start_line,
+                        StepMode::Over => depth <= start_depth && line != start_line,
+                        StepMode::Out => depth < start_depth,
+                        StepMode::Continue => false,
+                    }
+                };
+                if stop {
+                    let hit = self.capture_break_frame(pc, data);
+                    if let Some(d) = self.debug.as_mut() {
+                        d.paused = Some(hit);
+                    }
+                    return true;
+                }
+            }
+            first = false;
+            let op = self.code::<u8>();
+            if op == 255 {
+                let ext = self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            if self.database.frame_yield {
+                return true;
+            }
+            if self.database.runtime_error.is_some() {
+                self.code_pos = u32::MAX;
+            }
+            if self.code_pos == u32::MAX {
+                break;
+            }
+            // @PLN16 M3 — poll watchpoints after each op; the first change arms a stop.
+            if !watch_fired && let Some(hit) = self.poll_watchpoints() {
+                if let Some(d) = self.debug.as_mut() {
+                    d.last_watch = Some(hit);
+                }
+                watch_fired = true;
+            }
+        }
+        self.call_stack.pop();
+        self.database.parallel_ctx = None;
+        false
+    }
+
     /// Snapshot the bytecode, text segment, and native-function library for
     /// use in a parallel worker thread.  All three are `Arc`-cloned — O(1).
     #[must_use]
@@ -2349,6 +3824,7 @@ impl State {
             line_numbers: BTreeMap::new(),
             source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
+            debug: None,
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
