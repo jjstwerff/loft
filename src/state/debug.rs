@@ -1269,8 +1269,18 @@ impl State {
         for (a_nr, a) in def.attributes().iter().enumerate() {
             if !a.mutable {
                 if def.name() == "OpStaticCall" {
-                    let nr = self.code::<i16>();
-                    write!(log, "{})", FUNCTIONS[nr as usize].0)?;
+                    // Read u16 to match `static_call`'s `code::<u16>()`.  The
+                    // index can exceed the built-in `FUNCTIONS` table when it
+                    // targets a registered native LIBRARY function (or an
+                    // unloaded-library stub) — render those by index instead of
+                    // indexing `FUNCTIONS` out of bounds (which crashed the
+                    // trace logger mid-dump, masking the bug being traced).
+                    let nr = self.code::<u16>() as usize;
+                    if let Some((name, _)) = FUNCTIONS.get(nr) {
+                        write!(log, "{name})")?;
+                    } else {
+                        write!(log, "lib_fn#{nr})")?;
+                    }
                     self.code_pos = cur;
                     self.stack_pos = stack;
                     return Ok(op);
