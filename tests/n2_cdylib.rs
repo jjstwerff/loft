@@ -1049,3 +1049,99 @@ fn auto_cdylib_stem_is_a_valid_crate_identifier() {
         );
     }
 }
+
+/// #303 — a `text`-returning marked fn must dispatch correctly in EXPRESSION
+/// context (`f(7) != f(8)`), not just dest context (`x = f(7)`).
+///
+/// The fn's local-text-returned shape gives it a `text_return` work-buffer
+/// attribute (`&text`).  Before the unified marshallability judgment
+/// (`native_gate::classify_bridge_attr`), wire-time `compute_sig` rejected that
+/// attribute (`RefVar` → `None`) so the fn never wired and its emitted
+/// `OpStaticCall`s hit the panicking "native function not loaded" stub; and
+/// the dispatcher's non-dest text return degraded to an empty `Str`, so an
+/// expression-context comparison silently evaluated `"" != ""` → `false` —
+/// the crawler's `diff_seed` Heisenbug.  This pins both: the call DISPATCHES
+/// (sentinel) and both contexts produce the interpreted-identical values
+/// (loft-side asserts).
+#[test]
+fn p303_text_return_marked_fn_expression_and_dest_context() {
+    use loft::data::Type;
+    use loft::state::SHARED_DISPATCH_HITS;
+    use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    const ENAME_LIB: &str = "pub fn ename(k: integer) -> text {\n\
+                             \x20   n = \"amber\";\n\
+                             \x20   if k == 7 { n = \"azure\"; }\n\
+                             \x20   n\n\
+                             }";
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(ENAME_LIB, "lib", false);
+    p.parse_str(
+        "fn main() {\n\
+         \x20   diff = ename(7) != ename(8);\n\
+         \x20   assert(diff, \"expression-context text dispatch must compare real values\");\n\
+         \x20   a = ename(7);\n\
+         \x20   assert(a == \"azure\", \"dest-context text dispatch\");\n\
+         }",
+        "main",
+        false,
+    );
+    assert!(
+        !p.diagnostics.lines().iter().any(|l| l.starts_with("Error")),
+        "parse: {:?}",
+        p.diagnostics.lines()
+    );
+    loft::scopes::check(&mut p.data);
+
+    let fn_nr = p.data.def_nr("n_ename");
+    // Precondition the whole test rests on: the fn carries a text_return
+    // work-buffer attribute (`&text`) — the attr kind the old wire path rejected.
+    assert!(
+        p.data
+            .def(fn_nr)
+            .attributes()
+            .iter()
+            .any(|a| matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))),
+        "precondition: ename must carry a text_return work buffer"
+    );
+
+    let export: HashSet<u32> = std::iter::once(fn_nr).collect();
+    let tmp = std::env::temp_dir().join(format!("loft_n2_p303_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let so = match loft::native_lib::build_shared_cdylib(
+        &p.data,
+        &p.database,
+        &export,
+        &tmp,
+        "loft_auto_p303",
+    ) {
+        Ok(so) => so,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&tmp);
+            panic!("build_shared_cdylib failed: {e}");
+        }
+    };
+    loft::native_lib::mark_exports(&mut p.data, &export);
+
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    loft::extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    loft::extensions::wire_shared_native_fns(&mut state, &p.data);
+
+    SHARED_DISPATCH_HITS.store(0, Ordering::Relaxed);
+    state.execute_argv("main", &p.data, &[]); // loft asserts check the values
+    let hits = SHARED_DISPATCH_HITS.load(Ordering::Relaxed);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        hits >= 3,
+        "all three ename calls must DISPATCH to the bridge (got bridge_hits={hits}) — \
+         a wire-time skip would leave the panicking stub or interpret silently"
+    );
+}

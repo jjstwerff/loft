@@ -425,31 +425,49 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
     let mut body = String::new();
     let mut fwd = String::new();
     let mut slot = 0usize; // next public-arg LibArg slot
+    let ret_text = matches!(def.returned(), Type::Text(_));
     for (i, a) in def.attributes().iter().enumerate() {
         let var = format!("p{i}");
-        if a.hidden {
-            // ref_return destination — allocate it in the SHARED store, mirroring
-            // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
-            let tid = hidden_dest_type_id(data, &a.typedef);
-            let _ = writeln!(
-                body,
-                "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
-            );
-            let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
-            let _ = write!(fwd, ", {var}");
-        } else if is_text_work_buffer(&a.typedef) {
-            // text_return work buffer (`&mut String`) — own a LOCAL String, pass
-            // `&mut`.  The returned `Str` points into it; `bridge_write_ret` copies
-            // the bytes into the caller-owned `bridge_text_dest` record (@PLN10
-            // dest-passing) before this frame drops.
-            let _ = writeln!(body, "    let mut {var}: String = String::new();");
-            let _ = write!(fwd, ", &mut {var}");
-        } else {
-            let ty = rust_type(&a.typedef, &Context::Argument);
-            let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
-            let _ = writeln!(body, "    let {var}: {ty} = {read};");
-            slot += 1;
-            let _ = write!(fwd, ", {var}");
+        // #303 — the ONE marshallability judgment (shared with the gate and the
+        // wire-time signature builder).  The gate guarantees `Some` for every
+        // attribute of a marked function; a `None` here means the judgment
+        // drifted between marking and generation — fail loudly, never emit a
+        // bridge whose ABI the dispatcher would disagree with.
+        let kind = crate::native_gate::classify_bridge_attr(a, ret_text).unwrap_or_else(|| {
+            panic!(
+                "shared bridge for {}: attribute '{}' is not bridge-classifiable \
+                 but the function was marked dispatchable (gate/generator divergence)",
+                def.name(),
+                a.name,
+            )
+        });
+        match kind {
+            crate::native_gate::BridgeAttrKind::HiddenDest => {
+                // ref_return destination — allocate it in the SHARED store, mirroring
+                // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
+                let tid = hidden_dest_type_id(data, &a.typedef);
+                let _ = writeln!(
+                    body,
+                    "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+                );
+                let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+                let _ = write!(fwd, ", {var}");
+            }
+            crate::native_gate::BridgeAttrKind::WorkText => {
+                // text_return work buffer (`&mut String`) — own a LOCAL String, pass
+                // `&mut`.  The returned `Str` points into it; `bridge_write_ret` copies
+                // the bytes into the caller-owned `bridge_text_dest` record (@PLN10
+                // dest-passing) before this frame drops.
+                let _ = writeln!(body, "    let mut {var}: String = String::new();");
+                let _ = write!(fwd, ", &mut {var}");
+            }
+            crate::native_gate::BridgeAttrKind::Marshal => {
+                let ty = rust_type(&a.typedef, &Context::Argument);
+                let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
+                let _ = writeln!(body, "    let {var}: {ty} = {read};");
+                slot += 1;
+                let _ = write!(fwd, ", {var}");
+            }
         }
     }
 

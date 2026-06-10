@@ -5732,6 +5732,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 // Preserve native-extension wiring across test iterations.
                 extensions::load_all(&mut state_iter, all_native_libs.clone());
                 extensions::wire_native_fns(&mut state_iter, &data_iter);
+                // #303 — the shared-store bridges too: a `loft_shared_*`-marked
+                // fn dispatches via `OpStaticCall` in test bodies as well; without
+                // this wire every such call hits the panicking stub.
+                extensions::wire_shared_native_fns(&mut state_iter, &data_iter);
                 state_iter.execute_argv(name, &data_iter, &[]);
             }
         }
