@@ -173,11 +173,20 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
 (drive the messages over a pipe / WS, assert the JSON) plus a headless-chromium smoke
 (the dev box ships chromium + both wasm targets).
 
-1. **Foundation — `--serve` + shell + Run + program console.** The WebSocket transport
-   (`loft debug --serve <port>`, the same `handle()` driver as `--rpc` over WS framing);
-   the browser connects, shows a file (reuse `/file`), and a **Run** button → `run` →
-   `output` events stream into the Program console. *Smallest visible IDE; proves
-   transport + one console.* Engine: shipped. New: the WS transport + a static shell page.
+1. **Foundation — `--serve` + shell + Run + program console — LANDED (2026-06-10).**
+   `loft debug <file> --serve [--port <n>]` (`src/serve.rs`): an HTTP + WebSocket server on
+   `127.0.0.1`. `GET /` returns a minimal shell (the file's source in a read-only pane, a
+   **Run** button, a **Program** console); the shell opens a WebSocket and drives the *same*
+   `handle()` driver as `--rpc` — one JSON request per text frame, `run` → `output` events
+   stream into the console, then `terminated`. The transport is the only new code: a small
+   inline SHA-1 + WS framing (test-vector verified, no new crate); the engine, protocol, and
+   message set are unchanged. Program `print` rides the shared capture sink (`output`
+   events), never the socket. Tests: `tests/serve.rs` drives the full path over a real
+   socket (HTTP shell, WS handshake, launch → run → output → terminated) + unit tests for
+   SHA-1 / the RFC 6455 accept key / frame round-trip. *Smallest visible IDE; proves
+   transport + one console.* (Slice 1 shows the source inline rather than via a `/file`
+   endpoint — the editor/`readFile` path is slice 3.) The live game loop (slice 6) is why
+   this is a WebSocket, not request/response — it needs bidirectional server-push.
 2. **Compiler console — `compile` + `diagnostics`.** A `compile` message returns
    diagnostics; the Compiler console lists them; inline squiggles + gutter markers on the
    editor (the 14-bridge R2 drawing). *The dual console is complete.* Engine:

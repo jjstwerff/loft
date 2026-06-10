@@ -3045,12 +3045,40 @@ fn run_file_debugger() -> ! {
         };
         std::process::exit(code);
     }
+    // @PLN16 M5e slice 1 — `loft debug <file> --serve [--port <n>]`: the browser IDE
+    // foundation (HTTP shell + WebSocket protocol).  The file is the `debug` target;
+    // default port 8770 (distinct from the plan-35 viewer's 8765).
+    if args.iter().any(|a| a == "--serve") {
+        let port = args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|p| args.get(p + 1))
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(8770);
+        let file = args
+            .iter()
+            .position(|a| a == "debug")
+            .and_then(|p| args.get(p + 1))
+            .filter(|a| !a.starts_with('-'));
+        let Some(file) = file else {
+            eprintln!("usage: loft debug <file> --serve [--port <n>]");
+            std::process::exit(2);
+        };
+        let code = match loft::serve::run_serve(&stdlib, port, file) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("loft debug --serve: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     let target = args
         .iter()
         .position(|a| a == "debug")
         .and_then(|p| args.get(p + 1));
     let Some(target) = target else {
-        eprintln!("usage: loft debug <file>:<line>  (or: loft debug --rpc)");
+        eprintln!("usage: loft debug <file>:<line>  (or: loft debug --rpc / --serve)");
         std::process::exit(2);
     };
     // `rsplit_once` so a path that itself contains a colon (e.g. a Windows drive) keeps

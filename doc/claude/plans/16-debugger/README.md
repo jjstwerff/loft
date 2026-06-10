@@ -507,6 +507,9 @@ M5d (the condition reuses **E**).
   debugger UI → test/suite runners → the game loop with native OpenGL + live hot-swap);
   slices 1–5 are a usable IDE for any loft program, slice 6 is the lavition payoff. This
   is [`live-prototyping`](../../GOALS.md) made literal — see [LAVITION.md](../../LAVITION.md).
+  **Slice 1 LANDED (2026-06-10):** `loft debug <file> --serve` — an HTTP + WebSocket server
+  (`src/serve.rs`) serving a minimal shell (source + Run + Program console) that drives the
+  `--rpc` `handle()` driver over WS; `tests/serve.rs` proves the full socket round-trip.
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a

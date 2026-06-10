@@ -44,10 +44,10 @@ pub fn print_or_capture(text: &str) -> bool {
     })
 }
 
-fn capture_begin() {
+pub(crate) fn capture_begin() {
     OUTPUT_SINK.with(|s| *s.borrow_mut() = Some(String::new()));
 }
-fn capture_end() {
+pub(crate) fn capture_end() {
     OUTPUT_SINK.with(|s| *s.borrow_mut() = None);
 }
 /// Take the captured program output since the last drain (empty if none / not capturing).
@@ -100,7 +100,7 @@ pub fn run_rpc<R: BufRead, W: Write>(
 
 /// Handle one request line; returns the NDJSON messages to emit (response first, then
 /// any events) and whether the client asked to disconnect.
-fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, bool) {
+pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, bool) {
     let parsed = match crate::json::parse(line) {
         Ok(p) => p,
         Err(e) => return (vec![resp_err(0, &parse_err(&e))], false),
