@@ -349,3 +349,56 @@ fn serve_ws_writefile_then_relaunch_runs_new_code() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn serve_ws_breakpoint_stops_with_line_and_locals() {
+    // @PLN16 M5e slice 4 — the debugger flow the browser UI drives: set a breakpoint, run,
+    // and the `stopped` event carries the function, the current LINE (`paused_line` — the
+    // editor's current-line marker), and the frame locals (the variables panel).  Continue
+    // then runs to completion.
+    let path = tmp_program(
+        "dbg",
+        "fn dbl(n: integer) -> integer {\n  r = n * 2;\n  r\n}\nfn main() {\n  x = dbl(21);\n  print(\"x={x}\")\n}\n",
+    );
+    let file = path.to_string_lossy().into_owned();
+    let port = 18788;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
+    ws_send(
+        ws.get_ref(),
+        &format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":2}}]}}"
+        ),
+    );
+    assert!(
+        ws_recv(&mut ws).contains("\"ok\":true"),
+        "setBreakpoints ok"
+    );
+    ws_send(ws.get_ref(), "{\"id\":3,\"req\":\"run\"}");
+    let stopped = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"stopped\"")).join("\n");
+    assert!(
+        stopped.contains("\"function\":\"dbl\""),
+        "stopped in dbl: {stopped}"
+    );
+    assert!(
+        stopped.contains("\"line\":2"),
+        "stopped event carries the current line: {stopped}"
+    );
+    assert!(
+        stopped.contains("\"name\":\"n\"") && stopped.contains("\"value\":\"21\""),
+        "frame exposes local n=21 for the variables panel: {stopped}"
+    );
+    // continue → runs to completion (the program's print, then terminated)
+    ws_send(ws.get_ref(), "{\"id\":4,\"req\":\"continue\"}");
+    let done = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"terminated\"")).join("\n");
+    assert!(
+        done.contains("\"event\":\"terminated\""),
+        "continue runs to completion: {done}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

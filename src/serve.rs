@@ -342,9 +342,13 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #main { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
   #editor { grid-row:1 / 3; border-right:1px solid #8884; display:flex; overflow:hidden; font:13px/1.45 ui-monospace,monospace; }
   #gutter { flex:none; box-sizing:border-box; width:3.5em; padding:8px .7em 8px 0; text-align:right; opacity:.45; user-select:none; overflow:hidden; }
-  #gutter .gnum { white-space:pre; }
+  #gutter .gnum { white-space:pre; cursor:pointer; border-radius:8px; padding:0 .2em; }
+  #gutter .gnum:hover { background:#8882; }
   #gutter .gnum.error { color:#e53935; opacity:1; font-weight:700; }
   #gutter .gnum.warning { color:#b8860b; opacity:1; font-weight:700; }
+  #gutter .gnum.bp { background:#e53935; color:#fff; opacity:1; }
+  #gutter .gnum.cur { background:#ffd60055; opacity:1; }
+  #gutter .gnum.bp.cur { box-shadow:inset 0 0 0 2px #ffd600; }
   #src { flex:1; box-sizing:border-box; border:none; outline:none; resize:none; margin:0; padding:8px 12px; font:inherit; line-height:1.45; background:transparent; color:inherit; white-space:pre; overflow:auto; tab-size:4; }
   .pane { display:flex; flex-direction:column; min-height:0; }
   .pane h2 { margin:0; padding:6px 12px; font-size:12px; opacity:.6; border-bottom:1px solid #8884; text-transform:uppercase; letter-spacing:.05em; }
@@ -353,7 +357,19 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #diags .d.error { color:#e53935; } #diags .d.warning { color:#b8860b; }
   #diags .d .loc { opacity:.55; margin-right:.6em; }
   #diags .none { opacity:.45; }
-  #repl { flex:none; height:32%; border-top:2px solid #8886; display:flex; flex-direction:column; }
+  #steps { display:flex; gap:4px; }
+  #bottom { flex:none; height:34%; border-top:2px solid #8886; display:flex; min-height:0; }
+  #dbg { flex:none; width:42%; border-right:1px solid #8884; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  #dbg[hidden] { display:none; }
+  #dbg .pane { flex:1; min-height:0; }
+  #vars .var, #watches .watch { display:flex; gap:.6em; padding:1px 0; align-items:baseline; }
+  #vars .vn, #watches .wx { color:#1976d2; }
+  #vars .vv { cursor:pointer; } #vars .vv:hover { text-decoration:underline dotted; }
+  #vars .vedit { font:inherit; width:55%; }
+  #watches .wv { margin-left:auto; opacity:.85; } #watches .wrm { cursor:pointer; opacity:.5; }
+  #vars .none, #watches .none { opacity:.45; }
+  #waddin { flex:none; border:none; border-top:1px solid #8884; padding:6px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; }
+  #repl { flex:1; display:flex; flex-direction:column; min-height:0; }
   #replhead { padding:6px 12px; font-size:12px; opacity:.7; border-bottom:1px solid #8884; display:flex; gap:10px; align-items:center; text-transform:uppercase; letter-spacing:.05em; }
   #replctx { font-weight:600; padding:1px 8px; border-radius:9px; text-transform:none; letter-spacing:0; }
   #replctx.top { background:#2196f333; color:#1976d2; }
@@ -364,16 +380,24 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
-<div id="bar"><button id="run">▶ Run</button><button id="save" disabled>Save</button><span id="dirty"></span><span id="status">connecting…</span></div>
+<div id="bar"><button id="run">▶ Run</button><button id="save" disabled>Save</button><span id="dirty"></span>
+  <span id="steps"><button id="cont" disabled title="Continue (to next breakpoint)">⏵</button><button id="over" disabled title="Step over">↷</button><button id="into" disabled title="Step into">↓</button><button id="out" disabled title="Step out">↑</button></span>
+  <span id="status">connecting…</span></div>
 <div id="main">
   <div id="editor"><div id="gutter"></div><textarea id="src" spellcheck="false" wrap="off">__SOURCE__</textarea></div>
   <div class="pane"><h2>Compiler</h2><div id="diags" class="body"></div></div>
   <div class="pane"><h2>Program</h2><pre id="out" class="body"></pre></div>
 </div>
-<div id="repl">
-  <div id="replhead"><span>REPL</span><span id="replctx" class="top">top-level</span><span class="hint">Enter runs · Shift+Enter newline · Esc clears · ↑↓ history</span></div>
-  <div id="replout"></div>
-  <textarea id="replin" rows="1" spellcheck="false" placeholder="try an expression…"></textarea>
+<div id="bottom">
+  <div id="dbg" hidden>
+    <div class="pane"><h2>Variables · <span id="dbgfn"></span></h2><div id="vars" class="body"></div></div>
+    <div class="pane"><h2>Watch</h2><div id="watches" class="body"></div><input id="waddin" spellcheck="false" placeholder="+ watch expression (Enter)"></div>
+  </div>
+  <div id="repl">
+    <div id="replhead"><span>REPL</span><span id="replctx" class="top">top-level</span><span class="hint">Enter runs · Shift+Enter newline · Esc clears · ↑↓ history</span></div>
+    <div id="replout"></div>
+    <textarea id="replin" rows="1" spellcheck="false" placeholder="try an expression…"></textarea>
+  </div>
 </div>
 <script>
 const FILE = __FILE_JS__;
@@ -386,6 +410,7 @@ function renderGutter() {
   const n = $("src").value.split("\n").length;
   let h = ""; for (let i = 1; i <= n; i++) h += '<div class="gnum" id="g' + i + '">' + i + '</div>';
   $("gutter").innerHTML = h;
+  applyBpMarks();
 }
 function syncScroll() { $("gutter").scrollTop = $("src").scrollTop; }
 function isDirty() { return $("src").value !== saved; }
@@ -419,6 +444,83 @@ function showDiags(items) {
 // dirty flag only once the write actually succeeded.
 function persist() { const snap = $("src").value; pendSnap = snap; saveId = send("writeFile", {path: FILE, content: snap}); }
 function doSave() { if (!ws || ws.readyState !== 1 || !isDirty()) return; persist(); send("compile", {file: FILE}); }
+// ── debugger — gutter breakpoints, step controls, variables + watch panels ──
+let bps = new Set(), paused = false, curLine = 0, watches = [], lastLocals = [], reqcb = {};
+function sendCb(req, extra, cb) { const id = send(req, extra); reqcb[id] = cb; return id; }     // route this request's reply to cb
+function sendBreakpoints() { send("setBreakpoints", {file: FILE, breakpoints: [...bps].map(line => ({line}))}); }
+function applyBpMarks() {                                    // re-apply after every renderGutter (it rebuilds the gutter)
+  bps.forEach(n => { const g = gnum(n); if (g) g.classList.add("bp"); });
+  if (curLine) { const g = gnum(curLine); if (g) g.classList.add("cur"); }
+}
+function revealLine(n) {                                     // scroll the editor to line n WITHOUT stealing focus
+  const t = $("src"), lh = parseFloat(getComputedStyle(t).lineHeight) || 18;
+  t.scrollTop = Math.max(0, (n - 1) * lh - t.clientHeight / 2); syncScroll();
+}
+function markCurrentLine(n) {
+  if (curLine) { const o = gnum(curLine); if (o) o.classList.remove("cur"); }
+  curLine = n || 0;
+  if (curLine) { const g = gnum(curLine); if (g) g.classList.add("cur"); revealLine(curLine); }
+}
+function setPaused(on, frame) {                              // the run/paused state machine
+  paused = on;
+  for (const b of ["cont", "over", "into", "out"]) $(b).disabled = !on;
+  $("run").disabled = on;                                   // can't relaunch mid-pause — Continue/step first
+  $("dbg").hidden = !on;
+  if (on) {
+    setCtx("frame");
+    $("dbgfn").textContent = (frame && frame.function) || "?";
+    markCurrentLine(frame && frame.line);
+    renderVars((frame && frame.locals) || []);
+    evalWatches();
+  } else {
+    setCtx("top"); markCurrentLine(0); renderVars([]);
+  }
+}
+function renderVars(locals) {
+  lastLocals = locals || [];
+  const v = $("vars"); v.innerHTML = "";
+  if (!lastLocals.length) { v.innerHTML = '<div class="none">no locals in scope</div>'; return; }
+  for (const lc of lastLocals) {
+    const row = document.createElement("div"); row.className = "var";
+    const nm = document.createElement("span"); nm.className = "vn"; nm.textContent = lc.name;
+    const vv = document.createElement("span"); vv.className = "vv"; vv.textContent = lc.value; vv.title = "click to edit (scalars)";
+    vv.onclick = () => editVar(lc.name, vv);
+    row.append(nm, vv); v.appendChild(row);
+  }
+}
+function editVar(name, vv) {                                 // inline edit → setValue (edit-and-continue)
+  const cur = vv.textContent, inp = document.createElement("input");
+  inp.className = "vedit"; inp.value = cur; vv.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const commit = ok => {
+    if (done) return; done = true;
+    if (ok && inp.value !== cur) sendCb("setValue", {target: name, value: inp.value},
+      m => renderVars(m.ok && m.frame ? m.frame.locals : lastLocals));
+    else renderVars(lastLocals);
+  };
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); commit(true); } else if (e.key === "Escape") { e.preventDefault(); commit(false); } });
+  inp.addEventListener("blur", () => commit(true));
+}
+function renderWatches() {
+  const w = $("watches"); w.innerHTML = "";
+  if (!watches.length) { w.innerHTML = '<div class="none">no watches</div>'; }
+  watches.forEach((expr, i) => {
+    const row = document.createElement("div"); row.className = "watch";
+    const rm = document.createElement("span"); rm.className = "wrm"; rm.textContent = "×"; rm.title = "remove";
+    rm.onclick = () => { watches.splice(i, 1); renderWatches(); };
+    const x = document.createElement("span"); x.className = "wx"; x.textContent = expr;
+    const vv = document.createElement("span"); vv.className = "wv"; vv.id = "wv" + i; vv.textContent = paused ? "…" : "—";
+    row.append(rm, x, vv); w.appendChild(row);
+  });
+  evalWatches();
+}
+function evalWatches() {                                     // re-evaluate every watch against the paused frame
+  if (!paused) return;
+  watches.forEach((expr, i) => sendCb("eval", {expr}, m => {
+    const el = $("wv" + i); if (!el) return;
+    el.textContent = m.value === undefined ? "?" : (typeof m.value === "object" ? JSON.stringify(m.value) : String(m.value));
+  }));
+}
 // ── REPL — a context-switching prime element ──
 let ctx = "top", histTop = [], histFrame = [], histIdx = -1, pending = null;
 function curHist() { return ctx === "frame" ? histFrame : histTop; }
@@ -461,15 +563,20 @@ function connect() {
     if (m.ok !== undefined && m.event === undefined && m.context === undefined) {   // a bare response
       if (m.id === saveId) { saveId = 0; if (m.ok) { saved = pendSnap; updateDirty(); } return; }
       if (m.id === runAfterLaunch) { runAfterLaunch = 0;
-        if (m.ok) send("run", {}); else $("out").textContent += "\n[not run — fix the errors above]\n"; return; }
+        if (m.ok) { sendBreakpoints(); send("run", {}); } else $("out").textContent += "\n[not run — fix the errors above]\n"; return; }
+      if (reqcb[m.id]) { const cb = reqcb[m.id]; delete reqcb[m.id]; cb(m); return; }   // setValue / watch eval
     }
     if (m.event === "diagnostics") {
       if (m.file === "<repl>") { for (const it of (m.items || [])) replLine("err", it.line + ":" + it.col + "  " + it.message); }
       else showDiags(m.items || []);
     }
     else if (m.event === "output") $("out").textContent += m.text;
-    else if (m.event === "stopped") { setCtx("frame"); $("out").textContent += "\n⏸ stopped in " + ((m.frame || {}).function || "?") + "\n"; }
-    else if (m.event === "terminated") { setCtx("top"); $("out").textContent += "\n— done —\n"; }
+    else if (m.event === "stopped") {
+      const f = m.frame || {};
+      $("out").textContent += "\n⏸ stopped in " + (f.function || "?") + (f.line ? ":" + f.line : "") + "\n";
+      setPaused(true, f);
+    }
+    else if (m.event === "terminated") { $("out").textContent += "\n— done —\n"; setPaused(false); }
     else if (m.context !== undefined) onReplReply(m);       // a replEval reply (only it carries context)
     else if (m.ok === false && m.error) $("out").textContent += "\n[error] " + m.error + "\n";
   };
@@ -511,6 +618,23 @@ src.addEventListener("keydown", e => {
 });
 $("save").onclick = doSave;
 document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); doSave(); } });
+// ── debugger wiring ──
+$("gutter").addEventListener("click", e => {                 // toggle a breakpoint on the clicked line
+  const g = e.target.closest(".gnum"); if (!g) return;
+  const n = parseInt(g.id.slice(1), 10);
+  if (bps.has(n)) { bps.delete(n); g.classList.remove("bp"); } else { bps.add(n); g.classList.add("bp"); }
+  if (ws && ws.readyState === 1) sendBreakpoints();
+});
+$("cont").onclick = () => { if (paused) send("continue", {}); };
+$("over").onclick = () => { if (paused) send("stepOver", {}); };
+$("into").onclick = () => { if (paused) send("stepIn", {}); };
+$("out").onclick = () => { if (paused) send("stepOut", {}); };
+$("waddin").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  e.preventDefault(); const v = e.target.value.trim();
+  if (v) { watches.push(v); e.target.value = ""; renderWatches(); }
+});
+renderWatches();
 saved = src.value; renderGutter(); updateDirty();
 connect();
 </script></body></html>"##;
@@ -593,6 +717,10 @@ mod tests {
     }
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
+        use std::fmt::Write as _;
+        bytes.iter().fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
     }
 }

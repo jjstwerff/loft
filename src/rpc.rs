@@ -304,8 +304,13 @@ fn frame_field(session: &ReplSession) -> String {
                 .iter()
                 .map(|(n, v)| format!("{{\"name\":{},\"value\":{}}}", esc(n), esc(v)))
                 .collect();
+            // The source line the pause is parked on (moves as you step) — drives the
+            // editor's current-line marker.  Absent when the line is unknown.
+            let line = session
+                .paused_line()
+                .map_or(String::new(), |l| format!(",\"line\":{l}"));
             format!(
-                "\"frame\":{{\"function\":{},\"locals\":[{}]}}",
+                "\"frame\":{{\"function\":{},\"locals\":[{}]{line}}}",
                 esc(&f.function),
                 locals.join(",")
             )
