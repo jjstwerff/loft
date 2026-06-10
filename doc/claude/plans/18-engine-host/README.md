@@ -38,6 +38,24 @@ as host recompiles.
 | 02-dispatch | The N9 per-function dispatch table, **interpreter target first** (= C71 minimal): swap one fn of the *running* demo to interpret on edit, over the shared store. This phase lights up @PLN16 **6b** (hot-swap `reload`) and **6c** (breakpoint-in-game → the IDE's variables panel against a live frame) | ☐ todo | |
 | 03-wasm-tier | The background promotion tier: server compiles the edited fn (loft → Rust → `wasm32`) and the kernel swaps it in at a frame boundary; a trap falls back to tier 0. Gated on the phase-00 bridge-tax probe; unlocks remote-server patching (the same swap artifact over the wire) | ☐ todo | |
 | 04-state-sync-at-rate | @PLAN50's probe at **30 clients × 30 Hz** on the kernel: the fixed-rate traffic class proven at target (sight-range interest management, edge-triggered EXIT, priority keyframes), with the probe's published targets + failure thresholds. Unblocks bumper-airplanes phase 0 | ☐ todo | |
+| 05-udp-frontend | The custom UDP pump frontend ([design](ENGINE_HOST.md#the-udp-pump-frontend--a-custom-layer-the-class-table-keeps-small-evaluated-2026-06-10) + [LAN notes](ENGINE_HOST.md#udp-on-a-normal-lan--whats-actually-needed-evaluated-2026-06-10)): one Gaffer-style reliable event channel, naked `seq` datagrams for state sync, bulk stays on TCP/WS; stateless-cookie handshake, keepalive-as-radio-wake, ≤1200 B datagrams, LAN discovery beacon. Phones stay `wss`; native peers ride UDP in the same world | ⏸ parked — **trigger:** an arcade consumer whose feel outgrows `wss` on the venue LAN (input→display latency budget missed with conflation + interpolation in place), measured by the phase-00 harness + a loss% axis, not assumed | |
+| 06-snapshot-ring | The store **snapshot / restore / diff** primitive with a short tick-history ring — the ONE mechanics piece behind prediction, lag-compensation rewind, rollback, and delta-compressed snapshots (all loft *meaning* over it; embryos exist: the @PLN16 M2 undo journal, the store journal, record-refs #15) | ⏸ parked — **trigger:** an arcade consumer needs client prediction / hit-rewind (the bumper-planes forecast tests are the likely first caller), or replay/delta encoding gets demanded by a shipped game | |
+
+## The goal this plan serves — arcade-style multiplayer
+
+**Arcade-style multiplayer is a named goal of the engine** (the user's call,
+2026-06-10): bumper-planes-grade *feel* — N players on a LAN/venue network, fast
+shared-world action that responds within a frame or two, joinable from a phone in
+seconds. **Not** the esports-twitch tier (rollback-perfect netcode, sub-50 ms
+internet play) — arcade means the game feels immediate at venue/LAN scale.
+
+Phases 00–04 build everything arcade multiplayer needs *except* the two parked
+pieces, and the parked pieces are deliberately **designed-but-not-built**: the
+coverage evaluation ([ENGINE_HOST § Coverage](ENGINE_HOST.md#coverage--is-this-rich-enough-for-most-multiplayer-games-evaluated-2026-06-10))
+shows nothing in phases 00–04 must be *undone* to add them — the class table already
+carries per-message delivery semantics (so the UDP frontend bolts on), and the store
+already holds the embryos of the snapshot ring. The discipline: the parked rows
+activate on a **consumer's measured need** (the dogfood loop), never speculatively.
 
 ## Design
 
