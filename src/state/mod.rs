@@ -3094,10 +3094,12 @@ impl State {
                 .store(&self.stack_cur)
                 .addr::<i64>(rec, at)
                 .to_string(),
-            Type::Boolean => if *self.database.store(&self.stack_cur).addr::<u8>(rec, at) != 0 {
-                "true"
-            } else {
-                "false"
+            // 255 is @PLN17's three-state-boolean null sentinel (C73); rendering it as
+            // "null" is inert pre-merge (two-state writes only 0/1) and correct after.
+            Type::Boolean => match *self.database.store(&self.stack_cur).addr::<u8>(rec, at) {
+                0 => "false",
+                255 => "null",
+                _ => "true",
             }
             .to_string(),
             // Force a decimal point so the literal re-parses as `float`/`single`,
