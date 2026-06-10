@@ -448,6 +448,11 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
+        // @PLN17: a boolean's storage form is `u8` (0/1/255); a transient
+        // expression is `bool`.  This central cast-helper is consulted at the
+        // return / store / arg seams, so `bool -> u8` coercion happens there
+        // uniformly (`(expr) as u8` — idempotent for u8, 0/1 for bool).
+        Type::Boolean => Some("u8"),
         Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
         Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
         Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
@@ -557,6 +562,19 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
         Type::Text(_) => "Str",
+        // @PLN17: boolean tri-state.  Null-capable positions (local/field storage,
+        // params, returns) hold the raw byte `u8` (0/1/255); transient expression
+        // results are 2-state `bool`.  Mirrors the narrow-int Result→u8 split above
+        // and the text String/Str split; coercion to/from `bool` happens at the
+        // op-operand (calls.rs `as u8` wrap), store, return, and arg seams.
+        Type::Boolean
+            if matches!(
+                context,
+                Context::Variable | Context::Argument | Context::Result | Context::Reference
+            ) =>
+        {
+            "u8"
+        }
         Type::Boolean => "bool",
         Type::Float => "f64",
         Type::Single => "f32",
@@ -605,7 +623,8 @@ pub(super) fn default_native_value(tp: &Type) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),
         Type::Single => "0.0_f32".into(),
-        Type::Boolean => "false".into(),
+        // @PLN17: a boolean's null default is the 255 sentinel (storage form u8).
+        Type::Boolean => "255u8".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
         Type::Routine(_) => "0_u32".into(),
         Type::Function(_, _, _) => {
@@ -799,8 +818,10 @@ extern crate loft;"
                         Type::Single => {
                             let _ = write!(params, "{name}: f32");
                         }
+                        // @PLN17: cdylib exports use the u8 boolean storage form
+                        // (generated via rust_type); the extern decl must match.
                         Type::Boolean => {
-                            let _ = write!(params, "{name}: bool");
+                            let _ = write!(params, "{name}: u8");
                         }
                         _ => {
                             let _ = write!(params, "{name}: i32");
@@ -814,7 +835,7 @@ extern crate loft;"
                     Type::Integer(_) | Type::Character => " -> i32".to_string(),
                     Type::Float => " -> f64".to_string(),
                     Type::Single => " -> f32".to_string(),
-                    Type::Boolean => " -> bool".to_string(),
+                    Type::Boolean => " -> u8".to_string(), // @PLN17: u8 storage form
                     _ => " -> i32".to_string(),
                 };
                 writeln!(w, "    safe fn {}({params}){ret};", def.native())?;
@@ -2216,11 +2237,13 @@ extern crate loft;"
         if def.name() == "n_assert" && *def.code() == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: bool, msg: M, file: F, line: i64) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {{"
             )?;
+            // @PLN17: `test` is a boolean in storage form (u8); the assert fails
+            // when it is not the true byte (1) — i.e. false (0) OR null (255).
             writeln!(
                 w,
-                "  if !test {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
+                "  if test != 1 {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());
@@ -2586,7 +2609,7 @@ extern crate loft;"
                 )?;
                 match def.returned() {
                     Type::Void => {}
-                    Type::Boolean => writeln!(w, "  false")?,
+                    Type::Boolean => writeln!(w, "  0u8")?, // @PLN17: u8 storage form
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
                     Type::Text(_) => {
                         // @PLN10 N2 — cdylib text-native wrappers now return
@@ -2704,6 +2727,9 @@ extern crate loft;"
         }
 
         let needs_ret_cast = matches!(def.returned(), Type::Integer(_));
+        // @PLN17: external Rust fns use `bool`; loft's boolean storage form is u8.
+        // Wrap a boolean return `(call) as u8`; boolean args coerce `u8 -> bool` below.
+        let needs_bool_ret = matches!(def.returned(), Type::Boolean);
         // P244 / @PLN10 N2: `text`-returning natives return `loft_ffi::LoftStr`
         // from the extern.  Capture it as a typed local, copy its bytes into an
         // OWNED `String`, and return that directly — the wrapper signature is
@@ -2712,7 +2738,7 @@ extern crate loft;"
         // original P244 fix borrowed a `Str` from `stores.scratch`; N2 retired
         // the scratch hop (owned, freed at scope end — no program-lifetime leak).
         let needs_text_wrap = matches!(def.returned(), Type::Text(_));
-        if needs_ret_cast {
+        if needs_ret_cast || needs_bool_ret {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
         } else if needs_text_wrap {
             // No type annotation: lib/server (and other native sub-crates)
@@ -2795,7 +2821,9 @@ extern crate loft;"
                         write!(w, ", ")?;
                     }
                     first = false;
-                    write!(w, "var_{var}")?;
+                    // @PLN17: loft holds the u8 storage form; the external Rust fn
+                    // takes `bool` — coerce (255/0 -> false, 1 -> true).
+                    write!(w, "var_{var} != 0")?;
                 }
                 _ => {
                     if !first {
@@ -2808,6 +2836,8 @@ extern crate loft;"
         }
         if needs_ret_cast {
             write!(w, ") }}) as i64")?;
+        } else if needs_bool_ret {
+            write!(w, ") }}) as u8")?; // @PLN17: external bool -> loft u8 storage form
         } else if needs_text_wrap {
             // @PLN10 N2 — cdylib `#native` text return: copy the foreign
             // `LoftStr` bytes into an OWNED `String` and return it directly.

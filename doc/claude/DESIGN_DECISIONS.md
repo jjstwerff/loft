@@ -770,8 +770,10 @@ C09/C10 document the append-no-dedup behaviour this decision blesses).
 
 `!x` where `x` is a non-boolean (integer, single, reference, …) reads as
 *"is `x` null?"* rather than C-style logical-not.  Because the null sentinel
-is **in-band** (`i32::MIN` for integer, `false` for boolean, null `DbRef` for
-references), `!0` is `false` — `0` is a real value, not the sentinel.  A
+is **in-band** (`i64::MIN` for integer, byte `255` for boolean per @PLN17 / C73,
+null `DbRef` for references), `!0` is `false` — `0` is a real value, not the
+sentinel.  (This C69 decision is about *non-boolean* `!x`; boolean `!` is ordinary
+coercing negation — both `null` and `false` give `!b == true`.)  A
 crawler report (GitHub #253) hit this as a footgun: `f = 0; if !f { … }` never
 runs, and a `gl_load_font` zero-handle check silently misses.  Should `!`
 either coerce non-booleans C-style (`!0 ⇒ true`) or reject them as a
@@ -1094,6 +1096,50 @@ image free of generator state, narrowing what a saved image exposes.
 
 **Revisit when.** A concrete, non-security use case needs byte-identical RNG
 continuation across resume that an explicit seed cannot satisfy.
+
+---
+
+## C73 — `boolean` is three-state (false / true / null); `==` is raw, truthiness coerces
+
+**Question.** `boolean` was the only common-value scalar whose zero-value collided with
+its null sentinel (null *was* `false`), so a nullable boolean couldn't distinguish
+"absent" from "false" — unlike `integer` (0 ≠ `i64::MIN`), `float`, `text`, plain `enum`.
+A `hash → boolean` map couldn't express absent / false / true.  Should boolean become
+three-state, and if so, what are the comparison and coalescing semantics?
+
+**Evaluation.** A boolean is stored in one byte — the same storage class as a 2-variant
+plain enum, and plain enums already reserve byte `255` for null.  So the third state has
+room for free; boolean was the lone byte-scalar flattening to 2-state.  Two semantic
+candidates for `==`:
+
+- **A — raw compare** (chosen): `==`/`!=` compare the raw byte, so `null == false` is
+  `false` and `b == null` is the dedicated null test.  Truthiness contexts
+  (`if`/`while`/`!`/`&&`/`||`) coerce `null → false`.  This is **exactly what `integer`
+  already does** (`0 == null` is `false`; `n == null` is the null test; `if n` treats
+  null as falsy) — so it makes boolean *consistent* with every other type.
+- **B — coerce in `==`** (rejected): `null == false` would be `true`, forcing `== null`
+  to be a special raw test bolted onto a coercing `==`.  That introduces a *new*
+  inconsistency (boolean `==` coerces, integer `==` doesn't) — the opposite of the goal.
+  Evidence settled it: `0 == null` is `false` for integer, so A is the consistent choice.
+
+**Decision.** **Three-state boolean, design A.**  Dated 2026-06-10 (@PLN17).
+- Representation: `false`=0, `true`=1, `null`=255 (byte), held/distinguished everywhere a
+  boolean lives — locals, params, returns, tuples, struct fields, vector/keyed elements.
+  A `boolean not null` is 2-state.
+- `==`/`!=` are **raw** (distinguish null); `b == null` is the null test; truthiness and
+  `&&`/`||`/`!` **coerce** `null → false`; `??` / `?? return` work (null-check is `== 255`,
+  not truthiness — so `false ?? x` keeps `false`).
+- Native mirrors the interpreter via the `u8`(storage)/`bool`(expression) two-form split
+  (like `text`'s String/Str); heap storage mirrors plain-enum byte storage.
+- **Supersedes the #256 guard cluster** (which *rejected* `null`/`??`/`== null` on
+  boolean because false was indistinguishable from null — no longer true).
+- Cross-mode byte-identical on both backends; regression: `tests/scripts/292-pln17-three-state-boolean.loft`.
+  Full design + decision history: [`plans/17-three-state-boolean/`](plans/17-three-state-boolean/README.md).
+
+**Revisit when.** Never, barring a fundamental change to the in-band-sentinel memory
+model.  (Open, non-boolean-specific tail: the construction-vs-parse default for an
+*omitted* field — `S{}` gives the zero value, `parse` gives null — affects integer too;
+tracked separately, not part of this decision.)
 
 ---
 

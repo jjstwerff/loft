@@ -330,6 +330,16 @@ impl Output<'_> {
             let null_val = default_native_value(variables.tp(var));
             write!(w, "{null_val}")?;
         } else {
+            // @PLN17: a boolean variable's storage form is u8.  The RHS may be a
+            // compound `bool` expression (`!b` → `(..) != 1`, `a == b`), so the
+            // ` as u8` coercion must WRAP the whole RHS — a bare suffix binds to
+            // the last token (`!= 1 as u8`) and leaves a `bool`.  Open the paren
+            // here; the narrow-cast suffix below closes it with `) as u8`.
+            let wrap_bool =
+                !matches!(to, Value::Null) && matches!(variables.tp(var), Type::Boolean);
+            if wrap_bool {
+                write!(w, "(")?;
+            }
             // O7: when this text assignment opens a multi-segment format string,
             // pre-allocate capacity to avoid repeated reallocations.
             if needs_to_string
@@ -493,7 +503,13 @@ impl Output<'_> {
                     // Variable is a narrow integer type, but the RHS expression
                     // (a function returning u16 or an iterator block returning as u16) produces
                     // the narrow type.  Post-2c: widen to i64 to match the default Integer.
-                    write!(w, " as i64")?;
+                    // @PLN17: a boolean variable's storage form is u8 (not i64) — cast the
+                    // RHS (`bool` literal/comparison or `u8`) to u8, not i64.
+                    if matches!(variables.tp(var), Type::Boolean) {
+                        write!(w, ") as u8")?; // closes the `(` opened before the RHS
+                    } else {
+                        write!(w, " as i64")?;
+                    }
                 } else if let Value::Call(d_nr, _) = to.unspan() {
                     // When the variable type and the called function's return type differ
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),

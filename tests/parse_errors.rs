@@ -1068,7 +1068,7 @@ fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:375:24 — pick a different name \
+         at default{s}01_code.loft:377:24 — pick a different name \
          at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -1078,7 +1078,7 @@ fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:375:24 — pick a different name \
+         at default{s}01_code.loft:377:24 — pick a different name \
          at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
     ));
 }
@@ -1088,7 +1088,7 @@ fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:375:24 — pick a different name \
+         at default{s}01_code.loft:377:24 — pick a different name \
          at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -1098,7 +1098,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:375:24 — pick a different name \
+         at default{s}01_code.loft:377:24 — pick a different name \
          at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
     ));
 }
@@ -1388,19 +1388,14 @@ fn p315_float_literal_into_single_vector() {
         );
 }
 
-/// GitHub #256 — `??` on a boolean is rejected at compile time: boolean has no
-/// null representation, so a stored `false` is indistinguishable from "missing"
-/// and `false ?? x` would silently fall through to `x`.
+/// GitHub #256 — SUPERSEDED by @PLN17 (three-state boolean).  A boolean now has a
+/// real null sentinel (byte 255), so `??` works: `null ?? x` discharges to `x`, and
+/// `false` (which is NOT null) stays `false` — no silent fall-through.  The
+/// null-check is `lhs == null` (raw `== 255`), not the value's truthiness.
 #[test]
-fn gh256_bool_null_coalesce_rejected() {
-    code!("fn test() { b = false; c = b ?? true; }")
-        .error(
-            "Cannot use null coalescing '??' on boolean — boolean has no null \
-             representation (a stored 'false' is indistinguishable from missing); \
-             use an integer flag, or test the boolean directly at \
-             gh256_bool_null_coalesce_rejected:1:37",
-        )
-        .warning("Variable c is never read at gh256_bool_null_coalesce_rejected:1:27");
+fn gh256_bool_null_coalesce_supported() {
+    // `false` is not null, so `false ?? true` keeps `false` (the #256 footgun is gone).
+    expr!("false ?? true").result(Value::Boolean(false));
 }
 
 /// GitHub #253 — `!` on a `not null` non-boolean is always false (`!x` tests

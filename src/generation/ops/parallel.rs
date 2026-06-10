@@ -134,7 +134,8 @@ fn tuple_elem_read(t: &Type, off: usize) -> String {
     match t {
         Type::Integer(_) => format!("_ts.get_int(elm.rec, elm.pos + {off})"),
         Type::Character | Type::Null => format!("_ts.get_i32_raw(elm.rec, elm.pos + {off})"),
-        Type::Boolean => format!("_ts.get_boolean(elm.rec, elm.pos + {off}, 1)"),
+        // @PLN17: boolean tuple slot is u8 (storage form); get_boolean returns bool.
+        Type::Boolean => format!("(_ts.get_boolean(elm.rec, elm.pos + {off}, 1) as u8)"),
         Type::Enum(_, false, _) => format!(
             "{{ let r = _ts.get_byte(elm.rec, elm.pos + {off}, 0); if r < 0 {{ 255u8 }} else {{ r as u8 }} }}"
         ),

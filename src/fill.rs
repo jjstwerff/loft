@@ -49,6 +49,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     put_int,
     put_character,
     conv_int_from_null,
+    conv_bool_from_null,
     conv_character_from_null,
     conv_character_from_int,
     const_long_text,
@@ -199,6 +200,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     get_byte,
     get_enum,
     set_enum,
+    get_boolean,
+    set_boolean,
     get_short,
     get_text,
     set_int,
@@ -301,16 +304,16 @@ fn goto_word(s: &mut State) {
 
 fn goto_false(s: &mut State) {
     let v_step = s.code::<i8>();
-    let v_if_false = *s.get_stack::<bool>();
-    if !v_if_false {
+    let v_if_false = *s.get_stack::<u8>();
+    if v_if_false != 1 {
         s.code_pos = (s.code_pos as i32 + i32::from(v_step)) as u32;
     }
 }
 
 fn goto_false_word(s: &mut State) {
     let v_step = s.code::<i16>();
-    let v_if_false = *s.get_stack::<bool>();
-    if !v_if_false {
+    let v_if_false = *s.get_stack::<u8>();
+    if v_if_false != 1 {
         s.code_pos = (s.code_pos as i32 + i32::from(v_step)) as u32;
     }
 }
@@ -351,26 +354,32 @@ fn const_false(s: &mut State) {
 }
 
 fn cast_text_from_bool(s: &mut State) {
-    let v_v1 = *s.get_stack::<bool>();
-    let new_value = if v_v1 { "true" } else { "false" };
+    let v_v1 = *s.get_stack::<u8>();
+    let new_value = if v_v1 == 1 {
+        "true"
+    } else if v_v1 == 255 {
+        "null"
+    } else {
+        "false"
+    };
     s.put_stack(new_value);
 }
 
 fn var_bool(s: &mut State) {
     let v_pos = s.code::<u16>();
-    let new_value = *s.get_var::<bool>(v_pos);
+    let new_value = *s.get_var::<u8>(v_pos);
     s.put_stack(new_value);
 }
 
 fn put_bool(s: &mut State) {
     let v_var = s.code::<u16>();
-    let v_value = *s.get_stack::<bool>();
+    let v_value = *s.get_stack::<u8>();
     s.put_var(v_var, v_value);
 }
 
 fn not(s: &mut State) {
-    let v_v1 = *s.get_stack::<bool>();
-    let new_value = !v_v1;
+    let v_v1 = *s.get_stack::<u8>();
+    let new_value = v_v1 != 1;
     s.put_stack(new_value);
 }
 
@@ -418,6 +427,11 @@ fn put_character(s: &mut State) {
 
 fn conv_int_from_null(s: &mut State) {
     let new_value = i64::MIN;
+    s.put_stack(new_value);
+}
+
+fn conv_bool_from_null(s: &mut State) {
+    let new_value = 255u8;
     s.put_stack(new_value);
 }
 
@@ -1491,6 +1505,33 @@ fn set_enum(s: &mut State) {
     }
 }
 
+fn get_boolean(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r = s
+            .database
+            .store(&db)
+            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
+        if r < 0 { 255u8 } else { r as u8 }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_boolean(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_val = *s.get_stack::<u8>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = v_val;
+        s.database
+            .store_mut(&db)
+            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+    }
+}
+
 fn get_short(s: &mut State) {
     let v_fld = s.code::<u16>();
     let v_min = s.code::<i16>();
@@ -1846,15 +1887,15 @@ fn length_index(s: &mut State) {
 }
 
 fn eq_bool(s: &mut State) {
-    let v_v2 = *s.get_stack::<bool>();
-    let v_v1 = *s.get_stack::<bool>();
+    let v_v2 = *s.get_stack::<u8>();
+    let v_v1 = *s.get_stack::<u8>();
     let new_value = v_v1 == v_v2;
     s.put_stack(new_value);
 }
 
 fn ne_bool(s: &mut State) {
-    let v_v2 = *s.get_stack::<bool>();
-    let v_v1 = *s.get_stack::<bool>();
+    let v_v2 = *s.get_stack::<u8>();
+    let v_v1 = *s.get_stack::<u8>();
     let new_value = v_v1 != v_v2;
     s.put_stack(new_value);
 }

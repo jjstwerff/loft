@@ -233,6 +233,12 @@ pub const OPERATORS: &[fn(&mut State)] = &["
                         "    let v_{} = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\\0');",
                         a.name
                     )?;
+                } else if matches!(a.typedef, Type::Boolean) {
+                    // @PLN17 spike: booleans are tri-state (0=false, 1=true,
+                    // 255=null).  Reading the byte as `bool` is UB for 255, so read
+                    // the raw u8 — truthiness ops coerce (255 -> false) and
+                    // value-movement / comparison ops preserve it.
+                    writeln!(into, "    let v_{} = *s.get_stack::<u8>();", a.name)?;
                 } else {
                     writeln!(into, "    let v_{} = *s.get_stack::<{tp}>();", a.name)?;
                 }
