@@ -39,6 +39,16 @@ enforces this for reload; the build swap adds the layout guard (identical
 type schemas between builds).  Lenient serialization later lifts the layout
 bound into live data migration — that is its named purpose.
 
+**The "small" after-part (user, 2026-06-10, ironically):** converting one
+store format to another on class changes.  Schema-as-data (`Stores.types`)
+is what makes it tractable: both builds' schemas are values, so the diff is
+mechanical — added fields take defaults, dropped fields drop, widenings are
+free; only RENAMES are ambiguous and need a hint, which is exactly the
+frozen rename-migration-setter language feature (its thaw trigger is this
+phase's v2).  Until then: layout-identical swaps, and a swap-time schema
+hash comparison that refuses (gracefully — keep serving the old build)
+rather than corrupts.
+
 ---
 
 ## The pipeline, as scenarios with tests

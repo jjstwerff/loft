@@ -3681,6 +3681,42 @@ impl State {
 
     /// FY.2: Resume execution after a frame yield.  Returns `true` while the
     /// program is still running, `false` when it finishes.
+    /// @PLN18 02 (the heart's aorta) — the compiled→interp RE-ENTRY thunk:
+    /// call one interpreted function from HOST code (generated native code,
+    /// the debugger, a test) over the live State, between or inside frames.
+    ///
+    /// Contract: the caller has pushed the args in declaration order via
+    /// [`put_stack`](Self::put_stack) (scalars as `i64`, records/vectors as
+    /// `DbRef`, integer null = `i64::MIN`).  `reenter` pushes the synthetic
+    /// return address, jumps to the callee, runs it to completion, and
+    /// restores the PC and stack watermark — the surrounding execution (a
+    /// paused `main`, a yielded frame loop) continues unperturbed.
+    ///
+    /// v1 bounds: the callee must not yield (asserted) and stack-returning
+    /// results are not retrieved (store-writing callees — the shared store
+    /// is the ABI; a result record arg is the supported result path).
+    pub fn reenter(&mut self, d_nr: u32, code_position: u32) {
+        let saved_pos = self.code_pos;
+        let saved_sp = self.stack_pos;
+        // Balance: the callee's return pops a CallFrame unconditionally
+        // (`fn_return`) — without this push the FIRST re-entry pops the
+        // paused program's own frame (probe-caught: heap corruption at
+        // teardown after 200k imbalanced pops).
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: saved_sp,
+            args_size: 0,
+            line: 0,
+        });
+        self.put_stack(u32::MAX);
+        self.code_pos = code_position;
+        let yielded = self.resume();
+        assert!(!yielded, "reenter: the callee yielded mid-call");
+        self.code_pos = saved_pos;
+        self.stack_pos = saved_sp;
+    }
+
     pub fn resume(&mut self) -> bool {
         self.database.frame_yield = false;
         let bytecode_len = self.bytecode.len() as u32;

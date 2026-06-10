@@ -20,6 +20,18 @@
 > story) and the 6b IDE wire-up (the IDE drives saves; the watcher already
 > reacts to them).
 
+> **Slice-1 probe ran (2026-06-11; `tests/dispatch_reentry.rs`, parked with
+> the verdict in its ignore attribute).**  The core claim HOLDS: host code
+> re-entered interpreted fns over a paused program's live State — scalars,
+> vector, struct (DbRef) and null args all correct, the resumed `main`
+> verified the world in loft, and the crossing costs **217 ns/call**
+> (body included) — dispatch, not rewrite.  `State::reenter` (the thunk)
+> landed probe-grade.  The OPEN remainder: the synthetic frame's contract —
+> without a CallFrame push, 200k re-entries corrupt the heap at teardown
+> (fn_return pops unconditionally); WITH the push, the resumed program
+> reads a garbage DbRef — the frame's args_base/ownership bookkeeping at
+> the yield boundary needs mapping before S2 builds on it.
+
 **Goal.** Editing one function of a RUNNING kernel game takes effect at the
 next frame boundary, with ONLY that function dropping to the interpreter —
 everything else (libraries AND the rest of the game program) stays compiled.
