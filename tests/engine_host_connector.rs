@@ -92,21 +92,20 @@ fn main() {{
         println("client: connected");
         engine_host::client_send("hi-event");
       }} else if ev.kind == 1 {{
-        println("client: event {{ev.payload}}");
+        if ev.payload.starts_with("2:") {{
+          if !c.done {{
+            ub = engine_host::client_udp_bound();
+            println("client: sync {{ev.payload}} udp={{ub}}");
+            if ub {{ c.done = true; }}
+          }}
+        }} else {{
+          println("client: event {{ev.payload}}");
+        }}
       }} else if ev.kind == 2 {{
         println("client: disconnected");
       }}
     }},
-    fn() {{
-      while engine_host::client_sync_next() {{
-        if !c.done {{
-          sp = engine_host::client_sync_payload();
-          ub = engine_host::client_udp_bound();
-          println("client: sync {{sp}} udp={{ub}}");
-          if ub {{ c.done = true; }}
-        }}
-      }}
-    }});
+    fn() {{ }});
   println("client: loop exited");
 }}
 "#
@@ -214,14 +213,12 @@ fn main() {{
   engine_host::run_client("127.0.0.1", {port}, 100000,
     fn(ev: engine_host::Event) {{
       if ev.kind == 0 {{ println("kclient: connected"); }}
-    }},
-    fn() {{
-      while engine_host::client_sync_next() {{
-        sp = engine_host::client_sync_payload();
+      else if ev.kind == 1 && ev.payload.starts_with("2:") {{
         ub = engine_host::client_udp_bound();
-        println("kclient: sync {{sp}} udp={{ub}}");
+        println("kclient: sync {{ev.payload}} udp={{ub}}");
       }}
-    }});
+    }},
+    fn() {{ }});
 }}
 "#
         ),
@@ -365,19 +362,19 @@ fn main() {{
         println("t:connected");
         engine_host::client_send("hello");
       }} else if ev.kind == 1 {{
-        println("t:event {{ev.payload}}");
+        if ev.payload.starts_with("2:") {{
+          if !c.saw_sync {{
+            c.saw_sync = true;
+            println("t:sync-ok");
+          }}
+        }} else {{
+          println("t:event {{ev.payload}}");
+        }}
       }} else if ev.kind == 2 {{
         println("t:disconnected");
       }}
     }},
-    fn() {{
-      while engine_host::client_sync_next() {{
-        if !c.saw_sync {{
-          c.saw_sync = true;
-          println("t:sync-ok");
-        }}
-      }}
-    }});
+    fn() {{ }});
   println("t:exited");
 }}
 "#

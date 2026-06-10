@@ -105,6 +105,29 @@ pub fn sync_class_keyed(msg_id: integer);
 pub fn keyframe(cid: integer, msg: text) -> boolean;
 #native "n_kernel_keyframe"
 
+// ── Lanes — the service model's vocabulary (assign speed LATE, as data) ─────
+//
+// Build meaning first; afterwards one line per message kind decides its bus.
+// fast = latest-value state (conflates; rides UDP when the peer can);
+// normal = the default (must-deliver, in order, on WS);
+// slow = bulk (budget-ingested — declared today, lands with 05c; behaves as
+// normal until then, so the line is already correct to write).
+// The handler-registry column of the service model waits on collected
+// closures (@P213/@P214); until then the per-kind split lives in your
+// on_event — exactly the shape the language prescribes (#318).
+
+pub fn fast_lane(msg_id: integer) {
+  sync_class(msg_id);
+}
+
+pub fn fast_lane_keyed(msg_id: integer) {
+  sync_class_keyed(msg_id);
+}
+
+pub fn slow_lane(msg_id: integer) {
+  // Reserved: the bulk machinery is phase 05c; normal delivery until then.
+}
+
 // Drain the inbound conflation slots: each call loads the NEWEST unread state
 // from one client (stale/reordered datagrams were already discarded by the
 // kernel).  Drain inside `on_tick` — that reads the freshest data that arrived
@@ -156,6 +179,18 @@ pub fn run(port: integer, tick_interval_us: integer,
       work = work + 1;
     }
     if kernel_tick_due() {
+      // ONE receive surface: fast-lane state (the conflation slots) arrives
+      // through on_event like everything else — newest per (sender, kind,
+      // entity), late-latched to this tick.  Handlers never know the lane.
+      while sync_next() {
+        sev = Event {
+          cid:     sync_cid(),
+          kind:    1,
+          payload: sync_payload(),
+        };
+        on_event(sev);
+        work = work + 1;
+      }
       on_tick();
       work = work + 1;
     }
@@ -263,6 +298,17 @@ pub fn run_client(host: text, port: integer, tick_interval_us: integer,
       work = work + 1;
     }
     if kernel_client_tick_due() {
+      // ONE receive surface — the server's fast-lane state arrives through
+      // on_event, late-latched to this tick (see run()).
+      while client_sync_next() {
+        sev = Event {
+          cid:     0,
+          kind:    1,
+          payload: client_sync_payload(),
+        };
+        on_event(sev);
+        work = work + 1;
+      }
       on_tick();
       work = work + 1;
     }

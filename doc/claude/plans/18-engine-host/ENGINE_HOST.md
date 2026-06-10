@@ -382,13 +382,18 @@ Settled while verifying (2026-06-10):
 - **`on_event` stays as the default service** for unregistered kinds —
   consumers migrate one service at a time.
 
-**The gate before building: handler storage.**  Per-service handlers are
-capturing closures held in a registry (a vector/struct field) and invoked
-cross-fn — the #313 crash shape.  The fix is on `bugs321`
-(fixed-pending-merge); once merged, probe the storage matrix (field-stored ✓
-expected from the fix's own tests; vector-stored = the open cell) and build
-the surface on whichever shape proves safe.  Until then the declarative
-class table is the stable intermediate surface.
+**The gate probe ran (2026-06-10, post-#325 rebase) and answered:** the
+registry column is language-gated.  #318 rejects collections of
+closure-holder structs at compile time (element copies would dangle), and a
+bare `vector<fn>` of CAPTURING closures is @P213/@P214-deferred — both with
+graceful, prescriptive errors.  **v1 therefore shipped the other columns:**
+the lane vocabulary (`fast_lane`/`fast_lane_keyed`/`slow_lane`) as late
+data, and the ONE receive surface — `run`/`run_client` drain the conflation
+slots into `on_event` at tick time, so the lane never leaks into handlers
+and consumers' manual drain loops dissolved.  The per-kind split is a match
+inside `on_event` (the shape #318's guidance prescribes); when @P213/@P214
+lands, that match becomes the registered-handler column with zero wire or
+lane changes.
 
 ---
 

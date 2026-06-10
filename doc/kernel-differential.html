@@ -27,19 +27,19 @@ fn main() {
         println("t:connected");
         engine_host::client_send("hello");
       } else if ev.kind == 1 {
-        println("t:event {ev.payload}");
+        if ev.payload.starts_with("2:") {
+          if !c.saw_sync {
+            c.saw_sync = true;
+            println("t:sync-ok");
+          }
+        } else {
+          println("t:event {ev.payload}");
+        }
       } else if ev.kind == 2 {
         println("t:disconnected");
       }
     },
-    fn() {
-      while engine_host::client_sync_next() {
-        if !c.saw_sync {
-          c.saw_sync = true;
-          println("t:sync-ok");
-        }
-      }
-    });
+    fn() { });
   println("t:exited");
 }
 `;

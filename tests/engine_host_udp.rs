@@ -141,15 +141,14 @@ fn main() {{
     fn(ev: engine_host::Event) {{
       if ev.kind == 0 {{
         engine_host::send(ev.cid, "hi:{{ev.cid}}");
+      }} else if ev.kind == 1 {{
+        // ONE receive surface (05d): the client's conflated state arrives
+        // here at tick time — echo it back on the declared sync kind.
+        engine_host::send(ev.cid, "9:{{ev.payload}}");
       }}
     }},
     fn() {{
       w.tick = w.tick + 1;
-      while engine_host::sync_next() {{
-        sc = engine_host::sync_cid();
-        sp = engine_host::sync_payload();
-        engine_host::send(sc, "9:{{sp}}");
-      }}
       engine_host::send(0, "8:{{w.tick}}");
     }});
 }}

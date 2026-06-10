@@ -80,8 +80,8 @@ fn report(st: Stats) {
 
 fn main() {
   // The wire-schema table — must match the server's declarations.
-  engine_host::sync_class_keyed(2);  // poses: keyed by plane id
-  engine_host::sync_class(5);
+  engine_host::fast_lane_keyed(2);   // poses: latest-value per plane
+  engine_host::fast_lane(5);
 
   st = Stats { tick_n: 0, poses: 0, echoes: 0, last_echo_us: 0, tot: [], hold: [] };
 
