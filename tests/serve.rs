@@ -287,3 +287,65 @@ fn serve_ws_writefile_saves_and_sandboxes() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn serve_http_shell_has_editable_source() {
+    // @PLN16 M5e slice 3 — the shell's source pane is now an editable textarea (with a Save
+    // button), not a read-only listing; the source is embedded in the textarea body.
+    let path = tmp_program("editor", "fn main() { print(\"hello\") }\n");
+    let port = 18786;
+    start_server(port, path.to_string_lossy().into_owned());
+    let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    (&stream)
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut body = String::new();
+    let mut s = stream;
+    let _ = s.read_to_string(&mut body);
+    assert!(
+        body.contains("id=\"src\""),
+        "shell has an editable textarea"
+    );
+    assert!(body.contains("id=\"save\""), "shell has a Save button");
+    assert!(
+        body.contains("print(\"hello\")"),
+        "source embedded in the editor"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn serve_ws_writefile_then_relaunch_runs_new_code() {
+    // @PLN16 M5e slice 3 — the edit→save→reload→run loop the editor's Run button drives:
+    // `run` re-executes the *launched* program, so after a `writeFile` the editor must
+    // re-`launch` for the new code to take effect.  This proves that server-side contract.
+    let path = tmp_program("reload", "fn main() { print(\"old\") }\n");
+    let file = path.to_string_lossy().into_owned();
+    let port = 18787;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    // save new code to the served file
+    ws_send(
+        ws.get_ref(),
+        &format!(
+            "{{\"id\":1,\"req\":\"writeFile\",\"path\":\"{file}\",\"content\":\"fn main() {{ print(\\\"NEW\\\") }}\\n\"}}"
+        ),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "writeFile ok");
+    // re-launch (reads the new disk content), then run executes it
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":2,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+    );
+    assert!(
+        ws_recv(&mut ws).contains("\"id\":2,\"ok\":true"),
+        "relaunch ok"
+    );
+    ws_send(ws.get_ref(), "{\"id\":3,\"req\":\"run\"}");
+    let all = recv_until(&mut ws, 8, |m| m.contains("\"event\":\"terminated\"")).join("\n");
+    assert!(
+        all.contains("\"text\":\"NEW\""),
+        "run executes the saved code: {all}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

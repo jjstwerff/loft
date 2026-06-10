@@ -198,17 +198,24 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    Run. *The dual console is complete.* (Full inline squiggles are the later 14-bridge R2
    drawing; slice 2 ships the list + a per-line gutter marker.) Tests:
    `tests/rpc.rs::rpc_compile_*` (warn + error), `tests/serve.rs::serve_ws_compile_streams_diagnostics`.
-3. **Editor — editable pane + `writeFile` + save/reload.** Make the code pane editable;
-   `writeFile` saves to disk (sandboxed); a re-`run`/`compile` picks it up. *You can now
-   edit and re-run without leaving the browser.* The one new write capability + its sandbox.
-   - **Write core LANDED (2026-06-10):** `ReplSession::write_file` + `set_workspace_file` —
-     the one new write capability, **sandboxed to the single served file** (a path that
-     canonicalises anywhere else — `..`, a symlink, an absolute escape — is refused;
-     `--rpc` has no sandbox set, so it refuses every write). `writeFile {path, content}`
-     protocol arm; `tests/serve.rs::serve_ws_writefile_saves_and_sandboxes` proves save +
-     refusal. **Pending:** the editor UI — make the code pane an editable `<textarea>` + a
-     synced line-number gutter (so diagnostics still mark the line), **Save** (Ctrl/Cmd+S →
-     `writeFile` → re-`compile`) + a dirty indicator, and **Run** = save → compile → run.
+3. **Editor — editable pane + `writeFile` + save/reload — LANDED (2026-06-10).** The code
+   pane is now an editable `<textarea id="src">` with a synced line-number **gutter** (a
+   diagnostic colours its gutter line; click a console entry → scroll + caret to that line),
+   a **dirty** indicator, and **Save** (Ctrl/Cmd+S or the button → `writeFile` → `compile`).
+   **Run** became save → reload → run: it `writeFile`s a dirty buffer, then re-`launch`es and
+   runs — because `run` re-executes the *launched* program, so an edit only takes effect after
+   a fresh `launch` (the editor sequences `run` to fire **only if that launch succeeds**, so a
+   syntax-broken buffer shows errors instead of silently running stale code). *You can now
+   edit and re-run without leaving the browser.*
+   - **Write core:** `ReplSession::write_file` + `set_workspace_file` — the one new write
+     capability, **sandboxed to the single served file** (a path that canonicalises anywhere
+     else — `..`, a symlink, an absolute escape — is refused; `--rpc` has no sandbox set, so
+     it refuses every write). `writeFile {path, content}` protocol arm. Save is optimistic
+     but **reconciled**: the dirty flag clears only when the `writeFile` reply (tracked by id)
+     comes back `ok`.
+   - Tests: `tests/serve.rs::serve_ws_writefile_saves_and_sandboxes` (save + sandbox refusal),
+     `serve_http_shell_has_editable_source` (textarea + Save button + embedded source),
+     `serve_ws_writefile_then_relaunch_runs_new_code` (the edit→save→reload→run loop).
 4. **Debugger UI — gutter breakpoints + step controls + panels.** Click the gutter →
    `setBreakpoints`; **Debug** launches with breakpoints; step buttons → `stepIn/Over/Out`;
    the variables / watch / call-stack panels render the `stopped` frame. *The debugger is

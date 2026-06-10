@@ -313,34 +313,20 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     out
 }
 
-// ── the browser shell (slice 1 + 2: line-numbered source, Run, dual console) ─────────
+// ── the browser shell (slices 1-3: editable source + gutter, Run/Save, dual console) ──
 
-/// Build the IDE shell for `file`: its `source` in a line-numbered read-only pane, a Run
-/// button, and the **dual console** — a Compiler pane (diagnostics) over a Program pane
-/// (stdout).  The page opens a WebSocket, `launch`es + `compile`s the file on connect, marks
-/// diagnostic lines in the source, and on **Run** streams the program's output.  Built by
-/// token-replacement (not `format!`) so the CSS/JS braces stay literal.
+/// Build the IDE shell for `file`: its `source` in an **editable** pane (a `<textarea>` with
+/// a synced line-number gutter), Run + Save buttons, and the **dual console** — a Compiler
+/// pane (diagnostics) over a Program pane (stdout).  The page opens a WebSocket, `launch`es +
+/// `compile`s the file on connect, marks diagnostic lines in the gutter, and on **Save**
+/// writes the buffer back (sandboxed `writeFile`) / on **Run** saves, reloads, and streams
+/// the program's output.  Built by token-replacement (not `format!`) so the CSS/JS braces
+/// stay literal; the source is HTML-escaped into the textarea body.
 fn render_shell(file: &str, source: &str) -> String {
     SHELL_TEMPLATE
         .replace("__TITLE__", &html_escape(file))
-        .replace("__SOURCE_ROWS__", &render_source_lines(source))
+        .replace("__SOURCE__", &html_escape(source))
         .replace("__FILE_JS__", &js_string(file))
-}
-
-/// Render `source` as line-numbered rows (`<div id="L<n>">`), so a diagnostic at line *n*
-/// can mark its row and the gutter shows line numbers.
-fn render_source_lines(source: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for (i, line) in source.lines().enumerate() {
-        let n = i + 1;
-        let _ = write!(
-            out,
-            "<div class=\"row\" id=\"L{n}\"><span class=\"gut\">{n}</span><span class=\"ln\">{}</span></div>",
-            html_escape(line)
-        );
-    }
-    out
 }
 
 const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -350,14 +336,16 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   body { margin:0; font:14px/1.5 system-ui,sans-serif; display:flex; flex-direction:column; height:100vh; }
   #bar { padding:8px 12px; border-bottom:1px solid #8884; display:flex; gap:12px; align-items:center; flex:none; }
   #bar button { font:inherit; padding:4px 12px; cursor:pointer; }
+  #bar button:disabled { opacity:.4; cursor:default; }
+  #dirty { color:#f9a825; font-weight:600; font-size:12px; }
   #status { opacity:.7; }
   #main { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
-  #code { grid-row:1 / 3; border-right:1px solid #8884; overflow:auto; padding:8px 0; font:13px/1.45 ui-monospace,monospace; }
-  .row { display:flex; white-space:pre; }
-  .row .gut { width:3em; text-align:right; padding-right:.8em; opacity:.4; user-select:none; flex:none; }
-  .row .ln { flex:1; padding-right:12px; }
-  .row.error { box-shadow:inset 3px 0 #e53935; background:#e5393522; }
-  .row.warning { box-shadow:inset 3px 0 #f9a825; background:#f9a82522; }
+  #editor { grid-row:1 / 3; border-right:1px solid #8884; display:flex; overflow:hidden; font:13px/1.45 ui-monospace,monospace; }
+  #gutter { flex:none; box-sizing:border-box; width:3.5em; padding:8px .7em 8px 0; text-align:right; opacity:.45; user-select:none; overflow:hidden; }
+  #gutter .gnum { white-space:pre; }
+  #gutter .gnum.error { color:#e53935; opacity:1; font-weight:700; }
+  #gutter .gnum.warning { color:#b8860b; opacity:1; font-weight:700; }
+  #src { flex:1; box-sizing:border-box; border:none; outline:none; resize:none; margin:0; padding:8px 12px; font:inherit; line-height:1.45; background:transparent; color:inherit; white-space:pre; overflow:auto; tab-size:4; }
   .pane { display:flex; flex-direction:column; min-height:0; }
   .pane h2 { margin:0; padding:6px 12px; font-size:12px; opacity:.6; border-bottom:1px solid #8884; text-transform:uppercase; letter-spacing:.05em; }
   .body { flex:1; overflow:auto; margin:0; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; white-space:pre-wrap; }
@@ -376,9 +364,9 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
-<div id="bar"><button id="run">▶ Run</button><span id="status">connecting…</span></div>
+<div id="bar"><button id="run">▶ Run</button><button id="save" disabled>Save</button><span id="dirty"></span><span id="status">connecting…</span></div>
 <div id="main">
-  <div id="code">__SOURCE_ROWS__</div>
+  <div id="editor"><div id="gutter"></div><textarea id="src" spellcheck="false" wrap="off">__SOURCE__</textarea></div>
   <div class="pane"><h2>Compiler</h2><div id="diags" class="body"></div></div>
   <div class="pane"><h2>Program</h2><pre id="out" class="body"></pre></div>
 </div>
@@ -392,9 +380,26 @@ const FILE = __FILE_JS__;
 const $ = id => document.getElementById(id);
 let ws, mid = 0;
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-function row(n) { return document.getElementById("L" + n); }
+// ── editor — an editable source pane with a synced line-number gutter ──
+let saved = "", saveId = 0, runAfterLaunch = 0, pendSnap = "";
+function renderGutter() {
+  const n = $("src").value.split("\n").length;
+  let h = ""; for (let i = 1; i <= n; i++) h += '<div class="gnum" id="g' + i + '">' + i + '</div>';
+  $("gutter").innerHTML = h;
+}
+function syncScroll() { $("gutter").scrollTop = $("src").scrollTop; }
+function isDirty() { return $("src").value !== saved; }
+function updateDirty() { const d = isDirty(); $("dirty").textContent = d ? "● unsaved" : ""; $("save").disabled = !d; }
+function gnum(n) { return document.getElementById("g" + n); }
+function gotoLine(n) {                           // scroll the textarea to line n + caret there
+  const t = $("src"), lines = t.value.split("\n"); let i = 0;
+  for (let k = 0; k < n - 1 && k < lines.length; k++) i += lines[k].length + 1;
+  t.focus(); t.selectionStart = t.selectionEnd = i;
+  const lh = parseFloat(getComputedStyle(t).lineHeight) || 18;
+  t.scrollTop = Math.max(0, (n - 1) * lh - t.clientHeight / 2); syncScroll();
+}
 function clearDiags() {
-  document.querySelectorAll("#code .row.error, #code .row.warning").forEach(r => r.classList.remove("error", "warning"));
+  document.querySelectorAll("#gutter .gnum.error, #gutter .gnum.warning").forEach(g => g.classList.remove("error", "warning"));
   $("diags").innerHTML = "";
 }
 function showDiags(items) {
@@ -402,14 +407,18 @@ function showDiags(items) {
   if (!items.length) { $("diags").innerHTML = '<div class="none">no problems</div>'; return; }
   for (const it of items) {
     const lvl = (it.level === "error" || it.level === "fatal") ? "error" : "warning";
-    const r = row(it.line); if (r) r.classList.add(lvl);
+    const g = gnum(it.line); if (g) g.classList.add(lvl);
     const d = document.createElement("div");
     d.className = "d " + lvl;
     d.innerHTML = '<span class="loc">' + it.line + ':' + it.col + '</span>' + esc(it.message);
-    d.onclick = () => { const rr = row(it.line); if (rr) rr.scrollIntoView({block: "center"}); };
+    d.onclick = () => gotoLine(it.line);
     $("diags").appendChild(d);
   }
 }
+// Persist the buffer to disk (the sandboxed writeFile); the reply (tracked by id) clears the
+// dirty flag only once the write actually succeeded.
+function persist() { const snap = $("src").value; pendSnap = snap; saveId = send("writeFile", {path: FILE, content: snap}); }
+function doSave() { if (!ws || ws.readyState !== 1 || !isDirty()) return; persist(); send("compile", {file: FILE}); }
 // ── REPL — a context-switching prime element ──
 let ctx = "top", histTop = [], histFrame = [], histIdx = -1, pending = null;
 function curHist() { return ctx === "frame" ? histFrame : histTop; }
@@ -449,6 +458,11 @@ function connect() {
   ws.onerror = () => { $("status").textContent = "error"; };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.ok !== undefined && m.event === undefined && m.context === undefined) {   // a bare response
+      if (m.id === saveId) { saveId = 0; if (m.ok) { saved = pendSnap; updateDirty(); } return; }
+      if (m.id === runAfterLaunch) { runAfterLaunch = 0;
+        if (m.ok) send("run", {}); else $("out").textContent += "\n[not run — fix the errors above]\n"; return; }
+    }
     if (m.event === "diagnostics") {
       if (m.file === "<repl>") { for (const it of (m.items || [])) replLine("err", it.line + ":" + it.col + "  " + it.message); }
       else showDiags(m.items || []);
@@ -460,8 +474,14 @@ function connect() {
     else if (m.ok === false && m.error) $("out").textContent += "\n[error] " + m.error + "\n";
   };
 }
-function send(req, extra) { ws.send(JSON.stringify(Object.assign({id: ++mid, req}, extra))); }
-$("run").onclick = () => { if (!ws || ws.readyState !== 1) return; $("out").textContent = ""; send("compile", {file: FILE}); send("run", {}); };
+function send(req, extra) { const id = ++mid; ws.send(JSON.stringify(Object.assign({id, req}, extra))); return id; }
+$("run").onclick = () => {
+  if (!ws || ws.readyState !== 1) return;
+  $("out").textContent = "";
+  if (isDirty()) persist();                       // save first so disk matches the buffer
+  send("compile", {file: FILE});                  // refresh the compiler console
+  runAfterLaunch = send("launch", {file: FILE});  // reload; run() fires only if this launch is ok
+};
 const ti = $("replin");
 ti.addEventListener("input", () => autosize(ti));
 ti.addEventListener("keydown", e => {
@@ -477,6 +497,21 @@ ti.addEventListener("keydown", e => {
     histIdx++; if (histIdx >= h.length) { histIdx = -1; ti.value = ""; } else ti.value = h[histIdx]; autosize(ti);
   }
 });
+// ── editor wiring ──
+const src = $("src");
+src.addEventListener("input", () => { renderGutter(); updateDirty(); });
+src.addEventListener("scroll", syncScroll);
+src.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); doSave(); return; }
+  if (e.key === "Tab") {                          // insert spaces, keep focus in the editor
+    e.preventDefault(); const s = src.selectionStart;
+    src.value = src.value.slice(0, s) + "    " + src.value.slice(src.selectionEnd);
+    src.selectionStart = src.selectionEnd = s + 4; renderGutter(); updateDirty();
+  }
+});
+$("save").onclick = doSave;
+document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); doSave(); } });
+saved = src.value; renderGutter(); updateDirty();
 connect();
 </script></body></html>"##;
 
