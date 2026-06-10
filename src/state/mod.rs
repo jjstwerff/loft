@@ -289,6 +289,7 @@ impl State {
     #[must_use]
     pub fn new(mut db: Stores) -> State {
         let stack_cur = db.database(1000);
+        db.stack_store_at_zero = true; // #306 — protect slot 0 from whole-store frees
         let stack_cap_bytes = db.store(&stack_cur).byte_capacity() as u32;
         // Allocate the constant store (CONST_STORE = 1). Starts empty,
         // populated during byte_code(), locked before execution.

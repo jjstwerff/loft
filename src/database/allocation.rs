@@ -81,6 +81,19 @@ impl Stores {
         } else {
             self.find_free_slot()
         };
+        // #306 — slot space is u16 and store_nr 65535 is the null-DbRef
+        // sentinel.  Without this cap, `max = slot + 1` wraps to 0 at slot
+        // 65535 and the next allocation hands out slot 0 — the eval-stack
+        // store — corrupting the whole runtime (SIGSEGV at the next big
+        // copy).  Fail loudly instead: hitting this cap means ~65k stores
+        // are live at once, which in practice is a store leak.
+        assert!(
+            slot != u16::MAX,
+            "store table exhausted: 65535 stores live at once (store_nr is \
+             u16; 65535 is the null sentinel).  This usually indicates a \
+             store leak — run with LOFT_STORES=summary to list live stores \
+             by type."
+        );
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
@@ -176,6 +189,20 @@ impl Stores {
         }
         let al = db.store_nr;
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
+        // #306 — store 0 is the eval-stack store; freeing it destroys every
+        // live frame and lets the allocator recycle slot 0 as a heap store.
+        // A ref to a stack-allocated record (OpCreateStack) must never be
+        // whole-store freed: refuse loudly so the wrong-free site surfaces
+        // instead of corrupting the entire runtime.
+        if al == 0 && self.stack_store_at_zero {
+            eprintln!(
+                "loft: BUG (#306): refused to free the stack store (#0) \
+                 (rec={}, pos={}, var='{name}') — a stack-record ref was \
+                 treated as an owned heap store",
+                db.rec, db.pos,
+            );
+            return;
+        }
         let store = &mut self.allocations[al as usize];
         if store.free {
             return; // Already freed — no-op (replaces Issue #120 tolerance hack).
@@ -762,6 +789,7 @@ impl Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
+            stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.max,
             peak: self.max,
@@ -849,6 +877,7 @@ impl Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
+            stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.allocations.len() as u16 + pool_slice.len() as u16,
             peak: self.allocations.len() as u16 + pool_slice.len() as u16,
@@ -895,6 +924,146 @@ impl Stores {
     #[must_use]
     pub fn store_nr(&self, nr: u16) -> &Store {
         &self.allocations[nr as usize]
+    }
+
+    /// #306 diagnostic (`LOFT_TRACE_CR`) — bounds-checked mirror of the
+    /// `copy_claims` walk.  Reports (instead of faulting on) the first broken
+    /// interior edges of `rec`'s claim graph: a text offset or vector record
+    /// id outside its store's buffer, a freed/out-of-range store, or an
+    /// insane vector length.  Diagnostic only; never dereferences unchecked.
+    pub fn validate_claims(&self, rec: &DbRef, tp: u16, path: &str, problems: &mut u32) {
+        if *problems > 8 {
+            return;
+        }
+        if rec.store_nr as usize >= self.allocations.len() {
+            eprintln!(
+                "[cr-check] {path}: ref #{}.{},{} — store out of range",
+                rec.store_nr, rec.rec, rec.pos
+            );
+            *problems += 1;
+            return;
+        }
+        let store = &self.allocations[rec.store_nr as usize];
+        if store.free {
+            eprintln!(
+                "[cr-check] {path}: ref #{}.{},{} — store FREED",
+                rec.store_nr, rec.rec, rec.pos
+            );
+            *problems += 1;
+            return;
+        }
+        let cap = store.capacity_words();
+        if rec.rec >= cap || u64::from(rec.rec) * 8 + u64::from(rec.pos) >= u64::from(cap) * 8 {
+            eprintln!(
+                "[cr-check] {path}: ref #{}.{},{} — record beyond store capacity ({cap} words)",
+                rec.store_nr, rec.rec, rec.pos
+            );
+            *problems += 1;
+            return;
+        }
+        if (tp as usize) >= self.types.len() {
+            eprintln!("[cr-check] {path}: type {tp} out of range");
+            *problems += 1;
+            return;
+        }
+        match &self.types[tp as usize].parts {
+            Parts::Base if tp == 5 => {
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 && cur >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: text offset {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                }
+            }
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                for f in fields {
+                    self.validate_claims(
+                        &DbRef {
+                            store_nr: rec.store_nr,
+                            rec: rec.rec,
+                            pos: rec.pos + u32::from(f.position),
+                        },
+                        f.content,
+                        &format!("{path}.{}", f.name),
+                        problems,
+                    );
+                }
+            }
+            Parts::Vector(v) | Parts::Sorted(v, _) => {
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return;
+                }
+                if cur >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: vector rec {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let len = store.get_u32_raw(cur, 4);
+                let size = u32::from(self.size(*v));
+                if u64::from(len) * u64::from(size) > u64::from(cap) * 8 {
+                    eprintln!(
+                        "[cr-check] {path}: vector rec {cur} len {len} (elem size {size}) \
+                         exceeds store #{} capacity {cap} words",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                for i in 0..len.min(16) {
+                    self.validate_claims(
+                        &DbRef {
+                            store_nr: rec.store_nr,
+                            rec: cur,
+                            pos: 8 + size * i,
+                        },
+                        *v,
+                        &format!("{path}[{i}]"),
+                        problems,
+                    );
+                }
+            }
+            Parts::ChildRec(ct) => {
+                let r = store.get_u32_raw(rec.rec, rec.pos);
+                if r == 0 {
+                    return;
+                }
+                if r >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: child rec {r} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                self.validate_claims(
+                    &DbRef {
+                        store_nr: rec.store_nr,
+                        rec: r,
+                        pos: 8,
+                    },
+                    *ct,
+                    &format!("{path}->child"),
+                    problems,
+                );
+            }
+            Parts::Enum(values) => {
+                // Mirrors `copy_claims`' Enum arm (direct index, no -1 shift).
+                let e_nr = store.get_byte(rec.rec, rec.pos, -1);
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let etp = values[e_nr as usize].0;
+                    if etp != u16::MAX {
+                        self.validate_claims(rec, etp, path, problems);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn copy_claims_seq_vector(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {

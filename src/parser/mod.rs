@@ -3986,10 +3986,14 @@ impl Parser {
                         Value::Null,
                         "Expect a null default on database references"
                     );
+                    // #306: the attr's dep list is callee-internal (attr
+                    // indices); inherited verbatim it reads as CALLER var
+                    // numbers and mislabels the fresh buffer a borrow.
+                    let buf_tp = Type::Vector(content.clone(), Vec::new());
                     let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
-                        self.vars.work_refs(&tp, &mut self.lexer)
+                        self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     // @PLAN51 Cluster IV: tag this work-ref so parse_code's
                     // preamble emits Set(vr, Null) regardless of vr's
@@ -4006,10 +4010,12 @@ impl Parser {
                         Value::Null,
                         "Expect a null default on database references"
                     );
+                    // #306: strip the callee-internal dep list (see Vector arm).
+                    let buf_tp = Type::Reference(content, Vec::new());
                     let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
-                        self.vars.work_refs(&tp, &mut self.lexer)
+                        self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Reference(content, vec![vr]);
@@ -4029,10 +4035,12 @@ impl Parser {
                         Value::Null,
                         "Expect a null default on database references"
                     );
+                    // #306: strip the callee-internal dep list (see Vector arm).
+                    let buf_tp = Type::Enum(content, true, Vec::new());
                     let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&tp, &mut self.lexer)
+                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
-                        self.vars.work_refs(&tp, &mut self.lexer)
+                        self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Enum(content, true, vec![vr]);

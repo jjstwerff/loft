@@ -118,6 +118,37 @@ leak guards above are the canonical regression record for this surface.
 
 ---
 
+## View returns — dep merge and materialisation (#306)
+
+A function may return a *view*: a struct read out of a vector (`table[idx]`)
+aliases the vector's store rather than owning one.  Two rules keep the caller
+from freeing a store it does not own:
+
+1. **View of a parameter → dep merge.**  `ref_return` walks the returned
+   local's type deps *transitively* and merges every reachable parameter into
+   the declared return deps (`fn pick(t, i) -> M` whose body returns
+   `chosen = t[i]; chosen` declares `M["chosen", "t"]`).  The call site maps
+   the dep to its argument, so the result is a borrow there and is not freed.
+2. **View of a local → materialise.**  When a transitive dep resolves to a
+   non-parameter local (`pool = build(); pool[i]`), the owner dies at function
+   exit, so deps cannot help the caller.  `block_result` / `parse_return`
+   rewrite the return value into a deep copy of the view into a fresh
+   work-ref, which NRVO-promotes into the caller-provided buffer
+   (`materialize_view_return`, `src/parser/control.rs`).
+
+Var-to-var **re**assignment of same-struct references deep-copies (matching
+first assignment, `generate_set` reassignment arm) — the parser strips the
+LHS deps on that shape assuming a copy, so aliasing there let a later
+`OpFreeRef` release a store the variable never owned.
+
+Two runtime backstops make any future wrong-free loud instead of corrupting:
+`free_named` refuses to free the eval-stack store (slot 0,
+`Stores::stack_store_at_zero`), and the slot allocator panics with a
+"store table exhausted" diagnosis at 65535 live stores instead of wrapping
+the u16 watermark back onto the stack store.
+
+---
+
 ## The return-value exemption in detail
 
 When a scope exits with a return expression, two mechanisms prevent premature freeing:

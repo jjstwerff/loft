@@ -1727,6 +1727,48 @@ impl State {
                     }
                     return;
                 }
+                // #306 — reassignment `v = src` of same-struct References must
+                // DEEP-COPY, matching first-assignment
+                // (`gen_set_first_ref_var_copy`) and the parser's dep-strip
+                // (objects.rs strips v's deps assuming codegen copies).  The
+                // old fall-through aliased src's DbRef into v via OpPutRef, so
+                // v's next FreeRef released a store it never owned — when src
+                // held a view of a collection element, that freed the whole
+                // collection's store mid-program.  No 0x8000 free-source: src
+                // stays owned by its own scope.
+                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && let Value::Var(src) = value.unspan()
+                    && *src != v
+                    && let Type::Reference(src_d, _) = stack.function.tp(*src)
+                    && d_nr == *src_d
+                {
+                    let tp_nr = stack.data.def(d_nr).known_type();
+                    let ref_size = size_of::<crate::keys::DbRef>() as u16;
+                    let slot_end = stack.function.stack(v).saturating_add(ref_size);
+                    if stack.position < slot_end {
+                        let bump = stack.step(slot_end) - stack.position;
+                        stack.add_op("OpReserveFrame", self);
+                        self.code_add(bump);
+                        stack.position += bump;
+                    }
+                    let slot_offset = stack.var_pos(v);
+                    stack.add_op("OpInitRef", self);
+                    self.code_add(slot_offset);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(slot_offset);
+                    self.code_add(tp_nr);
+                    let copy_nr = stack.data.def_nr("OpCopyRecord");
+                    let copy_val = Value::Call(
+                        copy_nr,
+                        vec![
+                            Value::Var(*src),
+                            Value::Var(v),
+                            Value::Int(i32::from(tp_nr)),
+                        ],
+                    );
+                    self.generate(&copy_val, stack, false);
+                    return;
+                }
             }
             self.set_var(stack, v, value);
         } else {
@@ -3319,12 +3361,13 @@ impl State {
                 let slot = size(&var_tp, &Context::Variable);
                 if pushed != slot && pushed != 0 {
                     panic!(
-                        "[set_var] width mismatch assigning to '{}' ({}): \
+                        "[set_var] width mismatch assigning to '{}' ({}) in fn '{}': \
                          value pushed {pushed} bytes, slot is {slot} bytes. \
                          The trailing put-op would silently corrupt adjacent \
                          slots.  IR: {value:?}",
                         stack.function.name(var),
                         var_tp.name(stack.data),
+                        stack.data.def(stack.def_nr).name(),
                     );
                 }
             }

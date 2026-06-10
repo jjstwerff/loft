@@ -710,7 +710,7 @@ impl Parser {
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the
                 // inner call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, ls);
-            } else if let Type::Reference(_, ls) = t {
+            } else if let Type::Reference(td, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a
                 // Reference return type, recover work-ref variables from the
                 // return expression. First try Call arguments, then fall back
@@ -723,6 +723,13 @@ impl Parser {
                         // @P377 / S1: see above.
                         self.nrvo_collapse_tail_set(l, &extra);
                     }
+                } else if self.return_views_local(ls) {
+                    // #306: the tail value borrows from a local — copy it
+                    // into an owned work-ref before it escapes the function.
+                    let last = l.len() - 1;
+                    let w = self.materialize_view_return(*td, &mut l[last]);
+                    self.ref_return(&[w], l);
+                    self.nrvo_collapse_tail_set(l, &[w]);
                 } else {
                     self.ref_return(ls, l);
                     // @P377 / S1: see above.
@@ -3307,6 +3314,63 @@ impl Parser {
         }
     }
 
+    /// #306: true when a ref-typed return value may alias a LOCAL's store —
+    /// a transitive dep of `ls` resolves to a variable that is not a function
+    /// attribute.  The direct `ls` entries themselves are the NRVO-promotion
+    /// candidates (handled by `ref_return`); it is their *deps* that reveal a
+    /// borrow.  Such a view dangles the moment the local owner's store is
+    /// freed at function exit, so the return value must be materialised.
+    fn return_views_local(&self, ls: &[u16]) -> bool {
+        let attr_names = &self.data.def(self.context).attr_names;
+        let mut work: Vec<u16> = ls.to_vec();
+        let mut seen: std::collections::HashSet<u16> = work.iter().copied().collect();
+        let mut i = 0;
+        while i < work.len() {
+            let v = work[i];
+            i += 1;
+            if v >= self.vars.count() {
+                continue;
+            }
+            for d in self.vars.tp(v).depend() {
+                if d < self.vars.count() && seen.insert(d) {
+                    if !attr_names.contains_key(self.vars.name(d)) {
+                        return true; // borrows from a non-parameter local
+                    }
+                    work.push(d);
+                }
+            }
+        }
+        false
+    }
+
+    /// #306: rewrite a return value that views a local's store into an owned
+    /// copy — `{ __ref_N = null; OpDatabase(__ref_N, kt);
+    /// OpCopyRecord(<orig>, __ref_N, kt); __ref_N }`.  The returned work-ref
+    /// is then NRVO-promoted by `ref_return`, so the copy lands directly in
+    /// the caller-provided buffer (no extra allocation in the adopt case).
+    /// Returns the work-ref var so the caller passes `[w]` to `ref_return`.
+    fn materialize_view_return(&mut self, td: u32, tail: &mut Value) -> u16 {
+        if let Value::Return(inner) = tail {
+            return self.materialize_view_return(td, inner);
+        }
+        let ref_tp = Type::Reference(td, Vec::new());
+        let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
+        let kt = self.data.def(td).known_type();
+        let copy_d = self.data.def_nr("OpCopyRecord");
+        let orig = std::mem::replace(tail, Value::Null);
+        *tail = crate::data::v_block(
+            vec![
+                crate::data::v_set(w, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+                Value::Call(copy_d, vec![orig, Value::Var(w), Value::Int(i32::from(kt))]),
+                Value::Var(w),
+            ],
+            Type::Reference(td, vec![w]),
+            "materialized_view_return",
+        );
+        w
+    }
+
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &[Value]) {
         // Plan-57: a returned local that gets a fresh vector literal more than once
         // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
@@ -3372,6 +3436,17 @@ impl Parser {
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
+        if std::env::var("LOFT_TRACE_RR").is_ok() {
+            let fn_name = self.data.def(self.context).name();
+            let ls_named: Vec<String> = ls
+                .iter()
+                .map(|v| format!("{}={:?}", self.vars.name(*v), self.vars.tp(*v)))
+                .collect();
+            eprintln!(
+                "[rr] fn={fn_name} pass1={} ls={ls:?} ls_tps={ls_named:?} ret={ret:?}",
+                self.first_pass
+            );
+        }
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
         // (Type::Enum with struct-enum discriminator `true`) live as
         // heap-allocated records just like Reference and Vector do, so
@@ -3382,7 +3457,33 @@ impl Parser {
         // interpreter loops on Return(ret=0, value=16) at PC=0.
         if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
             let mut dep = cur.clone();
-            for v in ls {
+            // #306: a returned local can itself hold a view — its TYPE deps name
+            // the vars it borrows from (`chosen = table[idx]; chosen` gives
+            // `chosen: Reference(M, [table])`).  Walk deps transitively and merge
+            // every PARAMETER the returned value may alias into the declared
+            // return deps; otherwise the call site treats the value as owned and
+            // frees the caller's store at scope exit.  Transitively-reached vars
+            // are merge-only: promoting them to hidden ref args (as direct `ls`
+            // entries are) would change the call ABI for locals the NRVO
+            // machinery cannot host (e.g. a call-result vector), breaking callers.
+            let mut expanded: Vec<u16> = ls.to_vec();
+            let direct_count = expanded.len();
+            let mut seen: std::collections::HashSet<u16> = expanded.iter().copied().collect();
+            let mut i = 0;
+            while i < expanded.len() {
+                let v = expanded[i];
+                i += 1;
+                if v >= self.vars.count() {
+                    continue; // foreign dep (e.g. closure work var) — not ours
+                }
+                for d in self.vars.tp(v).depend() {
+                    if d < self.vars.count() && seen.insert(d) {
+                        expanded.push(d);
+                    }
+                }
+            }
+            for (e_idx, v) in expanded.iter().enumerate() {
+                let transitive = e_idx >= direct_count;
                 // A reassigned returned local must NOT be NRVO-promoted (see above).
                 if reassign_count(body, *v, newrecord_nr) >= 2 {
                     continue;
@@ -3394,6 +3495,9 @@ impl Parser {
                         dep.push(*a as u16);
                     }
                     continue;
+                }
+                if transitive {
+                    continue; // merge-only for transitively-reached vars (see above)
                 }
                 // create a new attribute with this name
                 let a = self
@@ -3520,12 +3624,18 @@ impl Parser {
                 // available here, so pass an empty body — the reassignment guard does
                 // not apply (explicit return already copies the value at the return,
                 // and the Vector arm is skipped above anyway).
-                if let Type::Reference(_, ls) = &t {
+                if let Type::Reference(td, ls) = &t {
                     if ls.is_empty() {
                         let extra = Self::collect_hidden_ref_args(&v, &self.data);
                         if !extra.is_empty() {
                             self.ref_return(&extra, &[]);
                         }
+                    } else if self.return_views_local(ls) {
+                        // #306: mid-body `return <view of a local>` — copy it
+                        // into an owned work-ref before it escapes (mirrors
+                        // block_result's tail handling).
+                        let w = self.materialize_view_return(*td, &mut v);
+                        self.ref_return(&[w], &[]);
                     } else {
                         self.ref_return(ls, &[]);
                     }
