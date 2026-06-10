@@ -190,6 +190,13 @@ offline, or with the server unreachable, the edited function keeps running
 interpreted.  You lose the performance tier on that one function, never the
 ability to edit a live game.
 
+*Build-side notes:* the engine-host design exploration —
+[plans/16-debugger/ENGINE_HOST.md](plans/16-debugger/ENGINE_HOST.md) — records the
+entry-gate probes for this model (the wasm bridge-tax measurement, unload safety, the
+N9 dispatch table as the real build), the **main-loop IO contract** (frame-boundary
+drain with byte/time budgets, completion-as-event, store-resident accumulation of long
+loads), and the in-house prior art that already runs pieces of it in pure loft.
+
 So loft's value proposition is sharpened: it does **not** win the main loop (Rust
 does) — it wins the **live-edit experience**.  Predictable memory, a
 friction-free surface, and data that survives your edits are the axis it is built

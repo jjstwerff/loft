@@ -22,6 +22,14 @@ the other. Two evaluations, recorded 2026-06-10.
 
 ## Part 1 — tiered execution: interpret now, WASM-swap soon, native baseline
 
+> **Canonical home:** this tier model is already specified in
+> [LAVITION.md § Execution granularity](../../LAVITION.md#execution-granularity--per-function-interpret-over-a-compiled-baseline)
+> — edit → the fn drops to the interpreter instantly; the server recompiles that one
+> fn to optimized wasm and hot-swaps it back; graceful degradation when the server is
+> unreachable. The evaluation below **re-derived that design independently** (a good
+> convergence signal) — what this note *adds* is the entry-gate probes, the risk
+> register, and the sequencing; LAVITION stays the canonical statement of the model.
+
 C71's model is "interpret the edited fn on a compiled baseline." Its honest weakness:
 a function in the **frame path** may blow the 16 ms budget under interpretation — and
 frame-path gameplay logic is exactly what live editing is *for*. The evaluation's
@@ -78,6 +86,15 @@ else slows down (baseline).**
 blocking** (every short event queued behind the big read) and its dual, **handling a
 load whenever its bytes happen to finish** (blowing the frame budget mid-frame). The
 contract has two halves: *interleave on the wire, accumulate-then-publish at the loop*.
+
+**Three traffic classes, three drain rules** (the third surfaced by @PLAN50's pose
+sync — see Prior art):
+
+| Class | Examples | Delivery | Drain rule at the tick |
+|---|---|---|---|
+| **Short events** | input, control, world deltas | every one matters | queue → drain **to empty** |
+| **Fixed-rate state sync** | 30 Hz poses, health bars | latest-value; loss fine, `seq`-numbered | **conflate to newest per sender**; a discontinuity (bounce) promotes a sample to a must-deliver event (priority keyframe) |
+| **Long loads** | assets, snapshots, wasm modules | complete-or-nothing | **byte/time-budgeted** ingest, accumulate invisibly, publish on completion as an event |
 
 ### The loop side
 
@@ -149,10 +166,55 @@ dependent-event contract, and whether remote-server patching is a near-term requ
 
 ---
 
-## Prior art in-house: the audience demo already runs this loop (evaluated 2026-06-10)
+## Prior art in-house (evaluated 2026-06-10): @PLN6 runs the drain; @PLAN50 runs the WHOLE loop
+
+Two dogfood projects already prototype this design in pure loft — the second more
+completely than the first.
+
+### @PLAN50 bumper-airplanes — the complete main-loop shape + measured findings
+
+[`plans/future/50-bumper-airplanes/`](../future/50-bumper-airplanes/00a-network-probe.md)
++ `tools/audience-demo-50/` (working MVP tests). `probe_server.loft`'s main loop **is**
+this note's loop contract, verbatim:
+
+```
+while true {
+  1. drain pump events to empty          (srv.poll_event() until null)
+  2. fixed-rate tick when due            (30 Hz broadcast_tick; drift-free:
+                                          last_tick_us += TICK_INTERVAL_US, never = now)
+  3. idle backoff                        (sleep 2 ms only when zero work)
+}
+```
+
+Beyond the loop, it contributes pieces this note had not named:
+
+- **A THIRD traffic class: fixed-rate state sync.** 30 Hz pose frames are neither
+  short *events* (must deliver every one) nor long *loads* (accumulate then publish) —
+  they carry **latest-value semantics**: loss is fine, stale frames are superseded,
+  each plane carries a `seq` that ticks per broadcast. The drain rule differs: events
+  queue-to-empty; poses **conflate to newest per sender**.
+- **Interest management** — `peer_sight_range` filtering shapes *outbound* per
+  recipient (a phone sees ~5–10 peers, not N−1; the projector is unfiltered), with
+  **edge-triggered EXIT** signaling (per-tick visibility diff fires exactly once on an
+  outward crossing). Rate-LOD bands (30/15/7.5 Hz by distance) designed, deferred.
+- **Reconstruction findings, measured** (`interp_test.loft`, ground-truth trajectories):
+  Hermite cubic is the default interp (linear shows 67 mm error on circular motion at
+  7.5 Hz; Hermite ~0); **a discontinuity (bounce) must emit a priority keyframe** —
+  no interpolation hides a missed bounce (0.3–1.0 m peak error). I.e. *discontinuities
+  promote a state-sync sample into a must-deliver event* — the classes interconvert.
+- **Server-side forecasting probed** (`forecast_test.loft`): can the server predict
+  bounces ahead, and how much does an input change invalidate the forecast —
+  speculative sync as a measured question, not a hope.
+- **The probe discipline this plan should copy**: explicit targets + failure thresholds
+  (30 clients × 30 Hz both ways, p99 < 100 ms, zero drops, CPU < 75%) with graduated
+  acceptance (20-cap fallback / architecture-rethink trigger). **Known open finding:**
+  the MVP observed ~12 Hz per peer vs the 30 Hz target — the pump throughput question
+  is inherited by this design and is exactly what the probe exists to settle.
+
+### @PLN6 audience demo — the event-world shape
 
 The @PLN6 audience demo (`tools/audience-demo/` + the `server`/`web`/`graphics` registry
-libs) is a **working dogfood prototype of both halves of this design, in pure loft**:
+libs) prototypes the event-driven half:
 
 - **The client side IS the frame-boundary drain.** `projector.loft`'s main loop:
   `while gl_poll_events() { while (msg = ws.try_recv()) != null { apply_frame(...) } …

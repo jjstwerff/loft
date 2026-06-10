@@ -109,7 +109,8 @@ Run/Test/Suite/Game buttons, the debugger inside, dual console + REPL panel, all
 same protocol (slices 1–5 + 6a; see the M5e status below). **Next on this plan**: the
 slice-6 remainder — verify the registry GL path (`loft install graphics` → a windowed
 `launchGame`), then hot-swap `reload` + breakpoint-in-game once the C71/N9 shared-store
-execution model gets its build plan.
+execution model gets its build plan (design exploration recorded in
+[ENGINE_HOST.md](ENGINE_HOST.md) — tier model, main-loop IO contract, in-house prior art).
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
