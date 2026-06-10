@@ -322,3 +322,35 @@ becomes the listener-role kernel), and **no protocol drift** (one traffic-class
 implementation). Honest residual: the **browser** client (`--html`/wasm) is a
 genuinely different host — the frame-yield contract instead of owning the loop — so
 it shares the loft-side contract but not the kernel binary.
+
+---
+
+## Coverage — is this rich enough for most multiplayer games? (evaluated 2026-06-10)
+
+**Yes for most; the residue reduces to one primitive + one transport.** Covered by
+construction: party/audience, turn-based (events + @PLAN38 durable stores), co-op
+(one-kernel → host-as-server falls out), MMO-lite/persistent (interest mgmt +
+rate-LOD + durable stores + lenient migration), spectator/replay (the projector IS an
+unfiltered spectator; deterministic tick + event log ≈ replay).
+
+**The gap tier — competitive twitch (FPS/fighting):** rollback, lag-compensation
+rewind, client prediction + reconciliation, delta-compressed snapshots. Under the
+host-boundary principle these all decompose into loft *meaning* over **one new
+mechanics primitive: cheap store snapshot / restore / diff with a short tick-history
+ring** — rollback = snapshot + re-tick; lag comp = read an old ring entry; delta
+encoding = store-diff-as-protocol; reconciliation = client-side rollback. loft already
+holds three embryos of this machinery (the @PLN16 M2 undo journal = store
+save/restore; the store journal work = change capture; record-references #15 = stable
+identity across states). Four classically-hard features, one primitive — the
+store-centric design is what makes that collapse possible.
+
+**The transport gap:** WebSocket/TCP retransmit stalls hurt twitch play; a
+**UDP/QUIC pump frontend** is C71-library-tier mechanics, and the traffic classes are
+transport-agnostic by construction (conflation maps *more* naturally onto unreliable
+delivery than onto TCP).
+
+**Acceptable residuals:** lockstep RTS (cross-machine determinism — Goal D is already
+a determinism discipline, made load-bearing by the tier swap, but lockstep stays
+non-first-class), host migration, NAT traversal/relays (a relay is a forwarding
+listener-role kernel), TLS, matchmaking (meaning-level, nothing new). **The test that
+matters: nothing in the design must be *undone* to add any of these.**
