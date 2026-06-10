@@ -2071,6 +2071,21 @@ impl State {
         self.debug.as_deref().and_then(|d| d.paused.as_ref())
     }
 
+    /// The source line the current suspension is stopped **on**, or `None` if not paused
+    /// (or the line is unknown).  `code_pos` is the op about to execute, so `line_at` gives
+    /// the line the debugger is parked on.  Unlike
+    /// [`paused_at_breakpoint`](Self::paused_at_breakpoint) this is set for a **step** pause
+    /// too — it doesn't require a registered breakpoint at the stop — which is what lets the
+    /// browser debugger move its current-line marker as you step.
+    #[must_use]
+    pub fn paused_line(&self) -> Option<u32> {
+        if !self.is_paused() {
+            return None;
+        }
+        let line = self.line_at(self.code_pos);
+        (line != 0).then_some(line)
+    }
+
     /// @PLN16 rich-bp — the bytecode offset of the current pause **iff** it is at a
     /// registered breakpoint (so the driver can look up its condition / tracepoint),
     /// else `None` (a step or watch pause is always a real stop).  The pause pc is
@@ -3147,7 +3162,11 @@ impl State {
                     .store(&self.stack_cur)
                     .addr::<crate::keys::DbRef>(rec, at);
                 let mut out = String::new();
-                self.database.show_loft(&mut out, &db, tp_known);
+                // Bounded glance for the variables panel so a big struct/vector doesn't
+                // flood it (the LOFT_DUMP_DEPTH/ELEMENTS trace defaults); the full value is
+                // one `eval` away via `eval_frame_heap`, which stays unbounded.
+                self.database
+                    .show_loft_bounded(&mut out, &db, tp_known, 2, 8);
                 out
             }
             // Simple enum: an inline 1-based discriminant byte → `Enum.Variant`.

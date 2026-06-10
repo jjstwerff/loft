@@ -1484,6 +1484,13 @@ impl ReplSession {
         self.paused.as_deref().and_then(State::paused_frame)
     }
 
+    /// The source line the current suspension is stopped on, or `None` if not paused —
+    /// drives the browser debugger's current-line marker (it moves as you step).
+    #[must_use]
+    pub fn paused_line(&self) -> Option<u32> {
+        self.paused.as_deref().and_then(State::paused_line)
+    }
+
     /// Edit scalar local `name` in the **live** paused frame to the value of `rhs`
     /// (the user types `n = 99`, `f = 2.0`, `b = !b` at the paused prompt), then
     /// refresh the frame view.  `rhs` is **evaluated against the frame** first (so

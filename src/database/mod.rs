@@ -1389,6 +1389,27 @@ impl Stores {
     }
 }
 
+/// The single record renderer — one schema walk, four output modes selected by the
+/// flags below.  Each mode shares the traversal (the `Parts` dispatch, the null-skipping
+/// field loop, the `next()` vector loop) and differs only at the emission points:
+///
+/// - **loft** — re-parseable native source (`TypeName{field: value}`, `Enum.Variant`,
+///   quoted+escaped text, forced-decimal floats).  Backs `Stores::show_loft`, the
+///   round-tripping own-format serializer (@PLN12 REPL.X / live data migration).
+/// - **json** — RFC 8259 JSON.  Backs `T.to_json()`.
+/// - debug (neither flag) — bare `{ field: value }`, the pretty inspector form.
+/// - **dump** — the structured trace form with `#store.rec` references, `compact`
+///   single-line option, and depth/element **limits** (the old `DumpDb`).  Backs the
+///   `LOFT_LOG` execution trace + `tests/dumps/*.txt`.
+///
+/// `max_depth` / `max_elements` (default `u16::MAX` = unlimited) bound *any* mode — so
+/// the loft form can be rendered bounded too (`show_loft_bounded`), the `{clean, bounded}`
+/// the debugger's variables panel needs.  `indent` doubles as the nesting depth (it
+/// increments exactly once per level), so the limit guards key off it directly.
+// The flags are orthogonal output toggles (`pretty` modifies, `json`/`loft`/`dump` select
+// the format, `compact` is a dump-only modifier), not a packed state — a mode enum would
+// just re-spell the same set while churning every `if self.json/loft/dump` site.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ShowDb<'a> {
     pub stores: &'a Stores,
     pub store: u16,
@@ -1397,28 +1418,17 @@ pub struct ShowDb<'a> {
     pub known_type: u16,
     pub pretty: bool,
     pub json: bool,
-    /// Emit re-parseable native loft source (`TypeName{field: value}`,
-    /// `Enum.Variant`, quoted+escaped text, forced-decimal floats) instead of
-    /// debug/JSON.  Mutually exclusive with `json`.  Backs `Stores::show_loft`,
-    /// the own-format serializer that round-trips through both the database
-    /// parser and the language parser (@PLN12 REPL.X / live data migration).
     pub loft: bool,
-}
-
-/// Structured debug dump with store/record references, depth and element limits.
-/// Used for `tests/dumps/*.txt` diagnostics and `LOFT_LOG` execution trace.
-pub struct DumpDb<'a> {
-    pub stores: &'a Stores,
-    pub store: u16,
-    pub rec: u32,
-    pub pos: u32,
-    pub known_type: u16,
-    /// Maximum nesting depth (0 = just the value, 1 = one level of fields, etc.)
-    pub max_depth: u16,
-    /// Maximum number of array/vector elements to show before `...`
-    pub max_elements: u16,
-    /// When true, output stays on a single line (spaces instead of newlines).
+    /// Trace form: `#store.rec` references, `compact`, and the depth/element limits below
+    /// are the truncation markers (`{...}` / `...N more`).  Mutually exclusive with
+    /// `loft`/`json` (it is the old `DumpDb` mode).
+    pub dump: bool,
+    /// Single-line dump (spaces instead of newlines) — only meaningful with `dump`.
     pub compact: bool,
+    /// Maximum nesting depth before `{...}` / `[N items...]` (`u16::MAX` = unlimited).
+    pub max_depth: u16,
+    /// Maximum array/vector elements before `...N more` (`u16::MAX` = unlimited).
+    pub max_elements: u16,
 }
 
 /// `get_type()` with an out-of-range index must panic with a helpful message.

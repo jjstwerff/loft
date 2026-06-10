@@ -378,6 +378,10 @@ pub fn OpFormatDatabase(
         pretty: db_format & 1 > 0,
         json: db_format & 2 > 0,
         loft: false,
+        dump: false,
+        compact: false,
+        max_depth: u16::MAX,
+        max_elements: u16::MAX,
     }
     .write(&mut s, 0);
     output.push_str(&s);
