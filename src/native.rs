@@ -255,6 +255,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
         crate::engine_host::n_kernel_sync_class,
     ),
     #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_sync_class_keyed",
+        crate::engine_host::n_kernel_sync_class_keyed,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_sync_next", crate::engine_host::n_kernel_sync_next),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_sync_cid", crate::engine_host::n_kernel_sync_cid),

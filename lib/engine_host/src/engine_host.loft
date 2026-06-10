@@ -89,6 +89,13 @@ pub fn udp_bound(cid: integer) -> boolean;
 pub fn sync_class(msg_id: integer);
 #native "n_kernel_sync_class"
 
+// A sync kind whose payload's FIRST comma-field is an entity id ("2:7,x,y" →
+// entity 7): conflation keeps the newest per (peer, kind, entity), so one
+// kind carries N entities' latest-values — poses keyed by plane, health by
+// unit.  Use plain sync_class for singleton state (one latest-value per kind).
+pub fn sync_class_keyed(msg_id: integer);
+#native "n_kernel_sync_class_keyed"
+
 // Drain the inbound conflation slots: each call loads the NEWEST unread state
 // from one client (stale/reordered datagrams were already discarded by the
 // kernel).  Drain inside `on_tick` — that reads the freshest data that arrived

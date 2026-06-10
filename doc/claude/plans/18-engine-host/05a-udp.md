@@ -42,7 +42,11 @@ Kernel mechanics (`src/engine_host.rs`):
 
 Loft surface (`lib/engine_host`): `sync_class(msg_id)` (the wire-schema
 table, minimal form — declare a message KIND as latest-value state once;
-user-directed 2026-06-10), `udp_bound(cid)` (read-only introspection),
+user-directed 2026-06-10) + `sync_class_keyed(msg_id)` (the payload's first
+field is an entity id — conflation keeps the newest per (peer, kind,
+entity), so one kind carries N entities: poses keyed by plane; added for the
+phase-04 measurements when per-kind conflation collapsed 30 planes to one
+slot), `udp_bound(cid)` (read-only introspection),
 `sync_next()` / `sync_cid()` / `sync_seq()` / `sync_payload()`.  There is no
 per-call transport API at all: ordinary `send`/`broadcast` route by the
 declared class — `sync_send` existed for a few hours and was absorbed.

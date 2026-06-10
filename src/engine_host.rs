@@ -71,12 +71,16 @@ struct UdpPath {
     out_seq: i64,
 }
 
-/// One inbound conflation slot: the newest `S:` datagram from this client for
-/// one `msg_id`.  Latest-value semantics — a higher seq overwrites, a stale
-/// seq is dropped.
+/// One inbound conflation slot: the newest `S:` datagram from this peer for
+/// one `(msg_id, key)`.  Latest-value semantics — a higher seq overwrites, a
+/// stale seq is dropped.
 struct SyncSlot {
     /// The `msg_id` parsed from the datagram's payload (`-1` = unframed).
     msg_id: i64,
+    /// For a `sync_class_keyed` kind: the payload's first field (the entity
+    /// id — "2:7,…" → "7"), so N entities keep N latest-values.  "" for
+    /// unkeyed kinds (one latest-value per kind).
+    key: String,
     seq: i64,
     payload: String,
     dirty: bool,
@@ -104,14 +108,16 @@ impl ClientNet {
 }
 
 // The wire-schema-as-data table, minimal form (user-directed 2026-06-10):
-// the set of `msg_id`s whose messages are **latest-value state** (the sync
-// class — conflate, ride UDP when the client can).  Everything else is the
-// event class (must-deliver, rides WS).  Declared by the loft side via
-// `sync_class(msg_id)` — data, not per-call API choice; `send`/`broadcast`
-// route by it.  Lives outside `Kernel` so declarations may precede `run()`.
+// `msg_id -> keyed?` for the kinds whose messages are **latest-value state**
+// (the sync class — conflate, ride UDP when the peer can).  `keyed = true`
+// (`sync_class_keyed`) conflates per the payload's first field — the entity
+// id — so one kind carries N entities' latest-values ("state-sync keyed by
+// cid" from the class table); `false` keeps one latest-value per kind.
+// Everything undeclared is the event class (must-deliver, rides WS).
+// Lives outside `Kernel` so declarations may precede `run()`.
 thread_local! {
-    static SYNC_IDS: RefCell<std::collections::HashSet<i64>> =
-        RefCell::new(std::collections::HashSet::new());
+    static SYNC_IDS: RefCell<std::collections::HashMap<i64, bool>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 /// The leading `<digits>:` of a wire message, or `-1` when unframed.
@@ -123,7 +129,19 @@ fn msg_id_of(msg: &str) -> i64 {
 
 fn is_sync_msg(msg: &str) -> bool {
     let id = msg_id_of(msg);
-    id >= 0 && SYNC_IDS.with(|s| s.borrow().contains(&id))
+    id >= 0 && SYNC_IDS.with(|s| s.borrow().contains_key(&id))
+}
+
+/// The conflation key for a payload: the first comma-field after the kind
+/// for keyed kinds ("2:7,x,y" → "7"), "" for unkeyed/unframed ones.
+fn sync_key_of(payload: &str) -> String {
+    let id = msg_id_of(payload);
+    let keyed = id >= 0 && SYNC_IDS.with(|s| s.borrow().get(&id).copied().unwrap_or(false));
+    if !keyed {
+        return String::new();
+    }
+    let body = payload.split_once(':').map_or("", |(_, b)| b);
+    body.split(',').next().unwrap_or("").to_string()
 }
 
 /// Conflate one inbound `S:` payload into a slot set: per `msg_id`, a higher
@@ -131,16 +149,22 @@ fn is_sync_msg(msg: &str) -> bool {
 /// (the listener's per-client slots and the connector's server slots) — the
 /// queue machinery must never fork between them.
 fn conflate_slot(slots: &mut Vec<SyncSlot>, seq: i64, payload: &str) {
-    // Bounded kind count — a peer inventing endless ids cannot grow memory;
-    // sync is loss-tolerant by definition, so over-cap datagrams just drop.
-    const SYNC_KINDS_MAX: usize = 64;
+    // Bounded slot count — a peer inventing endless ids/keys cannot grow
+    // memory; sync is loss-tolerant by definition, so over-cap datagrams
+    // just drop.  256 covers keyed kinds (e.g. 30 planes × a few kinds).
+    const SYNC_SLOTS_MAX: usize = 256;
     let msg_id = msg_id_of(payload);
-    let slot = match slots.iter_mut().position(|s| s.msg_id == msg_id) {
+    let key = sync_key_of(payload);
+    let slot = match slots
+        .iter_mut()
+        .position(|s| s.msg_id == msg_id && s.key == key)
+    {
         Some(i) => &mut slots[i],
-        None if slots.len() >= SYNC_KINDS_MAX => return,
+        None if slots.len() >= SYNC_SLOTS_MAX => return,
         None => {
             slots.push(SyncSlot {
                 msg_id,
+                key,
                 seq: -1,
                 payload: String::new(),
                 dirty: false,
@@ -764,7 +788,17 @@ pub fn n_kernel_udp_bound(stores: &mut Stores, stack: &mut DbRef) {
 pub fn n_kernel_sync_class(stores: &mut Stores, stack: &mut DbRef) {
     let msg_id = *stores.get::<i64>(stack);
     SYNC_IDS.with(|s| {
-        s.borrow_mut().insert(msg_id);
+        s.borrow_mut().insert(msg_id, false);
+    });
+}
+
+/// `sync_class_keyed(msg_id)` — a sync kind whose payload's FIRST field is an
+/// entity id: conflation keeps the newest per (peer, kind, entity), so one
+/// kind carries N entities' latest-values ("state-sync keyed by cid").
+pub fn n_kernel_sync_class_keyed(stores: &mut Stores, stack: &mut DbRef) {
+    let msg_id = *stores.get::<i64>(stack);
+    SYNC_IDS.with(|s| {
+        s.borrow_mut().insert(msg_id, true);
     });
 }
 
@@ -1014,6 +1048,19 @@ pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
         }
         // Datagrams: the ack and the server's sync traffic.
         if let Some(udp) = c.udp.as_ref() {
+            // Measurement-only loss injection (@PLN18 phase 04, the loss%
+            // axis): `LOFT_UDP_DROP_NTH=N` drops every Nth received sync
+            // datagram, deterministically — loopback has no real loss, and
+            // the sync class's claim is graceful degradation under it.
+            // Read once; 0 = off.
+            thread_local! {
+                static DROP_NTH: u64 = std::env::var("LOFT_UDP_DROP_NTH")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                static RECV_COUNT: RefCell<u64> = const { RefCell::new(0) };
+            }
+            let drop_nth = DROP_NTH.with(|d| *d);
             let mut buf = [0u8; 2048];
             loop {
                 let len = match udp.recv(&mut buf) {
@@ -1030,6 +1077,16 @@ pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
                     && let Some((seq_s, payload)) = rest.split_once(':')
                     && let Ok(seq) = seq_s.parse::<i64>()
                 {
+                    if drop_nth > 0 {
+                        let nth = RECV_COUNT.with(|r| {
+                            let mut r = r.borrow_mut();
+                            *r += 1;
+                            *r
+                        });
+                        if nth.is_multiple_of(drop_nth) {
+                            continue; // injected loss — the datagram never existed
+                        }
+                    }
                     conflate_slot(&mut c.slots, seq, payload);
                 }
             }

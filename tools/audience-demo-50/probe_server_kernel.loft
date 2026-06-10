@@ -143,7 +143,7 @@ fn main() {
   // The wire-schema table: POSE (2) + ECHO reply (5) are latest-value state;
   // everything else (EXIT 3, inbound INPUT 1 / ECHO request 4) stays the
   // event class.  Declared once — every send below is ordinary.
-  engine_host::sync_class(2);
+  engine_host::sync_class_keyed(2);  // poses: keyed by plane id
   engine_host::sync_class(5);
 
   world = World { planes: [], vis: [], tick: 0, echoes: [] };
