@@ -2,10 +2,10 @@
 ==== stdout ====
 ==== stderr ====
 error: Unknown variable 'x'
-  --> <cases>/11_type_var_uninitialised.loft:2:13
+  --> <cases>/11_type_var_uninitialised.loft:2:11
   |
 2 |   print("{x}");
-  |             ^
+  |           ^
 
 error: Incorrect expression in string was Unknown(0)
   --> <cases>/11_type_var_uninitialised.loft:2:13
@@ -20,10 +20,10 @@ error: Expect token )
   |             ^
 
 error: expected text, got void on call to print
-  --> <cases>/11_type_var_uninitialised.loft:2:12
+  --> <cases>/11_type_var_uninitialised.loft:2:10
   |
 2 |   print("{x}");
-  |            ^
+  |          ^
 
 fatal: Nested string literal not correctly terminated
   --> <cases>/11_type_var_uninitialised.loft:2:16

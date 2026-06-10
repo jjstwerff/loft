@@ -40,14 +40,19 @@ pub(crate) fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBu
         }
         return None;
     }
-    // Native: look next to the binary first (dev build in target/release/).
-    if exe_dir.join("libloft.rlib").exists() {
-        return Some(exe_dir.clone());
-    }
-    // Cargo places rlibs in target/<profile>/deps/ — check that too.
+    // Native: prefer `deps/` over the uplifted `<profile>/libloft.rlib` —
+    // the deps copy is what every binary links; the uplifted copy is only
+    // refreshed by an explicit `cargo build --lib` and goes stale-by-content
+    // whenever another build universe rewrites deps (#304/#307: post-rebase it
+    // lacked the new `loft::rpc` module while generated code referenced it,
+    // failing every `--native` compile with E0433).  Keep the ordering aligned
+    // with `cache::rlib_candidates` and `native_lib::find_loft_rlib`.
     let deps = exe_dir.join("deps");
     if deps.join("libloft.rlib").exists() {
         return Some(deps);
+    }
+    if exe_dir.join("libloft.rlib").exists() {
+        return Some(exe_dir.clone());
     }
     // Installed as <prefix>/bin/loft — look in <prefix>/share/loft/.
     if exe_dir.file_name()? == "bin" {
@@ -61,6 +66,19 @@ pub(crate) fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBu
 
 pub(crate) fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
+}
+
+/// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
+/// when it already IS `deps/` (the preferred deps-first resolution, #304/#307),
+/// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid
+/// `…/deps/deps` path that rustc can't search — E0463 "can't find crate" for
+/// every transitive dep of libloft (sha2, rand_core, …).
+pub(crate) fn deps_dir_of(lib_dir: &std::path::Path) -> std::path::PathBuf {
+    if lib_dir.file_name().is_some_and(|n| n == "deps") {
+        lib_dir.to_path_buf()
+    } else {
+        lib_dir.join("deps")
+    }
 }
 
 /// Parse every `target/<profile>/build/*/output` file and extract

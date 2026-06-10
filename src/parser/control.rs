@@ -483,7 +483,7 @@ impl Parser {
         if !self.first_pass {
             self.rewrite_defended_fault_sites(&mut l);
         }
-        t = self.block_result(context, result, &t, &mut l);
+        t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         *val = v_block(l, t.clone(), "block");
         t
     }
@@ -604,6 +604,7 @@ impl Parser {
         result: &Type,
         t: &Type,
         l: &mut [Value],
+        tail_pos: &Position,
     ) -> Type {
         let mut tp = t.clone();
         if *result != Type::Void && !matches!(*result, Type::Unknown(_)) {
@@ -690,7 +691,7 @@ impl Parser {
                         );
                     }
                 } else {
-                    self.validate_convert(context, t, result);
+                    self.validate_convert(context, t, result, tail_pos);
                 }
             }
             tp = result.clone();
@@ -3502,7 +3503,7 @@ impl Parser {
             if t == Type::Null {
                 v = self.null(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
-                self.validate_convert("return", &t, &r_type);
+                self.validate_convert("return", &t, &r_type, &expr_start.position);
             }
             // Phase 1b (inline-lift-safety): mirror block_result's ref/enum
             // merge for mid-body `return` statements.  Without this, a function
@@ -3778,6 +3779,7 @@ impl Parser {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
         let mut types = Vec::new();
+        let mut arg_pos: Vec<Position> = Vec::new();
         if self.lexer.has_token(")") {
             // Check for zero-argument fn-ref call
             if self.vars.name_exists(name) {
@@ -3828,7 +3830,7 @@ impl Parser {
                     return *ret_type;
                 }
             }
-            return self.call(val, source, name, &list, &Vec::new(), &[]);
+            return self.call(val, source, name, &list, &Vec::new(), &[], &[]);
         }
         let fn_def_nr = if self.first_pass {
             None
@@ -3896,6 +3898,10 @@ impl Parser {
                 }
             }
             let mut p = Value::Null;
+            // Capture each argument's start so a later type-mismatch diagnostic
+            // (in `process_call_args`) points the caret at the argument, not at
+            // the cursor drifted to `)` / `,`.
+            arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
             self.lambda_hint = Type::Unknown(0);
             types.push(t);
@@ -3908,7 +3914,16 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        let ret = self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos);
+        let ret = self.dispatch_call(
+            val,
+            source,
+            name,
+            &list,
+            &types,
+            &named_args,
+            &call_pos,
+            &arg_pos,
+        );
         // Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
         // at the `(` token position so runtime errors inside the call
         // (panic, divide-by-zero in callee, etc.) can be reported with
@@ -3933,6 +3948,7 @@ impl Parser {
         types: &[Type],
         named_args: &[(String, Value, Type)],
         call_pos: &Position,
+        arg_pos: &[Position],
     ) -> Type {
         if matches!(
             name,
@@ -4005,7 +4021,7 @@ impl Parser {
         if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {
             return tp;
         }
-        self.call(val, source, name, list, types, named_args)
+        self.call(val, source, name, list, types, named_args, arg_pos)
     }
 
     /// Try to dispatch as a call through a function-reference variable.
@@ -4437,11 +4453,15 @@ impl Parser {
     pub(crate) fn parse_method(&mut self, val: &mut Value, md_nr: u32, on: Type) -> Type {
         let mut list = vec![val.clone()];
         let mut types = vec![on];
+        // arg_pos aligns with `list` by index; slot 0 is the receiver (its
+        // position is the method-name token, the best available caret).
+        let mut arg_pos: Vec<Position> = vec![self.lexer.peek_pos().clone()];
         if self.lexer.has_token(")") {
-            return self.call_nr(val, md_nr, &list, &types, true);
+            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos);
         }
         loop {
             let mut p = Value::Null;
+            arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
             types.push(t);
             list.push(p);
@@ -4450,7 +4470,7 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.call_nr(val, md_nr, &list, &types, true)
+        self.call_nr(val, md_nr, &list, &types, true, &arg_pos)
     }
 
     pub(crate) fn parse_parameters(&mut self) -> (Vec<Type>, Vec<Value>) {

@@ -189,7 +189,14 @@ debug:
 # four classes of stale artefact that each cascade into misleading
 # test failures (rustc 1.94→1.96 update on 2026-05-29 surfaced #2):
 #   0. The top-level release rlib `target/release/libloft.rlib` —
-#      linked by the native code-gen pipeline (P200/P244 tests).
+#      linked by the native code-gen pipeline (P200/P244 tests) —
+#      AND the release `target/release/loft` binary.  `--bins` is
+#      load-bearing (#304): tests that spawn the release binary by
+#      path (tests/viewer_markdown.rs) get a stale-source binary
+#      otherwise — `make ci` runs its tests in the debug profile, so
+#      nothing else in that chain ever rebuilds the release bin, and
+#      the fresh rlib + stale bin pair made the binary build (or
+#      validate) native cdylibs against a loft that is not its own.
 #      Cargo's fingerprint detects rustc version bumps, so this is
 #      a no-op when fresh and a forced rebuild after a toolchain
 #      update.
@@ -203,8 +210,8 @@ debug:
 #      touch --html / wasip2)
 # Cargo is incremental; each step is ~free on a clean tree.
 rebuild-native-cdylibs:
-	@cargo build --release --lib -q || { \
-	  echo "FAIL: top-level libloft.rlib rebuild"; exit 1; \
+	@cargo build --release --lib --bins -q || { \
+	  echo "FAIL: top-level libloft.rlib + loft binary rebuild"; exit 1; \
 	}
 	@for d in lib/*/native tests/lib/*/native; do \
 	  [ -f "$$d/Cargo.toml" ] || continue; \

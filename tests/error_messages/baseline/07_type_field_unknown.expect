@@ -20,10 +20,10 @@ error: Expect token )
   |                  ^
 
 error: expected text, got void on call to print
-  --> <cases>/07_type_field_unknown.loft:4:17
+  --> <cases>/07_type_field_unknown.loft:4:10
   |
 4 |   print("{p.naem}");
-  |                 ^
+  |          ^
 
 fatal: Nested string literal not correctly terminated
   --> <cases>/07_type_field_unknown.loft:4:21

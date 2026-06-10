@@ -272,6 +272,11 @@ impl Stores {
             }
         }
         store.free = true;
+        // LOFT_UAF: record the freed slot so the dispatch loop can scan, after
+        // this op, for live variables that still read it (a premature free).
+        if crate::keys::uaf_check_enabled() {
+            self.uaf_freed_this_op.push(al);
+        }
         // S29: mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
         self.set_free_bit(al);
@@ -783,6 +788,7 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
+            uaf_freed_this_op: Vec::new(),
             worker_slot_dispenser: None,
             worker_allocated_indices: Vec::new(),
             report_asserts: false,
@@ -869,6 +875,7 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
+            uaf_freed_this_op: Vec::new(),
             worker_slot_dispenser: None,
             worker_allocated_indices: Vec::new(),
             report_asserts: false,

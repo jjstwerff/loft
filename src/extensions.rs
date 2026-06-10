@@ -251,13 +251,31 @@ struct NativeSig {
 #[cfg(feature = "native-extensions")]
 static NATIVE_SIGS: Mutex<Option<HashMap<u16, (String, NativeSig)>>> = Mutex::new(None);
 
+/// #303 — wire-time signature of a shared-store bridge function, derived from
+/// the ONE marshallability judgment (`native_gate::classify_bridge_attr`).
+/// The interpreter call site pushes EVERY attribute, so `pops` has one entry
+/// per attribute (declaration order) and drives the dispatcher's stack pops;
+/// the generated bridge reads only the marshalled subset (compacted order), so
+/// `forward` marks which popped slots become `LibArg`s.  `text_workbuf` is the
+/// `pops` index of the `text_return` work buffer: in a non-dest call
+/// (expression context) the dispatcher reuses that caller-cleared cell as
+/// `bridge_text_dest` and returns a `Str` over it.
+#[cfg(feature = "native-extensions")]
+#[derive(Clone)]
+struct SharedSig {
+    pops: Vec<ArgT>,
+    forward: Vec<bool>,
+    text_workbuf: Option<usize>,
+    ret: Option<ArgT>,
+}
+
 /// @PLN11 Arc N — side table for the **shared-store** bridge
 /// (`native_lib::generate_shared_cdylib_lib_rs`): library index → (bridge fn ptr,
 /// signature).  Populated by `wire_shared_native_fns`, read by
 /// `shared_store_dispatch`.  Separate from `NATIVE_SIGS` because the ABI differs
 /// (a `*mut Stores` + `LibArg` bridge, not the `LoftStore`/raw-ptr marshalling).
 #[cfg(feature = "native-extensions")]
-static SHARED_SIGS: Mutex<Option<HashMap<u16, (FnPtr, NativeSig)>>> = Mutex::new(None);
+static SHARED_SIGS: Mutex<Option<HashMap<u16, (FnPtr, SharedSig)>>> = Mutex::new(None);
 
 /// Compute the argument type list and return type from a definition's signature.
 /// Returns `None` if the signature contains types that can't be auto-marshalled
@@ -314,6 +332,80 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
         _ => return None,
     };
     Some(NativeSig { params, ret })
+}
+
+/// The `ArgT` mapping for one marshalled loft type (shared-bridge param or
+/// return).  `None` = not marshallable.
+#[cfg(feature = "native-extensions")]
+fn marshal_arg_t(t: &crate::data::Type) -> Option<ArgT> {
+    use crate::data::Type;
+    Some(match t {
+        // @P370: plain loft `integer` is 64-bit → I64; only explicit narrow
+        // ints (`forced_size`) and `Character` are ≤4 bytes → I32.
+        Type::Integer(s) if s.forced_size.is_none() => ArgT::I64,
+        Type::Integer(_) | Type::Character => ArgT::I32,
+        Type::Float => ArgT::F64,
+        Type::Single => ArgT::F32,
+        Type::Boolean => ArgT::Bool,
+        Type::Text(_) => ArgT::Text,
+        Type::Enum(_, false, _) => ArgT::I32,
+        Type::Reference(_, _)
+        | Type::Enum(_, true, _)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _) => ArgT::Ref,
+        Type::Vector(_, _) => ArgT::Vec,
+        _ => return None,
+    })
+}
+
+/// #303 — build a [`SharedSig`] from a definition, via the ONE marshallability
+/// judgment (`native_gate::classify_bridge_attr`).  Returns `None` exactly when
+/// the gate would not have marked the function — so a marked function always
+/// wires (the divergence that left panicking stubs behind emitted dispatches).
+#[cfg(feature = "native-extensions")]
+fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> {
+    use crate::data::Type;
+    use crate::native_gate::{BridgeAttrKind, classify_bridge_attr};
+    let def = data.def(d_nr);
+    let ret_text = matches!(def.returned(), Type::Text(_));
+    let mut pops = Vec::new();
+    let mut forward = Vec::new();
+    let mut text_workbuf = None;
+    for attr in &def.attributes {
+        match classify_bridge_attr(attr, ret_text)? {
+            BridgeAttrKind::Marshal => {
+                pops.push(marshal_arg_t(&attr.typedef)?);
+                forward.push(true);
+            }
+            BridgeAttrKind::WorkText => {
+                // The call site pushes the work buffer's `DbRef` (a CreateStack
+                // cell) — popped like any ref, never forwarded.
+                if text_workbuf.is_none() {
+                    text_workbuf = Some(pops.len());
+                }
+                pops.push(ArgT::Ref);
+                forward.push(false);
+            }
+            BridgeAttrKind::HiddenDest => {
+                // The call site pushes the caller-allocated placeholder; the
+                // bridge allocates its own dest — popped, never forwarded.
+                pops.push(ArgT::Vec);
+                forward.push(false);
+            }
+        }
+    }
+    let ret = match def.returned() {
+        Type::Void | Type::Null => None,
+        t => Some(marshal_arg_t(t)?),
+    };
+    Some(SharedSig {
+        pops,
+        forward,
+        text_workbuf,
+        ret,
+    })
 }
 
 /// Set of symbols that were registered as stubs (not hand-written glue).
@@ -476,20 +568,35 @@ pub fn wire_native_fns(_state: &mut crate::state::State, _data: &crate::data::Da
 #[cfg(feature = "native-extensions")]
 pub fn wire_shared_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
     // Phase 1: collect resolvable shared bridges (no lock held).
-    let mut wired: Vec<(String, u16, *const (), NativeSig)> = Vec::new();
+    let mut wired: Vec<(String, u16, *const (), SharedSig)> = Vec::new();
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         let sym = &def.native;
         if !sym.starts_with("loft_shared_") {
             continue;
         }
-        let Some((ptr, _uses_v1)) = try_dlsym(sym) else {
-            continue; // bridge not in any loaded cdylib (yet)
+        // #303 — a `loft_shared_*`-marked def means codegen already emitted
+        // `OpStaticCall` dispatches for it.  A wiring failure here leaves the
+        // panicking stub behind those dispatches, so every skip must be LOUD:
+        // the program will panic at the first call with a message that doesn't
+        // name the function.
+        let unwired = |reason: &str| {
+            eprintln!(
+                "loft: auto-native fn `{}` ({sym}) is marked for cdylib dispatch but \
+                 could not be wired ({reason}) — calling it will panic",
+                def.original_name(),
+            );
         };
-        let Some(sig) = compute_sig(data, d_nr) else {
-            continue; // signature not bridge-marshallable
+        let Some((ptr, _uses_v1)) = try_dlsym(sym) else {
+            unwired("bridge symbol not found in any loaded cdylib");
+            continue;
+        };
+        let Some(sig) = compute_shared_sig(data, d_nr) else {
+            unwired("signature not bridge-marshallable (gate/wire divergence)");
+            continue;
         };
         let Some(&lib_idx) = state.library_names.get(sym) else {
+            unwired("no stub slot registered for the symbol");
             continue;
         };
         wired.push((sym.clone(), lib_idx, ptr, sig));
@@ -538,9 +645,11 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         }
     };
 
-    // Pop in reverse (stack is LIFO), then restore declaration order.
-    let mut args: Vec<LibArg> = Vec::with_capacity(sig.params.len());
-    for &t in sig.params.iter().rev() {
+    // Pop ONE stack slot per attribute (the call site pushes every attribute,
+    // including hidden dests and the text work buffer) — in reverse (stack is
+    // LIFO), then restore declaration order.
+    let mut popped: Vec<LibArg> = Vec::with_capacity(sig.pops.len());
+    for &t in sig.pops.iter().rev() {
         let slot = match t {
             ArgT::I32 | ArgT::I64 => LibArg {
                 scalar: *stores.get::<i64>(stack),
@@ -575,9 +684,17 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
                 }
             }
         };
-        args.push(slot);
+        popped.push(slot);
     }
-    args.reverse();
+    popped.reverse();
+    // Forward only the marshalled slots (compacted order — the bridge reads
+    // `a[0..n]` skipping work buffers and hidden dests it satisfies locally).
+    let args: Vec<LibArg> = popped
+        .iter()
+        .zip(&sig.forward)
+        .filter(|(_, f)| **f)
+        .map(|(a, _)| *a)
+        .collect();
 
     // @PLN10 — dest-mode detection: the interpreter caller routes a text-returning
     // auto-native call through `gen_cdylib_text_dest_call`, which set a per-call
@@ -586,6 +703,19 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
     // text null — so we must push NOTHING here, matching the codegen's dest-mode
     // stack accounting.  Captured before the call because the bridge `take()`s it.
     let text_dest_mode = stores.bridge_text_dest.is_some();
+    // #303 — expression-context text return: no external dest was stashed, so
+    // reuse the call's own work buffer (a caller-cleared CreateStack cell whose
+    // DbRef the call site pushed) as the destination; after the call a `Str`
+    // over its content is pushed as the result, mirroring the interpreted ABI.
+    let self_dest: Option<DbRef> = if !text_dest_mode && matches!(sig.ret, Some(ArgT::Text)) {
+        sig.text_workbuf.map(|i| {
+            let d = popped[i].dbref;
+            stores.bridge_text_dest = Some(d);
+            d
+        })
+    } else {
+        None
+    };
 
     let mut ret = LibArg::ZERO;
     let stores_ptr: *mut crate::database::Stores = stores;
@@ -618,17 +748,30 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
         // @PLN10 — dest-passing: in dest-mode the bridge wrote the result into the
         // caller-owned `bridge_text_dest` record and left `ret` text null; the value
         // lives in its destination, so push NOTHING (matches the dest-mode codegen).
-        // The non-dest branch is an uncovered value position (whole-suite `=panic`
-        // == 0 proved it dead) — degrade to an empty `Str` rather than re-introduce
-        // `stores.scratch`, and flag it loudly in dev.
         Some(ArgT::Text) if text_dest_mode => {}
+        // #303 — expression context: the bridge wrote the result into the
+        // self-stashed work buffer; push a `Str` over its content (the cell
+        // outlives the expression — it is the call's own CreateStack cell),
+        // matching the +16-byte result the call-site codegen accounts.
         Some(ArgT::Text) => {
-            debug_assert!(
-                ret.text_ptr.is_null(),
-                "auto-native text return reached the dispatcher without a dest \
-                 (uncovered value position) — @PLN10 dest-passing coverage gap"
-            );
-            stores.put(stack, crate::keys::Str::new(""));
+            if let Some(d) = self_dest {
+                let s: &String = stores.store(&d).addr::<String>(d.rec, d.pos);
+                let result = crate::keys::Str {
+                    ptr: s.as_ptr(),
+                    len: s.len() as u32,
+                };
+                stores.put(stack, result);
+            } else {
+                // A text return with neither an external dest nor a work
+                // buffer (e.g. a constant-text body) — there is no caller cell
+                // to carry the bytes; degrade to an empty `Str` and flag in dev.
+                debug_assert!(
+                    ret.text_ptr.is_null(),
+                    "auto-native text return reached the dispatcher without any \
+                     dest cell — @PLN10 dest-passing coverage gap"
+                );
+                stores.put(stack, crate::keys::Str::new(""));
+            }
         }
     }
 }

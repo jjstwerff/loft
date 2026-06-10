@@ -240,6 +240,20 @@ fn float_cmp(v1: f64, v2: f64) -> Ordering {
     v1.total_cmp(&v2)
 }
 
+/// Use-after-free detector (`LOFT_UAF=1`).  When on, `free_named` records each
+/// freed store slot; after the op completes, the dispatch loop scans every
+/// active frame for a variable that (a) still holds a `DbRef` into a
+/// just-freed slot and (b) has a FUTURE READ in its function's bytecode (a
+/// `OpVarRef`/`OpVarVector` load of its slot not consumed by an `OpFreeRef`-
+/// family op).  Under the single-owner store model (Plan-57: no refcount) that
+/// combination means the store was freed while still in use — the premature
+/// free behind the store-lifetime Heisenbug family (#248/#290/#303) — and the
+/// panic lands AT the offending free.  One cached env read; off by default.
+pub fn uaf_check_enabled() -> bool {
+    static UAF: OnceLock<bool> = OnceLock::new();
+    *UAF.get_or_init(|| std::env::var_os("LOFT_UAF").is_some())
+}
+
 #[must_use]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
     debug_assert!(

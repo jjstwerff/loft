@@ -585,6 +585,10 @@ impl Parser {
     // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>
     #[allow(clippy::too_many_lines)]
     pub(crate) fn expression(&mut self, val: &mut Value) -> Type {
+        // Start of the expression — an "Unknown variable" caret on a bare-Var
+        // expression (e.g. a single call argument) must point here, not at the
+        // cursor that has drifted to the closing `)` / `;` by detection time.
+        let expr_pos = self.lexer.peek_pos().clone();
         if self.lexer.has_token("for") {
             self.parse_for(val);
             Type::Void
@@ -772,7 +776,7 @@ impl Parser {
                     );
                 }
             }
-            self.known_var_or_type(val);
+            self.known_var_or_type(val, &expr_pos);
             res
         }
     }
@@ -1013,10 +1017,11 @@ use a separate collection or add after the loop"
         // declared width).  Restored to Unknown after the RHS parse so
         // it doesn't leak into unrelated sub-expressions.
         let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
+        let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
         // check RHS of assignment for unresolved variables.
-        self.known_var_or_type(code);
+        self.known_var_or_type(code, &rhs_pos);
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
         }

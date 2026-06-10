@@ -730,7 +730,16 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
-    fn emit_file_header(w: &mut dyn Write, data: &Data, wasm_browser: bool) -> std::io::Result<()> {
+    ///
+    /// `reachable` filters the `extern crate <pkg>` declarations to the native
+    /// packages the emitted code actually calls (empty = whole-program
+    /// fallback, keep all) — see the comment at the emission loop (#307).
+    fn emit_file_header(
+        w: &mut dyn Write,
+        data: &Data,
+        wasm_browser: bool,
+        reachable: &HashSet<u32>,
+    ) -> std::io::Result<()> {
         writeln!(
             w,
             "\
@@ -842,10 +851,29 @@ extern crate loft;"
             }
             writeln!(w, "}}")?;
         } else {
-            // Emit extern crate declarations for native packages.
+            // Emit extern crate declarations only for the native packages the
+            // emitted (reachable) code actually calls (#307).  A library cdylib
+            // built inside a multi-package program (the viewer: markdown +
+            // server + web) must not declare unrelated packages: no `--extern`
+            // is supplied for them (E0463), and two loft-ffi package rlibs
+            // cannot link into one cdylib anyway (each exports `#[no_mangle]
+            // loft_register_v1` → duplicate symbol).  An empty `reachable` is
+            // the whole-program fallback — keep every package.
+            let needed: Option<HashSet<&String>> = if reachable.is_empty() {
+                None
+            } else {
+                Some(
+                    reachable
+                        .iter()
+                        .filter_map(|&d| data.native_symbol_crates.get(data.def(d).native()))
+                        .collect(),
+                )
+            };
             for (crate_name, _) in &data.native_packages {
                 let ident = crate_name.replace('-', "_");
-                writeln!(w, "extern crate {ident};")?;
+                if needed.as_ref().is_none_or(|n| n.contains(&ident)) {
+                    writeln!(w, "extern crate {ident};")?;
+                }
             }
         }
         writeln!(w, "use loft::database::Stores;")?;
@@ -935,7 +963,7 @@ extern crate loft;"
                 self.reachable = reachable_functions(self.data, &entries);
             }
         }
-        Self::emit_file_header(w, self.data, self.wasm_browser)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser, &self.reachable)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,
@@ -1032,7 +1060,7 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w, self.data, self.wasm_browser)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser, &reachable)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,

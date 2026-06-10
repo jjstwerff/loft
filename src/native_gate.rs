@@ -123,22 +123,53 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
                 )
                 || ret_text;
             ret_ok
-                && def.attributes().iter().all(|a| {
-                    if a.hidden {
-                        // The only hidden destination the bridge allocates is a vector.
-                        matches!(a.typedef, Type::Vector(_, _))
-                    } else if crate::native_lib::is_text_work_buffer(&a.typedef) {
-                        // text_return `&mut String` work buffer — valid iff the
-                        // function actually returns text.
-                        ret_text
-                    } else if a.name.starts_with("__") {
-                        false // closures — not handled
-                    } else {
-                        is_bridge_type(&a.typedef)
-                    }
-                })
+                && def
+                    .attributes()
+                    .iter()
+                    .all(|a| classify_bridge_attr(a, ret_text).is_some())
         })
         .collect()
+}
+
+/// How a shared-bridge function's attribute is satisfied at the dispatch
+/// boundary.  The interpreter call site pushes EVERY attribute onto the stack
+/// (declaration order); the generated bridge reads only the `Marshal` ones
+/// (compacted `LibArg` order) and satisfies the rest locally.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BridgeAttrKind {
+    /// Visible parameter — popped by the dispatcher AND forwarded to the bridge.
+    Marshal,
+    /// `text_return` work buffer (`&text`) — popped but NOT forwarded (the
+    /// bridge owns a local `String`).  In a non-dest call (expression context)
+    /// the dispatcher reuses this caller-cleared cell as `bridge_text_dest`.
+    WorkText,
+    /// Hidden `ref_return` destination — popped but NOT forwarded (the bridge
+    /// allocates its own destination in the shared store).
+    HiddenDest,
+}
+
+/// #303 — the ONE marshallability judgment for the shared-store bridge.
+/// Every consumer — this gate, the bridge generator
+/// (`native_lib::shared_bridge_wrapper`), and the wire-time signature builder
+/// (`extensions::compute_shared_sig`) — classifies an attribute through this
+/// function.  `None` means the function is not shared-dispatchable.  Keeping
+/// the judgment here is what guarantees a marked function always wires: the
+/// gate marking it, the generator emitting its bridge, and the dispatcher
+/// popping its stack slots can no longer disagree.
+#[must_use]
+pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Option<BridgeAttrKind> {
+    if a.hidden {
+        // The only hidden destination the bridge allocates is a vector.
+        return matches!(a.typedef, Type::Vector(_, _)).then_some(BridgeAttrKind::HiddenDest);
+    }
+    if crate::native_lib::is_text_work_buffer(&a.typedef) {
+        // Valid iff the function actually returns text.
+        return ret_text.then_some(BridgeAttrKind::WorkText);
+    }
+    if a.name.starts_with("__") {
+        return None; // closures — not handled
+    }
+    is_bridge_type(&a.typedef).then_some(BridgeAttrKind::Marshal)
 }
 
 /// A type passable through the shared-store `LibArg` bridge **as a parameter**: a

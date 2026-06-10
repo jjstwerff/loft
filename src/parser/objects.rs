@@ -3,15 +3,21 @@
 
 use super::{
     DefType, HashSet, I32, IntegerSpec, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT,
-    OutputState, Parser, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format,
-    to_default, v_block, v_if, v_set,
+    OutputState, Parser, Position, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
+    diagnostic_format, to_default, v_block, v_if, v_set,
 };
 
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn parse_var(&mut self, code: &mut Value, name: &str, parent_tp: &mut Type) -> Type {
+    pub(crate) fn parse_var(
+        &mut self,
+        code: &mut Value,
+        name: &str,
+        parent_tp: &mut Type,
+        name_pos: &Position,
+    ) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
             *code = Value::Var(0);
@@ -86,7 +92,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let mut t = self.parse_constant_value(code, source, &nm);
+        let mut t = self.parse_constant_value(code, source, &nm, name_pos);
         if t != Type::Null {
             return t;
         }
@@ -812,6 +818,7 @@ impl Parser {
         code: &mut Value,
         source: u16,
         name: &str,
+        name_pos: &Position,
     ) -> Type {
         let mut t;
         let d_nr = if source == u16::MAX {
@@ -957,10 +964,59 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
+        // A brace-construction `Name { field: … }` of a type that does not
+        // exist at all.  Without naming the real cause, the unconsumed `{`
+        // trips a baffling `Expect token ;` mid-literal.  Recover by consuming
+        // the balanced `{ … }` so the statement parses.  `!name_exists` gates
+        // out known variables (`items { … }` opening a loop body, `b { … }` an
+        // if body) BEFORE the stateful struct-shape lookahead — a genuinely
+        // unknown type has not been turned into a placeholder variable yet, so
+        // it still passes — and the `ident :` / `ident ,` shape check (the same
+        // `parse_block` uses) keeps a control-flow block from matching.
+        if d_nr == u32::MAX
+            && !self.vars.name_exists(name)
+            && self.lexer.peek_token("{")
+            && self.peek_struct_literal_body()
+        {
+            // Emit on pass 1 (matching the private-type branch above) so the
+            // error fires once; recover on both passes so neither cascades.
+            if self.first_pass {
+                diagnostic_at!(self.lexer, name_pos, Level::Error, "unknown type '{name}'");
+            }
+            self.lexer.has_token("{");
+            let mut depth = 1u32;
+            while depth > 0 {
+                let before = self.lexer.peek().position;
+                if self.lexer.has_token("{") {
+                    depth += 1;
+                } else if self.lexer.has_token("}") {
+                    depth -= 1;
+                } else {
+                    self.lexer.cont();
+                }
+                if self.lexer.peek().position == before {
+                    break; // no forward progress (EOF) — bail rather than spin
+                }
+            }
+            return Type::Unknown(0);
+        }
         Type::Null
     }
 
-    pub(crate) fn known_var_or_type(&mut self, code: &Value) {
+    /// Peek past a `{` to decide whether it opens a struct literal (`{ field:
+    /// … }` / `{ field, … }`) rather than a control-flow block.  Non-consuming
+    /// (uses a lexer link/revert); mirrors the disambiguation in `parse_block`.
+    fn peek_struct_literal_body(&mut self) -> bool {
+        let link = self.lexer.link();
+        self.lexer.token("{");
+        let looks_like_struct = self.lexer.has_identifier().is_some()
+            && ((self.lexer.peek_token(":") && !self.lexer.peek_token(":="))
+                || self.lexer.peek_token(","));
+        self.lexer.revert(link);
+        looks_like_struct
+    }
+
+    pub(crate) fn known_var_or_type(&mut self, code: &Value, pos: &Position) {
         if let Value::Var(nr) = code {
             if !self.vars.exists(*nr) {
                 return;
@@ -990,15 +1046,16 @@ impl Parser {
                     crate::diagnostics::suggest_similar(&name, &candidates)
                 };
                 if let Some(s) = suggestion {
-                    diagnostic!(
+                    diagnostic_at!(
                         self.lexer,
+                        pos,
                         Level::Error,
                         "Unknown variable '{}' — did you mean '{}'?",
                         name,
                         s
                     );
                 } else {
-                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    diagnostic_at!(self.lexer, pos, Level::Error, "Unknown variable '{}'", name);
                 }
             }
         }

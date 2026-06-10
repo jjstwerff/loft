@@ -158,6 +158,18 @@ macro_rules! specific {
     )
 }
 
+/// Emit a diagnostic at an explicit `Position` instead of the lexer's
+/// current cursor.  Expressions, call arguments, and type names are fully
+/// parsed before they are type-checked, so by detection time the cursor has
+/// drifted to the statement terminator — capture the offending node's start
+/// position at parse time and point the caret there.
+#[macro_export]
+macro_rules! diagnostic_at {
+    ($lexer:expr, $pos:expr, $level:expr, $($arg:tt)+) => (
+        $lexer.pos_diagnostic($level.clone(), $pos, &diagnostic_format($level, format_args!($($arg)+)))
+    )
+}
+
 /// Levenshtein edit distance between two strings.
 #[must_use]
 pub fn levenshtein(a: &str, b: &str) -> usize {

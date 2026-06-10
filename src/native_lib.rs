@@ -425,31 +425,49 @@ fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
     let mut body = String::new();
     let mut fwd = String::new();
     let mut slot = 0usize; // next public-arg LibArg slot
+    let ret_text = matches!(def.returned(), Type::Text(_));
     for (i, a) in def.attributes().iter().enumerate() {
         let var = format!("p{i}");
-        if a.hidden {
-            // ref_return destination — allocate it in the SHARED store, mirroring
-            // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
-            let tid = hidden_dest_type_id(data, &a.typedef);
-            let _ = writeln!(
-                body,
-                "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
-            );
-            let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
-            let _ = write!(fwd, ", {var}");
-        } else if is_text_work_buffer(&a.typedef) {
-            // text_return work buffer (`&mut String`) — own a LOCAL String, pass
-            // `&mut`.  The returned `Str` points into it; `bridge_write_ret` copies
-            // the bytes into the caller-owned `bridge_text_dest` record (@PLN10
-            // dest-passing) before this frame drops.
-            let _ = writeln!(body, "    let mut {var}: String = String::new();");
-            let _ = write!(fwd, ", &mut {var}");
-        } else {
-            let ty = rust_type(&a.typedef, &Context::Argument);
-            let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
-            let _ = writeln!(body, "    let {var}: {ty} = {read};");
-            slot += 1;
-            let _ = write!(fwd, ", {var}");
+        // #303 — the ONE marshallability judgment (shared with the gate and the
+        // wire-time signature builder).  The gate guarantees `Some` for every
+        // attribute of a marked function; a `None` here means the judgment
+        // drifted between marking and generation — fail loudly, never emit a
+        // bridge whose ABI the dispatcher would disagree with.
+        let kind = crate::native_gate::classify_bridge_attr(a, ret_text).unwrap_or_else(|| {
+            panic!(
+                "shared bridge for {}: attribute '{}' is not bridge-classifiable \
+                 but the function was marked dispatchable (gate/generator divergence)",
+                def.name(),
+                a.name,
+            )
+        });
+        match kind {
+            crate::native_gate::BridgeAttrKind::HiddenDest => {
+                // ref_return destination — allocate it in the SHARED store, mirroring
+                // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
+                let tid = hidden_dest_type_id(data, &a.typedef);
+                let _ = writeln!(
+                    body,
+                    "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+                );
+                let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+                let _ = write!(fwd, ", {var}");
+            }
+            crate::native_gate::BridgeAttrKind::WorkText => {
+                // text_return work buffer (`&mut String`) — own a LOCAL String, pass
+                // `&mut`.  The returned `Str` points into it; `bridge_write_ret` copies
+                // the bytes into the caller-owned `bridge_text_dest` record (@PLN10
+                // dest-passing) before this frame drops.
+                let _ = writeln!(body, "    let mut {var}: String = String::new();");
+                let _ = write!(fwd, ", &mut {var}");
+            }
+            crate::native_gate::BridgeAttrKind::Marshal => {
+                let ty = rust_type(&a.typedef, &Context::Argument);
+                let read = bridge_read(&a.typedef, &format!("a[{slot}]"));
+                let _ = writeln!(body, "    let {var}: {ty} = {read};");
+                slot += 1;
+                let _ = write!(fwd, ", {var}");
+            }
         }
     }
 
@@ -587,6 +605,11 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
 /// (an unhashed `target/<prof>/libloft.rlib`, or `deps/`) and an integration test
 /// (a hashed `libloft-<hash>.rlib` in the test binary's `deps/`).  Returns the
 /// chosen rlib path and the `deps/` dir to add to the link search path.
+///
+/// The deps-first preference must stay aligned with `cache::rlib_candidates`
+/// (#304): the fingerprint that validates a built cdylib has to hash the same
+/// rlib this function links, or a cdylib gets validated against one loft and
+/// built against another.
 #[must_use]
 pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
@@ -779,6 +802,30 @@ pub fn build_shared_cdylib(
     for (name, path) in extra_externs(&deps) {
         args.push("--extern".to_string());
         args.push(format!("{name}={}", path.display()));
+    }
+    // The emitted program declares `extern crate <pkg>` for each native package
+    // its reachable code calls (filtered in `emit_file_header`, #307) — supply
+    // the matching rlib + its deps dir.  A missing rlib is skipped: the compile
+    // then fails and the caller falls back to interpreting.  Note: TWO such
+    // packages in one cdylib cannot link (duplicate `loft_register_v1`); that
+    // shape fails here and interprets, by design.
+    for (crate_name, pkg_dir) in &data.native_packages {
+        let pkg_stem = crate_name.replace('-', "_");
+        let rlib_path = crate::extensions::native_target_root(std::path::Path::new(pkg_dir))
+            .join("release")
+            .join(format!("lib{pkg_stem}.rlib"));
+        if !rlib_path.exists() {
+            continue;
+        }
+        args.push("--extern".to_string());
+        args.push(format!("{pkg_stem}={}", rlib_path.display()));
+        // `dependency=` scope: the package crate's transitive deps (loft-ffi
+        // etc.) resolve only as indirect deps, never shadowing direct externs.
+        let pkg_deps = rlib_path.parent().map(|p| p.join("deps"));
+        if let Some(pkg_deps) = pkg_deps.filter(|p| p.is_dir()) {
+            args.push("-L".to_string());
+            args.push(format!("dependency={}", pkg_deps.display()));
+        }
     }
     // Windows MSVC: add the build-script `-L` dirs holding native import libs
     // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.

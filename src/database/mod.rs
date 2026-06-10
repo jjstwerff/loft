@@ -399,6 +399,10 @@ pub struct Stores {
     /// don't rely on adoption — `copy_from_worker` reads through the
     /// graft swap regardless of slot reuse.
     pub disable_slot_reuse: bool,
+    /// `LOFT_UAF` use-after-free detector: slots freed by the CURRENT op
+    /// (`free_named` pushes; the dispatch loop drains + scans after the op).
+    /// Always empty when the detector is off.  See `keys::uaf_check_enabled`.
+    pub uaf_freed_this_op: Vec<u16>,
     /// Plan-06 ARC.md A2 — shared atomic dispenser of parent-namespace
     /// slot indices for `run_parallel_queue_ref` workers.  When
     /// `disable_slot_reuse == true` AND this is `Some`, every
@@ -509,6 +513,7 @@ impl Clone for Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
+            uaf_freed_this_op: Vec::new(),
             worker_slot_dispenser: None,
             worker_allocated_indices: Vec::new(),
             report_asserts: false,
@@ -1011,6 +1016,7 @@ impl Stores {
             frame_yield: false,
             poison_free: false,
             disable_slot_reuse: false,
+            uaf_freed_this_op: Vec::new(),
             worker_slot_dispenser: None,
             worker_allocated_indices: Vec::new(),
             report_asserts: false,

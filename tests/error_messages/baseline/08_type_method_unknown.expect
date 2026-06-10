@@ -8,10 +8,10 @@ error: Unknown field text.lengt
   |               ^
 
 error: Unknown variable 'n'
-  --> <cases>/08_type_method_unknown.loft:4:13
+  --> <cases>/08_type_method_unknown.loft:4:11
   |
 4 |   print("{n}");
-  |             ^
+  |           ^
 
 error: Incorrect expression in string was Unknown(0)
   --> <cases>/08_type_method_unknown.loft:4:13
@@ -26,10 +26,10 @@ error: Expect token )
   |             ^
 
 error: expected text, got void on call to print
-  --> <cases>/08_type_method_unknown.loft:4:12
+  --> <cases>/08_type_method_unknown.loft:4:10
   |
 4 |   print("{n}");
-  |            ^
+  |          ^
 
 fatal: Nested string literal not correctly terminated
   --> <cases>/08_type_method_unknown.loft:4:16
