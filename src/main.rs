@@ -48,7 +48,7 @@ use loft::state;
 mod test_runner;
 
 use crate::native_utils::{
-    build_script_native_lib_dirs, default_artifact_path, html_wasm_import_modules_ok,
+    build_script_native_lib_dirs, default_artifact_path, deps_dir_of, html_wasm_import_modules_ok,
     is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
 };
 use crate::test_runner::run_tests;
@@ -4713,7 +4713,7 @@ fn main() {
             // and subsequent errors cascade (every `use loft::...` fails,
             // so `cr_call_push` is reported unfound as a collateral).
             if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                let host_deps = host_lib_dir.join("deps");
+                let host_deps = deps_dir_of(&host_lib_dir);
                 if host_deps.exists() {
                     cmd.arg("-L")
                         .arg(format!("dependency={}", host_deps.display()));
@@ -4771,7 +4771,7 @@ fn main() {
                         .arg(format!("dependency={}", deps.display()));
                 }
                 if let Some(host_lib_dir) = loft_lib_dir_for(None) {
-                    let host_deps = host_lib_dir.join("deps");
+                    let host_deps = deps_dir_of(&host_lib_dir);
                     if host_deps.exists() {
                         build
                             .arg("-L")
@@ -5359,22 +5359,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                // `loft_lib_dir()` returns either the binary's directory
-                // (when libloft.rlib lives next to the binary) or the
-                // `deps/` subdirectory (cargo's standard layout — macOS
-                // and Windows always; Linux when the canonical sibling
-                // is absent).  In the latter case `lib_dir` IS already
-                // the deps directory; appending "deps" yields an
-                // invalid `target/release/deps/deps` path that rustc
-                // can't search, leading to E0463 "can't find crate"
-                // for transitive deps like rand_core.
-                //
-                // Detect the deps-already case via the directory name.
-                let deps = if lib_dir.file_name().is_some_and(|n| n == "deps") {
-                    lib_dir.clone()
-                } else {
-                    lib_dir.join("deps")
-                };
+                let deps = deps_dir_of(&lib_dir);
                 cmd.arg("-L").arg(format!("dependency={}", deps.display()));
                 if let Ok(rd) = std::fs::read_dir(&deps) {
                     for e in rd.flatten() {
