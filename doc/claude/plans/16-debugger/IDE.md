@@ -319,16 +319,22 @@ known positions surfaced **two distinct bugs** (not one):
   an expression error now points at the line the user typed. Verified against the matrix
   (`nope`/`1 + nope` → line 1; multi-line expr → line 2); regression test
   `tests/rpc.rs::rpc_repl_eval_error_line_is_input_relative`.
-- **Bug 2 — the parser reports where it *halted*, not the token — OPEN.** The remaining
-  errors: the **column** points at the *end* of the offending token (`notype` at col 9 →
-  16), and a definition **body** error sits on the *next* line (`nope` on line 2 → line 3),
-  because `diagnostic!(self.lexer, …)` uses the lexer's *current* position after the operand
-  is consumed. This is **not** a REPL artifact — a file shows the same `3:2`. The fix records
-  the error at the offending token's position: add `Lexer::diagnostic_at(pos, …)` (the
-  `Diagnostics::add_at` plumbing already takes an explicit position) and thread the operand's
-  start position into `known_var_or_type` (and the `Undefined type` site) — ~6 call sites, a
-  focused parser change with **0 test-position regression risk** (no loft test pins a
-  column). Benefits files + the compiler console too, not just the REPL.
+- **Bug 2 — the parser reports where it *halted*, not the token — FILED [#302](https://github.com/loft-lang/loft/issues/302).**
+  A clean file-level matrix (`/tmp/p_followups/d{1..5}.loft`) settled the real shape: the
+  **line is correct**; only the **column** is wrong — every expression diagnostic
+  (`Unknown variable`, and the `expected <T>, got <U>` type-mismatch) points at the
+  **end-of-statement** `;` rather than the offending node's start (e.g. `undefinedvar` at
+  col 11 → reported col 24), because `diagnostic!(self.lexer, …)` uses the lexer's *current*
+  position after the operand is consumed. (The "def-body on the next line" symptom in the
+  earlier REPL read was a **probe-contamination artifact** — `let`/missing-`;` syntax I'd
+  written; loft has no `let` and statements need `;`. With valid syntax the line is right.)
+  A **second facet**: an **undefined type** in a struct literal mis-reports as
+  `Expect token ;` (wrong message *and* kind) instead of `unknown type '…'`. Fix plan
+  (unchanged): add `Lexer::diagnostic_at(pos, …)` (the `Diagnostics::add_at` plumbing already
+  takes an explicit position) and thread the operand's start position into
+  `known_var_or_type` (and the struct-literal type site) — ~6 call sites, **0 test-position
+  regression risk** (no loft test pins a column). Benefits files + the compiler console too,
+  not just the REPL. Deferred per "ignore for now"; tracked on #302.
 
 ## Dogfood driver — the `story` / crawler roguelike
 
