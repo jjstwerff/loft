@@ -404,6 +404,8 @@ impl Parser {
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
             "OpGetEnum" => self.cl("OpSetEnum", &[args[0].clone(), args[1].clone(), code]),
+            // @PLN17: byte-stored boolean write, storing the u8 form 0/1/255 directly.
+            "OpGetBoolean" => self.cl("OpSetBoolean", &[args[0].clone(), args[1].clone(), code]),
             "OpGetShort" => self.cl(
                 "OpSetShort",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
@@ -998,6 +1000,10 @@ impl Parser {
                 | "GetSingle"
                 | "GetFloat"
                 | "GetEnum"
+                // @PLN17: byte-stored boolean field/element read (single-level
+                // wrap of OpGetVector), so the inner OpGetVector swaps to its
+                // mutable form for `v[i] = bool` — same as GetEnum.
+                | "GetBoolean"
                 | "GetCharacter"
                 | "GetField"
                 | "GetDbRef"
@@ -1227,22 +1233,10 @@ impl Parser {
         }
 
         let lhs_type = ctp.clone();
-        // #256: boolean has no null representation, so the `convert(_, Boolean)`
-        // null-check below would just test the value's own truthiness — making
-        // `false ?? x` fall through to `x` (a stored `false` is then
-        // indistinguishable from "missing").  Reject `??` on a boolean rather
-        // than silently miscompile it (mirrors the `null`-on-boolean error in
-        // `mod.rs`'s `null()`).  The RHS is still parsed below to keep the
-        // parser in a valid state — compilation aborts on the error.
-        if matches!(lhs_type, Type::Boolean) && !self.first_pass {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot use null coalescing '??' on boolean — boolean has no \
-                 null representation (a stored 'false' is indistinguishable from \
-                 missing); use an integer flag, or test the boolean directly"
-            );
-        }
+        // @PLN17: boolean now has a real null sentinel (255), so `??` works — the
+        // null-check for a boolean LHS is `lhs == null` (raw `== 255`), NOT the
+        // value's truthiness (see the Boolean arm in `null_check_builder` below).
+        // `false ?? x` stays `false` (false is not null); `null ?? x` → x.
         if self.lexer.has_token("return") {
             self.build_null_coalesce_return(code, ctp, &lhs_type);
         } else {
@@ -1271,10 +1265,18 @@ impl Parser {
         // { tmp = lhs; if (tmp == null) { return ret_expr; }; tmp }
         let tmp = self.create_unique("ncr", lhs_type);
         let set_tmp = v_set(tmp, code.clone());
-        let mut null_check = Value::Var(tmp);
-        self.convert(&mut null_check, lhs_type, &Type::Boolean);
-        // Negate: true when null (i.e. when the boolean conversion is false).
-        let is_null = self.cl("OpNot", &[null_check]);
+        let is_null = if matches!(lhs_type, Type::Boolean) {
+            // @PLN17: a boolean is null iff its byte is the 255 sentinel — a raw
+            // `tmp == null` compare, NOT truthiness (which would treat `false` as
+            // missing).  `false ?? return` keeps `false`; `null ?? return` returns.
+            let null_b = self.cl("OpConvBoolFromNull", &[]);
+            self.cl("OpEqBool", &[Value::Var(tmp), null_b])
+        } else {
+            let mut null_check = Value::Var(tmp);
+            self.convert(&mut null_check, lhs_type, &Type::Boolean);
+            // Negate: true when null (i.e. when the boolean conversion is false).
+            self.cl("OpNot", &[null_check])
+        };
         let if_ret = v_if(is_null, ret_stmt, Value::Null);
         *code = v_block(
             vec![set_tmp, if_ret, Value::Var(tmp)],
@@ -1366,6 +1368,12 @@ impl Parser {
                 // 12-byte DbRef representation under the hood.
                 let conv_nr = this.data.def_nr("OpConvBoolFromRef");
                 Value::Call(conv_nr, vec![src.clone()])
+            } else if matches!(lhs_type, Type::Boolean) {
+                // @PLN17: the null-check is "is NOT null" (v_if true → keep lhs).
+                // For a boolean that is `src != null` (raw `!= 255`), NOT the
+                // value's truthiness — so `false ?? x` keeps `false`.
+                let null_b = this.cl("OpConvBoolFromNull", &[]);
+                this.cl("OpNeBool", &[src.clone(), null_b])
             } else {
                 let mut nc = src.clone();
                 this.convert(&mut nc, lhs_type, &Type::Boolean);

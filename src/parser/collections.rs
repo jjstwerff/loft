@@ -697,20 +697,11 @@ impl Parser {
                 return val.clone();
             }
         }
-        if *f_type == Type::Boolean
-            && let Value::Call(_, a) = to.unspan()
-            && let Value::Call(_, args) = a[0].unspan()
-        {
-            let conv = Value::If(
-                Box::new(val.clone()),
-                Box::new(Value::Int(1)),
-                Box::new(Value::Int(0)),
-            );
-            return self.cl(
-                "OpSetByte",
-                &[args[0].clone(), args[1].clone(), args[2].clone(), conv],
-            );
-        }
+        // @PLN17: boolean element/field writes now go through the generic
+        // call_to_set_op path (OpGetBoolean -> OpSetBoolean, with try_swap on the
+        // inner OpGetVector) — identical to how plain enums are handled.  The old
+        // special-case here destructured the two-level OpEqInt(OpGetByte(…)) read
+        // shape and is obsolete (it mis-read the single-level OpGetBoolean shape).
         let code = self.compute_op_code(op, to, val, f_type);
         if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name().to_string();

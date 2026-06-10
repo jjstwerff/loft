@@ -3790,23 +3790,18 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
         let (mut p, cell_d_nr) = parser_with_cell(&Type::Boolean, "__cell_boolean");
         let mut code = Value::Var(5);
         let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
-        // Expect: Call(OpEqInt, [Call(OpGetByte, [Var(5), Int(0), Int(0)]), Int(1)])
-        let eq_d_nr = p.data.def_nr("OpEqInt");
-        let byte_d_nr = p.data.def_nr("OpGetByte");
+        // @PLN17: boolean now reads its byte directly (0/1/255), like a plain enum —
+        // Call(OpGetBoolean, [Var(5), Int(0)]) — not the old OpEqInt(OpGetByte, 1).
+        let get_bool_d_nr = p.data.def_nr("OpGetBoolean");
         match &code {
             Value::Call(d, args) => {
-                assert_eq!(*d, eq_d_nr, "outer call should be OpEqInt");
+                assert_eq!(
+                    *d, get_bool_d_nr,
+                    "boolean cell read should be OpGetBoolean"
+                );
                 assert_eq!(args.len(), 2);
-                match &args[0] {
-                    Value::Call(inner_d, inner_args) => {
-                        assert_eq!(*inner_d, byte_d_nr);
-                        assert_eq!(inner_args.len(), 3);
-                    }
-                    other => panic!("expected inner OpGetByte; got {other:?}"),
-                }
-                assert!(matches!(args[1], Value::Int(1)));
             }
-            other => panic!("expected Call(OpEqInt, …); got {other:?}"),
+            other => panic!("expected Call(OpGetBoolean, …); got {other:?}"),
         }
         assert_eq!(new_t, Type::Boolean);
     }
