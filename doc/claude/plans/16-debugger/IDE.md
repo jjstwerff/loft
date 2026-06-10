@@ -282,7 +282,11 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
      The real dependency is the **C71/N9 per-fn interpret-on-compiled-baseline execution
      model over a shared store** ([DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md) — a
      design, not yet a build); faking hot-swap (e.g. by full restart) would ship the
-     workaround as the feature, so 6b/6c wait for that build.
+     workaround as the feature, so 6b/6c wait for that build. **The engine-host design
+     exploration is recorded in [ENGINE_HOST.md](ENGINE_HOST.md)** — the tiered execution
+     model (interpret → WASM-swap → native baseline) and the main-loop IO contract
+     (budgeted drain, completion-as-event, store-resident accumulation) that the C71
+     build plan starts from.
      **Correction (2026-06-10, the library-register inspection):** the graphics runtime is
      NOT missing — `graphics` (with gridmesh/imaging/shapes) is a **published registry
      package** (`loft-lang/loft-libs-graphics`, signed index at `loft-lang/registry`), one
