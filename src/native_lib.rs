@@ -460,14 +460,27 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
         });
         match kind {
             crate::native_gate::BridgeAttrKind::HiddenDest => {
-                // ref_return destination — allocate it in the SHARED store, mirroring
-                // a `--native` caller (`stores.null_named` + `OpDatabase(<type_id>)`).
+                // ref_return destination.  A body-bearing caller pre-allocates
+                // one and the dispatcher forwards its slot (#311) — write the
+                // result into THAT record (the caller's frame owns and frees
+                // it; a bridge-local allocation orphaned it, one leaked store
+                // per call).  Fallbacks allocate, mirroring a `--native` caller
+                // (`null_named` + `OpDatabase(<type_id>)`): a no-body `#native`
+                // decl caller forwards no slot (`{slot} >= n`), and a null
+                // incoming ref means no usable record arrived.
                 let tid = hidden_dest_type_id(data, &a.typedef);
                 let _ = writeln!(
                     body,
-                    "    let mut {var}: DbRef = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+                    "    let mut {var}: DbRef = if {slot} < n {{ a[{slot}].dbref }} else {{ DbRef {{ store_nr: 0, rec: 0, pos: 0 }} }};"
                 );
-                let _ = writeln!(body, "    {var} = OpDatabase(cell, {var}, {tid}i32);");
+                let _ = writeln!(body, "    if {var}.rec == 0 && {var}.pos == 0 {{");
+                let _ = writeln!(
+                    body,
+                    "        {var} = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
+                );
+                let _ = writeln!(body, "        {var} = OpDatabase(cell, {var}, {tid}i32);");
+                let _ = writeln!(body, "    }}");
+                slot += 1;
                 let _ = write!(fwd, ", {var}");
             }
             crate::native_gate::BridgeAttrKind::WorkText => {

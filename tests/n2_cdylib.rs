@@ -1309,3 +1309,65 @@ fn auto_native_disambiguates_duplicate_fn_names() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// #311 — a vector-returning auto-native call must write its result into the
+/// CALLER's pre-allocated hidden destination (forwarded by the dispatcher),
+/// not a bridge-local allocation that orphans the caller's record.  The leak
+/// was visible as a "stores not freed at program exit" warning — one record
+/// per call.  End-to-end over an on-disk package; asserts correct values AND
+/// a leak-free exit.
+#[test]
+fn auto_native_vector_return_uses_caller_dest() {
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if loft::native_lib::find_loft_rlib().is_none()
+        || Command::new("rustc").arg("--version").output().is_err()
+    {
+        return;
+    }
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_n3_vdest_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let pkg_src = root.join("libs/vlib/src");
+    std::fs::create_dir_all(&pkg_src).unwrap();
+    std::fs::write(
+        root.join("libs/vlib/loft.toml"),
+        "[package]\nname = \"vlib\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n[library]\nentry = \"src/vlib.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg_src.join("vlib.loft"),
+        "pub fn pair(a: text) -> vector<text> { [a, a] }\n",
+    )
+    .unwrap();
+    let prog = root.join("prog.loft");
+    std::fs::write(
+        &prog,
+        "use vlib;\n\nfn main() {\n    v = pair(\"ab\");\n    print(\"[{v[0]}|{v[1]}]\\n\");\n}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(root.join("libs"))
+        .arg(&prog)
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("run loft");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "run failed: {stdout}\n{stderr}");
+    assert!(stdout.contains("[ab|ab]"), "vector return value: {stdout}");
+    assert!(
+        !stderr.contains("could not compile native"),
+        "cdylib build fell back to interpret:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("stores not freed"),
+        "caller's hidden dest leaked (#311 regression):\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
