@@ -302,14 +302,25 @@ history discarded on context change). Tests: `tests/rpc.rs` replEval drive +
 frame-context switch lights up with **slice 4** (the debugger UI raises `stopped`).
 
 *Verified position findings (the real-use-case payoff).* Driving `replEval` with errors at
-known positions surfaced **two distinct bugs** to fix (not one): **(1) a consistent +1 line
-offset** for any input evaluated through a wrapper — bare expressions *and* definition
-*bodies* — while definition *signatures* (parsed directly) report the right line; and **(2)
-the column points at the *end* of the offending token, not its start** (`notype` at col 9
-reported as col 16). The +1 is the synthetic `fn replmain_N() { … }` header line; the col is
-the parser recording where it *noticed*. These are the engine-side corrections the REPL
-drives — fix the line at the wrapper boundary (the REPL knows its own prefix) and the column
-in the parser's position recording — verified against this matrix on both before/after.
+known positions surfaced **two distinct bugs** (not one):
+
+- **Bug 1 — the REPL wrapper's +1 line offset — FIXED (2026-06-10).** An expression /
+  binding evaluated inside `fn replmain_N() { <body> <input> }` had its diagnostic line
+  offset by the synthetic header + replayed `body`. `ReplSession::map_input_lines` subtracts
+  that prefix in `eval`'s wrapped paths (the def path parses directly, so it's untouched), so
+  an expression error now points at the line the user typed. Verified against the matrix
+  (`nope`/`1 + nope` → line 1; multi-line expr → line 2); regression test
+  `tests/rpc.rs::rpc_repl_eval_error_line_is_input_relative`.
+- **Bug 2 — the parser reports where it *halted*, not the token — OPEN.** The remaining
+  errors: the **column** points at the *end* of the offending token (`notype` at col 9 →
+  16), and a definition **body** error sits on the *next* line (`nope` on line 2 → line 3),
+  because `diagnostic!(self.lexer, …)` uses the lexer's *current* position after the operand
+  is consumed. This is **not** a REPL artifact — a file shows the same `3:2`. The fix records
+  the error at the offending token's position: add `Lexer::diagnostic_at(pos, …)` (the
+  `Diagnostics::add_at` plumbing already takes an explicit position) and thread the operand's
+  start position into `known_var_or_type` (and the `Undefined type` site) — ~6 call sites, a
+  focused parser change with **0 test-position regression risk** (no loft test pins a
+  column). Benefits files + the compiler console too, not just the REPL.
 
 ## Dogfood driver — the `story` / crawler roguelike
 

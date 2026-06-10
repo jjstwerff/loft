@@ -237,3 +237,16 @@ fn rpc_compile_reports_errors() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// @PLN16 M5e — bug 1: a REPL expression error must point at the user's INPUT line, not the
+// synthetic `fn replmain_N(){…}` wrapper line. `nosuchvar + 1` is a 1-line input, so the
+// error is on line 1 (before the fix the wrapper offset reported line 2).
+#[test]
+fn rpc_repl_eval_error_line_is_input_relative() {
+    let out = drive(&[
+        "{\"id\":1,\"req\":\"replEval\",\"input\":\"nosuchvar + 1\"}".to_string(),
+        "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(out.contains("\"file\":\"<repl>\""), "a <repl> diagnostics event: {out}");
+    assert!(out.contains("\"line\":1,"), "error on the input's line 1, not the wrapper line: {out}");
+}

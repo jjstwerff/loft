@@ -2023,7 +2023,7 @@ impl ReplSession {
                     // The RHS faulted while we snapshotted it: surface the error at
                     // the binding and store NOTHING — the effect ran once and no
                     // re-running source binding can poison later observes.
-                    Capture::Failed(diags) => return Eval::Error(diags),
+                    Capture::Failed(diags) => return Eval::Error(self.map_input_lines(diags)),
                     Capture::Skip => {} // not capturable — fall back to source
                 }
             }
@@ -2036,7 +2036,7 @@ impl ReplSession {
                     self.record_input(input);
                     Eval::Ran
                 }
-                Err(diags) => Eval::Error(diags),
+                Err(diags) => Eval::Error(self.map_input_lines(diags)),
             };
         }
         // Observing: show the value.  Bind it to a temp first, then print the
@@ -2062,8 +2062,27 @@ impl ReplSession {
         match self.compile_generation(&plain, true, true) {
             Ok(()) if self.is_debugging() => Eval::Paused,
             Ok(()) => Eval::Ran,
-            Err(diags) => Eval::Error(diags),
+            Err(diags) => Eval::Error(self.map_input_lines(diags)),
         }
+    }
+
+    /// @PLN16 M5e — map diagnostics from a **wrapped** REPL generation back to the user's
+    /// INPUT lines.  An expression / binding is evaluated inside `fn replmain_N() { <body>
+    /// <input> }` (a synthetic header line + the replayed session `body` prepended), so the
+    /// engine's diagnostic line is offset by that prefix; subtract it so an error points at
+    /// the line the user actually typed.  Only the wrapped paths call this — a top-level
+    /// **definition** is parsed directly (no wrapper), so its lines are already input-relative.
+    /// (The *column* and a def-body line can still sit on the next token — a separate parser
+    /// position issue, not this offset.)  `<repl>`-only and clamped, so an underflow leaves
+    /// the line at 1 rather than wrapping.
+    fn map_input_lines(&self, mut diags: Vec<DiagEntry>) -> Vec<DiagEntry> {
+        let prefix = 1 + self.body.matches('\n').count() as u32;
+        for d in &mut diags {
+            if d.file == "<repl>" {
+                d.line = d.line.saturating_sub(prefix).max(1);
+            }
+        }
+        diags
     }
 
     /// Parse one generation fn `fn replmain_N() { <gen_body> }`; when `execute`,
