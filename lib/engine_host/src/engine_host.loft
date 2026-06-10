@@ -64,24 +64,15 @@ pub fn clients() -> integer;
 
 // ── 05a — the state-sync UDP channel (events + bulk stay on WS) ─────────────
 //
-// The kernel binds a UDP socket on the SAME port as the WS listener.  A native
-// client earns the fast path with a cookie handshake: read the cookie with
-// `udp_cookie(cid)`, deliver it inside YOUR protocol (cookie transport is
-// meaning), and have the client echo it in a `H:<cookie>` datagram; the kernel
-// binds the source address and acks `A:<cid>`.  After that, `sync_send` rides
-// UDP for that client; phones that never hello simply keep receiving WS
-// frames from the same call.
-
-// Text-returning natives keep the `kernel_` def name (the dest-passing route
-// in `is_text_dest_native` keys on it — the `n_kernel_event_payload` pattern);
-// the pub wrappers carry the surface names.
-fn kernel_udp_cookie(cid: integer) -> text;
-#native
-
-// The client's UDP handshake cookie ("" when UDP is unavailable).
-pub fn udp_cookie(cid: integer) -> text {
-  kernel_udp_cookie(cid)
-}
+// The kernel binds a UDP socket on the SAME port as the WS listener, and the
+// transport negotiation is FULLY kernel-internal — the developer never sees
+// it (a core lavition/loft value: never bother the developer with details
+// that don't aid them; the server takes the fastest path available,
+// automatically).  The handshake cookie rides the WS 101 upgrade response as
+// an `X-Loft-UDP` header; a native client's kernel reads it and hellos
+// (`H:<cookie>` → `A:<cid>`), after which `sync_send` rides UDP for that
+// client.  Web pages cannot send UDP, never hello, and the same call keeps
+// sending WS frames — meaning-code never branches on transport.
 
 // Does this client currently have a live UDP path?
 pub fn udp_bound(cid: integer) -> boolean;
@@ -106,6 +97,9 @@ pub fn sync_cid() -> integer;
 pub fn sync_seq() -> integer;
 #native "n_kernel_sync_seq"
 
+// Text-returning natives keep the `kernel_` def name (the dest-passing route
+// in `is_text_dest_native` keys on it — the `n_kernel_event_payload` pattern);
+// the pub wrapper carries the surface name.
 fn kernel_sync_payload() -> text;
 #native
 

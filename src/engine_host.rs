@@ -157,7 +157,14 @@ fn with_kernel<R>(f: impl FnOnce(&mut Kernel) -> R) -> Option<R> {
 /// Upgrade a freshly-accepted stream: parse the HTTP request head, answer the
 /// WebSocket handshake.  Returns the stream ready for frame traffic, or `None`
 /// (not an upgrade / malformed — the connection is dropped).
-fn ws_upgrade(mut stream: TcpStream) -> Option<TcpStream> {
+///
+/// A non-empty `udp_cookie` rides the 101 response as an `X-Loft-UDP` header —
+/// the transport negotiation is **fully kernel-internal** (user directive,
+/// 2026-06-10: the game developer is never bothered with transport).  Browsers
+/// cannot read upgrade-response headers from JS and ignore it; a native
+/// client's kernel reads it and auto-hellos, earning the UDP fast path with
+/// zero meaning-level code on either side.
+fn ws_upgrade(mut stream: TcpStream, udp_cookie: &str) -> Option<TcpStream> {
     // The upgrade request is in flight from a live client; bound the read.
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -191,9 +198,14 @@ fn ws_upgrade(mut stream: TcpStream) -> Option<TcpStream> {
         return None;
     }
     let accept = crate::serve::ws_accept_key(&key);
+    let udp_header = if udp_cookie.is_empty() {
+        String::new()
+    } else {
+        format!("X-Loft-UDP: {udp_cookie}\r\n")
+    };
     let resp = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
-         Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+         Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{udp_header}\r\n"
     );
     stream.write_all(resp.as_bytes()).ok()?;
     // Frame phase: short timeout bounds a torn frame; the peek keeps idle free.
@@ -463,13 +475,17 @@ pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
         loop {
             match k.listener.accept() {
                 Ok((stream, _)) => {
-                    if let Some(s) = ws_upgrade(stream) {
-                        let cid = k
-                            .conns
-                            .iter()
-                            .position(Option::is_none)
-                            .unwrap_or(k.conns.len());
-                        let net = ClientNet::new(k.fresh_cookie(cid));
+                    let cid = k
+                        .conns
+                        .iter()
+                        .position(Option::is_none)
+                        .unwrap_or(k.conns.len());
+                    // Mint the cookie BEFORE the upgrade so the 101 response
+                    // carries the same value `ClientNet` stores — the whole
+                    // negotiation stays kernel-internal.
+                    let cookie = k.fresh_cookie(cid);
+                    if let Some(s) = ws_upgrade(stream, &cookie) {
+                        let net = ClientNet::new(cookie);
                         if cid == k.conns.len() {
                             k.conns.push(Some(s));
                             k.net.push(net);
@@ -654,29 +670,6 @@ pub fn n_kernel_clients(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 // ── 05a — the state-sync UDP channel ────────────────────────────────────────
-
-/// `udp_cookie(cid) -> text` — the client's UDP handshake cookie (destination-
-/// passing).  Empty when there is no UDP listener or no such connection.  The
-/// loft side transports it to the client inside its own protocol; the client
-/// echoes it in a `H:<cookie>` datagram to bind its UDP path.
-pub fn n_kernel_udp_cookie_dest(stores: &mut Stores, stack: &mut DbRef) {
-    // The dest ref is pushed LAST by the dest-pass emitter, so it pops FIRST
-    // (then the declared args in reverse) — the n_ymd_days_ago_dest order.
-    let dest = *stores.get::<DbRef>(stack);
-    let cid = *stores.get::<i64>(stack);
-    let v = with_kernel(|k| {
-        if k.conns.get(cid as usize).is_some_and(Option::is_some) {
-            k.net[cid as usize].cookie.clone()
-        } else {
-            String::new()
-        }
-    })
-    .unwrap_or_default();
-    stores
-        .store_mut(&dest)
-        .addr_mut::<String>(dest.rec, dest.pos)
-        .push_str(&v);
-}
 
 /// `udp_bound(cid) -> boolean` — does this client have a live UDP path?
 pub fn n_kernel_udp_bound(stores: &mut Stores, stack: &mut DbRef) {

@@ -244,12 +244,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_kernel_idle", crate::engine_host::n_kernel_idle),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_clients", crate::engine_host::n_kernel_clients),
-    // @PLN18 phase 05a — the state-sync UDP channel.
-    #[cfg(not(target_arch = "wasm32"))]
-    (
-        "n_kernel_udp_cookie_dest",
-        crate::engine_host::n_kernel_udp_cookie_dest,
-    ),
+    // @PLN18 phase 05a — the state-sync UDP channel.  (No cookie native: the
+    // handshake cookie rides the WS 101 response as an `X-Loft-UDP` header —
+    // transport negotiation is kernel-internal, invisible to loft code.)
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_udp_bound", crate::engine_host::n_kernel_udp_bound),
     #[cfg(not(target_arch = "wasm32"))]

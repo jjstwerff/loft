@@ -36,7 +36,10 @@ impl Drop for Guard {
     }
 }
 
-fn ws_connect(port: u16) -> TcpStream {
+/// Connect + upgrade; returns the stream and the `X-Loft-UDP` cookie from the
+/// 101 response head (the kernel-internal transport negotiation channel — no
+/// loft code on either side ever touches it).
+fn ws_connect(port: u16) -> (TcpStream, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let stream = loop {
         if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
@@ -58,8 +61,18 @@ fn ws_connect(port: u16) -> TcpStream {
         (&stream).read_exact(&mut b).unwrap();
         head.push(b[0]);
     }
-    assert!(String::from_utf8_lossy(&head).contains("101"));
-    stream
+    let head = String::from_utf8_lossy(&head).into_owned();
+    assert!(head.contains("101"));
+    let cookie = head
+        .lines()
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case("x-loft-udp")
+                .then(|| v.trim().to_string())
+        })
+        .unwrap_or_default();
+    (stream, cookie)
 }
 
 fn ws_recv(stream: &TcpStream) -> String {
@@ -113,8 +126,7 @@ fn main() {{
   engine_host::run({PORT}, {TICK_US},
     fn(ev: engine_host::Event) {{
       if ev.kind == 0 {{
-        ck = engine_host::udp_cookie(ev.cid);
-        engine_host::send(ev.cid, "7:{{ck}}");
+        engine_host::send(ev.cid, "hi:{{ev.cid}}");
       }}
     }},
     fn() {{
@@ -145,14 +157,13 @@ fn main() {{
         .expect("spawn kernel");
     let _guard = Guard(Some(child));
 
-    // 1. Connect; the first WS frame carries the cookie (meaning-transported).
-    let ws = ws_connect(PORT);
-    let cookie_frame = ws_recv(&ws);
-    let cookie = cookie_frame
-        .strip_prefix("7:")
-        .expect("cookie frame")
-        .to_string();
+    // 1. Connect; the cookie rides the 101 upgrade response (X-Loft-UDP) —
+    //    transport negotiation is kernel-internal, the loft program above
+    //    never references it.
+    let (ws, cookie) = ws_connect(PORT);
     assert_eq!(cookie.len(), 16, "16-hex-char cookie: {cookie:?}");
+    let hello_frame = ws_recv(&ws);
+    assert_eq!(hello_frame, "hi:0", "ordinary meaning traffic untouched");
 
     // 2. Pre-hello: sync_send falls back to WS — beacons arrive as plain
     //    WS text frames (no S: stamp).

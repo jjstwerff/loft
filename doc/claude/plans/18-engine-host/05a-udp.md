@@ -14,11 +14,16 @@ Kernel mechanics (`src/engine_host.rs`):
   a UDP bind failure is a warning — everything rides WS until restart).
 - **Cookie handshake** ties the UDP path to the WS session: the kernel issues
   a per-connection cookie (`RandomState`-seeded, 16 hex chars — LAN
-  spoof-resistance, not crypto; DTLS is the eventual hostile-network answer);
-  **the loft side transports it inside its own protocol** (cookie *issuance*
-  is mechanics, cookie *transport* is meaning — the host-boundary principle
-  applied to the handshake); the client echoes `H:<cookie>`, the kernel binds
-  the datagram source addr to that cid and acks `A:<cid>`.
+  spoof-resistance, not crypto; DTLS is the eventual hostile-network answer).
+  **The negotiation is fully kernel-internal** (user directive 2026-06-10 — a
+  core lavition/loft value: never bother the developer with details that
+  don't aid them): the cookie rides the WS **101 upgrade response** as an
+  `X-Loft-UDP` header — browsers can't read upgrade-response headers from JS
+  and ignore it; a native client's kernel reads it and echoes `H:<cookie>`,
+  the kernel binds the datagram source addr to that cid and acks `A:<cid>`.
+  No loft code on either side ever touches the cookie (the original
+  `udp_cookie()` surface was removed the same day it shipped — GOALS § Goal F
+  records this as the engine-surface instance of the friction test).
 - **Inbound conflation slots** (their first consumer, as deferred from phase
   01): `S:<seq>:<payload>` datagrams conflate to newest per sender — a higher
   seq overwrites the slot, a stale/reordered seq is **discarded** (never apply
@@ -35,9 +40,9 @@ Kernel mechanics (`src/engine_host.rs`):
   that): oversized sync sends drop with a once-per-kernel warning — never a
   halt; bulk belongs on the WS channel.
 
-Loft surface (`lib/engine_host`): `udp_cookie(cid)`, `udp_bound(cid)`,
+Loft surface (`lib/engine_host`): `udp_bound(cid)` (read-only introspection),
 `sync_send(cid, msg)`, `sync_next()` / `sync_cid()` / `sync_seq()` /
-`sync_payload()`.  `run()` is unchanged — sync drains inside the user's
+`sync_payload()` — nothing transport-shaped to configure.  `run()` is unchanged — sync drains inside the user's
 `on_tick`, which is what makes late-latch automatic.
 
 **The transport-selection contract (user-confirmed 2026-06-10): automatic per
@@ -49,7 +54,8 @@ end-to-end with zero client code either.
 
 ## Acceptance
 
-`tests/engine_host_udp.rs` (end-to-end, real sockets): cookie over WS →
+`tests/engine_host_udp.rs` (end-to-end, real sockets): cookie read from the
+101 `X-Loft-UDP` header (the fixture program never references transport) →
 WS-fallback beacons pre-hello → `H:`/`A:` binding → the same `sync_send`
 arriving as seq-stamped datagrams → a same-tick burst (seq 10, 12, then stale
 11) yields **exactly one** echo (the newest, 12) → a stale seq 5 is never
