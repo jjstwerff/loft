@@ -470,6 +470,10 @@ impl Parser {
         } else {
             u16::MAX
         };
+        // Start of the left operand — `known_var_or_type` below must point an
+        // "Unknown variable" caret here, not at the cursor that has drifted to
+        // the operator / statement terminator while the operand was parsed.
+        let operand_pos = self.lexer.peek_pos().clone();
         let mut current_type = self.parse_operators(var_tp, code, parent_tp, precedence + 1);
         loop {
             // a void left operand cannot have any binary operator
@@ -561,7 +565,7 @@ impl Parser {
                 }
                 return current_type;
             }
-            self.known_var_or_type(code);
+            self.known_var_or_type(code, &operand_pos);
             // Detect '++': not a valid operator in loft. Consume the extra '+',
             // emit an error, and continue as if a single '+' was written.
             if operator == "+" && self.lexer.has_token("+") && !self.first_pass {
@@ -1253,9 +1257,10 @@ impl Parser {
         let mut ret_val = Value::Null;
         let r_type = self.data.def(self.context).returned().clone();
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
+            let ret_pos = self.lexer.peek_pos().clone();
             let t = self.expression(&mut ret_val);
             if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
-                self.validate_convert("return", &t, &r_type);
+                self.validate_convert("return", &t, &r_type, &ret_pos);
             }
         } else if r_type != Type::Void && !self.first_pass {
             ret_val = self.null(&r_type);
@@ -1298,8 +1303,9 @@ impl Parser {
         lhs_type: &Type,
     ) {
         let mut rhs = Value::Null;
+        let rhs_pos = self.lexer.peek_pos().clone();
         let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
-        self.known_var_or_type(&rhs);
+        self.known_var_or_type(&rhs, &rhs_pos);
 
         if matches!(lhs_type, Type::Null) {
             // LHS is an untyped null literal: always use the RHS.
@@ -1509,9 +1515,10 @@ impl Parser {
             let mut second_code = Value::Null;
             let tp = parent_tp.clone();
             *parent_tp = ctp.clone();
+            let second_pos = self.lexer.peek_pos().clone();
             let second_type =
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
-            self.known_var_or_type(&second_code);
+            self.known_var_or_type(&second_code, &second_pos);
             if !self.first_pass && (operator == "==" || operator == "!=") {
                 if second_type == Type::Null && lhs_not_null {
                     let always = if operator == "==" { "false" } else { "true" };
@@ -1557,9 +1564,10 @@ impl Parser {
         } else {
             self.expr_not_null = false;
             let mut second_code = Value::Null;
+            let second_pos = self.lexer.peek_pos().clone();
             let second_type =
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
-            self.known_var_or_type(&second_code);
+            self.known_var_or_type(&second_code, &second_pos);
             if !self.first_pass
                 && (operator == "/" || operator == "%")
                 && (matches!(second_code, Value::Int(0)) || matches!(second_code, Value::Long(0)))

@@ -1412,17 +1412,17 @@ impl Parser {
         }
     }
 
-    fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type) {
+    fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type, pos: &Position) {
         if !self.first_pass && !self.can_convert(test_type, should) {
-            let res = self.lexer.peek();
             // Plan-07 phase 6 (partial) — "expected E, got G on context"
             // reads the same direction as English ("we expected this,
             // we got that"); the old shape "G should be E on context"
             // forced a mental flip and confused users new to the
-            // language.
-            specific!(
-                &mut self.lexer,
-                &res,
+            // language.  `pos` is the offending value's start, captured at
+            // parse time — the lexer cursor has drifted to the `;` by now.
+            diagnostic_at!(
+                self.lexer,
+                pos,
                 Level::Error,
                 "expected {}, got {} on {context}",
                 should.name(&self.data),
@@ -1472,6 +1472,7 @@ impl Parser {
     }
 
     /// Search for definitions with the given name and call that with the given parameters.
+    #[allow(clippy::too_many_arguments)]
     fn call(
         &mut self,
         code: &mut Value,
@@ -1480,6 +1481,7 @@ impl Parser {
         list: &[Value],
         types: &[Type],
         named_args: &[(String, Value, Type)],
+        arg_pos: &[Position],
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
@@ -1547,7 +1549,7 @@ impl Parser {
             }
         }
         if d_nr != u32::MAX {
-            self.call_with_named(code, d_nr, list, types, named_args, true)
+            self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos)
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else if name == "len"
@@ -2772,6 +2774,7 @@ impl Parser {
     }
 
     /// Resolve named arguments into positional slots, then delegate to `call_nr`.
+    #[allow(clippy::too_many_arguments)]
     fn call_with_named(
         &mut self,
         code: &mut Value,
@@ -2780,9 +2783,10 @@ impl Parser {
         pos_types: &[Type],
         named: &[(String, Value, Type)],
         is_method: bool,
+        arg_pos: &[Position],
     ) -> Type {
         if named.is_empty() {
-            return self.call_nr(code, d_nr, positional, pos_types, is_method);
+            return self.call_nr(code, d_nr, positional, pos_types, is_method, arg_pos);
         }
         // Build full argument vector with named args placed at the correct indices.
         let n_params = self.data.attributes(d_nr);
@@ -2835,7 +2839,10 @@ impl Parser {
         }
         args.truncate(last_provided);
         arg_types.truncate(last_provided);
-        self.call_nr(code, d_nr, &args, &arg_types, is_method)
+        // Named args are reordered into parameter slots, so the parse-order
+        // `arg_pos` no longer aligns; fall back to the cursor for the rare
+        // named-mismatch case.
+        self.call_nr(code, d_nr, &args, &arg_types, is_method, &[])
     }
 
     fn single_op(&mut self, op: &str, f: Value, t: Type) -> Value {
@@ -3669,7 +3676,7 @@ impl Parser {
                 && self.context != u32::MAX
                 && self.has_bound_for_method(&op_method)
             {
-                let tp = self.call_nr(code, stub_nr, list, types, false);
+                let tp = self.call_nr(code, stub_nr, list, types, false, &[]);
                 if tp != Type::Null {
                     return tp;
                 }
@@ -3693,7 +3700,7 @@ impl Parser {
                 {
                     continue;
                 }
-                let tp = self.call_nr(code, pos, list, types, false);
+                let tp = self.call_nr(code, pos, list, types, false, &[]);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
                     if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
@@ -3744,6 +3751,7 @@ impl Parser {
         list: &[Value],
         types: &[Type],
         report: bool,
+        arg_pos: &[Position],
     ) -> Type {
         let mut all_types = Vec::from(types);
         if self.data.def_type(d_nr) == DefType::Dynamic {
@@ -3758,7 +3766,7 @@ impl Parser {
                     return Type::Void;
                 };
                 if self.data.attr_type(r_nr, 0).is_equal(&types[0]) {
-                    return self.call_nr(code, r_nr, list, types, report);
+                    return self.call_nr(code, r_nr, list, types, report, arg_pos);
                 }
             }
             diagnostic!(
@@ -3778,7 +3786,7 @@ impl Parser {
             }
             return Type::Null;
         }
-        let mut actual = self.process_call_args(d_nr, list, types, &mut all_types, report);
+        let mut actual = self.process_call_args(d_nr, list, types, &mut all_types, report, arg_pos);
         if actual.is_empty() && !types.is_empty() {
             return Type::Null;
         }
@@ -3796,6 +3804,7 @@ impl Parser {
         types: &[Type],
         all_types: &mut [Type],
         report: bool,
+        arg_pos: &[Position],
     ) -> Vec<Value> {
         let mut actual = Vec::new();
         if types.is_empty() {
@@ -3875,7 +3884,15 @@ impl Parser {
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
                     let context = format!("call to {}", self.data.def(d_nr).original_name());
-                    self.validate_convert(&context, actual_type, &tp);
+                    // `arg_pos[nr]` is the argument's start, captured in
+                    // `parse_call`; the lexer cursor has drifted to `)` / `,`.
+                    // Synthetic / reordered call paths pass an empty slice and
+                    // fall back to the cursor.
+                    let pos = arg_pos
+                        .get(nr)
+                        .cloned()
+                        .unwrap_or_else(|| self.lexer.pos().clone());
+                    self.validate_convert(&context, actual_type, &tp, &pos);
                 } else if !self.can_convert(actual_type, &tp) {
                     return Vec::new();
                 }

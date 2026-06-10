@@ -10,20 +10,20 @@ mod testing;
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
-        .error("expected integer, got boolean on call to def at wrong_parameter:1:40")
+        .error("expected integer, got boolean on call to def at wrong_parameter:1:35")
         .warning("Parameter i is never read at wrong_parameter:1:21");
 }
 
 #[test]
 fn wrong_boolean() {
     code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
-        .error("expected EType, got boolean on call to def at wrong_boolean:2:38")
+        .error("expected EType, got boolean on call to def at wrong_boolean:2:33")
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
 #[test]
 fn unknown_var() {
-    code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:19");
+    code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:13");
 }
 
 /// S1: a misspelled variable name must produce a clear "Unknown variable" diagnostic
@@ -31,7 +31,7 @@ fn unknown_var() {
 #[test]
 fn typo_var_name() {
     code!("fn test() { count = 0; cound + 1; }")
-        .error("Unknown variable 'cound' — did you mean 'count'? at typo_var_name:1:33")
+        .error("Unknown variable 'cound' — did you mean 'count'? at typo_var_name:1:24")
         .warning("Variable count is never read at typo_var_name:1:20");
 }
 
@@ -77,7 +77,7 @@ fn test() {}"
 #[test]
 fn p07_no_suggest_single_letter_typo() {
     code!("fn test() { x = 5; y == 1 }")
-        .error("Unknown variable 'y' at p07_no_suggest_single_letter_typo:1:26")
+        .error("Unknown variable 'y' at p07_no_suggest_single_letter_typo:1:20")
         .warning("Variable x is never read at p07_no_suggest_single_letter_typo:1:16");
 }
 
@@ -86,7 +86,7 @@ fn p07_no_suggest_single_letter_typo() {
 #[test]
 fn p07_no_suggest_distant_name() {
     code!("fn test() { foo = 5; printbar == 1 }")
-        .error("Unknown variable 'printbar' at p07_no_suggest_distant_name:1:35")
+        .error("Unknown variable 'printbar' at p07_no_suggest_distant_name:1:22")
         .warning("Variable foo is never read at p07_no_suggest_distant_name:1:18");
 }
 
@@ -98,7 +98,7 @@ fn p07_no_suggest_distant_name() {
 fn p07_no_suggest_sibling_fn_scope() {
     code!("fn other() { cousin = 99; }\nfn test() { cousn == 1 }")
         .warning("Variable cousin is never read at p07_no_suggest_sibling_fn_scope:1:22")
-        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:1:42");
+        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:1:32");
 }
 
 // Field-suggestion paths (struct-literal + field-access) and the
@@ -115,13 +115,13 @@ fn p07_no_suggest_sibling_fn_scope() {
 #[test]
 fn use_before_define() {
     code!("fn test() { if a == 1 { panic(); }; a = 1; }")
-        .error("Unknown variable 'a' at use_before_define:1:22");
+        .error("Unknown variable 'a' at use_before_define:1:16");
 }
 
 #[test]
 fn wrong_text() {
     code!("fn rout(a: integer) -> integer {if a > 4 {return \"a\"} 2}\nfn test() {}")
-        .error("expected integer, got text on return at wrong_text:1:53");
+        .error("expected integer, got text on return at wrong_text:1:51");
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn wrong_plus() {
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
-        .error("expected integer, got text on else at wrong_if:2:1");
+        .error("expected integer, got text on else at wrong_if:1:34");
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn wrong_assign() {
 #[test]
 fn mixed_enums() {
     code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(V1) }")
-        .error("expected E2, got E1 on call to a at mixed_enums:4:19");
+        .error("expected E2, got E1 on call to a at mixed_enums:4:15");
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn undefined_enum() {
     // also flags V2 as UPPER_CASE-without-const because the parser
     // synthesised a placeholder local for it during recovery.
     code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
-        .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:37")
+        .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:33")
         .warning(
             "Variable 'V2' is UPPER_CASE — that style is reserved for constants.  \
              Declare with `const V2 = …` to make it immutable, or rename to lower_case. \
@@ -253,7 +253,7 @@ fn unknown_sizeof() {
     // const sweep then flags (P246 follow-up).
     code!("fn test() { sizeof(C); }")
         .error("Expect a variable or type after sizeof at unknown_sizeof:1:22")
-        .error("Unknown variable 'C' at unknown_sizeof:1:22")
+        .error("Unknown variable 'C' at unknown_sizeof:1:20")
         .warning(
             "Variable 'C' is UPPER_CASE — that style is reserved for constants.  \
              Declare with `const C = …` to make it immutable, or rename to lower_case. \
@@ -1037,7 +1037,7 @@ fn circular_init_error() {
 #[test]
 fn unknown_variable_error() {
     code!("fn test() -> integer { reuslt = 42; result }")
-        .error("Unknown variable 'result' — did you mean 'reuslt'? at unknown_variable_error:1:45")
+        .error("Unknown variable 'result' — did you mean 'reuslt'? at unknown_variable_error:1:37")
         .warning("Variable reuslt is never read at unknown_variable_error:1:32");
 }
 
@@ -1453,4 +1453,31 @@ fn gh247_noncapturing_closure_in_vector_ok() {
     code!(
         "fn dbl(x: integer) -> integer { x * 2 }\nfn test() { fs: vector<fn(integer) -> integer> = [dbl, fn(y: integer) -> integer { 7 }]; }"
     );
+}
+
+// ── #302 — expression diagnostics point at the offending token's start ───────
+// Before the fix the caret landed on the statement terminator (the `;` / past
+// the closing `)`); the lexer's current position at detection time, not the
+// offending sub-expression's start.  Each case pins the corrected column.
+
+/// An unknown variable as a call argument points at the variable, not the `;`.
+#[test]
+fn p302_unknown_var_arg_column() {
+    code!("fn test() { print(undefinedvar); }")
+        .error("Unknown variable 'undefinedvar' at p302_unknown_var_arg_column:1:19");
+}
+
+/// A type-mismatched argument points at the argument's start, not the `;`.
+#[test]
+fn p302_type_mismatch_arg_column() {
+    code!("fn test() { print(1 + 2); }")
+        .error("expected text, got integer on call to print at p302_type_mismatch_arg_column:1:19");
+}
+
+/// An undefined type in a struct literal yields `unknown type '…'` at the type
+/// name's start — not a misleading `Expect token ;` mid-`{`.
+#[test]
+fn p302_unknown_type_struct_literal() {
+    code!("fn test() { x = NoSuchType { a: 1 }; print(x); }")
+        .error("unknown type 'NoSuchType' at p302_unknown_type_struct_literal:1:17");
 }

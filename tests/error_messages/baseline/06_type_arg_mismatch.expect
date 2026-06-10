@@ -2,9 +2,9 @@
 ==== stdout ====
 ==== stderr ====
 error: expected integer, got text on call to add
-  --> <cases>/06_type_arg_mismatch.loft:3:20
+  --> <cases>/06_type_arg_mismatch.loft:3:15
   |
 3 |   x = add(1, "two");
-  |                    ^
+  |               ^
 
 error: aborting due to 1 previous error

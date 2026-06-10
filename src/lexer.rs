@@ -436,6 +436,13 @@ impl Lexer {
         &self.position
     }
 
+    /// Start position of the current lookahead token.  `pos()` returns the
+    /// scan cursor (the *end* of the peeked token); a diagnostic that should
+    /// point at the token the parser is about to consume needs its start.
+    pub fn peek_pos(&self) -> &Position {
+        &self.peek.position
+    }
+
     pub fn at(&self) -> (u32, u32) {
         (self.position.line, self.position.pos)
     }
@@ -1436,6 +1443,19 @@ impl Lexer {
         if let LexItem::Identifier(n) = self.peek().has {
             self.cont();
             Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Consume an identifier and return it together with its start position.
+    /// Diagnostics about the named entity (an unknown type / variable) must
+    /// point here; after consumption the cursor drifts to the next token.
+    pub fn has_identifier_pos(&mut self) -> Option<(String, Position)> {
+        if let LexItem::Identifier(n) = self.peek().has {
+            let pos = self.peek.position.clone();
+            self.cont();
+            Some((n, pos))
         } else {
             None
         }

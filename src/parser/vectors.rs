@@ -217,13 +217,14 @@ impl Parser {
         }
         let mut second_code = Value::Null;
         let mut parent_tp = Type::Unknown(0);
+        let second_pos = self.lexer.peek_pos().clone();
         let second_type = self.parse_operators(
             &Type::Unknown(0),
             &mut second_code,
             &mut parent_tp,
             precedence + 1,
         );
-        self.known_var_or_type(&second_code);
+        self.known_var_or_type(&second_code, &second_pos);
         if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
             self.can_convert(&second_type, &Type::Boolean);
         }
@@ -394,10 +395,12 @@ impl Parser {
         } else if self.lexer.has_token("panic") {
             self.lexer.token("(");
             self.parse_intrinsic_call(val, "panic")
-        } else if let Some(name) = self.lexer.has_identifier() {
-            self.parse_var(val, &name, parent_tp)
-        } else if self.lexer.has_token("$") {
-            self.parse_var(val, "$", parent_tp)
+        } else if let Some((name, name_pos)) = self.lexer.has_identifier_pos() {
+            self.parse_var(val, &name, parent_tp, &name_pos)
+        } else if self.lexer.peek_token("$") {
+            let name_pos = self.lexer.peek_pos().clone();
+            self.lexer.has_token("$");
+            self.parse_var(val, "$", parent_tp, &name_pos)
         } else if let Some(nr) = self.lexer.has_integer() {
             *val = Value::Int(nr as i32);
             I32.clone()
