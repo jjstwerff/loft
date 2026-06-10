@@ -384,6 +384,32 @@ outgrows a token bucket; **(3) deterministic netcode tests** — the in-process
 loopback channel gains loss/reorder/duplicate injection, so the reliability layer is
 tested without a network, and @PLAN50's probe targets extend with a loss% axis.
 
+### Broadcast bulk: measured, never assumed (user-directed 2026-06-10)
+
+Whether LAN broadcast actually helps is **environment-dependent in both
+directions** — some APs forward broadcast at base rate, some filter it
+entirely, some convert multicast to unicast; wired switches flood it for
+free.  A static rule ("wired = broadcast, wifi = unicast") misclassifies
+real venues both ways.  So 05c selects by **measurement, not classification**
+— and the NACK-chunk protocol is its own measuring instrument:
+
+1. **Probe burst**: a transfer opens with K chunks sent via broadcast; each
+   seat's first bitmap ack reports how many arrived.  That per-seat delivery
+   rate IS the decision variable — no separate benchmarking machinery.
+2. **Per-seat join/demote**: seats above the threshold (where
+   `repair traffic < full unicast send`, i.e. broadcast loss below ~30–50%)
+   ride the broadcast group; seats below get unicast chunk streams.  The
+   bitmap keeps measuring DURING the transfer, so a seat whose broadcast
+   loss spikes is demoted mid-flight.
+3. **Transport-fungible chunks**: a chunk is idempotent and the bitmap does
+   not care how it arrived — broadcast, unicast UDP repair, or WS.  So the
+   fallback ladder (broadcast → unicast UDP → WS) is not a mode switch;
+   it is just where a seat's next chunks come from, converging on the same
+   completion event.
+
+This is the 05a transport contract extended one level: the kernel measures
+and picks per seat (and per chunk); meaning never branches on transport.
+
 ### UDP on a normal LAN — what's actually needed (evaluated 2026-06-10)
 
 Engine-side (small): one well-known UDP port (client identity = the datagram's source
