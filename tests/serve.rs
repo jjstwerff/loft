@@ -17,6 +17,12 @@ fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
     p
 }
 
+/// A path as a JSON-string-safe value: Windows separators (`C:\Users\…`) are JSON escape
+/// characters and made every request unparseable on the Windows runner (`invalid escape \U`).
+fn json_path(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "\\\\")
+}
+
 /// Spawn the server on a test port in a background thread (it loops forever; the thread
 /// leaks, which is fine — nextest runs one process per test).  Returns once the port is
 /// accepting.
@@ -147,6 +153,7 @@ fn serve_ws_launch_run_streams_output() {
          fn main() {\n  a = greet(21);\n  print(\"hi a={a}\")\n}\n",
     );
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18782;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
@@ -154,7 +161,7 @@ fn serve_ws_launch_run_streams_output() {
     // launch the file → {ok:true}
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{jfile}\"}}"),
     );
     let launch = ws_recv(&mut ws);
     assert!(
@@ -182,12 +189,13 @@ fn serve_ws_compile_streams_diagnostics() {
     // @PLN16 M5e slice 2 — compile over the websocket → a structured `diagnostics` event.
     let path = tmp_program("diag", "fn main() {\n  X = 5;\n  print(\"{X}\")\n}\n");
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18783;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{jfile}\"}}"),
     );
     let msgs = recv_until(&mut ws, 4, |m| m.contains("\"event\":\"diagnostics\""));
     let all = msgs.join("\n");
@@ -258,6 +266,7 @@ fn serve_ws_writefile_saves_and_sandboxes() {
     // path outside it (the sandbox) is refused.
     let path = tmp_program("write", "fn main() { print(\"old\") }\n");
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18785;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
@@ -265,7 +274,7 @@ fn serve_ws_writefile_saves_and_sandboxes() {
     ws_send(
         ws.get_ref(),
         &format!(
-            "{{\"id\":1,\"req\":\"writeFile\",\"file_unused\":0,\"path\":\"{file}\",\"content\":\"fn main() {{ print(\\\"new\\\") }}\\n\"}}"
+            "{{\"id\":1,\"req\":\"writeFile\",\"file_unused\":0,\"path\":\"{jfile}\",\"content\":\"fn main() {{ print(\\\"new\\\") }}\\n\"}}"
         ),
     );
     let r1 = ws_recv(&mut ws);
@@ -321,6 +330,7 @@ fn serve_ws_writefile_then_relaunch_runs_new_code() {
     // re-`launch` for the new code to take effect.  This proves that server-side contract.
     let path = tmp_program("reload", "fn main() { print(\"old\") }\n");
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18787;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
@@ -328,14 +338,14 @@ fn serve_ws_writefile_then_relaunch_runs_new_code() {
     ws_send(
         ws.get_ref(),
         &format!(
-            "{{\"id\":1,\"req\":\"writeFile\",\"path\":\"{file}\",\"content\":\"fn main() {{ print(\\\"NEW\\\") }}\\n\"}}"
+            "{{\"id\":1,\"req\":\"writeFile\",\"path\":\"{jfile}\",\"content\":\"fn main() {{ print(\\\"NEW\\\") }}\\n\"}}"
         ),
     );
     assert!(ws_recv(&mut ws).contains("\"ok\":true"), "writeFile ok");
     // re-launch (reads the new disk content), then run executes it
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":2,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":2,\"req\":\"launch\",\"file\":\"{jfile}\"}}"),
     );
     assert!(
         ws_recv(&mut ws).contains("\"id\":2,\"ok\":true"),
@@ -361,18 +371,19 @@ fn serve_ws_breakpoint_stops_with_line_and_locals() {
         "fn dbl(n: integer) -> integer {\n  r = n * 2;\n  r\n}\nfn main() {\n  x = dbl(21);\n  print(\"x={x}\")\n}\n",
     );
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18788;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{jfile}\"}}"),
     );
     assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
     ws_send(
         ws.get_ref(),
         &format!(
-            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":2}}]}}"
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{jfile}\",\"breakpoints\":[{{\"line\":2}}]}}"
         ),
     );
     assert!(
@@ -413,12 +424,13 @@ fn serve_ws_run_tests_reports_pass_and_fail() {
         "fn test_pass() {\n  assert(1 + 1 == 2, \"math\");\n}\nfn test_fail() {\n  assert(1 == 2, \"deliberately fails\");\n}\n",
     );
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18789;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"runTests\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"runTests\",\"file\":\"{jfile}\"}}"),
     );
     let all = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"testSummary\"")).join("\n");
     assert!(
@@ -471,12 +483,13 @@ fn serve_ws_run_suite_runs_package_tests() {
         .join("src/suitepkg.loft")
         .to_string_lossy()
         .into_owned();
+    let jentry = json_path(&root.join("src/suitepkg.loft"));
     let port = 18790;
     start_server(port, entry.clone());
     let mut ws = ws_connect(port);
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"runSuite\",\"file\":\"{entry}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"runSuite\",\"file\":\"{jentry}\"}}"),
     );
     let all = recv_until(&mut ws, 8, |m| m.contains("\"event\":\"testSummary\"")).join("\n");
     assert!(
@@ -515,12 +528,13 @@ fn serve_ws_game_launch_streams_and_stops() {
         "fn main() {\n  for i in 0..3 {\n    print(\"frame {i}\");\n  }\n}\n",
     );
     let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
     let port = 18791;
     start_server(port, file.clone());
     let mut ws = ws_connect(port);
     ws_send(
         ws.get_ref(),
-        &format!("{{\"id\":1,\"req\":\"launchGame\",\"file\":\"{file}\"}}"),
+        &format!("{{\"id\":1,\"req\":\"launchGame\",\"file\":\"{jfile}\"}}"),
     );
     assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
     // Poll until the game exits (bounded), accumulating drained output.
@@ -551,7 +565,7 @@ fn serve_ws_game_launch_streams_and_stops() {
         "gameloop",
         "fn main() {\n  i = 0;\n  while true {\n    i = i + 1;\n  }\n}\n",
     );
-    let loop_file = loop_path.to_string_lossy().into_owned();
+    let loop_file = json_path(&loop_path);
     ws_send(
         ws.get_ref(),
         &format!("{{\"id\":2,\"req\":\"launchGame\",\"file\":\"{loop_file}\"}}"),

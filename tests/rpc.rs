@@ -17,6 +17,12 @@ fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
     p
 }
 
+/// A path as a JSON-string-safe value: Windows separators (`C:\Users\…`) are JSON escape
+/// characters and made every request unparseable on the Windows runner (`invalid escape \U`).
+fn json_path(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "\\\\")
+}
+
 /// Run the RPC server over `requests` (joined by newlines) and return the output text.
 fn drive(requests: &[String]) -> String {
     let input = Cursor::new(requests.join("\n").into_bytes());
@@ -32,7 +38,7 @@ fn rpc_launch_break_eval_continue() {
         "basic",
         "fn helper(n: integer) -> integer {\n  n * 2\n}\nfn main() {\n  a = helper(21);\n  print(\"a={a}\")\n}\n",
     );
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
         format!(
@@ -86,7 +92,7 @@ fn rpc_conditional_breakpoint_struct_field() {
          fn use_pt(p: Point) -> integer {\n  p.x + p.y\n}\n\
          fn main() {\n  use_pt(Point { x: 1, y: 2 });\n  use_pt(Point { x: 9, y: 2 })\n}\n",
     );
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
         format!(
@@ -122,7 +128,7 @@ fn rpc_eval_struct_as_json() {
          fn use_pt(p: Point) -> integer {\n  p.x + p.y\n}\n\
          fn main() {\n  use_pt(Point { x: 9, y: 2 })\n}\n",
     );
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
         format!(
@@ -163,7 +169,7 @@ fn rpc_eval_bare_vector_live() {
          }\n\
          fn main() {\n  build()\n}\n",
     );
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
         // line 5 is `total = nums[0] + mobs[0].hp;` — both locals are live (read here).
@@ -200,7 +206,7 @@ fn rpc_compile_emits_structured_diagnostics() {
     // `X = 5` is clean but warns (UPPER_CASE reserved for constants) — proves warnings
     // surface here even though `launch`/run treat the program as runnable.
     let path = tmp_program("warn", "fn main() {\n  X = 5;\n  print(\"{X}\")\n}\n");
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
         "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
@@ -222,7 +228,7 @@ fn rpc_compile_emits_structured_diagnostics() {
 fn rpc_compile_reports_errors() {
     // A call to an undefined function is an error the two-pass parser catches.
     let path = tmp_program("err", "fn main() {\n  no_such_function()\n}\n");
-    let file = path.to_str().unwrap();
+    let file = json_path(&path);
     let out = drive(&[
         format!("{{\"id\":1,\"req\":\"compile\",\"file\":\"{file}\"}}"),
         "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
