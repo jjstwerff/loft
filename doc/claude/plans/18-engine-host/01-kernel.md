@@ -44,8 +44,25 @@ the captured world persists in the store under the existing closure-record
 machinery — no language change, no anchor, and the audience-server migration
 becomes nearly mechanical (`srv.run(fn(ev){…})` is already this shape).
 Forward-compatible with @PLN13 (script mode just removes the `main` wrapper).
-**Probe 2 becomes:** Rust invoking a registered loft closure re-entrantly —
-precedent: `parallel.rs` dispatches loft fns from Rust worker threads.
+**Probe 2 — RESOLVED (2026-06-10), with a crash found on the way.** The loop
+skeleton lives in the kernel's **loft library** (`run()` calling `kernel_wait`/
+`kernel_next_event`/`kernel_tick_due` natives), so closures are invoked by the
+interpreter's **own fn-ref call** — no Rust→closure machinery at all; every
+loop decision stays behind the natives (host-boundary intact). The probed
+matrix then found the registration-shape boundary:
+
+| Closure shape | Verdict |
+|---|---|
+| passed as a **fn argument**, invoked in callee (the `srv.run` shape) | ✅ both backends |
+| in a **local**, same-fn invoke | ✅ |
+| plain fn (no captures) in a struct field, cross-fn | ✅ |
+| **capturing closure in a struct field, invoked cross-fn** | 💥 **both backends** — filed [#313](https://github.com/loft-lang/loft/issues/313) (interp SIGSEGV / native OOB `u16::MAX`), `wa:clean` |
+
+So registration is **by arguments**: `kernel_run(on_event, on_tick)` rather than
+a `Kernel { on_event: fn… }` struct (until #313 lands). Final probe: a library
+`run` loop invoking arg-closures 100× with captures mutating throughout —
+**identical results on interp and native** (`events=100 ticks=34`). The
+dispatch mechanic is fully proven in pure loft.
 
 **Harness lesson (not a compiler bug):** two codegen panics during probing
 (`Incorrect var _elm_3…`, `Incorrect stack…`) were both *my harness compiling a
@@ -67,10 +84,11 @@ bind-indexed-lookup-to-a-local-first pattern for hash mutation.)
   slots + bulk accumulation land when the consumer (@PLAN50 / assets) arrives,
   per wire-schema-as-data registration (table present from day one, one row).
 - **Dispatch v1:** parse+compile the program once (diagnostics-checked), run
-  `main` once; `kernel(port)` / `k.on_event(fn…)` / `k.on_tick(fn…)` natives
-  register closure values; `k.run()` enters the Rust loop, which invokes the
-  registered closures per event/tick (probe 2's mechanism; `parallel.rs` is the
-  precedent for Rust-side loft-fn invocation).
+  `main` once; main calls the kernel library's `run(on_event, on_tick, port)`
+  (closures **as arguments**, per #313), whose loft-side loop body invokes them
+  via ordinary fn-ref calls while `kernel_wait`/`kernel_next_event`/
+  `kernel_tick_due`/`kernel_send` natives carry all mechanics (pumps, queues,
+  budgets, drift-free ticks) in Rust.
 - **CLI:** `loft host <program.loft> [--port N]`.
 - **Acceptance:** the @PLN6 audience server's meaning ported onto handlers —
   identical observable behaviour under the existing probe/load tools; then the
