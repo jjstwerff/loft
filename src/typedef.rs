@@ -336,9 +336,13 @@ fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::Hash
     }
     for a_nr in 0..data.attributes(d_nr) {
         let a_type = data.attr_type(d_nr, a_nr);
-        // Only recurse into value-typed struct fields (Reference fields are pointers,
-        // not inline — they don't cause infinite-size cycles).
-        if let Type::Reference(child_nr, _) = &a_type
+        // Only recurse into value-typed struct fields.  A `reference<T>`
+        // field (the `u16::MAX` share-marker dep, #328) is a 12-byte
+        // pointer, not inline bytes — it cannot cause an infinite-size
+        // cycle, and skipping it here is exactly what makes
+        // `reference<Self>` legal.
+        if let Type::Reference(child_nr, deps) = &a_type
+            && !deps.contains(&u16::MAX)
             && data.def_type(*child_nr) == DefType::Struct
             && has_value_cycle(data, *child_nr, visiting)
         {

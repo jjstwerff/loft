@@ -1642,7 +1642,28 @@ impl Parser {
                     "reference" => {
                         self.lexer.closing_angle();
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
-                        Type::Reference(sub_nr, Vec::new())
+                        // #328: in struct-field position `reference<T>` is the
+                        // documented POINTER — the `u16::MAX` dep is the
+                        // auto-Reference share marker that selects the 12-byte
+                        // `Parts::DbRef` layout in `fill_database` and the
+                        // OpGetDbRef / OpSetDbRef read/write arms.  Without it
+                        // the parse erased the pointer-ness: the field laid
+                        // out as INLINE `T` bytes (a silent deep copy on
+                        // write), `next: null` construction panicked on the
+                        // unpositioned-field marker, and `reference<Self>`
+                        // could not exist at all.  Non-field positions
+                        // (locals, parameters, return types) keep the plain
+                        // shape — their semantics are unchanged by #328.
+                        if on_d != u32::MAX
+                            && matches!(
+                                self.data.def_type(on_d),
+                                DefType::Struct | DefType::EnumValue
+                            )
+                        {
+                            Type::Reference(sub_nr, vec![u16::MAX])
+                        } else {
+                            Type::Reference(sub_nr, Vec::new())
+                        }
                     }
                     "iterator" => {
                         // CO1.3c: comma and second type are optional for generators.

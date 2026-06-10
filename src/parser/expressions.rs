@@ -833,6 +833,23 @@ impl Parser {
             {
                 is_text = true;
             }
+            // #328: `x = x.next` would give x a SELF-dep ("x borrows from
+            // x") — a degenerate borrow that flips the var into the
+            // dependent-view codegen class (InitCreateStack) and corrupts
+            // the frame.  Strip the self-entry; the remaining deps (if
+            // any) still carry the real borrow sources.  The pre-Set free
+            // stays safe: codegen's S1 guard skips it whenever the RHS
+            // reads `v` itself.
+            let stripped: Type;
+            let tp = if let Type::Reference(d, deps) = tp
+                && deps.contains(v_nr)
+            {
+                let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
+                stripped = Type::Reference(*d, kept);
+                &stripped
+            } else {
+                tp
+            };
             if !is_text || *tp != Type::Character {
                 self.change_var_type(*v_nr, tp);
             }

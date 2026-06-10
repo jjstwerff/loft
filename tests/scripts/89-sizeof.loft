@@ -62,7 +62,9 @@ struct SzRS { a: integer, b: integer, c: integer }
 struct SzRMain { s: vector<SzRS>, biggest: reference<SzRS> }
 
 fn test_sizeof_reference_field() {
-  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 42824,
+  // #328: `biggest: reference<SzRS>` is a 12-byte DbRef pointer field
+  // (4B vector header + 12B ref = 16B SzRMain), not SzRS's inline bytes.
+  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 41624,
     "reference field sizes");
 }
 

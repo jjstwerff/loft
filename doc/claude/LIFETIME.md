@@ -152,6 +152,14 @@ branches, conservative across loop bodies) and emits an explicit
 tracked (a call with no visible-attr return dep; a same-struct var copy);
 everything else is Unknown and never freed this way.
 
+**Self-read transition residual (#328).**  When the borrowing RHS reads the
+variable itself (`x = x.next` — the linked-list walk), the pre-Set free is
+skipped (it would invalidate what the RHS dereferences), so the owned store
+survives until scope exit: ONE bounded store per owned→self-read-borrow
+transition, also when the reassign sits inside a loop (the depth guard).
+Correctness is unaffected.  Walks that start from a borrow (e.g. iterating a
+structure owned elsewhere) do not pay it.
+
 Two runtime backstops make any future wrong-free loud instead of corrupting:
 `free_named` refuses to free the eval-stack store (slot 0,
 `Stores::stack_store_at_zero`), and the slot allocator panics with a
