@@ -155,3 +155,44 @@ a restarted cabinet must rebind through TIME_WAIT.
 Remaining for phase 01: the 00(c) stamp-chain re-run on the kernel (the ~40 ms
 interp-harness term must collapse) and optionally `load_test.loft` at the
 kernel port.
+
+## The 00(c) stamp chain on the kernel — phase acceptance (2026-06-10)
+
+`tools/audience-demo-50/probe_server_kernel.loft` is `probe_server.loft`'s
+meaning on the kernel (same wire protocol + port 18084); the unchanged
+`probe.loft` client drives both.  12 clients, 12 s, 30 Hz, echo every 200 ms:
+
+| metric (µs) | lib/server baseline | kernel | floor |
+|---|---|---|---|
+| server hold p50 (t5−t1, one clock, exact) | 253 561 | **18 600** | 16 667 (half-tick — the by-design next-tick wait) |
+| server hold max | 1 138 862 | 32 178 | 33 333 (one tick) |
+| total turn-around p50 | 368 494 | 56 477 | |
+| wire+client legs p50 | 114 933 | 37 877 | (the probe client's own interp drain — the measuring instrument, not the kernel) |
+
+- **The acceptance metric held:** the interp-harness pump term collapsed —
+  hold residual above the half-tick floor is **~1.9 ms** (was ~237 ms over
+  floor on the unfixed lib/server pump; the loft-libs-net peek fix brings
+  that baseline down too, but the kernel needs no library fix at all — the
+  pump IS the Rust peek loop).
+- **N-stable:** 30 clients → hold p50 22 756, max 39 537 (tick-bounded; the
+  old pathology scales N×21 ms ≈ 630 ms).  Full pose fan-out sustained:
+  center clients receive ~29.8 poses/tick = **30 clients × 30 Hz through the
+  interpreted kernel loop** (~21 k sends/s) — the phase-04 checkpoint hit at
+  probe level.
+- The audience `load_test.loft` run is superseded by this richer 30-client
+  probe (same class, more load, plus the stamp chain).
+
+**Phase 01 verdict: complete.**  Built: the kernel natives + `lib/engine_host`
+loop skeleton, both acceptance gates green (audience differential + stamp
+chain).  Deliberately NOT built (no consumer yet — they land with the phase
+that needs them, not as scaffolding):
+
+- **Conflation slots + bulk class** → 05a (UDP state-sync datagrams) is their
+  first real consumer; the event queue is the only class with traffic today.
+- **Wire-schema-as-data table** → lands with the second traffic class (a
+  one-row table dispatching nothing is machinery without meaning).
+- **Connector role** (client-side kernel, window/GL feature-gate) → first
+  native client (phase 04 / bumper-airplanes).
+- **Stamp-at-queue-boundary debug primitive** → with the IDE pipeline panel
+  (@PLN16 follow-up); the loft-side chain (t1 at drain via `ticks()`) already
+  measures what phases 01–05a need.
