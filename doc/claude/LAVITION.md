@@ -191,7 +191,7 @@ interpreted.  You lose the performance tier on that one function, never the
 ability to edit a live game.
 
 *Build-side notes:* the engine-host design exploration —
-[plans/16-debugger/ENGINE_HOST.md](plans/16-debugger/ENGINE_HOST.md) — records the
+[plans/18-engine-host/ENGINE_HOST.md](plans/18-engine-host/ENGINE_HOST.md) — records the
 entry-gate probes for this model (the wasm bridge-tax measurement, unload safety, the
 N9 dispatch table as the real build), the **main-loop IO contract** (frame-boundary
 drain with byte/time budgets, completion-as-event, store-resident accumulation of long

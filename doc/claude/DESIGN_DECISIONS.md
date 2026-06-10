@@ -879,7 +879,7 @@ Pointer from the source:
 ## C71 — Native libraries compile, scripts interpret — the steady-state execution model
 
 > *Build-plan seed:* the engine-host design exploration —
-> [plans/16-debugger/ENGINE_HOST.md](plans/16-debugger/ENGINE_HOST.md) (tier model per
+> [plans/18-engine-host/ENGINE_HOST.md](plans/18-engine-host/ENGINE_HOST.md) (tier model per
 > LAVITION § Execution granularity, entry-gate probes, the main-loop IO contract,
 > dogfood prior art from @PLN6 / @PLAN50).
 

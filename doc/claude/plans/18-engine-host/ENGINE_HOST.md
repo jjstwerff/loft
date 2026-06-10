@@ -3,13 +3,14 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 16.H — the engine host: tiered execution + the main-loop IO contract
+# @PLN18 — the engine host: tiered execution + the main-loop IO contract (design)
 
-> **Identity:** a design sub-doc of `@PLN16` (debugger), slug `engine-host`.
-> **Status: design EXPLORATION — recorded evaluations, no decision and no build.**
-> This is the seed the **C71/N9 build plan** starts from (the per-fn execution model
+> **Identity:** the design doc of [`@PLN18`](README.md) (engine host), slug `engine-host`.
+> Grown from the @PLN16 (debugger) exploration and **graduated to this plan**.
+> **Status: recorded evaluations — the build is phased in [README.md](README.md).**
+> This is the C71/N9 execution model made buildable (the per-fn execution model
 > [DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
-> names as the steady state). It gates [IDE.md](IDE.md) slices **6b** (hot-swap `reload`)
+> names as the steady state). It gates [IDE.md](../16-debugger/IDE.md) slices **6b** (hot-swap `reload`)
 > and **6c** (breakpoint-in-game). Canonical context: [LAVITION.md](../../LAVITION.md)
 > (the engine), [GOALS.md](../../GOALS.md) § Purpose (live prototyping, AS/400 reliability).
 
