@@ -66,8 +66,14 @@ only spreads the joysticks and screens around the room:
   *without* prediction, rollback, reconciliation, or lag compensation — the
   single-machine illusion holds because the network is effectively a long controller
   cable. The thin-client model is not a limitation here; it **is** the goal.
-- **Walk-up join** — grab the stick: QR/instant join (the audience demo's proven
-  flow), drop-in/drop-out, no lobby ceremony.
+- **Two participation tiers — and the phone is the on-ramp, not the end goal.** The
+  **full arcade seat** is a *native client*: a real screen, real input (gamepad /
+  keyboard / cabinet stick), full rendering — that is what the experience is designed
+  toward, and what the native(/eventually UDP) path serves. The **phone-browser
+  client** is the *walk-up tier*: QR-scan, zero install, in the game in seconds (the
+  audience demo's proven flow), drop-in/drop-out, no lobby ceremony — how a bystander
+  joins the fun instantly, within what a phone's input/display affords. Easy
+  participation by design; never the bar the game is built against.
 - **The shared spectacle** — the projector/big screen is the cabinet's screen
   (exactly the audience-demo + bumper-planes shape); personal screens are controls
   and auxiliary views.
