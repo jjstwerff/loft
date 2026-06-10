@@ -278,14 +278,22 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
      `serve_ws_game_launch_streams_and_stops` (finite game → output + `exit:0`; infinite loop
      → killed). This transport is exactly what the GL window uses the day the graphics lib
      lands — launching a windowed game is the same child process.
-   - **6b — `reload` hot-swap + 6c — breakpoint-in-game: DEFERRED, dependencies named.**
-     Both need substrate that does not exist on this branch: the **graphics runtime**
-     (`lib/graphics` is untracked here — its sources live on another line of work) and the
-     **C71/N9 per-fn interpret-on-compiled-baseline execution model over a shared store**
-     ([DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md) — a design, not yet a build).
-     Faking either (e.g. "hot-swap" by full restart) would ship the workaround as the
-     feature. **Trigger to resume:** lib/graphics landing on the working branch, or the C71
-     execution model getting its own build plan.
+   - **6b — `reload` hot-swap + 6c — breakpoint-in-game: OPEN (the plan continues).**
+     The real dependency is the **C71/N9 per-fn interpret-on-compiled-baseline execution
+     model over a shared store** ([DESIGN_DECISIONS § C71](../../DESIGN_DECISIONS.md) — a
+     design, not yet a build); faking hot-swap (e.g. by full restart) would ship the
+     workaround as the feature, so 6b/6c wait for that build.
+     **Correction (2026-06-10, the library-register inspection):** the graphics runtime is
+     NOT missing — `graphics` (with gridmesh/imaging/shapes) is a **published registry
+     package** (`loft-lang/loft-libs-graphics`, signed index at `loft-lang/registry`), one
+     `loft install graphics` away; the untracked `lib/graphics` dir on this branch is a
+     migration leftover (runtime droppings, no sources). The parser already probes
+     `~/.loft/lib/<id>/…` (`probe_user_installed` / `probe_registry_installed`, with an
+     auto-install chain), and the moros libs on this branch declare `graphics = ">=0.1"` —
+     so **6a's Game button should reach a real native GL window today** via an installed
+     registry package. **Next step on this slice:** verify install → `use graphics` →
+     `launchGame` end-to-end (upgrades 6a from "transport ready" to "verified with the
+     window"), then 6b/6c when C71 gets its build plan.
 
 Slices 1–5 make a usable IDE for a **self-contained** loft program (the stdlib is its only
 dependency); slice 6 is the lavition payoff. They land in order; 1 is the prerequisite for
@@ -342,7 +350,12 @@ Both callers (file-run debugger, rpc/serve `launch`) want fresh-load semantics; 
 incremental path is `eval`, untouched. (Trade-off: re-parses the small stdlib per launch; a
 baseline-parser cache is the perf follow-up.) **Still open before library dev is real:**
 **`loft.toml` auto-resolution** (so deps resolve without explicit `--lib`) and **multi-file
-navigation**.
+navigation**. **Nuance from the library-register inspection (2026-06-10):** the parser
+already resolves **installed registry packages** without any `--lib` — it probes
+`~/.loft/lib/<id>/…` (`probe_user_installed` / `probe_registry_installed`, with a lockfile →
+installed → auto-install chain on `use`). So the remaining `--lib` need is for **local
+path-dep development** (a package's own `src/` + sibling deps, the `runSuite` shape); a
+registry dep like `graphics = ">=0.1"` should resolve in the IDE today once installed.
 
 ## The REPL panel — a prime, context-switching element
 

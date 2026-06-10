@@ -104,9 +104,12 @@ phase 2):** `loft debug --rpc` — the NDJSON stdio driver over the engine (`src
 a thin serialiser over `ReplSession` speaking the [wire protocol](PROTOCOL.md); requests
 parse via loft's inbuilt JSON, `eval` values serialise via `.to_json()`, program output
 streams as `output` events. The *agent* surface is real (`tests/rpc.rs` drives a full
-session over a pipe). **Next**: the **`--serve` WebSocket + browser** (M5b/M5e) — the
-editor + run/test buttons + suite runner + debugger + compiler/program console IDE,
-reusing the viewer shell over the same protocol.
+session over a pipe). **The `--serve` browser IDE (M5b/M5e) landed 2026-06-10** — editor,
+Run/Test/Suite/Game buttons, the debugger inside, dual console + REPL panel, all over the
+same protocol (slices 1–5 + 6a; see the M5e status below). **Next on this plan**: the
+slice-6 remainder — verify the registry GL path (`loft install graphics` → a windowed
+`launchGame`), then hot-swap `reload` + breakpoint-in-game once the C71/N9 shared-store
+execution model gets its build plan.
 
 This is the **purpose the REPL work serves**: the REPL is not standalone
 dev-tooling, it is the *interactive surface of a breakpoint debugger*. The plan
@@ -505,22 +508,27 @@ M5d (the condition reuses **E**).
   `launchGame`/`reload`), same one-message-⇄-one-method invariant, reusing the plan-35
   viewer shell. Six slices (foundation `--serve`+shell+Run → compiler console → editor →
   debugger UI → test/suite runners → the game loop with native OpenGL + live hot-swap);
-  slices 1–5 are a usable IDE for a **self-contained** loft program (stdlib-only — library /
-  dependency support is an open gap, see [IDE.md](IDE.md) § Library vs project), slice 6 is
-  the lavition payoff. This is [`live-prototyping`](../../GOALS.md) made literal — see
-  [LAVITION.md](../../LAVITION.md).
-  **Status (2026-06-10) — slices 1–4 LANDED, slice 5 in progress.** `loft debug <file>
-  --serve` (`src/serve.rs`) serves an HTTP + WebSocket shell that drives the `--rpc`
-  `handle()` over WS (`tests/serve.rs` proves the socket round-trip): **(1)** foundation +
-  Run + Program console; **(2)** compiler console (`compile` → structured `diagnostics`);
-  **(3)** editor (editable textarea + gutter, sandboxed `writeFile`, Save / Run-reload);
-  **(4)** debugger UI (gutter breakpoints, current-line marker via `paused_line`, step
-  controls, **bounded** variables + watch panels) — plus a context-switching **REPL** panel.
-  **(5)** `runTests` engine + protocol landed (`ReplSession::run_file_tests`); its UI and the
-  package-aware `runSuite` are pending. **Known gap:** the serve session is **stdlib-only /
-  single-file**, so library development — and projects with library deps, the real lavition
-  consumers — is not yet supported; the dependency-resolution direction is in
-  [IDE.md](IDE.md) § Library vs project.
+  slices 1–5 make a usable IDE for any single-file (or `--lib`-resolved) loft program,
+  slice 6 is the lavition payoff. This is [`live-prototyping`](../../GOALS.md) made literal —
+  see [LAVITION.md](../../LAVITION.md).
+  **Status (2026-06-10) — slices 1–5 + 6a LANDED; the plan stays OPEN** (6b/6c + the
+  library-dev follow-ups continue). `loft debug <file> --serve [--lib <dir>…]`
+  (`src/serve.rs`) serves an HTTP + WebSocket shell that drives the `--rpc` `handle()` over
+  WS (`tests/serve.rs` proves the socket round-trip): **(1)** foundation + Run + Program
+  console; **(2)** compiler console (`compile` → structured `diagnostics`); **(3)** editor
+  (editable textarea + gutter, sandboxed `writeFile`, Save / Run-reload); **(4)** debugger UI
+  (gutter breakpoints, current-line marker via `paused_line`, step controls, **bounded**
+  variables + watch panels) — plus a context-switching **REPL** panel; **(5)** test + suite
+  runners (`runTests` per file; `runSuite` = the package-aware `loft test` semantics over the
+  nearest `loft.toml`); **(6a)** the game-process layer (`launchGame`/`gameStatus`/`stopGame`
+  — a real `loft` child process streaming into the shell; the same transport a windowed GL
+  game uses). The session takes `--lib` dirs and `load_program` is idempotent, so
+  library-using programs edit/run/test repeatedly. **Open work on this plan:** **6b/6c**
+  (hot-swap `reload` + breakpoint-in-game — gated on the C71/N9 shared-store execution model
+  getting its build plan); verify the **registry GL path** (`loft install graphics` →
+  `launchGame` with a native window — see IDE.md slice 6's correction note); **multi-file
+  navigation**; `--lib`-free **local path-dep resolution**; streamed (vs batched) test
+  results; the baseline-parser cache.
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a
