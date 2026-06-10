@@ -14597,3 +14597,53 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(1));
 }
+
+// ── Issue 323 ────────────────────────────────────────────────────────────────
+// A factory-returned bare closure capturing a local struct freed the capture
+// at the factory's return (the return-position OpFreeRef): the escaped
+// closure's record kept a DbRef into the dead frame and corrupted whatever
+// reused the slot.  Both backends were affected — interp only LOOKED sound
+// because its allocation order happened not to reuse the slot in small
+// programs.  Fix: `get_free_vars` (scopes.rs) widens the Plan-57 captured-cell
+// suppression to every Reference-typed capture; the closure record's cascade
+// is the single owner of the captured store.
+
+#[test]
+fn issue_323_factory_closure_reference_capture_survives_reuse() {
+    code!(
+        "struct Counter { n: integer not null }
+fn make() -> fn() -> integer {
+    w = Counter { n: 7 };
+    fn() -> integer { w.n = w.n + 1; w.n }
+}
+fn run() -> integer {
+    f = make();
+    spam1 = Counter { n: 31337 };
+    spam2 = Counter { n: 41414 };
+    a = f();
+    b = f();
+    a * 1000000 + b * 100 + (spam1.n - 31337) + (spam2.n - 41414)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(8_000_900));
+}
+
+// Within-frame closures keep working: the record's frame-exit free cascades
+// the captured store, so nothing leaks and the capture stays live for the
+// whole frame.
+#[test]
+fn issue_323_in_frame_reference_capture_still_works() {
+    code!(
+        "struct Counter { n: integer not null }
+fn run() -> integer {
+    w = Counter { n: 7 };
+    f = fn() { w.n = w.n + 1; };
+    f();
+    f();
+    w.n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(9));
+}

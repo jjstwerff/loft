@@ -1665,27 +1665,26 @@ impl Scopes {
                                 | Type::Index(_, _, _)
                                 | Type::Spacial(_, _, _)
                         ));
-                // Plan-57 Phase B (Mechanism B): a captured mutable closure cell
-                // (`Reference(__cell_*, _)` marked `captured`) is OWNED by the
-                // closure record, not the defining frame.  The record's cascade
-                // free (`Stores::free_named`, allocation.rs:301) releases the cell
-                // when the closure value dies, so the defining-frame `OpFreeRef`
-                // here is redundant — and actively harmful once rc is gone: for an
-                // ESCAPED closure (factory return) it frees a slot the live closure
-                // still references, the next factory call reuses it, and coexisting
-                // closures alias one store → UAF (probes 02/09/12).  Suppress it;
-                // the cascade is the sole owner for escaping AND in-frame captures
-                // (in-frame: the fn-ref's own scope-exit free triggers the cascade).
-                // This replaces the `OpIncRc`-keeps-it-alive mechanism (the inc emit
-                // in parser/vectors.rs is dropped in the same change).
-                let captured_cell = function.is_captured(v)
-                    && matches!(
-                        function.tp(v),
-                        Type::Reference(cell_d, _)
-                            if data.def(*cell_d).name.starts_with("__cell_")
-                    );
+                // Plan-57 Phase B (Mechanism B), widened by #323: a
+                // Reference-typed capture — a boxed `__cell_<T>` AND, per
+                // P260's storage rule, any plain struct capture — is OWNED
+                // by the closure record, not the defining frame.  The
+                // record stores the capture's 12-byte DbRef and
+                // `free_named`'s cascade (allocation.rs) walks every DbRef
+                // field when the record dies, so the defining-frame
+                // `OpFreeRef` here is redundant — and actively harmful: for
+                // an ESCAPED closure (factory return) it frees a slot the
+                // live closure still references, the next allocation reuses
+                // it, and the closure silently corrupts the new occupant
+                // (#323; interp only *appeared* sound through slot-reuse
+                // luck).  Suppress it; the cascade is the sole owner for
+                // escaping AND in-frame captures (in-frame: the fn-ref's
+                // own scope-exit free triggers the cascade).  Mirrored by
+                // the captured-Reference exemption in `check_ref_leaks`.
+                let captured_ref = function.is_captured(v)
+                    && matches!(function.tp(v), Type::Reference(_, _));
                 let emit =
-                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_cell;
+                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_ref;
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -2452,6 +2451,14 @@ fn check_ref_leaks(
             continue; // variable belongs to outer scope — not our problem
         }
         if function.is_skip_free(v) {
+            continue;
+        }
+        // #323: a Reference-typed capture is owned by the closure record
+        // (the record stores its 12-byte DbRef; `free_named`'s cascade
+        // frees it when the record dies), so `get_free_vars` emits no
+        // frame-exit OpFreeRef for it — mirror that exemption here or
+        // every capturing closure false-positives this assert.
+        if function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _)) {
             continue;
         }
         if v == direct_ret_var {

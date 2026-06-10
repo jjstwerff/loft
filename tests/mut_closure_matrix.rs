@@ -30,7 +30,7 @@
 //! | **A** read-only | PASS:00 | PASS:00 | PASS:00 | PASS:00 |
 //! | **B** co-scoped (Reference) | PASS:02c | PASS:02c | PASS:02c | n/a |
 //! | **B** co-scoped (scalar via cell — int/float/single/char/enum/bool/text) | PASS:02d-iii.e/iv/v/vi | PASS:02d-iii.e/iv/v/vi | PASS:02d-iii.e/iv/v/vi | n/a |
-//! | **C** moved (factory) | n/a | n/a | PASS:03 | PASS:03 |
+//! | **C** moved (factory) | n/a | n/a | REJECTED:#318/C75 | PASS:03 |
 //! | **D** aliased mutating | REJECT:04 | REJECT:04 | REJECT:04 | REJECT:04 |
 //! | **Mutable<T> explicit** | FIX:05 | FIX:05 | FIX:05 | FIX:05 |
 //!
@@ -696,9 +696,18 @@ cross_mode!(
     "#
 );
 
-cross_mode!(
-    c_d3_factory_into_struct_field,
-    r#"
+// Re-classified REJECTED by #318 / C75 (2026-06-10): a factory returning a
+// struct-held capturing closure only ever passed this matrix by slot-reuse
+// luck — the record's cell DbRef dangles into the dead factory frame, and
+// under allocation pressure the closure corrupts whatever reuses the slot
+// (probe e4b in #318; cross-mode equality cannot see both backends dangling
+// identically).  The cell now locks the REJECTION on both backends.
+#[test]
+#[ignore = "mut_closure_matrix — run with --test mut_closure_matrix -- --ignored"]
+fn c_d3_factory_into_struct_field_rejected() {
+    crate::common::cross_mode::run_cross_mode_rejected(
+        "c_d3_factory_into_struct_field_rejected",
+        r#"
     struct Counter { cb: fn() -> integer }
     fn make_counter() -> Counter {
         n = 0;
@@ -707,12 +716,12 @@ cross_mode!(
     fn test() {
         c = make_counter();
         a = (c.cb)();
-        b = (c.cb)();
-        print("{a},{b}\n");
-        assert(a == 1 && b == 2, "factory-in-struct: {a},{b}");
+        print("{a}\n");
     }
-    "#
-);
+    "#,
+        "function returns a struct type that holds a capturing closure",
+    );
+}
 
 // Plan-22 phase 04 (decommissioned 2026-05-13): the original
 // design specced rejecting "Case D" — closures whose captures

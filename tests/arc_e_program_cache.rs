@@ -253,3 +253,70 @@ fn program_cache_warm_keeps_native_libs() {
     let _ = std::fs::remove_file(&script);
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+/// #322 — a `--lib`-resolved dependency edit must invalidate the program
+/// bundle.  Library files are parsed via an inline lexer switch (never a
+/// `parse()` entry), so before the fix `parsed_sources` — and therefore the
+/// drift manifest — missed them: the edited library's old bytecode kept
+/// executing until the cache was deleted by hand.
+#[test]
+fn lib_dependency_edit_invalidates_program_cache() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let lib_dir = tmp.join(format!("loft_p322_lib_{pid}"));
+    let _ = std::fs::remove_dir_all(&lib_dir);
+    std::fs::create_dir_all(&lib_dir).expect("mkdir lib");
+    let lib_file = lib_dir.join("rstream.loft");
+    let write_lib = |body: &str| std::fs::write(&lib_file, body).expect("write lib");
+    write_lib("pub fn stream_value() -> integer { 28 }\n");
+    let script = tmp.join(format!("loft_p322_main_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "use rstream;\nfn main() { print(\"v={stream_value()}\\n\"); }\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_p322_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    let run_lib = |label: &str| -> String {
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(&lib_dir)
+            .arg(&script)
+            .current_dir(workspace_root())
+            .env_remove("LOFT_STDLIB_CACHE")
+            .env("LOFT_PROGRAM_CACHE", "1")
+            .env("XDG_CACHE_HOME", &cache_dir)
+            .output()
+            .expect("failed to invoke loft binary");
+        assert!(out.status.success(), "{label} run failed");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // Cold run caches; the manifest must cover the lib file.
+    let out_cold = run_lib("cold");
+    assert!(out_cold.contains("v=28"), "cold output: {out_cold}");
+    let manifest = std::fs::read_dir(cache_dir.join("loft"))
+        .expect("cache dir")
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().ends_with(".manifest"))
+        .expect("manifest written");
+    let manifest_text = std::fs::read_to_string(manifest.path()).expect("read manifest");
+    assert!(
+        manifest_text.contains("rstream.loft"),
+        "manifest must list the --lib dependency:\n{manifest_text}"
+    );
+
+    // Edit the LIBRARY only — the warm run must see the new behaviour.
+    write_lib("pub fn stream_value() -> integer { 777 }\n");
+    let out_edited = run_lib("post-edit");
+    assert!(
+        out_edited.contains("v=777"),
+        "stale cache served after lib edit: {out_edited}"
+    );
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&lib_dir);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}
