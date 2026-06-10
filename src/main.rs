@@ -4394,6 +4394,14 @@ fn main() {
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
     for pkg_dir in &pending_native {
+        // @PLN18 — `[native] in_binary = true`: the library's natives are
+        // registered inside this binary (src/native.rs); a cdylib compile can
+        // only fail (the symbols exist nowhere else).  Skip it silently.
+        if manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+            .is_some_and(|m| m.native_in_binary)
+        {
+            continue;
+        }
         let export = loft::native_lib::library_export_set(&p.data, pkg_dir);
         if export.is_empty() {
             continue;

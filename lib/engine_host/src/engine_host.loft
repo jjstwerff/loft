@@ -62,6 +62,57 @@ fn kernel_idle(max_us: integer);
 pub fn clients() -> integer;
 #native "n_kernel_clients"
 
+// ── 05a — the state-sync UDP channel (events + bulk stay on WS) ─────────────
+//
+// The kernel binds a UDP socket on the SAME port as the WS listener.  A native
+// client earns the fast path with a cookie handshake: read the cookie with
+// `udp_cookie(cid)`, deliver it inside YOUR protocol (cookie transport is
+// meaning), and have the client echo it in a `H:<cookie>` datagram; the kernel
+// binds the source address and acks `A:<cid>`.  After that, `sync_send` rides
+// UDP for that client; phones that never hello simply keep receiving WS
+// frames from the same call.
+
+// Text-returning natives keep the `kernel_` def name (the dest-passing route
+// in `is_text_dest_native` keys on it — the `n_kernel_event_payload` pattern);
+// the pub wrappers carry the surface names.
+fn kernel_udp_cookie(cid: integer) -> text;
+#native
+
+// The client's UDP handshake cookie ("" when UDP is unavailable).
+pub fn udp_cookie(cid: integer) -> text {
+  kernel_udp_cookie(cid)
+}
+
+// Does this client currently have a live UDP path?
+pub fn udp_bound(cid: integer) -> boolean;
+#native "n_kernel_udp_bound"
+
+// Send a latest-value state frame: a seq-stamped datagram when the client's
+// UDP path is bound, else a plain WS frame.  False = dropped (no such client,
+// dead socket, or an oversized datagram — state frames must stay ≤ ~1200 B).
+pub fn sync_send(cid: integer, msg: text) -> boolean;
+#native "n_kernel_sync_send"
+
+// Drain the inbound conflation slots: each call loads the NEWEST unread state
+// from one client (stale/reordered datagrams were already discarded by the
+// kernel).  Drain inside `on_tick` — that reads the freshest data that arrived
+// before the tick (late-latch by construction).
+pub fn sync_next() -> boolean;
+#native "n_kernel_sync_next"
+
+pub fn sync_cid() -> integer;
+#native "n_kernel_sync_cid"
+
+pub fn sync_seq() -> integer;
+#native "n_kernel_sync_seq"
+
+fn kernel_sync_payload() -> text;
+#native
+
+pub fn sync_payload() -> text {
+  kernel_sync_payload()
+}
+
 // The kernel loop: pump → budgeted event drain → tick when due → idle.
 // Never returns.  `on_event` and `on_tick` are the user's meaning; their
 // captures (the world) live in the caller's frame, which stays alive because

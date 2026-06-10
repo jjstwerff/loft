@@ -59,6 +59,8 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // backends.
             | "n_source_dir"
             | "n_kernel_event_payload"
+            | "n_kernel_udp_cookie"
+            | "n_kernel_sync_payload"
             | "n_json_errors"
             | "t_9JsonValue_kind"
             | "t_9JsonValue_to_json"

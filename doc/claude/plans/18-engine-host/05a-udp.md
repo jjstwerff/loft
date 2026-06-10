@@ -1,0 +1,87 @@
+# Phase 05a — the quick UDP channel (state-sync datagrams beside the websockets)
+
+**Status: v1 shipped (2026-06-10).**  The minimal cut the traffic-class table
+makes possible: a datagram path for the **state-sync class only** — events and
+bulk stay on WS, so there is **no** reliable-UDP layer, no fragmentation, no
+congestion control.  Native peers gain the fast path; phones stay `wss`; same
+world, same `sync_send` call.
+
+## What shipped
+
+Kernel mechanics (`src/engine_host.rs`):
+
+- **One UDP socket on the SAME port number** as the WS listener (zero config;
+  a UDP bind failure is a warning — everything rides WS until restart).
+- **Cookie handshake** ties the UDP path to the WS session: the kernel issues
+  a per-connection cookie (`RandomState`-seeded, 16 hex chars — LAN
+  spoof-resistance, not crypto; DTLS is the eventual hostile-network answer);
+  **the loft side transports it inside its own protocol** (cookie *issuance*
+  is mechanics, cookie *transport* is meaning — the host-boundary principle
+  applied to the handshake); the client echoes `H:<cookie>`, the kernel binds
+  the datagram source addr to that cid and acks `A:<cid>`.
+- **Inbound conflation slots** (their first consumer, as deferred from phase
+  01): `S:<seq>:<payload>` datagrams conflate to newest per sender — a higher
+  seq overwrites the slot, a stale/reordered seq is **discarded** (never apply
+  an old pose; minimal-latency goal).  The loft side drains dirty slots with
+  `sync_next()` inside `on_tick` — **late-latch by construction** (the
+  freshest datagram before the tick is the one read).
+- **Outbound `sync_send(cid, msg)`**: stamps a per-cid seq and sends a
+  datagram when the path is bound, else falls back to a plain WS frame — the
+  transport split is invisible to meaning.
+- **Keepalive/timeout**: any datagram refreshes the path; silence past 3 s
+  unbinds it and sends revert to WS transparently.  (The client's steady
+  keepalive cadence doubles as the phone radio wake.)
+- **≤1200 B datagram cap** (overlay-shaved MTUs fragment silently above
+  that): oversized sync sends drop with a once-per-kernel warning — never a
+  halt; bulk belongs on the WS channel.
+
+Loft surface (`lib/engine_host`): `udp_cookie(cid)`, `udp_bound(cid)`,
+`sync_send(cid, msg)`, `sync_next()` / `sync_cid()` / `sync_seq()` /
+`sync_payload()`.  `run()` is unchanged — sync drains inside the user's
+`on_tick`, which is what makes late-latch automatic.
+
+## Acceptance
+
+`tests/engine_host_udp.rs` (end-to-end, real sockets): cookie over WS →
+WS-fallback beacons pre-hello → `H:`/`A:` binding → the same `sync_send`
+arriving as seq-stamped datagrams → a same-tick burst (seq 10, 12, then stale
+11) yields **exactly one** echo (the newest, 12) → a stale seq 5 is never
+echoed → 3 s of silence reverts beacons to WS.  Green (~6.5 s, includes the
+timeout wait).
+
+Transport-latency delta is **not** asserted: on loopback it is µs-noise; the
+win (no retransmit stalls, no head-of-line blocking, discard-stale) is a
+wifi/LAN property — measured when a native client exists (phase 04 extends
+the @PLAN50 probe targets with a loss% axis).
+
+## Build findings
+
+- **Dest-passing arg order**: the dest `DbRef` is pushed LAST by the emitter,
+  so a `_dest` native pops it FIRST, then the declared args in reverse
+  (`n_ymd_days_ago_dest` is the reference).  Popping `cid` first read the
+  dest ref as an integer and the next stack bytes as a "dest" → write into a
+  read-only store (store.rs:1537 assert).  The assert caught it immediately;
+  `LOFT_STUB_DEBUG=1` (new, compile.rs) lists which `#native` symbols got
+  panic-stubs at registration — both diagnostics earned their keep here.
+- **Text-dest naming**: `is_text_dest_native` keys on the *def name*, so a
+  text-returning kernel native must keep the `kernel_*` loft decl
+  (`n_kernel_udp_cookie`) with a pub wrapper for the surface name — the
+  `kernel_event_payload` pattern, now stated in the lib's comments.
+- **`[native] in_binary = true`** (lib/engine_host/loft.toml) — the manifest
+  mark phase 01 predicted, landed here when the extraction-hygiene gate
+  flagged the kernel symbols in `src/**`.  One mark, two readers: the
+  auto-native driver skips the doomed cdylib compile (the 36-line P269
+  warning block on every kernel-program start is gone), and the hygiene gate
+  sanctions the `n_kernel_*` symbols inside the compiler crate.
+
+## Deferred (with triggers)
+
+- **Bulk over UDP** (one-to-many asset push, NACK-based chunks) — see the
+  README § Phases note; trigger: a consumer that pushes big payloads to many
+  seats (level/world push).  Until then bulk wants TCP behaviour and has it.
+- **Client-side kernel (connector role)** — phase 04; until then native
+  clients hand-roll the trio (hello, keepalive, S-frames; the e2e test shows
+  the ~30 lines needed).
+- **Broadcast discovery beacon** (~30 lines, discovery only) — with the first
+  LAN-party consumer.
+- **DTLS / crypto-lib encryption** — hostile-network deployments, post-LAN.

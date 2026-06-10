@@ -286,6 +286,9 @@ fn register_native_stubs(state: &mut State, data: &Data) {
             continue;
         }
         stub_syms.insert(sym.to_string());
+        if std::env::var("LOFT_STUB_DEBUG").is_ok() {
+            eprintln!("STUBDBG panic-stub registered for native symbol '{sym}'");
+        }
         // Register a stub that panics with an **actionable** message.  Reaching it
         // means a `#native` function's cdylib symbol could not be resolved at load
         // (`wire_native_fns` left the stub in place), so calling it aborts.  The cause

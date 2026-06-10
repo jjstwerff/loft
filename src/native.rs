@@ -244,6 +244,27 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_kernel_idle", crate::engine_host::n_kernel_idle),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_clients", crate::engine_host::n_kernel_clients),
+    // @PLN18 phase 05a — the state-sync UDP channel.
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_udp_cookie_dest",
+        crate::engine_host::n_kernel_udp_cookie_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_udp_bound", crate::engine_host::n_kernel_udp_bound),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_send", crate::engine_host::n_kernel_sync_send),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_next", crate::engine_host::n_kernel_sync_next),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_cid", crate::engine_host::n_kernel_sync_cid),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_seq", crate::engine_host::n_kernel_sync_seq),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_sync_payload_dest",
+        crate::engine_host::n_kernel_sync_payload_dest,
+    ),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),

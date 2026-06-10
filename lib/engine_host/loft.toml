@@ -12,3 +12,10 @@ loft    = ">=0.8"
 
 [library]
 entry = "src/engine_host.loft"
+
+# The kernel natives are registered inside the loft binary (src/native.rs) —
+# there is no cdylib to build.  Readers of this mark: the auto-native driver
+# (skips the doomed compile + its warning) and the extraction-hygiene gate
+# (the n_kernel_* symbols are sanctioned in src/**).
+[native]
+in_binary = true

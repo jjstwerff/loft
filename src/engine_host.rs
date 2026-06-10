@@ -10,18 +10,41 @@
 //! loops over these natives and invokes the user's closures via ordinary fn-ref
 //! calls (probe 2: no Rust→closure machinery exists or is needed).
 //!
-//! v1 scope (events class only — the audience server is pure events):
-//! single-threaded pump driven from `n_kernel_pump` each loop turn; conflation
-//! slots + budgeted bulk accumulation land with their consumers (@PLAN50 /
-//! assets), via the wire-schema-as-data registration this module will grow.
+//! Scope: the **events class** (WS text frames, queue-to-empty) from phase 01,
+//! plus the phase-05a **state-sync class over UDP** — the quick channel beside
+//! the websockets.  Events and bulk STAY on WS (reliable+ordered for free); the
+//! UDP side carries ONLY latest-value state, so it needs no retransmit,
+//! fragmentation, or congestion machinery:
+//!
+//! - One UDP socket on the SAME port number as the TCP listener (zero config).
+//! - Identity = the datagram source address bound by a **cookie handshake**:
+//!   the kernel issues a per-connection cookie (`n_kernel_udp_cookie`); the
+//!   loft side transports it inside its own protocol (cookie *issuance* is
+//!   mechanics, cookie *transport* is meaning); the client echoes it in a
+//!   `H:<cookie>` datagram; the kernel binds the source addr to that cid and
+//!   acks `A:<cid>`.
+//! - Inbound `S:<seq>:<payload>` datagrams **conflate to newest per sender**
+//!   (a higher seq overwrites the slot; stale/reordered seqs are discarded —
+//!   never apply an old pose).  The loft side drains the dirty slots at tick
+//!   time via `n_kernel_sync_next` — late-latch by construction.
+//! - Outbound `n_kernel_sync_send` stamps a per-cid seq and sends a datagram
+//!   when the client has a live UDP path, else falls back to a WS frame —
+//!   phones stay `wss`, native peers ride UDP, same world.
+//! - Any datagram refreshes the path's keepalive; a silent path unbinds after
+//!   [`UDP_TIMEOUT_US`] and sends fall back to WS (the client keeps a steady
+//!   keepalive cadence — which doubles as the phone radio wake).
+//! - Datagrams are capped at [`UDP_MAX_DATAGRAM`] bytes (overlay-shaved MTUs
+//!   fragment silently above ~1200): oversized sync sends are dropped with a
+//!   once-per-kernel warning, never a halt.
 //!
 //! Wire: WebSocket text frames (`<msg_id>:<payload>` convention is the loft
 //! side's concern — the kernel passes payloads through verbatim).
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::database::Stores;
@@ -34,16 +57,88 @@ struct Event {
     payload: String,
 }
 
+/// A silent UDP path unbinds after this long; the client's keepalive cadence
+/// (~500 ms — also the phone radio wake) keeps a live path far inside it.
+const UDP_TIMEOUT_US: i64 = 3_000_000;
+/// Datagram payload cap — overlay/VPN-shaved MTUs fragment silently above
+/// ~1200 bytes, and a fragmented "fast path" is slower than the WS one.
+const UDP_MAX_DATAGRAM: usize = 1200;
+
+/// A client's bound UDP path (the source addr proven by the cookie handshake).
+struct UdpPath {
+    addr: SocketAddr,
+    last_seen_us: i64,
+    out_seq: i64,
+}
+
+/// One inbound conflation slot: the newest `S:` datagram from this client.
+/// Latest-value semantics — a higher seq overwrites, a stale seq is dropped.
+struct SyncSlot {
+    seq: i64,
+    payload: String,
+    dirty: bool,
+}
+
+/// Per-connection network state beyond the TCP stream itself; lives and dies
+/// with the connection slot (a reused cid starts fresh).
+struct ClientNet {
+    /// The UDP handshake cookie for this WS session ("" = no UDP listener).
+    cookie: String,
+    path: Option<UdpPath>,
+    slot: SyncSlot,
+}
+
+impl ClientNet {
+    fn new(cookie: String) -> Self {
+        ClientNet {
+            cookie,
+            path: None,
+            slot: SyncSlot {
+                seq: -1,
+                payload: String::new(),
+                dirty: false,
+            },
+        }
+    }
+}
+
 struct Kernel {
     listener: TcpListener,
+    /// The state-sync datagram socket (same port number); `None` = bind
+    /// failed at listen time (warned once; everything rides WS).
+    udp: Option<UdpSocket>,
     /// Slot-indexed connections; `None` = free slot (cid = index, reused).
     conns: Vec<Option<TcpStream>>,
+    /// Parallel to `conns`: cookie / UDP path / conflation slot per client.
+    net: Vec<ClientNet>,
     events: VecDeque<Event>,
     /// The event handed out by the last `n_kernel_next_event`.
     last: Event,
+    /// The slot handed out by the last `n_kernel_sync_next`.
+    last_sync: (i64, i64, String),
     start: Instant,
     tick_interval_us: i64,
     last_tick_us: i64,
+    warned_oversize: bool,
+}
+
+impl Kernel {
+    fn now_us(&self) -> i64 {
+        self.start.elapsed().as_micros() as i64
+    }
+
+    /// A fresh handshake cookie: 16 hex chars from the OS-seeded `RandomState`
+    /// hasher mixed with the clock and cid.  Spoof-resistant on a LAN; not
+    /// cryptographic (DTLS is the eventual answer for hostile networks).
+    fn fresh_cookie(&self, cid: usize) -> String {
+        if self.udp.is_none() {
+            return String::new();
+        }
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        self.start.elapsed().as_nanos().hash(&mut h);
+        cid.hash(&mut h);
+        format!("{:016x}", h.finish())
+    }
 }
 
 thread_local! {
@@ -240,31 +335,122 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
 
 // ── The natives (registered in native.rs; declared in lib/engine_host) ──────
 
-/// `kernel_listen(port, tick_interval_us) -> boolean`
+/// `kernel_listen(port, tick_interval_us) -> boolean` — binds the WS listener
+/// and, on the same port number, the state-sync UDP socket (05a).  A UDP bind
+/// failure is a warning, not an error: everything rides WS until a restart.
 pub fn n_kernel_listen(stores: &mut Stores, stack: &mut DbRef) {
     let tick_us = *stores.get::<i64>(stack);
     let port = *stores.get::<i64>(stack);
     let ok = bind_reuseaddr(port as u16)
         .map(|listener| {
             let _ = listener.set_nonblocking(true);
+            let udp = match UdpSocket::bind(("0.0.0.0", port as u16)) {
+                Ok(s) => {
+                    let _ = s.set_nonblocking(true);
+                    Some(s)
+                }
+                Err(e) => {
+                    eprintln!("engine_host: UDP bind on {port} failed ({e}); state-sync rides WS");
+                    None
+                }
+            };
             KERNEL.with(|k| {
                 *k.borrow_mut() = Some(Kernel {
                     listener,
+                    udp,
                     conns: Vec::new(),
+                    net: Vec::new(),
                     events: VecDeque::new(),
                     last: Event {
                         cid: -1,
                         kind: -1,
                         payload: String::new(),
                     },
+                    last_sync: (-1, -1, String::new()),
                     start: Instant::now(),
                     tick_interval_us: tick_us.max(1),
                     last_tick_us: 0,
+                    warned_oversize: false,
                 });
             });
         })
         .is_some();
     stores.put(stack, ok);
+}
+
+/// Drain every pending datagram into the conflation slots; bind/refresh UDP
+/// paths; expire silent ones.  Called from the pump sweep — datagram arrivals
+/// do NOT count as loop work (they conflate; the tick reads the newest).
+fn pump_udp(k: &mut Kernel) {
+    let Some(udp) = k.udp.as_ref() else {
+        return;
+    };
+    let now = k.now_us();
+    let mut buf = [0u8; 2048];
+    loop {
+        let (len, from) = match udp.recv_from(&mut buf) {
+            Ok(r) => r,
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => break,
+            Err(_) => break,
+        };
+        let Ok(text) = std::str::from_utf8(&buf[..len]) else {
+            continue; // not ours (binary lands with the wire-schema table)
+        };
+        if let Some(cookie) = text.strip_prefix("H:") {
+            // Handshake: bind the source addr to the cid owning this cookie.
+            let found = k
+                .net
+                .iter()
+                .position(|n| !n.cookie.is_empty() && n.cookie == cookie);
+            if let Some(cid) = found
+                && k.conns.get(cid).is_some_and(Option::is_some)
+            {
+                k.net[cid].path = Some(UdpPath {
+                    addr: from,
+                    last_seen_us: now,
+                    out_seq: 0,
+                });
+                let _ = udp.send_to(format!("A:{cid}").as_bytes(), from);
+            }
+            // Unknown cookie: silently dropped (spoof/staleness — the client
+            // retries its hello until acked).
+            continue;
+        }
+        // Everything else requires a bound path (identity = source addr).
+        let Some(cid) = k
+            .net
+            .iter()
+            .position(|n| n.path.as_ref().is_some_and(|p| p.addr == from))
+        else {
+            continue;
+        };
+        if let Some(p) = k.net[cid].path.as_mut() {
+            p.last_seen_us = now; // any datagram is a keepalive
+        }
+        if let Some(rest) = text.strip_prefix("S:")
+            && let Some((seq_s, payload)) = rest.split_once(':')
+            && let Ok(seq) = seq_s.parse::<i64>()
+        {
+            let slot = &mut k.net[cid].slot;
+            if seq > slot.seq {
+                slot.seq = seq;
+                slot.payload.clear();
+                slot.payload.push_str(payload);
+                slot.dirty = true;
+            }
+            // else: stale/reordered — discarded, never applied.
+        }
+        // "K:" (bare keepalive) needs nothing beyond the refresh above.
+    }
+    // Expire silent paths — sends fall back to WS transparently.
+    for n in &mut k.net {
+        if n.path
+            .as_ref()
+            .is_some_and(|p| now - p.last_seen_us > UDP_TIMEOUT_US)
+        {
+            n.path = None;
+        }
+    }
 }
 
 /// `kernel_pump() -> integer` — accept pending connections and drain every
@@ -283,10 +469,13 @@ pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
                             .iter()
                             .position(Option::is_none)
                             .unwrap_or(k.conns.len());
+                        let net = ClientNet::new(k.fresh_cookie(cid));
                         if cid == k.conns.len() {
                             k.conns.push(Some(s));
+                            k.net.push(net);
                         } else {
                             k.conns[cid] = Some(s);
+                            k.net[cid] = net; // reused cid starts fresh
                         }
                         k.events.push_back(Event {
                             cid: cid as i64,
@@ -316,22 +505,32 @@ pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
                         added += 1;
                     }
                     FrameRead::Closed => {
-                        k.conns[cid] = None;
-                        k.events.push_back(Event {
-                            cid: cid as i64,
-                            kind: 2,
-                            payload: String::new(),
-                        });
+                        disconnect(k, cid);
                         added += 1;
                         break;
                     }
                 }
             }
         }
+        // 05a: conflate pending state-sync datagrams (not counted as work —
+        // the tick reads the newest; see pump_udp).
+        pump_udp(k);
         added
     })
     .unwrap_or(0);
     stores.put(stack, n);
+}
+
+/// Close a connection slot: the cookie dies with the WS session (the UDP path
+/// and conflation slot go with it) and a disconnect event is queued.
+fn disconnect(k: &mut Kernel, cid: usize) {
+    k.conns[cid] = None;
+    k.net[cid] = ClientNet::new(String::new());
+    k.events.push_back(Event {
+        cid: cid as i64,
+        kind: 2,
+        payload: String::new(),
+    });
 }
 
 /// `kernel_next_event() -> boolean` — pop the queue head into the event
@@ -400,12 +599,7 @@ pub fn n_kernel_send(stores: &mut Stores, stack: &mut DbRef) {
             return false;
         };
         if write_frame(stream, 0x1, msg.as_bytes()).is_err() {
-            k.conns[cid as usize] = None;
-            k.events.push_back(Event {
-                cid,
-                kind: 2,
-                payload: String::new(),
-            });
+            disconnect(k, cid as usize);
             return false;
         }
         true
@@ -427,12 +621,7 @@ pub fn n_kernel_broadcast(stores: &mut Stores, stack: &mut DbRef) {
             if write_frame(stream, 0x1, msg.as_bytes()).is_ok() {
                 sent += 1;
             } else {
-                k.conns[cid] = None;
-                k.events.push_back(Event {
-                    cid: cid as i64,
-                    kind: 2,
-                    payload: String::new(),
-                });
+                disconnect(k, cid);
             }
         }
         sent
@@ -462,4 +651,123 @@ pub fn n_kernel_idle(stores: &mut Stores, stack: &mut DbRef) {
 pub fn n_kernel_clients(stores: &mut Stores, stack: &mut DbRef) {
     let n = with_kernel(|k| k.conns.iter().filter(|c| c.is_some()).count() as i64).unwrap_or(0);
     stores.put(stack, n);
+}
+
+// ── 05a — the state-sync UDP channel ────────────────────────────────────────
+
+/// `udp_cookie(cid) -> text` — the client's UDP handshake cookie (destination-
+/// passing).  Empty when there is no UDP listener or no such connection.  The
+/// loft side transports it to the client inside its own protocol; the client
+/// echoes it in a `H:<cookie>` datagram to bind its UDP path.
+pub fn n_kernel_udp_cookie_dest(stores: &mut Stores, stack: &mut DbRef) {
+    // The dest ref is pushed LAST by the dest-pass emitter, so it pops FIRST
+    // (then the declared args in reverse) — the n_ymd_days_ago_dest order.
+    let dest = *stores.get::<DbRef>(stack);
+    let cid = *stores.get::<i64>(stack);
+    let v = with_kernel(|k| {
+        if k.conns.get(cid as usize).is_some_and(Option::is_some) {
+            k.net[cid as usize].cookie.clone()
+        } else {
+            String::new()
+        }
+    })
+    .unwrap_or_default();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
+}
+
+/// `udp_bound(cid) -> boolean` — does this client have a live UDP path?
+pub fn n_kernel_udp_bound(stores: &mut Stores, stack: &mut DbRef) {
+    let cid = *stores.get::<i64>(stack);
+    let v =
+        with_kernel(|k| k.net.get(cid as usize).is_some_and(|n| n.path.is_some())).unwrap_or(false);
+    stores.put(stack, v);
+}
+
+/// `sync_send(cid, msg) -> boolean` — send a latest-value state frame: a
+/// seq-stamped datagram over the client's UDP path when bound, else a plain
+/// WS frame (phones stay `wss`, native peers ride UDP — same call, same
+/// world).  Oversized datagrams are dropped with a once-per-kernel warning
+/// (fragmentation is silent and slower than the WS path it would replace).
+pub fn n_kernel_sync_send(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    let cid = *stores.get::<i64>(stack);
+    let ok = with_kernel(|k| {
+        let Some(net) = k.net.get_mut(cid as usize) else {
+            return false;
+        };
+        if let (Some(path), Some(udp)) = (net.path.as_mut(), k.udp.as_ref()) {
+            path.out_seq += 1;
+            let dgram = format!("S:{}:{msg}", path.out_seq);
+            if dgram.len() > UDP_MAX_DATAGRAM {
+                if !k.warned_oversize {
+                    k.warned_oversize = true;
+                    eprintln!(
+                        "engine_host: sync_send dropped a {} B datagram (cap {} B; \
+                         state frames must stay small — bulk belongs on the WS channel)",
+                        dgram.len(),
+                        UDP_MAX_DATAGRAM
+                    );
+                }
+                return false;
+            }
+            return udp.send_to(dgram.as_bytes(), path.addr).is_ok();
+        }
+        // No UDP path: fall back to the reliable channel.
+        let Some(Some(stream)) = k.conns.get_mut(cid as usize) else {
+            return false;
+        };
+        if write_frame(stream, 0x1, msg.as_bytes()).is_err() {
+            disconnect(k, cid as usize);
+            return false;
+        }
+        true
+    })
+    .unwrap_or(false);
+    stores.put(stack, ok);
+}
+
+/// `sync_next() -> boolean` — load the next dirty conflation slot (newest
+/// state from one client) into the getters below and mark it read.  Draining
+/// inside `on_tick` gives late-latch by construction: the freshest datagram
+/// that arrived before the tick is the one read.
+pub fn n_kernel_sync_next(stores: &mut Stores, stack: &mut DbRef) {
+    let got = with_kernel(|k| {
+        for cid in 0..k.net.len() {
+            if k.net[cid].slot.dirty {
+                k.net[cid].slot.dirty = false;
+                k.last_sync = (
+                    cid as i64,
+                    k.net[cid].slot.seq,
+                    k.net[cid].slot.payload.clone(),
+                );
+                return true;
+            }
+        }
+        false
+    })
+    .unwrap_or(false);
+    stores.put(stack, got);
+}
+
+pub fn n_kernel_sync_cid(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_kernel(|k| k.last_sync.0).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+pub fn n_kernel_sync_seq(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_kernel(|k| k.last_sync.1).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+/// Destination-passing text return — see `n_kernel_event_payload_dest`.
+pub fn n_kernel_sync_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = with_kernel(|k| k.last_sync.2.clone()).unwrap_or_default();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
 }
