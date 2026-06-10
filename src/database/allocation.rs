@@ -219,13 +219,19 @@ impl Stores {
         // (Pinned const/global stores returned above.)
         // P259 commit 4: cascade-free closure-record DbRef attributes.
         // When the store being freed holds a `__closure_*` record,
-        // each Parts::DbRef field references a captured cell whose rc
-        // was inc'd at capture time (commit 2 OpIncRc emission).
-        // Walk those fields, read each 12-byte stored DbRef, and
-        // recursively free_named so the cell's rc drops back to its
-        // pre-capture level.  Cells shared between multiple closures
-        // only actually free when the LAST referencing closure dies
-        // (recursive free_named respects rc).
+        // each Parts::DbRef field references either the closure's
+        // captured `__cell_<T>` (which the record OWNS — C74 limits a
+        // mutated cell to one capturing closure, so this cascade is
+        // the cell's single owner free) or a captured live original
+        // (a `Reference` capture).  Walk those fields, read each
+        // 12-byte stored DbRef, and recursively free_named.  There is
+        // no ref-count (plan-57 phase C removed it): when the target
+        // was already freed — e.g. the defining frame freed a
+        // captured original before this record died — the recursive
+        // call hits the `store.free` no-op above.  Sound because all
+        // sharers of a DbRef die with the same frame; a sharer
+        // escaping its defining frame is exactly what C74 forbids for
+        // cells.
         //
         // Gated on the type name's `__closure_` prefix because:
         // - Only closure records hold cells via Parts::DbRef.

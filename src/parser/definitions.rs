@@ -930,6 +930,13 @@ impl Parser {
                 self.flip_scalars_to_box_types();
             }
             self.parse_code();
+            // #314 — pass-1 sibling of the pass-2 flip above: now that
+            // the whole body is parsed, `scalars_to_box` is final;
+            // reject any mutated scalar that more than one closure
+            // captures (GOALS.md § "Stability trumps features").
+            if self.first_pass {
+                self.reject_shared_mutable_scalar_captures(self.context);
+            }
             // reset transient closure state after each function body.
             // Without this, a lambda inside make_adder leaks last_closure_work_var
             // into the next function parsed (main), causing closure_var_of to

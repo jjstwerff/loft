@@ -14414,3 +14414,86 @@ fn plan53_cluster5_free_text_buffer_dealloc() {
     .expr("run()")
     .result(Value::Text("world".to_string()));
 }
+
+// ── Issue 313 ────────────────────────────────────────────────────────────────
+// Capturing closure in a struct field crashed when invoked from a function
+// DEFINED BEFORE the constructing function (interp SIGSEGV in opcode
+// dispatch; native OOB at u16::MAX).
+//
+// Root cause: pass 1 never recorded the capturing assignment on
+// `Attribute::assigned_lambda_d_nr` (lambdas emit as a bare `Int(d_nr)` in
+// pass 1), so `fill_database` always laid out the legacy 4B field — the
+// "working" same-fn shape wrote the closure record past the declared layout
+// into allocation slack.  In pass 2 the flag re-derived in body-parse order,
+// so a reader parsed before the assigning body emitted the legacy
+// null-sentinel closure read against the split write.
+//
+// Fix: pass 1 detects capture via the lambda def's `closure_record` (set by
+// `synthesize_closure_record` in both passes) so the layout truly splits;
+// pass-2 read/write shapes consult the database layout (the one order-stable
+// home of the fact) via `Parser::fn_ref_field_is_split`; native codegen
+// mirrors the registered layout (`<attr>__closure_rec` ChildRec field).
+// Cross-backend cells: tests/closure_matrix.rs
+// `c1_d3_int_capture_field_cross_fn_invoker_first` and
+// `c2_d3_text_capture_field_cross_fn_invoker_first`.
+
+#[test]
+fn issue_313_closure_field_invoked_cross_fn_invoker_first() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn(text) }
+fn fire(k: K, p: text) { c = k.cb; c(p); }
+fn fire_direct(k: K, p: text) { k.cb(p); }
+fn run() -> integer {
+    w = Counter { n: 0 };
+    k = K { cb: fn(p: text) { w.n = w.n + 1; } };
+    fire(k, \"a\");
+    fire_direct(k, \"b\");
+    w.n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+// ── Issue 314 ────────────────────────────────────────────────────────────────
+// A bare scalar captured by two closures — one reading, one writing — crashed
+// at runtime ("Write to read-only store … CONST_STORE") when the reader lambda
+// was parsed before the writer.  The shape only worked through shared heap
+// cells with no defined owner ("first death wins"), so it is REJECTED at
+// compile time instead (GOALS.md § "Stability trumps features";
+// DESIGN_DECISIONS.md).  Shared mutable state belongs in a struct, which both
+// closures may capture.
+
+#[test]
+fn issue_314_scalar_shared_by_two_closures_rejected() {
+    code!(
+        "fn run2(a: fn(), b: fn()) { b(); a(); }
+fn test_it() {
+    t = 0;
+    run2(fn() { u = t + 1; print(\"u={u}\"); }, fn() { t = t + 1; });
+}"
+    )
+    .error(
+        "variable `t` is mutated through a closure and captured by 2 closures; \
+         sharing a mutable variable between closures is not supported — hold the \
+         shared state in a struct field instead (e.g. `state = State { t: ... }` \
+         captured by all closures) \
+         at issue_314_scalar_shared_by_two_closures_rejected:5:2",
+    );
+}
+
+// The sound single-closure accumulator (one record, one owner) stays supported.
+#[test]
+fn issue_314_single_closure_accumulator_still_works() {
+    code!(
+        "fn run(a: fn()) { a(); a(); }
+fn run_it() -> integer {
+    t = 0;
+    run(fn() { t = t + 1; });
+    t
+}"
+    )
+    .expr("run_it()")
+    .result(Value::Int(2));
+}

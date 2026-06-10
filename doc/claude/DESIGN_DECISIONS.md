@@ -103,7 +103,9 @@ truly-immutable scalar captures in pure read-only contexts:
 - Captures of scalars whose bodies write to the capture are
   promoted to heap-owned cells via the phase-02d-iii.a type flip
   (`Type::Reference(__cell_<T>, vec![])` encoding).  The outer
-  scope and all closures share the same cell.
+  scope and the (single) mutating closure share the same cell —
+  sharing the cell across SEVERAL closures is rejected at compile
+  time since C74 (#314).
 - Pure read-only scalar captures remain value-copy (Case A
   semantics — unchanged).
 
@@ -1157,3 +1159,46 @@ Do not move the question itself out of the source doc's history.
 Strike it (`~~…~~`) and point at this register.  That keeps the
 original context discoverable from git blame / git log without
 cluttering active tables.
+
+## C74 — A mutated scalar may be captured by only ONE closure
+
+**Question.** Should a bare scalar local that one closure mutates be
+sharable with other closures (`run2(fn() { print(t) },
+fn() { t = t + 1 })`) — JS/Python-style shared upvalues?
+
+**Evaluation.** The shape only works through shared heap cells
+(`__cell_<T>`) referenced by several closure records at once, and the
+store model gives that sharing no defined owner: plan-57 removed the
+ref-count, so `free_named` frees the cell at the FIRST record's death
+and silently no-ops for the rest ("first death wins") — a latent
+use-after-free class whenever one sharer dies early.  The parse-side
+is equally fragile: closure-record attribute types freeze at each
+lambda's pass-1 epilogue while the boxing decision (`scalars_to_box`)
+accumulates until the parent's body end, so a reader lambda parsed
+before the writer baked in the unboxed layout and crashed at runtime
+(#314, interp CONST_STORE panic / native codegen failure).  No
+consumer needs the shape: the @PLN18 kernel that surfaced it
+immediately preferred a struct (`w.n`), which also makes the sharing
+visible at every use site.  First worked example of
+[GOALS.md § "Stability trumps features"](GOALS.md#stability-trumps-features).
+
+**Decision.** **Closed — rejected at compile time.**  Dated
+2026-06-10.  When more than one closure captures a scalar that any
+closure mutates, the parser reports *"sharing a mutable variable
+between closures is not supported — hold the shared state in a struct
+field instead"* (`Parser::reject_shared_mutable_scalar_captures`,
+`src/parser/vectors.rs`; chokepoint: the parent's pass-1 body end,
+where `scalars_to_box` is final).  Kept as supported: the
+single-closure accumulator (`fn() { sum = sum + x }` — one record,
+one owner, sound), read-only sharing of a scalar across any number of
+closures, and struct-field state captured by any number of closures.
+Supersedes the C38 plan-22 addendum sentence "the outer scope and all
+closures share the same cell" for the N≥2 case.  Regression guards:
+`tests/issues.rs::issue_314_scalar_shared_by_two_closures_rejected`
+and `::issue_314_single_closure_accumulator_still_works`.
+
+**Revisit when.** A real consumer presents a shape that is materially
+clumsier as a struct AND the cell gets a single defined owner first
+(e.g. the parent frame owns the cell and records never cascade-free
+it).  This is a default to keep in mind, not a hard line — reevaluate
+on evidence.

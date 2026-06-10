@@ -205,6 +205,13 @@ pub struct Parser {
     // outer variable numbers captured by the most recently parsed lambda.
     // Consumed by try_fn_ref_call to mark them as read at call-injection time.
     pub(crate) last_closure_captured_vars: Vec<u16>,
+    /// #314: capturing lambdas synthesized during each function body in
+    /// pass 1, keyed by the enclosing context's def_nr.  Consumed by
+    /// `reject_shared_mutable_scalar_captures` at the parent's body end
+    /// — the first moment the parent's `scalars_to_box` accumulation is
+    /// complete — to diagnose a mutated scalar captured by more than
+    /// one closure (GOALS.md § "Stability trumps features").
+    pub(crate) fn_lambdas: std::collections::HashMap<u32, Vec<u32>>,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
     /// Decremented after each init(expr) is parsed.
     pub(crate) init_field_tracking: bool,
@@ -447,6 +454,7 @@ impl Parser {
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),
+            fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
@@ -510,6 +518,7 @@ impl Parser {
         self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
+        self.fn_lambdas.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -520,6 +529,7 @@ impl Parser {
             self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
+            self.fn_lambdas.clear();
             self.lexer.switch(filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
@@ -726,6 +736,7 @@ impl Parser {
         self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
+        self.fn_lambdas.clear();
         self.lexer.parse_string(content, filename);
         self.parse_file();
         self.resolve_deferred_unknowns();
@@ -736,6 +747,7 @@ impl Parser {
             self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
+            self.fn_lambdas.clear();
             self.lexer.parse_string(content, filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
@@ -825,6 +837,7 @@ impl Parser {
         self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
+        self.fn_lambdas.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -836,6 +849,7 @@ impl Parser {
         self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
+        self.fn_lambdas.clear();
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
         self.parse_file();
@@ -2899,15 +2913,19 @@ impl Parser {
         } else {
             self.data.def(d_nr).attributes()[f_nr].alias_d_nr
         };
-        // P215: for fn-ref fields with the legacy 4B int layout
-        // (`assigned_lambda_d_nr == u32::MAX`), the database has no
-        // `<attr>__closure_rec` half — reading at pos+4 would corrupt
-        // the next attribute.  Synthesise the null DbRef sentinel for
-        // the closure half instead.  The 8B split layout (assigned by
-        // a capturing lambda) keeps the existing dual-read path.
+        // P215: for fn-ref fields with the legacy 4B int layout, the
+        // database has no `<attr>__closure_rec` half — reading at
+        // pos+4 would corrupt the next attribute.  Synthesise the
+        // null DbRef sentinel for the closure half instead.  The 8B
+        // split layout (assigned by a capturing lambda) keeps the
+        // existing dual-read path.  The split/legacy answer comes
+        // from `fn_ref_field_is_split` (the database layout), NOT
+        // from `assigned_lambda_d_nr` directly — the flag is only
+        // set when the assigning body parses, so a body parsed
+        // earlier would wrongly see the legacy layout (#313).
         if let Type::Function(_, _, _) = &tp
             && f_nr != usize::MAX
-            && self.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr == u32::MAX
+            && !self.fn_ref_field_is_split(d_nr, f_nr)
         {
             let read_dnr = self.cl("OpGetInt4", &[code, Value::Int(i32::from(pos))]);
             let read_clos = self.cl("OpNullRefSentinel", &[]);
@@ -2918,6 +2936,30 @@ impl Parser {
             );
         }
         self.get_val(&tp, nullable, u32::from(pos), code, alias)
+    }
+
+    /// Is the fn-ref struct field `d_nr.f_nr` stored in the split 8B
+    /// layout (`<attr>` d_nr + `<attr>__closure_rec`) rather than the
+    /// legacy 4B int layout?
+    ///
+    /// In the second pass the database layout is the answer's one
+    /// stable home: it was built from the COMPLETE first pass, while
+    /// `assigned_lambda_d_nr` is derived during body parsing — a body
+    /// parsed before the assigning body cannot trust the flag and
+    /// would bake in the wrong field shape (#313).  Deriving from the
+    /// layout keeps the read/write shape in lockstep with the bytes
+    /// actually laid out.  In the first pass the layout does not
+    /// exist yet, so fall back to the flag; the first pass's IR is
+    /// discarded and only the flag's end state (consumed by
+    /// `typedef::fill_database`) matters.
+    fn fn_ref_field_is_split(&self, d_nr: u32, f_nr: usize) -> bool {
+        if self.first_pass {
+            self.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr != u32::MAX
+        } else {
+            let nm = self.data.attr_name(d_nr, f_nr);
+            let kt = self.data.def(d_nr).known_type();
+            self.database.position(kt, &format!("{nm}__closure_rec")) != u16::MAX
+        }
     }
 
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
@@ -3490,7 +3532,7 @@ impl Parser {
                 // correct closure-record schema.  Heterogeneous
                 // captures across multiple constructors of the same
                 // host struct are diagnosed at the second site.
-                if let Some((lambda_d, _w)) = find_capturing_fn_ref(&val_code)
+                if let Some((lambda_d, _w)) = find_capturing_fn_ref(&self.data, &val_code)
                     && f_nr != usize::MAX
                 {
                     let lambda_d_u = lambda_d as u32;
@@ -6175,11 +6217,40 @@ fn tests_base_dir(cur_dir: &str) -> &str {
 /// `None` when no capturing FnRef is present.  Walks Block / Set /
 /// Span wrappers built by `parser/vectors.rs` around the `OpDatabase`
 /// allocation steps.
-fn find_capturing_fn_ref(v: &Value) -> Option<(i32, u16)> {
+fn find_capturing_fn_ref(data: &Data, v: &Value) -> Option<(i32, u16)> {
     match v.unspan() {
-        Value::FnRef(d, w, _) if *w != u16::MAX => Some((*d, *w)),
-        Value::Block(bl) => bl.operators.iter().find_map(find_capturing_fn_ref),
-        Value::Set(_, rhs) => find_capturing_fn_ref(rhs),
+        // `w != MAX` only appears in the second pass (`emit_lambda_code`
+        // builds the closure-allocation block there).  In the FIRST
+        // pass a capturing lambda still emits as a plain
+        // `FnRef(d, MAX)`, so also accept a lambda whose def carries a
+        // synthesized closure record — `synthesize_closure_record`
+        // runs in both passes, making it the pass-1-visible capture
+        // marker.  Without this, `assigned_lambda_d_nr` is never set
+        // in pass 1 and `fill_database` lays the field out as the
+        // legacy 4B int — no `<attr>__closure_rec` half (#313).
+        Value::FnRef(d, w, _)
+            if *w != u16::MAX || data.def(*d as u32).closure_record() != u32::MAX =>
+        {
+            Some((*d, *w))
+        }
+        // First pass only: `emit_lambda_code` emits a lambda as a bare
+        // `Int(d_nr)` there (no closure-allocation block yet), so a
+        // capturing lambda is recognisable only through its def's
+        // closure record.  Inside the fn-ref write arm an Int IS the
+        // lambda's d_nr by construction (the non-capturing write path
+        // stores exactly this Int).
+        Value::Int(d)
+            if *d >= 0
+                && (*d as usize) < data.definitions.len()
+                && data.def(*d as u32).closure_record() != u32::MAX =>
+        {
+            Some((*d, u16::MAX))
+        }
+        Value::Block(bl) => bl
+            .operators
+            .iter()
+            .find_map(|op| find_capturing_fn_ref(data, op)),
+        Value::Set(_, rhs) => find_capturing_fn_ref(data, rhs),
         _ => None,
     }
 }
@@ -6293,10 +6364,13 @@ fn emit_fn_ref_field_write(
             // outer scopes now write through to the closure record
             // when the captured lambda itself is non-capturing —
             // which is the canonical P215 reproducer.
+            // Like the read side, the split/legacy answer must come
+            // from the database layout (`fn_ref_field_is_split`), not
+            // the body-parse-order-dependent flag (#313).
             let target_is_4b = if (d_nr as usize) < p.data.definitions.len()
                 && f_nr < p.data.def(d_nr).attributes().len()
             {
-                p.data.def(d_nr).attributes()[f_nr].assigned_lambda_d_nr == u32::MAX
+                !p.fn_ref_field_is_split(d_nr, f_nr)
             } else {
                 false
             };
