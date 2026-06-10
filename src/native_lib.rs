@@ -71,6 +71,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
     }
     let mut fns: Vec<u32> = export_set.iter().copied().collect();
     fns.sort_unstable();
+    let decl_dups = crate::generation::duplicate_fn_names(data);
     for d in fns {
         let def = data.def(d);
         let name = def.name().strip_prefix("n_").unwrap_or(def.name());
@@ -87,7 +88,11 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
             format!(" -> {} not null", ret.name(data))
         };
         let _ = writeln!(src, "pub fn {name}({}){ret_clause};", params.join(", "));
-        let _ = writeln!(src, "#native \"loft_shared_{}\"", def.name());
+        let _ = writeln!(
+            src,
+            "#native \"loft_shared_{}\"",
+            crate::generation::disambiguated_fn_ident(&decl_dups, def)
+        );
     }
     src
 }
@@ -119,8 +124,14 @@ pub fn mark_native_exports(data: &mut Data, candidates: &HashSet<u32>) -> HashSe
 /// the library interprets (Step 2's invariant: a library that can't compile native
 /// silently interprets, no `exit`, no `OpStaticCall` to an unbuilt symbol).
 pub fn mark_exports(data: &mut Data, export: &HashSet<u32>) {
+    let dups = crate::generation::duplicate_fn_names(data);
     for &d in export {
-        let sym = format!("loft_shared_{}", data.def(d).name());
+        // The disambiguated ident (#305) — must equal the cdylib wrapper's
+        // exported symbol, or `wire_shared_native_fns`' dlsym misses it.
+        let sym = format!(
+            "loft_shared_{}",
+            crate::generation::disambiguated_fn_ident(&dups, data.def(d))
+        );
         data.def_mut(d).native = sym;
     }
 }
@@ -311,6 +322,7 @@ fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
             declared: HashSet::new(),
             active_pre_eval: std::collections::HashMap::new(),
             reachable: HashSet::new(),
+            dup_fn_names: HashSet::new(),
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,
@@ -345,9 +357,10 @@ fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
 pub fn generate_cdylib_lib_rs(data: &Data, stores: &Stores, export_set: &HashSet<u32>) -> String {
     let entry: Vec<u32> = export_set.iter().copied().collect();
     let mut src = emit_program(data, stores, &entry);
+    let dups = crate::generation::duplicate_fn_names(data);
     for &d in export_set {
         src.push('\n');
-        src.push_str(&export_wrapper(data, d));
+        src.push_str(&export_wrapper(data, &dups, d));
     }
     src
 }
@@ -365,9 +378,10 @@ pub fn generate_shared_cdylib_lib_rs(
 ) -> String {
     let entry: Vec<u32> = export_set.iter().copied().collect();
     let mut src = emit_program(data, stores, &entry);
+    let dups = crate::generation::duplicate_fn_names(data);
     for &d in export_set {
         src.push('\n');
-        src.push_str(&shared_bridge_wrapper(data, d));
+        src.push_str(&shared_bridge_wrapper(data, &dups, d));
     }
     src
 }
@@ -375,9 +389,11 @@ pub fn generate_shared_cdylib_lib_rs(
 /// The `#[no_mangle] pub extern "C"` **scalar** export wrapper for
 /// scalar-dispatchable function `d_nr` (inner `--native` fn = its name, e.g.
 /// `n_double`).  The export symbol is `loft_<name>` (distinct from the inner).
-fn export_wrapper(data: &Data, d_nr: u32) -> String {
+fn export_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> String {
     let def = data.def(d_nr);
-    let inner = def.name(); // e.g. "n_double"
+    // The emitted program disambiguates colliding fn names (#305) — the
+    // wrapper must call (and be named after) the SAME identifier.
+    let inner = crate::generation::disambiguated_fn_ident(dups, def); // e.g. "n_double"
     let ret = rust_type(def.returned(), &Context::Result);
     // Positional params (`a0`, `a1`, …) so wrapper arg names never clash with
     // anything; types match the inner function's argument-context signature.
@@ -417,10 +433,11 @@ fn export_wrapper(data: &Data, d_nr: u32) -> String {
 ///   caller would — so the caller-side dispatcher only ever passes the public args.
 ///
 /// Finally it forwards to the inner `--native` fn and writes the return.
-fn shared_bridge_wrapper(data: &Data, d_nr: u32) -> String {
+fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> String {
     use std::fmt::Write as _;
     let def = data.def(d_nr);
-    let inner = def.name(); // e.g. "n_vec_sum"
+    // Same identifier the emitted program uses for this fn (#305).
+    let inner = crate::generation::disambiguated_fn_ident(dups, def); // e.g. "n_vec_sum"
 
     let mut body = String::new();
     let mut fwd = String::new();

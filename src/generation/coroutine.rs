@@ -781,7 +781,7 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
-        let fn_name = def.name().to_string();
+        let fn_name = self.fn_ident(def);
         let struct_name = gen_struct_name(&fn_name);
 
         // Emit a minimal stub for bodyless functions and return early.
