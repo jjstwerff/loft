@@ -1743,6 +1743,16 @@ extern crate loft;"
                             .then(|| self.data.def(n).known_type())
                             .filter(|t| *t != u16::MAX)
                     }
+                    // #313: a split fn-ref field (capturing closure
+                    // assigned) registers `db.child_rec(t{closure})` —
+                    // recurse into the closure-record struct first so
+                    // its `t{N}` binding precedes the field emission,
+                    // mirroring `fill_database`'s inline recursion.
+                    Type::Function(_, _, _) => (a.assigned_lambda_d_nr != u32::MAX)
+                        .then(|| self.data.def(a.assigned_lambda_d_nr).closure_record())
+                        .filter(|cr| *cr != u32::MAX)
+                        .map(|cr| self.data.def(cr).known_type())
+                        .filter(|t| *t != u16::MAX),
                     _ => None,
                 };
                 if let Some(dep_tp) = dep_tp
@@ -1766,6 +1776,7 @@ extern crate loft;"
                 self.emit_field(
                     w,
                     &s_var,
+                    type_id,
                     &a.name,
                     &a.typedef,
                     a.nullable,
@@ -1967,6 +1978,7 @@ extern crate loft;"
         &self,
         w: &mut dyn Write,
         s_var: &str,
+        host_type_id: u16,
         field_name: &str,
         typedef: &Type,
         nullable: bool,
@@ -2201,10 +2213,31 @@ extern crate loft;"
             return Ok(());
         }
         if matches!(typedef, Type::Function(_, _, _)) {
-            // Storage holds the 4-byte i32 d_nr; closure half is not
-            // stored.  Mirrors the typedef.rs Function arm so native
-            // and interpreter agree on layout.
+            // Storage holds the 4-byte i32 d_nr.  When a capturing
+            // closure was assigned to this attribute, the parser split
+            // it into TWO database fields (`<attr>` +
+            // `<attr>__closure_rec`, see `typedef.rs::fill_database`)
+            // — mirror whichever shape the REGISTERED stores layout
+            // carries so native and interpreter agree (#313).
             emit_db_field(w, s_var, field_name, "int", "db.int(0, false)")?;
+            let crec_name = format!("{field_name}__closure_rec");
+            if host_type_id != u16::MAX
+                && let crate::database::Parts::Struct(fields)
+                | crate::database::Parts::EnumValue(_, fields) =
+                    &self.stores.types[host_type_id as usize].parts
+                && let Some(f) = fields.iter().find(|f| f.name == crec_name)
+                && let crate::database::Parts::ChildRec(c) =
+                    self.stores.types[f.content as usize].parts
+            {
+                let c_ref = type_id_ref(c);
+                emit_db_field(
+                    w,
+                    s_var,
+                    &crec_name,
+                    "crec",
+                    &format!("db.child_rec({c_ref})"),
+                )?;
+            }
             return Ok(());
         }
         // Plan-22 phase 02c (P258 native fix, 2026-05-12): auto-Reference
@@ -2280,6 +2313,7 @@ extern crate loft;"
             self.emit_field(
                 w,
                 &s_var,
+                type_id,
                 &a.name,
                 &a.typedef,
                 a.nullable,

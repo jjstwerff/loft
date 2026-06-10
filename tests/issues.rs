@@ -14414,3 +14414,186 @@ fn plan53_cluster5_free_text_buffer_dealloc() {
     .expr("run()")
     .result(Value::Text("world".to_string()));
 }
+
+// ── Issue 313 ────────────────────────────────────────────────────────────────
+// Capturing closure in a struct field crashed when invoked from a function
+// DEFINED BEFORE the constructing function (interp SIGSEGV in opcode
+// dispatch; native OOB at u16::MAX).
+//
+// Root cause: pass 1 never recorded the capturing assignment on
+// `Attribute::assigned_lambda_d_nr` (lambdas emit as a bare `Int(d_nr)` in
+// pass 1), so `fill_database` always laid out the legacy 4B field — the
+// "working" same-fn shape wrote the closure record past the declared layout
+// into allocation slack.  In pass 2 the flag re-derived in body-parse order,
+// so a reader parsed before the assigning body emitted the legacy
+// null-sentinel closure read against the split write.
+//
+// Fix: pass 1 detects capture via the lambda def's `closure_record` (set by
+// `synthesize_closure_record` in both passes) so the layout truly splits;
+// pass-2 read/write shapes consult the database layout (the one order-stable
+// home of the fact) via `Parser::fn_ref_field_is_split`; native codegen
+// mirrors the registered layout (`<attr>__closure_rec` ChildRec field).
+// Cross-backend cells: tests/closure_matrix.rs
+// `c1_d3_int_capture_field_cross_fn_invoker_first` and
+// `c2_d3_text_capture_field_cross_fn_invoker_first`.
+
+#[test]
+fn issue_313_closure_field_invoked_cross_fn_invoker_first() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn(text) }
+fn fire(k: K, p: text) { c = k.cb; c(p); }
+fn fire_direct(k: K, p: text) { k.cb(p); }
+fn run() -> integer {
+    w = Counter { n: 0 };
+    k = K { cb: fn(p: text) { w.n = w.n + 1; } };
+    fire(k, \"a\");
+    fire_direct(k, \"b\");
+    w.n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+// ── Issue 314 ────────────────────────────────────────────────────────────────
+// A bare scalar captured by two closures — one reading, one writing — crashed
+// at runtime ("Write to read-only store … CONST_STORE") when the reader lambda
+// was parsed before the writer.  The shape only worked through shared heap
+// cells with no defined owner ("first death wins"), so it is REJECTED at
+// compile time instead (GOALS.md § "Stability trumps features";
+// DESIGN_DECISIONS.md).  Shared mutable state belongs in a struct, which both
+// closures may capture.
+
+#[test]
+fn issue_314_scalar_shared_by_two_closures_rejected() {
+    code!(
+        "fn run2(a: fn(), b: fn()) { b(); a(); }
+fn test_it() {
+    t = 0;
+    run2(fn() { u = t + 1; print(\"u={u}\"); }, fn() { t = t + 1; });
+}"
+    )
+    .error(
+        "variable `t` is mutated through a closure and captured by 2 closures; \
+         sharing a mutable variable between closures is not supported — hold the \
+         shared state in a struct field instead (e.g. `state = State { t: ... }` \
+         captured by all closures) \
+         at issue_314_scalar_shared_by_two_closures_rejected:5:2",
+    );
+}
+
+// The sound single-closure accumulator (one record, one owner) stays supported.
+#[test]
+fn issue_314_single_closure_accumulator_still_works() {
+    code!(
+        "fn run(a: fn()) { a(); a(); }
+fn run_it() -> integer {
+    t = 0;
+    run(fn() { t = t + 1; });
+    t
+}"
+    )
+    .expr("run_it()")
+    .result(Value::Int(2));
+}
+
+// ── Issue 318 ────────────────────────────────────────────────────────────────
+// A capturing closure escaping the function that owns its captures kept raw
+// DbRefs into that frame's stores — freed at return, reused by later
+// allocations, silently corrupting unrelated objects (no crash, UAF detector
+// blind).  Three escape sinks are now rejected at compile time
+// (GOALS.md § "Stability trumps features"): returning a closure-carrying
+// struct (R1), writing a capturing closure into a struct received as an
+// argument (R2), and collections of closure-carrying structs (R3).  Bare
+// closure returns (the case-C factory) stay supported.  Probes:
+// /tmp/p_followups/e*.loft; predicate: `Parser::type_carries_closure`.
+
+#[test]
+fn issue_318_returning_closure_carrying_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+fn make() -> K {
+    w = Counter { n: 7 };
+    K { cb: fn() { w.n = w.n + 1; } }
+}
+fn test_it() { k = make(); c = k.cb; c(); }"
+    )
+    .error(
+        "function returns a struct type that holds a capturing closure; the \
+         closure references state owned by this function's frame, so the value \
+         cannot outlive it — construct the struct in the frame that owns the \
+         captured state and pass it down, or return the closure itself (#318) \
+         at issue_318_returning_closure_carrying_struct_rejected:3:17",
+    );
+}
+
+#[test]
+fn issue_318_closure_into_argument_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+struct H { k: K }
+fn attach(h: H) {
+    w = Counter { n: 7 };
+    h.k = K { cb: fn() { w.n = w.n + 1; } };
+}
+fn test_it() {
+    h = H { k: K { cb: fn() { print(\"orig\"); } } };
+    attach(h);
+}"
+    )
+    .error(
+        "cannot store a capturing closure into a struct received as an argument \
+         — the closure references state owned by this function's frame, which \
+         the argument's struct outlives; construct the closure in the frame \
+         that owns the captured state (#318) \
+         at issue_318_closure_into_argument_struct_rejected:6:44",
+    );
+}
+
+#[test]
+fn issue_318_vector_of_closure_carrying_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+fn test_it() {
+    w = Counter { n: 7 };
+    v: vector<K> = [K { cb: fn() { w.n = w.n + 1; } }];
+}"
+    )
+    .error(
+        "collection of a struct type that holds a capturing closure is not \
+         supported — element copies would dangle into the constructing \
+         function's frame; keep closure holders in local variables and pass \
+         them down as arguments (#318) \
+         at issue_318_vector_of_closure_carrying_struct_rejected:5:19",
+    )
+    .error(
+        "field `vector` would store a value of a type that holds a capturing \
+         closure; such values are bound to the function frame that owns the \
+         captures and cannot be copied into another struct — keep the closure \
+         holder in a local variable and pass it down as an argument (#318) \
+         at issue_318_vector_of_closure_carrying_struct_rejected:5:55",
+    );
+}
+
+// The supported shapes stay supported: closure-carrying struct in a local,
+// passed DOWN as an argument (#313's matrix), and the bare factory return.
+#[test]
+fn issue_318_local_closure_struct_passed_down_still_works() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn(text) }
+fn fire(k: K, p: text) { c = k.cb; c(p); }
+fn run() -> integer {
+    w = Counter { n: 0 };
+    k = K { cb: fn(p: text) { w.n = w.n + 1; } };
+    fire(k, \"a\");
+    w.n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}

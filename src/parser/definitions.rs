@@ -928,8 +928,36 @@ impl Parser {
                 // attributes — propagation goes through the
                 // shared cell DbRef, not via per-call slot copy.
                 self.flip_scalars_to_box_types();
+                // #318 sink R1: a fn cannot RETURN a closure-carrying
+                // struct — the value's closure record holds raw DbRefs
+                // into this frame's stores, which die at return (the
+                // caller then silently corrupts whatever reuses the
+                // slots).  Checked in pass 2 only: by then pass 1 has
+                // recorded every capturing assignment on the struct's
+                // attributes, so the predicate is complete.  Returning
+                // a BARE capturing closure stays supported (the case-C
+                // factory transfer owns the record + captures).
+                let returned = self.data.def(self.context).returned().clone();
+                if self.type_carries_closure(&returned) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "function returns a struct type that holds a capturing closure; \
+                         the closure references state owned by this function's frame, so \
+                         the value cannot outlive it — construct the struct in the frame \
+                         that owns the captured state and pass it down, or return the \
+                         closure itself (#318)"
+                    );
+                }
             }
             self.parse_code();
+            // #314 — pass-1 sibling of the pass-2 flip above: now that
+            // the whole body is parsed, `scalars_to_box` is final;
+            // reject any mutated scalar that more than one closure
+            // captures (GOALS.md § "Stability trumps features").
+            if self.first_pass {
+                self.reject_shared_mutable_scalar_captures(self.context);
+            }
             // reset transient closure state after each function body.
             // Without this, a lambda inside make_adder leaks last_closure_work_var
             // into the next function parsed (main), causing closure_var_of to
@@ -1410,6 +1438,38 @@ impl Parser {
     }
 
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
+        let tp = self.sub_type_inner(on_d, type_name, link)?;
+        // #318 sink R3: no collection of a closure-carrying struct.
+        // An element copy embeds a closure record whose raw DbRefs
+        // point into the constructing frame (silent corruption once
+        // the frame dies and slots are reused) — the same reason the
+        // plan-15 matrix CLOSED `vector<capturing fn>`; a struct
+        // wrapper was a loophole around that decision.  Checked in
+        // pass 2 (layout complete).
+        if !self.first_pass
+            && matches!(
+                tp,
+                Type::Vector(_, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+            && self.type_carries_closure(&tp)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "collection of a struct type that holds a capturing closure is not \
+                 supported — element copies would dangle into the constructing \
+                 function's frame; keep closure holders in local variables and pass \
+                 them down as arguments (#318)"
+            );
+        }
+        Some(tp)
+    }
+
+    fn sub_type_inner(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
         // Plan-06 phase 4d.A — accept tuple as the inner type of
         // `vector<(T1, T2, ...)>` (and reserve the same shape for
         // `iterator<(T1, T2)>` once that lands).  Without this, the

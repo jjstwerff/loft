@@ -268,6 +268,47 @@ cross_mode!(
     "#
 );
 
+// #313 — the definition-ORDER axis the original D3 cells missed: the
+// invoking function is defined (and second-pass parsed) BEFORE the
+// function that constructs the struct with the capturing closure.
+// Pre-fix, `assigned_lambda_d_nr` re-accumulated in body-parse order
+// after the inter-pass `data.reset()`, so the earlier-parsed reader
+// baked in the legacy 4B field shape (closure half = null sentinel)
+// → interp SIGSEGV / native OOB u16::MAX.  Covers both the
+// local-copy (`c = k.cb; c(p)`) and direct (`k.cb(p)`) call shapes.
+cross_mode!(
+    c1_d3_int_capture_field_cross_fn_invoker_first,
+    r#"
+    struct Counter { n: integer not null }
+    struct K { cb: fn(text) }
+    fn fire(k: K, p: text) { c = k.cb; c(p); }
+    fn fire_direct(k: K, p: text) { k.cb(p); }
+    fn test() {
+        w = Counter { n: 0 };
+        k = K { cb: fn(p: text) { w.n = w.n + 1; print("got {p} n={w.n}\n"); } };
+        fire(k, "a");
+        fire_direct(k, "b");
+        assert(w.n == 2, "after two fires w.n={w.n}");
+    }
+    "#
+);
+
+// #313 sibling symptom — a TEXT capture on the same invoker-first
+// shape failed differently pre-fix (allocation.rs OOB panic while
+// claiming the closure record into the host's store).
+cross_mode!(
+    c2_d3_text_capture_field_cross_fn_invoker_first,
+    r#"
+    struct K { cb: fn() }
+    fn fire(k: K) { c = k.cb; c(); }
+    fn test() {
+        msg = "hello";
+        k = K { cb: fn() { print("said {msg}\n"); } };
+        fire(k);
+    }
+    "#
+);
+
 cross_mode!(
     c5_d1_multi_capture_local,
     r#"
