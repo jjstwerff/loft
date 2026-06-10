@@ -1202,3 +1202,39 @@ clumsier as a struct AND the cell gets a single defined owner first
 (e.g. the parent frame owns the cell and records never cascade-free
 it).  This is a default to keep in mind, not a hard line — reevaluate
 on evidence.
+
+## C75 — Closure-carrying struct values are frame-bound
+
+**Question.** May a struct holding a capturing closure leave the function
+whose frame owns the captures — be returned, written into an argument's
+field, or stored in a collection?
+
+**Evaluation.** The closure record holds raw 12-byte DbRefs into the
+constructing frame's stores (Reference captures and `__cell` scalar boxes
+alike).  Every escape route copies the record's bytes — `OpClaimChildRec`
+clones the DbRefs but nothing transfers the stores they name — so the frame
+frees them at return and the free-bitmap hands the slots to the next
+allocation: the escaped closure then silently reads and writes an unrelated
+live object (#318; probed matrix in the issue, probes in
+`/tmp/p_followups/e*.loft`).  Within-frame use — locals, downward argument
+passing, #313's whole matrix — is sound.  A real ownership transfer through
+the deep copy is a substrate design (cross-store fix-ups, native mirroring);
+no consumer needs the escape today.
+
+**Decision.** **Closed — rejected at compile time.**  Dated 2026-06-10.
+Three sinks reject on the transitive `Parser::type_carries_closure`
+predicate (derived from the registered DB layout, order-stable): returning a
+closure-carrying struct type (`definitions.rs`, the pass-2 body hook),
+writing a capturing closure into a struct rooted at an argument
+(`set_field_check`'s fn arm), and collections of closure-carrying structs
+(`sub_type` — extends the plan-15 CLOSED `vector<capturing fn>` cell, which
+a struct wrapper had silently bypassed).  Struct assignment is copy-at-value
+(C38), so a local alias cannot smuggle a write past the argument check
+(probe e10).  Returning a BARE capturing closure stays supported on interp
+(case-C factory transfer); its native divergence is #323.  Regression
+guards: `tests/issues.rs::issue_318_*`.
+
+**Revisit when.** A consumer needs factory-built closure-holding structs AND
+the deep-copy path gets a designed ownership transfer (claim the captured
+stores into the host, or re-point the record at host-owned copies) —
+verified on both backends.

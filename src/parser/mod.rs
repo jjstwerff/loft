@@ -2962,6 +2962,63 @@ impl Parser {
         }
     }
 
+    /// #318: does `tp` (transitively) store a capturing closure — a
+    /// struct with a capturing-lambda fn field (`assigned_lambda_d_nr`
+    /// set), reached through struct fields, vector/keyed-collection
+    /// content, or tuple elements?
+    ///
+    /// Values of such types are frame-bound: the closure record holds
+    /// raw DbRefs into the stores of the frame that owns the captures,
+    /// and copying the value into storage that outlives that frame (a
+    /// return value, another struct's field, a collection element)
+    /// leaves dangling DbRefs — silent cross-object corruption once
+    /// the store slot is reused.  The three escape sinks reject on
+    /// this predicate; locals and downward argument passing stay free.
+    pub(crate) fn type_carries_closure(&self, tp: &Type) -> bool {
+        // Like `fn_ref_field_is_split`, derive from the registered
+        // database layout (built from the COMPLETE first pass) rather
+        // than `assigned_lambda_d_nr`, so the answer is independent of
+        // pass-2 body-parse order.
+        fn walk_def(
+            data: &Data,
+            db: &crate::database::Stores,
+            d: u32,
+            seen: &mut std::collections::HashSet<u32>,
+        ) -> bool {
+            if d == u32::MAX || (d as usize) >= data.definitions.len() || !seen.insert(d) {
+                return false;
+            }
+            let kt = data.def(d).known_type();
+            data.def(d).attributes().iter().any(|a| {
+                db.position(kt, &format!("{}__closure_rec", a.name)) != u16::MAX
+                    || walk(data, db, &a.typedef, seen)
+            })
+        }
+        fn walk(
+            data: &Data,
+            db: &crate::database::Stores,
+            tp: &Type,
+            seen: &mut std::collections::HashSet<u32>,
+        ) -> bool {
+            match tp {
+                Type::Reference(d, _) => walk_def(data, db, *d, seen),
+                Type::Vector(c, _) => walk(data, db, c, seen),
+                Type::Hash(d, _, _)
+                | Type::Sorted(d, _, _)
+                | Type::Index(d, _, _)
+                | Type::Spacial(d, _, _) => walk_def(data, db, *d, seen),
+                Type::Tuple(elems) => elems.iter().any(|e| walk(data, db, e, seen)),
+                _ => false,
+            }
+        }
+        walk(
+            &self.data,
+            &self.database,
+            tp,
+            &mut std::collections::HashSet::new(),
+        )
+    }
+
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
@@ -3379,6 +3436,29 @@ impl Parser {
     ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
         let nm = self.data.attr_name(d_nr, f_nr);
+        // #318 sink R2: a closure-carrying struct value cannot be
+        // copied into another struct's field — the copy's closure
+        // record keeps raw DbRefs into the constructing frame, which
+        // the field's host may outlive (silent corruption on slot
+        // reuse).  The direct fn-field write (Type::Function arm) IS
+        // the supported feature and stays; `emit_check == false` is
+        // the closure-record population path (captures share by
+        // DbRef, no copy) and is exempt.
+        if emit_check
+            && !self.first_pass
+            && !matches!(tp, Type::Function(_, _, _))
+            && self.type_carries_closure(&tp)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "field `{nm}` would store a value of a type that holds a capturing \
+                 closure; such values are bound to the function frame that owns the \
+                 captures and cannot be copied into another struct — keep the closure \
+                 holder in a local variable and pass it down as an argument (#318)"
+            );
+            return Value::Null;
+        }
         let pos = self
             .database
             .position(self.data.def(d_nr).known_type(), &nm);
@@ -3548,6 +3628,28 @@ impl Parser {
                              (this lambda's captured environment differs from the previously-assigned \
                               lambda's); split into two structs or unify the captures"
                         );
+                    }
+                    // #318 sink R2: the host being written must be
+                    // rooted in a frame-local — writing a capturing
+                    // closure into (a field of) an ARGUMENT claims the
+                    // closure record into a store that outlives this
+                    // frame, while the record's DbRefs point at this
+                    // frame's captures (silent corruption on slot
+                    // reuse once the frame dies).
+                    if !self.first_pass
+                        && let Some(base) = base_var_of(&ref_code)
+                        && self.vars.is_argument(base)
+                    {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot store a capturing closure into a struct received as an \
+                             argument — the closure references state owned by this \
+                             function's frame, which the argument's struct outlives; \
+                             construct the closure in the frame that owns the captured \
+                             state (#318)"
+                        );
+                        return Value::Null;
                     }
                 }
                 emit_fn_ref_field_write(self, d_nr, f_nr, ref_code, pos_val, &val_code)
@@ -6217,6 +6319,18 @@ fn tests_base_dir(cur_dir: &str) -> &str {
 /// `None` when no capturing FnRef is present.  Walks Block / Set /
 /// Span wrappers built by `parser/vectors.rs` around the `OpDatabase`
 /// allocation steps.
+/// #318: the frame variable a field-write host expression is rooted
+/// at — `Var(h)` itself, or the first argument of an accessor chain
+/// (`OpGetField(OpGetField(h, …), …)`).  `None` for shapes with no
+/// single var root (literals, fresh allocations inside blocks).
+fn base_var_of(v: &Value) -> Option<u16> {
+    match v.unspan() {
+        Value::Var(nr) => Some(*nr),
+        Value::Call(_, args) => args.first().and_then(base_var_of),
+        _ => None,
+    }
+}
+
 fn find_capturing_fn_ref(data: &Data, v: &Value) -> Option<(i32, u16)> {
     match v.unspan() {
         // `w != MAX` only appears in the second pass (`emit_lambda_code`

@@ -14497,3 +14497,103 @@ fn run_it() -> integer {
     .expr("run_it()")
     .result(Value::Int(2));
 }
+
+// ── Issue 318 ────────────────────────────────────────────────────────────────
+// A capturing closure escaping the function that owns its captures kept raw
+// DbRefs into that frame's stores — freed at return, reused by later
+// allocations, silently corrupting unrelated objects (no crash, UAF detector
+// blind).  Three escape sinks are now rejected at compile time
+// (GOALS.md § "Stability trumps features"): returning a closure-carrying
+// struct (R1), writing a capturing closure into a struct received as an
+// argument (R2), and collections of closure-carrying structs (R3).  Bare
+// closure returns (the case-C factory) stay supported.  Probes:
+// /tmp/p_followups/e*.loft; predicate: `Parser::type_carries_closure`.
+
+#[test]
+fn issue_318_returning_closure_carrying_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+fn make() -> K {
+    w = Counter { n: 7 };
+    K { cb: fn() { w.n = w.n + 1; } }
+}
+fn test_it() { k = make(); c = k.cb; c(); }"
+    )
+    .error(
+        "function returns a struct type that holds a capturing closure; the \
+         closure references state owned by this function's frame, so the value \
+         cannot outlive it — construct the struct in the frame that owns the \
+         captured state and pass it down, or return the closure itself (#318) \
+         at issue_318_returning_closure_carrying_struct_rejected:3:17",
+    );
+}
+
+#[test]
+fn issue_318_closure_into_argument_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+struct H { k: K }
+fn attach(h: H) {
+    w = Counter { n: 7 };
+    h.k = K { cb: fn() { w.n = w.n + 1; } };
+}
+fn test_it() {
+    h = H { k: K { cb: fn() { print(\"orig\"); } } };
+    attach(h);
+}"
+    )
+    .error(
+        "cannot store a capturing closure into a struct received as an argument \
+         — the closure references state owned by this function's frame, which \
+         the argument's struct outlives; construct the closure in the frame \
+         that owns the captured state (#318) \
+         at issue_318_closure_into_argument_struct_rejected:6:44",
+    );
+}
+
+#[test]
+fn issue_318_vector_of_closure_carrying_struct_rejected() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn() }
+fn test_it() {
+    w = Counter { n: 7 };
+    v: vector<K> = [K { cb: fn() { w.n = w.n + 1; } }];
+}"
+    )
+    .error(
+        "collection of a struct type that holds a capturing closure is not \
+         supported — element copies would dangle into the constructing \
+         function's frame; keep closure holders in local variables and pass \
+         them down as arguments (#318) \
+         at issue_318_vector_of_closure_carrying_struct_rejected:5:19",
+    )
+    .error(
+        "field `vector` would store a value of a type that holds a capturing \
+         closure; such values are bound to the function frame that owns the \
+         captures and cannot be copied into another struct — keep the closure \
+         holder in a local variable and pass it down as an argument (#318) \
+         at issue_318_vector_of_closure_carrying_struct_rejected:5:55",
+    );
+}
+
+// The supported shapes stay supported: closure-carrying struct in a local,
+// passed DOWN as an argument (#313's matrix), and the bare factory return.
+#[test]
+fn issue_318_local_closure_struct_passed_down_still_works() {
+    code!(
+        "struct Counter { n: integer not null }
+struct K { cb: fn(text) }
+fn fire(k: K, p: text) { c = k.cb; c(p); }
+fn run() -> integer {
+    w = Counter { n: 0 };
+    k = K { cb: fn(p: text) { w.n = w.n + 1; } };
+    fire(k, \"a\");
+    w.n
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
