@@ -14647,3 +14647,86 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(9));
 }
+
+// ── Issue 328 ────────────────────────────────────────────────────────────────
+// `reference<T>` struct fields were never laid out: the parse erased the
+// pointer-ness to the same Type as inline nesting, so `fill_database` either
+// embedded T's bytes inline (writes silently deep-copied — violating the
+// documented pointer semantics) or, for `reference<Self>`, rejected the
+// struct with the self-contradictory "use reference<Node>" cycle error;
+// `next: null` construction panicked on the unpositioned-field marker.
+//
+// Fix: in struct-field position `reference<T>` parses to the auto-Reference
+// share marker (`Type::Reference(d, [u16::MAX])`), riding the proven
+// 12-byte Parts::DbRef layout + OpGetDbRef/OpSetDbRef paths; the value-cycle
+// checker skips marker fields (making `reference<Self>` legal); pointer
+// field assignment repoints via OpSetDbRef (`= null` writes the sentinel);
+// self-deps from `x = x.next` are stripped at the type merge (a var cannot
+// borrow from itself — the dep flipped codegen into the dependent-view
+// class and corrupted the frame).
+
+#[test]
+fn issue_328_reference_field_pointer_semantics() {
+    code!(
+        "struct Leaf { value: integer }
+struct Node { value: integer, next: reference<Leaf> }
+fn run() -> integer {
+    a = Leaf { value: 1 };
+    b = Leaf { value: 2 };
+    n = Node { value: 0, next: a };
+    a.value = 41;
+    aliased = n.next.value;
+    n.next = b;
+    repointed = n.next.value;
+    untouched = a.value;
+    n.next = null;
+    cleared = if n.next == null { 1 } else { 0 };
+    d = Node { value: 9 };
+    default_null = if d.next == null { 1 } else { 0 };
+    aliased * 100000 + repointed * 1000 + untouched * 10 + cleared * 2 + default_null
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(4_102_413));
+}
+
+#[test]
+fn issue_328_reference_self_recursive_walk() {
+    code!(
+        "struct Node { value: integer, next: reference<Node> }
+fn run() -> integer {
+    c = Node { value: 4, next: null };
+    b = Node { value: 2, next: c };
+    a = Node { value: 1, next: b };
+    m = a.next;
+    m.value = 20;
+    cur = a;
+    total = 0;
+    while cur != null {
+        total = total + cur.value;
+        cur = cur.next;
+    }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(25));
+}
+
+// `x = x.next` (same-var self-read reassign): the stripped self-dep keeps
+// the var on the plain ref-slot codegen path (pre-fix: InitCreateStack frame
+// corruption → SIGSEGV reading the result).
+#[test]
+fn issue_328_self_reassign_through_reference_field() {
+    code!(
+        "struct Node { value: integer, next: reference<Node> }
+fn run() -> integer {
+    b = Node { value: 2, next: null };
+    x = Node { value: 1, next: b };
+    x = x.next;
+    x.value
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}

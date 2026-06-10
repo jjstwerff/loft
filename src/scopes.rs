@@ -884,7 +884,10 @@ impl Scopes {
                 RefRhs::View
             )
             // `value` is pre-scan IR: reads may name the original id (`ov`)
-            // or the remapped one (`v`) — guard against both.
+            // or the remapped one (`v`) — guard against both.  A self-
+            // reading borrow (`x = x.next`, #328) keeps its owned store
+            // until scope exit — a bounded, documented residual of this
+            // conservatism (LIFETIME.md § Ownership-transition free).
             && !value_reads_var(value, v)
             && !value_reads_var(value, ov)
         {

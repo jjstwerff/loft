@@ -622,6 +622,34 @@ impl Parser {
             let tp_val = db_tp;
             return self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
         }
+        // #328: a `reference<T>` field is a POINTER — assignment repoints
+        // the field; it must never deep-copy record bytes into the current
+        // referent (which both clobbered the referent and left `= null` a
+        // no-op).  The discriminator is the lvalue SHAPE: `get_val` emits
+        // `OpGetDbRef(host, pos)` only for pointer fields (the parse-time
+        // share marker is rewritten to liveness deps by the expression
+        // layer, so the TYPE cannot be tested here).  Closure-capture reads
+        // also produce OpGetDbRef but on the hidden `__closure` param —
+        // excluded so captured-Reference reassignment keeps its existing
+        // copy semantics.
+        if matches!(f_type, Type::Reference(_, _))
+            && op == "="
+            && let Value::Call(d, args) = to.unspan()
+            && self.data.def(*d).name() == "OpGetDbRef"
+            && args.len() == 2
+            && !matches!(args[0].unspan(), Value::Var(v) if *v == self.closure_param)
+        {
+            let (r, p) = (args[0].clone(), args[1].clone());
+            // `= null` clears the pointer: write the canonical null
+            // sentinel DbRef (a bare `Value::Null` here makes codegen
+            // allocate a typeless temp record that then leaks).
+            let v = if matches!(val.unspan(), Value::Null) {
+                self.cl("OpNullRefSentinel", &[])
+            } else {
+                val.clone()
+            };
+            return self.cl("OpSetDbRef", &[r, p, v]);
+        }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
             && !matches!(to, Value::Var(_))

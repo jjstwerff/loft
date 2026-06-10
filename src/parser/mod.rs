@@ -3014,6 +3014,13 @@ impl Parser {
             seen: &mut std::collections::HashSet<u32>,
         ) -> bool {
             match tp {
+                // #328: a `reference<T>` POINTER field (the u16::MAX share
+                // marker) copies only a 12-byte DbRef, never the record —
+                // it cannot smuggle a closure record's bytes, so the
+                // carrying-walk stops at the pointer boundary.  (Escaping
+                // a pointer to frame-local state is the generic, documented
+                // reference<T> borrow hazard — not the #318 copy class.)
+                Type::Reference(_, deps) if deps.contains(&u16::MAX) => false,
                 Type::Reference(d, _) => walk_def(data, db, *d, seen),
                 Type::Vector(c, _) => walk(data, db, c, seen),
                 Type::Hash(d, _, _)
