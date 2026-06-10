@@ -357,6 +357,19 @@ installed → auto-install chain on `use`). So the remaining `--lib` need is for
 path-dep development** (a package's own `src/` + sibling deps, the `runSuite` shape); a
 registry dep like `graphics = ">=0.1"` should resolve in the IDE today once installed.
 
+**Re-evaluation (2026-06-10, probed): library development itself already substantially
+works — this section's "unsupported" framing is superseded.** The verified state:
+
+| Library-dev flow | State |
+|---|---|
+| **Run a library checkout's own suite** (open its entry file → ✓✓ Suite) | **WORKS** — probed: `runSuite` from `lib/moros_map/src/moros_map.loft` walks up to its `loft.toml`, resolves its `src/` + `native-auto`, **51/51 across 8 test files**. A `loft-libs-*` repo checkout is the same case. |
+| **Consume registry deps** (`graphics = ">=0.1"`) | Designed-in (`~/.loft/lib` probes + auto-install); needs one install-and-run verification. |
+| **Edit a dependency in place** (clone it beside the consumer) | Designed-in: every *local* probe (project lib, sibling package, `--lib`, manifests) runs **before** the installed/registry probes, so a local checkout **shadows** the installed version — the cargo-`[patch]` workflow for free. Needs one end-to-end verification. |
+| **Edit across a library's files** | **THE gap.** The `writeFile` sandbox is single-file: a multi-src library runs its whole suite but only its served file is editable. "Multi-file navigation" is therefore not polish — it is the library-development blocker, and ranks accordingly. |
+
+(The *publish* half of the remote-library story — `REGISTRY_SUBMIT` / `LIBRARY_AUTHORING` —
+stays deliberately outside the IDE plan.)
+
 ## The REPL panel — a prime, context-switching element
 
 A **REPL is a prime element** of the shell, always present so you can try things out at any
