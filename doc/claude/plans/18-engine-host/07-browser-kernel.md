@@ -32,17 +32,36 @@ first-class slow-lane peer.  Keyframes arrive as plain reliable messages
 table still matters on the phone: inbound conflation (drain newest at the
 frame) is the SAME latest-value semantics, applied to a render loop.
 
-## The five seams (the slice list)
+## What already exists (audited 2026-06-10 — most of this phase is shipped)
+
+The user's instinct was right: the browser runtime already carries far more
+of this kernel than the first draft assumed.
+
+| Piece | State | Where |
+|---|---|---|
+| **WebSocket bridge** | **shipped end-to-end** — `ws_connect`/`ws_send`/`ws_recv`/`ws_last_message`/`ws_close` in the interpreter's own wasm build, JS side provided by `doc/loft-rt.js`; built so `use web` WS programs run in the browser TODAY | `src/wasm.rs` § WebSocket bridge; `doc/loft-rt.js` |
+| **Time** | **shipped end-to-end** — `ticks()` bridges via `host_time_ticks` → JS `time_ticks` in BOTH host JS files (the zero-stub trap is wasip2-headless only) | `src/wasm.rs:350`; `doc/loft-rt.js`, `doc/loft-gl.js` |
+| **Frame yield + resume** | **shipped** — session machinery (`frame_yield` → execute returns → `resume_frame`), RAF loop in the GL host | `src/wasm.rs` sessions; `doc/loft-gl.js` |
+| **Input** | **mouse + keys shipped** (`gl_key_pressed`/`gl_mouse_*` via `wasm_gl.rs`); **touch missing** in `loft-gl.js` | `src/wasm_gl.rs:64-67` |
+| **GL render** | **shipped** — the `--html` WebGL2 pipeline | `HTML_EXPORT.md` |
+| **Lib loading in browser** | **shipped** — VirtFS + `DEFAULT_FILES` gating | `src/wasm.rs` |
+
+So the seams below are mostly ASSEMBLY, not construction: the engine_host
+wasm natives wrap the EXISTING `host_ws_*` functions; the yield native sets
+the EXISTING `frame_yield`; only touch input and `default_host()` are new
+code at all.  Revised effort: **S/M** (was M).
+
+## The five seams (the slice list — revised against the inventory)
 
 Closing these — kernel-side, never script-side — is the whole build:
 
 1. **Same symbols, second registration.**  Every `n_kernel_client_*` /
    `n_kernel_connect` / `n_kernel_sync_class*` symbol registers a wasm-side
-   body (browser WebSocket via the W1c host-bridge pattern), plus honest
-   stubs for the surface that cannot exist (`n_kernel_client_udp_bound` →
-   false).  `lib/engine_host`'s `.loft` source is shared verbatim —
-   `cfg`-split `src/engine_host.rs` into the pure half (all targets) and
-   the socket half (native only).
+   body **wrapping the existing `host_ws_*` bridge** (no new transport
+   code), plus honest stubs for the surface that cannot exist
+   (`n_kernel_client_udp_bound` → false).  `lib/engine_host`'s `.loft`
+   source is shared verbatim — `cfg`-split `src/engine_host.rs` into the
+   pure half (all targets) and the socket half (native only).
 2. **The yield hides in the shared lib.**  A browser tab cannot host
    `run_client`'s `while` loop; the loop lives in `lib/engine_host`, so a
    per-turn `kernel_client_frame()` native (no-op natively; frame-yield in
@@ -51,17 +70,15 @@ Closing these — kernel-side, never script-side — is the whole build:
    source identical and scripts untouched.  NOTE: yield must be
    unconditional per turn — the native `idle(2000)` path only runs when a
    turn was idle, and a busy tab must still yield.
-3. **Time.**  `ticks()` must mean the same thing on both kernels.  VERIFIED
-   2026-06-10: the browser runtime bridges it (`src/wasm.rs
-   host_time_ticks` → JS `time_ticks`); the zero-stub trap is wasip2/
-   wasmtime headless only.  Remaining work: confirm the doc/pkg bundle's
-   host JS supplies `time_ticks` from `performance.now()`, and cover time-
-   paced behavior in the differential (a cadence assert, not an eyeball).
-4. **One input surface.**  Touch and mouse must reach scripts through one
-   API (pointer events at the bridge) or input-reading scripts fork per
-   host.  This seam belongs to the graphics/input bridge, not engine_host —
-   coordinate with the `--html` input bridge work; the walk-up consumer
-   (taps) needs only pointer-down with coordinates.
+3. **Time.**  CLOSED — verified end-to-end 2026-06-10: `src/wasm.rs
+   host_time_ticks` → JS `time_ticks`, provided by BOTH `doc/loft-rt.js`
+   and `doc/loft-gl.js`.  Residual: a cadence assert in the differential
+   (cover it, don't rebuild it).
+4. **One input surface.**  Mouse + keys are shipped (`wasm_gl.rs` →
+   `gl_key_pressed`/`gl_mouse_*`); the ONLY gap is touch — ~10 lines in
+   `doc/loft-gl.js` mapping touch/pointer events onto the existing mouse
+   state (the walk-up consumer needs only pointer-down with coordinates).
+   Scripts keep reading the one existing input API.
 5. **The connect target.**  A phone connects to the cabinet that served it
    the page; a native seat takes a host argument.  `engine_host::
    default_host()` (browser = the page origin; native = `LOFT_HOST` env /
@@ -104,7 +121,11 @@ heartbeat cadence, and bundle size over the cabinet's LAN serve.
 ## Sequencing
 
 After the first phone-seat consumer exists (bumper-planes walk-up tier is
-the natural driver); slices 1–3 are self-contained kernel work and can land
-ahead of 4–5 if the consumer arrives sooner.  Slice order: 3 (verify time —
-cheapest falsification), 1 (the split + registration), 2 (the yield), then
-the differential; 4–5 ride the consumer.
+the natural driver); slices 1–2 are self-contained kernel work and can land
+ahead if the consumer arrives sooner.  Revised order (post-inventory):
+1 (the split + same-symbol registration over the existing `host_ws_*`
+bridge), 2 (the yield native over the existing session machinery), the
+differential, then 4–5 (touch + `default_host`) ride the consumer.  Seam 3
+is closed.  An interim proof exists even before slice 1: `use web`
+WS-client programs already run in the browser — what's missing is only the
+`engine_host` surface over the same bridge (the same-script invariant).
