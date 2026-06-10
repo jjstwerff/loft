@@ -224,12 +224,12 @@ visually adjacent.
 
 | Chunk | Libraries | Status |
 |---|---|---|
-| `loft-libs-core` | `arguments`, `random`, `crypto` | all shipped |
+| `loft-libs-core` | `arguments`, `random`, `crypto`, `regex` | all shipped.  `random 0.2.0` (repo PR #9, 2026-06-10) adds the VALUE tier — owned deterministic `RandStream`s (seed_stream/get/indices) for games whose RNG is part of their state; crawler consumes it (its three private LCGs deleted). |
 | `loft-libs-net` | `web`, `server`, `game_protocol` | all shipped |
 | `loft-libs-graphics` | `graphics`, `shapes`, `gridmesh` | all shipped 0.1.x |
 | `loft-libs-assets` | `mesh3d`, `glb` (+ `imaging` migrating in at next major) | **chunk bootstrapped 2026-05-31** ([loft-lang/loft-libs-assets](https://github.com/loft-lang/loft-libs-assets)).  `mesh3d 0.1.0` + `glb 0.1.0` shipped (registry PR #8, validator 3-of-3 gates green).  imaging migration deferred to next major-version boundary. |
 | `loft-libs-game` | `physics_2body`, `particles`, `input`, `time`, `audio_bus` | **chunk bootstrapped 2026-06-01** ([loft-lang/loft-libs-game](https://github.com/loft-lang/loft-libs-game)).  `time 0.1.0` shipped (registry PR #11, validator green).  Other inhabitants pending design. |
-| `loft-libs-world` | `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | **chunk bootstrapped 2026-06-01** ([loft-lang/loft-libs-world](https://github.com/loft-lang/loft-libs-world)).  `hex_world 0.1.0` shipped (registry PR #10, validator green; renamed from `lib/world` in monorepo W.1).  Other hex_* inhabitants pending design. |
+| `loft-libs-world` | `hex_grid`, `hex_world`, `hex_walls`, `hex_terrain`, `hex_items` | **chunk bootstrapped 2026-06-01** ([loft-lang/loft-libs-world](https://github.com/loft-lang/loft-libs-world)).  `hex_world 0.1.0` shipped (registry PR #10, validator green; renamed from `lib/world` in monorepo W.1).  **`hex_grid` added 2026-06-10** (repo PR #1) — the GEOMETRY axis the other hex_* axes build on: the canonical pointy-top/odd-r/`L=√3` lattice math + the 12-orientation `cell_*` square basis, extracted from the **crawler** roguelike (which consumes it live — the first cross-game consumer).  The family's convergence plan (axial = interchange/storage, odd-r = authoring, `hex_grid` bridges; the capability roadmap: round towers, 24-dir walls, cliffs, water flow, collision, LOS, hearing) lives in the repo's [CONVERGENCE.md](https://github.com/loft-lang/loft-libs-world/blob/main/CONVERGENCE.md).  `hex_walls`/`hex_terrain` pending design (source material: dryopea `lib/wall.loft`/`lib/overland.loft` + crawler `wallgeo`). |
 
 **Naming the hex_* family.**  Each library covers ONE data axis of
 the hex world.  The `hex_*` prefix marks the family + leaves room for

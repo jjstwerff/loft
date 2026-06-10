@@ -599,6 +599,12 @@ impl Parser {
                 outer_context,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
+            // #314: remember this lambda so the enclosing body's end
+            // can reject shared-mutable-scalar captures once
+            // `scalars_to_box` is complete.
+            if self.first_pass {
+                self.fn_lambdas.entry(outer_context).or_default().push(d_nr);
+            }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
@@ -838,6 +844,12 @@ impl Parser {
                 outer_context,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
+            // #314: remember this lambda so the enclosing body's end
+            // can reject shared-mutable-scalar captures once
+            // `scalars_to_box` is complete.
+            if self.first_pass {
+                self.fn_lambdas.entry(outer_context).or_default().push(d_nr);
+            }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
         drop(captured);
@@ -1154,6 +1166,63 @@ impl Parser {
             }
             self.vars
                 .set_type(v_nr, Type::Reference(cell_d_nr, Vec::new()));
+        }
+    }
+
+    /// #314 (closed by decision — GOALS.md § "Stability trumps
+    /// features"): a mutated scalar captured by MORE THAN ONE closure
+    /// is rejected at compile time.
+    ///
+    /// The shape only worked through shared heap cells with no defined
+    /// owner ("first death wins" — `free_named` frees the cell at the
+    /// first record's death and silently no-ops for the rest), and the
+    /// closure-record attribute types freeze at each lambda's pass-1
+    /// epilogue while `scalars_to_box` keeps accumulating until the
+    /// parent's body end — so a reader lambda parsed before the writer
+    /// baked in the unboxed layout and crashed at runtime.  No
+    /// consumer needs the shape; shared mutable state belongs in a
+    /// struct, which also makes the sharing visible in the source.
+    ///
+    /// Runs at the parent's pass-1 body end — the first moment the
+    /// accumulation is final — for the same parents whose locals
+    /// `flip_scalars_to_box_types` flips in pass 2 (named fns; the
+    /// caller in `definitions.rs` is the flip's sibling).  The
+    /// single-closure accumulator (one record, one owner) stays
+    /// supported.
+    pub(crate) fn reject_shared_mutable_scalar_captures(&mut self, parent_d: u32) {
+        if !self.first_pass
+            || parent_d == u32::MAX
+            || (parent_d as usize) >= self.data.definitions.len()
+        {
+            return;
+        }
+        let Some(lambdas) = self.fn_lambdas.remove(&parent_d) else {
+            return;
+        };
+        let scalars = self.data.def(parent_d).scalars_to_box().to_vec();
+        if scalars.is_empty() {
+            return;
+        }
+        for name in &scalars {
+            let capturers = lambdas
+                .iter()
+                .filter(|&&lam| {
+                    let rec = self.data.def(lam).closure_record();
+                    rec != u32::MAX
+                        && (0..self.data.attributes(rec))
+                            .any(|a_nr| self.data.attr_name(rec, a_nr) == *name)
+                })
+                .count();
+            if capturers >= 2 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "variable `{name}` is mutated through a closure and captured by \
+                     {capturers} closures; sharing a mutable variable between closures \
+                     is not supported — hold the shared state in a struct field instead \
+                     (e.g. `state = State {{ {name}: ... }}` captured by all closures)"
+                );
+            }
         }
     }
 

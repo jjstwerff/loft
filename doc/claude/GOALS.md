@@ -199,6 +199,40 @@ write code. The failure mode we guard against is **latent undefined behaviour
 data corruption after a compiler upgrade or on a stricter platform. "Passes today"
 is not "stable."
 
+## Stability trumps features
+
+**The rule.** A feature must be needed enough to cover what it costs — and the
+cost is counted in the currency that matters here: brittle constructions, bug
+surface, and implementation complexity. When the value does not cover the cost,
+we **limit the feature**: forbid the expensive shape at compile time with an
+error that names the supported path, and keep the cheap shape. Features serve
+stability, never the reverse. This is a default to keep in mind, not a hard
+line — each cut is recorded in
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) precisely so it stays cheap to
+reevaluate when a real consumer brings new evidence of need.
+
+**How to apply it.** When a bug investigation reveals that a language shape only
+works through fragile machinery — an ownership story with no defined owner, a
+parse-order-sensitive decision, a repair per case — ask first: *what programmer
+need pays for this?* Consult the dogfood consumers. If every real program is
+content with a simpler shape, cut the expensive shape instead of repairing it.
+The rejection must hand the user the supported path (Goal F draws the exact
+line: an error that **bounds the language** is fine; an error that makes the
+user **serve the compiler** is not). Goal E's subtraction principle is the same
+move on the implementation side — remove the mechanism rather than guard it.
+
+**Worked example.** [#314](https://github.com/loft-lang/loft/issues/314): a
+scalar captured by several closures, one of them mutating it, only worked
+through shared heap cells with "first death wins" ownership — refcounting-shaped
+complexity with no counter behind it. No consumer needed the shape (the kernel
+program that surfaced it preferred a struct, which also makes the sharing
+visible in the source). Decision: reject the multi-closure shape at compile
+time; the single-closure accumulator — one record, one owner, sound — stays.
+
+**Check.** Every limited feature has a [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
+entry naming the cost it avoided and the supported alternative, and its
+rejection diagnostic is pinned by a test.
+
 ## The two engines (both required; neither finds the other's bugs)
 
 - **Dogfood — "is loft useful?"** Build real programs in loft (the branch-review
