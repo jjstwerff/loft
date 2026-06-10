@@ -1372,6 +1372,21 @@ impl State {
                 data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
             );
         }
+        if std::env::var("LOFT_TRACE_CR").is_ok() {
+            // #306 — bounds-checked pre-walk of both records' claim graphs;
+            // names the first broken interior edge instead of faulting on it.
+            let mut problems = 0u32;
+            self.database
+                .validate_claims(&data, tp, "src", &mut problems);
+            self.database.validate_claims(&to, tp, "dst", &mut problems);
+            if problems > 0 {
+                eprintln!(
+                    "[cr-check] {problems} broken edge(s) found before copy \
+                     src=#{}.{},{} dst=#{}.{},{} tp={tp}",
+                    data.store_nr, data.rec, data.pos, to.store_nr, to.rec, to.pos,
+                );
+            }
+        }
         let code_pos = self.code_pos;
         let size = u32::from(self.database.size(tp));
         // free any nested vectors/strings already owned by the destination

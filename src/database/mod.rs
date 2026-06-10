@@ -210,6 +210,13 @@ pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,
     pub allocations: Vec<Store>,
+    /// #306 — true when slot 0 holds the interpreter's eval-stack store
+    /// (set by `State::new`).  `free_named` then refuses a whole-store free
+    /// of slot 0: such a ref is always a stack-allocated record
+    /// (`OpCreateStack`) wrongly treated as an owned heap store, and the
+    /// free would destroy every live frame.  Bare `Stores` (unit tests,
+    /// tooling) keep `false` — there slot 0 is an ordinary store.
+    pub stack_store_at_zero: bool,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,
     #[cfg(feature = "wasm")]
@@ -481,6 +488,7 @@ impl Clone for Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations: Vec::new(),
+            stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.max,
             peak: 0,
@@ -989,6 +997,7 @@ impl Stores {
             types: Vec::new(),
             names: HashMap::new(),
             allocations: Vec::new(),
+            stack_store_at_zero: false,
             files: Vec::new(),
             max: 0,
             peak: 0,

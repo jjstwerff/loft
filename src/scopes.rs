@@ -2290,15 +2290,27 @@ fn check_ref_leaks(
             continue; // ownership transferred to caller
         }
         if let Type::Reference(_, dep) = function.tp(v) {
-            assert!(
-                !dep.is_empty() || ret_deps.contains(&v) || freed.contains(&v),
-                "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
-                 '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
-                 This is likely a scope-registration bug: the variable was registered \
-                 in an inner block scope that is not reachable from function-exit cleanup.",
-                function.name(v),
-                fn_name
-            );
+            // LOFT_REF_LEAK_WARN=1 downgrades the assert to a warning so a
+            // debug build can still RUN a program with a known leak shape
+            // (e.g. to chase a separate runtime corruption past compile).
+            let warn_only = std::env::var("LOFT_REF_LEAK_WARN").is_ok();
+            if warn_only && !(!dep.is_empty() || ret_deps.contains(&v) || freed.contains(&v)) {
+                eprintln!(
+                    "[check_ref_leaks] WARNING: Reference variable '{}' (var_nr={v}) in \
+                     function '{fn_name}' has no OpFreeRef (scope {scope}) — store leak.",
+                    function.name(v),
+                );
+            } else {
+                assert!(
+                    !dep.is_empty() || ret_deps.contains(&v) || freed.contains(&v),
+                    "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
+                     '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
+                     This is likely a scope-registration bug: the variable was registered \
+                     in an inner block scope that is not reachable from function-exit cleanup.",
+                    function.name(v),
+                    fn_name
+                );
+            }
             // warn about variables with deps that are only text-return work refs.
             // These deps are spurious (struct copies the text), but OpFreeRef is still
             // skipped, causing a store leak at runtime.
