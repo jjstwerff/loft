@@ -992,6 +992,27 @@ pub struct ReplOutcome {
     pub diagnostics: Vec<DiagEntry>,
 }
 
+/// @PLN16 M5e slice 5 — one test function's outcome, for the browser's test panel.
+pub struct TestRun {
+    /// The user function name (no `n_` prefix).
+    pub name: String,
+    /// Ran without a fault.
+    pub passed: bool,
+    /// The failure message (a typed runtime fault or a panic), `None` when it passed.
+    pub message: Option<String>,
+    /// The function's definition line, so a failure row can jump to it.
+    pub line: u32,
+}
+
+/// Extract a readable message from a caught panic payload.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panicked".to_string())
+}
+
 /// How a [`ReplSession::resume_from`] replay went.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ResumeStats {
@@ -1354,6 +1375,108 @@ impl ReplSession {
         let produced = self.parser.diagnostics.entries()[pre_diag..].to_vec();
         self.parser.data.rollback_to(pre_defs);
         Ok(produced)
+    }
+
+    /// @PLN16 M5e slice 5 — run every test in `path` and return a structured outcome per
+    /// test, for the browser's test panel.  A "test" is a zero-parameter user function
+    /// defined in `path` itself — the same discovery `loft --tests` uses (stdlib, library,
+    /// generator, and lambda functions are skipped).  Each runs in a **fresh** `State` (a
+    /// clone of the parsed program), so one test can't pollute the next, and a panic or a
+    /// typed runtime fault in one test is caught and reported, not fatal to the rest.  This
+    /// reuses the runner's execution primitives (`State::execute_argv` + `had_fatal`) without
+    /// its CLI-only annotation machinery (`@EXPECT_FAIL` etc. are a suite-file concern).
+    /// The file is (re)loaded first, so a just-saved edit is what runs.
+    ///
+    /// # Errors
+    /// Returns the I/O error if `path` cannot be read.
+    pub fn run_file_tests(&mut self, path: &str) -> std::io::Result<Vec<TestRun>> {
+        match self.load_program(path)? {
+            Ok(()) => {}
+            Err(diags) => {
+                // Won't compile → one synthetic failure naming the error(s).
+                let line = diags.first().map_or(1, |d| d.line);
+                let message = diags
+                    .iter()
+                    .map(crate::diagnostics::DiagEntry::to_string_compact)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Ok(vec![TestRun {
+                    name: "(compile)".to_string(),
+                    passed: false,
+                    message: Some(message),
+                    line,
+                }]);
+            }
+        }
+        crate::scopes::check(&mut self.parser.data);
+        let want = std::fs::canonicalize(path).ok();
+        let in_file = |pf: &str| -> bool {
+            pf == path
+                || want
+                    .as_ref()
+                    .is_some_and(|w| std::fs::canonicalize(pf).ok().as_ref() == Some(w))
+        };
+        // Discover the file's zero-parameter user test functions.
+        let mut targets: Vec<(String, u32)> = Vec::new();
+        for d_nr in 0..self.parser.data.definitions() {
+            let def = self.parser.data.def(d_nr);
+            if !matches!(def.def_type, DefType::Function) {
+                continue;
+            }
+            if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+                continue;
+            }
+            if def.position.file.starts_with("default/")
+                || def.position.file.starts_with("default\\")
+                || !in_file(&def.position.file)
+            {
+                continue;
+            }
+            // Generators (return iterator<T>) and parameterised functions are not tests.
+            if matches!(def.returned, Type::Iterator(_, _)) || !def.attributes.is_empty() {
+                continue;
+            }
+            let name = def.name.strip_prefix("n_").unwrap_or(&def.name).to_string();
+            targets.push((name, def.position.line));
+        }
+        // Run each in a fresh State so the tests are isolated from one another.
+        let mut out = Vec::with_capacity(targets.len());
+        for (name, line) in targets {
+            let mut data = self.parser.data.clone();
+            let mut state = State::new(self.parser.database.clone());
+            compile::byte_code(&mut state, &mut data);
+            let fn_name = format!("n_{name}");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.execute_argv(&fn_name, &data, &[]);
+                let fault = state.database.had_fatal;
+                let msg = state
+                    .database
+                    .runtime_error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_default();
+                (fault, msg)
+            }));
+            let (passed, message) = match result {
+                Ok((false, _)) => (true, None),
+                Ok((true, m)) => (
+                    false,
+                    Some(if m.is_empty() {
+                        "runtime error".to_string()
+                    } else {
+                        m
+                    }),
+                ),
+                Err(payload) => (false, Some(panic_text(&*payload))),
+            };
+            out.push(TestRun {
+                name,
+                passed,
+                message,
+                line,
+            });
+        }
+        Ok(out)
     }
 
     /// @PLN16 M5e slice 3 — set the **write sandbox**: the one file the editor may save

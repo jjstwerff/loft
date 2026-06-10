@@ -505,11 +505,22 @@ M5d (the condition reuses **E**).
   `launchGame`/`reload`), same one-message-⇄-one-method invariant, reusing the plan-35
   viewer shell. Six slices (foundation `--serve`+shell+Run → compiler console → editor →
   debugger UI → test/suite runners → the game loop with native OpenGL + live hot-swap);
-  slices 1–5 are a usable IDE for any loft program, slice 6 is the lavition payoff. This
-  is [`live-prototyping`](../../GOALS.md) made literal — see [LAVITION.md](../../LAVITION.md).
-  **Slice 1 LANDED (2026-06-10):** `loft debug <file> --serve` — an HTTP + WebSocket server
-  (`src/serve.rs`) serving a minimal shell (source + Run + Program console) that drives the
-  `--rpc` `handle()` driver over WS; `tests/serve.rs` proves the full socket round-trip.
+  slices 1–5 are a usable IDE for a **self-contained** loft program (stdlib-only — library /
+  dependency support is an open gap, see [IDE.md](IDE.md) § Library vs project), slice 6 is
+  the lavition payoff. This is [`live-prototyping`](../../GOALS.md) made literal — see
+  [LAVITION.md](../../LAVITION.md).
+  **Status (2026-06-10) — slices 1–4 LANDED, slice 5 in progress.** `loft debug <file>
+  --serve` (`src/serve.rs`) serves an HTTP + WebSocket shell that drives the `--rpc`
+  `handle()` over WS (`tests/serve.rs` proves the socket round-trip): **(1)** foundation +
+  Run + Program console; **(2)** compiler console (`compile` → structured `diagnostics`);
+  **(3)** editor (editable textarea + gutter, sandboxed `writeFile`, Save / Run-reload);
+  **(4)** debugger UI (gutter breakpoints, current-line marker via `paused_line`, step
+  controls, **bounded** variables + watch panels) — plus a context-switching **REPL** panel.
+  **(5)** `runTests` engine + protocol landed (`ReplSession::run_file_tests`); its UI and the
+  package-aware `runSuite` are pending. **Known gap:** the serve session is **stdlib-only /
+  single-file**, so library development — and projects with library deps, the real lavition
+  consumers — is not yet supported; the dependency-resolution direction is in
+  [IDE.md](IDE.md) § Library vs project.
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a

@@ -162,6 +162,33 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
                 Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
             }
         }
+        "runTests" => {
+            // @PLN16 M5e slice 5 — run the file's tests, one `testResult` event each, then a
+            // `testSummary`.  Drain the capture sink around the run so the tests' own `print`
+            // output doesn't leak into the program console.
+            let file = text(&parsed, "file").unwrap_or("");
+            let _ = capture_take();
+            match session.run_file_tests(file) {
+                Ok(results) => {
+                    let _ = capture_take();
+                    out.push(resp_ok(id, ""));
+                    let (mut passed, mut failed) = (0u32, 0u32);
+                    for t in &results {
+                        if t.passed {
+                            passed += 1;
+                        } else {
+                            failed += 1;
+                        }
+                        out.push(test_result_event(t));
+                    }
+                    out.push(event(
+                        "testSummary",
+                        &format!("\"passed\":{passed},\"failed\":{failed}"),
+                    ));
+                }
+                Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
+            }
+        }
         "setBreakpoints" => {
             set_breakpoints(session, &parsed);
             out.push(resp_ok(id, ""));
@@ -420,6 +447,25 @@ fn diagnostics_event(file: &str, diags: &[crate::diagnostics::DiagEntry]) -> Str
     event(
         "diagnostics",
         &format!("\"file\":{},\"items\":[{items}]", esc(file)),
+    )
+}
+
+/// @PLN16 M5e slice 5 — one test's result as a structured event (name / passed / line, plus
+/// the failure message when it failed), so the browser's test panel can list it and a
+/// failing row can jump to its line.
+fn test_result_event(t: &crate::repl::TestRun) -> String {
+    let msg = t
+        .message
+        .as_deref()
+        .map_or(String::new(), |m| format!(",\"message\":{}", esc(m)));
+    event(
+        "testResult",
+        &format!(
+            "\"name\":{},\"passed\":{},\"line\":{}{msg}",
+            esc(&t.name),
+            t.passed,
+            t.line
+        ),
     )
 }
 

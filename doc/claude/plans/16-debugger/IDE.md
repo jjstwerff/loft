@@ -216,16 +216,34 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    - Tests: `tests/serve.rs::serve_ws_writefile_saves_and_sandboxes` (save + sandbox refusal),
      `serve_http_shell_has_editable_source` (textarea + Save button + embedded source),
      `serve_ws_writefile_then_relaunch_runs_new_code` (the edit→save→reload→run loop).
-4. **Debugger UI — gutter breakpoints + step controls + panels.** Click the gutter →
-   `setBreakpoints`; **Debug** launches with breakpoints; step buttons → `stepIn/Over/Out`;
-   the variables / watch / call-stack panels render the `stopped` frame. *The debugger is
-   in the browser.* Engine: entirely shipped (A–F + M1–M3 + M5a) — this slice is pure UI
-   over the existing protocol.
-5. **Test + suite runners — `runTests` / `runSuite` + results panel.** Run a file's tests
-   or the whole project suite; `testResult` streams fill the panel live; click a failure →
-   jump to its line, or set a breakpoint and **Debug** it. *Run/Test/Suite buttons all
-   work.* Engine: `test_runner::run_tests` exists (`loft --tests` / `loft test`) — wrap it
-   to emit per-test events.
+4. **Debugger UI — gutter breakpoints + step controls + panels — LANDED (2026-06-10).**
+   Click a gutter line → `setBreakpoints` (red marker, re-applied across edits); the
+   `stopped` frame carries `line` (`paused_line`, moves as you step) → the editor marks +
+   scrolls to the current line; toolbar step controls (Continue / Over / Into / Out, enabled
+   only while paused, Run disabled mid-pause); the **variables** panel (beside the REPL when
+   paused) shows the frame locals **bounded** (`show_loft_bounded`, depth 2 / 8 elems — a big
+   struct shows `Big{…,nums:[…+8],inner:Big2{deep:[...]}}` instead of flooding; full value one
+   `eval` away) with click-to-edit scalars (`setValue`); a **watch** panel re-`eval`s each
+   expression on every stop. The bounded render came from unifying `ShowDb`/`DumpDb` into one
+   renderer (commit 49ce332c). Engine was already shipped (A–F + M1–M3 + M5a) bar one line
+   (`paused_line`). Test: `serve_ws_breakpoint_stops_with_line_and_locals`. Call-stack is the
+   single current frame (multi-frame backtrace is a later add).
+5. **Test + suite runners — `runTests` / `runSuite` + results panel.** Run a file's tests or
+   the whole project suite; click a failure → jump to its line, or set a breakpoint and
+   **Debug** it.
+   - **`runTests` engine + protocol LANDED (2026-06-10):** `ReplSession::run_file_tests` —
+     the file's zero-parameter user functions (the `loft --tests <file>` discovery; stdlib /
+     library / generator / lambda fns skipped), each in a **fresh** `State` (clone-per-test
+     isolation), faults caught (a panic *or* a typed `had_fatal`) and reported, not fatal to
+     the rest. Reuses the runner's execution primitives WITHOUT its 1226-line CLI annotation
+     machinery (`@EXPECT_FAIL` etc. are a suite-file concern, not an IDE one). Protocol:
+     `runTests {file}` → one `testResult {name, passed, line, message?}` per test + a
+     `testSummary {passed, failed}`. (Batched into the reply, not yet live-streamed — true
+     trickle needs a mid-`handle` flush, shared with slice 6.)
+   - **Pending — the UI** (a **Test** button + results panel + click-to-jump) and **`runSuite`**.
+     **`runSuite` must be the PACKAGE-aware runner** (`loft test` — reads `loft.toml`, resolves
+     deps), NOT "run every `.loft` in a dir" — and it is **blocked on the dependency-resolution
+     gap** in § Library vs project below.
 6. **The game loop (lavition) — `launchGame` + `reload` (hot-swap) + debug the running
    game.** **Game ▶** launches the program in a **native OpenGL window** (the `make game`
    host); editing a function + **Reload** hot-swaps just that function into the running
@@ -236,8 +254,43 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    shared-store per-fn dispatch (N9/C71) — this slice is where the IDE *becomes the engine
    editor*.
 
-Slices 1–5 make a usable IDE for any loft program (CLI tools, servers, libraries); slice 6
-is the lavition payoff. They land in order; 1 is the prerequisite for all.
+Slices 1–5 make a usable IDE for a **self-contained** loft program (the stdlib is its only
+dependency); slice 6 is the lavition payoff. They land in order; 1 is the prerequisite for
+all. **Caveat (§ Library vs project below):** the serve session loads only the stdlib, so
+programs that depend on *libraries* — including the real lavition consumers — are not yet
+supported; that gap gates `runSuite` and the multi-file work.
+
+## Library vs project — the dependency gap (open; evaluated 2026-06-10)
+
+The IDE today is **stdlib-only and single-file**: `run_serve(stdlib_dir, port, file)` and
+`ReplSession::new(stdlib_dir)` load *only* the standard library, against *one* file. That
+fits a self-contained script or a small project, but **library development is unsupported**,
+on three counts:
+
+1. **No dependency resolution (the blocker).** A library's source + tests `use` its `src/`
+   modules and its `loft.toml` deps. The serve session never loads `lib_dirs` or resolves
+   `loft.toml`, and `loft debug <file> --serve` doesn't even accept `--lib` — so a file that
+   `use`s any dependency cannot be opened / compiled / tested in the IDE. This breaks both
+   libraries *and* projects that depend on libraries.
+2. **Single-file vs multi-file package.** The IDE serves one file; a library is many
+   (`src/*.loft` behind an `[library] entry`). No file tree / cross-file navigation.
+3. **File-level vs package-level tests.** loft already has the package runner `loft test`
+   (reads `loft.toml`, resolves deps, runs the whole package). The shipped `runTests {file}`
+   is the file-level path (`loft --tests file.loft`) — dep-blind. `runSuite` must be the
+   package-aware one.
+
+**Why it matters:** the real lavition consumers (moros, dryopea) are projects that depend on
+libraries (graphics, etc.), so the IDE-as-engine-editor vision *requires* dependency-aware,
+multi-file support. Building more single-file UI on a stdlib-only base polishes a surface
+that can't open its eventual programs.
+
+**Clean direction (one change, at the session level):** thread `lib_dirs` (and ideally
+`--project` / `loft.toml` resolution) into `run_serve` + `ReplSession`. Once the session
+loads the libs, `load_program` / `compile` / `run` / `run_file_tests` all resolve `use` for
+free — the runner code is unchanged. Then `runSuite` = the package-aware `loft test`. **Open
+fork:** is the IDE targeting self-contained scripts (current) or full packages (the lavition
+need)? The latter is the destination; `--lib` threading is the cheapest first step, best
+done *before* more single-file UI.
 
 ## The REPL panel — a prime, context-switching element
 
