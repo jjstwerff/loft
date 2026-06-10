@@ -346,11 +346,11 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
 <link rel="icon" href="data:,"><title>loft · __TITLE__</title>
 <style>
   :root { color-scheme: light dark; }
-  body { margin:0; font:14px/1.5 system-ui,sans-serif; }
-  #bar { padding:8px 12px; border-bottom:1px solid #8884; display:flex; gap:12px; align-items:center; }
+  body { margin:0; font:14px/1.5 system-ui,sans-serif; display:flex; flex-direction:column; height:100vh; }
+  #bar { padding:8px 12px; border-bottom:1px solid #8884; display:flex; gap:12px; align-items:center; flex:none; }
   #bar button { font:inherit; padding:4px 12px; cursor:pointer; }
   #status { opacity:.7; }
-  #main { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; height:calc(100vh - 41px); }
+  #main { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
   #code { grid-row:1 / 3; border-right:1px solid #8884; overflow:auto; padding:8px 0; font:13px/1.45 ui-monospace,monospace; }
   .row { display:flex; white-space:pre; }
   .row .gut { width:3em; text-align:right; padding-right:.8em; opacity:.4; user-select:none; flex:none; }
@@ -364,12 +364,27 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #diags .d.error { color:#e53935; } #diags .d.warning { color:#b8860b; }
   #diags .d .loc { opacity:.55; margin-right:.6em; }
   #diags .none { opacity:.45; }
+  #repl { flex:none; height:32%; border-top:2px solid #8886; display:flex; flex-direction:column; }
+  #replhead { padding:6px 12px; font-size:12px; opacity:.7; border-bottom:1px solid #8884; display:flex; gap:10px; align-items:center; text-transform:uppercase; letter-spacing:.05em; }
+  #replctx { font-weight:600; padding:1px 8px; border-radius:9px; text-transform:none; letter-spacing:0; }
+  #replctx.top { background:#2196f333; color:#1976d2; }
+  #replctx.frame { background:#ab47bc33; color:#8e24aa; }
+  #replhead .hint { opacity:.5; margin-left:auto; text-transform:none; letter-spacing:0; }
+  #replout { flex:1; overflow:auto; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; white-space:pre-wrap; }
+  #replout .in .p { opacity:.5; user-select:none; }
+  #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
+  #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
 <div id="bar"><button id="run">▶ Run</button><span id="status">connecting…</span></div>
 <div id="main">
   <div id="code">__SOURCE_ROWS__</div>
   <div class="pane"><h2>Compiler</h2><div id="diags" class="body"></div></div>
   <div class="pane"><h2>Program</h2><pre id="out" class="body"></pre></div>
+</div>
+<div id="repl">
+  <div id="replhead"><span>REPL</span><span id="replctx" class="top">top-level</span><span class="hint">Enter runs · Shift+Enter newline · Esc clears · ↑↓ history</span></div>
+  <div id="replout"></div>
+  <textarea id="replin" rows="1" spellcheck="false" placeholder="try an expression…"></textarea>
 </div>
 <script>
 const FILE = __FILE_JS__;
@@ -394,6 +409,38 @@ function showDiags(items) {
     $("diags").appendChild(d);
   }
 }
+// ── REPL — a context-switching prime element ──
+let ctx = "top", histTop = [], histFrame = [], histIdx = -1, pending = null;
+function curHist() { return ctx === "frame" ? histFrame : histTop; }
+function setCtx(c) {
+  if (c === ctx) return;
+  histFrame = [];                       // a debug context's history is thrown away when it ends / starts
+  ctx = c; histIdx = -1;
+  const b = $("replctx"); b.className = c; b.textContent = c === "frame" ? "frame (paused)" : "top-level";
+}
+function replLine(cls, text) {
+  const d = document.createElement("div"); d.className = cls; d.textContent = text;
+  $("replout").appendChild(d); $("replout").scrollTop = $("replout").scrollHeight;
+}
+function replEcho(input) {
+  const d = document.createElement("div"); d.className = "in";
+  d.innerHTML = '<span class="p">' + (ctx === "frame" ? "(dbg) " : "› ") + '</span>' + esc(input);
+  $("replout").appendChild(d); $("replout").scrollTop = $("replout").scrollHeight;
+}
+function autosize(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px"; }
+function replSubmit() { const buf = $("replin").value; if (buf.trim()) { pending = buf; send("replEval", {input: buf}); } }
+function onReplReply(m) {
+  if (m.more) {                          // incomplete → keep the (editable) buffer, continue
+    const t = $("replin");
+    if (!t.value.endsWith("\n")) t.value += "\n";
+    t.selectionStart = t.selectionEnd = t.value.length; autosize(t); return;
+  }
+  if (pending != null) { replEcho(pending); curHist().push(pending); }
+  if (m.value != null) replLine("val", String(m.value));
+  if (m.output) replLine("out", m.output.replace(/\n$/, ""));
+  pending = null; histIdx = -1;
+  const t = $("replin"); t.value = ""; autosize(t);
+}
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/ws");
   ws.onopen = () => { $("status").textContent = "connected"; send("launch", {file: FILE}); send("compile", {file: FILE}); };
@@ -401,15 +448,34 @@ function connect() {
   ws.onerror = () => { $("status").textContent = "error"; };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.event === "diagnostics") showDiags(m.items || []);
+    if (m.event === "diagnostics") {
+      if (m.file === "<repl>") { for (const it of (m.items || [])) replLine("err", it.line + ":" + it.col + "  " + it.message); }
+      else showDiags(m.items || []);
+    }
     else if (m.event === "output") $("out").textContent += m.text;
-    else if (m.event === "stopped") $("out").textContent += "\n⏸ stopped in " + ((m.frame || {}).function || "?") + "\n";
-    else if (m.event === "terminated") $("out").textContent += "\n— done —\n";
+    else if (m.event === "stopped") { setCtx("frame"); $("out").textContent += "\n⏸ stopped in " + ((m.frame || {}).function || "?") + "\n"; }
+    else if (m.event === "terminated") { setCtx("top"); $("out").textContent += "\n— done —\n"; }
+    else if (m.context !== undefined) onReplReply(m);       // a replEval reply (only it carries context)
     else if (m.ok === false && m.error) $("out").textContent += "\n[error] " + m.error + "\n";
   };
 }
 function send(req, extra) { ws.send(JSON.stringify(Object.assign({id: ++mid, req}, extra))); }
 $("run").onclick = () => { if (!ws || ws.readyState !== 1) return; $("out").textContent = ""; send("compile", {file: FILE}); send("run", {}); };
+const ti = $("replin");
+ti.addEventListener("input", () => autosize(ti));
+ti.addEventListener("keydown", e => {
+  const atEnd = ti.selectionStart === ti.value.length && ti.selectionEnd === ti.value.length;
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); replSubmit(); }
+  else if (e.key === "Enter" && !e.shiftKey && atEnd) { e.preventDefault(); replSubmit(); }   // Enter mid-buffer / Shift+Enter fall through = newline (edit anywhere)
+  else if (e.key === "Escape") { e.preventDefault(); ti.value = ""; histIdx = -1; autosize(ti); }
+  else if (e.key === "ArrowUp" && ti.selectionStart === 0) {
+    const h = curHist(); if (!h.length) return; e.preventDefault();
+    histIdx = histIdx < 0 ? h.length - 1 : Math.max(0, histIdx - 1); ti.value = h[histIdx]; autosize(ti);
+  } else if (e.key === "ArrowDown" && ti.selectionStart === ti.value.length) {
+    const h = curHist(); if (histIdx < 0) return; e.preventDefault();
+    histIdx++; if (histIdx >= h.length) { histIdx = -1; ti.value = ""; } else ti.value = h[histIdx]; autosize(ti);
+  }
+});
 connect();
 </script></body></html>"##;
 

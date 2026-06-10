@@ -114,6 +114,32 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
             Ok(Err(diags)) => out.push(resp_err(id, &diags_msg(&diags))),
             Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
         },
+        "replEval" => {
+            // @PLN16 M5e — the REPL panel's context-aware eval.  A top-level expression
+            // prints its value to the capture sink, so drain anything pending first, then
+            // drain again after to capture *this* eval's output (the value / any prints),
+            // keeping REPL output distinct from a program `run`'s streamed output.
+            let _ = capture_take();
+            let outcome = session.repl_eval(text(&parsed, "input").unwrap_or(""), true);
+            let printed = capture_take();
+            let mut extra = format!("\"context\":\"{}\"", outcome.context);
+            if outcome.more {
+                extra.push_str(",\"more\":true");
+            }
+            if let Some(v) = &outcome.value {
+                let _ = std::fmt::Write::write_fmt(&mut extra, format_args!(",\"value\":{v}"));
+            }
+            if !printed.is_empty() {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut extra,
+                    format_args!(",\"output\":{}", esc(&printed)),
+                );
+            }
+            out.push(resp_ok(id, &extra));
+            if !outcome.diagnostics.is_empty() {
+                out.push(diagnostics_event("<repl>", &outcome.diagnostics));
+            }
+        }
         "compile" => {
             // @PLN16 M5e slice 2 — the compiler-console feed: check the file (no run, no
             // load) and emit its diagnostics (errors + warnings) as a structured event.

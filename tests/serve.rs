@@ -189,3 +189,57 @@ fn serve_ws_compile_streams_diagnostics() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn serve_ws_repl_eval_top_level() {
+    // @PLN16 M5e — the REPL panel's context-aware eval over the websocket: a top-level
+    // expression prints its value, a definition persists + is callable, an error returns
+    // a <repl> diagnostics event.
+    let path = tmp_program("repl", "fn main() { print(\"x\") }\n");
+    let file = path.to_string_lossy().into_owned();
+    let port = 18784;
+    start_server(port, file);
+    let mut ws = ws_connect(port);
+    // an expression → value printed
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":1,\"req\":\"replEval\",\"input\":\"2 + 3\"}",
+    );
+    let r1 = ws_recv(&mut ws);
+    assert!(
+        r1.contains("\"context\":\"top\"") && r1.contains("\"output\":\"5\\n\""),
+        "2+3 → 5: {r1}"
+    );
+    // define then call
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":2,\"req\":\"replEval\",\"input\":\"fn dbl(n: integer) -> integer { n * 2 }\"}",
+    );
+    let _ = ws_recv(&mut ws);
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":3,\"req\":\"replEval\",\"input\":\"dbl(21)\"}",
+    );
+    let r3 = ws_recv(&mut ws);
+    assert!(r3.contains("\"output\":\"42\\n\""), "dbl(21) → 42: {r3}");
+    // incomplete → more
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":4,\"req\":\"replEval\",\"input\":\"fn open() -> integer {\"}",
+    );
+    let r4 = ws_recv(&mut ws);
+    assert!(r4.contains("\"more\":true"), "incomplete → more: {r4}");
+    // error → a <repl> diagnostics event
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":5,\"req\":\"replEval\",\"input\":\"nope + 1\"}",
+    );
+    let msgs = recv_until(&mut ws, 3, |m| m.contains("diagnostics"));
+    assert!(
+        msgs.join("\n").contains("\"file\":\"<repl>\"")
+            && msgs.join("\n").contains("\"level\":\"error\""),
+        "error → <repl> diagnostics: {:?}",
+        msgs
+    );
+    let _ = std::fs::remove_file(&path);
+}

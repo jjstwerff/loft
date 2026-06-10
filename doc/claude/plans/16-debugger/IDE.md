@@ -292,11 +292,24 @@ until then.) The **column** is best-effort — the parser reports where it *noti
 not always the token start (`notavar` at col 3 surfaced as col 14) — so the panel anchors on
 the line (a reliable gutter mark + message) and treats a precise column underline as a bonus.
 
-*Engine basis — shipped:* both halves exist (top-level `eval`/`value_of`, frame
-`debug_eval`); the new code is the context-routing `replEval` wrapper (incl. the line-offset
-fix above) + the shell panel + the per-context history. *Slot:* the panel + top-level REPL
-stand alone (land any time after slice 1); the frame-context switch completes alongside
-**slice 4** (debugger UI). It is the PROTOCOL.md "REPL console," made context-aware.
+*BUILT (2026-06-10).* `ReplSession::repl_eval` (context routes frame `debug_eval` vs
+top-level `eval`, returns `{context, more, value, diagnostics}`) → `replEval` protocol
+request (the transport drains the eval's own printed output into the REPL pane, distinct from
+a program `run`) → the shell REPL bar (context badge top/frame, scrollback, an auto-growing
+textarea with the live-buffer multi-line model above, per-context history with the frame
+history discarded on context change). Tests: `tests/rpc.rs` replEval drive +
+`tests/serve.rs::serve_ws_repl_eval_top_level`. *Slot:* top-level REPL works now; the
+frame-context switch lights up with **slice 4** (the debugger UI raises `stopped`).
+
+*Verified position findings (the real-use-case payoff).* Driving `replEval` with errors at
+known positions surfaced **two distinct bugs** to fix (not one): **(1) a consistent +1 line
+offset** for any input evaluated through a wrapper — bare expressions *and* definition
+*bodies* — while definition *signatures* (parsed directly) report the right line; and **(2)
+the column points at the *end* of the offending token, not its start** (`notype` at col 9
+reported as col 16). The +1 is the synthetic `fn replmain_N() { … }` header line; the col is
+the parser recording where it *noticed*. These are the engine-side corrections the REPL
+drives — fix the line at the wrapper boundary (the REPL knows its own prefix) and the column
+in the parser's position recording — verified against this matrix on both before/after.
 
 ## Dogfood driver — the `story` / crawler roguelike
 

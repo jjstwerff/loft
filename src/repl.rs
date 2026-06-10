@@ -972,6 +972,26 @@ pub enum Eval {
     Paused,
 }
 
+/// @PLN16 M5e — outcome of a **context-aware** REPL evaluation ([`ReplSession::repl_eval`]),
+/// for the browser REPL panel.
+#[derive(Debug)]
+pub struct ReplOutcome {
+    /// Which env the input ran against: `"frame"` (paused at a breakpoint — the debugger)
+    /// or `"top"` (the session top level — the normal REPL).
+    pub context: &'static str,
+    /// The input is incomplete (`NeedMore`) — the multi-line continuation signal; the
+    /// caller keeps the buffer and re-submits when there's more.
+    pub more: bool,
+    /// A rendered result, when the eval hands one back directly (frame eval).  A top-level
+    /// expression instead *prints* its value to the output sink, which the transport drains
+    /// into the REPL pane — so `value` is `None` there.
+    pub value: Option<String>,
+    /// Diagnostics (errors), empty on success.  Positions are the engine's **as reported**:
+    /// the REPL is the consumer that drives these toward correctness, so they are surfaced
+    /// raw here rather than silently massaged.
+    pub diagnostics: Vec<DiagEntry>,
+}
+
 /// How a [`ReplSession::resume_from`] replay went.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ResumeStats {
@@ -1742,6 +1762,53 @@ impl ReplSession {
     /// when not paused or it doesn't evaluate.
     pub fn debug_eval_json(&mut self, expr: &str) -> Option<String> {
         self.debug_eval_fmt(expr, true)
+    }
+
+    /// @PLN16 M5e — the REPL panel's **context-aware** evaluation. When paused at a
+    /// breakpoint it evaluates against the **live frame** (D1/D2, `debug_eval`); otherwise
+    /// against the **session top level** (the normal `eval` — defines, bindings, statements,
+    /// expressions). Incomplete input returns `more` (the multi-line continuation, which is
+    /// **non-mutating** — the session is unchanged, so the buffer stays freely editable). A
+    /// top-level expression's value is printed to the output sink (the transport drains it
+    /// into the REPL pane); a frame value comes back in [`ReplOutcome::value`]. Runs the
+    /// input **exactly once** (it routes through `eval`'s own def/binding/observe paths).
+    pub fn repl_eval(&mut self, input: &str, json: bool) -> ReplOutcome {
+        if self.is_debugging() {
+            return ReplOutcome {
+                context: "frame",
+                more: false,
+                value: self.debug_eval_fmt(input, json),
+                diagnostics: Vec::new(),
+            };
+        }
+        if Parser::statement_incomplete(input) {
+            return ReplOutcome {
+                context: "top",
+                more: true,
+                value: None,
+                diagnostics: Vec::new(),
+            };
+        }
+        match self.eval(input) {
+            Eval::Ran | Eval::Paused => ReplOutcome {
+                context: "top",
+                more: false,
+                value: None,
+                diagnostics: Vec::new(),
+            },
+            Eval::NeedMore => ReplOutcome {
+                context: "top",
+                more: true,
+                value: None,
+                diagnostics: Vec::new(),
+            },
+            Eval::Error(diagnostics) => ReplOutcome {
+                context: "top",
+                more: false,
+                value: None,
+                diagnostics,
+            },
+        }
     }
 
     fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
