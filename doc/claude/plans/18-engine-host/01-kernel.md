@@ -4,7 +4,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 # @PLN18 phase 01 — the kernel: design notes + entry probes
 
-> Status: **◐ in progress** (entered 2026-06-10 after phase 00 closed at v1).
+> Status: **◐ in progress — the v1 core is ALIVE** (2026-06-10): `src/engine_host.rs`
+> (pump with the peek pattern, event queue, drift-free ticks, send/broadcast) +
+> `lib/engine_host` (the budgeted-drain `run()` skeleton) pass the end-to-end test
+> (`tests/engine_host_kernel.rs`: WS client → connect event → handler closure →
+> broadcast round trips → tick counting via a struct world). Next: the audience-server
+> port (acceptance) + the stamp-chain re-run.
 > The loop/queue/wire design is [ENGINE_HOST.md](ENGINE_HOST.md) Part 2 + the
 > host-boundary principle; this file records the **dispatch mechanics** that the
 > kernel build rests on, probed before building.
@@ -93,3 +98,25 @@ bind-indexed-lookup-to-a-local-first pattern for hash mutation.)
 - **Acceptance:** the @PLN6 audience server's meaning ported onto handlers —
   identical observable behaviour under the existing probe/load tools; then the
   00(c) stamp chain re-run: the ~40 ms interp-harness term must collapse.
+
+
+## Build findings (the v1 core, 2026-06-10)
+
+- **The text-return ABI bit hard:** a native returning `text` must be
+  **destination-passing** (@PLN10's convention — caller allocates, the native
+  `push_str`s into the passed `DbRef`, the base name routed by
+  `is_text_dest_native`). My first `n_kernel_event_payload` pushed a `String`
+  directly and corrupted the stack — every program died on FIRST EVENT
+  (SIGSEGV/SIGABRT/panic by shape) while startup smokes stayed green. Ladder
+  lesson: **smoke the event path, not just the listen line.**
+- **Two pre-existing closure-capture crashes filed en route**, both with probed
+  matrices + clean workarounds: [#313](https://github.com/loft-lang/loft/issues/313)
+  (capturing closure in a struct *field*, cross-fn invoke) and
+  [#314](https://github.com/loft-lang/loft/issues/314) (bare scalar captured by a
+  reader closure + a writer closure). **Struct-held world state avoids both** —
+  and is the natural kernel idiom; `lib/engine_host`'s docs say so.
+- The kernel lib trips the auto-native cdylib build (the natives are in-binary;
+  the cdylib can't link them) and falls back to interpret with a warning —
+  cosmetic for now; the right fix is a manifest mark for in-binary-native
+  libraries (or routing through codegen_runtime for `--native` programs), noted
+  for phase 02/03.

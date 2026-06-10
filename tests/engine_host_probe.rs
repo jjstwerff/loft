@@ -45,7 +45,11 @@ fn on_call(args: vector<text>) {{
         state.execute_argv("on_call", &data, &[i.to_string()]);
     }
     let out = std::fs::read_to_string(&outp).expect("report file");
-    assert_eq!(out.trim(), "call 50 sum=1275", "50th dispatch intact: {out}");
+    assert_eq!(
+        out.trim(),
+        "call 50 sum=1275",
+        "50th dispatch intact: {out}"
+    );
     let _ = std::fs::remove_file(&tmp);
     let _ = std::fs::remove_file(&outp);
 }

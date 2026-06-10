@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 — the engine-host kernel: loft surface over the in-binary natives
+// (src/engine_host.rs).  The host-boundary principle: the natives carry ALL
+// mechanics (non-blocking pump with the peek pattern, event queue, drift-free
+// ticks, send/broadcast); this library carries the loop SKELETON and nothing
+// else — user code supplies meaning as closures:
+//
+//   use engine_host;
+//   fn main() {
+//     world = World { ... };
+//     engine_host::run(18083, 33333,
+//       fn(ev: engine_host::Event) { ...world... },
+//       fn() { ...world... });
+//   }
+//
+// Closures are passed as ARGUMENTS (not struct fields) per the probed crash
+// boundary in loft-lang/loft#313.
+
+// One pumped event.  kind: 0 = connect, 1 = message, 2 = disconnect.
+pub struct Event {
+  cid:     integer not null,
+  kind:    integer not null,
+  payload: text not null,
+}
+
+fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;
+#native
+
+fn kernel_pump() -> integer;
+#native
+
+fn kernel_next_event() -> boolean;
+#native
+
+fn kernel_event_cid() -> integer;
+#native
+
+fn kernel_event_kind() -> integer;
+#native
+
+fn kernel_event_payload() -> text;
+#native
+
+fn kernel_tick_due() -> boolean;
+#native
+
+// Send a text frame to one client.  False = the client is gone (a disconnect
+// event is queued for it).
+pub fn send(cid: integer, msg: text) -> boolean;
+#native "n_kernel_send"
+
+// Broadcast a text frame to every live client; returns the delivery count.
+pub fn broadcast(msg: text) -> integer;
+#native "n_kernel_broadcast"
+
+fn kernel_idle(max_us: integer);
+#native
+
+// Live connection count (diagnostics).
+pub fn clients() -> integer;
+#native "n_kernel_clients"
+
+// The kernel loop: pump → budgeted event drain → tick when due → idle.
+// Never returns.  `on_event` and `on_tick` are the user's meaning; their
+// captures (the world) live in the caller's frame, which stays alive because
+// this fn never returns.
+pub fn run(port: integer, tick_interval_us: integer,
+           on_event: fn(Event), on_tick: fn()) {
+  ok = kernel_listen(port, tick_interval_us);
+  if !ok {
+    println("engine_host: cannot listen on port {port}");
+    return;
+  }
+  println("engine_host: listening on ws://0.0.0.0:{port}/ (tick every {tick_interval_us} us)");
+  while true {
+    work = kernel_pump();
+    // Budgeted drain (the ENGINE_HOST drain rule): events to a bounded count
+    // per turn, so the tick check below is never starved by a flood.
+    for _ in 0..256 {
+      more = kernel_next_event();
+      if !more { break; }
+      ev = Event {
+        cid:     kernel_event_cid(),
+        kind:    kernel_event_kind(),
+        payload: kernel_event_payload(),
+      };
+      on_event(ev);
+      work = work + 1;
+    }
+    if kernel_tick_due() {
+      on_tick();
+      work = work + 1;
+    }
+    if work == 0 {
+      kernel_idle(2000);
+    }
+  }
+}

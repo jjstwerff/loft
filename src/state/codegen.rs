@@ -58,6 +58,7 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // that "a dest can't represent null" was probe-falsified on both
             // backends.
             | "n_source_dir"
+            | "n_kernel_event_payload"
             | "n_json_errors"
             | "t_9JsonValue_kind"
             | "t_9JsonValue_to_json"

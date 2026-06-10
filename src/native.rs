@@ -211,6 +211,39 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
+    // declares them; native targets only — the kernel has no wasm story).
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_listen", crate::engine_host::n_kernel_listen),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_pump", crate::engine_host::n_kernel_pump),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_next_event",
+        crate::engine_host::n_kernel_next_event,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_event_cid", crate::engine_host::n_kernel_event_cid),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_event_kind",
+        crate::engine_host::n_kernel_event_kind,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_event_payload_dest",
+        crate::engine_host::n_kernel_event_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_tick_due", crate::engine_host::n_kernel_tick_due),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_send", crate::engine_host::n_kernel_send),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_broadcast", crate::engine_host::n_kernel_broadcast),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_idle", crate::engine_host::n_kernel_idle),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_clients", crate::engine_host::n_kernel_clients),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
