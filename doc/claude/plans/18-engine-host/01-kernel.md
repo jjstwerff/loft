@@ -20,13 +20,32 @@ until phase 02 adds the table).
 
 **Finding — loft has NO mutable globals.** Top-level bindings are constants
 (the parser enforces UPPER_CASE; mutation is rejected) — which is *why* every
-existing server holds its world as a `main` local. Consequence for the kernel's
-inversion of control: **the world is STORE-ANCHORED** — the kernel keeps the
-world's `DbRef` and hands it to handlers through a kernel-registered native
-(`State::static_fn`, ABI `fn(&mut Stores, &mut DbRef)` with `stores.put(stack,
-…)` returns — the same registration `native.rs` uses). loft side:
-`fn world() -> World; #native "n_kernel_world"`. Probe 2 (with the skeleton)
-exercises the DbRef round-trip through that native.
+existing server holds its world as a `main` local.
+
+**Design pivot (2026-06-10, via the @PLN13 script-mode evaluation):** the
+kernel's state model is **closure capture, not an anchor native**. @PLN13's
+scripts-without-main design (plan-as-issue, future/freeze-parked) makes loose
+top-level statements a *synthesized-main's locals* — confirming main-locals +
+closure capture as loft's canonical mutable-state idiom. The kernel program is
+therefore the **already-proven server shape**:
+
+```loft
+fn main() {
+  world = World { cells: [], ticks: 0 };
+  k = kernel(PORT);
+  k.on_event(fn(args) { …world… });   // closures capture the world
+  k.on_tick(fn() { world.ticks = world.ticks + 1; });
+  k.run();                            // ← the Rust loop; never returns
+}
+```
+
+`k.run()` IS the Rust kernel: main's frame lives for the program's lifetime, so
+the captured world persists in the store under the existing closure-record
+machinery — no language change, no anchor, and the audience-server migration
+becomes nearly mechanical (`srv.run(fn(ev){…})` is already this shape).
+Forward-compatible with @PLN13 (script mode just removes the `main` wrapper).
+**Probe 2 becomes:** Rust invoking a registered loft closure re-entrantly —
+precedent: `parallel.rs` dispatches loft fns from Rust worker threads.
 
 **Harness lesson (not a compiler bug):** two codegen panics during probing
 (`Incorrect var _elm_3…`, `Incorrect stack…`) were both *my harness compiling a
@@ -47,10 +66,11 @@ bind-indexed-lookup-to-a-local-first pattern for hash mutation.)
 - **Classes v1:** events only — the audience server is pure events; conflation
   slots + bulk accumulation land when the consumer (@PLAN50 / assets) arrives,
   per wire-schema-as-data registration (table present from day one, one row).
-- **Dispatch v1:** parse+compile the program once (diagnostics-checked), one
-  persistent `State`, `execute_argv` per handler call; world via the anchor
-  native. Handlers: `init()` (build world, hand it to the kernel),
-  `on_event(args: vector<text>)`, `on_tick()`.
+- **Dispatch v1:** parse+compile the program once (diagnostics-checked), run
+  `main` once; `kernel(port)` / `k.on_event(fn…)` / `k.on_tick(fn…)` natives
+  register closure values; `k.run()` enters the Rust loop, which invokes the
+  registered closures per event/tick (probe 2's mechanism; `parallel.rs` is the
+  precedent for Rust-side loft-fn invocation).
 - **CLI:** `loft host <program.loft> [--port N]`.
 - **Acceptance:** the @PLN6 audience server's meaning ported onto handlers —
   identical observable behaviour under the existing probe/load tools; then the
