@@ -389,10 +389,15 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
                 forward.push(false);
             }
             BridgeAttrKind::HiddenDest => {
-                // The call site pushes the caller-allocated placeholder; the
-                // bridge allocates its own dest — popped, never forwarded.
+                // The call site pushes the caller-allocated destination record —
+                // forward it so the bridge writes the result THERE (the record
+                // the caller's frame owns and frees).  A bridge-local allocation
+                // instead orphaned the caller's copy: one leaked store per
+                // vector-returning call (#311).  The wrapper still allocates as
+                // a fallback when no slot arrives (a no-body `#native` decl
+                // caller has no hidden attrs) or the incoming ref is null.
                 pops.push(ArgT::Vec);
-                forward.push(false);
+                forward.push(true);
             }
         }
     }
@@ -2256,6 +2261,21 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
             pkg_dir.join("native").join("target")
         }
     }
+}
+
+/// Resolve a `[library] native = "<stem>"` registration to a loadable cdylib
+/// path: a pre-built `<pkg_dir>/native/<libname>` wins, else build (or reuse a
+/// fingerprint-fresh build of) the package's native crate via
+/// [`auto_build_native`].  The ONE home for this resolution — the parser's two
+/// manifest paths and the warm startup-cache load (#310) all derive from it,
+/// so a cached run re-checks cdylib freshness exactly like a cold parse.
+pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
+    let filename = platform_lib_name(stem);
+    let prebuilt = format!("{pkg_dir}/native/{filename}");
+    if std::path::Path::new(&prebuilt).exists() {
+        return Some(prebuilt);
+    }
+    auto_build_native(pkg_dir, stem)
 }
 
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {

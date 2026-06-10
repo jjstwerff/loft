@@ -365,6 +365,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             declared: HashSet::new(),
             active_pre_eval: std::collections::HashMap::new(),
             reachable: HashSet::new(),
+            dup_fn_names: HashSet::new(),
             loop_stack: Vec::new(),
             next_format_count: 0,
             yield_collect: false,

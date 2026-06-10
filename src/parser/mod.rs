@@ -97,6 +97,11 @@ pub struct Parser {
     /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
+    /// The `(stem, pkg_dir)` registration inputs behind `pending_native_libs`.
+    /// Persisted in the startup-cache manifest so a warm load can re-resolve
+    /// the cdylibs with cold-equal freshness semantics (#310 — the resolved
+    /// PATHS alone can go stale when loft itself is rebuilt).
+    pub native_lib_regs: Vec<(String, String)>,
     /// @PLN11 Arc N / N3 — package dirs of libraries that opted into
     /// auto-compilation (`[library] compile = "native"`).  Recorded during `use`
     /// processing; the driver (`main.rs`) marks each library's public
@@ -425,6 +430,7 @@ impl Parser {
             line: 0,
             lib_dirs: Vec::new(),
             pending_native_libs: Vec::new(),
+            native_lib_regs: Vec::new(),
             pending_native_compile: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
@@ -5314,18 +5320,12 @@ impl Parser {
         // packages depended on by a no-native parent (e.g. an examples
         // package that uses `lib/server`) lose their native bindings in
         // interpreter mode.
-        if let Some(ref stem) = m.native {
-            let filename = crate::extensions::platform_lib_name(stem);
-            let prebuilt = format!("{pkg_dir}/native/{filename}");
-            if std::path::Path::new(&prebuilt).exists() {
-                if !self.pending_native_libs.contains(&prebuilt) {
-                    self.pending_native_libs.push(prebuilt);
-                }
-            } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem)
-                && !self.pending_native_libs.contains(&built)
-            {
-                self.pending_native_libs.push(built);
-            }
+        if let Some(ref stem) = m.native
+            && let Some(path) = crate::extensions::resolve_native_lib(&pkg_dir, stem)
+            && !self.pending_native_libs.contains(&path)
+        {
+            self.pending_native_libs.push(path);
+            self.native_lib_regs.push((stem.clone(), pkg_dir.clone()));
         }
         // @PLN11 N3 Step 3 (default-native) / F2 — mirror `apply_manifest_side_effects`:
         // a normal loft library reached via THIS direct-resolution / sibling-package /
@@ -5520,15 +5520,15 @@ impl Parser {
     /// (`pending_pkg_deps`).
     fn apply_manifest_side_effects(&mut self, dir: &str, pkg_dir: &str, m: &manifest::Manifest) {
         // register native shared library path for loading after byte_code().
-        // Try pre-built location first, then auto-build from source.
-        if let Some(ref stem) = m.native {
-            let filename = crate::extensions::platform_lib_name(stem);
-            let prebuilt = format!("{pkg_dir}/native/{filename}");
-            if std::path::Path::new(&prebuilt).exists() {
-                self.pending_native_libs.push(prebuilt);
-            } else if let Some(built) = crate::extensions::auto_build_native(pkg_dir, stem) {
-                self.pending_native_libs.push(built);
-            }
+        // Pre-built location first, then auto-build from source (one home:
+        // `extensions::resolve_native_lib`, shared with the warm-cache load).
+        if let Some(ref stem) = m.native
+            && let Some(path) = crate::extensions::resolve_native_lib(pkg_dir, stem)
+            && !self.pending_native_libs.contains(&path)
+        {
+            self.pending_native_libs.push(path);
+            self.native_lib_regs
+                .push((stem.clone(), pkg_dir.to_string()));
         }
         // @PLN11 Arc N / N3 Step 3 — **default-native**.  Every `use`d normal loft
         // library is a native candidate: record the package dir; the driver marks +
