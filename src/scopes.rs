@@ -93,6 +93,15 @@ struct Scopes {
     /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
     /// `let` is still live where `v`'s free fires.
     witness_buffer: HashMap<u16, u16>,
+    /// #316 — Reference vars whose LATEST scanned assignment gave them an
+    /// OWNED store (a call whose filtered return deps are empty, a deep-copied
+    /// var, …), mapped to the loop depth (`loops.len()`) at that assignment.
+    /// When such a var is reassigned with a BORROW, its merged static type
+    /// already carries deps, so codegen's dep-empty pre-Set free never fires —
+    /// `scan_set` emits an explicit `OpFreeRef(v)` for the orphaned store
+    /// instead (only at the same loop depth: emitting inside a deeper loop
+    /// would re-free a viewed store on iterations 2+).
+    owned_refs: HashMap<u16, usize>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -124,6 +133,7 @@ fn run_scan_phase(
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
+        owned_refs: HashMap::new(),
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -536,7 +546,13 @@ impl Scopes {
                 let scope = self.enter_scope();
                 self.loops.push(scope);
                 function.mark_loop_scope(scope);
+                // #316 — a loop body executes repeatedly: any ownership entry
+                // the body touches is unreliable afterwards.  Keep only the
+                // entries the body left unchanged.
+                let owned_before = self.owned_refs.clone();
                 let ls = self.convert(lp, function, data, false);
+                self.owned_refs
+                    .retain(|k, depth| owned_before.get(k) == Some(depth));
                 self.loops.pop();
                 self.exit_scope();
                 Value::Loop(Box::new(Block {
@@ -695,12 +711,22 @@ impl Scopes {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
             }
             Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
-            Value::Iter(idx, create, next, extra) => Value::Iter(
-                *idx,
-                Box::new(self.scan(create, function, data)),
-                Box::new(self.scan(next, function, data)),
-                Box::new(self.scan(extra, function, data)),
-            ),
+            Value::Iter(idx, create, next, extra) => {
+                let scanned_create = self.scan(create, function, data);
+                // #316 — `next`/`extra` execute once per iteration: drop any
+                // ownership entry they touch (same rationale as Value::Loop).
+                let owned_before = self.owned_refs.clone();
+                let scanned_next = self.scan(next, function, data);
+                let scanned_extra = self.scan(extra, function, data);
+                self.owned_refs
+                    .retain(|k, depth| owned_before.get(k) == Some(depth));
+                Value::Iter(
+                    *idx,
+                    Box::new(scanned_create),
+                    Box::new(scanned_next),
+                    Box::new(scanned_extra),
+                )
+            }
             Value::Tuple(elems) => {
                 Value::Tuple(elems.iter().map(|v| self.scan(v, function, data)).collect())
             }
@@ -818,6 +844,9 @@ impl Scopes {
             }
         }
         let v = *self.var_mapping.get(&ov).unwrap_or(&ov);
+        // #316 — capture BEFORE put_scope below: an ownership-transition free
+        // only applies to a REassignment.
+        let was_in_scope = self.var_scope.contains_key(&v);
         // A redundant re-init `Set(v, Null)` for an already-in-scope var is
         // elided (Reference/Vector/Enum/Text locals don't need re-null-ing).
         // EXCEPTION (@P302): keyed collections — `s = []` lowers to
@@ -836,6 +865,41 @@ impl Scopes {
             )
         {
             return Value::Insert(Vec::new());
+        }
+        // #316 — ownership-transition free.  When this var's latest scanned
+        // assignment gave it an OWNED store and this reassignment installs a
+        // BORROW, the merged static type already carries deps, so codegen's
+        // dep-empty pre-Set free never fires and the owned store is orphaned
+        // (`chosen = m_none(); chosen = pool[i] ?? m_none()` leaked one store
+        // per call).  Emit the free here, in the IR, before the new value
+        // lands.  Depth guard: only at the loop depth that owned the store —
+        // inside a deeper loop the free would re-run on iterations 2+ and
+        // release the previous iteration's VIEWED store.
+        let mut transition_free: Option<Value> = None;
+        if was_in_scope
+            && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
+            && self.owned_refs.get(&v) == Some(&self.loops.len())
+            && matches!(
+                Self::ref_rhs_ownership(value, function, data, v),
+                RefRhs::View
+            )
+            // `value` is pre-scan IR: reads may name the original id (`ov`)
+            // or the remapped one (`v`) — guard against both.
+            && !value_reads_var(value, v)
+            && !value_reads_var(value, ov)
+        {
+            transition_free = Some(call("OpFreeRef", v, data));
+        }
+        // Track the LATEST assignment's ownership for this var.
+        if matches!(function.tp(v), Type::Reference(_, _)) {
+            match Self::ref_rhs_ownership(value, function, data, v) {
+                RefRhs::Owned => {
+                    self.owned_refs.insert(v, self.loops.len());
+                }
+                RefRhs::View | RefRhs::Unknown => {
+                    self.owned_refs.remove(&v);
+                }
+            }
         }
         // remember the scope of the variable
         let mut depend = Vec::new();
@@ -1008,6 +1072,12 @@ impl Scopes {
         };
         // Prepend dependency initializations.
         let mut prefix = Vec::new();
+        // #316 — the ownership-transition free runs FIRST: before the dep
+        // inits, the hoisted RHS preamble, and the Set itself, so the owned
+        // store is released before any part of the new value is computed.
+        if let Some(free) = transition_free {
+            prefix.push(free);
+        }
         for d in depend {
             if d == v {
                 continue;
@@ -1026,6 +1096,56 @@ impl Scopes {
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
             Value::Insert(all)
+        }
+    }
+
+    /// #316 — classify the (pre-scan) RHS of a `Set` into Reference var `v`.
+    /// Only two shapes are provably OWNED: a user-fn call whose declared
+    /// return carries no visible-attribute dep (the callee materialises /
+    /// owns its result), and a same-struct `Var` copy (codegen deep-copies
+    /// both first assignment and reassignment).  A `Block` whose result type
+    /// carries deps is a view — unless a dep names `v` itself (the new value
+    /// might point into the store about to be freed).
+    fn ref_rhs_ownership(value: &Value, function: &Function, data: &Data, v: u16) -> RefRhs {
+        match value.unspan() {
+            Value::Call(d, _)
+                if (*d as usize) < data.definitions.len()
+                    && data.def(*d).name().starts_with("n_") =>
+            {
+                if let Type::Reference(_, deps) = data.def(*d).returned() {
+                    let attrs = data.def(*d).attributes();
+                    let visible_dep = deps
+                        .iter()
+                        .any(|&i| (i as usize) >= attrs.len() || !attrs[i as usize].hidden);
+                    if visible_dep {
+                        RefRhs::View
+                    } else {
+                        RefRhs::Owned
+                    }
+                } else {
+                    RefRhs::Unknown
+                }
+            }
+            Value::Var(src)
+                if *src < function.count()
+                    && matches!(
+                        (function.tp(v), function.tp(*src)),
+                        (Type::Reference(a, _), Type::Reference(b, _)) if a == b
+                    ) =>
+            {
+                RefRhs::Owned
+            }
+            Value::Block(bl) => match &bl.result {
+                Type::Reference(_, deps) if !deps.is_empty() => {
+                    if deps.contains(&v) {
+                        RefRhs::Unknown
+                    } else {
+                        RefRhs::View
+                    }
+                }
+                _ => RefRhs::Unknown,
+            },
+            _ => RefRhs::Unknown,
         }
     }
 
@@ -1072,10 +1192,19 @@ impl Scopes {
             self.var_order.push(v);
         }
 
+        let scanned_test = self.scan(test, function, data);
+        // #316 — ownership state is path-sensitive: scan each branch from the
+        // same pre-If state, then keep only entries BOTH branches agree on.
+        let owned_before = self.owned_refs.clone();
+        let scanned_true = self.scan(t_val, function, data);
+        let owned_after_true = std::mem::replace(&mut self.owned_refs, owned_before);
+        let scanned_false = self.scan(f_val, function, data);
+        self.owned_refs
+            .retain(|k, depth| owned_after_true.get(k) == Some(depth));
         let scanned_if = Value::If(
-            Box::new(self.scan(test, function, data)),
-            Box::new(self.scan(t_val, function, data)),
-            Box::new(self.scan(f_val, function, data)),
+            Box::new(scanned_test),
+            Box::new(scanned_true),
+            Box::new(scanned_false),
         );
 
         if pre_inits.is_empty() {
@@ -2028,6 +2157,45 @@ fn needs_pre_init(tp: &Type) -> bool {
 
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
     Value::Call(data.def_nr(to), vec![Value::Var(v)])
+}
+
+/// #316 — what kind of store does the RHS of a `Set` into a Reference var
+/// yield?  Conservative: anything not provably one of the two certain shapes
+/// is `Unknown` (no ownership-transition free is emitted for it).
+enum RefRhs {
+    /// A store the variable will own (safe to free on a later transition).
+    Owned,
+    /// A borrowed view into someone else's store (must never be freed).
+    View,
+    /// Not provable either way.
+    Unknown,
+}
+
+/// #316 — true when `value` reads variable `v` anywhere (its old store may
+/// feed the new value, so a pre-Set free would be a use-after-free).
+fn value_reads_var(value: &Value, v: u16) -> bool {
+    match value {
+        Value::Var(x) => *x == v,
+        Value::Set(x, inner) => *x == v || value_reads_var(inner, v),
+        Value::Span(b) => value_reads_var(&b.1, v),
+        Value::Call(_, args)
+        | Value::CallRef(_, args)
+        | Value::Insert(args)
+        | Value::Tuple(args)
+        | Value::Parallel(args) => args.iter().any(|a| value_reads_var(a, v)),
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| value_reads_var(o, v)),
+        Value::If(c, t, e) => {
+            value_reads_var(c, v) || value_reads_var(t, v) || value_reads_var(e, v)
+        }
+        Value::Iter(_, c, n, e) => {
+            value_reads_var(c, v) || value_reads_var(n, v) || value_reads_var(e, v)
+        }
+        Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+            value_reads_var(x, v)
+        }
+        Value::TupleGet(x, _) => *x == v,
+        _ => false,
+    }
 }
 
 fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {

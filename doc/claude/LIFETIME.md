@@ -141,6 +141,17 @@ first assignment, `generate_set` reassignment arm) — the parser strips the
 LHS deps on that shape assuming a copy, so aliasing there let a later
 `OpFreeRef` release a store the variable never owned.
 
+**Ownership-transition free (#316).**  A var whose latest assignment was
+OWNED (`chosen = m_none()`) and which is then reassigned with a BORROW
+(`chosen = pool[i] ?? m_none()`) would orphan the owned store: the merged
+static type already carries deps, so codegen's dep-empty pre-Set free never
+fires.  `scan_set` (`src/scopes.rs`) tracks each Reference var's
+latest-assignment ownership through the IR (path-sensitive across `if`
+branches, conservative across loop bodies) and emits an explicit
+`OpFreeRef(v)` before the borrowing Set.  Only provably-owned shapes are
+tracked (a call with no visible-attr return dep; a same-struct var copy);
+everything else is Unknown and never freed this way.
+
 Two runtime backstops make any future wrong-free loud instead of corrupting:
 `free_named` refuses to free the eval-stack store (slot 0,
 `Stores::stack_store_at_zero`), and the slot allocator panics with a
