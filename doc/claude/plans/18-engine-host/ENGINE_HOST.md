@@ -383,3 +383,23 @@ small and auditable, `quinn`/QUIC is the heavier fallback if congestion control
 outgrows a token bucket; **(3) deterministic netcode tests** — the in-process
 loopback channel gains loss/reorder/duplicate injection, so the reliability layer is
 tested without a network, and @PLAN50's probe targets extend with a loss% axis.
+
+### UDP on a normal LAN — what's actually needed (evaluated 2026-06-10)
+
+Engine-side (small): one well-known UDP port (client identity = the datagram's source
+4-tuple + the handshake cookie — clients need no config); discovery reuses the demo's
+IP-harvest + QR, optionally upgraded with a **broadcast discovery beacon** (~30 lines;
+broadcast for discovery ONLY — wifi sends broadcast at base rate and APs filter it,
+so gameplay stays unicast); keepalive at a steady cadence (doubles as the phone
+wifi-power-save radio wake — idle radios add 100 ms+ bursts); datagrams ≤ ~1200 B
+(VPN/overlay-shaved MTUs fragment silently above that).
+
+Environment-side (the real blockers, in order): **(1) the server's host firewall**
+(inbound UDP allow — the #1 cause of "UDP doesn't work"; the TCP port has the same
+requirement so the runbook already crosses it); **(2) AP client isolation** on
+venue/guest wifi (kills TCP too — THE classic venue killer; needs an SSID without
+isolation or the server wired); **(3)** same subnet = **no NAT machinery at all**
+(the relay/port-forward residual starts only when a peer leaves the LAN);
+**(4)** browser phones still can't UDP on LAN — and WebTransport/WebRTC want TLS,
+which is painful for bare LAN IPs (self-signed ceremony) — so the transport split
+(phones `wss`, native peers UDP) is the LAN answer too.
