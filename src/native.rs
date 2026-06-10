@@ -265,6 +265,69 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
         "n_kernel_sync_payload_dest",
         crate::engine_host::n_kernel_sync_payload_dest,
     ),
+    // @PLN18 — the connector role (the client-side kernel).
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_connect", crate::engine_host::n_kernel_connect),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_pump",
+        crate::engine_host::n_kernel_client_pump,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_alive",
+        crate::engine_host::n_kernel_client_alive,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_next_event",
+        crate::engine_host::n_kernel_client_next_event,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_kind",
+        crate::engine_host::n_kernel_client_event_kind,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_payload_dest",
+        crate::engine_host::n_kernel_client_event_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_tick_due",
+        crate::engine_host::n_kernel_client_tick_due,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_idle",
+        crate::engine_host::n_kernel_client_idle,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_send",
+        crate::engine_host::n_kernel_client_send,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_next",
+        crate::engine_host::n_kernel_client_sync_next,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_seq",
+        crate::engine_host::n_kernel_client_sync_seq,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_payload_dest",
+        crate::engine_host::n_kernel_client_sync_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_udp_bound",
+        crate::engine_host::n_kernel_client_udp_bound,
+    ),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),

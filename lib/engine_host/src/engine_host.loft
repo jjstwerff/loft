@@ -148,3 +148,96 @@ pub fn run(port: integer, tick_interval_us: integer,
     }
   }
 }
+
+// ── The connector role — the client-side kernel (one core, two roles) ───────
+//
+// A native client's half of the auto-path, with the same zero-transport
+// surface as the listener: `run_client` connects, upgrades, reads the
+// kernel-negotiated UDP cookie from the 101 head, hellos until acked and
+// keepalives after — all invisible.  `client_send` routes by the SAME
+// wire-schema table (`sync_class`): declared kinds ride datagrams once the
+// path is live, everything else (and everything before) rides WS.  Inbound
+// server sync conflates per msg_id; drain it inside `on_tick` (late-latch).
+// Unlike `run`, `run_client` RETURNS when the server connection dies.
+
+fn kernel_connect(host: text, port: integer, tick_interval_us: integer) -> boolean;
+#native
+
+fn kernel_client_pump() -> integer;
+#native
+
+fn kernel_client_alive() -> boolean;
+#native
+
+fn kernel_client_next_event() -> boolean;
+#native
+
+fn kernel_client_event_kind() -> integer;
+#native
+
+fn kernel_client_event_payload() -> text;
+#native
+
+fn kernel_client_tick_due() -> boolean;
+#native
+
+fn kernel_client_idle(max_us: integer);
+#native
+
+// Send to the server, class-routed: a `sync_class` kind rides a seq-stamped
+// datagram once the UDP path is acked, everything else a WS frame.  False =
+// dropped (dead connection or an oversized datagram).
+pub fn client_send(msg: text) -> boolean;
+#native "n_kernel_client_send"
+
+// Drain the newest unread server state, one kind per call — inside `on_tick`.
+pub fn client_sync_next() -> boolean;
+#native "n_kernel_client_sync_next"
+
+pub fn client_sync_seq() -> integer;
+#native "n_kernel_client_sync_seq"
+
+fn kernel_client_sync_payload() -> text;
+#native
+
+pub fn client_sync_payload() -> text {
+  kernel_client_sync_payload()
+}
+
+// Read-only introspection: is the UDP fast path live?
+pub fn client_udp_bound() -> boolean;
+#native "n_kernel_client_udp_bound"
+
+// The connector loop: pump → budgeted event drain → tick when due → idle.
+// Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
+// once the server connection closes — the kind-2 disconnect event reaches
+// `on_event` first.
+pub fn run_client(host: text, port: integer, tick_interval_us: integer,
+                  on_event: fn(Event), on_tick: fn()) {
+  ok = kernel_connect(host, port, tick_interval_us);
+  if !ok {
+    println("engine_host: cannot connect to {host}:{port}");
+    return;
+  }
+  while kernel_client_alive() {
+    work = kernel_client_pump();
+    for _ in 0..256 {
+      more = kernel_client_next_event();
+      if !more { break; }
+      ev = Event {
+        cid:     0,
+        kind:    kernel_client_event_kind(),
+        payload: kernel_client_event_payload(),
+      };
+      on_event(ev);
+      work = work + 1;
+    }
+    if kernel_client_tick_due() {
+      on_tick();
+      work = work + 1;
+    }
+    if work == 0 {
+      kernel_client_idle(2000);
+    }
+  }
+}

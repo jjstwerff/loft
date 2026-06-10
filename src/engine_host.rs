@@ -126,6 +126,36 @@ fn is_sync_msg(msg: &str) -> bool {
     id >= 0 && SYNC_IDS.with(|s| s.borrow().contains(&id))
 }
 
+/// Conflate one inbound `S:` payload into a slot set: per `msg_id`, a higher
+/// seq overwrites, a stale/reordered seq is discarded.  Shared by both roles
+/// (the listener's per-client slots and the connector's server slots) — the
+/// queue machinery must never fork between them.
+fn conflate_slot(slots: &mut Vec<SyncSlot>, seq: i64, payload: &str) {
+    // Bounded kind count — a peer inventing endless ids cannot grow memory;
+    // sync is loss-tolerant by definition, so over-cap datagrams just drop.
+    const SYNC_KINDS_MAX: usize = 64;
+    let msg_id = msg_id_of(payload);
+    let slot = match slots.iter_mut().position(|s| s.msg_id == msg_id) {
+        Some(i) => &mut slots[i],
+        None if slots.len() >= SYNC_KINDS_MAX => return,
+        None => {
+            slots.push(SyncSlot {
+                msg_id,
+                seq: -1,
+                payload: String::new(),
+                dirty: false,
+            });
+            slots.last_mut().expect("just pushed")
+        }
+    };
+    if seq > slot.seq {
+        slot.seq = seq;
+        slot.payload.clear();
+        slot.payload.push_str(payload);
+        slot.dirty = true;
+    }
+}
+
 struct Kernel {
     listener: TcpListener,
     /// The state-sync datagram socket (same port number); `None` = bind
@@ -468,32 +498,8 @@ fn pump_udp(k: &mut Kernel) {
             && let Ok(seq) = seq_s.parse::<i64>()
         {
             // Conflate per (sender, msg_id): two sync kinds from one client
-            // each keep their own newest.  The kind count is bounded — a
-            // client inventing endless ids cannot grow memory; sync is
-            // loss-tolerant by definition, so over-cap datagrams just drop.
-            const SYNC_KINDS_MAX: usize = 64;
-            let msg_id = msg_id_of(payload);
-            let slots = &mut k.net[cid].slots;
-            let slot = match slots.iter_mut().position(|s| s.msg_id == msg_id) {
-                Some(i) => &mut slots[i],
-                None if slots.len() >= SYNC_KINDS_MAX => continue,
-                None => {
-                    slots.push(SyncSlot {
-                        msg_id,
-                        seq: -1,
-                        payload: String::new(),
-                        dirty: false,
-                    });
-                    slots.last_mut().expect("just pushed")
-                }
-            };
-            if seq > slot.seq {
-                slot.seq = seq;
-                slot.payload.clear();
-                slot.payload.push_str(payload);
-                slot.dirty = true;
-            }
-            // else: stale/reordered — discarded, never applied.
+            // each keep their own newest; stale/reordered seqs drop.
+            conflate_slot(&mut k.net[cid].slots, seq, payload);
         }
         // "K:" (bare keepalive) needs nothing beyond the refresh above.
     }
@@ -803,4 +809,388 @@ pub fn n_kernel_sync_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&v);
+}
+
+// ── The connector role — the client-side kernel (one core, two roles) ───────
+//
+// A native client's half of the auto-path: connect + WS upgrade, read the
+// `X-Loft-UDP` cookie from the 101 head, auto-hello until acked, keepalive
+// cadence (the phone-radio wake), class-routed `client_send`, and inbound
+// conflation through the SAME `conflate_slot`/`SYNC_IDS` machinery the
+// listener uses — the queue semantics never fork between roles.  The loft
+// surface is `run_client(host, port, tick_us, on_event, on_tick)`, which
+// returns when the server connection dies (a connector without a server has
+// nothing left to do — unlike `run`, which serves forever).
+
+/// Hello retry cadence while unbound (the ack races real traffic, so this is
+/// a retry, not a timeout).
+const HELLO_INTERVAL_US: i64 = 200_000;
+/// Keepalive cadence once bound — far inside the listener's 3 s path timeout.
+const KEEPALIVE_INTERVAL_US: i64 = 500_000;
+
+struct ClientKernel {
+    conn: TcpStream,
+    udp: Option<UdpSocket>,
+    /// From the 101 head; "" = the server offered no UDP (everything WS).
+    cookie: String,
+    udp_bound: bool,
+    last_hello_us: i64,
+    last_keepalive_us: i64,
+    out_seq: i64,
+    /// Inbound conflation slots for the server's sync traffic (per msg_id).
+    slots: Vec<SyncSlot>,
+    /// (seq, payload) handed out by the last `client_sync_next`.
+    last_sync: (i64, String),
+    events: VecDeque<Event>,
+    last: Event,
+    start: Instant,
+    tick_interval_us: i64,
+    last_tick_us: i64,
+    /// False once the server connection closed — `run_client` then returns.
+    alive: bool,
+}
+
+impl ClientKernel {
+    fn now_us(&self) -> i64 {
+        self.start.elapsed().as_micros() as i64
+    }
+}
+
+thread_local! {
+    static CLIENT: RefCell<Option<ClientKernel>> = const { RefCell::new(None) };
+}
+
+fn with_client<R>(f: impl FnOnce(&mut ClientKernel) -> R) -> Option<R> {
+    CLIENT.with(|c| c.borrow_mut().as_mut().map(f))
+}
+
+/// Client→server frames are masked (RFC 6455 requires it; `read_frame` on the
+/// listener side already handles both).  The mask key needs no randomness for
+/// security — it exists to defeat broken transparent proxies — so a cheap
+/// counter-derived key is fine.
+fn write_frame_masked(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut frame = Vec::with_capacity(payload.len() + 14);
+    frame.push(0x80 | opcode);
+    if payload.len() <= 125 {
+        frame.push(0x80 | payload.len() as u8);
+    } else if payload.len() <= 0xFFFF {
+        frame.push(0x80 | 0x7E);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        frame.push(0x80 | 0x7F);
+        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    let mask = (payload.len() as u32)
+        .wrapping_mul(0x9E37_79B9)
+        .to_be_bytes();
+    frame.extend_from_slice(&mask);
+    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    stream.write_all(&frame)
+}
+
+/// `kernel_connect(host, port, tick_interval_us) -> boolean` — TCP connect,
+/// WS upgrade (the fixed RFC sample key: the key field is anti-cache, not
+/// auth), capture the `X-Loft-UDP` cookie, prepare the UDP socket.  Queues a
+/// kind-0 event so `on_event` sees the connect like the listener side does.
+pub fn n_kernel_connect(stores: &mut Stores, stack: &mut DbRef) {
+    let tick_us = *stores.get::<i64>(stack);
+    let port = *stores.get::<i64>(stack);
+    let host = stores.get::<Str>(stack).str().to_owned();
+    let ok = client_connect(&host, port as u16, tick_us).is_some();
+    stores.put(stack, ok);
+}
+
+fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
+    use std::net::ToSocketAddrs;
+    let addr = (host, port).to_socket_addrs().ok()?.next()?;
+    let mut conn = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok()?;
+    conn.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let req = format!(
+        "GET /ws HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n"
+    );
+    conn.write_all(req.as_bytes()).ok()?;
+    let mut head = Vec::with_capacity(256);
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match conn.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return None,
+        }
+        if head.len() > 16 * 1024 {
+            return None;
+        }
+    }
+    let head = String::from_utf8_lossy(&head);
+    if !head.contains(" 101 ") {
+        return None;
+    }
+    let cookie = head
+        .lines()
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case("x-loft-udp")
+                .then(|| v.trim().to_string())
+        })
+        .unwrap_or_default();
+    // Frame phase: the listener's peek pattern bounds idle reads.
+    conn.set_read_timeout(Some(Duration::from_millis(20)))
+        .ok()?;
+    let udp = if cookie.is_empty() {
+        None
+    } else {
+        UdpSocket::bind("0.0.0.0:0").ok().and_then(|s| {
+            s.connect(addr).ok()?;
+            s.set_nonblocking(true).ok()?;
+            Some(s)
+        })
+    };
+    CLIENT.with(|c| {
+        *c.borrow_mut() = Some(ClientKernel {
+            conn,
+            udp,
+            cookie,
+            udp_bound: false,
+            last_hello_us: i64::MIN / 2,
+            last_keepalive_us: 0,
+            out_seq: 0,
+            slots: Vec::new(),
+            last_sync: (-1, String::new()),
+            events: {
+                let mut q = VecDeque::new();
+                q.push_back(Event {
+                    cid: 0,
+                    kind: 0,
+                    payload: String::new(),
+                });
+                q
+            },
+            last: Event {
+                cid: -1,
+                kind: -1,
+                payload: String::new(),
+            },
+            start: Instant::now(),
+            tick_interval_us: tick_us.max(1),
+            last_tick_us: 0,
+            alive: true,
+        });
+        Some(())
+    })
+}
+
+/// `kernel_client_pump() -> integer` — drain server WS frames into the event
+/// queue and server datagrams into the conflation slots; drive the hello /
+/// keepalive cadences.  Datagram arrivals are not counted as work (they
+/// conflate; the tick reads the newest — same rule as the listener).
+pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
+    let n = with_client(|c| {
+        let mut added = 0i64;
+        // WS frames: events from the server.
+        while c.alive {
+            match read_frame(&mut c.conn) {
+                FrameRead::None => break,
+                FrameRead::Text(payload) => {
+                    c.events.push_back(Event {
+                        cid: 0,
+                        kind: 1,
+                        payload,
+                    });
+                    added += 1;
+                }
+                FrameRead::Closed => {
+                    c.alive = false;
+                    c.udp_bound = false;
+                    c.events.push_back(Event {
+                        cid: 0,
+                        kind: 2,
+                        payload: String::new(),
+                    });
+                    added += 1;
+                }
+            }
+        }
+        // Datagrams: the ack and the server's sync traffic.
+        if let Some(udp) = c.udp.as_ref() {
+            let mut buf = [0u8; 2048];
+            loop {
+                let len = match udp.recv(&mut buf) {
+                    Ok(l) => l,
+                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                };
+                let Ok(text) = std::str::from_utf8(&buf[..len]) else {
+                    continue;
+                };
+                if text.starts_with("A:") {
+                    c.udp_bound = true;
+                } else if let Some(rest) = text.strip_prefix("S:")
+                    && let Some((seq_s, payload)) = rest.split_once(':')
+                    && let Ok(seq) = seq_s.parse::<i64>()
+                {
+                    conflate_slot(&mut c.slots, seq, payload);
+                }
+            }
+            // Hello until acked; keepalive once bound (the radio wake).
+            let now = c.now_us();
+            if !c.udp_bound && !c.cookie.is_empty() && now - c.last_hello_us > HELLO_INTERVAL_US {
+                let _ = udp.send(format!("H:{}", c.cookie).as_bytes());
+                c.last_hello_us = now;
+            }
+            if c.udp_bound && now - c.last_keepalive_us > KEEPALIVE_INTERVAL_US {
+                let _ = udp.send(b"K:");
+                c.last_keepalive_us = now;
+            }
+        }
+        added
+    })
+    .unwrap_or(0);
+    stores.put(stack, n);
+}
+
+/// `kernel_client_alive() -> boolean` — false once the server connection
+/// closed; `run_client`'s loop condition.
+pub fn n_kernel_client_alive(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.alive).unwrap_or(false);
+    stores.put(stack, v);
+}
+
+pub fn n_kernel_client_next_event(stores: &mut Stores, stack: &mut DbRef) {
+    let got = with_client(|c| match c.events.pop_front() {
+        Some(ev) => {
+            c.last = ev;
+            true
+        }
+        None => false,
+    })
+    .unwrap_or(false);
+    stores.put(stack, got);
+}
+
+pub fn n_kernel_client_event_kind(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.last.kind).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+/// Destination-passing text return — see `n_kernel_event_payload_dest`.
+pub fn n_kernel_client_event_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = with_client(|c| c.last.payload.clone()).unwrap_or_default();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
+}
+
+/// `kernel_client_tick_due() -> boolean` — the listener's drift-free rule.
+pub fn n_kernel_client_tick_due(stores: &mut Stores, stack: &mut DbRef) {
+    let due = with_client(|c| {
+        let now = c.now_us();
+        if now - c.last_tick_us >= c.tick_interval_us {
+            if c.last_tick_us == 0 {
+                c.last_tick_us = now;
+            } else {
+                c.last_tick_us += c.tick_interval_us;
+            }
+            true
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false);
+    stores.put(stack, due);
+}
+
+/// `kernel_client_idle(max_us)` — sleep, capped at the next tick boundary.
+pub fn n_kernel_client_idle(stores: &mut Stores, stack: &mut DbRef) {
+    let max_us = *stores.get::<i64>(stack);
+    let sleep_us = with_client(|c| {
+        let now = c.now_us();
+        let until_tick = if c.last_tick_us == 0 {
+            c.tick_interval_us
+        } else {
+            (c.last_tick_us + c.tick_interval_us - now).max(0)
+        };
+        max_us.clamp(0, until_tick.max(1))
+    })
+    .unwrap_or(max_us.max(0));
+    std::thread::sleep(Duration::from_micros(sleep_us as u64));
+}
+
+/// `client_send(msg) -> boolean` — class-routed, mirroring the listener's
+/// `deliver`: a sync-class message rides a seq-stamped datagram once the
+/// path is acked; everything else — and everything before the ack — goes as
+/// a masked WS frame.
+pub fn n_kernel_client_send(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    let sync = is_sync_msg(&msg);
+    let ok = with_client(|c| {
+        if !c.alive {
+            return false;
+        }
+        if sync
+            && c.udp_bound
+            && let Some(udp) = c.udp.as_ref()
+        {
+            c.out_seq += 1;
+            let dgram = format!("S:{}:{msg}", c.out_seq);
+            if dgram.len() > UDP_MAX_DATAGRAM {
+                return false; // state frames must stay small (see the listener)
+            }
+            return udp.send(dgram.as_bytes()).is_ok();
+        }
+        if write_frame_masked(&mut c.conn, 0x1, msg.as_bytes()).is_err() {
+            c.alive = false;
+            c.udp_bound = false;
+            c.events.push_back(Event {
+                cid: 0,
+                kind: 2,
+                payload: String::new(),
+            });
+            return false;
+        }
+        true
+    })
+    .unwrap_or(false);
+    stores.put(stack, ok);
+}
+
+/// `client_sync_next() -> boolean` — drain the newest unread server state,
+/// one slot per call (drain inside `on_tick`: late-latch, the listener rule).
+pub fn n_kernel_client_sync_next(stores: &mut Stores, stack: &mut DbRef) {
+    let got = with_client(|c| {
+        for slot in &mut c.slots {
+            if slot.dirty {
+                slot.dirty = false;
+                c.last_sync = (slot.seq, slot.payload.clone());
+                return true;
+            }
+        }
+        false
+    })
+    .unwrap_or(false);
+    stores.put(stack, got);
+}
+
+pub fn n_kernel_client_sync_seq(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.last_sync.0).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+/// Destination-passing text return — see `n_kernel_event_payload_dest`.
+pub fn n_kernel_client_sync_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = with_client(|c| c.last_sync.1.clone()).unwrap_or_default();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
+}
+
+/// `client_udp_bound() -> boolean` — read-only introspection (diagnostics).
+pub fn n_kernel_client_udp_bound(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.udp_bound).unwrap_or(false);
+    stores.put(stack, v);
 }

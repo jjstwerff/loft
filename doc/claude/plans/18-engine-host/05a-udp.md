@@ -116,9 +116,29 @@ the @PLAN50 probe targets with a loss% axis).
   (broadcast/multicast + NACK chunks) is the case TCP structurally can't
   match; single-receiver bulk stays on WS by design.  Trigger: a consumer
   that pushes big payloads to many seats.
-- **Client-side kernel (connector role)** — phase 04; until then native
-  clients hand-roll the trio (hello, keepalive, S-frames; the e2e test shows
-  the ~30 lines needed).
+- ~~Client-side kernel (connector role)~~ — **LANDED 2026-06-10** (pulled
+  forward from phase 04; see § The connector role below).
 - **Broadcast discovery beacon** (~30 lines, discovery only) — with the first
   LAN-party consumer.
 - **DTLS / crypto-lib encryption** — hostile-network deployments, post-LAN.
+
+## The connector role (landed 2026-06-10 — pulled forward from phase 04)
+
+One core, two roles: `run_client(host, port, tick_us, on_event, on_tick)` is
+the native client's half of the auto-path, with the same zero-transport
+surface as the listener.  The connector connects + upgrades (masked client
+frames per RFC 6455), reads the kernel-negotiated `X-Loft-UDP` cookie from
+the 101 head, **auto-hellos until acked and keepalives after** (500 ms — the
+phone-radio-wake cadence, inside the listener's 3 s timeout); `client_send`
+routes by the SAME `sync_class` table; inbound server sync conflates through
+the SAME `conflate_slot` machinery (per msg_id) — the queue semantics never
+fork between roles.  Unlike `run`, `run_client` RETURNS when the server
+connection dies (the kind-2 disconnect event reaches `on_event` first).
+
+Acceptance: `tests/engine_host_connector.rs` — a loft client against a loft
+server, BOTH programs transport-free: WS event round-trip, a sync-class
+broadcast arriving as datagrams into the client's slots (`udp=true`), and the
+return-on-disconnect lifecycle.  Green in ~1 s.
+
+Native seats now need zero client transport code, which unblocks the phase-04
+probe extensions (loss% axis, native-client stamp chain).
