@@ -965,6 +965,18 @@ impl Output<'_> {
                     _ => None,
                 }
             }
+            // @PLN17: a fn-ref call's type is the fn-ref var's Function return type,
+            // so a boolean-returning `flip()` used as a predicate (`if flip()`) gets
+            // the output_test_predicate u8->bool coercion (the dispatch `match` arms
+            // return the u8 storage form).
+            ValueType::CallRef => {
+                let var = node.callref_var();
+                if let Type::Function(_, r, _) = self.data.def(self.def_nr).variables.tp(var) {
+                    (**r != Type::Void).then(|| (**r).clone())
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
