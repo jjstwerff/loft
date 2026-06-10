@@ -1101,6 +1101,11 @@ pub struct ReplSession {
     /// user can inspect the frame, edit a value, and step.  `None` unless paused.
     /// Boxed because `State` is large and the paused case is rare.
     paused: Option<Box<State>>,
+    /// @PLN16 M5e slice 3 — the editor's **write sandbox**: the canonical path of the one
+    /// file the browser may save back to (the `--serve` target).  `None` (e.g. `--rpc`)
+    /// rejects every `writeFile`.  Single-file for now; a workspace-root form lands with
+    /// multi-file editing.
+    workspace_file: Option<std::path::PathBuf>,
 }
 
 impl ReplSession {
@@ -1124,6 +1129,7 @@ impl ReplSession {
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
+            workspace_file: None,
         })
     }
 
@@ -1145,6 +1151,7 @@ impl ReplSession {
             last_hits: Vec::new(),
             stepping: false,
             paused: None,
+            workspace_file: None,
         }
     }
 
@@ -1347,6 +1354,36 @@ impl ReplSession {
         let produced = self.parser.diagnostics.entries()[pre_diag..].to_vec();
         self.parser.data.rollback_to(pre_defs);
         Ok(produced)
+    }
+
+    /// @PLN16 M5e slice 3 — set the **write sandbox**: the one file the editor may save
+    /// back to (the `--serve` target), stored canonical.  An unreadable path leaves the
+    /// sandbox `None`, so every [`write_file`](Self::write_file) is then refused.
+    pub fn set_workspace_file(&mut self, path: &str) {
+        self.workspace_file = std::fs::canonicalize(path).ok();
+    }
+
+    /// @PLN16 M5e slice 3 — save the editor's `content` to `path`, **only** if `path`
+    /// canonicalises to the sandboxed workspace file ([`set_workspace_file`]).  Any other
+    /// path — or no sandbox set — is refused, so the browser can never write outside the
+    /// one file it opened.
+    ///
+    /// # Errors
+    /// `Err` with a message when no sandbox is set, the target is outside it, or the write
+    /// fails.
+    pub fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
+        let Some(allowed) = &self.workspace_file else {
+            return Err("no writable workspace (server has no file sandbox)".to_string());
+        };
+        // Canonicalise the request against the sandbox: the file exists (we are overwriting
+        // it), so a path that resolves anywhere else — `..`, a symlink, an absolute escape —
+        // fails this equality and is refused.
+        match std::fs::canonicalize(path) {
+            Ok(p) if &p == allowed => {
+                std::fs::write(allowed, content).map_err(|e| format!("write failed: {e}"))
+            }
+            _ => Err("path is outside the editable file".to_string()),
+        }
     }
 
     /// @PLN16 M5a — set a `file:line` breakpoint for the file-run debugger.  Stored and

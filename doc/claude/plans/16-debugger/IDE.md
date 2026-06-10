@@ -201,6 +201,14 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
 3. **Editor — editable pane + `writeFile` + save/reload.** Make the code pane editable;
    `writeFile` saves to disk (sandboxed); a re-`run`/`compile` picks it up. *You can now
    edit and re-run without leaving the browser.* The one new write capability + its sandbox.
+   - **Write core LANDED (2026-06-10):** `ReplSession::write_file` + `set_workspace_file` —
+     the one new write capability, **sandboxed to the single served file** (a path that
+     canonicalises anywhere else — `..`, a symlink, an absolute escape — is refused;
+     `--rpc` has no sandbox set, so it refuses every write). `writeFile {path, content}`
+     protocol arm; `tests/serve.rs::serve_ws_writefile_saves_and_sandboxes` proves save +
+     refusal. **Pending:** the editor UI — make the code pane an editable `<textarea>` + a
+     synced line-number gutter (so diagnostics still mark the line), **Save** (Ctrl/Cmd+S →
+     `writeFile` → re-`compile`) + a dirty indicator, and **Run** = save → compile → run.
 4. **Debugger UI — gutter breakpoints + step controls + panels.** Click the gutter →
    `setBreakpoints`; **Debug** launches with breakpoints; step buttons → `stepIn/Over/Out`;
    the variables / watch / call-stack panels render the `stopped` frame. *The debugger is

@@ -38,6 +38,7 @@ pub fn run_serve(stdlib_dir: &str, port: u16, file: &str) -> std::io::Result<()>
     // output is captured into `output` events, not printed, exactly as `--rpc` does.
     let mut session = ReplSession::new(stdlib_dir)?;
     session.debug_stepping(true);
+    session.set_workspace_file(file); // slice 3 — the editor may save back to this one file
     // Program output is captured into `output` events rather than printed (the same sink
     // `--rpc` uses).  Unlike `--rpc` we do NOT silence the panic hook: the protocol rides
     // the WebSocket, not stdout, so a fault printing to stderr is useful server-side

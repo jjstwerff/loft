@@ -67,8 +67,16 @@ fn ws_send(stream: &TcpStream, text: &str) {
     let mask = [0x12u8, 0x34, 0x56, 0x78];
     let bytes = text.as_bytes();
     let mut frame = vec![0x81u8]; // FIN + text
-    assert!(bytes.len() <= 125, "test payloads are small");
-    frame.push(0x80 | bytes.len() as u8); // masked
+    if bytes.len() <= 125 {
+        frame.push(0x80 | bytes.len() as u8); // masked, 7-bit len
+    } else {
+        assert!(
+            bytes.len() <= 0xFFFF,
+            "test payloads fit the 16-bit length form"
+        );
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    }
     frame.extend_from_slice(&mask);
     frame.extend(bytes.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
     let mut s = stream;
@@ -240,6 +248,42 @@ fn serve_ws_repl_eval_top_level() {
             && msgs.join("\n").contains("\"level\":\"error\""),
         "error → <repl> diagnostics: {:?}",
         msgs
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn serve_ws_writefile_saves_and_sandboxes() {
+    // @PLN16 M5e slice 3 — the editor's save: writeFile overwrites the served file, but a
+    // path outside it (the sandbox) is refused.
+    let path = tmp_program("write", "fn main() { print(\"old\") }\n");
+    let file = path.to_string_lossy().into_owned();
+    let port = 18785;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    // save new content to the served file → ok, and the file on disk changes
+    ws_send(
+        ws.get_ref(),
+        &format!(
+            "{{\"id\":1,\"req\":\"writeFile\",\"file_unused\":0,\"path\":\"{file}\",\"content\":\"fn main() {{ print(\\\"new\\\") }}\\n\"}}"
+        ),
+    );
+    let r1 = ws_recv(&mut ws);
+    assert!(r1.contains("\"id\":1,\"ok\":true"), "writeFile ok: {r1}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn main() { print(\"new\") }\n",
+        "file saved"
+    );
+    // a path outside the sandbox is refused
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":2,\"req\":\"writeFile\",\"path\":\"/etc/hosts\",\"content\":\"x\"}",
+    );
+    let r2 = ws_recv(&mut ws);
+    assert!(
+        r2.contains("\"ok\":false"),
+        "out-of-sandbox write refused: {r2}"
     );
     let _ = std::fs::remove_file(&path);
 }

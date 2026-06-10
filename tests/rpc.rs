@@ -247,6 +247,12 @@ fn rpc_repl_eval_error_line_is_input_relative() {
         "{\"id\":1,\"req\":\"replEval\",\"input\":\"nosuchvar + 1\"}".to_string(),
         "{\"id\":2,\"req\":\"disconnect\"}".to_string(),
     ]);
-    assert!(out.contains("\"file\":\"<repl>\""), "a <repl> diagnostics event: {out}");
-    assert!(out.contains("\"line\":1,"), "error on the input's line 1, not the wrapper line: {out}");
+    assert!(
+        out.contains("\"file\":\"<repl>\""),
+        "a <repl> diagnostics event: {out}"
+    );
+    assert!(
+        out.contains("\"line\":1,"),
+        "error on the input's line 1, not the wrapper line: {out}"
+    );
 }

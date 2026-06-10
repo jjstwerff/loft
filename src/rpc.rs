@@ -140,6 +140,16 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
                 out.push(diagnostics_event("<repl>", &outcome.diagnostics));
             }
         }
+        "writeFile" => {
+            // @PLN16 M5e slice 3 — the editor's save, sandboxed to the one served file.
+            match session.write_file(
+                text(&parsed, "path").unwrap_or(""),
+                text(&parsed, "content").unwrap_or(""),
+            ) {
+                Ok(()) => out.push(resp_ok(id, "")),
+                Err(e) => out.push(resp_err(id, &e)),
+            }
+        }
         "compile" => {
             // @PLN16 M5e slice 2 — the compiler-console feed: check the file (no run, no
             // load) and emit its diagnostics (errors + warnings) as a structured event.
