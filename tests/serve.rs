@@ -22,7 +22,7 @@ fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
 /// accepting.
 fn start_server(port: u16, file: String) {
     std::thread::spawn(move || {
-        let _ = loft::serve::run_serve("default", port, &file);
+        let _ = loft::serve::run_serve("default", &[], port, &file);
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -399,6 +399,40 @@ fn serve_ws_breakpoint_stops_with_line_and_locals() {
     assert!(
         done.contains("\"event\":\"terminated\""),
         "continue runs to completion: {done}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn serve_ws_run_tests_reports_pass_and_fail() {
+    // @PLN16 M5e slice 5 — `runTests` runs the file's zero-parameter test functions, one
+    // `testResult {name, passed, line, message?}` each, then a `testSummary {passed, failed}`.
+    // A failing test carries its assertion message and the others still run (isolation).
+    let path = tmp_program(
+        "tests",
+        "fn test_pass() {\n  assert(1 + 1 == 2, \"math\");\n}\nfn test_fail() {\n  assert(1 == 2, \"deliberately fails\");\n}\n",
+    );
+    let file = path.to_string_lossy().into_owned();
+    let port = 18789;
+    start_server(port, file.clone());
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"runTests\",\"file\":\"{file}\"}}"),
+    );
+    let all = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"testSummary\"")).join("\n");
+    assert!(
+        all.contains("\"name\":\"test_pass\",\"passed\":true"),
+        "test_pass passes: {all}"
+    );
+    assert!(
+        all.contains("\"name\":\"test_fail\",\"passed\":false")
+            && all.contains("deliberately fails"),
+        "test_fail fails with its message: {all}"
+    );
+    assert!(
+        all.contains("\"event\":\"testSummary\",\"passed\":1,\"failed\":1"),
+        "summary counts 1 pass / 1 fail: {all}"
     );
     let _ = std::fs::remove_file(&path);
 }

@@ -1088,6 +1088,11 @@ struct BpMeta {
 /// A live REPL session: stdlib + the statements entered so far.
 pub struct ReplSession {
     parser: Parser,
+    /// The standard-library directory this session was built from, kept so the test runner
+    /// can spin up a **fresh** parser (stdlib + the file under test) — the clean single-parse
+    /// the CLI runner uses, which the persistent session's accumulated parser state can't
+    /// reproduce for a bare-function call.
+    stdlib_dir: String,
     /// Accumulated statements, each terminated with `;`, replayed in one shared
     /// function scope so earlier bindings stay visible.
     body: String,
@@ -1140,6 +1145,7 @@ impl ReplSession {
         parser.parse_dir(stdlib_dir, true, false)?;
         Ok(Self {
             parser,
+            stdlib_dir: stdlib_dir.to_string(),
             body: String::new(),
             counter: 0,
             record: None,
@@ -1154,6 +1160,20 @@ impl ReplSession {
         })
     }
 
+    /// Like [`new`](Self::new) but with explicit `--lib` import search paths, so a program
+    /// loaded into this session can `use` **libraries**, not just the stdlib.  The browser
+    /// IDE (`--serve`) and the `--rpc` server pass the dirs collected from the command line,
+    /// giving the IDE the same `use`-resolution the normal run path has — without it the
+    /// session is stdlib-only and a library (or a project that depends on one) cannot load.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the standard library cannot be read.
+    pub fn new_with_libs(stdlib_dir: &str, lib_dirs: &[String]) -> std::io::Result<Self> {
+        let mut session = Self::new(stdlib_dir)?;
+        session.parser.lib_dirs = lib_dirs.to_vec();
+        Ok(session)
+    }
+
     /// Build a session over an existing `parser` already loaded with a program's
     /// definitions — used by the @PLN16 debugger to evaluate at a paused frame with
     /// the program's types + functions in scope.  The accumulated body starts
@@ -1162,6 +1182,10 @@ impl ReplSession {
     pub fn from_parser(parser: Parser) -> Self {
         Self {
             parser,
+            // `from_parser` builds a debugger-eval session over an existing program, not a
+            // test runner; the stdlib dir is unknown here, so the conventional `"default"`
+            // is the fallback (run_file_tests is driven from `new`/`new_with_libs` sessions).
+            stdlib_dir: "default".to_string(),
             body: String::new(),
             counter: 0,
             record: None,
@@ -1385,41 +1409,67 @@ impl ReplSession {
     /// typed runtime fault in one test is caught and reported, not fatal to the rest.  This
     /// reuses the runner's execution primitives (`State::execute_argv` + `had_fatal`) without
     /// its CLI-only annotation machinery (`@EXPECT_FAIL` etc. are a suite-file concern).
-    /// The file is (re)loaded first, so a just-saved edit is what runs.
+    /// Parsed fresh each call (so a just-saved edit is what runs), in a clean parser, so the
+    /// session's accumulated parser state never interferes.
     ///
     /// # Errors
     /// Returns the I/O error if `path` cannot be read.
     pub fn run_file_tests(&mut self, path: &str) -> std::io::Result<Vec<TestRun>> {
-        match self.load_program(path)? {
-            Ok(()) => {}
-            Err(diags) => {
-                // Won't compile → one synthetic failure naming the error(s).
-                let line = diags.first().map_or(1, |d| d.line);
-                let message = diags
-                    .iter()
-                    .map(crate::diagnostics::DiagEntry::to_string_compact)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                return Ok(vec![TestRun {
-                    name: "(compile)".to_string(),
-                    passed: false,
-                    message: Some(message),
-                    line,
-                }]);
-            }
+        // A **fresh** parser — stdlib + the file + the session's `--lib` dirs — is the clean
+        // single-parse the CLI runner uses; the persistent session's accumulated parser state
+        // does not run a bare test function (every native call faults "Unknown definition").
+        // Parse the file **by path** (`parse`, not `parse_str`): that sets up the source dir +
+        // `use` context a bare-function call needs.  Read it first for a clean io error.
+        let _ = std::fs::read_to_string(path)?;
+        let abs = std::fs::canonicalize(path)
+            .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+        let mut parser = Parser::new();
+        parser.lib_dirs.clone_from(&self.parser.lib_dirs);
+        parser.parse_dir(&self.stdlib_dir, true, false)?;
+        let pre_diag = parser.diagnostics.entries().len();
+        let parse_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parser.parse(&abs, false);
+        }));
+        if parse_outcome.is_err() {
+            return Ok(vec![TestRun {
+                name: "(compile)".to_string(),
+                passed: false,
+                message: Some("parse panicked".to_string()),
+                line: 1,
+            }]);
         }
-        crate::scopes::check(&mut self.parser.data);
-        let want = std::fs::canonicalize(path).ok();
-        let in_file = |pf: &str| -> bool {
-            pf == path
-                || want
-                    .as_ref()
-                    .is_some_and(|w| std::fs::canonicalize(pf).ok().as_ref() == Some(w))
-        };
-        // Discover the file's zero-parameter user test functions.
+        let errors: Vec<DiagEntry> = parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.level,
+                    crate::diagnostics::Level::Error | crate::diagnostics::Level::Fatal
+                )
+            })
+            .cloned()
+            .collect();
+        if !errors.is_empty() {
+            // Won't compile → one synthetic failure naming the error(s).
+            let line = errors.first().map_or(1, |d| d.line);
+            let message = errors
+                .iter()
+                .map(crate::diagnostics::DiagEntry::to_string_compact)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Ok(vec![TestRun {
+                name: "(compile)".to_string(),
+                passed: false,
+                message: Some(message),
+                line,
+            }]);
+        }
+        crate::scopes::check(&mut parser.data);
+        // Discover the file's zero-parameter user test functions (defs whose `position.file`
+        // is the canonical path we parsed).
+        let in_file = |pf: &str| pf == abs;
         let mut targets: Vec<(String, u32)> = Vec::new();
-        for d_nr in 0..self.parser.data.definitions() {
-            let def = self.parser.data.def(d_nr);
+        for d_nr in 0..parser.data.definitions() {
+            let def = parser.data.def(d_nr);
             if !matches!(def.def_type, DefType::Function) {
                 continue;
             }
@@ -1439,15 +1489,20 @@ impl ReplSession {
             let name = def.name.strip_prefix("n_").unwrap_or(&def.name).to_string();
             targets.push((name, def.position.line));
         }
-        // Run each in a fresh State so the tests are isolated from one another.
+        // Run each in a **fresh State** (a clean heap / stores, so one test can't pollute the
+        // next), wiring the native functions after bytecode — the CLI runner's exact sequence.
+        let pending_native = parser.pending_native_libs.clone();
         let mut out = Vec::with_capacity(targets.len());
         for (name, line) in targets {
-            let mut data = self.parser.data.clone();
-            let mut state = State::new(self.parser.database.clone());
+            let mut data = parser.data.clone();
+            let mut state = State::new(parser.database.clone());
             compile::byte_code(&mut state, &mut data);
-            let fn_name = format!("n_{name}");
+            crate::extensions::load_all(&mut state, pending_native.clone());
+            crate::extensions::wire_native_fns(&mut state, &data);
+            // `execute_argv` prepends `n_` itself — pass the bare user name (`name`), not an
+            // already-prefixed one, or it looks up `n_n_<name>` → "Unknown definition".
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                state.execute_argv(&fn_name, &data, &[]);
+                state.execute_argv(&name, &data, &[]);
                 let fault = state.database.had_fatal;
                 let msg = state
                     .database

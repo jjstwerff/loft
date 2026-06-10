@@ -292,6 +292,21 @@ fork:** is the IDE targeting self-contained scripts (current) or full packages (
 need)? The latter is the destination; `--lib` threading is the cheapest first step, best
 done *before* more single-file UI.
 
+**`--lib` threading LANDED (2026-06-10).** `loft debug <file> --serve [--lib <dir>…]` (and
+`--rpc`) now collect the `--lib` import paths and pass them to `ReplSession::new_with_libs`,
+so the served file can `use` libraries: a program that `use`s `plainlib` **launches, runs
+(`[hi]`), and `runTests`-passes** with `--lib tests/lib`, and is correctly refused without it.
+`run_file_tests` itself was fixed in the process — it parses the file **by path** in a fresh
+parser (the clean single-parse `loft --tests` uses) and calls `execute_argv` with the **bare**
+function name (it prepends `n_` itself — a double-prefix was making every native call an
+"Unknown definition"). Tests: `serve_ws_run_tests_reports_pass_and_fail`, manual `--lib`
+probes. **Still open before library dev is real:** (1) **re-load idempotency** — `load_program`
+is additive, so re-launching a `use`-program duplicates its libraries ("Cannot redefine 'banner'");
+the **Run** button works *once* for a library program, then needs a session reset. This is a
+pre-existing `load_program` bug (no-`use` programs re-launch fine), now the top blocker. (2)
+**`loft.toml` auto-resolution** (so deps resolve without explicit `--lib`) and (3) **multi-file
+navigation**.
+
 ## The REPL panel — a prime, context-switching element
 
 A **REPL is a prime element** of the shell, always present so you can try things out at any

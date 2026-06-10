@@ -21,7 +21,7 @@ fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
 fn drive(requests: &[String]) -> String {
     let input = Cursor::new(requests.join("\n").into_bytes());
     let mut out: Vec<u8> = Vec::new();
-    loft::rpc::run_rpc("default", input, &mut out).expect("rpc run");
+    loft::rpc::run_rpc("default", &[], input, &mut out).expect("rpc run");
     String::from_utf8(out).expect("utf8")
 }
 

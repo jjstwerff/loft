@@ -30,13 +30,19 @@ use std::net::{TcpListener, TcpStream};
 ///
 /// # Errors
 /// Returns an I/O error if the port can't be bound.
-pub fn run_serve(stdlib_dir: &str, port: u16, file: &str) -> std::io::Result<()> {
+pub fn run_serve(
+    stdlib_dir: &str,
+    lib_dirs: &[String],
+    port: u16,
+    file: &str,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let source = std::fs::read_to_string(file).unwrap_or_default();
     let shell = render_shell(file, &source);
     // One session for the lifetime of the server (slice 1 is single-session); program
     // output is captured into `output` events, not printed, exactly as `--rpc` does.
-    let mut session = ReplSession::new(stdlib_dir)?;
+    // `lib_dirs` are the `--lib` import paths so the served file can `use` libraries.
+    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
     session.debug_stepping(true);
     session.set_workspace_file(file); // slice 3 — the editor may save back to this one file
     // Program output is captured into `output` events rather than printed (the same sink

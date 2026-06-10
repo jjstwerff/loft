@@ -3017,6 +3017,29 @@ fn start_repl() -> ! {
     std::process::exit(code);
 }
 
+/// Collect every `--lib <dir>` import path from `args`, canonicalised (so a relative dir
+/// resolves against the launch cwd) and de-duplicated.  Shared by the debugger's `--rpc`
+/// and `--serve` servers so the debugged file can `use` libraries — the `use`-resolution
+/// the normal run path's `--lib` handling already gives a plain `loft <file>` run.
+fn collect_lib_dirs(args: &[String]) -> Vec<String> {
+    let mut dirs = Vec::new();
+    let mut i = 0;
+    while i + 1 < args.len() {
+        if args[i] == "--lib" {
+            let raw = &args[i + 1];
+            let abs = std::fs::canonicalize(raw)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| raw.clone());
+            if !dirs.contains(&abs) {
+                dirs.push(abs);
+            }
+            i += 1;
+        }
+        i += 1;
+    }
+    dirs
+}
+
 /// @PLN16 M5a — `loft debug <file>:<line>`: load the file, break at `file:line`, run
 /// `main()` to the breakpoint, and drop into the interactive `(dbg)` prompt.  Reads its
 /// `<file>:<line>` argument by scanning the command line (so it needs no thread-through
@@ -3030,13 +3053,16 @@ fn run_file_debugger() -> ! {
     } else {
         "default".to_string()
     };
+    // Explicit `--lib <dir>` import paths so the debugged file can `use` libraries (not
+    // just the stdlib) — the same `use`-resolution the normal run path has.
+    let lib_dirs = collect_lib_dirs(&args);
     // @PLN16 M5d phase 2 — `loft debug --rpc`: the NDJSON wire-protocol server on stdio.
     // The file is supplied by the `launch` request, so no `<file>:<line>` target is
     // needed; the protocol owns stdout, program output rides `output` events.
     if args.iter().any(|a| a == "--rpc") {
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout();
-        let code = match loft::rpc::run_rpc(&stdlib, stdin.lock(), &mut stdout) {
+        let code = match loft::rpc::run_rpc(&stdlib, &lib_dirs, stdin.lock(), &mut stdout) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("loft debug --rpc: {e}");
@@ -3064,7 +3090,7 @@ fn run_file_debugger() -> ! {
             eprintln!("usage: loft debug <file> --serve [--port <n>]");
             std::process::exit(2);
         };
-        let code = match loft::serve::run_serve(&stdlib, port, file) {
+        let code = match loft::serve::run_serve(&stdlib, &lib_dirs, port, file) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("loft debug --serve: {e}");

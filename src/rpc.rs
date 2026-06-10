@@ -67,10 +67,11 @@ fn capture_take() -> String {
 /// Returns an I/O error from the input / output streams.
 pub fn run_rpc<R: BufRead, W: Write>(
     stdlib_dir: &str,
+    lib_dirs: &[String],
     input: R,
     out: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new(stdlib_dir)?;
+    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
     session.debug_stepping(true);
     // Silence the raw panic handler — a fault in the debugged program is caught and
     // reported as `terminated`, not printed.
@@ -172,18 +173,18 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
                 Ok(results) => {
                     let _ = capture_take();
                     out.push(resp_ok(id, ""));
-                    let (mut passed, mut failed) = (0u32, 0u32);
+                    let (mut pass_count, mut fail_count) = (0u32, 0u32);
                     for t in &results {
                         if t.passed {
-                            passed += 1;
+                            pass_count += 1;
                         } else {
-                            failed += 1;
+                            fail_count += 1;
                         }
                         out.push(test_result_event(t));
                     }
                     out.push(event(
                         "testSummary",
-                        &format!("\"passed\":{passed},\"failed\":{failed}"),
+                        &format!("\"passed\":{pass_count},\"failed\":{fail_count}"),
                     ));
                 }
                 Err(e) => out.push(resp_err(id, &format!("cannot read file: {e}"))),
