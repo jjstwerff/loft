@@ -135,7 +135,7 @@ restricted.
 | Form | Result today | Site |
 |---|---|---|
 | `fn f() -> boolean { null }` / `return null` | **error** "Cannot use null with boolean — boolean has no null representation" | `parser/mod.rs:6127` |
-| `b ?? x` (boolean LHS) | **error** "Cannot use null coalescing '??' on boolean …" | `parser/operators.rs:1237` |
+| `b ?? x` (boolean LHS) | **error** "Cannot use null coalescing '??' on boolean …" → **now works** (@PLN17): `null ?? x`→x, `false ?? x`→false | `parser/operators.rs` |
 | `b == null` | **error** "No matching operator '==' on 'boolean' and 'null'" | operator resolution |
 
 These are the single home to flip: #256 chose to *reject* null-on-boolean (make the
@@ -173,7 +173,7 @@ forms *work*.
 | **A** — Stage A matrix | probes for every cell above; record current vs expected | **Done** 2026-06-09 (see findings §) |
 | **B** — representation | nullable bool round-trips `255`; `OpConvBoolFromNull` producer | **DONE (interp)** 2026-06-09 — design A, full matrix green; [SPIKE.md](SPIKE.md) |
 | **C** — truthiness chokepoint | `null → false` via `@v != 1`; generator reads bool operands as `u8` (UB fix) | **DONE (interp)** 2026-06-09 |
-| **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127`, `operators.rs:1237`, `==`-resolution) with real support | `null`-literal flipped in spike; `??` + `== null` open |
+| **G256** — retire the #256 guard cluster | replace the three null-on-boolean *rejections* (`mod.rs:6127` null-literal, `operators.rs` `??`, `==`-resolution) with real support | **DONE** — `null`/`return null`, `== null`, and `??`/`?? return` all work on boolean (`null`-check is raw `== 255`, not truthiness) |
 | **D** — `== null` + `??` + coerce-`==` | add boolean `== null` (`==255`) + `??`; flip `eq_bool`/`ne_bool` to coerce-compare (decision B) on both backends | Open |
 | **E** — native u8/bool split | rust_type two-form split + `narrow_int_cast` + operand-wrap + predicate-coerce + if-arm `bool_unify` + FFI/runtime-helper (`n_assert`/`n_set_store_lock`/`n_json_bool`/extern-decl/direct-call) + tuple-element coercions | **DONE** 2026-06-10 — suite 2156/2157 |
 | **F** — format rendering | decide + implement `{nullable_bool}` output (today renders `"false"`) | Open |
