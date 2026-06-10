@@ -3288,6 +3288,15 @@ impl Parser {
                 }
             }
             Value::Set(_, inner) => Self::collect_hidden_ref_args(inner, data),
+            // P198 convention: the parser wraps most expressions — including a
+            // body-tail call — in `Value::Span` for diagnostics.  Unwrap so a
+            // `Span(Call(...))` tail is recognised, matching the Block/Insert/
+            // Set/If arms.  Without this, a thin wrapper `fn f() -> S { g() }`
+            // whose tail is `Span(Call(g, [..., __ref_N]))` recovers no hidden
+            // work-ref, `ref_return` never promotes the placeholder to f's
+            // hidden return dest, and the local `__ref_N` is freed at f's exit
+            // — corrupting the returned struct's store once it is reused (#299).
+            Value::Span(b) => Self::collect_hidden_ref_args(&b.1, data),
             Value::If(_, t, f) => {
                 let mut r = Self::collect_hidden_ref_args(t, data);
                 r.extend(Self::collect_hidden_ref_args(f, data));
