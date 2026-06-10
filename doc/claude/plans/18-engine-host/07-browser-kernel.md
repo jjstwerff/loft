@@ -20,8 +20,17 @@
 > defaulted `time_ticks` to 0 (now real µs; `fakeTicks` still overrides)
 > and `doc/loft-gl.js` returned MILLISECONDS where loft expects µs (a
 > 1000× clock bug in browser GL games).  Bundle rebuilt (`make wasm`).
-> REMAINING: the one-script chromium differential (the acceptance), touch
-> input (~10 lines of loft-gl.js), the real-phone probe.
+> SHIPPED LATER THE SAME DAY: touch input (touches map onto the mouse state
+> in loft-gl.js — one input surface), `engine_host.loft` bundled into the
+> browser build (BUNDLED_LIB_FILES), and the FULL one-script differential
+> harness (`doc/kernel-differential.html` + `engine_host_connector::
+> browser_kernel_one_script_differential`): the native leg passes; the
+> browser leg is `#[ignore]`d on a REAL finding the harness caught — an
+> `Instant::now` panic ("time not implemented") somewhere in the
+> `compile_and_run` + frame-yield + `run_client` combo (the playground's
+> short non-yielding programs never hit it).  REMAINING: localize + bridge
+> that one time call (then un-ignore the differential), and the real-phone
+> probe (hardware day).
 
 **Goal.** A phone (or any browser) runs the SAME loft client script a native
 seat runs — `run_client`, `sync_class`, `client_sync_next`, unchanged — with

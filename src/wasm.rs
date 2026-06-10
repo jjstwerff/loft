@@ -731,6 +731,12 @@ const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
         "web.loft",
         include_str!("../tests/fixtures/libs/web/src/web.loft"),
     ),
+    // @PLN18 phase 07 — the browser kernel's loft surface: the SAME lib
+    // source the native kernel uses (the script is the contract).
+    (
+        "engine_host.loft",
+        include_str!("../lib/engine_host/src/engine_host.loft"),
+    ),
 ];
 
 /// Run a loft program supplied as a JSON array of `{name, content}` file objects.

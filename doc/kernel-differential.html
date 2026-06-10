@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!-- @PLN18 phase 07 — the one-script differential: the SAME loft client
+     source runs here (the browser kernel) and natively (run_client); both
+     must print the identical transcript.  The page throws on mismatch
+     (the chromium harness fails on exceptions) and logs DIFFERENTIAL-OK
+     on success.  ?port=N selects the kernel server. -->
+<html><head><meta charset="utf-8"><title>kernel differential</title></head>
+<body><script type="module">
+import init, { compile_and_run, resume_frame } from './pkg/loft.js';
+import { createHost } from './loft-rt.js';
+
+const { host } = createHost();
+globalThis.loftHost = host;
+
+const port = new URLSearchParams(location.search).get('port') || '18095';
+// THE script — byte-identical to the native run's (the test asserts that
+// by generating both from one template; only the port substitutes).
+const SRC = `
+use engine_host;
+struct C { saw_sync: boolean not null }
+fn main() {
+  engine_host::sync_class(2);
+  c = C { saw_sync: false };
+  engine_host::run_client(engine_host::default_host(), ${port}, 50000,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 0 {
+        println("t:connected");
+        engine_host::client_send("hello");
+      } else if ev.kind == 1 {
+        println("t:event {ev.payload}");
+      } else if ev.kind == 2 {
+        println("t:disconnected");
+      }
+    },
+    fn() {
+      while engine_host::client_sync_next() {
+        if !c.saw_sync {
+          c.saw_sync = true;
+          println("t:sync-ok");
+        }
+      }
+    });
+  println("t:exited");
+}
+`;
+const EXPECT = ["t:connected", "t:event 7:hi", "t:sync-ok", "t:disconnected", "t:exited"];
+
+await init();
+let result = JSON.parse(compile_and_run(JSON.stringify([{ name: 'main.loft', content: SRC }])));
+if (result.success === false) {
+  throw new Error('DIFFERENTIAL-COMPILE ' + JSON.stringify(result.diagnostics));
+}
+let output = result.output || '';
+while (result.running) {
+  await new Promise(r => setTimeout(r, 5));
+  result = JSON.parse(resume_frame());
+  output += result.output || '';
+}
+const lines = output.split('\n').filter(l => l.startsWith('t:'));
+if (JSON.stringify(lines) !== JSON.stringify(EXPECT)) {
+  throw new Error(`DIFFERENTIAL-MISMATCH got=${JSON.stringify(lines)} want=${JSON.stringify(EXPECT)}`);
+}
+console.log('DIFFERENTIAL-OK');
+</script></body></html>
