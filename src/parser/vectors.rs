@@ -1355,7 +1355,16 @@ impl Parser {
         // Parse body as an expression-returning block: [for n in range { expr }]
         let mut body = Value::Null;
         let body_type = self.parse_block("for", &mut body, &Type::Unknown(0));
-        *in_t = body_type.clone();
+        // #319 — a struct-literal body returns `Rewritten(Reference(...))`.
+        // The wrapper is a parse-internal marker, not an element type:
+        // leaking it into the vector's element type broke every later
+        // `qs[i] ?? …` on the comprehension result (the ncc temp lost its
+        // dep chain and stack slot — "Incorrect var __ncc_N[65535]").
+        *in_t = if let Type::Rewritten(t) = body_type {
+            *t
+        } else {
+            body_type
+        };
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
         // Finalise vector element type (same as parse_vector post-loop)
