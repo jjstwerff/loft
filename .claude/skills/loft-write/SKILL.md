@@ -30,7 +30,7 @@ The parser **rejects** code that violates these rules.
 | `integer` | **64-bit** signed int (the base integer type; i64 at rest) | `i64::MIN` |
 | `float` | 64-bit float; literal must contain `.`: `1.0` | `NaN` |
 | `single` | 32-bit float; literal suffix `f`: `1.0f` | `NaN` (32-bit) |
-| `boolean` | `true` / `false` | `false` (so `!b` is true for both `null` and `false`) |
+| `boolean` | `true` / `false` / `null` (three-state, @PLN17) | byte `255` (test with `b == null`; `!b` is true for both `null` and `false`; `null == false` is `false`).  `boolean not null` is 2-state. |
 | `character` | Single Unicode char; literal: `'a'`, `'😊'`; `c as integer` → codepoint | `'\0'` |
 | `text` | UTF-8 string (primary string type) | internal null pointer |
 

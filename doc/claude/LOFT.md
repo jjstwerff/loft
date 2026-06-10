@@ -68,7 +68,7 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 
 | Type | Null sentinel | Notes |
 |------|---------------|-------|
-| `boolean` | `false` | `!b` is true for both `null` and `false` |
+| `boolean` | byte `255` (@PLN17) | Three-state: `false`=0, `true`=1, `null`=255 — stored like a 2-variant plain enum.  `null` is held and distinguished everywhere a boolean lives (locals, params, returns, fields, vector/keyed elements); test it with `b == null`.  `null` coerces to `false` only in boolean *logic* (`if`/`while`/`!`/`&&`/`\|\|`); `==`/`!=` are raw, so `null == false` is `false`.  A `boolean not null` is 2-state (false/true).  `!b` is true for both `null` and `false` (both coerce to false). |
 | `integer` | `i64::MIN` | Post-2c (0.9.0): 8-byte storage, sentinel moved from `i32::MIN`.  Accidental sentinel collisions effectively vanish at the i64 boundary. |
 | `float` | `NaN` | IEEE 754: `NaN != NaN`, but `!f` correctly detects null |
 | `single` | `NaN` (32-bit) | Same as `float` |
@@ -128,9 +128,10 @@ protocols need the same audit.
 
 **`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
 or default?" but the answer differs by type because the null sentinel is in-band.
-For `boolean`, `false` *is* the null sentinel — `!b` is true for **both** `null`
-and `false`, and the two cases are indistinguishable.  For `integer`, `0` is a
-valid non-null value — `!n` fires **only** for `i32::MIN`, not for `0`.  Code
+For `boolean`, `!b` is true for **both** `null` and `false` (both coerce to false in
+boolean logic) — so `!b` alone can't tell them apart; use `b == null` for that
+(@PLN17 — boolean is now three-state, false=0 / true=1 / null=255).  For `integer`,
+`0` is a valid non-null value — `!n` fires **only** for `i64::MIN`, not for `0`.  Code
 ported from a boolean guard to an integer guard (or vice versa) silently changes
 meaning:
 
