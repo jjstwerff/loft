@@ -120,3 +120,38 @@ bind-indexed-lookup-to-a-local-first pattern for hash mutation.)
   cosmetic for now; the right fix is a manifest mark for in-binary-native
   libraries (or routing through codegen_runtime for `--native` programs), noted
   for phase 02/03.
+
+## The audience-server port + differential acceptance (2026-06-10)
+
+`tools/audience-demo/server_kernel.loft` is the @PLN6 audience server's meaning
+on the kernel: identical structs/helpers (Cell/Player/World, seed/erase/ignore/
+clear/select/snapshot/join-replay), `main` holds the world in a struct and
+passes `on_event`/`on_tick` closures to `engine_host::run`.
+`tests/engine_host_audience.rs` drives ONE protocol scenario against BOTH
+servers and asserts the per-client transcripts are equal — green (kernel ≡
+original, ~1.5 s).
+
+**The acceptance test surfaced a pre-existing parser bug** (all binaries, not
+this branch): in package mode the package root sits in `lib_dirs` (that is what
+makes intra-package `use otherfile;` work), so a package file named exactly
+like a declared dependency SHADOWED it — `use server;` inside
+`tools/audience-demo/server.loft` resolved to the file itself, the `server`
+library never loaded, and `server::Server` came back "Undefined type". Every
+program in the package broke the same way (`single_port_server.loft` included);
+nothing CI-ran them, so the demo rotted silently. Diagnosis ran the full
+matrix: the "kernel never listened" symptom was actually the ORIGINAL server's
+parse failure in the test's second spawn — the kernel block had been passing.
+Fixed at the chokepoint (`Parser::lib_path`): a name declared under
+`[dependencies]` never resolves to a file inside the declaring package
+(`package_declared_deps` + the `blocked()` guard, canonical-path compare).
+Regression: `tests/fixtures/dep_shadow/` +
+`package_layout::declared_dep_beats_same_named_package_file`.
+`single_port_server.loft` additionally needed `as i32`/`as u8` casts (implicit-
+narrowing strictness landed after it was written) — fixed.
+
+Also landed: `bind_reuseaddr` (SO_REUSEADDR on unix) in the kernel listener —
+a restarted cabinet must rebind through TIME_WAIT.
+
+Remaining for phase 01: the 00(c) stamp-chain re-run on the kernel (the ~40 ms
+interp-harness term must collapse) and optionally `load_test.loft` at the
+kernel port.

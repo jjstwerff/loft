@@ -116,6 +116,11 @@ pub struct Parser {
     /// are deterministic, so it is read + scanned at most once (keyed by path)
     /// and reused across the second pass and any `todo_files` re-parse.
     auto_use_scan_cache: std::collections::HashMap<String, (Vec<String>, Vec<String>)>,
+    /// Per-directory cache for the dep-shadowing guard in `lib_path`: the
+    /// nearest ancestor manifest's package root + its declared dependency
+    /// names.  `None` = no manifest above that directory.
+    pkg_dep_cache:
+        std::collections::HashMap<String, Option<(String, std::collections::HashSet<String>)>>,
     /// Tier-1 text-method trigger map: `method name -> providing package`,
     /// derived once per top-level parse from the current package's (and its
     /// trigger-enabled dependencies') declared triggers.  `None` until built.
@@ -441,6 +446,7 @@ impl Parser {
             pending_native_compile: Vec::new(),
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
+            pkg_dep_cache: std::collections::HashMap::new(),
             auto_use_trigger_map: None,
             auto_use_catalog_map: None,
             pending_imports: Vec::new(),
@@ -4798,13 +4804,46 @@ impl Parser {
         // `f` starts as the cheapest guess (project-local `lib/<id>.loft` or
         // `<id>.loft`); subsequent strategies overwrite only when `f` does
         // not yet resolve to an existing file.
-        let mut f = Self::probe_project_lib(id);
+        // Dep-shadowing guard: a name declared under [dependencies] in the
+        // current package's manifest must resolve as a dependency — never to
+        // a same-named `.loft` file inside the declaring package.  Without
+        // this, `use server` in a package that also contains `server.loft`
+        // loads the package file (the package root sits in `lib_dirs` for
+        // intra-package `use`), silently shadowing the library: its types
+        // vanish and every consumer in the package breaks.
+        let shadow_root = self
+            .package_declared_deps(cur_dir)
+            .filter(|(_, deps)| deps.contains(id))
+            .map(|(root, _)| root);
+        let blocked = |candidate: &str| {
+            shadow_root.as_deref().is_some_and(|root| {
+                // Canonicalize so relative candidates (cwd inside the
+                // package) and the canonical root compare in one space.
+                let cand = std::path::Path::new(candidate);
+                cand.canonicalize()
+                    .unwrap_or_else(|_| cand.to_path_buf())
+                    .starts_with(root)
+            })
+        };
 
+        let mut f = Self::probe_project_lib(id);
+        if blocked(&f) {
+            f = format!("{id}.loft");
+        }
         Self::probe_cur_dir_lib(id, cur_dir, &mut f);
         Self::probe_base_dir_lib(id, base_dir, &mut f);
+        if blocked(&f) {
+            f = format!("{id}.loft");
+        }
         self.probe_sibling_package(id, cur_dir, &mut f);
         Self::probe_script_sibling_dir(id, &cur_script, &mut f);
+        if blocked(&f) {
+            f = format!("{id}.loft");
+        }
         self.probe_cmdline_lib_dirs(id, &mut f);
+        if blocked(&f) {
+            f = format!("{id}.loft");
+        }
         self.probe_cmdline_lib_dirs_manifest(id, &mut f);
         Self::probe_loft_lib_flat(id, &mut f);
         self.probe_loft_lib_manifest(id, &mut f);
@@ -4815,8 +4854,45 @@ impl Parser {
         self.probe_auto_install(id, &mut f);
         Self::probe_cur_dir_flat(id, cur_dir, &mut f);
         Self::probe_base_dir_flat(id, base_dir, &mut f);
-
+        if blocked(&f) {
+            f = format!("{id}.loft");
+        }
         f
+    }
+
+    /// The package context owning `cur_dir`: the nearest ancestor directory
+    /// holding a `loft.toml`, plus that manifest's declared dependency names.
+    /// Cached per directory (manifests don't change mid-parse).
+    fn package_declared_deps(
+        &mut self,
+        cur_dir: &str,
+    ) -> Option<(String, std::collections::HashSet<String>)> {
+        if let Some(cached) = self.pkg_dep_cache.get(cur_dir) {
+            return cached.clone();
+        }
+        let mut found = None;
+        let start = if cur_dir.is_empty() { "." } else { cur_dir };
+        let mut search = std::path::Path::new(start).canonicalize().ok();
+        while let Some(dir) = search {
+            let manifest_path = dir.join("loft.toml");
+            if manifest_path.exists() {
+                if let Some(manifest) =
+                    crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                {
+                    let deps: std::collections::HashSet<String> = manifest
+                        .dependencies
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    found = Some((dir.to_string_lossy().to_string(), deps));
+                }
+                break;
+            }
+            search = dir.parent().map(std::path::Path::to_path_buf);
+        }
+        self.pkg_dep_cache
+            .insert(cur_dir.to_string(), found.clone());
+        found
     }
 
     /// Initial guess: the project-supplied `lib/<id>.loft`, falling back to

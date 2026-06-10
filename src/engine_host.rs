@@ -194,14 +194,57 @@ fn write_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> std::io::R
     stream.write_all(&frame)
 }
 
+/// Bind with `SO_REUSEADDR` so a restarted server rebinds through TIME_WAIT —
+/// the arcade flow (restart the cabinet mid-evening) depends on it; Rust's std
+/// `TcpListener::bind` does not set it.
+#[cfg(unix)]
+fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
+    use std::os::fd::FromRawFd;
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return None;
+        }
+        let one: libc::c_int = 1;
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            std::ptr::addr_of!(one).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        let addr = libc::sockaddr_in {
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: port.to_be(),
+            sin_addr: libc::in_addr { s_addr: 0 }, // 0.0.0.0
+            sin_zero: [0; 8],
+        };
+        if libc::bind(
+            fd,
+            std::ptr::addr_of!(addr).cast(),
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        ) != 0
+            || libc::listen(fd, 128) != 0
+        {
+            libc::close(fd);
+            return None;
+        }
+        Some(TcpListener::from_raw_fd(fd))
+    }
+}
+
+#[cfg(not(unix))]
+fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
+    TcpListener::bind(("0.0.0.0", port)).ok()
+}
+
 // ── The natives (registered in native.rs; declared in lib/engine_host) ──────
 
 /// `kernel_listen(port, tick_interval_us) -> boolean`
 pub fn n_kernel_listen(stores: &mut Stores, stack: &mut DbRef) {
     let tick_us = *stores.get::<i64>(stack);
     let port = *stores.get::<i64>(stack);
-    let ok = TcpListener::bind(("0.0.0.0", port as u16))
-        .ok()
+    let ok = bind_reuseaddr(port as u16)
         .map(|listener| {
             let _ = listener.set_nonblocking(true);
             KERNEL.with(|k| {

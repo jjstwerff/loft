@@ -359,8 +359,8 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
       // other-colour tap → ignore
       return;
     }
-    world.cells += [Cell{ck: k, x: x, y: y, color: c,
-                         birth_tick: world.tick}];
+    world.cells += [Cell{ck: k, x: x as i32, y: y as i32, color: c as u8,
+                         birth_tick: world.tick as u32}];
     p = world.players[cid];
     if p != null {
       p.lx = x;

@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Dep-shadowing regression — this file is deliberately named after the
+// `shadowlib` dependency declared in loft.toml.  The package root sits in
+// `lib_dirs` (intra-package `use`), so without the guard in
+// `Parser::lib_path`, `use shadowlib;` resolved to THIS file instead of
+// the dependency: the lib never loaded, `shadowlib::Probe` was undefined,
+// and every qualified reference below errored.  This is exactly how
+// `tools/audience-demo/server.loft` (a package file named `server.loft`
+// with a `server` dependency) silently broke.
+
+use shadowlib;
+
+fn check(v: shadowlib::Probe) -> integer {
+  v.val
+}
+
+fn main() {
+  p = shadowlib::make(41);
+  cb = fn(x: shadowlib::Probe) {
+    println("cb {x.val}");
+  };
+  println("shadow-ok {check(p) + 1}");
+}

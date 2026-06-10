@@ -1,0 +1,162 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 phase 01 ACCEPTANCE — the @PLN6 audience server's MEANING, ported
+// verbatim onto the engine-host kernel (lib/engine_host).  The wire protocol,
+// world semantics, and helper logic are copied from server.loft unchanged;
+// only the transport moved: `srv.run(fn(ev){…})` over lib/server's loft loop
+// became `engine_host::run(…)` over the Rust kernel loop.
+//
+// Wire schema (identical to server.loft):
+//   client → server   1:q,r,color  seed   · 2:q,r  clear  · 3:color  select
+//                     6:           snapshot re-request
+//   server → client   4:q,r,color  delta  · 5:q,r  active hint
+//
+// Run:
+//   ./target/release/loft --interpret --no-warnings --lib lib \
+//       tools/audience-demo/server_kernel.loft
+
+use engine_host;
+
+struct Cell {
+  ck:    text not null,
+  color: integer not null,
+}
+
+struct Player {
+  pk:    integer not null,
+  color: integer not null,
+  lq:    integer not null,
+  lr:    integer not null,
+}
+
+struct World {
+  cells:   hash<Cell[ck]>,
+  players: hash<Player[pk]>,
+}
+
+fn cell_key(q: integer, r: integer) -> text {
+  "{q},{r}"
+}
+
+fn parse_qr(payload: text) -> (integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0)
+  } else {
+    q = payload[..i] as integer;
+    r = payload[i + 1..] as integer;
+    (q, r)
+  }
+}
+
+fn parse_qrc(payload: text) -> (integer, integer, integer) {
+  i = payload.find(",");
+  if i == null {
+    (0, 0, 0)
+  } else {
+    q = payload[..i] as integer;
+    rest = payload[i + 1..];
+    j = rest.find(",");
+    if j == null {
+      (q, 0, 0)
+    } else {
+      r = rest[..j] as integer;
+      c = rest[j + 1..] as integer;
+      (q, r, c)
+    }
+  }
+}
+
+fn delta_frame(q: integer, r: integer, color: integer) -> text {
+  "4:{q},{r},{color}"
+}
+
+fn active_frame(q: integer, r: integer) -> text {
+  "5:{q},{r}"
+}
+
+fn replay_world_to(cid: integer, world: World) {
+  for cell in world.cells {
+    (cq, cr) = parse_qr(cell.ck);
+    engine_host::send(cid, delta_frame(cq, cr, cell.color));
+  }
+}
+
+fn handle_seed(world: World, cid: integer, q: integer, r: integer, color: integer) -> integer {
+  k = cell_key(q, r);
+  existing = world.cells[k];
+  if existing != null {
+    if existing.color == color {
+      world.cells[k] = null;
+      return 0;
+    }
+    return -1;
+  }
+  world.cells += [Cell{ck: k, color: color}];
+  p = world.players[cid];
+  if p != null {
+    p.lq = q;
+    p.lr = r;
+  }
+  color
+}
+
+fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
+  if msg_id == 1 {
+    (q, r, c) = parse_qrc(payload);
+    if c >= 1 && c <= 9 {
+      result = handle_seed(world, cid, q, r, c);
+      if result >= 0 {
+        engine_host::broadcast(delta_frame(q, r, result));
+      }
+    }
+  } else if msg_id == 2 {
+    (q, r) = parse_qr(payload);
+    k = cell_key(q, r);
+    if world.cells[k] != null {
+      world.cells[k] = null;
+      engine_host::broadcast(delta_frame(q, r, 0));
+    }
+  } else if msg_id == 6 {
+    println("audience server: [snapshot req cid={cid}] cells={world.cells.len()}");
+    replay_world_to(cid, world);
+  } else if msg_id == 3 {
+    c = payload as integer;
+    p = world.players[cid];
+    if p == null {
+      world.players += [Player{pk: cid, color: c, lq: 0, lr: 0}];
+      engine_host::broadcast(active_frame(0, 0));
+    } else {
+      p.color = c;
+      engine_host::broadcast(active_frame(p.lq, p.lr));
+    }
+  }
+}
+
+fn main() {
+  port = 18083;
+  println("audience server (kernel): holds world state + broadcasts every change");
+
+  world = World{cells: [], players: []};
+
+  // The original has no tick loop (phase 1.4 deferred there too) — the kernel
+  // tick idles at 1 Hz with an empty handler.
+  engine_host::run(port, 1000000,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 0 {
+        println("audience server: [connect cid={ev.cid}]");
+        if world.players[ev.cid] == null {
+          world.players += [Player{pk: ev.cid, color: 0, lq: 0, lr: 0}];
+        }
+        replay_world_to(ev.cid, world);
+      } else if ev.kind == 1 {
+        i = ev.payload.find(":");
+        if i != null {
+          msg_id = ev.payload[..i] as integer;
+          handle_message(world, ev.cid, msg_id, ev.payload[i + 1..]);
+        }
+      }
+    },
+    fn() { });
+}
