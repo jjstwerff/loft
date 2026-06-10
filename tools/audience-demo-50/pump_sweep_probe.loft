@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 phase 00(b) — pump sweep-cost probe.
+//
+// Measures what one empty drain sweep (poll_event returning null) costs as a
+// function of connected-client count.  Run `probe.loft` against it with
+// LOFT_PROBE_SECS large so its clients sit idle while this server times
+// poll_event sweeps.  Each printed line: clients, sweeps timed, min/mean/max
+// sweep µs — the direct answer to "where does the ~95 ms loop iteration go".
+//
+// Run:
+//   LOFT_NO_CACHE=1 loft --interpret tools/audience-demo-50/pump_sweep_probe.loft
+//   LOFT_NO_CACHE=1 LOFT_PROBE_CLIENTS=12 LOFT_PROBE_SECS=60 \
+//     loft --interpret tools/audience-demo-50/probe.loft
+
+use server;
+use web;
+
+const PORT: integer = 18084;
+
+fn main() {
+  srv = server::listen(PORT);
+  if srv.handle < 0 {
+    println("pump_sweep: FAILED to listen on {PORT}");
+    return;
+  }
+  println("pump_sweep: listening on ws://127.0.0.1:{PORT}/ws");
+
+  clients = 0;
+  last_report_clients = 0 - 1;
+  quiet_since: integer = 0;
+  while true {
+    // Drain anything pending (connects, the probe's single INPUT per client).
+    had = false;
+    while true {
+      ev = srv.poll_event();
+      if ev == null { break; }
+      had = true;
+      if ev.connected { clients = clients + 1; }
+    }
+    if had { quiet_since = ticks(); }
+    // Time 50 empty sweeps — only at a NEW client count AND after 2 s of quiet,
+    // so in-flight handshakes (blocking upgrade-header reads) never contaminate
+    // the sweep timing.
+    quiet = ticks() - quiet_since > 2000000;
+    if clients != last_report_clients && clients > 0 && quiet {
+      total: integer = 0;
+      min_us: integer = 0 - 1;
+      max_us: integer = 0;
+      for i in 0..50 {
+        t0 = ticks();
+        ev2 = srv.poll_event();   // expected: null (clients idle)
+        t1 = ticks();
+        d = t1 - t0;
+        total = total + d;
+        if min_us < 0 || d < min_us { min_us = d; }
+        if d > max_us { max_us = d; }
+        if ev2 != null { i = i; }  // drained a late frame; keep timing
+      }
+      println("pump_sweep: clients={clients} sweeps=50 min={min_us}us mean={total / 50}us max={max_us}us");
+      last_report_clients = clients;
+    }
+    web::sleep_ms(50);
+  }
+}
