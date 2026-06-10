@@ -62,6 +62,17 @@ arriving as seq-stamped datagrams → a same-tick burst (seq 10, 12, then stale
 echoed → 3 s of silence reverts beacons to WS.  Green (~6.5 s, includes the
 timeout wait).
 
+**The auto-path proof on the real consumer** (user-directed 2026-06-10):
+`probe_server_kernel.loft`'s poses + echoes ride `sync_send` (EXIT stays on
+`send` — the class table in action: state syncs, events deliver).  Proven
+both ways: (a) the unchanged WS probe client at 12 clients behaves
+identically (hold p50 14.7 ms ≈ the half-tick floor — fallback is
+byte-identical WS); (b) `engine_host_udp::probe_server_poses_ride_the_
+fastest_path_per_client` runs ONE server with client A (web-page tier, no
+hello → WS pose frames) and client B (native tier, hellos → the same world's
+poses as seq-stamped datagrams) — one call site, zero transport logic in the
+server program.
+
 Transport-latency delta is **not** asserted: on loopback it is µs-noise; the
 win (no retransmit stalls, no head-of-line blocking, discard-stale) is a
 wifi/LAN property — measured when a native client exists (phase 04 extends

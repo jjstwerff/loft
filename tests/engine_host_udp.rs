@@ -3,8 +3,9 @@
 
 //! @PLN18 phase 05a — the state-sync UDP channel end-to-end:
 //!
-//! 1. the kernel issues a cookie; the loft side transports it over WS
-//!    (cookie issuance = mechanics, transport = meaning);
+//! 1. the kernel issues a cookie and carries it on the WS 101 upgrade
+//!    response (`X-Loft-UDP`) — negotiation is kernel-internal, no loft
+//!    code on either side touches it;
 //! 2. before the hello, `sync_send` falls back to WS frames;
 //! 3. `H:<cookie>` binds the source addr (acked `A:<cid>`), after which the
 //!    SAME `sync_send` call rides UDP;
@@ -90,6 +91,16 @@ fn ws_recv(stream: &TcpStream) -> String {
     let mut payload = vec![0u8; len];
     s.read_exact(&mut payload).unwrap();
     String::from_utf8(payload).unwrap()
+}
+
+fn ws_send(stream: &TcpStream, text: &str) {
+    let mask = [9u8, 8, 7, 6];
+    let bytes = text.as_bytes();
+    let mut frame = vec![0x81u8, 0x80 | bytes.len() as u8];
+    frame.extend_from_slice(&mask);
+    frame.extend(bytes.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    let mut s = stream;
+    s.write_all(&frame).unwrap();
 }
 
 /// Receive one datagram as text, or `None` on timeout.
@@ -268,4 +279,88 @@ fn main() {{
     }
 
     let _ = std::fs::remove_file(&prog);
+}
+
+/// The auto-path proof on the REAL consumer — `probe_server_kernel.loft`
+/// (the @PLAN50 pose server, poses ported onto `sync_send`): ONE server, one
+/// call site.  Client A is a plain web-page-style WS client (cannot UDP,
+/// never hellos) and receives poses as ordinary WS frames; client B is a
+/// native-style client that hellos with the 101-header cookie and receives
+/// the SAME world's poses as seq-stamped datagrams.  The server program
+/// contains zero transport logic — the kernel picks the fastest path per
+/// client.
+#[test]
+fn probe_server_poses_ride_the_fastest_path_per_client() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 18084u16; // probe_server_kernel.loft's fixed port
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let child = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(root.join("tools/audience-demo-50/probe_server_kernel.loft"))
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn probe server");
+    let _guard = Guard(Some(child));
+
+    // A = web-page tier (cid 0), B = native tier (cid 1); both in sight range.
+    let (ws_a, _cookie_a) = ws_connect(port);
+    let (ws_b, cookie_b) = ws_connect(port);
+    ws_send(&ws_a, "1:0,0,0,0");
+    ws_send(&ws_b, "1:1,10,0,0");
+
+    // B hellos — earning the UDP fast path with the kernel-negotiated cookie.
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.connect(("127.0.0.1", port)).unwrap();
+    udp.set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut b_pose: Option<String> = None;
+    loop {
+        udp.send(format!("H:{cookie_b}").as_bytes()).unwrap();
+        match udp_recv(&udp) {
+            Some(d) if d == "A:1" => break,
+            Some(d) if d.starts_with("S:") => {
+                b_pose = Some(d); // bound on an earlier hello; a pose raced the ack
+                break;
+            }
+            _ => assert!(Instant::now() < deadline, "hello never acked"),
+        }
+    }
+
+    // A (fallback): poses arrive as plain WS frames — B's plane is id 1.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = ws_recv(&ws_a);
+        if f.starts_with("2:1,") {
+            break; // WS pose of B's plane
+        }
+        assert!(
+            Instant::now() < deadline,
+            "A never saw a WS pose, got {f:?}"
+        );
+    }
+
+    // B (fast path): the same world's poses arrive as seq-stamped datagrams —
+    // A's plane is id 0.
+    let dgram = loop {
+        match b_pose.take().or_else(|| udp_recv(&udp)) {
+            Some(d) => {
+                let (_, payload) = unstamp(&d);
+                if payload.starts_with("2:0,") {
+                    break d;
+                }
+            }
+            None => assert!(Instant::now() < deadline, "B never saw a UDP pose"),
+        }
+    };
+    let (seq, _) = unstamp(&dgram);
+    assert!(seq >= 1, "outbound seq stamped: {dgram:?}");
 }
