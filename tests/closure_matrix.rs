@@ -309,6 +309,32 @@ cross_mode!(
     "#
 );
 
+// #323 — factory-returned closure with a Reference capture, under
+// allocation pressure.  The capture's store must survive the factory's
+// return (owned by the closure record's cascade, not the dead frame);
+// pre-fix both backends corrupted whichever spam object reused the slot
+// (interp only looked sound without pressure).
+cross_mode!(
+    c3_d4_reference_capture_factory_reuse_pressure,
+    r#"
+    struct Counter { n: integer not null }
+    fn make() -> fn() -> integer {
+        w = Counter { n: 7 };
+        fn() -> integer { w.n = w.n + 1; w.n }
+    }
+    fn test() {
+        f = make();
+        spam1 = Counter { n: 31337 };
+        spam2 = Counter { n: 41414 };
+        a = f();
+        b = f();
+        print("{a},{b},{spam1.n},{spam2.n}\n");
+        assert(a == 8 && b == 9, "factory capture: {a},{b}");
+        assert(spam1.n == 31337 && spam2.n == 41414, "spam corrupted: {spam1.n},{spam2.n}");
+    }
+    "#
+);
+
 cross_mode!(
     c5_d1_multi_capture_local,
     r#"

@@ -2938,6 +2938,19 @@ impl Parser {
         self.get_val(&tp, nullable, u32::from(pos), code, alias)
     }
 
+    /// #322: switch the lexer to a `use`-resolved dependency file,
+    /// recording it for the program startup-cache manifest first.
+    /// Library files are parsed via an inline lexer switch (never a
+    /// `parse()` entry), so without this record the manifest misses
+    /// them and an edited library keeps executing from the stale
+    /// cached program.
+    fn switch_to_dep(&mut self, f: &str) {
+        if self.track_sources && !self.parsed_sources.iter().any(|s| s == f) {
+            self.parsed_sources.push(f.to_string());
+        }
+        self.lexer.switch(f);
+    }
+
     /// Is the fn-ref struct field `d_nr.f_nr` stored in the split 8B
     /// layout (`<attr>` d_nr + `<attr>__closure_rec`) rather than the
     /// legacy 4B int layout?
@@ -4418,7 +4431,7 @@ impl Parser {
                     // spec is consumed (tokens already read); the import will be recorded
                     // when this `use` statement is seen again via todo_files with use_exists=true.
                     drop(spec);
-                    self.lexer.switch(&f);
+                    self.switch_to_dep(&f);
                 } else {
                     diagnostic!(
                         self.lexer,
@@ -4448,7 +4461,7 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&dep_id);
-                    self.lexer.switch(&f);
+                    self.switch_to_dep(&f);
                 }
             }
         }
@@ -4532,7 +4545,7 @@ impl Parser {
                 let cur = self.lexer.pos().file.clone();
                 self.todo_files.push((cur, self.data.source));
                 self.data.use_add(&name);
-                self.lexer.switch(&f);
+                self.switch_to_dep(&f);
             }
         }
         // Apply wildcard/selective imports queued for this source now that the while-use loop
