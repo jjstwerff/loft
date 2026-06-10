@@ -50,10 +50,10 @@ Inbound conflation is per (sender, msg_id) — two sync kinds from one client
 never collapse each other (kind count bounded at 64/client; over-cap sync
 datagrams drop, which latest-value semantics permits).
 
-The class is data, not code, which is what the service surface (next step,
-pending the #313 fix on `bugs321`) will hang lanes on: a registered service =
-handler + kind + (late, separately) its lane; `sync_class` is that table's
-first column.  `run()` is unchanged — sync drains inside the user's
+The class is data, not code, which is what the service surface (phase
+**05d**, design verified — ENGINE_HOST.md § Services) hangs lanes on: a
+registered service = handler + kind + (late, separately) its lane;
+`sync_class` is that table's lane column.  `run()` is unchanged — sync drains inside the user's
 `on_tick`, which is what makes late-latch automatic.
 
 **The transport-selection contract (user-confirmed 2026-06-10): automatic per

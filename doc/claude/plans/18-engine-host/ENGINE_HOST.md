@@ -53,7 +53,11 @@ Instead the loft program **registers** its traffic at startup — "msg 4 = state
 keyed by cid, conflate; msg 9 = bulk, accumulate to store; msg 1–3 = events" — and
 the kernel's drain rules are driven by that table. This is loft's own "schema is data"
 principle (`Stores.types`) extended to the wire: a new message kind is a registration
-line in loft, not a host change.
+line in loft, not a host change.  *Minimal form LANDED 2026-06-10:*
+`sync_class(msg_id)` is the table's first column — both roles' `send`s route
+by it (datagram vs WS, per message per client) and inbound datagrams conflate
+per (sender, msg_id); undeclared kinds default to must-deliver events.  The
+kernel reads only the `<msg_id>:` framing — classification, never meaning.
 
 **The honest residual — what still recompiles, and why that's fine.** Three things
 genuinely need Rust: a new **traffic-class kind** (a fourth drain rule — rare,
@@ -315,6 +319,16 @@ principle), so they never touch the kernel. In-house evidence: `probe_server.lof
 and `projector.loft` already run the same loop body, differing only in cadence
 source and the GL tail.
 
+**Status (2026-06-10): both roles are LANDED** — `run` (listener) and
+`run_client` (connector) in `lib/engine_host`, sharing the frame I/O, the
+drift-free tick, the `sync_class` table and the `conflate_slot` machinery
+(factored shared in `src/engine_host.rs`, so the queue semantics *cannot*
+fork).  The connector auto-hellos from the `X-Loft-UDP` 101 header and
+keepalives at 500 ms; `tests/engine_host_connector.rs` is the loopback proof
+(a loft client against a loft server, both transport-free).  The one
+deliberate asymmetry: `run_client` returns when the server dies; `run`
+serves forever.  Window/GL remains the future client-only module.
+
 Compounding payoffs: **loopback testing** (server + client kernels in one process
 over an in-memory channel — the whole protocol tested without sockets; also
 single-player for free), **the IDE host converges** (`--serve`'s hand-rolled WS loop
@@ -322,6 +336,59 @@ becomes the listener-role kernel), and **no protocol drift** (one traffic-class
 implementation). Honest residual: the **browser** client (`--html`/wasm) is a
 genuinely different host — the frame-yield contract instead of owning the loop — so
 it shares the loft-side contract but not the kernel binary.
+
+---
+
+## Services — register meaning, assign speed later (design verified 2026-06-10)
+
+The developer surface over the class table, in the user's own framing: *"all a
+developer has to do is register services (listener & writer combined); that
+service can send/receive messages; after building everything he can decide
+that some services need a faster bus than others and can assign some to a
+fast lane and some to a slow one (some stay normal)."*
+
+**The invariant: a service is the ONE home for a message kind** — its handler
+(listener), its writer, and (late, separately) its **lane**:
+
+| Lane | Class underneath | Delivery contract (both directions) |
+|---|---|---|
+| **fast** | state-sync | newest wins: inbound conflates, outbound rides datagrams when the peer can |
+| **normal** | events | must-deliver, in order, on WS — the default |
+| **slow** | bulk | budget-ingested into store regions, publishes a completion event (05c machinery) |
+
+Why this shape wins:
+
+- **Late binding of performance.** Lane assignment comes AFTER the build —
+  one reversible line per service, no restructuring.  Goal F applied to
+  performance: meaning first, speed as a tweak.  (Live re-assignment from the
+  debugger/REPL is the natural extension — the lane is just table data.)
+- **One home per kind.** The `sync_class` step already collapsed transport
+  choice into data; services collapse the remaining duplication — the msg_id
+  literals in send strings and the `handle_message` if-chain every consumer
+  hand-rolls (audience + probe servers both have one) become registration.
+- **The lane never leaks into service code.** A service reads and writes
+  messages; the kernel owns delivery.  `slow` can exist in the API before
+  05c's machinery lands (behaves as normal until then) — declaring it is
+  data, not behavior the developer observes.
+
+Settled while verifying (2026-06-10):
+
+- **Wire identity stays the explicit `msg_id`** — browser pages hand-roll
+  `"2:..."` today; auto-numbered services would need a schema handshake with
+  JS clients.  The end state (service NAMES on a shareable schema the client
+  fetches) layers on later without breaking this.
+- **`sync_class` is the lane column of this table**, already landed; the
+  service registry adds the handler + writer columns.
+- **`on_event` stays as the default service** for unregistered kinds —
+  consumers migrate one service at a time.
+
+**The gate before building: handler storage.**  Per-service handlers are
+capturing closures held in a registry (a vector/struct field) and invoked
+cross-fn — the #313 crash shape.  The fix is on `bugs321`
+(fixed-pending-merge); once merged, probe the storage matrix (field-stored ✓
+expected from the fix's own tests; vector-stored = the open cell) and build
+the surface on whichever shape proves safe.  Until then the declarative
+class table is the stable intermediate surface.
 
 ---
 
