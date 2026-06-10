@@ -146,3 +146,40 @@ Each stage independently shippable; tier 0 means the wasm tier never blocks the 
 loop. Open questions worth settling early: the bridge-tax measurement, the
 dependent-event contract, and whether remote-server patching is a near-term requirement
 (it decides how much weight the wasm tier carries).
+
+---
+
+## Prior art in-house: the audience demo already runs this loop (evaluated 2026-06-10)
+
+The @PLN6 audience demo (`tools/audience-demo/` + the `server`/`web`/`graphics` registry
+libs) is a **working dogfood prototype of both halves of this design, in pure loft**:
+
+- **The client side IS the frame-boundary drain.** `projector.loft`'s main loop:
+  `while gl_poll_events() { while (msg = ws.try_recv()) != null { apply_frame(...) } …
+  cam_step … lazy VBO rebuild on world.version change … render }` — a non-blocking
+  drain-to-empty, mutations into world state, version-keyed incremental rebuild
+  (dirty render-groups only), then draw. Exactly Part 2's loop contract, minus the
+  budgets.
+- **The server side is the event-callback shape.** `server.loft` holds the world and
+  runs `srv.run(fn(ev) { … broadcast(delta) … })` over `lib/server`'s
+  `<msg_id>:<payload>` text framing — purely event-driven (no frame loop), broadcasts
+  every change, replays state to new connections; `lib/server` absorbs disconnects and
+  malformed frames (the no-runtime-halt preference, in practice).
+- **The long-load problem is solved by EVENT-DECOMPOSITION instead of chunking:** the
+  "snapshot" (the demo's only bulk transfer) is replayed as many small idempotent
+  delta events, with a capped re-request watchdog (retry while the world stays empty).
+  That is a third wire shape Part 2 should name: when a load *can* be decomposed into
+  idempotent events, no bulk path is needed at all — reassembly, budgets, and
+  completion-events collapse into ordinary event handling + a re-request for loss.
+- **Resilience patterns worth keeping:** `lib/web`'s auto-reconnecting `ws_handler`;
+  the snapshot watchdog (re-request, capped attempts).
+
+**The deltas this design still adds over the demo:** (1) the demo's drain is
+**count-unbounded** — a many-thousand-delta replay lands in one frame (a visible
+hitch); Part 2's byte/time budget is the fix. (2) No true bulk path exists — fine for
+hex deltas, not for assets/wasm modules that cannot be event-decomposed; that's where
+the chunked/store-accumulation shape earns its place. (3) No store-resident
+accumulation (nothing needed it yet). The demo therefore validates the loop contract
+and the event-server shape, and sharpens Part 2's wire options to **three**:
+two-channel, chunked-frames, or **decompose-into-idempotent-events** (preferred
+whenever the data model allows it — it is what the demo proves).
