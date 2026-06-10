@@ -438,6 +438,156 @@ impl State {
         self.iter_frame_variables_at(data, fn_d_nr, frame_base, self.code_pos)
     }
 
+    /// `LOFT_UAF` use-after-free detector — called by the dispatch loop after
+    /// any op that freed store slots (`Stores::uaf_freed_this_op`).  A frame
+    /// variable is a VICTIM when it (a) still holds a `DbRef` into a just-freed
+    /// slot, (b) was already initialised, and (c) has a FUTURE READ — an
+    /// `OpVarRef`/`OpVarVector` load of its own slot, later in its function,
+    /// not consumed by an `OpFreeRef`-family op.  (c) is what separates a real
+    /// premature free from the benign "stale bytes linger until the cleanup
+    /// free" pattern that made the reuse-time v1 false-positive.
+    ///
+    /// # Panics
+    /// On an OUTER-frame victim — the detector's whole point: the panic lands
+    /// AT the offending free, naming the victim and the future read it would
+    /// corrupt.  (Same-frame victims only warn: their "future read" may sit on
+    /// a branch this activation never reaches.)
+    pub fn uaf_scan_freed(&mut self, data: &Data) {
+        let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
+        // Opcode bytes for the load + free families.  All are < 255 (single
+        // byte); bail quietly if that ever changes rather than misdecode.
+        let op_of = |name: &str| -> u16 {
+            let d = data.def_nr(name);
+            if d == u32::MAX {
+                u16::MAX
+            } else {
+                data.def(d).op_code
+            }
+        };
+        let load_ops = [op_of("OpVarRef"), op_of("OpVarVector")];
+        let free_ops = [
+            op_of("OpFreeRef"),
+            op_of("OpFreeRefIfDistinct"),
+            op_of("OpFreeRefTag"),
+        ];
+        if load_ops.iter().chain(free_ops.iter()).any(|&o| o >= 255) {
+            return;
+        }
+        let n = self.call_stack.len();
+        let frames: Vec<(u32, u32, u32, bool)> = (0..n)
+            .map(|idx| {
+                let f = &self.call_stack[idx];
+                let cp = if idx + 1 == n {
+                    self.code_pos
+                } else {
+                    self.call_stack[idx + 1].call_pos
+                };
+                (f.d_nr, f.args_base, cp, idx + 1 == n)
+            })
+            .collect();
+        for (d_nr, args_base, frame_pos, is_top) in frames {
+            if d_nr == u32::MAX || d_nr >= data.definitions() {
+                continue;
+            }
+            let def = data.def(d_nr);
+            let fn_start = def.code_position;
+            let fn_end = def.code_position + def.code_length;
+            for fv in self.iter_frame_variables_at(data, d_nr, args_base, frame_pos) {
+                let r = match fv.value {
+                    VariableValue::Reference(r) | VariableValue::Vector(r) => r,
+                    _ => continue,
+                };
+                if !freed.contains(&r.store_nr) {
+                    continue;
+                }
+                // Not yet initialised at this position → slot bytes are garbage.
+                if fv.bc_first == u32::MAX || fv.bc_first > frame_pos {
+                    continue;
+                }
+                for (&bc, &v) in &self.vars {
+                    if v != fv.var_nr || bc <= frame_pos || bc < fn_start || bc >= fn_end {
+                        continue;
+                    }
+                    if !self.uaf_is_read(bc, fv.slot, load_ops, free_ops) {
+                        continue;
+                    }
+                    let line = self
+                        .line_numbers
+                        .get(&bc)
+                        .map_or(String::new(), |l| format!(" (line {l})"));
+                    let free_fn = self.call_stack.last().map_or_else(
+                        || "<none>".to_string(),
+                        |f| {
+                            if f.d_nr == u32::MAX || f.d_nr >= data.definitions() {
+                                "<synthetic>".to_string()
+                            } else {
+                                data.def(f.d_nr).original_name().clone()
+                            }
+                        },
+                    );
+                    let msg = format!(
+                        "use-after-free (LOFT_UAF): store slot #{} freed at pc={} in fn \
+                         `{free_fn}` while variable '{}' (type {}) in fn `{}` still READS it \
+                         at pc={bc}{line} — premature free",
+                        r.store_nr,
+                        self.code_pos,
+                        fv.name,
+                        fv.typedef.name(data),
+                        def.original_name(),
+                    );
+                    // A SAME-frame victim's "future read" may sit on a branch
+                    // this activation never reaches (e.g. the free belongs to
+                    // an early-`return` path and the read to the normal tail),
+                    // which a bytecode-order scan cannot distinguish — warn
+                    // only.  An OUTER-frame victim is immune to the callee's
+                    // control flow: its later reads stay reachable, so a freed
+                    // store there is a genuine premature free — panic.
+                    if is_top {
+                        eprintln!(
+                            "[uaf-warn] {msg} (same-frame: possibly an unreachable-branch read)"
+                        );
+                        break;
+                    }
+                    panic!("{msg}");
+                }
+            }
+        }
+    }
+
+    /// Classify the `State.vars` entry at `bc` for a variable in slot `slot`:
+    /// `true` only for a genuine READ — a `OpVarRef`/`OpVarVector` load of
+    /// exactly this slot whose consuming op (after any further consecutive
+    /// ref loads) is NOT an `OpFreeRef`-family op.  Entries that are write
+    /// sites (`generate_set` keys the RHS's first op) or loads of a different
+    /// variable's slot return `false`.
+    fn uaf_is_read(&self, bc: u32, slot: u16, load_ops: [u16; 2], free_ops: [u16; 3]) -> bool {
+        let code = &self.bytecode;
+        let at = |p: u32| -> Option<u16> { code.get(p as usize).map(|&b| u16::from(b)) };
+        let Some(op) = at(bc) else { return false };
+        if !load_ops.contains(&op) {
+            return false;
+        }
+        let operand = match (code.get(bc as usize + 1), code.get(bc as usize + 2)) {
+            (Some(&lo), Some(&hi)) => u16::from_le_bytes([lo, hi]),
+            _ => return false,
+        };
+        if operand != slot {
+            return false;
+        }
+        // Walk past any further consecutive ref loads (e.g. the witness load
+        // of `OpFreeRefIfDistinct(placeholder, witness)`); the first other op
+        // decides: free family → not a read.
+        let mut p = bc + 3;
+        loop {
+            let Some(op) = at(p) else { return true };
+            if load_ops.contains(&op) {
+                p += 3;
+                continue;
+            }
+            return !free_ops.contains(&op);
+        }
+    }
+
     /// Like [`iter_frame_variables`] but for a specific frame, identified by
     /// its `d_nr`, `args_base`, and the bytecode position to evaluate liveness
     /// against.  Used by stack-trace introspection to walk every frame in the

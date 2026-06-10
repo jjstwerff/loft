@@ -3493,6 +3493,7 @@ impl State {
         #[cfg(debug_assertions)]
         let mut trail_head: usize = 0;
         let bytecode_len = self.bytecode.len() as u32;
+        let uaf_on = crate::keys::uaf_check_enabled();
         while self.code_pos < bytecode_len {
             let op_pos_rt = self.code_pos;
             // @PLN16 debugger — at a registered breakpoint, capture the frame (and
@@ -3523,6 +3524,11 @@ impl State {
                 OPERATORS[255 + ext as usize](self);
             } else {
                 OPERATORS[op as usize](self);
+            }
+            // LOFT_UAF: the op freed store slots — scan live frame variables
+            // for one that still reads a freed slot (premature free).
+            if uaf_on && !self.database.uaf_freed_this_op.is_empty() {
+                self.uaf_scan_freed(data);
             }
             // @PLAN53 cluster 2 / S4 — alignment invariant guard.  In aligned
             // mode the entry base is 8 and every push/pop/reserve advances by a
