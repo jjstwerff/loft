@@ -51,16 +51,16 @@ use std::process::Command;
 /// `prefix:`, `file:`, `incoming:`, `all`, `help`, excerpt
 /// flags) stay in the bash script until a consumer asks.
 fn idx_command(args: &[&str]) -> Command {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "run",
-        "--bin",
-        "loft",
-        "--release",
-        "--quiet",
-        "--",
-        "tools/indexer/src/idx.loft",
-    ]);
+    // `env!("CARGO_BIN_EXE_loft")`: the loft binary cargo already built for
+    // this test run.  Do NOT shell out to `cargo run` here: a nested cargo
+    // invocation resolves the NON-test feature universe against the live
+    // `target/release`, marking shared dependency rlibs dirty and rewriting
+    // them while sibling nextest processes are linking against them — the
+    // "cannot open libring-….rlib" / "crate `rustls` required to be
+    // available in rlib format" cdylib-build flakes (#307; also the
+    // nondeterministic half of #304).
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("tools/indexer/src/idx.loft");
     for a in args {
         cmd.arg(a);
     }

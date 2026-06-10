@@ -803,6 +803,30 @@ pub fn build_shared_cdylib(
         args.push("--extern".to_string());
         args.push(format!("{name}={}", path.display()));
     }
+    // The emitted program declares `extern crate <pkg>` for each native package
+    // its reachable code calls (filtered in `emit_file_header`, #307) — supply
+    // the matching rlib + its deps dir.  A missing rlib is skipped: the compile
+    // then fails and the caller falls back to interpreting.  Note: TWO such
+    // packages in one cdylib cannot link (duplicate `loft_register_v1`); that
+    // shape fails here and interprets, by design.
+    for (crate_name, pkg_dir) in &data.native_packages {
+        let pkg_stem = crate_name.replace('-', "_");
+        let rlib_path = crate::extensions::native_target_root(std::path::Path::new(pkg_dir))
+            .join("release")
+            .join(format!("lib{pkg_stem}.rlib"));
+        if !rlib_path.exists() {
+            continue;
+        }
+        args.push("--extern".to_string());
+        args.push(format!("{pkg_stem}={}", rlib_path.display()));
+        // `dependency=` scope: the package crate's transitive deps (loft-ffi
+        // etc.) resolve only as indirect deps, never shadowing direct externs.
+        let pkg_deps = rlib_path.parent().map(|p| p.join("deps"));
+        if let Some(pkg_deps) = pkg_deps.filter(|p| p.is_dir()) {
+            args.push("-L".to_string());
+            args.push(format!("dependency={}", pkg_deps.display()));
+        }
+    }
     // Windows MSVC: add the build-script `-L` dirs holding native import libs
     // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.
     for dir in native_lib_search_dirs(&rlib) {

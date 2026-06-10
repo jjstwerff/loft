@@ -905,6 +905,93 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// #307 — BODY-BEARING **text-returning** library fns through the auto-native
+/// path.  Unlike the no-body `#native`-decl tests above, a body-bearing def
+/// carries `text_return` work-buffer attributes (`RefVar(Text)`), and its call
+/// sites push a DbRef per buffer plus typed null sentinels for omitted
+/// (defaulted) arguments.  Three protocol seams broke at once:
+///   - `compute_sig` rejected the `RefVar(Text)` attr → the bridge never wired
+///     → "native function not loaded" stub panic at the first call;
+///   - `gen_cdylib_text_dest_call` pushed 0 bytes per `null` arg while popping
+///     the full parameter size → frame desync ("Incorrect var ..." panic);
+///   - the bridge wrapper substituted a local `String` for the caller's work
+///     buffer → every NON-dest call shape (the call nested inside a larger
+///     expression) lost its result text.
+///
+/// One source, three call shapes — assignment (dest-mode), nested-in-concat
+/// (non-dest), and defaulted-null arguments.
+#[test]
+fn auto_native_text_return_shapes() {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if loft::native_lib::find_loft_rlib().is_none()
+        || Command::new("rustc").arg("--version").output().is_err()
+    {
+        return;
+    }
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n3_text_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        "pub fn greet(a: text, b: text, c: text) -> text { a + \":\" + b + \":\" + c }",
+        "mylib",
+        false,
+    );
+    p.parse_str(
+        "fn main() {\n\
+         \x20   r = greet(\"x\", \"y\", \"z\");\n\
+         \x20   assert(r == \"x:y:z\", \"assignment (dest-mode) shape, got {r}\");\n\
+         \x20   d = greet(\"x\");\n\
+         \x20   assert(d == \"x::\", \"defaulted-null args, got {d}\");\n\
+         \x20   n = \"[\" + greet(\"a\", \"b\", \"c\") + \"]\";\n\
+         \x20   assert(n == \"[a:b:c]\", \"nested (non-dest) shape, got {n}\");\n\
+         }",
+        "test",
+        false,
+    );
+    let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
+    scopes::check(&mut p.data);
+
+    let greet_nr = p.data.def_nr("n_greet");
+    let candidates: std::collections::HashSet<u32> = std::iter::once(greet_nr).collect();
+    let export = loft::native_lib::mark_native_exports(&mut p.data, &candidates);
+    assert!(export.contains(&greet_nr), "greet should be auto-marked");
+
+    let mut state = State::new(p.database);
+    // Pre-#307 this byte_code call panicked ("Incorrect var ...") on the
+    // defaulted-null call's frame accounting.
+    byte_code(&mut state, &mut p.data);
+
+    let so = loft::native_lib::build_shared_cdylib(
+        &p.data,
+        &state.database,
+        &export,
+        &tmp,
+        "loft_n3_text",
+    )
+    .expect("build_shared_cdylib");
+    extensions::load_all(&mut state, vec![so.to_string_lossy().into_owned()]);
+    extensions::wire_shared_native_fns(&mut state, &p.data);
+    // Pre-#307 the wiring skipped `greet` (RefVar attr rejected) and this call
+    // hit the "native function not loaded" stub.
+    state.execute_argv("main", &p.data, &[]);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// @PLN11 F3 — does a **default-native-MARKED, BODY-BEARING** library function
 /// actually dispatch to its compiled cdylib bridge at runtime, or interpret its own
 /// loft body (correct output either way — the no-speedup mechanism)?

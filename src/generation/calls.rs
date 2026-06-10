@@ -130,6 +130,19 @@ impl Output<'_> {
                     // it so the callee gets the &mut DbRef it expects.
                     write!(w, "&mut var_{name}")?;
                 }
+            } else if matches!(v.unspan(), Value::Null)
+                && idx < def_fn.attributes().len()
+                && !matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _))
+            {
+                // #307 — a `Value::Null` argument (a parser-filled default for
+                // an omitted parameter, or an explicit `null`) renders as `()`
+                // through `output_code_inner`, which rustc rejects at any typed
+                // parameter (E0308: expected `&str`, found `()` on
+                // `render("a", "b")`).  Emit the parameter-typed null sentinel
+                // instead — the same repair the interpreter call paths apply
+                // via `emit_typed_null`.  Fn-ref params keep the generic path
+                // (their two-part (d_nr, closure) form is handled below).
+                Self::write_typed_null(w, &def_fn.attributes()[idx].typedef)?;
             } else {
                 // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
                 let param_is_fnref = idx < def_fn.attributes().len()

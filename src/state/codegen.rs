@@ -2312,9 +2312,7 @@ impl State {
             .iter()
             .map(|a| a.typedef.clone())
             .collect();
-        for arg_val in &inner_args {
-            self.generate(arg_val, stack, false);
-        }
+        self.gen_dest_call_args(stack, &inner_args, &inner_attrs);
         let dep_offset = stack.var_pos(dest_var);
         self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
@@ -3379,6 +3377,29 @@ impl State {
         self.code_add(var_pos);
     }
 
+    /// Generate the argument pushes for a destination-passing native call
+    /// (`gen_text_dest_call` / `gen_cdylib_text_dest_call`).
+    ///
+    /// A `Value::Null` argument (explicit, or a parser-filled default for an
+    /// omitted parameter) generates 0 bytes on its own, while the callers' pop
+    /// accounting — and the runtime bridge dispatcher — consume the full
+    /// parameter size, desyncing the frame (#307: the `render("a", "b")`
+    /// two-defaulted-args slot panic).  Emit the typed null sentinel so every
+    /// argument occupies exactly `size(attr_type)` (mirrors the same repair in
+    /// `generate_call`'s mutable-arg loop).
+    fn gen_dest_call_args(&mut self, stack: &mut Stack, args: &[Value], attr_types: &[Type]) {
+        for (a_nr, arg_val) in args.iter().enumerate() {
+            let stack_before = stack.position;
+            self.generate(arg_val, stack, false);
+            if matches!(arg_val.unspan(), Value::Null)
+                && stack.position == stack_before
+                && let Some(tp) = attr_types.get(a_nr)
+            {
+                self.emit_typed_null(stack, tp);
+            }
+        }
+    }
+
     /// Emit a destination-passing call for a text-returning native function.
     ///
     /// Instead of: evaluate call → Str on stack → OpAppendText(var)
@@ -3398,9 +3419,7 @@ impl State {
             .iter()
             .map(|a| a.typedef.clone())
             .collect();
-        for arg_val in args {
-            self.generate(arg_val, stack, false);
-        }
+        self.gen_dest_call_args(stack, args, &attr_types);
         // The destination DbRef the `_dest` native writes into.  For a plain
         // `Text` var that is the create-stack address of the var's String slot.
         // @PLN10 — for a `RefVar(Text)` var (a `&mut String` work buffer, e.g. a
@@ -3456,9 +3475,7 @@ impl State {
             .iter()
             .map(|a| a.typedef.clone())
             .collect();
-        for arg_val in args {
-            self.generate(arg_val, stack, false);
-        }
+        self.gen_dest_call_args(stack, args, &attr_types);
         // Push the destination DbRef (top) — the raw RefVar DbRef for a promoted
         // return buffer, else the create-stack address of the plain text slot
         // (same dest forms as `gen_text_dest_call`).
