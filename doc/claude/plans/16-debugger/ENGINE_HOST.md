@@ -20,6 +20,54 @@ the other. Two evaluations, recorded 2026-06-10.
 
 ---
 
+## The host-boundary principle — rich without recompiling (the keystone)
+
+The governing question for the whole note: **can a Rust main loop carry this richness
+(tick simulation, interest management, traffic classes, interpolation, forecasting)
+without recompiling the host every time a feature is added?** Yes — and the existence
+proof is already in-house: **@PLAN50 built ALL of its richness without touching a line
+of Rust.** Sight-range filtering, edge-triggered EXIT, seq numbers, the 30 Hz tick
+body, Hermite interpolation, bounce forecasting — every one landed as loft code over
+`lib/server`'s `poll_event()` pump; the pump's native half never changed.
+
+**The principle: the Rust kernel owns MECHANICS; loft owns MEANING.** The kernel is
+semantics-free:
+
+- the frame cycle (timing, drift-free ticks, idle backoff),
+- the socket pumps (accept / read / write, framing, reconnect),
+- the queue machinery (event queues, conflation slots, budget-bounded bulk
+  accumulation into store regions),
+- the store + the N9 dispatch table (calling loft fns — interpreted, wasm, or native),
+- the window / GL context.
+
+Its entire contract: *"each tick I hand you drained, classified inputs and call your
+loft tick/handler functions over the shared store."* Every **feature** — what an event
+means, which records a pose updates, who sees whom, how a chunk publishes, what the
+tick simulates — is a loft function: tier 0 instantly on edit, tier 1 wasm when the
+background build lands. **rustc never enters the iteration loop.**
+
+**The one design move that makes it stick: wire-schema-as-data.** The trap that would
+force host recompiles is classification in Rust (`match msg_id { 4 => pose… }`).
+Instead the loft program **registers** its traffic at startup — "msg 4 = state-sync
+keyed by cid, conflate; msg 9 = bulk, accumulate to store; msg 1–3 = events" — and
+the kernel's drain rules are driven by that table. This is loft's own "schema is data"
+principle (`Stores.types`) extended to the wire: a new message kind is a registration
+line in loft, not a host change.
+
+**The honest residual — what still recompiles, and why that's fine.** Three things
+genuinely need Rust: a new **traffic-class kind** (a fourth drain rule — rare,
+kernel-level), a new **transport** (QUIC/UDP), a new **platform capability** (GL
+feature, audio). Those are exactly C71's *library* tier — they arrive as dlopen'd
+native libraries from the registry, not as edits to the host binary. The kernel's
+recompile cadence becomes engine-release cadence, not feature cadence. The discipline
+that keeps it true: when a feature seems to need kernel code, ask *"mechanics or
+meaning?"* — meaning goes to loft, new mechanics go to a library, and only a genuinely
+new queue/loop primitive touches the kernel. (@PLAN50's open ~12 Hz pump finding is
+the boundary working as intended: a **mechanics** fix, made once in `lib/server`'s
+native half, inherited by every loft program on top.)
+
+---
+
 ## Part 1 — tiered execution: interpret now, WASM-swap soon, native baseline
 
 > **Canonical home:** this tier model is already specified in
