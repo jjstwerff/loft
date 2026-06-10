@@ -100,6 +100,18 @@ only spreads the joysticks and screens around the room:
     invalidation rate is what bounds how often a correction flickers). This is
     loft-side *meaning* over the kernel — it needs the event class + timestamps, not
     the parked snapshot ring — so it rides phases 01/05a, not 06.
+  - **Cheating for feel is sanctioned** (the user's call, 2026-06-10): the game may
+    deliberately bend truth where it makes play *feel* better — and the same-machine
+    model makes this **fair by construction** (one authority → everyone sees the same
+    bend; no per-client divergence, unlike internet-netcode trickery). The deepest
+    form rides the forecast keystone: **promise-keeping physics** — once a forecast
+    is broadcast, the server *prefers making it true* (nudging the sim within a
+    tolerance) over issuing a correction; truth follows presentation. Corrections are
+    reserved for genuine invalidation (a real input change), so correction flicker —
+    the worst feel-killer — approaches zero. The same license covers the classic
+    arcade feel-cheats at meaning level: input backdating (eat latency in the sim),
+    favor-the-player collision tolerances, input buffering / coyote time. All loft
+    *meaning*; the kernel never knows the game is lying.
 - **Two participation tiers — and the phone is the on-ramp, not the end goal.** The
   **full arcade seat** is a *native client*: a real screen, real input (gamepad /
   keyboard / cabinet stick), full rendering — that is what the experience is designed
