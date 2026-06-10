@@ -1681,8 +1681,8 @@ impl Scopes {
                 // escaping AND in-frame captures (in-frame: the fn-ref's
                 // own scope-exit free triggers the cascade).  Mirrored by
                 // the captured-Reference exemption in `check_ref_leaks`.
-                let captured_ref = function.is_captured(v)
-                    && matches!(function.tp(v), Type::Reference(_, _));
+                let captured_ref =
+                    function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
                 let emit =
                     (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_ref;
                 if scope_debug && !emit {
