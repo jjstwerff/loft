@@ -41,21 +41,45 @@ as host recompiles.
 | 05-udp-frontend | The custom UDP pump frontend ([design](ENGINE_HOST.md#the-udp-pump-frontend--a-custom-layer-the-class-table-keeps-small-evaluated-2026-06-10) + [LAN notes](ENGINE_HOST.md#udp-on-a-normal-lan--whats-actually-needed-evaluated-2026-06-10)): one Gaffer-style reliable event channel, naked `seq` datagrams for state sync, bulk stays on TCP/WS; stateless-cookie handshake, keepalive-as-radio-wake, ≤1200 B datagrams, LAN discovery beacon. Phones stay `wss`; native peers ride UDP in the same world | ⏸ parked — **trigger:** an arcade consumer whose feel outgrows `wss` on the venue LAN (input→display latency budget missed with conflation + interpolation in place), measured by the phase-00 harness + a loss% axis, not assumed | |
 | 06-snapshot-ring | The store **snapshot / restore / diff** primitive with a short tick-history ring — the ONE mechanics piece behind prediction, lag-compensation rewind, rollback, and delta-compressed snapshots (all loft *meaning* over it; embryos exist: the @PLN16 M2 undo journal, the store journal, record-refs #15) | ⏸ parked — **trigger:** an arcade consumer needs client prediction / hit-rewind (the bumper-planes forecast tests are the likely first caller), or replay/delta encoding gets demanded by a shipped game | |
 
-## The goal this plan serves — arcade-style multiplayer
+## The goal this plan serves — arcade-style multiplayer (one machine, distributed)
+
+This goal is an instance of the project's purpose
+([GOALS § Purpose](../../GOALS.md) — **bringing fun to game developers and
+players**): for *players*, the arcade machine is the most fun-dense multiplayer form
+ever built — walk up, grab the stick, compete with the people in the room; for
+*developers*, the same-machine model is the most fun to BUILD on — one world, one
+tick, no netcode illusions to maintain, and the whole thing live-editable while
+friends are playing it (the @PLN16 IDE + this kernel). Every technical choice below
+serves that, not a latency spec.
 
 **Arcade-style multiplayer is a named goal of the engine** (the user's call,
-2026-06-10): bumper-planes-grade *feel* — N players on a LAN/venue network, fast
-shared-world action that responds within a frame or two, joinable from a phone in
-seconds. **Not** the esports-twitch tier (rollback-perfect netcode, sub-50 ms
-internet play) — arcade means the game feels immediate at venue/LAN scale.
+2026-06-10), and the model is precise: **a traditional LAN setup where people compete
+as if they were on the same arcade machine.** The server *is* the cabinet; the LAN
+only spreads the joysticks and screens around the room:
 
-Phases 00–04 build everything arcade multiplayer needs *except* the two parked
-pieces, and the parked pieces are deliberately **designed-but-not-built**: the
-coverage evaluation ([ENGINE_HOST § Coverage](ENGINE_HOST.md#coverage--is-this-rich-enough-for-most-multiplayer-games-evaluated-2026-06-10))
-shows nothing in phases 00–04 must be *undone* to add them — the class table already
-carries per-message delivery semantics (so the UDP frontend bolts on), and the store
-already holds the embryos of the snapshot ring. The discipline: the parked rows
-activate on a **consumer's measured need** (the dogfood loop), never speculatively.
+- **One authoritative world, one tick** — the server simulates THE game; every player
+  acts in the *same frame of the same world*. No client-side divergence: clients send
+  inputs and render authoritative state — extra joysticks + extra screens on one
+  machine (linked-cabinet style).
+- **Same-frame fairness for free at LAN latency.** Sub-millisecond RTT means
+  input → server tick → broadcast → render fits the arcade responsiveness budget
+  *without* prediction, rollback, reconciliation, or lag compensation — the
+  single-machine illusion holds because the network is effectively a long controller
+  cable. The thin-client model is not a limitation here; it **is** the goal.
+- **Walk-up join** — grab the stick: QR/instant join (the audience demo's proven
+  flow), drop-in/drop-out, no lobby ceremony.
+- **The shared spectacle** — the projector/big screen is the cabinet's screen
+  (exactly the audience-demo + bumper-planes shape); personal screens are controls
+  and auxiliary views.
+
+This is also why the parked phases stay parked: prediction/rollback machinery
+(06-snapshot-ring) exists to *fake* the single-machine illusion **over the
+internet** — the LAN/same-machine model deliberately avoids needing it. The dogfood
+consumers (@PLN6, @PLAN50) are already this model; phases 00–04 give it its kernel.
+The coverage evaluation ([ENGINE_HOST § Coverage](ENGINE_HOST.md#coverage--is-this-rich-enough-for-most-multiplayer-games-evaluated-2026-06-10))
+guarantees nothing must be *undone* if a consumer ever outgrows the LAN; the parked
+rows activate on a **consumer's measured need** (the dogfood loop), never
+speculatively.
 
 ## Design
 
