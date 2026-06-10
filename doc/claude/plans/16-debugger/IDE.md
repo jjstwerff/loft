@@ -240,10 +240,15 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
      `runTests {file}` → one `testResult {name, passed, line, message?}` per test + a
      `testSummary {passed, failed}`. (Batched into the reply, not yet live-streamed — true
      trickle needs a mid-`handle` flush, shared with slice 6.)
-   - **Pending — the UI** (a **Test** button + results panel + click-to-jump) and **`runSuite`**.
-     **`runSuite` must be the PACKAGE-aware runner** (`loft test` — reads `loft.toml`, resolves
-     deps), NOT "run every `.loft` in a dir" — and it is **blocked on the dependency-resolution
-     gap** in § Library vs project below.
+   - **UI LANDED (2026-06-10):** a **Test** button in the toolbar runs the file's tests
+     (saving a dirty buffer first), and a **Tests** panel (beside the REPL) lists each result
+     ✓/✗ with a `passed/total` summary; a **failing row is clickable → jumps to its line** in
+     the editor. Smoke-verified the served shell (`id="test"`/`tests`/`tlist`, `runTests`/
+     `addTestRow`/`finishTests`); the protocol is covered by
+     `serve_ws_run_tests_reports_pass_and_fail`.
+   - **Pending — `runSuite`.** It **must be the PACKAGE-aware runner** (`loft test` — reads
+     `loft.toml`, resolves deps), NOT "run every `.loft` in a dir" — and it is **blocked on the
+     dependency-resolution gap** in § Library vs project below.
 6. **The game loop (lavition) — `launchGame` + `reload` (hot-swap) + debug the running
    game.** **Game ▶** launches the program in a **native OpenGL window** (the `make game`
    host); editing a function + **Reload** hot-swaps just that function into the running

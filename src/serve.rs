@@ -375,6 +375,15 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #watches .wv { margin-left:auto; opacity:.85; } #watches .wrm { cursor:pointer; opacity:.5; }
   #vars .none, #watches .none { opacity:.45; }
   #waddin { flex:none; border:none; border-top:1px solid #8884; padding:6px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; }
+  #tests { flex:none; width:42%; border-right:1px solid #8884; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  #tests[hidden] { display:none; }
+  #tests .pane { flex:1; min-height:0; }
+  #tsum.ok { color:#2e7d32; } #tsum.bad { color:#e53935; }
+  #tlist .t { display:flex; gap:.6em; padding:2px 0; align-items:baseline; }
+  #tlist .t.clickable { cursor:pointer; } #tlist .t.clickable:hover { text-decoration:underline dotted; }
+  #tlist .t .ti { width:1em; flex:none; } #tlist .t.pass .ti { color:#2e7d32; } #tlist .t.fail .ti { color:#e53935; }
+  #tlist .t .tn { color:#1976d2; } #tlist .t .tm { opacity:.75; margin-left:auto; padding-left:1em; }
+  #tlist .none { opacity:.45; }
   #repl { flex:1; display:flex; flex-direction:column; min-height:0; }
   #replhead { padding:6px 12px; font-size:12px; opacity:.7; border-bottom:1px solid #8884; display:flex; gap:10px; align-items:center; text-transform:uppercase; letter-spacing:.05em; }
   #replctx { font-weight:600; padding:1px 8px; border-radius:9px; text-transform:none; letter-spacing:0; }
@@ -386,7 +395,7 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
 </style></head><body>
-<div id="bar"><button id="run">▶ Run</button><button id="save" disabled>Save</button><span id="dirty"></span>
+<div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="save" disabled>Save</button><span id="dirty"></span>
   <span id="steps"><button id="cont" disabled title="Continue (to next breakpoint)">⏵</button><button id="over" disabled title="Step over">↷</button><button id="into" disabled title="Step into">↓</button><button id="out" disabled title="Step out">↑</button></span>
   <span id="status">connecting…</span></div>
 <div id="main">
@@ -398,6 +407,9 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   <div id="dbg" hidden>
     <div class="pane"><h2>Variables · <span id="dbgfn"></span></h2><div id="vars" class="body"></div></div>
     <div class="pane"><h2>Watch</h2><div id="watches" class="body"></div><input id="waddin" spellcheck="false" placeholder="+ watch expression (Enter)"></div>
+  </div>
+  <div id="tests" hidden>
+    <div class="pane"><h2>Tests · <span id="tsum"></span></h2><div id="tlist" class="body"></div></div>
   </div>
   <div id="repl">
     <div id="replhead"><span>REPL</span><span id="replctx" class="top">top-level</span><span class="hint">Enter runs · Shift+Enter newline · Esc clears · ↑↓ history</span></div>
@@ -559,6 +571,28 @@ function onReplReply(m) {
   pending = null; histIdx = -1;
   const t = $("replin"); t.value = ""; autosize(t);
 }
+// ── test runner — Test button → runTests → testResult* → testSummary ──
+function runTests() {
+  if (!ws || ws.readyState !== 1) return;
+  if (isDirty()) persist();                      // save first so the tests run the buffer
+  $("tlist").innerHTML = ""; $("tsum").textContent = "running…"; $("tsum").className = "";
+  $("tests").hidden = false;
+  send("runTests", {file: FILE});
+}
+function addTestRow(m) {
+  const row = document.createElement("div"); row.className = "t " + (m.passed ? "pass" : "fail");
+  let html = '<span class="ti">' + (m.passed ? "✓" : "✗") + '</span><span class="tn">' + esc(m.name) + '</span>';
+  if (m.message) html += '<span class="tm">' + esc(m.message) + '</span>';
+  row.innerHTML = html;
+  if (!m.passed) { row.classList.add("clickable"); row.title = "jump to line " + m.line; row.onclick = () => gotoLine(m.line); }
+  $("tlist").appendChild(row);
+}
+function finishTests(m) {
+  const total = m.passed + m.failed;
+  if (!total) { $("tlist").innerHTML = '<div class="none">no tests in this file</div>'; }
+  $("tsum").textContent = m.failed === 0 ? (m.passed + "/" + total + " passed") : (m.failed + " of " + total + " failed");
+  $("tsum").className = m.failed === 0 ? "ok" : "bad";
+}
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/ws");
   ws.onopen = () => { $("status").textContent = "connected"; send("launch", {file: FILE}); send("compile", {file: FILE}); };
@@ -583,6 +617,8 @@ function connect() {
       setPaused(true, f);
     }
     else if (m.event === "terminated") { $("out").textContent += "\n— done —\n"; setPaused(false); }
+    else if (m.event === "testResult") addTestRow(m);
+    else if (m.event === "testSummary") finishTests(m);
     else if (m.context !== undefined) onReplReply(m);       // a replEval reply (only it carries context)
     else if (m.ok === false && m.error) $("out").textContent += "\n[error] " + m.error + "\n";
   };
@@ -595,6 +631,7 @@ $("run").onclick = () => {
   send("compile", {file: FILE});                  // refresh the compiler console
   runAfterLaunch = send("launch", {file: FILE});  // reload; run() fires only if this launch is ok
 };
+$("test").onclick = runTests;
 const ti = $("replin");
 ti.addEventListener("input", () => autosize(ti));
 ti.addEventListener("keydown", e => {
