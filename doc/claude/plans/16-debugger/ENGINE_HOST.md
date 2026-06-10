@@ -293,3 +293,31 @@ accumulation (nothing needed it yet). The demo therefore validates the loop cont
 and the event-server shape, and sharpens Part 2's wire options to **three**:
 two-channel, chunked-frames, or **decompose-into-idempotent-events** (preferred
 whenever the data model allows it — it is what the demo proves).
+
+---
+
+## One kernel, two roles — server and client share the implementation (evaluated 2026-06-10)
+
+Server and client are **the same kernel in two configurations**, not two implementations:
+
+| Kernel piece | Server | Client | Verdict |
+|---|---|---|---|
+| Frame cycle | timer-paced sim tick (30 Hz) + idle backoff | vsync-paced render + the same fixed sim tick | **shared** — cadence source is a parameter |
+| Socket pump | *listener* (accept N, broadcast) | *connector* (1 conn, auto-reconnect) | **shared core, two thin frontends** (today's `lib/server` + `lib/web`, unified) |
+| Queue machinery (3 classes, conflation, budgeted bulk → store) | identical | identical | **fully shared — must never fork** or the wire gains two interpretations |
+| Store + N9 dispatch (tiers) | live-patching the server needs it | live-editing the game needs it | **fully shared** |
+| Window / GL | — (headless) | the one client-only module | **feature-gated** (`--features window`), never forked; server builds stay GL-free |
+
+The asymmetries people expect to force a fork — authority, validation, prediction,
+interpolation — are all **meaning, not mechanics** (loft fns per the boundary
+principle), so they never touch the kernel. In-house evidence: `probe_server.loft`
+and `projector.loft` already run the same loop body, differing only in cadence
+source and the GL tail.
+
+Compounding payoffs: **loopback testing** (server + client kernels in one process
+over an in-memory channel — the whole protocol tested without sockets; also
+single-player for free), **the IDE host converges** (`--serve`'s hand-rolled WS loop
+becomes the listener-role kernel), and **no protocol drift** (one traffic-class
+implementation). Honest residual: the **browser** client (`--html`/wasm) is a
+genuinely different host — the frame-yield contract instead of owning the loop — so
+it shares the loft-side contract but not the kernel binary.
