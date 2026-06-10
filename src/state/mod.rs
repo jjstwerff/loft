@@ -3493,9 +3493,30 @@ impl State {
         let mut trail_op = [0u8; 16usize];
         #[cfg(debug_assertions)]
         let mut trail_head: usize = 0;
-        let bytecode_len = self.bytecode.len() as u32;
+        #[allow(unused_mut)]
+        let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
+        // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
+        // save can swap one fn's dispatch targets mid-run (append-only code, so
+        // the cached length refreshes after a swap).  One decrement + one
+        // predictable branch per op; only ever true under LOFT_LIVE_RELOAD=1.
+        const RELOAD_POLL_OPS: u32 = 32_768;
+        #[cfg(not(target_arch = "wasm32"))]
+        let reload_on = crate::live_reload::active();
+        #[cfg(target_arch = "wasm32")]
+        let reload_on = false;
+        let mut reload_tick: u32 = RELOAD_POLL_OPS;
         while self.code_pos < bytecode_len {
+            if reload_on {
+                reload_tick -= 1;
+                if reload_tick == 0 {
+                    reload_tick = RELOAD_POLL_OPS;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if crate::live_reload::poll(self) {
+                        bytecode_len = self.bytecode.len() as u32;
+                    }
+                }
+            }
             let op_pos_rt = self.code_pos;
             // @PLN16 debugger — at a registered breakpoint, capture the frame (and
             // in stepping mode, suspend: return to the driver with the frame in

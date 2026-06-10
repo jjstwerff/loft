@@ -5753,6 +5753,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             std::process::exit(1);
         }
     } else {
+        // @PLN18 phase 02 — tier-0 live reload (opt-in): watch the program
+        // file and hot-swap edited fns into the running State.
+        if std::env::var_os("LOFT_LIVE_RELOAD").is_some() {
+            loft::live_reload::install(&abs_file, "default", &p.lib_dirs, &p.data);
+        }
         state.execute_argv("main", &p.data, &user_args);
         // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
         // causing execute_argv to return. Resume until the program finishes.

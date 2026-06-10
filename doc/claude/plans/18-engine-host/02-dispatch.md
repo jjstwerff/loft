@@ -1,5 +1,25 @@
 # Phase 02 — tier 0: the per-function dispatch (N9 turned inward)
 
+> **Status (2026-06-10): the tier-0 core SHIPPED** — `LOFT_LIVE_RELOAD=1`
+> live-swaps a named fn of a RUNNING program.  What the build found: the
+> dispatch table already existed in two halves — `State::fn_positions[d_nr]`
+> (fn-ref calls re-resolve per call) and `State::calls` (the per-callee
+> call-site patch list; direct `OpCall` sites embed `to` at opcode+11) — so
+> reload = parse the edited fn under a versioned temp name in a parity-
+> checked SHADOW session (`src/live_reload.rs`; no redefinition machinery
+> at all), `def_code` the new body APPEND-ONLY at the stream end (the PC is
+> live — save/restore `code_pos`; refresh the execute loop's cached length),
+> then patch both halves.  Self-recursion names the original def, so it
+> lands on the new body through the same patch.  The poll is a counter-gated
+> check in the execute loop (~32k ops + 200 ms throttle; one predictable
+> branch per op when off).  Proven: `tests/engine_host_reload.rs` — clean
+> swap with world-state continuity, broken-edit → old body keeps serving,
+> fix-up re-swap, signature-change rejection.  REMAINING in 02: the
+> `--native`-baseline call-site indirection (compiled callers through the
+> table — today's consumers run interpreted, where the swap is the whole
+> story) and the 6b IDE wire-up (the IDE drives saves; the watcher already
+> reacts to them).
+
 **Goal.** Editing one function of a RUNNING kernel game takes effect at the
 next frame boundary, with ONLY that function dropping to the interpreter —
 everything else (libraries AND the rest of the game program) stays compiled.

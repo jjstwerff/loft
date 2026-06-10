@@ -1107,7 +1107,7 @@ struct BpMeta {
 
 /// A live REPL session: stdlib + the statements entered so far.
 pub struct ReplSession {
-    parser: Parser,
+    pub(crate) parser: Parser,
     /// The standard-library directory this session was built from, kept so the test runner
     /// can spin up a **fresh** parser (stdlib + the file under test) — the clean single-parse
     /// the CLI runner uses, which the persistent session's accumulated parser state can't
