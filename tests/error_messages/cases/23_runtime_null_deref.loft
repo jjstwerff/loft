@@ -1,6 +1,13 @@
-struct Node { value: integer, next: reference<Node> }
+// Null deref through a hash miss: loft's contract is warn-and-continue —
+// a null field READ renders "null", never a halt (GOALS § F sibling;
+// feedback: recoverable faults log + continue).  This baseline pins that.
+// (Historic: this case used `reference<Node>`, which the value-cycle
+// checker wrongly rejected — and whose field layout is unfinished; see
+// the reference-field layout issue.)
+struct Player { pk: integer not null, color: integer not null }
+struct World { players: hash<Player[pk]> }
 fn main() {
-  n = Node { value: 1, next: null };
-  m = n.next;
-  print("{m.value}");
+  w = World { players: [] };
+  p = w.players[5];
+  print("{p.color}");
 }
