@@ -40,6 +40,13 @@ Loft surface (`lib/engine_host`): `udp_cookie(cid)`, `udp_bound(cid)`,
 `sync_payload()`.  `run()` is unchanged — sync drains inside the user's
 `on_tick`, which is what makes late-latch automatic.
 
+**The transport-selection contract (user-confirmed 2026-06-10): automatic per
+client.**  A native client hellos (it can speak UDP) and `sync_send` rides
+datagrams; a web page cannot send UDP, never binds, and the very same call
+stays WS — meaning-code never branches on transport.  The phase-04 connector
+kernel auto-performs the hello, so for native seats the selection is automatic
+end-to-end with zero client code either.
+
 ## Acceptance
 
 `tests/engine_host_udp.rs` (end-to-end, real sockets): cookie over WS →
@@ -76,9 +83,11 @@ the @PLAN50 probe targets with a loss% axis).
 
 ## Deferred (with triggers)
 
-- **Bulk over UDP** (one-to-many asset push, NACK-based chunks) — see the
-  README § Phases note; trigger: a consumer that pushes big payloads to many
-  seats (level/world push).  Until then bulk wants TCP behaviour and has it.
+- **Bulk over UDP** — promoted to its own parked phase row, **05c-udp-bulk**
+  (README § Phases; user-directed 2026-06-10): the one-to-many seat push
+  (broadcast/multicast + NACK chunks) is the case TCP structurally can't
+  match; single-receiver bulk stays on WS by design.  Trigger: a consumer
+  that pushes big payloads to many seats.
 - **Client-side kernel (connector role)** — phase 04; until then native
   clients hand-roll the trio (hello, keepalive, S-frames; the e2e test shows
   the ~30 lines needed).
