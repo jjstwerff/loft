@@ -354,3 +354,32 @@ a determinism discipline, made load-bearing by the tier swap, but lockstep stays
 non-first-class), host migration, NAT traversal/relays (a relay is a forwarding
 listener-role kernel), TLS, matchmaking (meaning-level, nothing new). **The test that
 matters: nothing in the design must be *undone* to add any of these.**
+
+---
+
+## The UDP pump frontend — a custom layer the class table keeps small (evaluated 2026-06-10)
+
+A custom UDP layer slots in as a **pump frontend** (mechanics, library tier), and the
+wire-schema-as-data table does the classically hard part — per-message guarantees are
+already declared per `msg_id`, so the UDP layer reads the SAME table the drain rules
+read:
+
+| Class | Delivery over UDP | Custom work |
+|---|---|---|
+| Events | reliable + ordered | the one real piece: seq + ack-bitfield + retransmit (Gaffer-style channel, ~hundreds of lines) |
+| State sync | raw datagrams, `seq`-stamped | **nothing** — conflation already tolerates loss/reorder; never retransmit a stale pose |
+| Long loads | stay on the TCP/WS channel | nothing (the two-channel shape; bulk *wants* TCP behaviour) |
+
+Remaining mechanics: stateless-cookie handshake (spoofing), keepalive/timeout, MTU
+fragmentation for oversized events, sender pacing (token bucket — the receive budget
+is the other half), DTLS / `crypto`-lib encryption.
+
+Consequences: **(1) heterogeneous transports per client, one server** — the pump core
+feeds the same class queues from any frontend, so browser phones stay on `wss` while
+native clients ride UDP in the same world (WebTransport / WebRTC datachannels are the
+eventual browser-side unreliable frontend); **(2) no async runtime** — a nonblocking
+`UdpSocket` polled by the pump thread fits the no-tokio stance; hand-rolled stays
+small and auditable, `quinn`/QUIC is the heavier fallback if congestion control
+outgrows a token bucket; **(3) deterministic netcode tests** — the in-process
+loopback channel gains loss/reorder/duplicate injection, so the reliability layer is
+tested without a network, and @PLAN50's probe targets extend with a loss% axis.
