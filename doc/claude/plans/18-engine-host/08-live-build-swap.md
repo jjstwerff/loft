@@ -9,6 +9,11 @@ in the background and **swaps to the new build without stopping anything**.
 The same loop holds for wasm: **the browser loads the new binary via
 websockets and swaps to it.**
 
+**This is the heart of the engine** (user, 2026-06-10: *"if we can do this
+on both the native and the wasm build we are golden"*).  Every other piece
+of the stack — the store, the dispatch table, the wire classes, the
+debugger, the host layers — is judged by whether it serves this loop.
+
 **The invariant.** *The build is replaceable; the state (the store) and the
 connections (the host layer) persist.*  Everything below is that one
 sentence, applied per host:

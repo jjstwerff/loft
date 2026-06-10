@@ -139,6 +139,12 @@ so future migration work treats it as first-class.
 
 ### Execution granularity — per-function interpret over a compiled baseline
 
+> **The heart of the engine** (2026-06-10): this model's full form — the
+> live build swap on BOTH hosts (native process cutover / browser module
+> swap in the living page, one invariant: *the build is replaceable; the
+> state and the connections persist*) — is designed with its test catalog
+> in [plans/18-engine-host/08-live-build-swap.md](plans/18-engine-host/08-live-build-swap.md).
+
 The editor does **not** interpret the whole program and compile it later.  The
 baseline is **everything compiled / optimized** — the libraries (graphics,
 physics, world: the *heavy* code) as native / wasm cdylibs, and most game logic
