@@ -2529,6 +2529,7 @@ impl Data {
         self.referenced.contains_key(&d_nr)
     }
 
+
     pub fn set_referenced(&mut self, d_nr: u32, t_nr: u32, change: Value) {
         if d_nr != u32::MAX {
             self.referenced.insert(d_nr, (t_nr, change));
