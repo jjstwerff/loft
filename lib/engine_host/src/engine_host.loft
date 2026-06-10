@@ -70,19 +70,24 @@ pub fn clients() -> integer;
 // that don't aid them; the server takes the fastest path available,
 // automatically).  The handshake cookie rides the WS 101 upgrade response as
 // an `X-Loft-UDP` header; a native client's kernel reads it and hellos
-// (`H:<cookie>` → `A:<cid>`), after which `sync_send` rides UDP for that
-// client.  Web pages cannot send UDP, never hello, and the same call keeps
+// (`H:<cookie>` → `A:<cid>`).  The developer declares per message KIND, not
+// per call: `sync_class(msg_id)` marks a kind as latest-value state, and the
+// ordinary `send`/`broadcast` then ride UDP for that kind whenever the client
+// can.  Web pages cannot send UDP, never hello, and the same calls keep
 // sending WS frames — meaning-code never branches on transport.
 
 // Does this client currently have a live UDP path?
 pub fn udp_bound(cid: integer) -> boolean;
 #native "n_kernel_udp_bound"
 
-// Send a latest-value state frame: a seq-stamped datagram when the client's
-// UDP path is bound, else a plain WS frame.  False = dropped (no such client,
-// dead socket, or an oversized datagram — state frames must stay ≤ ~1200 B).
-pub fn sync_send(cid: integer, msg: text) -> boolean;
-#native "n_kernel_sync_send"
+// Declare a msg_id as latest-value state in the wire-schema table — data,
+// not a per-call API.  `send`/`broadcast` then route messages of that kind to
+// the sync channel automatically (datagram when the client can, WS frame when
+// it can't), and inbound datagrams of that kind conflate to newest.  Declare
+// once at startup; everything else is ordinary `send`.  Undeclared kinds are
+// events: must-deliver, in order, on WS — the safe default.
+pub fn sync_class(msg_id: integer);
+#native "n_kernel_sync_class"
 
 // Drain the inbound conflation slots: each call loads the NEWEST unread state
 // from one client (stale/reordered datagrams were already discarded by the

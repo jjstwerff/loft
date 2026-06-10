@@ -71,9 +71,12 @@ struct UdpPath {
     out_seq: i64,
 }
 
-/// One inbound conflation slot: the newest `S:` datagram from this client.
-/// Latest-value semantics — a higher seq overwrites, a stale seq is dropped.
+/// One inbound conflation slot: the newest `S:` datagram from this client for
+/// one `msg_id`.  Latest-value semantics — a higher seq overwrites, a stale
+/// seq is dropped.
 struct SyncSlot {
+    /// The `msg_id` parsed from the datagram's payload (`-1` = unframed).
+    msg_id: i64,
     seq: i64,
     payload: String,
     dirty: bool,
@@ -85,7 +88,9 @@ struct ClientNet {
     /// The UDP handshake cookie for this WS session ("" = no UDP listener).
     cookie: String,
     path: Option<UdpPath>,
-    slot: SyncSlot,
+    /// Conflation slots, one per `msg_id` this client has sent (newest per
+    /// sender PER MESSAGE KIND — two sync kinds never collapse each other).
+    slots: Vec<SyncSlot>,
 }
 
 impl ClientNet {
@@ -93,13 +98,32 @@ impl ClientNet {
         ClientNet {
             cookie,
             path: None,
-            slot: SyncSlot {
-                seq: -1,
-                payload: String::new(),
-                dirty: false,
-            },
+            slots: Vec::new(),
         }
     }
+}
+
+// The wire-schema-as-data table, minimal form (user-directed 2026-06-10):
+// the set of `msg_id`s whose messages are **latest-value state** (the sync
+// class — conflate, ride UDP when the client can).  Everything else is the
+// event class (must-deliver, rides WS).  Declared by the loft side via
+// `sync_class(msg_id)` — data, not per-call API choice; `send`/`broadcast`
+// route by it.  Lives outside `Kernel` so declarations may precede `run()`.
+thread_local! {
+    static SYNC_IDS: RefCell<std::collections::HashSet<i64>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// The leading `<digits>:` of a wire message, or `-1` when unframed.
+fn msg_id_of(msg: &str) -> i64 {
+    msg.split_once(':')
+        .and_then(|(id, _)| id.parse::<i64>().ok())
+        .unwrap_or(-1)
+}
+
+fn is_sync_msg(msg: &str) -> bool {
+    let id = msg_id_of(msg);
+    id >= 0 && SYNC_IDS.with(|s| s.borrow().contains(&id))
 }
 
 struct Kernel {
@@ -443,7 +467,26 @@ fn pump_udp(k: &mut Kernel) {
             && let Some((seq_s, payload)) = rest.split_once(':')
             && let Ok(seq) = seq_s.parse::<i64>()
         {
-            let slot = &mut k.net[cid].slot;
+            // Conflate per (sender, msg_id): two sync kinds from one client
+            // each keep their own newest.  The kind count is bounded — a
+            // client inventing endless ids cannot grow memory; sync is
+            // loss-tolerant by definition, so over-cap datagrams just drop.
+            const SYNC_KINDS_MAX: usize = 64;
+            let msg_id = msg_id_of(payload);
+            let slots = &mut k.net[cid].slots;
+            let slot = match slots.iter_mut().position(|s| s.msg_id == msg_id) {
+                Some(i) => &mut slots[i],
+                None if slots.len() >= SYNC_KINDS_MAX => continue,
+                None => {
+                    slots.push(SyncSlot {
+                        msg_id,
+                        seq: -1,
+                        payload: String::new(),
+                        dirty: false,
+                    });
+                    slots.last_mut().expect("just pushed")
+                }
+            };
             if seq > slot.seq {
                 slot.seq = seq;
                 slot.payload.clear();
@@ -606,38 +649,66 @@ pub fn n_kernel_tick_due(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, due);
 }
 
-/// `kernel_send(cid, msg) -> boolean`
+/// Deliver one message to one client, routed by the wire-schema table: a
+/// sync-class message (`sync_class(msg_id)`) rides a seq-stamped datagram
+/// when the client's UDP path is bound; everything else — and every client
+/// without a path — gets a WS frame.  ONE function, the fastest path that
+/// client supports; meaning never branches on transport.
+fn deliver(k: &mut Kernel, cid: usize, msg: &str, sync: bool) -> bool {
+    if sync
+        && let Some(net) = k.net.get_mut(cid)
+        && let (Some(path), Some(udp)) = (net.path.as_mut(), k.udp.as_ref())
+    {
+        path.out_seq += 1;
+        let dgram = format!("S:{}:{msg}", path.out_seq);
+        if dgram.len() > UDP_MAX_DATAGRAM {
+            if !k.warned_oversize {
+                k.warned_oversize = true;
+                eprintln!(
+                    "engine_host: dropped a {} B sync datagram (cap {} B; \
+                     state frames must stay small — bulk belongs on the WS channel)",
+                    dgram.len(),
+                    UDP_MAX_DATAGRAM
+                );
+            }
+            return false;
+        }
+        return udp.send_to(dgram.as_bytes(), path.addr).is_ok();
+    }
+    // Event class, or no UDP path: the reliable channel.
+    let Some(Some(stream)) = k.conns.get_mut(cid) else {
+        return false;
+    };
+    if write_frame(stream, 0x1, msg.as_bytes()).is_err() {
+        disconnect(k, cid);
+        return false;
+    }
+    true
+}
+
+/// `kernel_send(cid, msg) -> boolean` — class-routed delivery (see `deliver`).
 pub fn n_kernel_send(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.get::<Str>(stack).str().to_owned();
     let cid = *stores.get::<i64>(stack);
-    let ok = with_kernel(|k| {
-        let Some(Some(stream)) = k.conns.get_mut(cid as usize) else {
-            return false;
-        };
-        if write_frame(stream, 0x1, msg.as_bytes()).is_err() {
-            disconnect(k, cid as usize);
-            return false;
-        }
-        true
-    })
-    .unwrap_or(false);
+    let sync = is_sync_msg(&msg);
+    let ok = with_kernel(|k| deliver(k, cid as usize, &msg, sync)).unwrap_or(false);
     stores.put(stack, ok);
 }
 
-/// `kernel_broadcast(msg) -> integer` — send to every live connection;
-/// returns the delivery count.  A failed send disconnects that client.
+/// `kernel_broadcast(msg) -> integer` — class-routed delivery to every live
+/// connection (each client gets its own fastest path); returns the delivery
+/// count.  A failed WS send disconnects that client.
 pub fn n_kernel_broadcast(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.get::<Str>(stack).str().to_owned();
+    let sync = is_sync_msg(&msg);
     let n = with_kernel(|k| {
         let mut sent = 0i64;
         for cid in 0..k.conns.len() {
-            let Some(stream) = k.conns[cid].as_mut() else {
+            if k.conns[cid].is_none() {
                 continue;
-            };
-            if write_frame(stream, 0x1, msg.as_bytes()).is_ok() {
+            }
+            if deliver(k, cid, &msg, sync) {
                 sent += 1;
-            } else {
-                disconnect(k, cid);
             }
         }
         sent
@@ -679,47 +750,16 @@ pub fn n_kernel_udp_bound(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, v);
 }
 
-/// `sync_send(cid, msg) -> boolean` — send a latest-value state frame: a
-/// seq-stamped datagram over the client's UDP path when bound, else a plain
-/// WS frame (phones stay `wss`, native peers ride UDP — same call, same
-/// world).  Oversized datagrams are dropped with a once-per-kernel warning
-/// (fragmentation is silent and slower than the WS path it would replace).
-pub fn n_kernel_sync_send(stores: &mut Stores, stack: &mut DbRef) {
-    let msg = stores.get::<Str>(stack).str().to_owned();
-    let cid = *stores.get::<i64>(stack);
-    let ok = with_kernel(|k| {
-        let Some(net) = k.net.get_mut(cid as usize) else {
-            return false;
-        };
-        if let (Some(path), Some(udp)) = (net.path.as_mut(), k.udp.as_ref()) {
-            path.out_seq += 1;
-            let dgram = format!("S:{}:{msg}", path.out_seq);
-            if dgram.len() > UDP_MAX_DATAGRAM {
-                if !k.warned_oversize {
-                    k.warned_oversize = true;
-                    eprintln!(
-                        "engine_host: sync_send dropped a {} B datagram (cap {} B; \
-                         state frames must stay small — bulk belongs on the WS channel)",
-                        dgram.len(),
-                        UDP_MAX_DATAGRAM
-                    );
-                }
-                return false;
-            }
-            return udp.send_to(dgram.as_bytes(), path.addr).is_ok();
-        }
-        // No UDP path: fall back to the reliable channel.
-        let Some(Some(stream)) = k.conns.get_mut(cid as usize) else {
-            return false;
-        };
-        if write_frame(stream, 0x1, msg.as_bytes()).is_err() {
-            disconnect(k, cid as usize);
-            return false;
-        }
-        true
-    })
-    .unwrap_or(false);
-    stores.put(stack, ok);
+/// `sync_class(msg_id)` — declare a `msg_id` as latest-value state in the
+/// wire-schema table: `send`/`broadcast` then route messages of that kind to
+/// the sync channel (datagram when the client can, WS frame when it can't)
+/// and inbound datagrams of that kind conflate.  Data, not a per-call API —
+/// the developer states what a message IS once; the kernel picks transports.
+pub fn n_kernel_sync_class(stores: &mut Stores, stack: &mut DbRef) {
+    let msg_id = *stores.get::<i64>(stack);
+    SYNC_IDS.with(|s| {
+        s.borrow_mut().insert(msg_id);
+    });
 }
 
 /// `sync_next() -> boolean` — load the next dirty conflation slot (newest
@@ -729,14 +769,14 @@ pub fn n_kernel_sync_send(stores: &mut Stores, stack: &mut DbRef) {
 pub fn n_kernel_sync_next(stores: &mut Stores, stack: &mut DbRef) {
     let got = with_kernel(|k| {
         for cid in 0..k.net.len() {
-            if k.net[cid].slot.dirty {
-                k.net[cid].slot.dirty = false;
-                k.last_sync = (
-                    cid as i64,
-                    k.net[cid].slot.seq,
-                    k.net[cid].slot.payload.clone(),
-                );
-                return true;
+            for slot in &mut k.net[cid].slots {
+                if slot.dirty {
+                    slot.dirty = false;
+                    // The payload carries its own `<msg_id>:` framing, so the
+                    // drained message reads exactly like an event payload.
+                    k.last_sync = (cid as i64, slot.seq, slot.payload.clone());
+                    return true;
+                }
             }
         }
         false

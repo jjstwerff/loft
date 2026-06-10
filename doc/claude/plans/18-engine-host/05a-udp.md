@@ -40,9 +40,20 @@ Kernel mechanics (`src/engine_host.rs`):
   that): oversized sync sends drop with a once-per-kernel warning — never a
   halt; bulk belongs on the WS channel.
 
-Loft surface (`lib/engine_host`): `udp_bound(cid)` (read-only introspection),
-`sync_send(cid, msg)`, `sync_next()` / `sync_cid()` / `sync_seq()` /
-`sync_payload()` — nothing transport-shaped to configure.  `run()` is unchanged — sync drains inside the user's
+Loft surface (`lib/engine_host`): `sync_class(msg_id)` (the wire-schema
+table, minimal form — declare a message KIND as latest-value state once;
+user-directed 2026-06-10), `udp_bound(cid)` (read-only introspection),
+`sync_next()` / `sync_cid()` / `sync_seq()` / `sync_payload()`.  There is no
+per-call transport API at all: ordinary `send`/`broadcast` route by the
+declared class — `sync_send` existed for a few hours and was absorbed.
+Inbound conflation is per (sender, msg_id) — two sync kinds from one client
+never collapse each other (kind count bounded at 64/client; over-cap sync
+datagrams drop, which latest-value semantics permits).
+
+The class is data, not code, which is what the service surface (next step,
+pending the #313 fix on `bugs321`) will hang lanes on: a registered service =
+handler + kind + (late, separately) its lane; `sync_class` is that table's
+first column.  `run()` is unchanged — sync drains inside the user's
 `on_tick`, which is what makes late-latch automatic.
 
 **The transport-selection contract (user-confirmed 2026-06-10): automatic per

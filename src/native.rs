@@ -250,7 +250,10 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_udp_bound", crate::engine_host::n_kernel_udp_bound),
     #[cfg(not(target_arch = "wasm32"))]
-    ("n_kernel_sync_send", crate::engine_host::n_kernel_sync_send),
+    (
+        "n_kernel_sync_class",
+        crate::engine_host::n_kernel_sync_class,
+    ),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_sync_next", crate::engine_host::n_kernel_sync_next),
     #[cfg(not(target_arch = "wasm32"))]

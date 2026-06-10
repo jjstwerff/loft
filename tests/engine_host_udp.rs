@@ -133,6 +133,9 @@ fn udp_sync_channel_end_to_end() {
 use engine_host;
 struct W {{ tick: integer not null }}
 fn main() {{
+  // Wire-schema table: 8 = tick beacon, 9 = state echo — latest-value kinds.
+  engine_host::sync_class(8);
+  engine_host::sync_class(9);
   w = W {{ tick: 0 }};
   engine_host::run({PORT}, {TICK_US},
     fn(ev: engine_host::Event) {{
@@ -145,9 +148,9 @@ fn main() {{
       while engine_host::sync_next() {{
         sc = engine_host::sync_cid();
         sp = engine_host::sync_payload();
-        engine_host::sync_send(sc, "echo:{{sp}}");
+        engine_host::send(sc, "9:{{sp}}");
       }}
-      engine_host::sync_send(0, "beacon:{{w.tick}}");
+      engine_host::send(0, "8:{{w.tick}}");
     }});
 }}
 "#
@@ -179,7 +182,7 @@ fn main() {{
     // 2. Pre-hello: sync_send falls back to WS — beacons arrive as plain
     //    WS text frames (no S: stamp).
     let b = ws_recv(&ws);
-    assert!(b.starts_with("beacon:"), "WS fallback beacon, got {b:?}");
+    assert!(b.starts_with("8:"), "WS fallback beacon, got {b:?}");
 
     // 3. Hello: bind the UDP path; the kernel acks.  Datagrams can drop even
     //    on loopback under load — retry the hello until the ack.
@@ -215,7 +218,7 @@ fn main() {{
     };
     let (seq, payload) = unstamp(&dgram);
     assert!(seq >= 1, "outbound seq stamped: {dgram:?}");
-    assert!(payload.starts_with("beacon:"), "UDP beacon: {dgram:?}");
+    assert!(payload.starts_with("8:"), "UDP beacon: {dgram:?}");
 
     // 5. Conflation: a same-tick burst (10, then 12, then stale 11) must
     //    yield exactly ONE echo — the newest (12).  Sync right after a beacon
@@ -229,7 +232,7 @@ fn main() {{
     while Instant::now() < until {
         if let Some(d) = udp_recv(&udp) {
             let (_, p) = unstamp(&d);
-            if let Some(e) = p.strip_prefix("echo:") {
+            if let Some(e) = p.strip_prefix("9:") {
                 echoes.push(e.to_string());
             }
         }
@@ -261,7 +264,7 @@ fn main() {{
     while Instant::now() < until {
         if let Some(d) = udp_recv(&udp) {
             let (_, p) = unstamp(&d);
-            if let Some(t) = p.strip_prefix("beacon:") {
+            if let Some(t) = p.strip_prefix("8:") {
                 last_udp_tick = t.parse().unwrap_or(0);
             }
         }
@@ -270,7 +273,7 @@ fn main() {{
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let f = ws_recv(&ws);
-        if let Some(t) = f.strip_prefix("beacon:")
+        if let Some(t) = f.strip_prefix("8:")
             && t.parse::<i64>().unwrap_or(0) > last_udp_tick
         {
             break; // fresh beacon on WS: the fallback re-engaged

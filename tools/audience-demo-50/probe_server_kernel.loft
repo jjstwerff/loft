@@ -98,10 +98,10 @@ fn broadcast_tick(world: World) {
       was_in_range = v_r.peers[idx].in_range;
 
       if in_range_now {
-        // POSE = latest-value state -> the sync channel: rides UDP for a
-        // helloed native client, falls back to a WS frame for a web page —
-        // the SAME call, the kernel picks the fastest path per client.
-        engine_host::sync_send(bt_r.cid, "2:{bt_p.cid},{bt_p.seq},{bt_p.x},{bt_p.y},{bt_p.z}");
+        // POSE is declared sync (main) — this ordinary send rides UDP for a
+        // helloed native client and falls back to a WS frame for a web page;
+        // the kernel picks the fastest path per client.
+        engine_host::send(bt_r.cid, "2:{bt_p.cid},{bt_p.seq},{bt_p.x},{bt_p.y},{bt_p.z}");
         v_r.peers[idx].in_range = true;
       } else if was_in_range {
         // EXIT = must-deliver event -> stays on the reliable WS channel.
@@ -114,9 +114,9 @@ fn broadcast_tick(world: World) {
   // Flush pending echoes with the send-time stamp (t5), after the poses so
   // the echo experiences a full tick's queue position, like a pose.
   for er in world.echoes {
-    // The echo measures the GAME-DATA path, so it rides the same channel
-    // the poses do (sync; WS-identical bytes for a web client).
-    engine_host::sync_send(er.cid, "5:{er.t0},{er.t1},{ticks()}");
+    // The echo measures the GAME-DATA path; msg 5 is declared sync (main)
+    // so it rides the same channel the poses do.
+    engine_host::send(er.cid, "5:{er.t0},{er.t1},{ticks()}");
   }
   world.echoes = [];
 }
@@ -139,6 +139,12 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
 
 fn main() {
   println("probe_server (kernel): sight 80 m, tick 30 Hz");
+
+  // The wire-schema table: POSE (2) + ECHO reply (5) are latest-value state;
+  // everything else (EXIT 3, inbound INPUT 1 / ECHO request 4) stays the
+  // event class.  Declared once — every send below is ordinary.
+  engine_host::sync_class(2);
+  engine_host::sync_class(5);
 
   world = World { planes: [], vis: [], tick: 0, echoes: [] };
 
