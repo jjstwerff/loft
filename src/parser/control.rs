@@ -919,20 +919,27 @@ impl Parser {
     fn retrofit_callers_hidden_args(&mut self) {
         let target = self.context;
         let n_attrs = self.data.def(target).attributes().len();
-        let hidden: Vec<(usize, u32)> = self
+        // #339 sibling (H1 census, 2026-06-11): late pass-2 growth happens
+        // for ALL THREE heap-return kinds — a vector-literal tail promotes
+        // in pass 2 only, exactly like the Reference wrapper chain (7-line
+        // repro: a caller above `pub fn colours() -> vector<text>
+        // { ["r","g","b"] }` panicked 'Too few parameters').  Collect every
+        // hidden heap-buffer attr kind, mirroring `add_defaults`.
+        let hidden: Vec<(usize, Type)> = self
             .data
             .def(target)
             .attributes()
             .iter()
             .enumerate()
-            .filter_map(|(i, a)| {
-                if a.hidden
-                    && let Type::Reference(td, _) = &a.typedef
-                {
-                    Some((i, *td))
-                } else {
-                    None
+            .filter_map(|(i, a)| match &a.typedef {
+                Type::Reference(td, _) if a.hidden => Some((i, Type::Reference(*td, Deps::none()))),
+                Type::Vector(content, _) if a.hidden => {
+                    Some((i, Type::Vector(content.clone(), Deps::none())))
                 }
+                Type::Enum(td, true, _) if a.hidden => {
+                    Some((i, Type::Enum(*td, true, Deps::none())))
+                }
+                _ => None,
             })
             .collect();
         if hidden.is_empty() {
@@ -957,10 +964,10 @@ impl Parser {
                     && *f == target
                     && args.len() < n_attrs
                 {
-                    for &(i, td) in &hidden {
+                    for (i, buf_tp) in &hidden {
+                        let i = *i;
                         if args.len() == i {
-                            let buf_tp = Type::Reference(td, Deps::none());
-                            let vr = vars.work_refs(&buf_tp, &mut self.lexer);
+                            let vr = vars.work_refs(buf_tp, &mut self.lexer);
                             vars.mark_caller_hidden_buf(vr);
                             new_inits.push(crate::data::v_set(vr, Value::Null));
                             args.push(Value::Var(vr));
