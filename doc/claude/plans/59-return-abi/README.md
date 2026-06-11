@@ -141,9 +141,39 @@ missed — every NON-`add_defaults` dispatcher that derives call arity:
   (`completion_model_resolves_members_from_schema`,
   `capture_heap_types_run_once`): schema-driven signature consumers.
 
-The flip itself is sound; phase 1 = teach C9–C11 the buffer (or filter
-hidden attrs there), THEN re-apply the three-part change.  The reverted
-diff is reproducible from this README §§ mechanics + the probes.
+The flip itself is sound; the verified diff is stored as
+**`phase1-flip.patch`** in this directory (`git apply` to re-apply).
+
+**THE LOCK, diagnosed (2026-06-11)**: the broken dispatchers classify
+hidden attributes BY NAME PREFIX, not by type —
+`src/native.rs:1427-1435` (par stitch context):
+
+```rust
+n_hidden_text  = attrs.filter(|a| a.name.starts_with("__")).count();
+n_hidden_dests = attrs.filter(|a| a.hidden && !a.name.starts_with("__")).count();
+```
+
+`__retbuf` is a Reference/Vector-typed dest with a `__` name → counted
+as a TEXT buffer (wrong slot kind/size) and missed as a dest → the
+`8 < 12` frame underflow.  The same prefix heuristic sits at
+`native_lib.rs:60/81/192/383` (the C10 cdylib marshal).  NOTE: this is
+a LIVE landmine independent of the flip — a wrapper-promoted attr is
+named `__ref_1` (Reference-typed, `__`-prefixed) and would misclassify
+in a par worker TODAY.
+
+**The unlock — classify by TYPE, not name** (its own small, gated
+change BEFORE re-applying the patch):
+- text work buffer ⇔ `RefVar(Text)` (the `is_text_work_buffer` helper
+  already exists at `native_lib.rs:81`);
+- hidden heap dest ⇔ `a.hidden && (Reference | Vector | Enum(true))`;
+- visible user arg ⇔ `!a.hidden` (drop the name tests).
+Gates: the 25-test inventory above + a NEW regression for the live
+landmine (a par worker calling a wrapper-promoted fn).  C11
+(completion/capture) re-check after — likely the same root or a
+hidden-filter one-liner.
+
+Order: (1) classify-by-type refactor (standalone PR-able), (2)
+`git apply phase1-flip.patch`, (3) the full validation matrix.
 
 ## Risks / open questions
 

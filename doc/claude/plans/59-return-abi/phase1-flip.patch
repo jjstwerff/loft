@@ -1,0 +1,121 @@
+diff --git a/src/parser/control.rs b/src/parser/control.rs
+index 6f0ea48c..9f1d55fd 100644
+--- a/src/parser/control.rs
++++ b/src/parser/control.rs
+@@ -3533,7 +3533,36 @@ impl Parser {
+                 if transitive {
+                     continue; // merge-only for transitively-reached vars (see above)
+                 }
+-                // create a new attribute with this name
++                // @PLAN59 / H1: bind the promoted local to the
++                // signature-time `__retbuf` buffer instead of GROWING the
++                // signature — rename the ATTR to the local's name (the
++                // attr↔var coupling is by name, probe C3; pass 2's
++                // `attr_names` lookup above then hits directly) and retire
++                // the placeholder argument var (the promoted local takes
++                // the same last frame slot by var-number order, probe C6).
++                if let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf") {
++                    let def = &mut self.data.definitions[self.context as usize];
++                    def.attributes[buf_attr].name = n.to_string();
++                    def.attr_names.remove("__retbuf");
++                    def.attr_names.insert(n.to_string(), buf_attr);
++                    let placeholder = self.vars.var("__retbuf");
++                    if placeholder != u16::MAX {
++                        self.vars.retire_argument(placeholder);
++                    }
++                    self.vars.become_argument(*v);
++                    dep.push(buf_attr as u16);
++                    continue;
++                }
++                // Legacy in-place growth — reachable only for defs parsed
++                // outside `parse_function`'s buffer insertion (lambdas:
++                // defined at their literal site, so no earlier caller can
++                // exist; growth is harmless there).
++                debug_assert!(
++                    self.data.def(self.context).name().contains("__lambda")
++                        || self.data.def_type(self.context) != crate::data::DefType::Function,
++                    "@PLAN59: arity grew post-signature on plain fn '{}'",
++                    self.data.def(self.context).name()
++                );
+                 let a = self
+                     .data
+                     .add_attribute(&mut self.lexer, self.context, n, ret.clone());
+@@ -3541,13 +3570,8 @@ impl Parser {
+                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
+                 self.vars.become_argument(*v);
+                 dep.push(a as u16);
+-                // #339: in pass 2 this promotion arrives LATE — the wrapper's
+-                // `__ref_N` (and thus this attr) only materialises once the
+-                // callee's own hidden attr exists, which a callee defined
+-                // LATER in the source gets after this fn's pass-1 parse.
+-                // Callers re-parsed EARLIER in pass 2 still carry the short
+-                // arg list against the grown arity (codegen panics 'Too few
+-                // parameters').  Patch them up after the loop.
++                // #339 backstop: patch earlier-parsed callers when growth
++                // does happen (lambda-class defs).
+                 if !self.first_pass {
+                     grew_in_pass2 = true;
+                 }
+diff --git a/src/parser/definitions.rs b/src/parser/definitions.rs
+index a8746f9f..7550c404 100644
+--- a/src/parser/definitions.rs
++++ b/src/parser/definitions.rs
+@@ -890,6 +890,38 @@ impl Parser {
+                     }
+                 }
+             }
++            // @PLAN59 / H1 phase 1 — the unconditional heap-return buffer:
++            // every BODY-carrying plain fn returning Reference / Vector /
++            // struct-Enum gets its hidden `__retbuf` attribute + backing
++            // argument var at signature parse, so arity is fixed before ANY
++            // caller parses.  `ref_return` binds a promoted local to it by
++            // renaming the ATTR and retiring this placeholder var (probes
++            // C3/C6 in plans/59-return-abi).  Excluded: native decls (`;`,
++            // handled by the enclosing branch), ops / `#rust`-templated fns
++            // (implemented in Rust, never promoted — their ABI must not
++            // change), generic templates (specialisations never promote,
++            // I9-var), lambdas (separate parse path, no earlier callers).
++            if self.first_pass
++                && !is_generic_template
++                && self.data.def_type(self.context) == DefType::Function
++                && self.data.def(self.context).rust().is_empty()
++                && matches!(
++                    self.data.def(self.context).returned(),
++                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
++                )
++            {
++                let ret = self.data.def(self.context).returned().clone();
++                let a =
++                    self.data
++                        .add_attribute(&mut self.lexer, self.context, "__retbuf", ret.clone());
++                self.data.definitions[self.context as usize].attributes[a].hidden = true;
++                let v = self.create_var("__retbuf", &ret);
++                if v != u16::MAX {
++                    self.vars.become_argument(v);
++                    self.var_usages(v, false);
++                    self.vars.mark_used(v);
++                }
++            }
+             // re-apply name remaps for promoted text arguments in second pass.
+             if !self.first_pass {
+                 for (shadow, original) in self.vars.promoted_text_args() {
+diff --git a/src/variables/mod.rs b/src/variables/mod.rs
+index 13a52256..5a61043e 100644
+--- a/src/variables/mod.rs
++++ b/src/variables/mod.rs
+@@ -1204,6 +1204,15 @@ impl Function {
+         self.variables[var_nr as usize].stack_allocated = true;
+     }
+ 
++    /// @PLAN59 (H1): drop a var from the argument set — used to retire the
++    /// signature-time `__retbuf` placeholder when `ref_return` promotes a
++    /// real local into the buffer role (the promoted local takes the
++    /// placeholder's attribute; `arguments()` then yields the promoted var
++    /// in the same last position by number order).
++    pub fn retire_argument(&mut self, var_nr: u16) {
++        self.variables[var_nr as usize].argument = false;
++    }
++
+     pub fn is_argument(&self, var_nr: u16) -> bool {
+         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
+     }
