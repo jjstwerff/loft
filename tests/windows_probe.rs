@@ -46,10 +46,19 @@ fn main() {{
 }}
 "#
         );
+        // FINDING (round 1): parse_str with a VIRTUAL name ("<win-probe>")
+        // fails on Windows — "Fatal: Unknown file:<win-probe>" (angle
+        // brackets are invalid path chars; some resolution step treats the
+        // virtual name as a real path).  That implicates every virtual-name
+        // consumer on Windows (the REPL, live-reload's "<live-reload>").
+        // Recorded for WINDOWS.md; the probe uses a real file.
+        let probe_file = std::env::temp_dir().join("win_probe_server.loft");
+        std::fs::write(&probe_file, &src).expect("write probe");
+        let probe_path = probe_file.to_string_lossy().replace('\\', "/");
         let mut parser = Parser::new();
         parser.parse_dir("default", true, false).expect("stdlib");
         parser.lib_dirs = vec!["lib".to_string()];
-        parser.parse_str(&src, "<win-probe>", false);
+        parser.parse(&probe_path, false);
         assert!(
             parser.diagnostics.level() < loft::diagnostics::Level::Error,
             "probe server must parse clean: {:?}",
@@ -157,4 +166,39 @@ fn probe_same_port_second_bind_semantics() {
     );
     drop(second);
     drop(first);
+}
+
+/// Probe 3b — the SEQUENTIAL-REBIND feasibility (the Windows swap design,
+/// given 3's AddrInUse verdict): close the listener, rebind the same port
+/// immediately — how fast does it succeed?  (unix SO_REUSEADDR makes this
+/// instant; Windows TIME_WAIT behavior is the question.)  Reports the
+/// latency; asserts only that it succeeds within the swap's budget.
+#[test]
+fn probe_sequential_rebind_latency() {
+    let port = 18202u16;
+    let first = std::net::TcpListener::bind(("0.0.0.0", port)).expect("first bind");
+    // Exercise the listener so the close isn't trivially clean.
+    let conn = TcpStream::connect(("127.0.0.1", port)).expect("dial");
+    let _accepted = first.accept().expect("accept");
+    drop(conn);
+    drop(first);
+    let t0 = Instant::now();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let rebound = loop {
+        match std::net::TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => break l,
+            Err(e) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "rebind never succeeded within 10 s ({e})"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    println!(
+        "PROBE sequential-rebind: succeeded after {:?}",
+        t0.elapsed()
+    );
+    drop(rebound);
 }
