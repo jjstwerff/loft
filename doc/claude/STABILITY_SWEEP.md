@@ -9,9 +9,11 @@ A systematic sweep of the whole body of code for **invariants implemented in
 more than one way** — the disease class behind #313 (layout decided in three
 places), #314 (capture shape frozen before the decision was final), #323
 (ownership transferred on one path, freed on another), and #328 (pointer-ness
-erased between parse and layout).  The method is the
-[engineering-rigor](../../.claude/skills/engineering-rigor/SKILL.md) loop
-aimed at *breakage discovery*:
+erased between parse and layout).  The method is pass 1 of
+[STABILITY_METHOD.md](STABILITY_METHOD.md) (sweep → move algorithms to their
+data structures → de-duplicate), using the
+[engineering-rigor](../../.claude/skills/engineering-rigor/SKILL.md)
+instruments for *breakage discovery*:
 
 1. **Find the fact with two homes.**  Grep/read the module for a fact that is
    derived, cached, or re-asserted in a second place (a flag AND a layout; a
