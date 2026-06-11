@@ -116,18 +116,17 @@ a manual re-assertion of the convention).
 
 **Mitigation — typed dep semantics (M)**
 
-1. Inventory pass (S): grep every `depend()` / dep-vec construction;
-   label each site with its intended meaning.  The inventory itself is
-   the deliverable — expect to find more #306-shaped confusions.
-2. Introduce a `Deps` enum or newtype set in `src/data.rs`:
-   `CallerVars(Vec<u16>)` / `AttrIndices(Vec<u16>)` /
-   `SharedPointer` / `OwnedSelf` — and migrate `Type` to carry it.
-   Mechanical but wide; do it in a quiet window like pass 2's moves.
-3. The compiler then enforces the boundary translations that today live
-   in comments (`resolve_deps` is the one legitimate converter — make it
-   the ONLY one).
-4. Validation: full suite; the #306/#328/#330 regression files; the leak
-   gate (`tests/leak.rs`) — dep misreads surface as leaks/double-frees.
+Step 1 DONE (2026-06-11): **[DEPS_INVENTORY.md](DEPS_INVENTORY.md)** —
+the semantic model (two address spaces + five marker overloads, incl. TWO
+different `u16::MAX` meanings), all 84+ reader/writer/converter sites
+classified, the crossing sites named, and a corpus probe showing the
+out-of-range guards in `is_borrowed_view` / `dep_has_var` are fossil
+defenses (zero contamination in stdlib + moros + crawler + scripts).
+Step 2 DONE: `pub type Deps = Vec<u16>` alias on every `Type` variant
+(zero-risk rename).  Remaining: the newtype flip + constructor sweep +
+fossil removal (own quiet window; ~1,000 mechanical sites — design in
+the inventory § Step-2 migration design), then a debug-mode full-suite
+run for the space asserts.
 
 ---
 

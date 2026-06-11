@@ -757,6 +757,18 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     }
 }
 
+/// H2 ([STABILITY_HOTSPOTS](../doc/claude/STABILITY_HOTSPOTS.md) /
+/// [DEPS_INVENTORY](../doc/claude/DEPS_INVENTORY.md)): the dependency list
+/// carried by heap-backed `Type` variants.  An entry is an index into one
+/// of TWO address spaces depending on where the `Type` lives — caller
+/// frame VAR numbers (variable-table / expression types) or callee ATTR
+/// indices (`Definition.returned` / attr typedefs) — plus marker
+/// overloads (`u16::MAX` pointer/share markers, `[self]` ownership,
+/// empty = owned).  `resolve_deps` and `ref_return` are the only
+/// legitimate space converters.  This alias is migration step 2; step 3
+/// flips it to a constructor-checked newtype.
+pub type Deps = Vec<u16>;
+
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 /// Static type of a parsed expression or variable.
@@ -786,17 +798,17 @@ pub enum Type {
     Single,
     Character,
     /// A text with the linked variables.
-    Text(Vec<u16>),
+    Text(Deps),
     /// Description of the possible keys on a structure (hash, index, spacial, sorted)
     Keys,
     /// An enum value. With definition with enum type itself. With value true it is a reference.
-    Enum(u32, bool, Vec<u16>),
+    Enum(u32, bool, Deps),
     /// A readonly reference to a record instance in a store.
-    Reference(u32, Vec<u16>),
+    Reference(u32, Deps),
     /// A reference to a variable on stack.
     RefVar(Box<Type>),
     /// A dynamic vector of a specific type
-    Vector(Box<Type>, Vec<u16>),
+    Vector(Box<Type>, Deps),
     /// A dynamic routine, from a routine definition without code.
     /// The actual code is a routine with this routine as a parent or just a Block for a lambda function.
     Routine(u32),
@@ -804,16 +816,16 @@ pub enum Type {
     /// The second is the internal iterator value or `Type::Null` for structure iterator: `(i32,i32)`
     Iterator(Box<Type>, Box<Type>),
     /// An ordered vector on a record, second is the key [field name, ascending]
-    Sorted(u32, Vec<(String, bool)>, Vec<u16>),
+    Sorted(u32, Vec<(String, bool)>, Deps),
     /// An index towards other records. The key is [field name, ascending]
-    Index(u32, Vec<(String, bool)>, Vec<u16>),
+    Index(u32, Vec<(String, bool)>, Deps),
     /// An index towards other records. The second is [field name]
-    Spacial(u32, Vec<String>, Vec<u16>),
+    Spacial(u32, Vec<String>, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
-    Hash(u32, Vec<String>, Vec<u16>),
+    Hash(u32, Vec<String>, Deps),
     /// A function reference allowing for closures. Argument types, result, and deps.
     /// The dep list tracks ownership of the closure record embedded in the fn-ref slot.
-    Function(Vec<Type>, Box<Type>, Vec<u16>),
+    Function(Vec<Type>, Box<Type>, Deps),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
     /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
