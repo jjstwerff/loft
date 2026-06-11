@@ -601,6 +601,184 @@ fn main() {{
     let _ = std::fs::remove_file(&err_path);
 }
 
+/// @PLN18 08 scenario S8 — THE STANDING DIFFERENTIAL: one meaning scenario
+/// executed in four tier states — interpreted, compiled, mixed (the S2/S3
+/// standing state: a fn flipped to the interpreter), and post-swap (the
+/// process REPLACED mid-sequence via a control-channel self-swap) — with
+/// byte-equal game transcripts.  Goal D's sweep extended to the mixed
+/// states; it pins "a target change is observable only as speed"
+/// permanently.  Positive controls per leg: the mixed leg must really
+/// dispatch through the interpreter; the swap leg must really restore the
+/// world across a new process.
+#[test]
+fn s8_standing_four_state_differential() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let legs = [
+        ("interpreted", 18110u16),
+        ("compiled", 18111u16),
+        ("mixed", 18112u16),
+        ("post-swap", 18113u16),
+    ];
+    let mut transcripts = Vec::new();
+    for (mode, port) in legs {
+        transcripts.push((mode, run_s8_leg(mode, port)));
+    }
+    let want = vec!["got:a#1", "got:b#2", "got:c#3", "got:d#4"];
+    for (mode, t) in &transcripts {
+        assert_eq!(
+            t, &want,
+            "S8: the {mode} tier must produce the canonical transcript"
+        );
+    }
+}
+
+fn run_s8_leg(mode: &str, port: u16) -> Vec<String> {
+    let stem = format!("/.loft/cache/eh_s8_{port}-");
+    s5_kill_stale(&stem);
+    let fixture = format!(
+        r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn bump_events(w: W) -> integer {{
+  w.events = w.events + 1;
+  w.events
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  resumed = engine_host::swap_world(w);
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = bump_events(w);
+      engine_host::send(ev.cid, "got:{{ev.payload}}#{{n}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+    );
+    let prog = std::env::temp_dir().join(format!("eh_s8_{port}.loft"));
+    std::fs::write(&prog, &fixture).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let err_path = std::env::temp_dir().join(format!("eh_s8_{port}.err"));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let mut cmd = Command::new(loft_bin());
+    match mode {
+        "interpreted" => {
+            cmd.arg("--interpret");
+        }
+        "compiled" => {}
+        "mixed" => {
+            cmd.env("LOFT_LIVE_FLIP", "1")
+                .env("LOFT_FLIP_FNS", "bump_events")
+                .env("LOFT_DISPATCH_DEBUG", "1");
+        }
+        "post-swap" => {
+            cmd.env("LOFT_LIVE_FLIP", "1")
+                .env("LOFT_DEBUG_CONTROL", "1");
+        }
+        _ => unreachable!(),
+    }
+    cmd.process_group(0);
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+    let _hygiene_kill = scopeguard_kill(stem.clone());
+
+    let mut replies = Vec::new();
+    let ws = ws_connect(port);
+    ws_send(&ws, "a");
+    replies.push(ws_recv(&ws));
+    ws_send(&ws, "b");
+    replies.push(ws_recv(&ws));
+
+    let tail_ws = if mode == "post-swap" {
+        // THE SELF-SWAP between b and c: rebuild the UNCHANGED source (a
+        // cache hit on the artifact this very process runs), swap to it —
+        // a new process under the same world — then finish the sequence.
+        let ctl = ws_connect(port);
+        ws_send(&ctl, "D!:rebuild");
+        assert_eq!(ws_recv(&ctl), "D:rebuild started");
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            ws_send(&ctl, "D!:rebuild?");
+            let st = ws_recv(&ctl);
+            if st == "D:rebuild 2" {
+                break;
+            }
+            assert!(Instant::now() < deadline, "self-rebuild never ready");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        ws_send(&ctl, "D!:swap auto");
+        assert_eq!(ws_recv(&ctl), "D:swap true");
+        ws.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        while ws_try_recv(&ws).is_some() {}
+        let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(nws) = ws_try_connect(port) {
+                break nws;
+            }
+            assert!(
+                Instant::now() < reconnect_deadline,
+                "never reconnected after the self-swap"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        ws
+    };
+    ws_send(&tail_ws, "c");
+    replies.push(ws_recv(&tail_ws));
+    ws_send(&tail_ws, "d");
+    replies.push(ws_recv(&tail_ws));
+    drop(_guard);
+
+    // Per-leg positive controls: the tier state must be REAL, not silent.
+    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    match mode {
+        "mixed" => assert!(
+            stderr.contains("live-dispatch: n_bump_events"),
+            "the mixed leg must dispatch through the interpreter:\n{stderr}"
+        ),
+        "post-swap" => {
+            assert!(
+                stderr.contains("loft-swap: world restored"),
+                "the swap leg must restore the world:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("handing over"),
+                "the swap leg must hand over:\n{stderr}"
+            );
+        }
+        _ => {}
+    }
+    let _ = std::fs::remove_file(&prog);
+    let _ = std::fs::remove_file(&err_path);
+    replies
+}
+
+/// Kill any leftover process running the leg's cache binary at scope end
+/// (the swap child outlives the Guard's process group by design).
+fn scopeguard_kill(stem: String) -> impl Drop {
+    struct K(String);
+    impl Drop for K {
+        fn drop(&mut self) {
+            s5_kill_stale(&self.0);
+        }
+    }
+    K(stem)
+}
+
 /// @PLN18 08 scenario S7 — the debugger loop end-to-end (@PLN16 6b/6c
 /// convergence): a scripted control-channel session against a serving
 /// compiled kernel, asserting each stage IN ORDER — breakpoint hit with

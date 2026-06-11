@@ -360,12 +360,45 @@ mixed → background rebuild → swap → still debuggable.  **SHIPPED**:
 > the post-swap hit shows the RESTORED world (events=101) in its
 > bindings before the new build serves 201.
 
-### S8 — the standing differential (cross-cutting)
+### S8 — the standing differential (cross-cutting)  ✅ (2026-06-11)
 
 > **Test:** one meaning scenario executed in four states — interpreted,
 > compiled, mixed (post-S3), post-swap — transcripts byte-equal.  This is
 > Goal D's sweep extended to the mixed states; it pins "a target change
 > is observable only as speed" permanently.
+
+**SHIPPED** — `engine_host_kernel::s8_standing_four_state_differential`:
+the canonical bump scenario (`a b c d` → `got:x#N`) in four tier states —
+interpreted / compiled / mixed (`LOFT_FLIP_FNS`, sentinel-verified) /
+post-swap (a control-channel **SELF-SWAP** between `b` and `c`: rebuild
+the unchanged source → a cache-hit artifact → swap — the process is
+REPLACED mid-sequence and the transcript must not show it).  Per-leg
+positive controls keep the tiers honest (the mixed leg must really
+dispatch interp; the swap leg must really restore the world and hand
+over).  Locked into CI with the rest of the suite.
+
+---
+
+## Scenario scoreboard — ALL EIGHT SHIPPED (2026-06-11)
+
+S1 ✅ compiled baseline · S2 ✅ live flip · S3 ✅ live edit (mixed) ·
+S4 ✅ background rebuild · S5 ✅ native swap (~35 ms gap) · S6 ✅ browser
+swap (living page) · S7 ✅ debugger loop e2e · S8 ✅ standing four-state
+differential.  **The heart of the engine is built and pinned.**
+
+Open residuals (each with its trigger):
+- **Line-keyed breakpoints** — reload snippets re-number lines; needs
+  source-mapping.  Trigger: the @PLN16 editor wanting mid-body stops.
+- **Compiled-`--html` browser module swap** — store export across wasm
+  instances; host hooks + snapshot format already module-agnostic.
+  Trigger: the --html pipeline meeting the kernel scripts.
+- **Full-expression eval at a pause** — @PLN14 store-resident env;
+  v1 is frame-variable lookup.
+- **Snapshot coverage** — reference/hash/sorted world fields restore to
+  defaults (the lenient-serialization growth path).
+- **Mid-freeze event loss** (S5) — events arriving inside the swap
+  window die with the old process; an event journal or fd-handover
+  shrinks it.  Trigger: a consumer that cannot tolerate the ~1 s window.
 
 ---
 
