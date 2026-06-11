@@ -394,8 +394,12 @@ const SHELL_TEMPLATE: &str = r##"<!doctype html><html lang="en"><head><meta char
   #replout .in .p { opacity:.5; user-select:none; }
   #replout .val { color:#2e7d32; } #replout .err { color:#e53935; }
   #replin { flex:none; resize:none; border:none; border-top:1px solid #8884; padding:8px 12px; font:13px/1.45 ui-monospace,monospace; background:transparent; color:inherit; outline:none; min-height:1.6em; }
+  #gdbg { display:inline-flex; gap:4px; align-items:center; padding-left:10px; border-left:1px solid #8884; }
+  #gdbg input { font:12px ui-monospace,monospace; padding:2px 6px; border:1px solid #8886; border-radius:4px; background:transparent; color:inherit; }
+  #gstat { font-size:12px; opacity:.7; max-width:26em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style></head><body>
 <div id="bar"><button id="run">▶ Run</button><button id="test" title="Run this file's tests">✓ Test</button><button id="suite" title="Run the package suite (tests/*.loft beside the nearest loft.toml)">✓✓ Suite</button><button id="game" title="Launch as a game: a real loft process of its own (native window once the graphics lib lands)">🎮 Game</button><button id="save" disabled>Save</button><span id="dirty"></span>
+  <span id="gdbg" hidden><input id="gbpin" spellcheck="false" placeholder="fn name" size="12"><button id="gbp" title="Break at the fn's entry in the RUNNING game (flips it to the interpreter)">⛳</button><button id="gresume" disabled title="Resume the paused game">⏵</button><button id="grebuild" title="Rebuild the game binary in the background (the old build keeps serving)">⟳</button><button id="gswap" disabled title="Swap to the rebuilt binary under the running world">⇄</button><span id="gstat"></span></span>
   <span id="steps"><button id="cont" disabled title="Continue (to next breakpoint)">⏵</button><button id="over" disabled title="Step over">↷</button><button id="into" disabled title="Step into">↓</button><button id="out" disabled title="Step out">↑</button></span>
   <span id="status">connecting…</span></div>
 <div id="main">
@@ -461,7 +465,13 @@ function showDiags(items) {
 // Persist the buffer to disk (the sandboxed writeFile); the reply (tracked by id) clears the
 // dirty flag only once the write actually succeeded.
 function persist() { const snap = $("src").value; pendSnap = snap; saveId = send("writeFile", {path: FILE, content: snap}); }
-function doSave() { if (!ws || ws.readyState !== 1 || !isDirty()) return; persist(); send("compile", {file: FILE}); }
+function doSave() {
+  if (!ws || ws.readyState !== 1 || !isDirty()) return; persist(); send("compile", {file: FILE});
+  // A PAUSED game's reload is dispatch-driven (the S3 finding) — poll it now
+  // through the pause so the edit acks immediately.  (The 200 ms reload
+  // throttle wants the save settled first.)
+  if (gws && gamePaused) setTimeout(() => { if (gws && gamePaused) gws.send("D!:reload"); }, 400);
+}
 // ── debugger — gutter breakpoints, step controls, variables + watch panels ──
 let bps = new Set(), paused = false, curLine = 0, watches = [], lastLocals = [], reqcb = {};
 function sendCb(req, extra, cb) { const id = send(req, extra); reqcb[id] = cb; return id; }     // route this request's reply to cb
@@ -598,6 +608,82 @@ function finishTests(m) {
   $("tsum").textContent = (m.failed === 0 ? (m.passed + "/" + total + " passed") : (m.failed + " of " + total + " failed")) + files;
   $("tsum").className = m.failed === 0 ? "ok" : "bad";
 }
+// ── game debugger (@PLN18 08-S7) — the D!: control channel, dialed DIRECTLY ──
+// A kernel game prints its port; this page is then the debug client (the
+// channel is loopback-only and enabled by launch_game's LOFT_DEBUG_CONTROL).
+// Breakpoints are FN-ENTRY, name-keyed — they survive live reloads, and the
+// page re-arms them after a build swap (the S7 loop, in the UI).
+let gws = null, gport = 0, gameBps = new Set(), gamePaused = false, gameSwapped = false, reattach = 0;
+function gstat(t) { $("gstat").textContent = t; }
+function setGamePauseUi() { $("gresume").disabled = !gamePaused; }
+function gameVarsOff() { if (!paused) { $("dbg").hidden = true; $("dbgfn").textContent = ""; renderVars([]); } }
+function gdial() {
+  if (gws) { try { gws.close(); } catch {} }
+  gws = new WebSocket("ws://127.0.0.1:" + gport + "/ws");
+  gws.onopen = () => {
+    reattach = 0; $("gdbg").hidden = false;
+    gstat(gameSwapped ? "swapped — debug reattached" : "debug ready");
+    gameBps.forEach(fn => gws.send("D!:bp " + fn));      // re-arm across a swap
+  };
+  gws.onmessage = ev => onGameCtl(String(ev.data));
+  gws.onclose = () => {
+    if (reattach > 0) { reattach--; setTimeout(gdial, 300); return; }
+    $("gdbg").hidden = true; gws = null; gamePaused = false; setGamePauseUi(); gameVarsOff();
+  };
+  gws.onerror = () => {};                                // close fires after; the retry lives there
+}
+function renderGameVars(locals) {
+  const v = $("vars"); v.innerHTML = "";
+  if (!locals.length) { v.innerHTML = '<div class="none">no bindings</div>'; return; }
+  for (const lc of locals) {
+    const row = document.createElement("div"); row.className = "var";
+    const nm = document.createElement("span"); nm.className = "vn"; nm.textContent = lc.name;
+    const vv = document.createElement("span"); vv.className = "vv"; vv.textContent = lc.value; vv.title = "game frame (read-only)";
+    row.append(nm, vv); v.appendChild(row);
+  }
+}
+function onGameCtl(msg) {
+  if (!msg.startsWith("D:")) return;                     // game broadcasts also land on this socket — ignore
+  if (msg.startsWith("D:hit ")) {
+    gamePaused = true; setGamePauseUi();
+    const rest = msg.slice(6), sp = rest.indexOf(" ");
+    const fn = sp < 0 ? rest : rest.slice(0, sp);
+    const locals = sp < 0 ? [] : rest.slice(sp + 1).split("|").filter(Boolean).map(kv => {
+      const eq = kv.indexOf("="); return {name: kv.slice(0, eq), value: kv.slice(eq + 1)};
+    });
+    $("dbg").hidden = false; $("dbgfn").textContent = fn + " · game";
+    renderGameVars(locals);
+    gstat("⏸ paused in " + fn);
+    $("out").textContent += "\n⏸ game paused in " + fn + "\n";
+  }
+  else if (msg === "D:resumed") { gamePaused = false; setGamePauseUi(); gstat("running"); gameVarsOff(); }
+  else if (msg.startsWith("D:reload ")) $("out").textContent += "[game] live-reload " + msg.slice(9) + (gamePaused ? " (applied through the pause)" : "") + "\n";
+  else if (msg.startsWith("D:rebuild ")) {
+    const st = msg.slice(10);
+    if (st === "started" || st === "1") { gstat("rebuilding…"); setTimeout(() => { if (gws) gws.send("D!:rebuild?"); }, 400); }
+    else if (st === "2") { gstat("rebuild ready — ⇄ to swap"); $("gswap").disabled = false; }
+    else gstat("rebuild " + st);
+  }
+  else if (msg.startsWith("D:swap ")) {
+    if (msg.endsWith("true")) { gstat("swapping…"); reattach = 20; gameSwapped = true; $("gswap").disabled = true; }
+    else gstat("swap refused (rebuild first)");
+  }
+  else if (msg.startsWith("D:ok bp ")) gstat("⛳ " + msg.slice(8) + " (fn entry)");
+  else if (msg.startsWith("D:err") || msg.startsWith("D:quitting")) gstat(msg.slice(2));
+}
+$("gbp").onclick = () => {
+  const fn = $("gbpin").value.trim(); if (!fn || !gws) return;
+  gameBps.add(fn); gws.send("D!:bp " + fn); $("gbpin").value = "";
+};
+$("gbpin").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("gbp").onclick(); } });
+$("gresume").onclick = () => { if (gws) gws.send("D!:resume"); };
+$("grebuild").onclick = () => { if (gws) gws.send("D!:rebuild"); };
+$("gswap").onclick = () => { if (gws) gws.send("D!:swap auto"); };
+function gameDebugReset() {
+  if (gws) { try { gws.close(); } catch {} }
+  gws = null; gport = 0; gameBps.clear(); gamePaused = false; gameSwapped = false; reattach = 0;
+  $("gdbg").hidden = true; $("gswap").disabled = true; setGamePauseUi(); gameVarsOff();
+}
 // ── game launcher (slice 6) — a real loft child process; output arrives via polls ──
 // Deliberately NOT disabled while paused: the game is its own process and never touches
 // the paused session, so comparing a running game against a frozen frame is fine.
@@ -605,21 +691,41 @@ let gameTimer = 0;
 function setGameUi(running) { $("game").textContent = running ? "■ Stop game" : "🎮 Game"; }
 function pollGame() {
   sendCb("gameStatus", {}, m => {
-    if (m.output) $("out").textContent += m.output;
+    if (m.output) {
+      $("out").textContent += m.output;
+      // A kernel game announces its port — that port is the debug channel.
+      if (!gport) {
+        const pm = m.output.match(/listening on ws:\/\/0\.0\.0\.0:(\d+)\//);
+        if (pm) { gport = +pm[1]; gdial(); }
+      }
+    }
     if (m.running) { gameTimer = setTimeout(pollGame, 500); }
     else {
-      setGameUi(false); gameTimer = 0;
-      $("out").textContent += "\n— game exited" + (m.exit !== undefined ? " (code " + m.exit + ")" : "") + " —\n";
+      gameTimer = 0;
+      if (gameSwapped && gws) {
+        // The driver chain retired at the swap; the NEW build serves on.
+        $("out").textContent += "\n— build swapped; the game continues (control attached) —\n";
+        setGameUi(true);
+      } else {
+        setGameUi(false); gameDebugReset();
+        $("out").textContent += "\n— game exited" + (m.exit !== undefined ? " (code " + m.exit + ")" : "") + " —\n";
+      }
     }
   });
 }
 function gameClick() {
   if (!ws || ws.readyState !== 1) return;
+  if (!gameTimer && gameSwapped && gws) {          // a swapped game is no longer our child: quit over control
+    gws.send("D!:quit");
+    $("out").textContent += "\n— game stopped (quit over the control channel) —\n";
+    setGameUi(false); gameSwapped = false; gameDebugReset();
+    return;
+  }
   if (gameTimer) {                                 // running → stop
     clearTimeout(gameTimer); gameTimer = 0;
     sendCb("stopGame", {}, m => {
       if (m.output) $("out").textContent += m.output;
-      $("out").textContent += "\n— game stopped —\n"; setGameUi(false);
+      $("out").textContent += "\n— game stopped —\n"; setGameUi(false); gameDebugReset();
     });
     return;
   }

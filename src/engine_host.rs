@@ -1636,6 +1636,12 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
             let ok = swap_start_impl(&target);
             Some(format!("D:swap {ok}"))
         }
+        ("quit", _) => {
+            // The editor's stop for a SWAPPED game (no longer its child).
+            eprintln!("loft-debug: quit via the control channel");
+            let _ = deliver(k, cid, "D:quitting", false);
+            std::process::exit(0);
+        }
         _ => Some(format!("D:err unknown command {cmd:?}")),
     };
     if let Some(msg) = reply {

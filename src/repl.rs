@@ -1732,9 +1732,23 @@ impl ReplSession {
         if std::env::var_os("LOFT_LIVE_RELOAD").is_none() {
             cmd.env("LOFT_LIVE_RELOAD", "1");
         }
+        // @PLN18 08-S7 editor support — an IDE-launched game is DEBUGGABLE by
+        // default: the D!: control channel answers on the game's port
+        // (loopback-only) and a compiled game keeps the parked interpreter
+        // for breakpoint flips.  Opt out with =0 (the LIVE_RELOAD pattern).
+        if std::env::var_os("LOFT_DEBUG_CONTROL").is_none() {
+            cmd.env("LOFT_DEBUG_CONTROL", "1");
+        }
+        if std::env::var_os("LOFT_LIVE_FLIP").is_none() {
+            cmd.env("LOFT_LIVE_FLIP", "1");
+        }
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // A `--native` game serves from a GRANDCHILD of this child (the S1
+        // process-model finding) — own group so stop_game can reach it all.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("cannot launch game: {e}"))?;
@@ -1774,6 +1788,12 @@ impl ReplSession {
     /// is running.
     pub fn stop_game(&mut self) -> Option<String> {
         let mut g = self.game.take()?;
+        // Kill the whole process GROUP this session created: a native game's
+        // real server is a grandchild (driver -> compiled binary).
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(g.child.id() as i32, libc::SIGKILL);
+        }
         let _ = g.child.kill();
         let _ = g.child.wait();
         Some(std::mem::take(

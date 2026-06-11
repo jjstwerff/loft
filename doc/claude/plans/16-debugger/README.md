@@ -524,12 +524,26 @@ M5d (the condition reuses **E**).
   nearest `loft.toml`); **(6a)** the game-process layer (`launchGame`/`gameStatus`/`stopGame`
   — a real `loft` child process streaming into the shell; the same transport a windowed GL
   game uses). The session takes `--lib` dirs and `load_program` is idempotent, so
-  library-using programs edit/run/test repeatedly. **Open work on this plan:** **6b/6c**
-  (hot-swap `reload` + breakpoint-in-game — gated on the C71/N9 shared-store execution model
-  getting its build plan); verify the **registry GL path** (`loft install graphics` →
+  library-using programs edit/run/test repeatedly.
+  **(6b/6c — LANDED 2026-06-11 via @PLN18 08-S7's control channel.)**  The shell gained
+  the **game-debug strip**: a kernel game announces its port in the streamed output; the
+  PAGE dials the game's `D!:` control channel directly (a plain WebSocket — loopback-only,
+  enabled by `launch_game`'s new `LOFT_DEBUG_CONTROL=1` + `LOFT_LIVE_FLIP=1` defaults) and
+  drives the whole S7 loop from the bar: fn-entry breakpoints (`⛳` — name-keyed, they
+  survive reloads and are RE-ARMED after a build swap), hit notifications populate the
+  existing Variables panel (read-only, `fn · game`), `⏵` resume, a save while paused sends
+  the reload poll-now (`D:reload applied` through the pause), `⟳` background rebuild →
+  `⇄` swap (the control socket rides the handover: reattach-with-retry + re-arm), and
+  Stop uses `D!:quit` over the channel when the game was swapped (no longer the session's
+  child).  `stop_game` now kills the process GROUP (a `--native` game's server is a
+  grandchild).  `tests/serve.rs::serve_game_debug_control_end_to_end` drives the exact
+  page flow through real components; the strip is smoke-locked in
+  `serve_http_shell_has_game_debug_strip`.
+  **Open work on this plan:** verify the **registry GL path** (`loft install graphics` →
   `launchGame` with a native window — see IDE.md slice 6's correction note); **multi-file
   navigation**; `--lib`-free **local path-dep resolution**; streamed (vs batched) test
-  results; the baseline-parser cache.
+  results; the baseline-parser cache; game-frame **expression eval** (v1 shows fn-entry
+  bindings; @PLN14); line-keyed game breakpoints (08's source-mapping residual).
 
 **M6 — on-stack deopt (Q7, deferred).** True mid-flight introspection without loop
 re-entry (a non-looping program, the *exact* current invocation, step-out into a
