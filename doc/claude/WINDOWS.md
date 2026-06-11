@@ -105,7 +105,8 @@ unix-gated lifecycle suite leaves open.  Warm-cache round time: ~40 s.
   lexer registers `parse_string` sources by name and `switch` re-serves
   them from memory (mirroring the wasm VIRT_FS branch).  Regression:
   `tests/parse_str.rs` (cross-platform) + the windows-probe serve test
-  (the Windows leg).
+  (the Windows leg — VALIDATED on windows-latest 2026-06-11, run
+  27380012429: parse_str + use + serve all green).
 
 **Remaining unprobed**: process-group-free cleanup (`stop_game` orphans
 the `--native` grandchild on Windows — Job Objects / `taskkill /T` is the
