@@ -902,91 +902,6 @@ impl Parser {
 
     /// @P377 / S1 — parse-time NRVO for the intermediate-local return shape.
     ///
-    /// #339 — pass-2 late-promotion fix-up.  `ref_return` just GREW
-    /// `self.context`'s arity during pass 2 (hidden Reference return-buffer
-    /// attrs).  Every function whose pass-2 body was already parsed
-    /// (definition order == parse order) may hold calls to it with the old,
-    /// short arg list; codegen would panic 'Too few parameters'.  Bring
-    /// those calls up to the new arity exactly the way `add_defaults` does
-    /// for in-order callers: a fresh `__ref_N` work-ref from the CALLER's
-    /// own variable table (marked `caller_hidden_buf`), passed in the
-    /// hidden slot, with the @PLAN51 `Set(vr, Null)` preamble prepended so
-    /// the slot allocator sees a first_def.  Only Reference returns can
-    /// promote late (the Vector/Enum arms have no `collect_hidden_ref_args`
-    /// recovery), and `filter_hidden` strips hidden deps from Reference
-    /// results — so callers' binding TYPES are unaffected; only the call
-    /// arity needs the patch.
-    fn retrofit_callers_hidden_args(&mut self) {
-        let target = self.context;
-        let n_attrs = self.data.def(target).attributes().len();
-        // #339 sibling (H1 census, 2026-06-11): late pass-2 growth happens
-        // for ALL THREE heap-return kinds — a vector-literal tail promotes
-        // in pass 2 only, exactly like the Reference wrapper chain (7-line
-        // repro: a caller above `pub fn colours() -> vector<text>
-        // { ["r","g","b"] }` panicked 'Too few parameters').  Collect every
-        // hidden heap-buffer attr kind, mirroring `add_defaults`.
-        let hidden: Vec<(usize, Type)> = self
-            .data
-            .def(target)
-            .attributes()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, a)| match &a.typedef {
-                Type::Reference(td, _) if a.hidden => Some((i, Type::Reference(*td, Deps::none()))),
-                Type::Vector(content, _) if a.hidden => {
-                    Some((i, Type::Vector(content.clone(), Deps::none())))
-                }
-                Type::Enum(td, true, _) if a.hidden => {
-                    Some((i, Type::Enum(*td, true, Deps::none())))
-                }
-                _ => None,
-            })
-            .collect();
-        if hidden.is_empty() {
-            return;
-        }
-        for d in 0..target {
-            if self.data.def_type(d) != crate::data::DefType::Function {
-                continue;
-            }
-            if *self.data.def(d).code() == Value::Null {
-                continue;
-            }
-            let mut code =
-                std::mem::replace(&mut self.data.definitions[d as usize].code, Value::Null);
-            let mut vars = std::mem::replace(
-                &mut self.data.definitions[d as usize].variables,
-                crate::variables::Function::new("", "none"),
-            );
-            let mut new_inits: Vec<Value> = Vec::new();
-            code.map_nodes(&mut |n| {
-                if let Value::Call(f, args) = n
-                    && *f == target
-                    && args.len() < n_attrs
-                {
-                    for (i, buf_tp) in &hidden {
-                        let i = *i;
-                        if args.len() == i {
-                            let vr = vars.work_refs(buf_tp, &mut self.lexer);
-                            vars.mark_caller_hidden_buf(vr);
-                            new_inits.push(crate::data::v_set(vr, Value::Null));
-                            args.push(Value::Var(vr));
-                        }
-                    }
-                }
-            });
-            if !new_inits.is_empty()
-                && let Value::Block(bl) = &mut code
-            {
-                for (k, init) in new_inits.into_iter().enumerate() {
-                    bl.operators.insert(k, init);
-                }
-            }
-            self.data.definitions[d as usize].variables = vars;
-            self.data.definitions[d as usize].code = code;
-        }
-    }
-
     /// After `ref_return` has promoted `cv` to the function's hidden return
     /// buffer attribute, an inner heap-returning call inside the body still
     /// targets its own parser-synthesised `__ref_N` work-ref, and the
@@ -3515,7 +3430,6 @@ impl Parser {
                     }
                 }
             }
-            let mut grew_in_pass2 = false;
             for (e_idx, v) in expanded.iter().enumerate() {
                 let transitive = e_idx >= direct_count;
                 // A reassigned returned local must NOT be NRVO-promoted (see above).
@@ -3570,11 +3484,12 @@ impl Parser {
                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
-                // #339 backstop: patch earlier-parsed callers when growth
-                // does happen (lambda-class defs).
-                if !self.first_pass {
-                    grew_in_pass2 = true;
-                }
+                // Growth here is lambda-only (asserted above): a lambda is
+                // defined at its literal site and invoked via CallRef
+                // (fn-ref dispatch, never an arity-filled Call), so no
+                // earlier caller can hold a short arg list — the #339
+                // retro-patch this branch once needed is deleted
+                // (@PLAN59 phase 2).
             }
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
@@ -3593,9 +3508,6 @@ impl Parser {
                     return;
                 }
             };
-            if grew_in_pass2 {
-                self.retrofit_callers_hidden_args();
-            }
         }
     }
 

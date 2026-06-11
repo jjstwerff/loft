@@ -145,6 +145,16 @@ pub struct Parser {
     ///
     /// The second pass:
     /// - Creates code, assumes that all types are known.
+    // The two-pass contract (H5, @PLAN59): pass 1 registers definitions
+    // and FINAL signatures — since @PLAN59 every body-carrying plain fn's
+    // hidden `__retbuf` exists from its pass-1 signature parse, so attr
+    // counts CANNOT change in pass 2 (`ref_return` debug-asserts it; only
+    // lambda-class defs may still grow, and they have no earlier callers).
+    // Pass 2 re-parses bodies against those fixed signatures.  Variable
+    // tables persist across passes BY NAME (pass 2 re-finds rather than
+    // re-creates) — the parser is therefore NOT re-entrant beyond two
+    // passes: a third pass leaves tables half-migrated (verified by the
+    // #339 third-pass experiment, which segfaulted).
     first_pass: bool,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
@@ -4223,12 +4233,12 @@ impl Parser {
     }
 
     fn add_defaults(&mut self, d_nr: u32, actual: &mut Vec<Value>, all_types: &mut Vec<Type>) {
-        // When filling extra attrs for a recursive self-call on the second pass, use a
-        // separate __rref_N counter so we don't consume __ref_N slots that the outer
-        // function's return-value work-ref needs to keep the same name it had on the
-        // first pass (allowing ref_return to find the name match instead of adding a
-        // new attribute and growing the function's attr count across passes).
-        let is_recursive_self = d_nr == self.context && !self.first_pass;
+        // @PLAN59 phase 2: the `__rref_N` recursive-self counter dance is
+        // gone.  It existed to keep `__ref_N` numbering pass-stable so
+        // `ref_return` could re-find its promoted attr BY NAME instead of
+        // growing the attr count across passes.  With the signature-time
+        // `__retbuf` the attr exists before any body parses and the
+        // promotion re-find no longer depends on work-ref numbering.
         // Extend to full parameter count so we can fill gaps from named arguments.
         while actual.len() < self.data.attributes(d_nr) {
             actual.push(Value::Null);
@@ -4252,11 +4262,7 @@ impl Parser {
                     // indices); inherited verbatim it reads as CALLER var
                     // numbers and mislabels the fresh buffer a borrow.
                     let buf_tp = Type::Vector(content.clone(), Deps::none());
-                    let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
-                    } else {
-                        self.vars.work_refs(&buf_tp, &mut self.lexer)
-                    };
+                    let vr = self.vars.work_refs(&buf_tp, &mut self.lexer);
                     // @PLAN51 Cluster IV: tag this work-ref so parse_code's
                     // preamble emits Set(vr, Null) regardless of vr's
                     // typedef dep list.  Without it, if-tail / recursion
@@ -4274,11 +4280,7 @@ impl Parser {
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
                     let buf_tp = Type::Reference(content, Deps::none());
-                    let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
-                    } else {
-                        self.vars.work_refs(&buf_tp, &mut self.lexer)
-                    };
+                    let vr = self.vars.work_refs(&buf_tp, &mut self.lexer);
                     self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Reference(content, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
@@ -4299,11 +4301,7 @@ impl Parser {
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
                     let buf_tp = Type::Enum(content, true, Deps::none());
-                    let vr = if is_recursive_self {
-                        self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
-                    } else {
-                        self.vars.work_refs(&buf_tp, &mut self.lexer)
-                    };
+                    let vr = self.vars.work_refs(&buf_tp, &mut self.lexer);
                     self.vars.mark_caller_hidden_buf(vr);
                     all_types[a_nr] = Type::Enum(content, true, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);

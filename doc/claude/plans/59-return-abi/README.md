@@ -248,11 +248,20 @@ self-test; brick-buster `--html` + the headless GL render gate
 probe battery (caller-first, wrapper chains, closures, REPL captures,
 par over promoted callees).
 
-## Phase 2 (cleanups, open)
+## Phase 2 — DONE (2026-06-11)
 
-- `retrofit_callers_hidden_args` is now a lambda-only backstop (the
-  debug assert proves plain fns never grow) — delete after one quiet
-  release, together with the `grew_in_pass2` plumbing.
-- The `__rref_` recursive-self dance in `add_defaults` should now be
-  reducible (arity can no longer differ across passes).
-- H5's name-stability asserts; COMPILER.md fn-ABI section.
+- `retrofit_callers_hidden_args` + `grew_in_pass2` DELETED — lambda
+  invocations go through CallRef (fn-ref dispatch), never an
+  arity-filled `Call`, so the retro-patch could never patch anything
+  for the only defs still allowed to grow.
+- The `__rref_` recursive-self dance DELETED (`work_refs_recursive` +
+  the `work_rref` counter): the signature-time attr exists before any
+  body parses, so the promotion re-find no longer depends on work-ref
+  numbering.  The `__rref_` name patterns in scopes.rs remain as
+  harmless dead halves of string ORs.
+- The two-pass contract documented at the `first_pass` flag
+  (`parser/mod.rs`); the calling convention documented in
+  [COMPILER.md § Function calling convention](../../COMPILER.md).
+
+H1 is RETIRED in STABILITY_HOTSPOTS.  Gates: full suite 2315/2316
+(env-only kernel_port), clippy 0, fmt clean.

@@ -330,4 +330,16 @@ mechanically.  Not started; should precede any new `par` feature work.
 
 ## Retired
 
-(none yet)
+### H1 — Analysis-dependent function arity (RETIRED 2026-06-11)
+
+Phase 1 (the unconditional `__retbuf` ABI + the dispatcher census:
+plain calls, par lanes with witness-free, entry invocations, the
+cdylib shared bridge with runtime type-name ids) and phase 2 (deleted:
+`retrofit_callers_hidden_args`, the `grew_in_pass2` plumbing, the
+`__rref_` recursive-self counter dance; documented: the two-pass
+contract at the `first_pass` flag, the calling convention in
+COMPILER.md § Function calling convention) — all landed on `bugs325`.
+Arity is a pure function of the declaration; pass-2 growth is
+debug-asserted impossible for plain fns.  H5's load mostly dissolved
+with it (the contract is now documented + the growth assert enforces
+its hardest clause).  Full history: [plans/59-return-abi](plans/59-return-abi/README.md).

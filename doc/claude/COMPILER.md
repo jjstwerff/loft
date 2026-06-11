@@ -819,6 +819,38 @@ Calls `database.finish()` to compute final field byte offsets for all record typ
 
 ---
 
+## Function calling convention — the heap-return buffer (@PLAN59)
+
+Every BODY-carrying plain fn returning `Reference` / `Vector` /
+struct-`Enum` carries one hidden attribute `__retbuf` (typed as the
+return type, last position) plus a backing argument var from its pass-1
+signature parse — **arity is a pure function of the declaration**.
+
+- **Promotion** (`ref_return`): an NRVO-promotable returned local takes
+  over the buffer by ROLE SWAP — the attribute is renamed to the local
+  (the attr↔var coupling is by name), the placeholder var is retired
+  (`Function::retire_argument`), the local keeps its var number (frame
+  position is var-number order).  A non-promoted body simply never
+  writes the buffer.
+- **Callers** fill every hidden heap attr with a fresh `__ref_N`
+  work-ref (`add_defaults`); its null-init preamble binds the NULL
+  SENTINEL (no allocation — the self-dep keeps `emit_null_dbref` off the
+  `null_named` path).  Results are consumed BY VALUE; cleanup is the
+  witness pair `OpFreeRef(x)` + `OpFreeRefIfDistinct(__ref, x)`.
+- **Other invokers speak the same ABI**: par worker lanes count dests by
+  TYPE and witness-free unadopted dests; entry invocations
+  (`execute_argv` — incl. the REPL's capture wrappers) push sentinel
+  dests; the cdylib shared bridge resolves dest type ids AT RUNTIME by
+  type name in the caller's store.
+- **Excluded** (no buffer): native `;` declarations, ops and
+  `#rust`-templated fns (Rust-implemented, ABI frozen), generic
+  templates (specialisations never promote), lambdas (in-place growth;
+  invoked via fn-ref dispatch, no earlier caller can exist).
+
+Design + probe history: `plans/59-return-abi/README.md`.
+
+---
+
 ## Scope analysis (`src/scopes.rs`)
 
 `scopes::check(data)` is called after parsing a file. It visits every function's IR tree and:
