@@ -74,12 +74,18 @@ share-marker is deliberately NOT writable through this path.  ✅ uniform.
 
 ### Crossing sites (the #306 class — each is a manual space bridge)
 
-1. **`scopes.rs:1614–1646` (`dep_has_var`)** — translates def-space attr
-   indices to frame vars through `def.attributes[a].name` lookup, with a
-   FALLBACK `a == v // fallback for non-attribute deps` that compares
-   ACROSS spaces when the index is out of attr range.  Works only while
-   def-space lists stay uncontaminated (probe below); the migration makes
-   the fallback unrepresentable.
+1. **`scopes.rs:1614–1646` (`dep_has_var`)** — translates attr indices to
+   frame vars through `def.attributes[a].name`, with a fallback `a == v`
+   for out-of-range entries.  **Step-3 bisect finding (2026-06-11): the
+   fallback is LIVE, not a fossil** — the BLOCK-RESULT type's deps
+   (`tp.depend()`) are MIXED-space by contract: entries below the attr
+   count are attribute indices, entries above are FRAME var numbers (a
+   factory's returned fn-ref carries its closure work var this way).
+   Removing the arm freed closure records early — `26-closures`' two
+   `make_adder` results silently shared one record.  The positional
+   disambiguation (in-range = attr, out-of-range = frame) is the current
+   contract; a future step makes block-result types carry properly
+   tagged/split deps instead.
 2. **`scopes.rs:2379–2391` (`check_ref_leaks`)** — pools
    `ret_type.depend()` (def space) and `function.tp(ret_var).depend()`
    (frame space) into ONE `HashSet<u16>` matched against frame var
@@ -101,10 +107,12 @@ An env-gated probe in `scopes::check` scanned every parsed function for
 def-space dep entries `>= attributes.len()` across: the full stdlib,
 `tests/scripts/100-enhancements.loft`, the moros_glb example, and the
 whole crawler kernel self-test (combat @ 458adcc).
-**Zero hits.**  Conclusion: the out-of-range guards in `is_borrowed_view`
-and `dep_has_var`'s fallback defend against contamination that does NOT
-occur in today's corpus — they are fossil defenses (likely pre-#306).
-The migration may make them unrepresentable rather than preserving them.
+**Zero hits** — for `Definition.returned` lists.  CAUTION (learned in
+step 3): the probe covered RETURNED types only; BLOCK-RESULT types
+(`dep_has_var`'s other input) are mixed-space by contract and out-of-range
+entries there are real frame vars, not contamination.  `is_borrowed_view`
+reads returned-only, so its `>= len` arms stay defensive (debug-screams
+added); `dep_has_var`'s fallback is load-bearing and stays.
 
 ## Step-2 migration design (M–L; own quiet window)
 
@@ -146,6 +154,12 @@ wide to combine with other work.
 
 - [x] Step 1 — this inventory (semantic model, 84+ classified sites,
       corpus probe: no contamination).
-- [ ] Step 2 — alias-rename commit.
-- [ ] Step 3 — newtype flip + constructor sweep + fossil removal.
-- [ ] Step 4 — debug-space asserts green over the full suite.
+- [x] Step 2 — alias-rename commit.
+- [x] Step 3 — newtype flip + constructor sweep (named constructors at
+      every creation site; `resolve_deps`/`ref_return` typed as THE
+      converters; debug screams on contaminated reads).  The dep_has_var
+      "fossil" turned out load-bearing (see crossing sites) — kept.
+- [x] Step 4 — release + debug full-suite runs green (space asserts live
+      in debug).
+- [ ] Step 5 (future) — split block-result mixed-space deps into tagged
+      halves so the positional contract in `dep_has_var` can retire.

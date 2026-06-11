@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
+use crate::data::Deps;
 
 /// P194 helper — extract the host reference and base position from
 /// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
@@ -296,7 +297,7 @@ impl Parser {
             let call = std::mem::replace(v, Value::Null);
             *v = v_block(
                 vec![v_set(w, call), Value::Var(w)],
-                Type::Text(vec![w]),
+                Type::Text(Deps::frame1(w)),
                 "synth text dest",
             );
             return;
@@ -783,7 +784,7 @@ impl Parser {
                 && deps.contains(v_nr)
             {
                 let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
-                stripped = Type::Reference(*d, kept);
+                stripped = Type::Reference(*d, Deps::frame(kept));
                 &stripped
             } else {
                 tp
@@ -1084,7 +1085,7 @@ use a separate collection or add after the loop"
             && ir_mentions_var(code, var_nr)
         {
             let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
             let tmp = self.create_unique("__p390_tmp", &vec_tp);
             self.vars.defined(tmp);
             // (1) materialise the slice iterator into the fresh temp (reads the
@@ -1129,7 +1130,7 @@ use a separate collection or add after the loop"
             && self.is_field(to)
         {
             let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
             let tmp = self.create_unique("__p287_tmp", &vec_tp);
             self.vars.defined(tmp);
             // (2) materialise iter → tmp (mutates *code into the materialise IR).
@@ -1269,7 +1270,7 @@ use a separate collection or add after the loop"
                 let name = self.vars.name(var_nr).to_string();
                 let shadow = self.vars.add_variable(
                     &format!("__tp_{name}"),
-                    &Type::Text(Vec::new()),
+                    &Type::Text(Deps::none()),
                     &mut self.lexer,
                 );
                 self.vars.set_promoted_from(shadow, var_nr);
@@ -1383,7 +1384,7 @@ use a separate collection or add after the loop"
                     // lowering) — build the temp as a fresh empty vector and
                     // element-append the borrow into it BEFORE the clear.
                     let rhs_saved = code.clone();
-                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
                     let init_tmp = v_set(tmp, Value::Null);
                     let fill_tmp = self.cl(
@@ -1475,7 +1476,7 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
             self.change_var(to, &vec_tp);
             if !self.first_pass {
                 // Break the alias.  The standard type-inference copied the RHS
@@ -1597,7 +1598,7 @@ use a separate collection or add after the loop"
                     Type::Sorted(_, _, d)
                     | Type::Hash(_, _, d)
                     | Type::Index(_, _, d)
-                    | Type::Spacial(_, _, d) => d.clone(),
+                    | Type::Spacial(_, _, d) => d.to_vec(),
                     _ => Vec::new(),
                 };
                 for d in deps {
@@ -2461,7 +2462,7 @@ use a separate collection or add after the loop"
         } else if op == "+=" && matches!(f_type, Type::Text(_)) {
             let v = self
                 .vars
-                .unique("field", &Type::Text(vec![]), &mut self.lexer);
+                .unique("field", &Type::Text(Deps::none()), &mut self.lexer);
             *code = Value::Var(v);
             *parent_tp = Type::Null;
             v
@@ -2572,7 +2573,7 @@ use a separate collection or add after the loop"
             unreachable!()
         };
         let elm_tp = *elm_tp;
-        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
         self.change_var(to, &vec_tp);
         if !self.first_pass
             && let Value::Iter(_, init, next, _) = code.clone()

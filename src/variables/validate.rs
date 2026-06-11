@@ -781,7 +781,7 @@ mod invariant_tests {
     //! corresponding invariant fires.
 
     use super::*;
-    use crate::data::IntegerSpec;
+    use crate::data::{Deps, IntegerSpec};
 
     const INT: Type = Type::Integer(IntegerSpec::signed32());
 
@@ -872,7 +872,7 @@ mod invariant_tests {
         // Two Text vars at identical (slot, size) with disjoint
         // lifetimes — permitted RefSlot reuse.
         let mut f = mk_fn();
-        let text = Type::Text(Vec::new());
+        let text = Type::Text(Deps::none());
         add_local(&mut f, "t1", &text, 4, 0, 10);
         add_local(&mut f, "t2", &text, 4, 11, 20);
         assert_eq!(check_i5_kind_consistency(&f.variables), None);
@@ -884,7 +884,7 @@ mod invariant_tests {
         // slot that overlaps the Text's range.  Disjoint lifetimes
         // but kinds differ → I5 must fire.
         let mut f = mk_fn();
-        let text = Type::Text(Vec::new());
+        let text = Type::Text(Deps::none());
         add_local(&mut f, "t", &text, 4, 0, 10);
         add_local(&mut f, "i", &INT, 4, 11, 20);
         assert!(check_i5_kind_consistency(&f.variables).is_some());
@@ -895,8 +895,8 @@ mod invariant_tests {
         // Both RefSlot, same start slot, different sizes (24 B Text
         // vs 12 B DbRef).  Disjoint lifetimes.  Must fire.
         let mut f = mk_fn();
-        let text = Type::Text(Vec::new());
-        let refer = Type::Reference(0, Vec::new());
+        let text = Type::Text(Deps::none());
+        let refer = Type::Reference(0, Deps::none());
         add_local(&mut f, "t", &text, 4, 0, 10);
         add_local(&mut f, "r", &refer, 4, 11, 20);
         assert!(check_i5_kind_consistency(&f.variables).is_some());
@@ -919,8 +919,8 @@ mod invariant_tests {
         // lifetimes — size and slot match, kinds match (both
         // RefSlot), both drop via OpFreeRef.  Permitted.
         let mut f = mk_fn();
-        let r = Type::Reference(0, Vec::new());
-        let v = Type::Vector(Box::new(INT), Vec::new());
+        let r = Type::Reference(0, Deps::none());
+        let v = Type::Vector(Box::new(INT), Deps::none());
         add_local(&mut f, "r", &r, 4, 0, 10);
         add_local(&mut f, "vec", &v, 4, 11, 20);
         assert_eq!(check_i5_kind_consistency(&f.variables), None);
@@ -1057,7 +1057,7 @@ mod invariant_tests {
         // Text is 24 bytes (> 8) → zone 2, skipped by I7.
         // Place it well above scope 1's frame; I7 must still pass.
         let code = mk_block(1, 8);
-        let v = add_local(&mut f, "t", &Type::Text(Vec::new()), 100, 5, 10);
+        let v = add_local(&mut f, "t", &Type::Text(Deps::none()), 100, 5, 10);
         set_scope(&mut f, v, 1);
         assert_eq!(
             check_i7_scope_frame(&f.variables, &f, &code, compute_local_start(&f)),

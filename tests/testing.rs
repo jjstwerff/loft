@@ -525,7 +525,7 @@ impl Test {
             } else if let Value::Long(_) = self.result {
                 loft::data::I64.clone()
             } else if let Value::Text(_) = self.result {
-                Type::Text(Vec::new())
+                Type::Text(loft::data::Deps::none())
             } else if let Value::Float(_) = self.result {
                 Type::Float
             } else if let Value::Null = self.result {

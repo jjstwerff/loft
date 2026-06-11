@@ -1,6 +1,7 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+use crate::data::Deps;
 use crate::data::IntegerSpec;
 use std::collections::HashSet;
 
@@ -198,7 +199,7 @@ impl Parser {
             self.lexer.revert(link);
             if looks_like_struct_body {
                 self.parse_object(r, val);
-                return Type::Reference(r, Vec::new());
+                return Type::Reference(r, Deps::none());
             }
         }
         self.lexer.token("{");
@@ -958,7 +959,7 @@ impl Parser {
                 {
                     for &(i, td) in &hidden {
                         if args.len() == i {
-                            let buf_tp = Type::Reference(td, Vec::new());
+                            let buf_tp = Type::Reference(td, Deps::none());
                             let vr = vars.work_refs(&buf_tp, &mut self.lexer);
                             vars.mark_caller_hidden_buf(vr);
                             new_inits.push(crate::data::v_set(vr, Value::Null));
@@ -1168,7 +1169,7 @@ impl Parser {
         // single work-ref whose value is well-defined at the join
         // point.  Mirrors the unification done by P236's
         // `unify_if_branches_work_refs` for struct returns.
-        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
+        let synth_ref_type = Type::Reference(synthetic_d_nr, Deps::none());
         let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
         let known_type = self.data.def(synthetic_d_nr).known_type();
         self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
@@ -1195,7 +1196,7 @@ impl Parser {
                 if let Some(last) = b.operators.last_mut() {
                     self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
                 }
-                b.result = Type::Reference(synthetic_d_nr, vec![w]);
+                b.result = Type::Reference(synthetic_d_nr, Deps::frame1(w));
                 return;
             }
             Value::Insert(ops) => {
@@ -1225,7 +1226,7 @@ impl Parser {
         ops.push(Value::Var(w));
         *tail = crate::data::v_block(
             ops,
-            Type::Reference(synthetic_d_nr, vec![w]),
+            Type::Reference(synthetic_d_nr, Deps::frame1(w)),
             "synthetic_tuple_return",
         );
     }
@@ -2195,7 +2196,7 @@ impl Parser {
             Type::Float
         } else if let Some(s) = self.lexer.has_cstring() {
             lit = Value::Text(s);
-            Type::Text(Vec::new())
+            Type::Text(Deps::none())
         } else if let Some(c) = self.lexer.has_char() {
             lit = self.cl("OpConvCharacterFromInt", &[Value::Int(c as i32)]);
             Type::Character
@@ -3128,7 +3129,7 @@ impl Parser {
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
             if let Type::Enum(nr, true, _) = t {
-                t = Type::Reference(nr, vec![]);
+                t = Type::Reference(nr, Deps::none());
             }
             // P189b: vector elements that are tuples live as inline bytes
             // in the vector record.  Iteration yields a 12-byte DbRef
@@ -3141,7 +3142,7 @@ impl Parser {
             if let Type::Tuple(ref elems) = t {
                 let elems_clone = elems.clone();
                 let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
-                t = Type::Reference(tuple_d, vec![]);
+                t = Type::Reference(tuple_d, Deps::none());
             }
             for d in dep {
                 t = t.depending(*d);
@@ -3211,12 +3212,12 @@ impl Parser {
                         &mut self.lexer,
                         self.context,
                         n,
-                        Type::RefVar(Box::new(Type::Text(Vec::new()))),
+                        Type::RefVar(Box::new(Type::Text(Deps::none()))),
                     );
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                     self.vars
-                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Vec::new()))));
+                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                 } else if matches!(tp, Type::Tuple(_)) {
                     // @P330: a tuple local hoisted to a tuple parameter
                     // doesn't have a well-defined caller-side null-init —
@@ -3269,7 +3270,7 @@ impl Parser {
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
                 );
             if self.first_pass && is_lambda && !has_work_buf {
-                let work_tp = Type::RefVar(Box::new(Type::Text(Vec::new())));
+                let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
                     self.context,
@@ -3378,7 +3379,7 @@ impl Parser {
         if let Value::Return(inner) = tail {
             return self.materialize_view_return(td, inner);
         }
-        let ref_tp = Type::Reference(td, Vec::new());
+        let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
         let kt = self.data.def(td).known_type();
         let copy_d = self.data.def_nr("OpCopyRecord");
@@ -3390,7 +3391,7 @@ impl Parser {
                 Value::Call(copy_d, vec![orig, Value::Var(w), Value::Int(i32::from(kt))]),
                 Value::Var(w),
             ],
-            Type::Reference(td, vec![w]),
+            Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
         w
@@ -3544,6 +3545,9 @@ impl Parser {
                     grew_in_pass2 = true;
                 }
             }
+            // H2: the rebuilt return-type deps are ATTRIBUTE indices —
+            // tag them so `as_attr_indices` readers verify in debug builds.
+            let dep = Deps::attrs(dep.to_vec());
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
                 Type::Reference(td, _) => Type::Reference(td, dep),
@@ -3590,7 +3594,7 @@ impl Parser {
                 // inheriting that on the literal would fool the `Type::Vector`
                 // arm below (`!dep.contains(ref1_var)`) into skipping the
                 // OpAppendVector copy into __ref_1.  Element type only.
-                let hint = Type::Vector(elm.clone(), Vec::new());
+                let hint = Type::Vector(elm.clone(), Deps::none());
                 let mut parent_tp = Type::Null;
                 self.parse_operators(&hint, &mut v, &mut parent_tp, 0)
             } else {
@@ -3964,7 +3968,7 @@ impl Parser {
                                     crate::data::v_set(wv, Value::Text(String::new())),
                                     self.cl("OpCreateStack", &[Value::Var(wv)]),
                                 ],
-                                Type::Reference(ref_def, vec![wv]),
+                                Type::Reference(ref_def, Deps::frame1(wv)),
                                 "cref_work_buf",
                             ));
                         }
@@ -4028,16 +4032,22 @@ impl Parser {
             {
                 let elem = *elm.clone();
                 let hint = match (name, arg_idx) {
-                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem), vec![])),
-                    ("filter" | "any" | "all" | "count_if", 1) => {
-                        Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
-                    }
+                    ("map", 1) => Some(Type::Function(
+                        vec![elem.clone()],
+                        Box::new(elem),
+                        Deps::none(),
+                    )),
+                    ("filter" | "any" | "all" | "count_if", 1) => Some(Type::Function(
+                        vec![elem],
+                        Box::new(Type::Boolean),
+                        Deps::none(),
+                    )),
                     ("reduce", 2) => {
                         let init_tp = types.get(1).cloned().unwrap_or(elem.clone());
                         Some(Type::Function(
                             vec![init_tp.clone(), elem],
                             Box::new(init_tp),
-                            vec![],
+                            Deps::none(),
                         ))
                     }
                     _ => None,
@@ -4257,7 +4267,7 @@ impl Parser {
                         crate::data::v_set(wv, Value::Text(String::new())),
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
                     ],
-                    Type::Reference(ref_def, vec![wv]),
+                    Type::Reference(ref_def, Deps::frame1(wv)),
                     "cref_work_buf",
                 ));
             }
@@ -4595,7 +4605,7 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        Type::Text(Vec::new())
+        Type::Text(Deps::none())
     }
 
     // <call> ::= [ <expression> { ',' <expression> } ] ')'

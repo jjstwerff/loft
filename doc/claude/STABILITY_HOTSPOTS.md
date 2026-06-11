@@ -122,11 +122,19 @@ different `u16::MAX` meanings), all 84+ reader/writer/converter sites
 classified, the crossing sites named, and a corpus probe showing the
 out-of-range guards in `is_borrowed_view` / `dep_has_var` are fossil
 defenses (zero contamination in stdlib + moros + crawler + scripts).
-Step 2 DONE: `pub type Deps = Vec<u16>` alias on every `Type` variant
-(zero-risk rename).  Remaining: the newtype flip + constructor sweep +
-fossil removal (own quiet window; ~1,000 mechanical sites — design in
-the inventory § Step-2 migration design), then a debug-mode full-suite
-run for the space asserts.
+Steps 2–4 DONE (2026-06-11): `Deps` is a constructor-checked NEWTYPE —
+every creation site states its meaning (`none` / `frame` / `attrs` /
+`pointer_marker` / `share_sentinel` / `unknown`), reads go through
+`Deref` or the space-asserting accessors (`frame_vars` /
+`as_attr_indices`, debug-tag-checked, zero release cost),
+`resolve_deps`/`ref_return` are typed as THE converters, and contaminated
+reads scream in debug.  The step-3 bisect upgraded the inventory: the
+`dep_has_var` "fossil" is LIVE — block-result deps are mixed-space by
+contract (in-range = attr index, out-of-range = frame var; removing the
+arm made `26-closures`' factory results share one record).  Remaining
+(step 5, future): split block-result mixed-space deps into tagged halves
+so the positional contract can retire.  Gates: release suite 2292/2292,
+debug-mode suite (asserts armed) green.
 
 ---
 

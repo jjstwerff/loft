@@ -3,7 +3,7 @@
 
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
-use crate::data::{Block, Context, IntegerSpec, Type, Value};
+use crate::data::{Block, Context, Deps, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
@@ -936,8 +936,12 @@ impl Output<'_> {
             ValueType::Float => Some(Type::Float),
             ValueType::Single => Some(Type::Single),
             ValueType::Boolean => Some(Type::Boolean),
-            ValueType::Text => Some(Type::Text(Vec::new())),
-            ValueType::Enum => Some(Type::Enum(u32::from(node.enum_pair().1), false, Vec::new())),
+            ValueType::Text => Some(Type::Text(Deps::none())),
+            ValueType::Enum => Some(Type::Enum(
+                u32::from(node.enum_pair().1),
+                false,
+                Deps::none(),
+            )),
             ValueType::Var => Some(
                 self.data
                     .def(self.def_nr)

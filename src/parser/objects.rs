@@ -21,7 +21,7 @@ impl Parser {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
             *code = Value::Var(0);
-            return Type::Reference(self.context, Vec::new());
+            return Type::Reference(self.context, crate::data::Deps::none());
         }
         let mut source = u16::MAX;
         let qualified = self.lexer.has_token("::");
@@ -149,7 +149,11 @@ impl Parser {
                         .map(|a| self.data.attr_type(fn_d_nr, a))
                         .collect();
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
-                    return Type::Function(arg_types, Box::new(ret_type), vec![]);
+                    return Type::Function(
+                        arg_types,
+                        Box::new(ret_type),
+                        crate::data::Deps::none(),
+                    );
                 }
             }
             if self.lexer.has_token("#") {
@@ -159,7 +163,7 @@ impl Parser {
                     let fn_nr = self.data.def_nr("i_parse_errors");
                     if fn_nr != u32::MAX {
                         *code = Value::Call(fn_nr, vec![]);
-                        t = Type::Text(Vec::new());
+                        t = Type::Text(crate::data::Deps::none());
                     }
                     return t;
                 }
@@ -184,7 +188,7 @@ impl Parser {
                     let into_var = *into;
                     self.vars.make_independent(into_var, v_nr);
                     *code = Value::Var(v_nr);
-                    return Type::Reference(d_nr, Vec::new());
+                    return Type::Reference(d_nr, crate::data::Deps::none());
                 }
                 *code = Value::Var(v_nr);
             } else {
@@ -284,7 +288,7 @@ impl Parser {
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
             } else if self.data.def_type(dnr) == DefType::EnumValue {
-                t = Type::Enum(self.data.def(dnr).parent(), true, Vec::new());
+                t = Type::Enum(self.data.def(dnr).parent(), true, crate::data::Deps::none());
             } else {
                 t = Type::Null;
             }
@@ -355,7 +359,7 @@ impl Parser {
                         .map(|a| self.data.attr_type(fn_d_nr, a))
                         .collect();
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
-                    t = Type::Function(arg_types, Box::new(ret_type), vec![]);
+                    t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
                 }
             } else if !self.first_pass {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
@@ -456,12 +460,12 @@ impl Parser {
             let file_ref = Value::Var(var_nr);
             *code = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
             let fmt_def = self.data.def_nr("Format");
-            *t = Type::Enum(fmt_def, false, Vec::new());
+            *t = Type::Enum(fmt_def, false, crate::data::Deps::none());
         } else if self.lexer.has_keyword("exists") {
             let file_ref = Value::Var(var_nr);
             let fmt = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
             let fmt_def = self.data.def_nr("Format");
-            let enum_tp = Type::Enum(fmt_def, false, Vec::new());
+            let enum_tp = Type::Enum(fmt_def, false, crate::data::Deps::none());
             let ne_val = if let Some(&a_nr) = self.data.def(fmt_def).attr_names.get("NotExists") {
                 self.data.attr_value(fmt_def, a_nr)
             } else {
@@ -516,7 +520,7 @@ impl Parser {
                     let alias_nr = self.data.def_nr(&type_name);
                     let tp = self
                         .parse_type(u32::MAX, &type_name, false)
-                        .unwrap_or(Type::Text(vec![]));
+                        .unwrap_or(Type::Text(crate::data::Deps::none()));
                     if let Type::Reference(d_nr, _) = &tp
                         && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
                     {
@@ -591,7 +595,7 @@ impl Parser {
                     };
                     (tp, id, nat_size)
                 } else {
-                    let text_tp = Type::Text(vec![]);
+                    let text_tp = Type::Text(crate::data::Deps::none());
                     let id = self.get_type(&text_tp);
                     (text_tp, id, None)
                 }
@@ -647,7 +651,7 @@ impl Parser {
                 };
                 (hint, id, nat)
             } else {
-                let text_tp = Type::Text(vec![]);
+                let text_tp = Type::Text(crate::data::Deps::none());
                 let id = self.get_type(&text_tp);
                 (text_tp, id, None)
             };
@@ -919,7 +923,11 @@ impl Parser {
                                 // work-ref is skip_free (same store, no
                                 // double-free).
                                 self.vars.set_skip_free(w);
-                                *code = v_block(list, Type::Enum(en, true, vec![]), "EnumUnitLit");
+                                *code = v_block(
+                                    list,
+                                    Type::Enum(en, true, crate::data::Deps::none()),
+                                    "EnumUnitLit",
+                                );
                                 return t;
                             }
                         }
@@ -1115,7 +1123,11 @@ impl Parser {
                 // Preserves the legacy data-import semantics.
                 let mut text_expr = arg_expr;
                 if !matches!(arg_tp, Type::Text(_)) {
-                    self.convert(&mut text_expr, &arg_tp, &Type::Text(Vec::new()));
+                    self.convert(
+                        &mut text_expr,
+                        &arg_tp,
+                        &Type::Text(crate::data::Deps::none()),
+                    );
                 }
                 let known_tp = self.data.def(d_nr).known_type();
                 *code = self.cl(
@@ -1124,7 +1136,7 @@ impl Parser {
                 );
             }
         }
-        Type::Reference(d_nr, Vec::new())
+        Type::Reference(d_nr, crate::data::Deps::none())
     }
 
     /// Parse `vector<T>.parse(text)` — parse a JSON array into a vector of T.
@@ -1134,11 +1146,11 @@ impl Parser {
         let mut text_expr = Value::Null;
         let tp = self.expression(&mut text_expr);
         self.lexer.token(")");
-        let elem_tp = Type::Reference(elem_d_nr, Vec::new());
-        let vec_type = Type::Vector(Box::new(elem_tp.clone()), Vec::new());
+        let elem_tp = Type::Reference(elem_d_nr, crate::data::Deps::none());
+        let vec_type = Type::Vector(Box::new(elem_tp.clone()), crate::data::Deps::none());
         if !self.first_pass {
             if !matches!(tp, Type::Text(_)) {
-                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+                self.convert(&mut text_expr, &tp, &Type::Text(crate::data::Deps::none()));
             }
             // Get the database vector type for vector<elem>.
             let elem_kt = self.data.def(elem_d_nr).known_type();
@@ -1282,10 +1294,14 @@ impl Parser {
         }
         if var < u16::MAX {
             list.push(Value::Var(var));
-            *code = v_block(list, Type::Text(vec![var]), "Formatted string");
-            Type::Text(vec![var])
+            *code = v_block(
+                list,
+                Type::Text(crate::data::Deps::frame1(var)),
+                "Formatted string",
+            );
+            Type::Text(crate::data::Deps::frame1(var))
         } else {
-            Type::Text(Vec::new())
+            Type::Text(crate::data::Deps::none())
         }
     }
 
@@ -1654,7 +1670,7 @@ impl Parser {
             } else {
                 Value::Null
             };
-            let mut parent_tp = Type::Reference(td_nr, Vec::new());
+            let mut parent_tp = Type::Reference(td_nr, crate::data::Deps::none());
             if let Value::Var(v) = code {
                 parent_tp = parent_tp.depending(*v);
             }
@@ -1817,11 +1833,15 @@ impl Parser {
         }
         if new_object && let Value::Var(v) = code {
             list.push(Value::Var(*v));
-            *code = v_block(list, Type::Reference(td_nr, vec![*v]), "Object");
-            Type::Reference(td_nr, Vec::new())
+            *code = v_block(
+                list,
+                Type::Reference(td_nr, crate::data::Deps::frame1(*v)),
+                "Object",
+            );
+            Type::Reference(td_nr, crate::data::Deps::none())
         } else {
             *code = Value::Insert(list);
-            Type::Rewritten(Box::new(Type::Reference(td_nr, Vec::new())))
+            Type::Rewritten(Box::new(Type::Reference(td_nr, crate::data::Deps::none())))
         }
     }
 

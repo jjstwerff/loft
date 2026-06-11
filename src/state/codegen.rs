@@ -13,7 +13,7 @@
 //! (control flow).
 
 use super::State;
-use crate::data::{Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, Deps, I32, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
 use crate::ir_node::{IrBlock, IrNode, IrNodeList};
@@ -380,7 +380,7 @@ impl State {
                 self.types.insert(self.code_pos, tp);
                 stack.add_op("OpConstEnum", self);
                 self.code_add(ord);
-                Type::Enum(0, false, Vec::new())
+                Type::Enum(0, false, Deps::none())
             }
             ValueType::Text => self.gen_text(node.text(), stack),
             ValueType::Var => self.generate_var(stack, node.var_nr()),
@@ -720,7 +720,7 @@ impl State {
             // We encode the record position; the opcode reads length from the store.
             self.code_add(0i64); // pos offset within the record (length is at rec+4)
         }
-        Type::Text(Vec::new())
+        Type::Text(Deps::none())
     }
 
     pub(super) fn gen_loop(&mut self, lp: IrBlock, stack: &mut Stack) -> Type {
@@ -1095,7 +1095,7 @@ impl State {
         let slot_offset = stack.position - pos;
         let dep = match stack.function.tp(v).clone() {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
-            _ => Vec::new(),
+            _ => Deps::none(),
         };
         if dep.is_empty() {
             if stack.function.is_inline_ref(v) {
@@ -1657,8 +1657,22 @@ impl State {
                         let deps = def.returned().depend();
                         !deps.is_empty()
                             && deps.iter().any(|&a| {
-                                (a as usize) >= def.attributes().len()
-                                    || !def.attributes()[a as usize].hidden
+                                {
+                                    // H2: out-of-range = def-space dep list
+                                    // contaminated with a frame var.  The
+                                    // DEPS_INVENTORY corpus probe found zero;
+                                    // keep the conservative borrowed-view
+                                    // answer (never free a maybe-borrowed
+                                    // source) but scream in debug.
+                                    debug_assert!(
+                                        (a as usize) < def.attributes().len(),
+                                        "dep-space violation: returned dep {a} \
+                                         outside attr range of '{}'",
+                                        def.name()
+                                    );
+                                    (a as usize) >= def.attributes().len()
+                                        || !def.attributes()[a as usize].hidden
+                                }
                             })
                     };
                     let tp_val = if is_borrowed_view {
@@ -2349,6 +2363,14 @@ impl State {
                 let deps = def.returned().depend();
                 !deps.is_empty()
                     && deps.iter().any(|&a| {
+                        // H2: see the twin site above — conservative answer
+                        // kept, debug scream on def-space contamination.
+                        debug_assert!(
+                            (a as usize) < def.attributes().len(),
+                            "dep-space violation: returned dep {a} outside \
+                             attr range of '{}'",
+                            def.name()
+                        );
                         (a as usize) >= def.attributes().len()
                             || !def.attributes()[a as usize].hidden
                     })

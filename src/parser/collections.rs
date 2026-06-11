@@ -387,7 +387,7 @@ impl Parser {
                     let block_tp = if let Type::Tuple(ref elems) = *vtp.clone() {
                         let elems_clone = elems.clone();
                         let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
-                        Type::Reference(tuple_d, vec![])
+                        Type::Reference(tuple_d, crate::data::Deps::none())
                     } else {
                         *vtp.clone()
                     };
@@ -1068,7 +1068,7 @@ use #count instead"
                 v_set(wv, Value::Text(String::new())),
                 self.cl("OpCreateStack", &[Value::Var(wv)]),
             ],
-            Type::Reference(self.data.def_nr("reference"), vec![wv]),
+            Type::Reference(self.data.def_nr("reference"), crate::data::Deps::frame1(wv)),
             "p242_to_text_work",
         );
         Some(Value::Call(stub_nr, vec![format.clone(), work_arg]))
@@ -1902,7 +1902,7 @@ use #count instead"
             _ => return None,
         };
         let elem_ref_tp = Type::Reference(content_d, dep);
-        let vec_ref_tp = Type::Vector(Box::new(elem_ref_tp.clone()), Vec::new());
+        let vec_ref_tp = Type::Vector(Box::new(elem_ref_tp.clone()), crate::data::Deps::none());
         let mat_var = self.create_unique("__par_mat", &vec_ref_tp);
         self.vars.defined(mat_var);
         // Register the wrapper struct EARLY (both passes) so the
@@ -2024,7 +2024,7 @@ use #count instead"
             return None;
         }
         let elem_tp = self.for_type(in_type);
-        let vec_tp = Type::Vector(Box::new(elem_tp.clone()), Vec::new());
+        let vec_tp = Type::Vector(Box::new(elem_tp.clone()), crate::data::Deps::none());
         // Register the element vector type EARLY (both passes) so the typedef
         // pass between pass 1 and pass 2 assigns it a real `known_type`.
         let _ = self.data.vector_def(&mut self.lexer, &elem_tp);
@@ -2605,7 +2605,7 @@ use #count instead"
         elem_tp: &Type,
     ) {
         let ref_d_nr = self.data.def_nr("reference");
-        let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
+        let results_ref_type = Type::Reference(ref_d_nr, crate::data::Deps::none());
         let par_for_d_nr = self.data.def_nr("n_parallel_for");
 
         // Plan-06 PRIORITY.md spine step 8c — compute the queue gate
@@ -2753,7 +2753,7 @@ use #count instead"
             Type::Unknown(u32::MAX)
         } else if let Type::Text(_) = ret_type {
             // Strip worker-internal deps — they reference variables in the worker scope.
-            Type::Text(Vec::new())
+            Type::Text(crate::data::Deps::none())
         } else {
             ret_type.clone()
         };
@@ -3357,7 +3357,7 @@ use #count instead"
     /// Generates inline bytecode equivalent to `[for elm in v { f(elm) }]`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_map(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
-        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
+        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), crate::data::Deps::none());
         // On first pass, return the concrete output vector type derived from the function's
         // return type so that downstream variables (e.g. `r = map(...)`) get the right type
         // and subsequent `for x in r` iterations resolve correctly.
@@ -3368,7 +3368,7 @@ use #count instead"
             // to the input element type is correct for most cases (e.g. x * 10)
             // and lets downstream code like r[0] type-check.
             if let Type::Vector(elm, _) = &types[0] {
-                return Type::Vector(elm.clone(), Vec::new());
+                return Type::Vector(elm.clone(), crate::data::Deps::none());
             }
             return placeholder;
         }
@@ -3435,7 +3435,7 @@ use #count instead"
         self.vars.defined(for_var);
 
         let out_elem = fn_ret_type.clone();
-        let result_type = Type::Vector(Box::new(out_elem.clone()), Vec::new());
+        let result_type = Type::Vector(Box::new(out_elem.clone()), crate::data::Deps::none());
         let result_vec = self.create_unique("map_result", &result_type);
         let elm = self.unique_elm_var(&result_type, &out_elem, result_vec);
 
@@ -3494,7 +3494,7 @@ use #count instead"
         list: &[Value],
         types: &[Type],
     ) -> Result<(Type, Option<u32>), Type> {
-        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
+        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), crate::data::Deps::none());
         if list.len() != 2 {
             diagnostic!(
                 self.lexer,
@@ -3549,13 +3549,13 @@ use #count instead"
     }
 
     pub(crate) fn parse_filter(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
-        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
+        let placeholder = Type::Vector(Box::new(Type::Unknown(0)), crate::data::Deps::none());
         // On first pass, return the concrete output type from the input vector's element type.
         if self.first_pass {
             if !types.is_empty()
                 && let Type::Vector(elm, _) = &types[0]
             {
-                return Type::Vector(elm.clone(), Vec::new());
+                return Type::Vector(elm.clone(), crate::data::Deps::none());
             }
             return placeholder;
         }
@@ -3584,7 +3584,7 @@ use #count instead"
         self.vars.defined(for_var);
 
         let out_elem = in_elem_type.clone();
-        let result_type = Type::Vector(Box::new(out_elem.clone()), Vec::new());
+        let result_type = Type::Vector(Box::new(out_elem.clone()), crate::data::Deps::none());
         let result_vec = self.create_unique("filter_result", &result_type);
         let elm = self.unique_elm_var(&result_type, &out_elem, result_vec);
 
@@ -3662,7 +3662,7 @@ use #count instead"
         code: &mut Value,
     ) {
         let field_def_nr = self.data.def_nr("StructField");
-        let field_type = Type::Reference(field_def_nr, Vec::new());
+        let field_type = Type::Reference(field_def_nr, crate::data::Deps::none());
         let loop_var = self.create_var(loop_var_name, &field_type);
         self.vars.defined(loop_var);
 
@@ -3847,7 +3847,7 @@ use #count instead"
         let db_tp = self.type_info(&elm_tp);
         let ed_nr = self.data.type_def_nr(&elm_tp);
         // Create a temp var with dependency on the vector to prevent premature free
-        let ref_tp = Type::Reference(ed_nr, types[0].depend());
+        let ref_tp = Type::Reference(ed_nr, crate::data::Deps::frame(types[0].depend()));
         let tmp = self.create_unique("ins", &ref_tp);
         if let Value::Var(vec_var) = &list[0] {
             self.vars.depend(tmp, *vec_var);

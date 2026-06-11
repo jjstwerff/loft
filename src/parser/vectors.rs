@@ -5,6 +5,7 @@ use super::{
     Argument, DefType, Function, I32, Level, Parser, ToString, Type, Value, diagnostic_format,
     field_id, v_block, v_if, v_loop, v_set,
 };
+use crate::data::Deps;
 
 // Lambda and vector expression parsing.
 
@@ -191,7 +192,7 @@ impl Parser {
                 );
             }
         }
-        let tp = Type::Text(vec![var_nr]);
+        let tp = Type::Text(Deps::frame1(var_nr));
         if orig_var == u16::MAX || var_nr != orig_var {
             // A new work text was created (either no orig_var, or orig_var was a
             // Character variable) — wrap in a Block so the work text appears on the stack.
@@ -475,7 +476,7 @@ impl Parser {
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned().clone();
-        Type::Function(arg_types, Box::new(ret_type), vec![])
+        Type::Function(arg_types, Box::new(ret_type), Deps::none())
     }
 
     // <lambda> ::= 'fn' '(' [<params>] ')' ['->' <type>] '{' <body> '}'
@@ -545,7 +546,7 @@ impl Parser {
         if !self.first_pass {
             let closure_rec = self.data.def(d_nr).closure_record();
             if closure_rec != u32::MAX {
-                let closure_tp = Type::Reference(closure_rec, vec![]);
+                let closure_tp = Type::Reference(closure_rec, Deps::none());
                 // Add as definition attribute so codegen positions it on the stack.
                 self.data
                     .add_attribute(&mut self.lexer, d_nr, "__closure", closure_tp.clone());
@@ -629,9 +630,9 @@ impl Parser {
         // a local ___clos_N variable owns the closure (and will free it).  Without
         // this dep, the Function arm in get_free_vars would emit a duplicate free.
         let dep = if self.last_closure_work_var == u16::MAX {
-            vec![]
+            Deps::none()
         } else {
-            vec![self.last_closure_work_var]
+            Deps::frame1(self.last_closure_work_var)
         };
         Type::Function(arg_types, Box::new(ret_type), dep)
     }
@@ -868,9 +869,9 @@ impl Parser {
         let ret_type = self.data.def(d_nr).returned().clone();
         // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
-            vec![]
+            Deps::none()
         } else {
-            vec![self.last_closure_work_var]
+            Deps::frame1(self.last_closure_work_var)
         };
         Type::Function(arg_types, Box::new(ret_type), dep)
     }
@@ -897,7 +898,7 @@ impl Parser {
             // The fn_ref_var (__fn_ref_N) holds [d_nr, closure DbRef] as 16 bytes.
             // At call sites, fn_call_ref reads the embedded DbRef and pushes it as
             // the hidden __closure arg automatically — no explicit injection needed.
-            let rec_tp = Type::Reference(closure_rec_d, vec![]);
+            let rec_tp = Type::Reference(closure_rec_d, Deps::none());
             let w = self.create_unique("__clos", &rec_tp);
             self.vars.defined(w);
             // Register w as a work-ref so parse_code inserts Set(w,Null) at fn start.
@@ -919,7 +920,7 @@ impl Parser {
             // fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.
-            let fn_type = Type::Function(visible_params, Box::new(ret_tp.clone()), vec![w]);
+            let fn_type = Type::Function(visible_params, Box::new(ret_tp.clone()), Deps::frame1(w));
             let mut alloc_steps: Vec<Value> = Vec::new();
             // Allocate and populate the closure record w.
             alloc_steps.push(crate::data::v_set(w, Value::Null));
@@ -972,7 +973,7 @@ impl Parser {
             if let Type::Function(params, _, _) = self.data.def(self.context).returned() {
                 let params = params.clone();
                 self.data.definitions[self.context as usize].returned =
-                    Type::Function(params, Box::new(ret_tp), vec![w]);
+                    Type::Function(params, Box::new(ret_tp), Deps::frame1(w));
             }
             // record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
@@ -1165,7 +1166,7 @@ impl Parser {
                 continue;
             }
             self.vars
-                .set_type(v_nr, Type::Reference(cell_d_nr, Vec::new()));
+                .set_type(v_nr, Type::Reference(cell_d_nr, Deps::none()));
         }
     }
 
@@ -1270,7 +1271,7 @@ impl Parser {
                         // — closure records are the sole producer, so
                         // this doesn't affect user-defined struct
                         // fields.
-                        Type::Reference(*d, vec![u16::MAX])
+                        Type::Reference(*d, Deps::share_sentinel())
                     }
                     _ => tp.clone(),
                 };
@@ -1368,13 +1369,13 @@ impl Parser {
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
         // Finalise vector element type (same as parse_vector post-loop)
-        let struct_tp = Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+        let struct_tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         if !is_field {
             self.vars
                 .change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
             self.data.vector_def(&mut self.lexer, in_t);
         }
-        let tp = Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+        let tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         if self.first_pass {
             return tp;
         }
@@ -1385,7 +1386,7 @@ impl Parser {
             && let Some(unrolled) =
                 self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
         {
-            let parent_tp = &Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+            let parent_tp = &Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
             let (tp, ls) = self.build_vector_list(
                 val, parent_tp, elm, vec, &unrolled, in_t, tp, is_var, is_field,
             );
@@ -1557,7 +1558,7 @@ impl Parser {
             // block exits, and (b) the caller receives the correct Vector<T,[db]> type,
             // preventing scopes from emitting a redundant OpFreeRef for the result variable.
             if let Type::Vector(elem, _) = &tp {
-                tp = Type::Vector(elem.clone(), self.vars.tp(vec).depend().clone());
+                tp = Type::Vector(elem.clone(), Deps::frame(self.vars.tp(vec).depend()));
             }
         }
         ls.extend(for_steps);
@@ -1639,7 +1640,7 @@ impl Parser {
         } else {
             self.create_unique(
                 "vec",
-                &Type::Vector(Box::new(assign_tp.clone()), parent_tp.depend()),
+                &Type::Vector(Box::new(assign_tp.clone()), Deps::frame(parent_tp.depend())),
             )
         };
         let mut in_t = assign_tp.clone();
@@ -1670,13 +1671,13 @@ impl Parser {
         if in_t == Type::Null {
             return in_t;
         }
-        let struct_tp = Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+        let struct_tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         if !is_field {
             self.vars
                 .change_var_type(vec, &struct_tp, &self.data, &mut self.lexer);
             self.data.vector_def(&mut self.lexer, &in_t);
         }
-        let tp = Type::Vector(Box::new(in_t.clone()), parent_tp.depend());
+        let tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         let (tp, ls) =
             self.build_vector_list(val, parent_tp, elm, vec, &res, &in_t, tp, is_var, is_field);
         self.lexer.token("]");
@@ -1841,7 +1842,7 @@ impl Parser {
             } else {
                 self.data.type_def_nr(&c_tp)
             },
-            parent_tp.depend(),
+            Deps::frame(parent_tp.depend()),
         );
         let elm = self.create_unique(
             "elm",
@@ -1854,7 +1855,7 @@ impl Parser {
         if vec != u16::MAX {
             self.vars.depend(elm, vec);
         }
-        for on in parent_tp.depend() {
+        for on in Deps::frame(parent_tp.depend()) {
             self.vars.depend(elm, on);
         }
         elm
@@ -1927,7 +1928,7 @@ impl Parser {
             )
             && *t_e == *in_e
         {
-            *in_t = Type::Enum(*t_e, true, Vec::new());
+            *in_t = Type::Enum(*t_e, true, Deps::none());
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
@@ -2350,7 +2351,7 @@ impl Parser {
                     }
                     Value::Call(_, _) => {
                         let fn_type = if let Type::Function(params, ret, _) = in_t {
-                            Type::Function(params.clone(), ret.clone(), vec![])
+                            Type::Function(params.clone(), ret.clone(), Deps::none())
                         } else {
                             in_t.clone()
                         };
@@ -2406,7 +2407,7 @@ impl Parser {
             let vec_def = self.data.vector_def(&mut self.lexer, assign_tp);
             let db = self
                 .vars
-                .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
+                .work_vec_db(&Type::Reference(vec_def, Deps::none()), &mut self.lexer);
             self.vars.depend(vec, db);
             let tp = self.data.def(vec_def).known_type();
             debug_assert_ne!(
@@ -2445,7 +2446,7 @@ impl Parser {
         // name across both passes.
         let db = self
             .vars
-            .work_vec_db(&Type::Reference(vec_def, Vec::new()), &mut self.lexer);
+            .work_vec_db(&Type::Reference(vec_def, Deps::none()), &mut self.lexer);
         self.vars.depend(elm, db);
         self.vars.depend(vec, db);
         let known = Value::Int(i32::from(self.data.def(vec_def).known_type()));
@@ -2684,8 +2685,8 @@ fn cell_value_type(tp: &Type) -> Type {
                 crate::data::I32.clone()
             }
         }
-        Type::Text(_) => Type::Text(Vec::new()),
-        Type::Enum(d_nr, _, _) => Type::Enum(*d_nr, false, Vec::new()),
+        Type::Text(_) => Type::Text(Deps::none()),
+        Type::Enum(d_nr, _, _) => Type::Enum(*d_nr, false, Deps::none()),
         other => other.clone(),
     }
 }
@@ -2763,7 +2764,7 @@ fn box_captured_names_for_outer_scalars(
         if let Some(cell_name) = cell_struct_name(tp, data) {
             let cell_d_nr = data.def_nr(&cell_name);
             if cell_d_nr != u32::MAX {
-                *tp = Type::Reference(cell_d_nr, vec![]);
+                *tp = Type::Reference(cell_d_nr, Deps::none());
             }
         }
     }
@@ -3806,7 +3807,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
     //! inputs — they verify the wrapping logic in isolation,
     //! independent of the integration path.
 
-    use crate::data::{Type, Value};
+    use crate::data::{Deps, Type, Value};
     use crate::parser::Parser;
 
     /// Helper: build a parser with defaults loaded so the OpGet*
@@ -3832,7 +3833,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
             "__cell_integer",
         );
         let mut code = Value::Var(7);
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, Deps::none()));
         // Expect: Call(OpGetInt, [Var(7), Int(0)])
         let op_d_nr = p.data.def_nr("OpGetInt");
         match &code {
@@ -3852,9 +3853,9 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
 
     #[test]
     fn text_cell_wraps_with_op_get_text() {
-        let (mut p, cell_d_nr) = parser_with_cell(&Type::Text(vec![]), "__cell_text");
+        let (mut p, cell_d_nr) = parser_with_cell(&Type::Text(Deps::none()), "__cell_text");
         let mut code = Value::Var(3);
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, Deps::none()));
         let op_d_nr = p.data.def_nr("OpGetText");
         match &code {
             Value::Call(d, args) => {
@@ -3870,7 +3871,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
     fn boolean_cell_wraps_byte_then_eq() {
         let (mut p, cell_d_nr) = parser_with_cell(&Type::Boolean, "__cell_boolean");
         let mut code = Value::Var(5);
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, Deps::none()));
         // @PLN17: boolean now reads its byte directly (0/1/255), like a plain enum —
         // Call(OpGetBoolean, [Var(5), Int(0)]) — not the old OpEqInt(OpGetByte, 1).
         let get_bool_d_nr = p.data.def_nr("OpGetBoolean");
@@ -3891,7 +3892,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
     fn float_cell_wraps_with_op_get_float() {
         let (mut p, cell_d_nr) = parser_with_cell(&Type::Float, "__cell_float");
         let mut code = Value::Var(2);
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, Deps::none()));
         let op_d_nr = p.data.def_nr("OpGetFloat");
         if let Value::Call(d, _) = &code {
             assert_eq!(*d, op_d_nr);
@@ -3905,7 +3906,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
     fn character_cell_wraps_with_op_get_character() {
         let (mut p, cell_d_nr) = parser_with_cell(&Type::Character, "__cell_character");
         let mut code = Value::Var(4);
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(cell_d_nr, Deps::none()));
         let op_d_nr = p.data.def_nr("OpGetCharacter");
         if let Value::Call(d, _) = &code {
             assert_eq!(*d, op_d_nr);
@@ -3929,7 +3930,7 @@ mod plan22_phase02d_iii_b_read_auto_deref_tests {
             .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
         let mut code = Value::Var(1);
         let original_code = code.clone();
-        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(s_d_nr, vec![]));
+        let new_t = p.auto_deref_boxed_scalar(&mut code, Type::Reference(s_d_nr, Deps::none()));
         assert_eq!(
             code, original_code,
             "non-cell Reference must not be wrapped"
@@ -4025,9 +4026,11 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
             .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
         p.data
             .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
-        let v_nr = p
-            .vars
-            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        let v_nr = p.vars.add_variable(
+            var_name,
+            &Type::Reference(cell_d_nr, crate::data::Deps::none()),
+            &mut p.lexer,
+        );
         (p, cell_d_nr, v_nr)
     }
 
@@ -4103,7 +4106,7 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
     #[test]
     fn text_first_set_uses_op_set_text() {
         let (p, _cell_d_nr, v_nr) =
-            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+            parser_with_boxed_local(&Type::Text(crate::data::Deps::none()), "__cell_text", "s");
         let op_set = p.data.def_nr("OpSetText");
         let ir = p
             .boxed_scalar_assign_rewrite(v_nr, "=", Value::Text("hi".to_string()))
@@ -4157,9 +4160,11 @@ mod plan22_phase02d_iii_c_assign_rewrite_tests {
         let s_d_nr = p
             .data
             .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
-        let v_nr = p
-            .vars
-            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let v_nr = p.vars.add_variable(
+            "s",
+            &Type::Reference(s_d_nr, crate::data::Deps::none()),
+            &mut p.lexer,
+        );
         let result = p.boxed_scalar_assign_rewrite(v_nr, "=", Value::Null);
         assert!(
             result.is_none(),
@@ -4258,9 +4263,11 @@ mod plan22_phase02d_iii_d_alloc_prepend_tests {
             .add_def(cell_name, p.lexer.pos(), crate::data::DefType::Struct);
         p.data
             .add_attribute(&mut p.lexer, cell_d_nr, "value", value_tp.clone());
-        let v_nr = p
-            .vars
-            .add_variable(var_name, &Type::Reference(cell_d_nr, vec![]), &mut p.lexer);
+        let v_nr = p.vars.add_variable(
+            var_name,
+            &Type::Reference(cell_d_nr, crate::data::Deps::none()),
+            &mut p.lexer,
+        );
         (p, cell_d_nr, v_nr)
     }
 
@@ -4350,9 +4357,11 @@ mod plan22_phase02d_iii_d_alloc_prepend_tests {
         let s_d_nr = p
             .data
             .add_def("MyStruct", p.lexer.pos(), crate::data::DefType::Struct);
-        let v_nr = p
-            .vars
-            .add_variable("s", &Type::Reference(s_d_nr, vec![]), &mut p.lexer);
+        let v_nr = p.vars.add_variable(
+            "s",
+            &Type::Reference(s_d_nr, crate::data::Deps::none()),
+            &mut p.lexer,
+        );
         let op_get = p.data.def_nr("OpGetInt");
         let op_set = p.data.def_nr("OpSetInt");
         let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);
@@ -4403,7 +4412,7 @@ mod plan22_phase02d_iii_d_alloc_prepend_tests {
     #[test]
     fn text_cell_first_set_uses_correct_kt() {
         let (mut p, cell_d_nr, v_nr) =
-            parser_with_boxed_local(&Type::Text(vec![]), "__cell_text", "s");
+            parser_with_boxed_local(&Type::Text(crate::data::Deps::none()), "__cell_text", "s");
         let op_get = p.data.def_nr("OpGetText");
         let op_set = p.data.def_nr("OpSetText");
         let lhs = Value::Call(op_get, vec![Value::Var(v_nr), Value::Int(0)]);

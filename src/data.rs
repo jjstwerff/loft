@@ -757,6 +757,23 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     }
 }
 
+/// The debug-only address-space tag carried by [`Deps`] — which index
+/// space its entries live in.  See [DEPS_INVENTORY](../doc/claude/DEPS_INVENTORY.md).
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DepSpace {
+    /// Not yet classified (codec round-trips, tests, legacy plumbing).
+    /// Asserts nothing.
+    #[default]
+    Unknown,
+    /// Entries are caller FRAME variable numbers (variable-table and
+    /// expression types).
+    Frame,
+    /// Entries are callee ATTRIBUTE indices (`Definition.returned`,
+    /// attribute typedefs).
+    Attr,
+}
+
 /// H2 ([STABILITY_HOTSPOTS](../doc/claude/STABILITY_HOTSPOTS.md) /
 /// [DEPS_INVENTORY](../doc/claude/DEPS_INVENTORY.md)): the dependency list
 /// carried by heap-backed `Type` variants.  An entry is an index into one
@@ -764,10 +781,208 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
 /// frame VAR numbers (variable-table / expression types) or callee ATTR
 /// indices (`Definition.returned` / attr typedefs) — plus marker
 /// overloads (`u16::MAX` pointer/share markers, `[self]` ownership,
-/// empty = owned).  `resolve_deps` and `ref_return` are the only
-/// legitimate space converters.  This alias is migration step 2; step 3
-/// flips it to a constructor-checked newtype.
-pub type Deps = Vec<u16>;
+/// empty = owned).  `resolve_deps` (def→frame, at call sites) and
+/// `ref_return` (frame→def, at promotion) are the only legitimate space
+/// converters.
+///
+/// Construction goes through the NAMED constructors so every creation
+/// site states its meaning; reads go through `Deref<[Vec<u16>]>` (the
+/// space-agnostic ones) or the space-asserting accessors.  In debug
+/// builds each value carries its [`DepSpace`]; the tag is excluded from
+/// equality and absent in release builds.
+#[derive(Clone, Debug, Default)]
+pub struct Deps {
+    items: Vec<u16>,
+    #[cfg(debug_assertions)]
+    space: DepSpace,
+}
+
+impl PartialEq for Deps {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+    }
+}
+
+impl std::ops::Deref for Deps {
+    type Target = Vec<u16>;
+    fn deref(&self) -> &Vec<u16> {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for Deps {
+    /// Mutation inherits the construction-site space tag.
+    fn deref_mut(&mut self) -> &mut Vec<u16> {
+        &mut self.items
+    }
+}
+
+impl<'a> IntoIterator for &'a Deps {
+    type Item = &'a u16;
+    type IntoIter = std::slice::Iter<'a, u16>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+impl IntoIterator for Deps {
+    type Item = u16;
+    type IntoIter = std::vec::IntoIter<u16>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+#[cfg(debug_assertions)]
+macro_rules! deps_new {
+    ($items:expr, $space:expr) => {
+        Deps {
+            items: $items,
+            space: $space,
+        }
+    };
+}
+#[cfg(not(debug_assertions))]
+macro_rules! deps_new {
+    ($items:expr, $space:expr) => {{
+        let _ = $space; // tag only exists in debug builds
+        Deps { items: $items }
+    }};
+}
+
+#[allow(dead_code)]
+impl Deps {
+    /// OWNED — no borrow, either space.  The most load-bearing convention
+    /// in the codebase (`is_empty()` gates the free logic).
+    #[must_use]
+    pub fn none() -> Deps {
+        #[cfg(debug_assertions)]
+        {
+            deps_new!(Vec::new(), DepSpace::Unknown)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            deps_new!(Vec::new(), ())
+        }
+    }
+
+    /// Caller FRAME variable numbers.
+    #[must_use]
+    pub fn frame(items: Vec<u16>) -> Deps {
+        #[cfg(debug_assertions)]
+        {
+            deps_new!(items, DepSpace::Frame)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            deps_new!(items, ())
+        }
+    }
+
+    /// One caller frame variable.
+    #[must_use]
+    pub fn frame1(v: u16) -> Deps {
+        Self::frame(vec![v])
+    }
+
+    /// Callee ATTRIBUTE indices (`Definition.returned` / attr typedefs).
+    #[must_use]
+    pub fn attrs(items: Vec<u16>) -> Deps {
+        #[cfg(debug_assertions)]
+        {
+            deps_new!(items, DepSpace::Attr)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            deps_new!(items, ())
+        }
+    }
+
+    /// #328 — the `reference<T>` POINTER-field marker (struct-field
+    /// typedefs; def space).
+    #[must_use]
+    pub fn pointer_marker() -> Deps {
+        Self::attrs(vec![u16::MAX])
+    }
+
+    /// Closure auto-Reference share-sentinel (`vectors.rs` — a stand-in
+    /// for a not-yet-known OUTER var; frame space).
+    #[must_use]
+    pub fn share_sentinel() -> Deps {
+        Self::frame(vec![u16::MAX])
+    }
+
+    /// Unclassified — codec round-trips, tests, plumbing that merely
+    /// copies entries through.  Asserts nothing in debug builds.
+    #[must_use]
+    pub fn unknown(items: Vec<u16>) -> Deps {
+        #[cfg(debug_assertions)]
+        {
+            deps_new!(items, DepSpace::Unknown)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            deps_new!(items, ())
+        }
+    }
+
+    /// The entries read as caller frame variable numbers.
+    /// Debug builds panic when the value is tagged as attr indices —
+    /// the cross-space read #306 was made of.
+    #[must_use]
+    pub fn frame_vars(&self) -> &[u16] {
+        #[cfg(debug_assertions)]
+        debug_assert_ne!(
+            self.space,
+            DepSpace::Attr,
+            "dep-space violation: attr-index deps read as frame vars ({:?})",
+            self.items
+        );
+        &self.items
+    }
+
+    /// The entries read as callee attribute indices.
+    /// Debug builds panic when the value is tagged as frame vars.
+    #[must_use]
+    pub fn as_attr_indices(&self) -> &[u16] {
+        #[cfg(debug_assertions)]
+        debug_assert_ne!(
+            self.space,
+            DepSpace::Frame,
+            "dep-space violation: frame-var deps read as attr indices ({:?})",
+            self.items
+        );
+        &self.items
+    }
+
+    /// #328: is this the pointer-field marker?
+    #[must_use]
+    pub fn is_pointer_marker(&self) -> bool {
+        self.items.contains(&u16::MAX)
+    }
+
+    /// A copy extended with `on` at the front (the `depending()` shape);
+    /// inherits this value's space.
+    #[must_use]
+    pub fn extended(&self, on: u16) -> Deps {
+        let mut v = vec![on];
+        if !self.items.contains(&on) {
+            v.append(&mut self.items.clone());
+        }
+        let items = v;
+        #[cfg(debug_assertions)]
+        {
+            Deps {
+                items,
+                space: self.space,
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Deps { items }
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
@@ -954,73 +1169,30 @@ impl Type {
     When this extra variable doesn't exist.
     */
     #[must_use]
+    /// Rebase this type's borrow onto frame var `on`.
+    ///
+    /// H2 finding (DEPS_INVENTORY § findings): the original per-arm bodies
+    /// carried a dead merge guard — `let mut v = vec![on]; if !v.contains(&on)
+    /// { v.append(&mut dep.clone()) }` can never append (`v` always contains
+    /// `on`), so `depending()` has ALWAYS meant "deps := [on]" (replace, not
+    /// extend); the `Index` arm would even have double-appended had it ever
+    /// run.  This rewrite keeps the replace semantics and deletes the fossil.
+    /// Every caller passes a frame var (the assert has always rejected the
+    /// `u16::MAX` markers).
     pub fn depending(&self, on: u16) -> Type {
         assert_ne!(on, u16::MAX, "Unknown depended on variable");
-        let mut v = vec![on];
+        let v = Deps::frame1(on);
         match self {
-            Type::Text(dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Text(v)
-            }
-            Type::Reference(t, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Reference(*t, v)
-            }
-            Type::Enum(t, is_ref, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Enum(*t, *is_ref, v)
-            }
-            Type::Index(t, keys, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                    v.append(&mut dep.clone());
-                }
-                Type::Index(*t, keys.clone(), v)
-            }
-            Type::Spacial(t, keys, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Spacial(*t, keys.clone(), v)
-            }
-            Type::Hash(t, keys, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Hash(*t, keys.clone(), v)
-            }
-            Type::Sorted(t, keys, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Sorted(*t, keys.clone(), v)
-            }
-            Type::Vector(t, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Vector(Box::new(*t.clone()), v)
-            }
-            Type::Function(params, ret, dep) => {
-                if !v.contains(&on) {
-                    v.append(&mut dep.clone());
-                }
-                Type::Function(params.clone(), ret.clone(), v)
-            }
+            Type::Text(_) => Type::Text(v),
+            Type::Reference(t, _) => Type::Reference(*t, v),
+            Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, v),
+            Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), v),
+            Type::Spacial(t, keys, _) => Type::Spacial(*t, keys.clone(), v),
+            Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
+            Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
+            Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
+            Type::Function(params, ret, _) => Type::Function(params.clone(), ret.clone(), v),
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
-            // P197: Type::Tuple has no dep field of its own — propagate
-            // the dep into each element type so per-element reads
-            // (`OpGetText` / `OpGetRef` / nested tuple reads) retain
-            // the host's lifetime when the struct field is unboxed
-            // into per-element values via `get_val::Type::Tuple`.
-            // Without this, returning a `text` element from a tuple
-            // struct field reads from a freed host record (P197 abort).
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
             _ => self.clone(),
         }
@@ -3169,7 +3341,7 @@ impl Data {
     /// Get a vector definition. This is a record with a single field pointing towards this vector.
     /// We need this definition as the primary record of a database holding a vector and its child records/vectors.
     pub fn vector_def(&mut self, lexer: &mut Lexer, tp: &Type) -> u32 {
-        let fld_tp = Type::Vector(Box::new(tp.clone()), Vec::new());
+        let fld_tp = Type::Vector(Box::new(tp.clone()), Deps::none());
         let fld = fld_tp.name(self);
         if self.def_nr(&fld) == u32::MAX {
             let d = self.add_def(&fld, lexer.pos(), DefType::Vector);
@@ -3193,7 +3365,7 @@ impl Data {
                 lexer,
                 vd,
                 "vector",
-                Type::Vector(Box::new(tp.clone()), Vec::new()),
+                Type::Vector(Box::new(tp.clone()), Deps::none()),
             );
             vd
         } else {
@@ -3225,7 +3397,7 @@ impl Data {
         // `vector_def`).
         self.def_names.entry((name.clone(), 0)).or_insert(d);
         self.definitions[d as usize].source = 0;
-        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         let mut indices: Vec<u16> = Vec::with_capacity(types.len());
         let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
         for (i, t) in types.iter().enumerate() {
@@ -3316,7 +3488,7 @@ impl Data {
         // `rebuild_indices` reproduces the global binding (see `vector_def`).
         self.def_names.entry((name.clone(), 0)).or_insert(d);
         self.definitions[d as usize].source = 0;
-        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         // `_d_nr`: 4-byte signed integer holding the function's
         // def-nr.  The integer alias `i32` carries the `size(4)`
         // annotation that fill_database honours via
@@ -3347,7 +3519,7 @@ impl Data {
         // placeholder that fill_database will overwrite once the
         // real DbRef Parts variant lands).  The data-side definition
         // is the load-bearing piece; the runtime layout is deferred.
-        self.add_attribute(lexer, d, "_closure", Type::Reference(d, Vec::new()));
+        self.add_attribute(lexer, d, "_closure", Type::Reference(d, Deps::none()));
         d
     }
 
@@ -4334,7 +4506,7 @@ fn span_unspan_strips_wrapper() {
 
 #[cfg(test)]
 mod caller_graph_tests {
-    use super::{Block, Data, DefType, Type, Value};
+    use super::{Block, Data, DefType, Deps, Type, Value};
     use crate::lexer::Position;
 
     /// Build a synthetic Data with three user fns:
@@ -4449,7 +4621,7 @@ mod caller_graph_tests {
         let mut lexer = crate::lexer::Lexer::from_str("", "test");
         // Register the wrapper from a NON-zero source (as if from a `use`d module).
         d.source = 5;
-        let vd = d.vector_def(&mut lexer, &Type::Reference(foo, Vec::new()));
+        let vd = d.vector_def(&mut lexer, &Type::Reference(foo, Deps::none()));
         assert_eq!(
             d.definitions[vd as usize].source, 0,
             "main_vector<Foo> wrapper must be stamped source=0"
@@ -4474,7 +4646,7 @@ mod type_name_user_facing_tests {
     //! (e.g. `tuple([integer(...), text([])])`); user-visible error
     //! messages now render proper loft syntax.
 
-    use super::{Data, DefType, IntegerSpec, Type};
+    use super::{Data, DefType, Deps, IntegerSpec, Type};
     use crate::lexer::Position;
 
     fn make_data() -> Data {
@@ -4582,14 +4754,14 @@ mod type_name_user_facing_tests {
     #[test]
     fn tuple_renders_as_paren_csv() {
         let d = Data::new();
-        let t = Type::Tuple(vec![Type::Boolean, Type::Text(Vec::new())]);
+        let t = Type::Tuple(vec![Type::Boolean, Type::Text(Deps::none())]);
         assert_eq!(t.name(&d), "(boolean, text)");
     }
 
     #[test]
     fn function_void_return_omits_arrow() {
         let d = Data::new();
-        let f = Type::Function(vec![Type::Boolean], Box::new(Type::Void), Vec::new());
+        let f = Type::Function(vec![Type::Boolean], Box::new(Type::Void), Deps::none());
         assert_eq!(f.name(&d), "fn(boolean)");
     }
 
@@ -4598,8 +4770,8 @@ mod type_name_user_facing_tests {
         let d = Data::new();
         let f = Type::Function(
             vec![Type::Boolean, Type::Float],
-            Box::new(Type::Text(Vec::new())),
-            Vec::new(),
+            Box::new(Type::Text(Deps::none())),
+            Deps::none(),
         );
         assert_eq!(f.name(&d), "fn(boolean, float) -> text");
     }
@@ -4608,27 +4780,27 @@ mod type_name_user_facing_tests {
     fn reference_renders_struct_name() {
         let d = make_data();
         let foo_d_nr = d.def_nr("Foo");
-        assert_eq!(Type::Reference(foo_d_nr, Vec::new()).name(&d), "Foo");
+        assert_eq!(Type::Reference(foo_d_nr, Deps::none()).name(&d), "Foo");
     }
 
     #[test]
     fn vector_of_text_renders_with_angle_brackets() {
         let d = Data::new();
-        let v = Type::Vector(Box::new(Type::Text(Vec::new())), Vec::new());
+        let v = Type::Vector(Box::new(Type::Text(Deps::none())), Deps::none());
         assert_eq!(v.name(&d), "vector<text>");
     }
 
     #[test]
     fn vector_of_unknown_renders_as_bare_vector() {
         let d = Data::new();
-        let v = Type::Vector(Box::new(Type::Unknown(0)), Vec::new());
+        let v = Type::Vector(Box::new(Type::Unknown(0)), Deps::none());
         assert_eq!(v.name(&d), "vector");
     }
 
     #[test]
     fn ref_var_renders_with_ampersand() {
         let d = Data::new();
-        let r = Type::RefVar(Box::new(Type::Text(Vec::new())));
+        let r = Type::RefVar(Box::new(Type::Text(Deps::none())));
         assert_eq!(r.name(&d), "&text");
     }
 }

@@ -51,7 +51,7 @@ pub use validate::dump_variables;
 #[allow(unused_imports)]
 pub use validate::{validate_alignment, validate_slots};
 
-use crate::data::{Context, Data, Type, Value};
+use crate::data::{Context, Data, Deps, Type, Value};
 use crate::diagnostics::{Level, diagnostic_format};
 use crate::keys::DbRef;
 use crate::lexer::Lexer;
@@ -1358,7 +1358,7 @@ impl Function {
         let v = if let Some(nr) = self.names.get(&n) {
             *nr
         } else {
-            self.add_variable(&n, &Type::Text(Vec::new()), lexer)
+            self.add_variable(&n, &Type::Text(Deps::none()), lexer)
         };
         self.work_texts.insert(v);
         v
@@ -1682,7 +1682,7 @@ mod align_tests {
     // (align 1/4) so they pack into the holes alignment leaves.
     #[test]
     fn align_values_for_stack_layout() {
-        assert_eq!(align(&Type::Text(vec![])), 8);
+        assert_eq!(align(&Type::Text(Deps::none())), 8);
         assert_eq!(align(&Type::Boolean), 1);
         assert_eq!(align(&Type::Character), 4);
         assert_eq!(align(&Type::Single), 4);

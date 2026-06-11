@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{STRING_NULL, State};
-use crate::data::{Attribute, Context, Data, DefType, Definition, I32, IntegerSpec, Type};
+use crate::data::{Attribute, Context, Data, DefType, Definition, Deps, I32, IntegerSpec, Type};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Key};
 use crate::log_config::{LogConfig, TailBuffer};
@@ -1534,10 +1534,10 @@ impl State {
                 2 => self.dump_stack(&Type::Single, u32::MAX, data),
                 3 => self.dump_stack(&Type::Float, u32::MAX, data),
                 4 => self.dump_stack(&Type::Boolean, u32::MAX, data),
-                5 => self.dump_stack(&Type::Text(Vec::new()), u32::MAX, data),
+                5 => self.dump_stack(&Type::Text(Deps::none()), u32::MAX, data),
                 6 => self.dump_stack(&Type::Character, u32::MAX, data),
                 _ => self.dump_stack(
-                    &Type::Enum(u32::MAX, false, Vec::new()),
+                    &Type::Enum(u32::MAX, false, Deps::none()),
                     u32::from(*key),
                     data,
                 ),

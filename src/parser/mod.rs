@@ -5,8 +5,8 @@
 //! Including type checking.
 
 use crate::data::{
-    Argument, Context, Data, DefType, I32, IntegerSpec, Type, Value, to_default, v_block, v_if,
-    v_loop, v_set,
+    Argument, Context, Data, DefType, Deps, I32, IntegerSpec, Type, Value, to_default, v_block,
+    v_if, v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{DiagEntry, Diagnostics, Level, diagnostic_format};
@@ -414,12 +414,12 @@ impl Parser {
             pos: 0,
         };
         let d = data.add_def("i_parse_errors", &pos, DefType::Function);
-        data.definitions[d as usize].returned = Type::Text(Vec::new());
+        data.definitions[d as usize].returned = Type::Text(Deps::none());
         let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
         data.definitions[d as usize].returned = Type::Void;
         {
             let mut lexer = Lexer::default();
-            data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
+            data.add_attribute(&mut lexer, d, "msg", Type::Text(Deps::none()));
         }
         Parser {
             todo_files: Vec::new(),
@@ -1199,7 +1199,7 @@ impl Parser {
                     ls.push(self.cl("OpCreateStack", &[Value::Var(wv)]));
                     *code = v_block(
                         ls,
-                        Type::Reference(self.data.def_nr("reference"), vec![wv]),
+                        Type::Reference(self.data.def_nr("reference"), Deps::frame1(wv)),
                         "text_ref",
                     );
                 }
@@ -1235,8 +1235,8 @@ impl Parser {
             return true;
         }
         let mut check_type = is_type;
-        let r = Type::Reference(self.data.def_nr("reference"), Vec::new());
-        let e = Type::Enum(0, false, Vec::new());
+        let r = Type::Reference(self.data.def_nr("reference"), Deps::none());
+        let e = Type::Enum(0, false, Deps::none());
         if let Type::Vector(_nr, _) = is_type {
             if let Type::Vector(v, _) = should
                 && v.is_unknown()
@@ -2579,7 +2579,10 @@ impl Parser {
                 // `self.vars.depend(elm, vec)` so elm doesn't outlive the
                 // backing store.
                 let content_def_nr = data.type_def_nr(concrete);
-                vars.set_type(elm_var, Type::Reference(content_def_nr, vec![out_var]));
+                vars.set_type(
+                    elm_var,
+                    Type::Reference(content_def_nr, Deps::frame1(out_var)),
+                );
                 // 1. OpPreAllocVector(Var(out_var), Int(1), Int(elem_size))
                 //    Mirrors `vectors.rs:1161-1178` for perf parity with
                 //    concrete-T vector pushes.
@@ -3847,7 +3850,7 @@ impl Parser {
                 return if tv_nr == u32::MAX {
                     Type::Unknown(0)
                 } else {
-                    Type::Reference(tv_nr, Vec::new())
+                    Type::Reference(tv_nr, Deps::none())
                 };
             }
             let op_method = format!("Op{}", rename(op));
@@ -4101,26 +4104,63 @@ impl Parser {
                 .collect()
         };
         if let Type::Text(d) = tp {
-            Type::Text(Self::resolve_deps(types, &d))
+            Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
         } else if let Type::Vector(to, d) = tp {
-            Type::Vector(to, Self::resolve_deps(types, &d))
+            Type::Vector(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Sorted(to, key, d) = tp {
-            Type::Sorted(to, key, Self::resolve_deps(types, &d))
+            Type::Sorted(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Hash(to, key, d) = tp {
-            Type::Hash(to, key, Self::resolve_deps(types, &d))
+            Type::Hash(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Index(to, key, d) = tp {
-            Type::Index(to, key, Self::resolve_deps(types, &d))
+            Type::Index(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Spacial(to, key, d) = tp {
-            Type::Spacial(to, key, Self::resolve_deps(types, &d))
+            Type::Spacial(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(to, Self::resolve_deps(types, &filter_hidden(&d)))
+            Type::Reference(
+                to,
+                Deps::frame(Self::resolve_deps(
+                    types,
+                    &filter_hidden(d.as_attr_indices()),
+                )),
+            )
         } else if let Type::Enum(to, true, d) = tp {
-            Type::Enum(to, true, Self::resolve_deps(types, &filter_hidden(&d)))
+            Type::Enum(
+                to,
+                true,
+                Deps::frame(Self::resolve_deps(
+                    types,
+                    &filter_hidden(d.as_attr_indices()),
+                )),
+            )
         } else {
             tp
         }
     }
 
+    /// THE def→frame dep converter (H2 / DEPS_INVENTORY): maps the
+    /// callee's ATTR-INDEX deps through the actual argument types at a
+    /// call site into caller FRAME var deps.  `d` must be attr-space
+    /// (callers read it via `Deps::as_attr_indices`); the result is
+    /// wrapped `Deps::frame` by `call_dependencies`.
     fn resolve_deps(types: &[Type], d: &[u16]) -> Vec<u16> {
         let mut dp = HashSet::new();
         for ar in d {
@@ -4173,7 +4213,7 @@ impl Parser {
                     // #306: the attr's dep list is callee-internal (attr
                     // indices); inherited verbatim it reads as CALLER var
                     // numbers and mislabels the fresh buffer a borrow.
-                    let buf_tp = Type::Vector(content.clone(), Vec::new());
+                    let buf_tp = Type::Vector(content.clone(), Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
@@ -4186,7 +4226,7 @@ impl Parser {
                     // skips → codegen panics.
                     self.vars.mark_caller_hidden_buf(vr);
                     self.data.vector_def(&mut self.lexer, content);
-                    all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
+                    all_types[a_nr] = Type::Vector(content.clone(), Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Reference(content, _) = tp {
                     assert_eq!(
@@ -4195,14 +4235,14 @@ impl Parser {
                         "Expect a null default on database references"
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
-                    let buf_tp = Type::Reference(content, Vec::new());
+                    let buf_tp = Type::Reference(content, Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
                         self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
-                    all_types[a_nr] = Type::Reference(content, vec![vr]);
+                    all_types[a_nr] = Type::Reference(content, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Enum(content, true, _) = tp {
                     // @P301 — struct-enums are heap records like
@@ -4220,14 +4260,14 @@ impl Parser {
                         "Expect a null default on database references"
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
-                    let buf_tp = Type::Enum(content, true, Vec::new());
+                    let buf_tp = Type::Enum(content, true, Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
                         self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
-                    all_types[a_nr] = Type::Enum(content, true, vec![vr]);
+                    all_types[a_nr] = Type::Enum(content, true, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
@@ -4258,7 +4298,7 @@ impl Parser {
                     ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
                     actual[a_nr] = v_block(
                         ls,
-                        Type::Reference(self.data.def_nr("reference"), vec![vr]),
+                        Type::Reference(self.data.def_nr("reference"), Deps::frame1(vr)),
                         "default ref",
                     );
                     all_types[a_nr] = tp.clone();
@@ -6689,7 +6729,7 @@ fn merge_dependencies(a: &Type, b: &Type) -> Type {
         for v in db {
             d.insert(*v);
         }
-        Type::Text(d.into_iter().collect())
+        Type::Text(Deps::frame(d.into_iter().collect()))
     } else {
         a.clone()
     }

@@ -122,6 +122,8 @@ fn declared_dep_beats_same_named_package_file() {
         stdout.contains("shadow-ok 42"),
         "dep-shadowing guard regressed: `use shadowlib;` did not resolve to \
          the declared dependency.  stdout={stdout:?} stderr={stderr:?}"
+    );
+}
 
 /// #337 — PACKAGES.md resolution step 2: `use a;` resolves through the
 /// consuming package's `[dependencies] a = { path = "…" }` even when the

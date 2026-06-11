@@ -513,7 +513,7 @@ impl Parser {
                             *code = Value::Text(String::new());
                             return self.parse_append_text(
                                 code,
-                                &Type::Text(Vec::new()),
+                                &Type::Text(crate::data::Deps::none()),
                                 &ls,
                                 u16::MAX,
                             );
@@ -775,10 +775,10 @@ impl Parser {
                     let orig = code.clone();
                     *code = v_block(
                         vec![v_set(w, orig), Value::Var(w)],
-                        Type::Reference(d_nr, vec![w]),
+                        Type::Reference(d_nr, crate::data::Deps::frame1(w)),
                         "inline ref",
                     );
-                    t = Type::Reference(d_nr, vec![w]);
+                    t = Type::Reference(d_nr, crate::data::Deps::frame1(w));
                 }
             } else if self.lexer.has_token("[") {
                 wrap_chain = true;
@@ -794,7 +794,11 @@ impl Parser {
             } else if self.lexer.has_token("(") {
                 // chained call on a Type::Function expression — expr(args).
                 if let Type::Function(param_types, ret_type, _) = t.clone() {
-                    let fn_type = Type::Function(param_types.clone(), ret_type.clone(), vec![]);
+                    let fn_type = Type::Function(
+                        param_types.clone(),
+                        ret_type.clone(),
+                        crate::data::Deps::none(),
+                    );
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
@@ -846,7 +850,7 @@ impl Parser {
                                     v_set(wv, Value::Text(String::new())),
                                     self.cl("OpCreateStack", &[Value::Var(wv)]),
                                 ],
-                                Type::Reference(ref_def, vec![wv]),
+                                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
                                 "cref_work_buf",
                             ));
                         }

@@ -26,7 +26,7 @@
 //! **Return-value exemption:** the variable holding the function's return value
 //! (`ret_var`) is never freed — its value is consumed by the caller.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value, v_if, v_set};
+use crate::data::{Block, Context, Data, DefType, Deps, Type, Value, v_if, v_set};
 use crate::variables::{Function, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -1455,7 +1455,7 @@ impl Scopes {
                 {
                     self.ret_temp_counter += 1;
                     let name = format!("__ret_text_{}", self.ret_temp_counter);
-                    let tmp = function.add_temp_var(&name, &Type::Text(vec![]));
+                    let tmp = function.add_temp_var(&name, &Type::Text(Deps::none()));
                     function.set_skip_free(tmp);
                     self.var_scope.insert(tmp, self.scope);
                     self.var_order.push(tmp);
@@ -1623,7 +1623,17 @@ impl Scopes {
                         if a_idx < def.attributes.len() {
                             function.var(&def.attributes[a_idx].name) == v
                         } else {
-                            a == v // fallback for non-attribute deps
+                            // NOT a fossil (H2 bisect 2026-06-11): block-result
+                            // types reach here with MIXED-space deps — entries
+                            // below the attr count are attribute indices,
+                            // entries above are FRAME var numbers (e.g. the
+                            // closure work var a factory's returned fn-ref
+                            // depends on).  Removing this arm freed closure
+                            // records early (26-closures: two make_adder
+                            // results shared one record).  The positional
+                            // disambiguation IS the current contract —
+                            // documented in DEPS_INVENTORY § crossing sites.
+                            a == v
                         }
                     })
                 };
@@ -2033,9 +2043,9 @@ impl Scopes {
             return None;
         }
         match &def.returned {
-            Type::Vector(elem, _) => Some(Type::Vector(elem.clone(), Vec::new())),
-            Type::Reference(d_nr, _) => Some(Type::Reference(*d_nr, Vec::new())),
-            Type::Enum(d_nr, true, _) => Some(Type::Enum(*d_nr, true, Vec::new())),
+            Type::Vector(elem, _) => Some(Type::Vector(elem.clone(), Deps::none())),
+            Type::Reference(d_nr, _) => Some(Type::Reference(*d_nr, Deps::none())),
+            Type::Enum(d_nr, true, _) => Some(Type::Enum(*d_nr, true, Deps::none())),
             _ => None,
         }
     }
@@ -2059,7 +2069,7 @@ impl Scopes {
             let def = data.def(*fn_nr);
             if def.name.starts_with("n_") && def.code != Value::Null {
                 if let Type::Reference(d_nr, _) = &def.returned {
-                    return Some(Type::Reference(*d_nr, Vec::new()));
+                    return Some(Type::Reference(*d_nr, Deps::none()));
                 }
                 // @P303 — a user fn returning a struct-enum by FRESH owned
                 // store (empty dep) leaks its result temp when used directly
@@ -2072,7 +2082,7 @@ impl Scopes {
                 if let Type::Enum(d_nr, true, dep) = &def.returned
                     && dep.is_empty()
                 {
-                    return Some(Type::Enum(*d_nr, true, Vec::new()));
+                    return Some(Type::Enum(*d_nr, true, Deps::none()));
                 }
                 // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
                 // whose fn-ref carries a fresh closure record) leaks its result temp
@@ -2087,7 +2097,7 @@ impl Scopes {
                 // is a safe no-op; a borrowed fn-ref copy is marked `skip_free`
                 // elsewhere, so only a freshly produced closure is lifted here.
                 if let Type::Function(params, ret, _) = &def.returned {
-                    return Some(Type::Function(params.clone(), ret.clone(), Vec::new()));
+                    return Some(Type::Function(params.clone(), ret.clone(), Deps::none()));
                 }
             }
         }
@@ -2114,7 +2124,7 @@ impl Scopes {
                 && let Type::Vector(elem, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Vector(elem.clone(), Vec::new()));
+                return Some(Type::Vector(elem.clone(), Deps::none()));
             }
         }
         // The native-constructor branches below are intentionally matched on the
@@ -2133,7 +2143,7 @@ impl Scopes {
                 && let Type::Enum(d_nr, true, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Enum(*d_nr, true, Vec::new()));
+                return Some(Type::Enum(*d_nr, true, Deps::none()));
             }
             // Native vector-returning fns (e.g. `keys()`, `fields()` on
             // JsonValue) allocate a fresh vector store that the caller owns.
@@ -2143,7 +2153,7 @@ impl Scopes {
                 && let Type::Vector(elem, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Vector(elem.clone(), Vec::new()));
+                return Some(Type::Vector(elem.clone(), Deps::none()));
             }
         }
         None
@@ -2376,7 +2386,22 @@ fn check_ref_leaks(
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, free_ref_nr, &mut freed);
 
-    let mut ret_deps: HashSet<u16> = ret_type.depend().into_iter().collect();
+    // H2: `ret_type` deps are ATTRIBUTE indices — translate each to its
+    // frame var through the attribute name before pooling with the
+    // frame-space deps below (the old code inserted them raw, so an attr
+    // index colliding with an unrelated var number silently suppressed a
+    // leak report).
+    let fn_def_nr = data.def_nr(fn_name);
+    let mut ret_deps: HashSet<u16> = HashSet::new();
+    for a in ret_type.depend() {
+        let a_idx = a as usize;
+        if fn_def_nr != u32::MAX && a_idx < data.def(fn_def_nr).attributes().len() {
+            let av = function.var(&data.def(fn_def_nr).attributes()[a_idx].name);
+            if av != u16::MAX {
+                ret_deps.insert(av);
+            }
+        }
+    }
     // The directly-returned variable (e.g. the owned struct constructed by a function
     // whose return type is Reference) passes ownership to the caller — no FreeRef is
     // emitted for it and that is correct.  Exclude it so check_ref_leaks does not

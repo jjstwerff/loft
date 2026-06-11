@@ -40,7 +40,7 @@ fn call_with_null() {
 fn call_text_null() {
     code!("fn routine(a: integer) -> text { if a > 2 { return null }; \"#{a}#\"}")
         .expr("routine(5)")
-        .tp(Type::Text(vec![]))
+        .tp(Type::Text(loft::data::Deps::none()))
         .result(Value::Null);
 }
 
@@ -56,7 +56,7 @@ fn call_int_null() {
 fn if_typing() {
     expr!("a = \"12\"; if a.len()>2 { null } else { \"error\" }").result(Value::str("error"));
     expr!("a = \"12\"; if a.len()==2 { null } else { \"error\" }")
-        .tp(Type::Text(vec![]))
+        .tp(Type::Text(loft::data::Deps::none()))
         .result(Value::Null);
 }
 
@@ -74,12 +74,12 @@ fn tuple_element_offsets() {
             not_null: false,
             forced_size: None,
         }),
-        Type::Text(vec![]),
+        Type::Text(loft::data::Deps::none()),
         Type::Float,
     ];
     let offsets = element_offsets(&types);
     // integer=8 at 0 (post-2c), text=Str size at 8, float=8 after text
-    let text_sz = element_size(&Type::Text(vec![]));
+    let text_sz = element_size(&Type::Text(loft::data::Deps::none()));
     assert_eq!(offsets, vec![0, 8, 8 + text_sz]);
 }
 
@@ -94,8 +94,8 @@ fn tuple_owned_elements() {
             not_null: false,
             forced_size: None,
         }),
-        Type::Text(vec![]),
-        Type::Reference(0, vec![]),
+        Type::Text(loft::data::Deps::none()),
+        Type::Reference(0, loft::data::Deps::none()),
     ];
     let owned = owned_elements(&types);
     assert_eq!(owned.len(), 2);

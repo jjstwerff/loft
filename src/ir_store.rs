@@ -875,6 +875,7 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Deps;
     use crate::data::{
         Attribute, Block, IntegerSpec, LinkedFieldGroup, LinkedFieldKind, ParForBody, Type,
     };
@@ -1256,10 +1257,13 @@ mod tests {
                     not_null: true,
                     forced_size: NonZeroU8::new(4),
                 }),
-                Type::Text(vec![1, 2]),
+                Type::Text(Deps::unknown(vec![1, 2])),
             ],
-            Box::new(Type::Vector(Box::new(Type::Boolean), vec![3])),
-            vec![7],
+            Box::new(Type::Vector(
+                Box::new(Type::Boolean),
+                Deps::unknown(vec![3]),
+            )),
+            Deps::unknown(vec![7]),
         );
 
         let root = root_type_vector(&mut stores);
@@ -1315,7 +1319,7 @@ mod tests {
         let ty = Type::Sorted(
             9,
             vec![("name".into(), true), ("age".into(), false)],
-            vec![2],
+            Deps::unknown(vec![2]),
         );
         let root = root_type_vector(&mut stores);
         materialize_type(&mut stores, root, &ty);
@@ -1331,7 +1335,7 @@ mod tests {
         assert_eq!(k1.field_str(&stores, ds::SORTKEY_NAME), "age");
         assert!(!k1.field_bool(&stores, ds::SORTKEY_ASC));
 
-        let sp = Type::Spacial(4, vec!["x".into(), "y".into()], vec![]);
+        let sp = Type::Spacial(4, vec!["x".into(), "y".into()], Deps::none());
         let root2 = root_type_vector(&mut stores);
         materialize_type(&mut stores, root2, &sp);
         let spr = root2.get(0, &stores);

@@ -14,7 +14,7 @@
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.
 
-use crate::data::{Data, DefType, I32, IntegerSpec, Type, Value};
+use crate::data::{Data, DefType, Deps, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
 use crate::lexer::Lexer;
@@ -25,7 +25,7 @@ use crate::lexer::Lexer;
 pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
     match data.def(d_nr).name.as_str() {
         "vector" => {
-            data.set_returned(d_nr, Type::Vector(Box::new(Type::Unknown(0)), Vec::new()));
+            data.set_returned(d_nr, Type::Vector(Box::new(Type::Unknown(0)), Deps::none()));
             data.definitions[d_nr as usize].known_type = 7;
         }
         "integer" => {
@@ -41,7 +41,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 2;
         }
         "text" => {
-            data.set_returned(d_nr, Type::Text(Vec::new()));
+            data.set_returned(d_nr, Type::Text(Deps::none()));
             data.definitions[d_nr as usize].known_type = 5;
         }
         "boolean" => {
@@ -49,7 +49,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 4;
         }
         "enumerate" => {
-            data.set_returned(d_nr, Type::Enum(0, false, Vec::new()));
+            data.set_returned(d_nr, Type::Enum(0, false, Deps::none()));
         }
         "function" => {
             data.set_returned(d_nr, Type::Routine(d_nr));
@@ -59,7 +59,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 6;
         }
         "radix" | "hash" | "reference" | "index" | "sorted" | "spacial" => {
-            data.set_returned(d_nr, Type::Reference(d_nr, Vec::new()));
+            data.set_returned(d_nr, Type::Reference(d_nr, Deps::none()));
         }
         "keys_definition" => {
             data.set_returned(d_nr, Type::Keys);
@@ -104,7 +104,7 @@ pub fn actual_types_deferred(
     // Determine the actual type of structs regarding their use
     for d in start_def..data.definitions() {
         if matches!(data.def_type(d), DefType::Struct) {
-            data.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+            data.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         }
     }
     for d in start_def..data.definitions() {
@@ -222,7 +222,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                         lexer,
                         d_nr,
                         "enum",
-                        Type::Enum(enumerate_d_nr, false, Vec::new()),
+                        Type::Enum(enumerate_d_nr, false, Deps::none()),
                     );
                     let attr_nr = data.def(d_nr).attr_names["enum"];
                     data.set_attr_value(d_nr, attr_nr, Value::Enum(discriminant, u16::MAX));
