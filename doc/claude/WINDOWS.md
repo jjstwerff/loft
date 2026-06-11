@@ -70,6 +70,47 @@ the MSVC toolchain is the missing piece.
 
 ## Known gaps
 
+### Engine-host kernel on Windows — PROBED 2026-06-11 (the focused windows-probe loop)
+
+The `windows-probe` branch + `.github/workflows/windows-probe.yml` (the
+non-PR platform-debug loop, user-directed) answered the @PLN18 questions the
+unix-gated lifecycle suite leaves open.  Warm-cache round time: ~40 s.
+
+**Verified working on `windows-latest`:**
+- **The kernel SERVES**: listen (the std-bind fallback), WS upgrade, event
+  echo over world state, drift-free 10 ms ticks — the whole serve path
+  (`tests/windows_probe.rs::probe_kernel_serves_on_windows`).
+- **Sequential rebind is instant**: close-listener → rebind the same port
+  succeeds after **~72 µs** (no TIME_WAIT penalty for listeners).
+
+**Measured constraints:**
+- **No bind overlap**: a second plain bind on a held port → `AddrInUse`
+  (the first listener unaffected).  The S5 swap's unix shape (SO_REUSEPORT
+  overlap, rollback-by-default because the old build never stops
+  listening) does NOT port as-is.
+- **Windows swap design (from the numbers)**: a TWO-PHASE handover —
+  new build restores the world and signals *restored* (pre-bind READY
+  variant) → old closes its listener + signals GO → new binds (~72 µs)
+  and serves.  Rollback: no *restored* within the deadline → the old
+  build never closed, keeps serving; post-GO child death → the old
+  REBINDS (~72 µs) and resumes.  The freeze window grows only by the
+  close-to-bind gap (negligible); the choreography gains one round-trip.
+
+**New bug found (affects products, not just tests):**
+- **`parse_str` with a VIRTUAL filename fails on Windows** — `Fatal:
+  Unknown file:<win-probe>` (`<`/`>` are invalid Windows path characters;
+  a resolution step treats the virtual name as a real path).  Implicates
+  every virtual-name consumer there: the REPL's snippet names and
+  live-reload's `"<live-reload>"` parse — i.e. **tier-0 live reload is
+  likely broken on Windows** until fixed.  Repro: `Parser::parse_str(src,
+  "<anything>", false)` after a `use` that triggers path resolution.
+
+**Remaining unprobed**: process-group-free cleanup (`stop_game` orphans
+the `--native` grandchild on Windows — Job Objects / `taskkill /T` is the
+shape); the full flip/reload/rebuild lifecycle (gated on the virtual-name
+fix); UDP same-port behavior beside the listener.
+
+
 ### ~~G2~~ — `--native` `windows-targets` link search path (`LNK1181`) — FIXED 2026-05-30
 
 - **Root cause:** a diamond dependency pulls TWO versions of
