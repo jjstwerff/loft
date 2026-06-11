@@ -4850,6 +4850,7 @@ impl Parser {
         if blocked(&f) {
             f = format!("{id}.loft");
         }
+        self.probe_manifest_path_dep(id, cur_dir, &mut f);
         self.probe_sibling_package(id, cur_dir, &mut f);
         Self::probe_script_sibling_dir(id, &cur_script, &mut f);
         if blocked(&f) {
@@ -4933,6 +4934,57 @@ impl Parser {
     fn probe_base_dir_lib(id: &str, base_dir: &str, f: &mut String) {
         if !base_dir.is_empty() && !std::path::Path::new(f).exists() {
             *f = format!("{base_dir}{0}lib{0}{id}.loft", sep_str());
+        }
+    }
+
+    /// #337 / PACKAGES.md resolution step 2 — `[dependencies] <id> =
+    /// { path = "…" }` in the consuming package's `loft.toml`.  Walk up
+    /// from `cur_dir` to the owning manifest; if it declares `id` as a
+    /// path dependency, resolve the path relative to the manifest's
+    /// directory and locate the dep package's entry file (its own
+    /// `[library] entry`, defaulting to `src/<id>.loft`).  Registers the
+    /// dep's manifest so its `#native` symbols resolve, mirroring
+    /// `probe_sibling_package`.
+    fn probe_manifest_path_dep(&mut self, id: &str, cur_dir: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() || cur_dir.is_empty() {
+            return;
+        }
+        let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+        loop {
+            let manifest_path = search_dir.join("loft.toml");
+            if manifest_path.exists() {
+                let dep_rel = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                    .and_then(|m| {
+                        m.dependencies.iter().find_map(|(name, value)| {
+                            (name == id)
+                                .then(|| crate::manifest::extract_path_dep(value))
+                                .flatten()
+                                .map(str::to_string)
+                        })
+                    });
+                if let Some(rel) = dep_rel {
+                    let pkg_root = search_dir.join(rel);
+                    let dep_manifest = pkg_root.join("loft.toml");
+                    let entry = dep_manifest
+                        .exists()
+                        .then(|| crate::manifest::read_manifest(&dep_manifest.to_string_lossy()))
+                        .flatten()
+                        .and_then(|m| m.entry)
+                        .unwrap_or_else(|| format!("src{}{id}.loft", sep_str()));
+                    let file = pkg_root.join(entry);
+                    if file.exists() {
+                        *f = file.to_string_lossy().to_string();
+                        if dep_manifest.exists() {
+                            self.register_native_manifest(&dep_manifest, &pkg_root);
+                        }
+                    }
+                }
+                break;
+            }
+            let Some(p) = search_dir.parent() else {
+                break;
+            };
+            search_dir = p.to_path_buf();
         }
     }
 
