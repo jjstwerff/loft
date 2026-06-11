@@ -1248,6 +1248,13 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
             ctl_listener: bind_ctl_listener(),
             ctl_conns: Vec::new(),
         });
+        // @PLN18 08-S5 — the swap-resume handshake, CLIENT form: a client's
+        // "serving" is CONNECTED.  Touching the file tells the retiring
+        // parent the new build is live (mirror of listen_impl's signal).
+        if let Ok(ready) = std::env::var("LOFT_SWAP_READY") {
+            let _ = std::fs::write(&ready, b"connected");
+            eprintln!("loft-swap: new build connected (ready file touched)");
+        }
         Some(())
     })
 }
@@ -1962,6 +1969,16 @@ pub fn n_kernel_swap_step(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, phase);
 }
 
+/// `swap_retired() -> boolean` — did THIS process hand its world to a new
+/// build?  A loop wrapper (the projector's reconnect-on-drop) must
+/// distinguish "the server vanished" (reconnect) from "I retired" (exit):
+/// both return from `run_client`, and the swap phase is sticky by design.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn n_swap_retired(stores: &mut Stores, stack: &mut DbRef) {
+    let v = SWAP.with(|sw| matches!(*sw.borrow(), SwapPhase::Done));
+    stores.put(stack, v);
+}
+
 // ── The BROWSER kernel (@PLN18 phase 07) — the same loft script on a phone ──
 //
 // The connector role rebuilt on what the browser already provides: the
@@ -2375,6 +2392,10 @@ pub mod typed {
     pub fn n_kernel_swap_step(cell: &UnsafeCell<Stores>) -> i64 {
         let stores: &mut Stores = unsafe { &mut *cell.get() };
         super::swap_step_impl(stores)
+    }
+
+    pub fn n_swap_retired(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(super::SWAP.with(|sw| matches!(*sw.borrow(), super::SwapPhase::Done)))
     }
 
     pub fn n_kernel_default_host(_cell: &UnsafeCell<Stores>) -> String {

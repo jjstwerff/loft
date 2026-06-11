@@ -236,6 +236,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_swap_start", crate::engine_host::n_swap_start),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_swap_step", crate::engine_host::n_kernel_swap_step),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_retired", crate::engine_host::n_swap_retired),
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]

@@ -184,6 +184,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_swap_world",                 abi: Abi::Cell },
     RuntimeFn { name: "n_swap_start",                 abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_swap_step",           abi: Abi::Cell },
+    RuntimeFn { name: "n_swap_retired",               abi: Abi::Cell },
 ];
 
 // @PLN18 08-S1 — the typed kernel twins, glob-importable by generated crates.

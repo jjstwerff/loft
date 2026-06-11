@@ -889,6 +889,16 @@ fn main() {
     crystal_births: [],
   };
 
+  // Name the world for live build swaps (@PLN18 08-S5).  The hash fields
+  // (cells/fades) restore to defaults across a swap — by design for a
+  // VIEWER: the snapshot carries the scalars, and the post-swap connect's
+  // "6:" re-request replays the cells from the server (the same recovery
+  // path a fresh start uses).
+  resumed = engine_host::swap_world(world);
+  if resumed {
+    println("projector: resumed from a build swap (world replay requested on connect)");
+  }
+
   // Dark-blue background — matches doc/audience-demo/index.html --bg.
   bg = graphics::rgba(10, 10, 20, 255);
 
@@ -896,7 +906,7 @@ fn main() {
   // frame.  run_client returns when the server drops — reconnect (the
   // mid-show resilience the old lib/web session gave us) until the window
   // itself closes.
-  while !p.closing {
+  while !p.closing && !engine_host::swap_retired() {
     engine_host::run_client(host, port, FRAME_US,
       fn(ev: engine_host::Event) {
         if ev.kind == 0 {
@@ -1049,7 +1059,9 @@ fn main() {
       p.snapshot_retries = p.snapshot_retries + 1;
     }
       });
-    if !p.closing {
+    if engine_host::swap_retired() {
+      println("projector: this build retired after a swap — the new one carries on");
+    } else if !p.closing {
       println("projector: reconnecting…");
     }
   }

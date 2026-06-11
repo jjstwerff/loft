@@ -601,6 +601,195 @@ fn main() {{
     let _ = std::fs::remove_file(&err_path);
 }
 
+/// @PLN18 08-S5 (connector half) — swap a CLIENT process under its running
+/// world.  Driven over the client's own control endpoint: rebuild (a cache
+/// hit — the self-swap) then swap; the retiring client signals the new
+/// build via the READY file's CLIENT form ("connected" — a client's
+/// serving is its connection), `run_client`'s swap step freezes meaning
+/// while mechanics pump, and `swap_retired()` lets a reconnect wrapper
+/// tell retirement from a dropped server (the projector's spin,
+/// probe-caught live).  World continuity: the tick counter is a SCALAR, so
+/// the snapshot restores it fully — the new process resumes counting from
+/// the old one's value.
+#[test]
+fn s5_client_swap_under_running_world() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 18116u16;
+    const STEM: &str = "/.loft/cache/eh_s5c_";
+    s5_kill_stale(STEM);
+    let _hygiene = S5Hygiene(STEM);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    let srv_prog = std::env::temp_dir().join(format!("eh_s5c_srv_{port}.loft"));
+    std::fs::write(
+        &srv_prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ t: integer not null }}
+fn main() {{
+  w = W {{ t: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{ }},
+    fn() {{ w.t = w.t + 1; }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let mut scmd = Command::new(loft_bin());
+    scmd.process_group(0);
+    let server = scmd
+        .arg("--interpret")
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&srv_prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn server");
+    let _sguard = Guard(Some(server));
+
+    let cli_prog = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.loft"));
+    std::fs::write(
+        &cli_prog,
+        format!(
+            r#"
+use engine_host;
+struct C {{ ticks: integer not null }}
+fn main() {{
+  c = C {{ ticks: 0 }};
+  resumed = engine_host::swap_world(c);
+  if resumed {{ println("client: resumed ticks={{c.ticks}}"); }}
+  engine_host::run_client(engine_host::default_host(), {port}, 5000,
+    fn(ev: engine_host::Event) {{ }},
+    fn() {{
+      c.ticks = c.ticks + 1;
+      if c.ticks > 12000 {{ engine_host::client_stop(); }}
+    }});
+  if engine_host::swap_retired() {{ println("client: retired"); }}
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let out_path = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.out"));
+    let err_path = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.err"));
+    let mut ccmd = Command::new(loft_bin());
+    ccmd.env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_DEBUG_CONTROL", "1");
+    ccmd.process_group(0);
+    let client = ccmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&cli_prog)
+        .current_dir(&root)
+        .stdout(Stdio::from(std::fs::File::create(&out_path).unwrap()))
+        .stderr(Stdio::from(std::fs::File::create(&err_path).unwrap()))
+        .spawn()
+        .expect("spawn client");
+    let mut cguard = Guard(Some(client));
+
+    // Scrape the FIRST control endpoint.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let ctl_port: u16 = loop {
+        let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+        if let Some(rest) = out.split("debug control on 127.0.0.1:").nth(1) {
+            break rest
+                .split_whitespace()
+                .next()
+                .and_then(|p| p.trim().parse().ok())
+                .expect("port parse");
+        }
+        assert!(Instant::now() < deadline, "client never announced: {out}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // Drive the self-swap over the channel.
+    let ctl = ws_connect(ctl_port);
+    std::thread::sleep(Duration::from_millis(300)); // let some ticks land
+    ws_send(&ctl, "D!:rebuild");
+    assert_eq!(ws_recv(&ctl), "D:rebuild started");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        ws_send(&ctl, "D!:rebuild?");
+        let st = ws_recv(&ctl);
+        if st == "D:rebuild 2" {
+            break;
+        }
+        assert!(st == "D:rebuild 1", "rebuild status: {st}");
+        assert!(Instant::now() < deadline, "rebuild never ready");
+    }
+    ws_send(&ctl, "D!:swap auto");
+    assert_eq!(ws_recv(&ctl), "D:swap true");
+
+    // The OLD driver chain exits (run_client returns 2 -> main ends).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(child) = cguard.0.as_mut()
+            && child.try_wait().ok().flatten().is_some()
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "old client never retired");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Evidence: retirement printed; the NEW process resumed the world (a
+    // scalar tick counter restores fully -> it resumed counting from a
+    // positive value) and announced its own endpoint.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (resumed_ticks, ctl2_port): (i64, u16) = loop {
+        let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+        let announce2 = out.match_indices("debug control on 127.0.0.1:").nth(1);
+        if let (Some(rest), Some((idx, _))) =
+            (out.split("client: resumed ticks=").nth(1), announce2)
+        {
+            let ticks = rest
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse().ok())
+                .expect("ticks parse");
+            let port = out[idx + "debug control on 127.0.0.1:".len()..]
+                .split_whitespace()
+                .next()
+                .and_then(|p| p.parse().ok())
+                .expect("ctl2 parse");
+            break (ticks, port);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the new build never resumed/announced: {out}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(
+        resumed_ticks > 0,
+        "the world must cross the swap (resumed ticks={resumed_ticks})"
+    );
+    let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+    assert!(
+        out.contains("client: retired"),
+        "swap_retired must fire: {out}"
+    );
+
+    // The new build is debuggable: quit it over ITS endpoint.
+    let ctl2 = ws_connect(ctl2_port);
+    ws_send(&ctl2, "D!:quit");
+    assert_eq!(ws_recv(&ctl2), "D:quitting");
+    let _ = std::fs::remove_file(&srv_prog);
+    let _ = std::fs::remove_file(&cli_prog);
+    let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_file(&err_path);
+}
+
 /// @PLN18 08-S7 (connector half) — debug a CLIENT process via its own
 /// control endpoint.  A connector has no game port a debugger could dial,
 /// so under LOFT_DEBUG_CONTROL=1 it binds a loopback listener and announces

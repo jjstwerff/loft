@@ -102,6 +102,12 @@ pub fn swap_start(artifact: text) -> boolean;
 fn kernel_swap_step() -> integer;
 #native
 
+// Did THIS process hand its world to a new build?  A reconnect wrapper
+// around run_client must tell "the server vanished" (redial) apart from
+// "this build retired after a swap" (exit) — both return from the loop.
+pub fn swap_retired() -> boolean;
+#native
+
 fn kernel_idle(max_us: integer);
 #native
 
@@ -355,7 +361,21 @@ pub fn run_client(host: text, port: integer, tick_interval_us: integer,
     return;
   }
   while kernel_client_alive() {
+    // @PLN18 08-S5/S7 — the swap step on the CLIENT side too: 0 = run
+    // normally, 1 = FROZEN (the new build is booting; keep pumping so the
+    // server connection and the debug endpoint stay alive), 2 = handed
+    // over (the new process is connected; this one retires).
+    swapping = kernel_swap_step();
+    if swapping == 2 {
+      println("engine_host: swapped to the new build; this client retires");
+      return;
+    }
     work = kernel_client_pump();
+    if swapping == 1 {
+      kernel_client_idle(1000);
+      kernel_client_frame();
+      continue;
+    }
     for _ in 0..256 {
       more = kernel_client_next_event();
       if !more { break; }

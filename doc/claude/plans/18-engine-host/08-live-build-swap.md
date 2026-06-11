@@ -243,6 +243,24 @@ Rollback if the new build fails to boot.  **SHIPPED**:
   reconnect); user_args are not re-passed to the new build; capture-set
   changes between builds fall to the lenient deserializer's defaults.
 
+**Connector half + THE WINDOW VERDICT (2026-06-11):** clients swap too —
+`run_client` drives the same swap step (freeze keeps the server connection
+AND the debug endpoint pumping), a client's READY form is "connected"
+(its serving IS its connection), and the new `swap_retired()` lets a
+reconnect wrapper tell retirement from a dropped server (without it the
+projector's wrapper SPUN: redial → sticky Done → instant retire → 25k
+loops — probe-caught live).  **Measured on the GL projector**: swap→retire
+within the same second (≲1 s meaning-freeze, cache-hit artifact), and the
+window does NOT blink — the NEW window opens during the old build's freeze
+(boot order: window → restore → connect → READY), then the old closes:
+an overlap, never an empty screen.  The world's hash fields restore to
+defaults and the on-connect `6:` replay heals them (the viewer's
+meaning-level recovery); scalars cross intact.  Post-swap the new build
+re-announces its control endpoint and is immediately debuggable
+(frame-stepping verified on the swapped process).  CI:
+`s5_client_swap_under_running_world` (headless; world continuity via the
+restored tick counter).
+
 > **Test:** `engine_host_kernel::s5_native_swap_under_running_world` —
 > ONE test drives the whole heart pipeline (S2 flip → rollback legs → S3
 > edit → S4 rebuild → swap):
