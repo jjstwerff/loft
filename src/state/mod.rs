@@ -3712,6 +3712,47 @@ impl State {
     ///
     /// # Panics
     /// When the callee yields mid-call (not supported in v1).
+    /// `reenter` for a value-returning callee: after completion the result
+    /// sits at the synthetic frame's BASE (`copy_result` copies it to
+    /// `fn_stack` = the base and leaves `stack_pos = base + step(size)`).
+    /// Read it before restoring the watermark.
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    pub fn reenter_ret<T: Copy + 'static>(
+        &mut self,
+        d_nr: u32,
+        code_position: u32,
+        push_args: impl FnOnce(&mut Self),
+    ) -> T {
+        let saved_pos = self.code_pos;
+        let saved_sp = self.stack_pos;
+        let base = self.stack_high.next_multiple_of(8);
+        self.stack_pos = base;
+        push_args(self);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: base,
+            args_size: 0,
+            line: 0,
+        });
+        self.put_stack(u32::MAX);
+        self.code_pos = code_position;
+        let yielded = self.resume();
+        assert!(!yielded, "reenter_ret: the callee yielded mid-call");
+        let result = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + base);
+        self.code_pos = saved_pos;
+        self.stack_pos = saved_sp;
+        result
+    }
+
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
     pub fn reenter(&mut self, d_nr: u32, code_position: u32, push_args: impl FnOnce(&mut Self)) {
         let saved_pos = self.code_pos;
         let saved_sp = self.stack_pos;

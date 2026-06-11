@@ -456,6 +456,7 @@ impl Test {
             coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
+            live_fns: Vec::new(),
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

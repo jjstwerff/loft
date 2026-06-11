@@ -173,11 +173,15 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_client_sync_seq",            abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_sync_payload", abi: Abi::Cell },
     RuntimeFn { name: "n_client_udp_bound",           abi: Abi::Cell },
+    // @PLN18 08-S2 — live dispatch: flip a fn to the interpreter at runtime.
+    RuntimeFn { name: "n_live_flip",                  abi: Abi::Cell },
 ];
 
 // @PLN18 08-S1 — the typed kernel twins, glob-importable by generated crates.
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::engine_host::typed::*;
+// @PLN18 08-S2 — the live-flip surface (typed twin in live_dispatch).
+pub use crate::live_dispatch::n_live_flip;
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
 /// unknown names — user-defined functions and Op stubs default to the

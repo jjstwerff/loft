@@ -88,6 +88,7 @@ pub mod state;
 pub mod compile;
 pub mod engine_host;
 pub mod extensions;
+pub mod live_dispatch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod live_reload;
 pub mod repl;

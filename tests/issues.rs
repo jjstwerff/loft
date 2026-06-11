@@ -956,6 +956,7 @@ fn n1_native_pipeline_trivial_program() {
         coroutine_persistent_vars: std::collections::HashSet::new(),
         call_stack_prefix: None,
         wasm_browser: false,
+        live_fns: Vec::new(),
     };
     out.output_native_reachable(&mut f, start_def, end_def, &[main_nr])
         .expect("output_native_reachable");
@@ -9064,6 +9065,7 @@ fn p144_ref_param_forward_native() {
             coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
+            live_fns: Vec::new(),
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
             .unwrap();
@@ -9459,6 +9461,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
             coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
+            live_fns: Vec::new(),
         };
         out.output_native_reachable(&mut f, 0, p.data.definitions(), &[main_nr])
             .unwrap();

@@ -822,6 +822,7 @@ pub(crate) fn run_tests(
                             coroutine_persistent_vars: std::collections::HashSet::new(),
                             call_stack_prefix: None,
                             wasm_browser: false,
+                            live_fns: Vec::new(),
                         };
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");

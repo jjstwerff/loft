@@ -479,6 +479,12 @@ pub struct Output<'a> {
     /// When true, emit `#[no_mangle] pub extern "C" fn loft_start()`
     /// instead of `fn main()` and use WASM imports for native package functions.
     pub wasm_browser: bool,
+    /// @PLN18 08-S2 — the live-dispatch fn table, in emission order.  Each
+    /// generated user fn with a dispatchable signature opens with
+    /// `live_flipped(idx)`; `idx` is its position here.  `emit_native_main`
+    /// emits the table as `LOFT_LIVE_FNS` so the runtime bootstrap can
+    /// resolve every index against its own parse of the same sources.
+    pub live_fns: Vec<String>,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -783,6 +789,55 @@ impl Output<'_> {
         self.next_format_count = 0;
     }
 
+    /// @PLN18 08-S2 — build the live-dispatch entry check for a user fn, or
+    /// `None` when its signature is outside the v1 dispatchable set (text /
+    /// character / fn-ref / `&mut` args, narrow-int / text returns).  The
+    /// check is ONE relaxed atomic load when live mode is off; when the fn is
+    /// flipped it re-enters the parked interpreter over the shared world,
+    /// pushing args in declared order (the 02 frame contract).  Allocates the
+    /// fn's table index as a side effect — gate first, allocate after.
+    fn live_entry_check(&mut self, def: &crate::data::Definition) -> Option<String> {
+        if def.name() == "n_main" {
+            return None;
+        }
+        use std::fmt::Write as _;
+        let mut pushes = String::new();
+        for a in def.attributes() {
+            match &a.typedef {
+                Type::Integer(_)
+                | Type::Float
+                | Type::Boolean
+                | Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _) => {
+                    let _ = write!(pushes, " st.put_stack(var_{});", sanitize(&a.name));
+                }
+                _ => return None,
+            }
+        }
+        let thunk = match def.returned() {
+            Type::Void => "live_call_void",
+            Type::Integer(_) if rust_type(def.returned(), &Context::Result) == "i64" => {
+                "live_call_i64"
+            }
+            Type::Float => "live_call_f64",
+            Type::Boolean => "live_call_u8",
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _) => "live_call_ref",
+            _ => return None,
+        };
+        let idx = self.live_fns.len();
+        self.live_fns.push(def.name().to_string());
+        Some(format!(
+            "  if loft::live_dispatch::live_flipped({idx}) {{ return loft::live_dispatch::{thunk}(cell, {idx}, |st| {{{pushes} }}); }}\n"
+        ))
+    }
+
     /// Emit the common Rust file header (attributes, imports, `mod external`).
     ///
     /// `reachable` filters the `extern crate <pkg>` declarations to the native
@@ -1068,18 +1123,7 @@ extern crate loft;"
                 // src/main.rs does for the interpreter path
                 // (state.database.user_args.clone_from(&user_args)).
                 // @PLAN37 phase 10.3 fix.
-                // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
-                writeln!(
-                    w,
-                    "const LOFT_PROGRAM_RELATIVE: bool = {};",
-                    self.stores.program_relative
-                )?;
-                write!(
-                    w,
-                    "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n"
-                )?;
-                w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
-                writeln!(w, "}}")?;
+                self.emit_native_main(w)?;
             }
         }
         Ok(())
@@ -1138,20 +1182,38 @@ extern crate loft;"
     fn emit_main_bootstrap(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
         let main_nr = self.data.def_nr("n_main");
         if main_nr < till {
-            // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
-            writeln!(
-                w,
-                "const LOFT_PROGRAM_RELATIVE: bool = {};",
-                self.stores.program_relative
-            )?;
-            write!(
-                w,
-                "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n"
-            )?;
-            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
-            writeln!(w, "}}")?;
+            self.emit_native_main(w)?;
         }
         Ok(())
+    }
+
+    /// @PLN18 08-S2 — the ONE native `fn main()` template (both program
+    /// emission paths).  Under `LOFT_LIVE_FLIP=1` the world comes from
+    /// `live_dispatch::boot_stores` (a full parse of the same sources, so the
+    /// parked interpreter and the compiled code share one id-compatible
+    /// world) and `init` is skipped — the parse already seeded it.  The leak
+    /// check is also skipped live: the parked interpreter's machinery stores
+    /// are not program leaks.
+    fn emit_native_main(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
+        writeln!(
+            w,
+            "const LOFT_PROGRAM_RELATIVE: bool = {};",
+            self.stores.program_relative
+        )?;
+        write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
+        for n in &self.live_fns {
+            write!(w, "{n:?}, ")?;
+        }
+        writeln!(w, "];")?;
+        write!(
+            w,
+            "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n"
+        )?;
+        writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
+        w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+        writeln!(w, "    }}")?;
+        writeln!(w, "}}")
     }
 
     /// Use this to emit only the `init` body that registers all types.
@@ -2435,8 +2497,13 @@ extern crate loft;"
                 // `&UnsafeCell<Stores>` parameter so templates and inner
                 // emissions see `stores` as a regular `&mut Stores` binding.
                 let escaped_file = loft_file.replace('\\', "\\\\");
+                // @PLN18 08-S2 — the live-dispatch entry check precedes even
+                // the `stores` derivation: a flipped fn re-enters the parked
+                // interpreter (which swaps the world out of the cell), so no
+                // native `&mut` may be live in THIS frame when it runs.
+                let live_check = self.live_entry_check(def).unwrap_or_default();
                 self.call_stack_prefix = Some(format!(
-                    "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
+                    "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));

@@ -333,6 +333,7 @@ fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
             coroutine_persistent_vars: HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
+            live_fns: Vec::new(),
         };
         // Only the exported functions + their transitive deps (header + init + the
         // reachable subset) — exactly what a `--native` binary emits from `n_main`,

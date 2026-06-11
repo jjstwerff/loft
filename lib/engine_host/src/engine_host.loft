@@ -55,6 +55,14 @@ pub fn send(cid: integer, msg: text) -> boolean;
 pub fn broadcast(msg: text) -> integer;
 #native "n_kernel_broadcast"
 
+// @PLN18 08-S2 — push one function to the interpreter (on=true) or back to
+// compiled (on=false), live.  Real only in a compiled build started under
+// LOFT_LIVE_FLIP=1; interpreted runs (where everything is already
+// interpreted) and unknown names return false.  Behavior never changes —
+// only the execution tier of that one function.
+pub fn live_flip(name: text, on: boolean) -> boolean;
+#native
+
 fn kernel_idle(max_us: integer);
 #native
 

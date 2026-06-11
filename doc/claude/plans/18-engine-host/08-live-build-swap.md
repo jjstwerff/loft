@@ -77,19 +77,43 @@ GRANDCHILD of the loft driver — test guards must kill the process group
 > with the SERVER swapped for its native build.  Pass = byte-equal
 > transcripts.
 
-### S2 — the debugger pushes one fn to the interpreter, live
+### S2 — the debugger pushes one fn to the interpreter, live  ✅ (2026-06-11)
 
 Compiled callers call through the per-fn dispatch point; the target flips
-native → interp at a frame boundary; nothing else changes.
+native → interp at a frame boundary; nothing else changes.  **SHIPPED**:
 
-> **Gate probes first (02 slices 1–2):** compiled→interp re-entry over the
-> shared store — correctness matrix (scalar/struct/vector args, text
-> returns, null) + crossing cost; the inlining check (a flip must not be
-> defeated by an inlined call site).
-> **Test:** a native kernel server with a control input that flips
-> `broadcast_tick`; clients observe identical behavior before/after (the
-> flip visible ONLY via `LOFT_DISPATCH_DEBUG` and the stamp chain's
-> bounded interp cost, ≤ the measured 6×).
+- **The check lives INSIDE the callee** (`src/live_dispatch.rs` +
+  `Output::live_entry_check`): every generated user fn with a dispatchable
+  signature opens with `live_flipped(idx)` — one relaxed atomic load when
+  off.  This answers the inlining gate **by construction**: an inlined call
+  site inlines the check with it; no caller-side table to defeat.
+- **The bootstrap world IS the program world**: under `LOFT_LIVE_FLIP=1`
+  the generated `main` takes its `Stores` from a full parse of the same
+  sources (`boot_stores`; the driver hands paths down via `LOFT_LIVE_SRC/
+  _STDLIB/_LIBS`) and skips `init` — so the parked interpreter and the
+  compiled code share ONE id-compatible world.  Probed before building:
+  the whole probe program ran compiled over the parse-seeded world,
+  byte-equal (the type-id-determinism claim held).
+- **Sharing is a swap, not an alias**: each dispatch swaps the world into
+  the parked `State`, runs `reenter`/`reenter_ret` (the 02 frame contract),
+  swaps back.  Probe matrix green first run: args i64/f64/bool/record/
+  vector × returns void/i64/f64/bool/DbRef × bodies (field writes / text
+  format / iteration / **allocation inside the interp callee, consumed by
+  compiled field reads** — the shared world round-trips both directions).
+- **Runtime control**: `engine_host::live_flip(name, on)` (typed twin +
+  no-op-false interp stack native), plus `LOFT_FLIP_FNS` startup flips and
+  the `LOFT_DISPATCH_DEBUG=1` sentinel.
+- v1 bounds: dispatchable = scalar/bool/float/record/vector args, void/
+  i64/f64/bool/DbRef returns; text/char/fn-ref/`&mut` args, narrow-int/
+  text returns fall through to compiled (no check emitted).  Flipped fns'
+  CALLEES run interpreted too (bytecode world) — semantically identical,
+  slower; per-callee re-dispatch back to native is N9/C71 territory.
+
+> **Test:** `engine_host_kernel::s2_live_flip_under_serving_kernel` — a
+> native kernel server flips `bump_events(w: W)` via a WS control input
+> mid-serve; the world counter runs 1..=5 continuously across
+> compiled→interp→compiled, the transcript is byte-equal to the
+> interpreted leg, and the flip is visible ONLY in the sentinel.
 
 ### S3 — edit the interpreted fn; the mixed build keeps running
 

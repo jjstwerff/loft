@@ -211,6 +211,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    // @PLN18 08-S2 — live dispatch flip (no-op under the interpreter).
+    ("n_live_flip", crate::live_dispatch::n_live_flip_stack),
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]

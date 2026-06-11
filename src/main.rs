@@ -4574,6 +4574,7 @@ fn main() {
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
+                live_fns: Vec::new(),
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -4685,6 +4686,7 @@ fn main() {
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: true,
+                live_fns: Vec::new(),
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -5099,6 +5101,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
+                live_fns: Vec::new(),
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
@@ -5599,13 +5602,25 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             println!("ok {abs_file}");
             return;
         }
-        let run_status = std::process::Command::new(&binary)
-            .args(&user_args)
-            .status()
-            .unwrap_or_else(|e| {
-                eprintln!("loft: failed to run native binary: {e}");
-                std::process::exit(1);
-            });
+        // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
+        // re-parses the same sources, so hand it the resolved paths the driver
+        // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;
+        // explicit user-set values win.
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.args(&user_args);
+        if std::env::var("LOFT_LIVE_SRC").is_err() {
+            cmd.env("LOFT_LIVE_SRC", &abs_file);
+        }
+        if std::env::var("LOFT_LIVE_STDLIB").is_err() {
+            cmd.env("LOFT_LIVE_STDLIB", &default_str);
+        }
+        if std::env::var("LOFT_LIVE_LIBS").is_err() && !p.lib_dirs.is_empty() {
+            cmd.env("LOFT_LIVE_LIBS", p.lib_dirs.join(":"));
+        }
+        let run_status = cmd.status().unwrap_or_else(|e| {
+            eprintln!("loft: failed to run native binary: {e}");
+            std::process::exit(1);
+        });
         // Clean up temp binary (not the cached copy).
         if binary != cached_binary {
             let _ = std::fs::remove_file(&binary);
