@@ -3335,6 +3335,38 @@ mod par_shallow_tests {
         );
     }
 
+    /// Pass-2 wave 4 regression: the hand-rolled walker had no `Return`
+    /// arm (`_ => None`), so a parent-write call appearing only in
+    /// `return f(...)` escaped the scan — the worker classified safe.
+    /// The keystone descent sees every position.
+    #[test]
+    fn parent_write_in_return_value_detected() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Return(Box::new(Value::Call(bad, vec![])));
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("vector_add".to_string())
+        );
+    }
+
+    /// Same hole for a tuple element (`(f(...), 1)` result shapes).
+    #[test]
+    fn parent_write_in_tuple_element_detected() {
+        let mut d = Data::new();
+        let bad = d.add_def("hash_set", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code =
+            Value::Tuple(vec![Value::Call(bad, vec![]), Value::Int(1)]);
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("hash_set".to_string())
+        );
+    }
+
     #[test]
     fn pure_call_not_detected() {
         let mut d = Data::new();

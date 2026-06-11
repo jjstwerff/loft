@@ -111,10 +111,8 @@ graph walk, not a type-tree walk) move in later waves.
   refusal to descend If/Loop/Parallel is dominance semantics, not drift.
 - Gates: full suite 2289 passed / 173 skipped (baseline-equal), clippy
   clean, fmt applied.
-- Known benign: `tests/fixtures/libs/imaging/native` cdylib rebuild fails
-  pre-existing (`loft-ffi-build = "0.1"` from crates-io lacks
-  `generate_register_from_loft_with_bridges`; no test consumes the
-  fixture — candidate for the accessor-batch wave or a fixture path-patch).
+- ~~Known benign: imaging fixture cdylib rebuild fails~~ — FIXED in the
+  follow-up wave below.
 
 ### Wave 2 — 2026-06-11 — pure exists-anywhere walkers; positional walkers audited
 
@@ -209,3 +207,29 @@ family in `src/data.rs` is the single source of tree shape for both `Value`
 and `Type`; four drifted copies of the reads-var predicate are one method;
 every remaining hand-rolled walker carries a documented reason it is NOT a
 plain exists-anywhere search.
+
+### Follow-up wave — 2026-06-11 — the encountered-but-unfixed items, closed
+
+- **Imaging fixture builds again.**  Root cause was double-layered:
+  the fixture pinned `loft-ffi-build = "0.1"` (local crate is 0.2.0, so
+  crates-io 0.1.0 won — missing `generate_register_from_loft_with_bridges`),
+  and bumping to `"0.2"` STILL failed because the published 0.2.0 also
+  lacks the function — **the local crate has drifted past its published
+  version without a version bump**.  Fix: `[patch.crates-io]` path-patch to
+  the in-repo `loft-ffi`/`loft-ffi-build`/`loft-ffi-macros` (a fixture
+  should validate the current tree anyway).  ⚠ The next `loft-ffi-build`
+  publish must bump to 0.2.1+ and lift the patch — noted in the fixture's
+  Cargo.toml.
+- **Spacial arms added** to `generation::is_collection_field` and
+  `default_native_value`, aligning them with the `heap_dep`/`slot_kind`
+  store-backed family.  Unreachable today (`spacial<T>` is parser-rejected,
+  "planned for 1.1+") so this is landmine-removal, not a behavior change;
+  the full native-coverage work stays under [NATIVE.md § N9](NATIVE.md).
+- **Regression coverage for the widened walker shapes:**
+  `tests/scripts/293-text-self-ref-wide-shapes.loft` pins text
+  self-reference through If / Block / Loop RHS on both backends (the
+  shapes `code_references_var` missed); `par_shallow_tests` gains
+  `parent_write_in_return_value_detected` + `…_in_tuple_element_detected`
+  (the safe-by-default leaves `walk_shallow_parent_write` had).
+- Gates: full suite 2291 passed / 173 skipped (2 new unit tests), clippy
+  clean, fmt clean, cdylib rebuild log clean of the imaging failure.
