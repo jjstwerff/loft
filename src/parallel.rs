@@ -783,10 +783,18 @@ pub fn run_parallel_queue_ref(
                     } else {
                         crate::state::WorkerArg::Ref(row_ref)
                     };
-                    batch.push((
-                        row_idx,
-                        state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref),
-                    ));
+                    let r = state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref);
+                    // @PLAN59 witness-free (mirrors the plain-call
+                    // `OpFreeRefIfDistinct` pair): a worker whose tail built
+                    // its OWN store (literal return — the signature-time
+                    // buffer stays unwritten) leaves the pre-allocated dest
+                    // orphaned; free every dest the result did not adopt.
+                    for d in &hidden_dests {
+                        if d.store_nr != r.store_nr {
+                            state.database.free(d);
+                        }
+                    }
+                    batch.push((row_idx, r));
                 }
                 (batch, state.database)
             })

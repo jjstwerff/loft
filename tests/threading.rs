@@ -1253,6 +1253,23 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
     let ret_type = data.def(d_nr).returned.clone();
 
     let allocations_before = state.database.allocations.len();
+    // @PLAN59: derive the hidden-dest count from the def like real callers
+    // do (the signature-time __retbuf makes literal-returning workers carry
+    // one too).
+    let n_dests = data
+        .def(d_nr)
+        .attributes()
+        .iter()
+        .filter(|a| {
+            a.hidden
+                && matches!(
+                    a.typedef,
+                    loft::data::Type::Reference(_, _)
+                        | loft::data::Type::Vector(_, _)
+                        | loft::data::Type::Enum(_, true, _)
+                )
+        })
+        .count();
     let (refs, adopted) = run_parallel_queue_ref(
         &mut state.database,
         program,
@@ -1264,7 +1281,7 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         n as usize,
         &ret_type,
         &data,
-        0,
+        n_dests,
         0, // primitive_input_size: worker takes a struct ref (DbRef input)
     );
     let allocations_after = state.database.allocations.len();

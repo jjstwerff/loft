@@ -91,7 +91,17 @@ always.
    wrappers changes shape, so `make rebuild-native-cdylibs` artifacts and
    the registry's `verified` libraries need a re-verify pass.
 
-**Status (2026-06-11)**: plan opened —
+**Status (2026-06-11, end of day): PHASE 1 SHIPPED** — every
+body-carrying plain fn returning Reference / Vector / struct-Enum
+carries its hidden `__retbuf` from signature parse; `ref_return` binds
+promoted locals by role swap; arity can no longer grow behind a parsed
+caller (debug-asserted; lambdas keep in-place growth — no earlier
+callers can exist).  The dispatcher census that gated it is complete:
+plain calls, par lanes (+ runtime witness-free), entry invocations
+(REPL capture), and the cdylib shared bridge (runtime type-name ids)
+all speak the uniform ABI.  Full matrix green —
+[plans/59-return-abi](plans/59-return-abi/README.md) records the three
+rounds, every probe, and the phase-2 cleanups.  Originally: plan opened —
 [plans/59-return-abi](plans/59-return-abi/README.md) (@PLAN59).  Phase 0
 SHIPPED: the H1 census probe caught a LIVE #339 sibling (vector-literal
 tails promote late too; 7-line caller-first repro panicked on main) — the

@@ -890,6 +890,38 @@ impl Parser {
                     }
                 }
             }
+            // @PLAN59 / H1 phase 1 — the unconditional heap-return buffer:
+            // every BODY-carrying plain fn returning Reference / Vector /
+            // struct-Enum gets its hidden `__retbuf` attribute + backing
+            // argument var at signature parse, so arity is fixed before ANY
+            // caller parses.  `ref_return` binds a promoted local to it by
+            // renaming the ATTR and retiring this placeholder var (probes
+            // C3/C6 in plans/59-return-abi).  Excluded: native decls (`;`,
+            // handled by the enclosing branch), ops / `#rust`-templated fns
+            // (implemented in Rust, never promoted — their ABI must not
+            // change), generic templates (specialisations never promote,
+            // I9-var), lambdas (separate parse path, no earlier callers).
+            if self.first_pass
+                && !is_generic_template
+                && self.data.def_type(self.context) == DefType::Function
+                && self.data.def(self.context).rust().is_empty()
+                && matches!(
+                    self.data.def(self.context).returned(),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+            {
+                let ret = self.data.def(self.context).returned().clone();
+                let a =
+                    self.data
+                        .add_attribute(&mut self.lexer, self.context, "__retbuf", ret.clone());
+                self.data.definitions[self.context as usize].attributes[a].hidden = true;
+                let v = self.create_var("__retbuf", &ret);
+                if v != u16::MAX {
+                    self.vars.become_argument(v);
+                    self.var_usages(v, false);
+                    self.vars.mark_used(v);
+                }
+            }
             // re-apply name remaps for promoted text arguments in second pass.
             if !self.first_pass {
                 for (shadow, original) in self.vars.promoted_text_args() {

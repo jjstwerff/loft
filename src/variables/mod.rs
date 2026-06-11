@@ -1204,6 +1204,15 @@ impl Function {
         self.variables[var_nr as usize].stack_allocated = true;
     }
 
+    /// @PLAN59 (H1): drop a var from the argument set — used to retire the
+    /// signature-time `__retbuf` placeholder when `ref_return` promotes a
+    /// real local into the buffer role (the promoted local takes the
+    /// placeholder's attribute; `arguments()` then yields the promoted var
+    /// in the same last position by number order).
+    pub fn retire_argument(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].argument = false;
+    }
+
     pub fn is_argument(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }

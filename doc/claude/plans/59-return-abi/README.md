@@ -212,3 +212,47 @@ plan; belongs to NATIVE.md § N9's par coverage list).
 - Coroutines return `iterator<T>` (not heap kinds) → out of scope ✅.
 - Text returns use the separate `text_return` machinery — untouched by
   this plan (a future H1b if the same disease shows there).
+
+## PHASE 1 SHIPPED (2026-06-11, round 3)
+
+The flip is IN, with the three final lane fixes the round-2 inventory
+predicted plus one it could not see:
+
+1. **threading.rs harness** — `par_queue_ref_adopts_and_rebases`
+   hardcoded `n_hidden_dests = 0`; it now derives the count from the
+   def like real callers.
+2. **par runtime witness-free** (`parallel.rs` ref lane) — a worker
+   whose tail built its OWN store leaves the pre-allocated dest
+   orphaned; every dest the result did not adopt is freed (mirrors the
+   plain-call `OpFreeRefIfDistinct` pair).  Found by the 22c leak gate.
+3. **entry-fn dests** (`state/mod.rs::execute_argv`) — the C11 root:
+   the REPL's capture wrapper (`fn replmain_N() -> P { … }`) is a
+   heap-returning ENTRY fn; the invoker now pushes one null-sentinel
+   dest per hidden heap attr so the frame matches.  Fixed the whole
+   REPL/completion/capture family.
+4. **bridge runtime type-ids** (`native_lib.rs`) — the unforeseen one:
+   the shared bridge's HiddenDest fallback embedded the LIBRARY's
+   compile-time type id, meaningless in the CALLER's shared store
+   (`claim(size=0)` → "Incomplete record" SIGABRT) — and
+   `hidden_dest_type_id` was Vector-only anyway.  The bridge now
+   resolves the id AT RUNTIME by type NAME (`Stores::name`) in the
+   caller's store, covering all three heap kinds.  This path was
+   reachable pre-flip only for promoted-callee `;`-decl dispatch and
+   simply never had a test.
+
+**Validation (all green)**: full suite 2315/2316 (the env-only
+`kernel_port` failure, identical on pure main); crawler kernel
+self-test; brick-buster `--html` + the headless GL render gate
+(doc/brick-buster.html rebuilt with the flip compiler); n2_cdylib
+22/22; debug-mode core suites with the H2 space asserts armed; the
+probe battery (caller-first, wrapper chains, closures, REPL captures,
+par over promoted callees).
+
+## Phase 2 (cleanups, open)
+
+- `retrofit_callers_hidden_args` is now a lambda-only backstop (the
+  debug assert proves plain fns never grow) — delete after one quiet
+  release, together with the `grew_in_pass2` plumbing.
+- The `__rref_` recursive-self dance in `add_defaults` should now be
+  reducible (arity can no longer differ across passes).
+- H5's name-stability asserts; COMPILER.md fn-ABI section.

@@ -3533,7 +3533,36 @@ impl Parser {
                 if transitive {
                     continue; // merge-only for transitively-reached vars (see above)
                 }
-                // create a new attribute with this name
+                // @PLAN59 / H1: bind the promoted local to the
+                // signature-time `__retbuf` buffer instead of GROWING the
+                // signature — rename the ATTR to the local's name (the
+                // attr↔var coupling is by name, probe C3; pass 2's
+                // `attr_names` lookup above then hits directly) and retire
+                // the placeholder argument var (the promoted local takes
+                // the same last frame slot by var-number order, probe C6).
+                if let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf") {
+                    let def = &mut self.data.definitions[self.context as usize];
+                    def.attributes[buf_attr].name = n.to_string();
+                    def.attr_names.remove("__retbuf");
+                    def.attr_names.insert(n.to_string(), buf_attr);
+                    let placeholder = self.vars.var("__retbuf");
+                    if placeholder != u16::MAX {
+                        self.vars.retire_argument(placeholder);
+                    }
+                    self.vars.become_argument(*v);
+                    dep.push(buf_attr as u16);
+                    continue;
+                }
+                // Legacy in-place growth — reachable only for defs parsed
+                // outside `parse_function`'s buffer insertion (lambdas:
+                // defined at their literal site, so no earlier caller can
+                // exist; growth is harmless there).
+                debug_assert!(
+                    self.data.def(self.context).name().contains("__lambda")
+                        || self.data.def_type(self.context) != crate::data::DefType::Function,
+                    "@PLAN59: arity grew post-signature on plain fn '{}'",
+                    self.data.def(self.context).name()
+                );
                 let a = self
                     .data
                     .add_attribute(&mut self.lexer, self.context, n, ret.clone());
@@ -3541,13 +3570,8 @@ impl Parser {
                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
-                // #339: in pass 2 this promotion arrives LATE — the wrapper's
-                // `__ref_N` (and thus this attr) only materialises once the
-                // callee's own hidden attr exists, which a callee defined
-                // LATER in the source gets after this fn's pass-1 parse.
-                // Callers re-parsed EARLIER in pass 2 still carry the short
-                // arg list against the grown arity (codegen panics 'Too few
-                // parameters').  Patch them up after the loop.
+                // #339 backstop: patch earlier-parsed callers when growth
+                // does happen (lambda-class defs).
                 if !self.first_pass {
                     grew_in_pass2 = true;
                 }
