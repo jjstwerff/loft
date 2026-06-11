@@ -179,6 +179,35 @@ closure factory · `f10` text-field churn leak-free · `f9/f9b` program-cache
 warm≡cold for #328/#313 shapes · LOFT_ALIGN=1 sample · REPL error rollback ·
 trace dumper on reference-field programs.
 
+### F5/260-1 — native declaration point derived from IR init position (#260; pass-2 entry)
+
+- **Invariant**: a native local is declared exactly once, in scope for every
+  use; the IR's `Set(v, Null)` position means *initialization order* only —
+  it must not double as the declaration point.
+- **Homes today**: `scopes.rs lastuse_reclaim` relocates the null-init for
+  watermark benefit; `generation/dispatch.rs`'s `declared` set derives the
+  `let mut var_…` placement from wherever that init landed.  Fix A
+  (`has_free_before_alloc`) is a GUARD compensating for the coupling — it
+  excludes early-return-shadowed stores from reclaim so the derived `let`
+  never strands a free (rustc E0425, 92× on the brick-buster `--html`
+  build pre-A).
+- **Natural home**: the native function emitter, declaring ref-typed locals
+  up front FROM THE VARIABLE TABLE (the structure that already knows every
+  local and its type); `Set(v, Null)` lowers to a plain assignment.  After
+  the move, any IR reordering is safe by construction and the Fix-A guard
+  is pass-3 dead code — deleting it restores the watermark reclaim for the
+  excluded stores.
+- **Instrument before the move**: an env-gated sentinel in
+  `lastuse_reclaim` counting excluded stores per function across the suite
+  + the brick-buster build — quantifies the recoverable reclaim (if ~zero,
+  the move is cleanliness only; if large, it carries Goal-E value).
+- **Validation matrix when executed (low-churn window)**: the original 92×
+  E0425 `--html` build (now reproducible locally — binaryen + chromium
+  installed 2026-06-11, `make game` + `tests/html_render.rs` green), full
+  native + wasm suites, ASan gate.
+- **Status**: documented, scheduled for pass 2 (issue #260 stays
+  `status:deferred`).
+
 ### F3-1 — two null encodings, comparator normalises: probed, HELD (2026-06-11)
 
 - **Invariant**: one byte-pattern means "null DbRef" — or every consumer
