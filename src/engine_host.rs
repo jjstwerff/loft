@@ -430,7 +430,12 @@ fn write_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> std::io::R
 fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
     use std::os::fd::FromRawFd;
     unsafe {
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        // SOCK_CLOEXEC: kernel sockets belong to ONE process.  Without it,
+        // every spawned child (the S4 rebuild driver, the S5 swap target)
+        // inherits this listening fd across exec — the zombie copy stays in
+        // the SO_REUSEPORT group and eats load-balanced SYNs into a backlog
+        // nobody accepts (probe-caught: post-swap dials failed by hash luck).
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
         if fd < 0 {
             return None;
         }
@@ -439,6 +444,17 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
             fd,
             libc::SOL_SOCKET,
             libc::SO_REUSEADDR,
+            std::ptr::addr_of!(one).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        // @PLN18 08-S5 — SO_REUSEPORT: during a build swap the NEW process
+        // binds the same port while the old one still serves; the overlap is
+        // what makes rollback trivial (the old build never stops listening
+        // until the new one is proven serving).
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
             std::ptr::addr_of!(one).cast(),
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
@@ -487,7 +503,7 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
     bind_reuseaddr(port as u16)
         .map(|listener| {
             let _ = listener.set_nonblocking(true);
-            let udp = match UdpSocket::bind(("0.0.0.0", port as u16)) {
+            let udp = match bind_udp_reuseport(port as u16) {
                 Ok(s) => {
                     let _ = s.set_nonblocking(true);
                     Some(s)
@@ -516,8 +532,61 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                     warned_oversize: false,
                 });
             });
+            // @PLN18 08-S5 — the swap-resume handshake: when this process was
+            // booted as a swap target, the parent polls this file; touching
+            // it means "the new build is serving" and the parent retires.
+            if let Ok(ready) = std::env::var("LOFT_SWAP_READY") {
+                let _ = std::fs::write(&ready, b"serving");
+                eprintln!("loft-swap: new build serving on port {port} (ready file touched)");
+            }
         })
         .is_some()
+}
+
+/// UDP bind with `SO_REUSEPORT` (the swap-overlap requirement — see
+/// `bind_reuseaddr`).  Datagrams during the brief dual-bind window
+/// load-balance between old and new; the sync class tolerates that loss
+/// by design (latest-value semantics).
+#[cfg(unix)]
+fn bind_udp_reuseport(port: u16) -> std::io::Result<UdpSocket> {
+    use std::os::fd::FromRawFd;
+    unsafe {
+        // SOCK_CLOEXEC — same one-process invariant as the TCP listener.
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let one: libc::c_int = 1;
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            std::ptr::addr_of!(one).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        let addr = libc::sockaddr_in {
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: port.to_be(),
+            sin_addr: libc::in_addr { s_addr: 0 },
+            sin_zero: [0; 8],
+        };
+        if libc::bind(
+            fd,
+            std::ptr::addr_of!(addr).cast(),
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        ) != 0
+        {
+            let e = std::io::Error::last_os_error();
+            libc::close(fd);
+            return Err(e);
+        }
+        Ok(UdpSocket::from_raw_fd(fd))
+    }
+}
+
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn bind_udp_reuseport(port: u16) -> std::io::Result<UdpSocket> {
+    UdpSocket::bind(("0.0.0.0", port))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1074,7 +1143,21 @@ pub fn n_kernel_connect(stores: &mut Stores, stack: &mut DbRef) {
 fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
     use std::net::ToSocketAddrs;
     let addr = (host, port).to_socket_addrs().ok()?.next()?;
-    let mut conn = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok()?;
+    // @PLN18 08-S5 — seat reconnect semantics: a build swap closes every
+    // connection and the new process binds moments later; retry the dial
+    // across that gap (5 s ≫ the measured handover) so `run_client` in a
+    // `while` wrapper rides a swap through.  First-connect failures to a
+    // dead host still fail fast enough for scripts (one bounded window).
+    let dial_deadline = Instant::now() + Duration::from_secs(5);
+    let mut conn = loop {
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
+            Ok(c) => break c,
+            Err(_) if Instant::now() < dial_deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    };
     conn.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     let req = format!(
         "GET /ws HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n\
@@ -1452,6 +1535,214 @@ pub fn n_kernel_default_host_dest(stores: &mut Stores, stack: &mut DbRef) {
         .push_str(&v);
 }
 
+// ── @PLN18 08-S5 — the native build swap: a new process under a running ────
+// world.  The OLD process drives: at a frame boundary it snapshots the
+// registered world (schema-walked JSON — the lenient-serialization seed),
+// spawns the S4 artifact with LOFT_RESUME pointing at the snapshot, and
+// KEEPS SERVING (meaning frozen, mechanics alive) until the child touches
+// the READY file (= bound via SO_REUSEPORT and serving).  Then it closes its
+// sockets and retires; seats reconnect into the new build (bounded gap).
+// Rollback is the default: the child dying or timing out un-freezes the old
+// build — it never stopped listening.
+//
+// v1 bounds (documented in 08-live-build-swap.md): the world is ONE
+// record graph named via `swap_world(w)` (scalars/text/vectors/inline
+// structs — `populate_struct_from_jsonvalue`'s matrix); events arriving
+// INSIDE the freeze window die with the old process (visible as the
+// connection close); layout changes between builds are the lenient
+// deserializer's problem (missing fields → null, extra → ignored).
+
+#[cfg(not(target_arch = "wasm32"))]
+enum SwapPhase {
+    Idle,
+    Requested(String),
+    Waiting {
+        child: std::process::Child,
+        ready: std::path::PathBuf,
+        snap: std::path::PathBuf,
+        deadline: Instant,
+    },
+    Done,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static SWAP: RefCell<SwapPhase> = const { RefCell::new(SwapPhase::Idle) };
+    /// The snapshot root registered by `swap_world`: (record, known_type).
+    static WORLD_ROOT: std::cell::Cell<Option<(DbRef, u16)>> = const { std::cell::Cell::new(None) };
+}
+
+/// `swap_world(w)` — name the world record: registers it as the snapshot
+/// root for future swaps, and — when THIS process is a swap target
+/// (`LOFT_RESUME`) — restores the previous build's world INTO it, in
+/// place, so every alias (main's var, the handler captures) sees the
+/// restored state.  Returns true iff a restore happened.
+#[cfg(not(target_arch = "wasm32"))]
+fn swap_world_impl(stores: &mut Stores, w: DbRef) -> bool {
+    let kt = stores.allocations[w.store_nr as usize].known_type;
+    if kt == u16::MAX {
+        eprintln!("loft-swap: swap_world got a record with no known type; swaps disabled");
+        return false;
+    }
+    WORLD_ROOT.with(|r| r.set(Some((w, kt))));
+    let Ok(snap_path) = std::env::var("LOFT_RESUME") else {
+        return false;
+    };
+    let Ok(json) = std::fs::read_to_string(&snap_path) else {
+        eprintln!("loft-swap: LOFT_RESUME set but {snap_path} unreadable; starting fresh");
+        return false;
+    };
+    let jv = crate::native::json_parse_into_stores(stores, &json);
+    crate::native::populate_struct_from_jsonvalue(stores, &w, kt, &jv);
+    eprintln!("loft-swap: world restored from {snap_path}");
+    true
+}
+
+/// `swap_start(artifact)` — request a swap to the given binary (normally
+/// `rebuild_artifact()`).  The run loop acts at the next frame boundary.
+#[cfg(not(target_arch = "wasm32"))]
+fn swap_start_impl(artifact: &str) -> bool {
+    if artifact.is_empty() || !std::path::Path::new(artifact).exists() {
+        eprintln!("loft-swap: no such artifact `{artifact}` — swap refused");
+        return false;
+    }
+    SWAP.with(|sw| {
+        let mut sw = sw.borrow_mut();
+        if !matches!(*sw, SwapPhase::Idle) {
+            eprintln!("loft-swap: a swap is already in progress");
+            return false;
+        }
+        *sw = SwapPhase::Requested(artifact.to_string());
+        true
+    })
+}
+
+/// The per-turn swap step `run()` drives: 0 = serve normally, 1 = FROZEN
+/// (mechanics only — pump runs, meaning waits), 2 = handed over (run
+/// returns; this process retires).  All failure paths roll back to 0.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_lines)]
+fn swap_step_impl(stores: &mut Stores) -> i64 {
+    SWAP.with(|sw| {
+        let mut sw = sw.borrow_mut();
+        match &mut *sw {
+            SwapPhase::Idle => 0,
+            SwapPhase::Done => 2,
+            SwapPhase::Requested(artifact) => {
+                let artifact = artifact.clone();
+                let Some((w, kt)) = WORLD_ROOT.with(std::cell::Cell::get) else {
+                    eprintln!("loft-swap: rolled back (no swap_world registered)");
+                    *sw = SwapPhase::Idle;
+                    return 0;
+                };
+                // The frame boundary: meaning is frozen from here on, so
+                // this snapshot is THE world state the new build resumes.
+                let mut json = String::new();
+                stores.show_json(&mut json, &w, kt, false);
+                let base = std::env::temp_dir().join(format!("loft_swap_{}", std::process::id()));
+                let snap = base.with_extension("snap.json");
+                let ready = base.with_extension("ready");
+                let _ = std::fs::remove_file(&ready);
+                if std::fs::write(&snap, &json).is_err() {
+                    eprintln!("loft-swap: rolled back (cannot write snapshot)");
+                    *sw = SwapPhase::Idle;
+                    return 0;
+                }
+                let mut cmd = std::process::Command::new(&artifact);
+                cmd.env("LOFT_RESUME", &snap)
+                    .env("LOFT_SWAP_READY", &ready)
+                    // Dispatch reset: the new build has the edits COMPILED —
+                    // startup flips must not resurrect the interpreter tier.
+                    .env_remove("LOFT_FLIP_FNS")
+                    .stdin(std::process::Stdio::null());
+                // The new build is a HANDOVER TARGET, not part of this
+                // process tree: it must survive the old chain's exit and any
+                // group-scoped kill aimed at the retiring driver hierarchy
+                // (probe-caught: a group signal reaped the new server after
+                // a clean handover).  Its own group makes the cut explicit.
+                #[cfg(unix)]
+                std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+                match cmd.spawn() {
+                    Ok(child) => {
+                        eprintln!("loft-swap: booting {artifact} (meaning frozen)");
+                        *sw = SwapPhase::Waiting {
+                            child,
+                            ready,
+                            snap,
+                            deadline: Instant::now() + std::time::Duration::from_secs(15),
+                        };
+                        1
+                    }
+                    Err(e) => {
+                        eprintln!("loft-swap: rolled back (cannot spawn {artifact}: {e})");
+                        let _ = std::fs::remove_file(&snap);
+                        *sw = SwapPhase::Idle;
+                        0
+                    }
+                }
+            }
+            SwapPhase::Waiting {
+                child,
+                ready,
+                snap,
+                deadline,
+            } => {
+                if ready.exists() {
+                    // The new build is serving: hand over.  Dropping the
+                    // Kernel closes the listener, the UDP socket and every
+                    // connection — seats reconnect into the new process.
+                    eprintln!("loft-swap: handing over — this build retires");
+                    let _ = std::fs::remove_file(snap);
+                    let _ = std::fs::remove_file(ready);
+                    *sw = SwapPhase::Done;
+                    KERNEL.with(|k| *k.borrow_mut() = None);
+                    return 2;
+                }
+                if let Ok(Some(status)) = child.try_wait() {
+                    eprintln!("loft-swap: rolled back (new build exited {status} before serving)");
+                    let _ = std::fs::remove_file(snap);
+                    let _ = std::fs::remove_file(ready);
+                    *sw = SwapPhase::Idle;
+                    return 0;
+                }
+                if Instant::now() > *deadline {
+                    eprintln!("loft-swap: rolled back (new build never became ready)");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(snap);
+                    let _ = std::fs::remove_file(ready);
+                    *sw = SwapPhase::Idle;
+                    return 0;
+                }
+                1
+            }
+        }
+    })
+}
+
+/// `swap_world(w: reference) -> boolean` (stack native).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn n_swap_world(stores: &mut Stores, stack: &mut DbRef) {
+    let w = *stores.get::<DbRef>(stack);
+    let resumed = swap_world_impl(stores, w);
+    stores.put(stack, resumed);
+}
+
+/// `swap_start(artifact: text) -> boolean` (stack native).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn n_swap_start(stores: &mut Stores, stack: &mut DbRef) {
+    let artifact = stores.get::<Str>(stack).str().to_owned();
+    let ok = swap_start_impl(&artifact);
+    stores.put(stack, ok);
+}
+
+/// `kernel_swap_step() -> integer` (stack native; run()'s per-turn driver).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn n_kernel_swap_step(stores: &mut Stores, stack: &mut DbRef) {
+    let phase = swap_step_impl(stores);
+    stores.put(stack, phase);
+}
+
 // ── The BROWSER kernel (@PLN18 phase 07) — the same loft script on a phone ──
 //
 // The connector role rebuilt on what the browser already provides: the
@@ -1816,6 +2107,21 @@ pub mod typed {
         with_kernel(|k| k.last_sync.2.clone()).unwrap_or_default()
     }
     pub fn n_kernel_client_frame(_cell: &UnsafeCell<Stores>) {}
+    /// @PLN18 08-S5 — typed twins of the swap natives.
+    pub fn n_swap_world(cell: &UnsafeCell<Stores>, w: DbRef) -> u8 {
+        let stores: &mut Stores = unsafe { &mut *cell.get() };
+        u8::from(super::swap_world_impl(stores, w))
+    }
+
+    pub fn n_swap_start(_cell: &UnsafeCell<Stores>, artifact: &str) -> u8 {
+        u8::from(super::swap_start_impl(artifact))
+    }
+
+    pub fn n_kernel_swap_step(cell: &UnsafeCell<Stores>) -> i64 {
+        let stores: &mut Stores = unsafe { &mut *cell.get() };
+        super::swap_step_impl(stores)
+    }
+
     pub fn n_kernel_default_host(_cell: &UnsafeCell<Stores>) -> String {
         std::env::var("LOFT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
     }

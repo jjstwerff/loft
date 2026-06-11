@@ -229,6 +229,13 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
         "n_kernel_rebuild_artifact_dest",
         crate::live_dispatch::n_kernel_rebuild_artifact_dest,
     ),
+    // @PLN18 08-S5 — the native build swap.
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_world", crate::engine_host::n_swap_world),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_start", crate::engine_host::n_swap_start),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_swap_step", crate::engine_host::n_kernel_swap_step),
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]

@@ -310,6 +310,297 @@ fn run_s3_scenario(port: u16, interpret: bool) -> S2Run {
     }
 }
 
+/// One full connect+upgrade ATTEMPT; `None` on any failure.  During the
+/// swap's dual-bind overlap a dial can land on the DYING process's listener
+/// queue and drop mid-upgrade — seats (and this harness) retry the whole
+/// attempt, which converges on the new build within the gap bound.
+fn ws_try_connect(port: u16) -> Option<TcpStream> {
+    let stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
+    let req = "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+               Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+               Sec-WebSocket-Version: 13\r\n\r\n";
+    (&stream).write_all(req.as_bytes()).ok()?;
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        (&stream).read_exact(&mut b).ok()?;
+        head.push(b[0]);
+    }
+    String::from_utf8_lossy(&head)
+        .contains("101")
+        .then_some(stream)
+}
+
+/// Tolerant frame read for swap-gap detection: `None` = the connection
+/// closed (the handover) or timed out.
+fn ws_try_recv(stream: &TcpStream) -> Option<String> {
+    let mut s = stream;
+    let mut hdr = [0u8; 2];
+    s.read_exact(&mut hdr).ok()?;
+    let len = match hdr[1] & 0x7F {
+        126 => {
+            let mut b = [0u8; 2];
+            s.read_exact(&mut b).ok()?;
+            u16::from_be_bytes(b) as usize
+        }
+        n => n as usize,
+    };
+    if hdr[0] & 0x0F == 0x08 {
+        return None; // close frame
+    }
+    let mut payload = vec![0u8; len];
+    s.read_exact(&mut payload).ok()?;
+    String::from_utf8(payload).ok()
+}
+
+/// @PLN18 08 scenario S5 — the native swap: a new process under a running
+/// world.  One test drives the WHOLE heart pipeline: a compiled kernel
+/// serves with a fn flipped to the interpreter (S2) → rollback legs (a
+/// missing artifact is refused; a build that dies before serving rolls
+/// back while the world keeps counting) → a live source edit (S3's
+/// subject) → background rebuild (S4) → swap: the world counter crosses
+/// the cutover EXACTLY continuous, the tick stamp never resets, the WS
+/// seat's gap is bounded (measured — probe gate 5's seat-reconnect
+/// verdict), and the flipped fn runs COMPILED in the new build (dispatch
+/// reset: zero post-swap interp dispatches).
+/// Kill any process running an `eh_s5` cache binary — OUR OWN fixture's
+/// stem, exactly anchored.  The swap child outlives its parent chain by
+/// DESIGN (it is the new server), so the process-group Guard alone cannot
+/// be relied on across runs; with SO_REUSEPORT a stale orphan silently
+/// SHARES the test port and poisons every dial (probe-caught).
+fn s5_kill_stale(stem: &str) {
+    if let Ok(out) = Command::new("pgrep").arg("-f").arg(stem).output() {
+        for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+            if let Ok(pid) = pid.parse::<i32>() {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
+struct S5Hygiene(&'static str);
+impl Drop for S5Hygiene {
+    fn drop(&mut self) {
+        s5_kill_stale(self.0);
+    }
+}
+
+#[test]
+fn s5_native_swap_under_running_world() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    const STEM: &str = "/.loft/cache/eh_s5_18100-";
+    s5_kill_stale(STEM); // a stale orphan from a prior run shares the port
+    let _hygiene = S5Hygiene(STEM); // and OUR swap child must die at exit
+    std::thread::sleep(Duration::from_millis(200));
+    let port = 18100u16;
+    let fixture = |ver: &str| {
+        format!(
+            r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn bump_events(w: W) -> integer {{
+  w.events = w.events + 1;
+  w.events
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  resumed = engine_host::swap_world(w);
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = bump_events(w);
+      if ev.payload == "rebuild" {{
+        engine_host::send(ev.cid, "rebuild:{{engine_host::rebuild_start()}}");
+        return;
+      }}
+      if ev.payload == "status" {{
+        engine_host::send(ev.cid, "status:{{engine_host::rebuild_status()}}");
+        return;
+      }}
+      if ev.payload == "swap" {{
+        engine_host::send(ev.cid, "swap:{{engine_host::swap_start(engine_host::rebuild_artifact())}}");
+        return;
+      }}
+      if ev.payload == "badpath" {{
+        engine_host::send(ev.cid, "badpath:{{engine_host::swap_start("/nonexistent/binary")}}");
+        return;
+      }}
+      if ev.payload == "badswap" {{
+        engine_host::send(ev.cid, "badswap:{{engine_host::swap_start("/bin/false")}}");
+        return;
+      }}
+      engine_host::send(ev.cid, "{ver}:{{ev.payload}}#{{n}}t{{w.ticks}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+        )
+    };
+    let prog = std::env::temp_dir().join(format!("eh_s5_{port}.loft"));
+    std::fs::write(&prog, fixture("v1")).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let err_path = std::env::temp_dir().join(format!("eh_s5_{port}.err"));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_FLIP_FNS", "bump_events")
+        .env("LOFT_DISPATCH_DEBUG", "1");
+    cmd.process_group(0);
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let stderr_now = || std::fs::read_to_string(&err_path).unwrap_or_default();
+    let mut count = 0i64; // every event bumps the world counter
+    let ws = ws_connect(port);
+    let ask = |ws: &TcpStream, msg: &str, count: &mut i64| -> String {
+        ws_send(ws, msg);
+        *count += 1;
+        ws_recv(ws)
+    };
+    // The flipped baseline serves (S2 still alive under this fixture).
+    let r = ask(&ws, "a", &mut count);
+    assert_eq!(
+        r,
+        format!("v1:a#{count}t")
+            .rsplit_once('t')
+            .unwrap()
+            .0
+            .to_string()
+            + "t"
+            + r.rsplit_once('t').unwrap().1,
+        "shape"
+    );
+    assert!(r.starts_with(&format!("v1:a#{count}t")), "baseline: {r}");
+    assert!(stderr_now().contains("live-dispatch: n_bump_events"));
+
+    // Rollback leg 1: a missing artifact is refused outright (no freeze).
+    assert_eq!(ask(&ws, "badpath", &mut count), "badpath:false");
+    // Rollback leg 2: a build that dies before serving.  The freeze defers
+    // the next replies; they drain after the rollback (recv timeout rides
+    // it).  The world must keep counting and the old build keep serving.
+    assert_eq!(ask(&ws, "badswap", &mut count), "badswap:true");
+    let r = ask(&ws, "b", &mut count);
+    assert!(
+        r.starts_with(&format!("v1:b#{count}t")),
+        "post-rollback: {r}"
+    );
+    assert!(
+        stderr_now().contains("rolled back"),
+        "the dead build must roll back:\n{}",
+        stderr_now()
+    );
+
+    // S3+S4: live edit, then background rebuild to ready.
+    std::fs::write(&prog, fixture("v2")).unwrap();
+    assert_eq!(ask(&ws, "rebuild", &mut count), "rebuild:true");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        let st = ask(&ws, "status", &mut count);
+        if st == "status:2" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rebuild never ready");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    // THE SWAP.  The ack arrives before the freeze; the world counter and
+    // tick stamp in the LAST pre-swap reply are the continuity anchors.
+    let r = ask(&ws, "c", &mut count);
+    assert!(r.starts_with(&format!("v1:c#{count}t")), "pre-swap: {r}");
+    let t_pre: i64 = r.rsplit_once('t').unwrap().1.parse().unwrap();
+    assert_eq!(ask(&ws, "swap", &mut count), "swap:true");
+
+    // Wait for the handover: the old process closes this connection.
+    ws.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let gap_start = Instant::now();
+    while ws_try_recv(&ws).is_some() {}
+    // Reconnect into the NEW build (seat-reconnect semantics; measure it).
+    // Full-attempt retry: a dial in the dual-bind overlap can land on the
+    // dying process and drop mid-upgrade.
+    let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+    let new_ws = loop {
+        if let Some(ws) = ws_try_connect(port) {
+            break ws;
+        }
+        if Instant::now() >= reconnect_deadline {
+            // Diagnostics: who exists, who listens, what the server said.
+            let ps = Command::new("pgrep").args(["-af", "eh_s5_18100"]).output();
+            let ss = Command::new("ss").args(["-tlnp"]).output();
+            panic!(
+                "never reconnected into the new build\n--- pgrep:\n{}\n--- ss -tlnp:\n{}\n--- server stderr tail:\n{}",
+                String::from_utf8_lossy(&ps.map(|o| o.stdout).unwrap_or_default()),
+                String::from_utf8_lossy(&ss.map(|o| o.stdout).unwrap_or_default())
+                    .lines()
+                    .filter(|l| l.contains("18100"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                stderr_now()
+                    .lines()
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let gap = gap_start.elapsed();
+    eprintln!("S5 swap gap (close -> serving reconnect): {gap:?}");
+    assert!(
+        gap < Duration::from_secs(3),
+        "the swap gap must stay under the keepalive timeout: {gap:?}"
+    );
+
+    // Continuity: the new build serves v2 meaning over the SAME world —
+    // counter exactly +1 (nothing lost, nothing duplicated), ticks never
+    // reset.
+    let marker = stderr_now();
+    let r = ask(&new_ws, "d", &mut count);
+    assert!(
+        r.starts_with(&format!("v2:d#{count}t")),
+        "the new build must serve the new meaning over the OLD world: {r}"
+    );
+    let t_post: i64 = r.rsplit_once('t').unwrap().1.parse().unwrap();
+    assert!(
+        t_post >= t_pre,
+        "tick stamp must cross the swap monotonically ({t_pre} -> {t_post})"
+    );
+    assert!(
+        marker.contains("loft-swap: world restored from"),
+        "the new build must restore the snapshot:\n{marker}"
+    );
+    // Dispatch reset: bump_events is COMPILED in the new build — no interp
+    // dispatches after the handover marker.
+    let full = stderr_now();
+    let after = full.split("handing over").nth(1).unwrap_or("");
+    let _ = ask(&new_ws, "e", &mut count); // drive one more dispatch window
+    assert!(
+        !after.contains("live-dispatch:"),
+        "the swap must reset the dispatch tier:\n{after}"
+    );
+    drop(_guard);
+    let _ = std::fs::remove_file(&prog);
+    let _ = std::fs::remove_file(&err_path);
+}
+
 /// @PLN18 08 scenario S4 — the background rebuild: the serve host compiles
 /// the full project (a real rustc run) while the OLD build keeps serving.
 /// Asserts the design's three clauses:

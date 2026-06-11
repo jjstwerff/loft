@@ -82,6 +82,26 @@ pub fn rebuild_artifact() -> text {
   kernel_rebuild_artifact()
 }
 
+// @PLN18 08-S5 — the live build swap.  Name your world record ONCE before
+// run(): it becomes the snapshot root for swaps, and when this process is
+// booted AS a swap target the previous build's world is restored INTO it
+// (in place — every alias sees it) before serving starts.  Returns true
+// iff a restore happened (a resumed boot).
+pub fn swap_world(w: reference) -> boolean;
+#native
+
+// Swap to a new build (normally rebuild_artifact()) without stopping the
+// game: the run loop freezes meaning at the next frame boundary, boots the
+// artifact with the world snapshot, keeps mechanics alive until the new
+// build SERVES, then retires.  A new build that fails to serve rolls back
+// — the old build never stopped listening.  Returns false when the
+// artifact path is missing or a swap is already in progress.
+pub fn swap_start(artifact: text) -> boolean;
+#native
+
+fn kernel_swap_step() -> integer;
+#native
+
 fn kernel_idle(max_us: integer);
 #native
 
@@ -191,7 +211,19 @@ pub fn run(port: integer, tick_interval_us: integer,
   }
   println("engine_host: listening on ws://0.0.0.0:{port}/ (tick every {tick_interval_us} us)");
   while true {
+    // @PLN18 08-S5 — the swap step: 0 = serve normally, 1 = FROZEN (a new
+    // build is booting; mechanics stay alive, meaning waits), 2 = handed
+    // over (the new build serves; this process retires).
+    swapping = kernel_swap_step();
+    if swapping == 2 {
+      println("engine_host: swapped to the new build; this process retires");
+      return;
+    }
     work = kernel_pump();
+    if swapping == 1 {
+      kernel_idle(1000);
+      continue;
+    }
     // Budgeted drain (the ENGINE_HOST drain rule): events to a bounded count
     // per turn, so the tick check below is never starved by a flood.
     for _ in 0..256 {

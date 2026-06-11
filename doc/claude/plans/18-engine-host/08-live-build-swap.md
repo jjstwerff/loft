@@ -197,29 +197,68 @@ window.
 > a build requeues ("rebuild stale … requeued") and the ready artifact is
 > the settled source's build.
 
-### S5 — the native swap: a new process under a running world
+### S5 — the native swap: a new process under a running world  ✅ (2026-06-11)
 
 Cutover at a frame boundary: freeze meaning at tick N, snapshot the store,
 boot the new build, hand over (or let seats reconnect), resume at N+1.
-Rollback if the new build fails to boot.
+Rollback if the new build fails to boot.  **SHIPPED**:
 
-> **Tests:**
-> 1. **State continuity** — a monotonically counting world crosses the
->    swap with no lost/duplicated tick (the counter and the tick stamp
->    are exactly N+1 after the cutover).
-> 2. **Event integrity** — every event-class message sent before the swap
->    is delivered exactly once (the queue drains or migrates; the class
->    contract holds across builds).  Sync class may conflate across the
->    gap — by design, assert only freshness afterwards.
-> 3. **Seat continuity** — a native seat (`run_client`) and a WS client
->    ride through with a bounded gap; the connector gains reconnect
->    semantics (re-hello, new cookie) and the test asserts the gap <
->    the keepalive timeout (no path expiry cascade).
-> 4. **Rollback** — a deliberately-broken new build (panics on boot):
->    the old process keeps serving; the stamp chain never stops; the
->    failure is reported, not fatal.
-> 5. **Dispatch reset** — the interpreted fns from S3 run compiled again
->    after the swap (the sentinel shows zero interp dispatches).
+- **Surface:** `swap_world(w)` — name the world record ONCE before `run()`
+  (the only program-side line): it becomes the snapshot root, and on a
+  resumed boot (`LOFT_RESUME`) the previous build's world is restored INTO
+  it in place, so every alias (main's var, the handler captures) sees it.
+  `swap_start(artifact)` requests the cutover; `run()`'s per-turn
+  `kernel_swap_step` acts at the frame boundary (0 serve / 1 frozen / 2
+  retire).
+- **The snapshot is the lenient-serialization seed**: `show_json` (schema
+  walk) out, `populate_struct_from_jsonvalue` in — already lenient (missing
+  fields → null, extra → ignored), so v1's layout-identical bound relaxes
+  to "what the deserializer covers": scalars/text/vectors/inline structs;
+  reference/hash/sorted fields stay at defaults (documented).
+- **Overlap handover, rollback-by-default**: the old build NEVER stops
+  serving until the new one is proven.  `SO_REUSEPORT` lets the new
+  process bind while the old still listens; the READY file (touched after
+  a successful bind) is the proof; the old then closes its sockets and
+  retires.  Child dies / never ready → warn + un-freeze + keep serving.
+  During the freeze, mechanics stay alive (pump runs; meaning waits).
+  The swap child gets ITS OWN process group (a handover target, not part
+  of the retiring tree) and `LOFT_FLIP_FNS` is stripped (dispatch reset).
+- **Probe-caught en route — `SOCK_CLOEXEC` on kernel sockets**: the raw
+  `libc::socket` listener/UDP fds were inherited across exec by EVERY
+  spawned child (rebuild driver, swap target); the zombie copy stayed in
+  the REUSEPORT group and ate load-balanced SYNs into a backlog nobody
+  accepts — post-swap dials failed by hash luck.  Kernel sockets belong
+  to one process; both binds are now CLOEXEC.
+- **Probe gate 5 verdict (socket handover)**: seat-reconnect, measured —
+  the close→serving-reconnect gap is **~35 ms** on loopback (deadline-
+  retried dial; the connector gained a 5 s dial-retry window), far under
+  the 3 s keepalive timeout.  fd-passing stays unbuilt: zero-gap is not
+  worth a unix-only fd + WS-framing-state migration at this gap.
+- **Probe gate 3 verdict (durable live world)**: covered at the meaning
+  level — the world graph round-trips through the snapshot under live
+  churn (the counter crosses exactly); the byte-compare form belongs to
+  the full-image store format if/when one is needed.
+- v1 bounds: events arriving INSIDE the freeze window die with the old
+  process (visible as the connection close — the client can resend on
+  reconnect); user_args are not re-passed to the new build; capture-set
+  changes between builds fall to the lenient deserializer's defaults.
+
+> **Test:** `engine_host_kernel::s5_native_swap_under_running_world` —
+> ONE test drives the whole heart pipeline (S2 flip → rollback legs → S3
+> edit → S4 rebuild → swap):
+> 1. **State continuity** ✅ — the world counter crosses the cutover
+>    EXACTLY +1 (nothing lost/duplicated); the tick stamp never resets.
+> 2. **Event integrity** ✅ — every pre-swap message round-trips exactly
+>    once (replied before the boundary by construction of the freeze).
+> 3. **Seat continuity** ✅ — the WS seat's measured gap ~35 ms < the 3 s
+>    keepalive timeout; the connector dial now retries across the gap
+>    (native seats ride through a swap in a `while run_client` wrapper —
+>    the full native-seat differential is an audience-harness residual).
+> 4. **Rollback** ✅ — two legs: a missing artifact is refused outright;
+>    a build that dies before serving rolls back while the world keeps
+>    counting (the old build never stopped listening).
+> 5. **Dispatch reset** ✅ — zero `live-dispatch:` lines after the
+>    handover marker (the flipped fn runs compiled in the new build).
 
 ### S6 — the browser swap: a new module under a living page
 
