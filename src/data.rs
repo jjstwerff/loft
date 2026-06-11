@@ -590,6 +590,71 @@ impl Value {
         found
     }
 
+    /// Mutable twin of [`Value::for_each_child`] — the same exhaustive
+    /// child-edge enumeration, kept adjacent so the two matches cannot
+    /// drift (a new variant breaks both).
+    pub fn for_each_child_mut(&mut self, f: &mut impl FnMut(&mut Value)) {
+        match self {
+            Value::Span(b) => f(&mut b.1),
+            Value::Call(_, items)
+            | Value::CallRef(_, items)
+            | Value::Insert(items)
+            | Value::Tuple(items)
+            | Value::Parallel(items) => items.iter_mut().for_each(&mut *f),
+            Value::Block(bl) | Value::Loop(bl) => bl.operators.iter_mut().for_each(&mut *f),
+            Value::Set(_, inner)
+            | Value::Return(inner)
+            | Value::BreakWith(_, inner)
+            | Value::Drop(inner)
+            | Value::Yield(inner)
+            | Value::TuplePut(_, _, inner) => f(inner),
+            Value::If(c, t, e) => {
+                f(c);
+                f(t);
+                f(e);
+            }
+            Value::Iter(_, a, b, c) => {
+                f(a);
+                f(b);
+                f(c);
+            }
+            Value::ParFor(b) => {
+                f(&mut b.input);
+                f(&mut b.worker);
+                f(&mut b.threads);
+                f(&mut b.body);
+            }
+            // Leaves — no child expressions.
+            Value::RawExpr(_)
+            | Value::Null
+            | Value::Line(_)
+            | Value::Int(_)
+            | Value::Enum(_, _)
+            | Value::Boolean(_)
+            | Value::Float(_)
+            | Value::Long(_)
+            | Value::Single(_)
+            | Value::Text(_)
+            | Value::Var(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Keys(_)
+            | Value::TupleGet(_, _)
+            | Value::FnRef(_, _, _)
+            | Value::FnRefDnr(_) => {}
+        }
+    }
+
+    /// Pre-order mutable visitor: calls `f` on this node, then on every
+    /// descendant of whatever the node is AFTER `f` ran (so a node `f`
+    /// replaces wholesale gets its replacement's children visited).
+    /// Unlike the read-side walkers, `f` SEES `Span` nodes (it may want to
+    /// replace them); descent still enters the wrapped value.
+    pub fn map_nodes(&mut self, f: &mut impl FnMut(&mut Value)) {
+        f(self);
+        self.for_each_child_mut(&mut |c| c.map_nodes(f));
+    }
+
     /// Pre-order visitor: calls `f` on this node and every descendant.
     /// `Span` wrappers are transparent, matching [`Value::any_node`].
     pub fn walk(&self, f: &mut impl FnMut(&Value)) {
@@ -2787,6 +2852,38 @@ impl Data {
         } else {
             self.def(d_nr).attributes[a_nr].typedef.clone()
         }
+    }
+
+    /// Check if struct `d_nr` contains itself as a value type (not reference)
+    /// field, directly or through other structs.  (Moved from `typedef.rs` —
+    /// pass-2: a walk over `Data`'s definition graph lives with `Data`.)
+    pub fn has_value_cycle(
+        &self,
+        d_nr: u32,
+        visiting: &mut std::collections::HashSet<u32>,
+    ) -> bool {
+        if !visiting.insert(d_nr) {
+            return true; // Already visiting this type — cycle found.
+        }
+        for a_nr in 0..self.attributes(d_nr) {
+            let a_type = self.attr_type(d_nr, a_nr);
+            // Only recurse into value-typed struct fields.  A `reference<T>`
+            // field (the `u16::MAX` share-marker dep, #328) is a 12-byte
+            // pointer, not inline bytes — it cannot cause an infinite-size
+            // cycle, and skipping it here is exactly what makes
+            // `reference<Self>` legal.
+            if let Type::Reference(child_nr, deps) = &a_type
+                && !deps.contains(&u16::MAX)
+                && self.def_type(*child_nr) == DefType::Struct
+                && !self.def_referenced(*child_nr)
+                && self.has_value_cycle(*child_nr, visiting)
+            {
+                visiting.remove(&d_nr);
+                return true;
+            }
+        }
+        visiting.remove(&d_nr);
+        false
     }
 
     /**

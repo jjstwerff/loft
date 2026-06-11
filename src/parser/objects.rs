@@ -1827,50 +1827,13 @@ impl Parser {
 
     /// Recursively replace `Value::Var(0)` (the record placeholder used in field default
     /// expressions) with the actual record reference from the calling context.
-    pub(crate) fn replace_record_ref(val: Value, record: &Value) -> Value {
-        match val {
-            Value::Var(0) => record.clone(),
-            Value::Call(nr, args) => Value::Call(
-                nr,
-                args.into_iter()
-                    .map(|a| Self::replace_record_ref(a, record))
-                    .collect(),
-            ),
-            Value::If(cond, t, f) => Value::If(
-                Box::new(Self::replace_record_ref(*cond, record)),
-                Box::new(Self::replace_record_ref(*t, record)),
-                Box::new(Self::replace_record_ref(*f, record)),
-            ),
-            Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
-                name: bl.name,
-                operators: bl
-                    .operators
-                    .into_iter()
-                    .map(|v| Self::replace_record_ref(v, record))
-                    .collect(),
-                result: bl.result,
-                scope: bl.scope,
-                var_size: 0,
-            })),
-            Value::Set(v, inner) => {
-                Value::Set(v, Box::new(Self::replace_record_ref(*inner, record)))
+    pub(crate) fn replace_record_ref(mut val: Value, record: &Value) -> Value {
+        val.map_nodes(&mut |n| {
+            if matches!(n, Value::Var(0)) {
+                *n = record.clone();
             }
-            Value::Insert(ops) => Value::Insert(
-                ops.into_iter()
-                    .map(|v| Self::replace_record_ref(v, record))
-                    .collect(),
-            ),
-            Value::Return(inner) => {
-                Value::Return(Box::new(Self::replace_record_ref(*inner, record)))
-            }
-            Value::Drop(inner) => Value::Drop(Box::new(Self::replace_record_ref(*inner, record))),
-            Value::Span(b) => {
-                let (pos, inner) = *b;
-                let new_inner = Self::replace_record_ref(inner, record);
-                Value::with_span(pos, new_inner)
-            }
-            other => other,
-        }
+        });
+        val
     }
 
     // fill the not mentioned fields with their default value

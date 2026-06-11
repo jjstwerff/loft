@@ -155,7 +155,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
             let mut visiting = std::collections::HashSet::new();
-            if has_value_cycle(data, d_nr, &mut visiting) {
+            if data.has_value_cycle(d_nr, &mut visiting) {
                 lexer.pos_diagnostic(
                     Level::Error,
                     &data.def(d_nr).position,
@@ -326,33 +326,6 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-}
-
-/// Check if struct `d_nr` contains itself as a value type (not reference) field,
-/// directly or through other structs.
-fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::HashSet<u32>) -> bool {
-    if !visiting.insert(d_nr) {
-        return true; // Already visiting this type — cycle found.
-    }
-    for a_nr in 0..data.attributes(d_nr) {
-        let a_type = data.attr_type(d_nr, a_nr);
-        // Only recurse into value-typed struct fields.  A `reference<T>`
-        // field (the `u16::MAX` share-marker dep, #328) is a 12-byte
-        // pointer, not inline bytes — it cannot cause an infinite-size
-        // cycle, and skipping it here is exactly what makes
-        // `reference<Self>` legal.
-        if let Type::Reference(child_nr, deps) = &a_type
-            && !deps.contains(&u16::MAX)
-            && data.def_type(*child_nr) == DefType::Struct
-            && !data.def_referenced(*child_nr)
-            && has_value_cycle(data, *child_nr, visiting)
-        {
-            visiting.remove(&d_nr);
-            return true;
-        }
-    }
-    visiting.remove(&d_nr);
-    false
 }
 
 fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {

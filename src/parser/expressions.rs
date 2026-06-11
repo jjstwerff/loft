@@ -2206,10 +2206,7 @@ use a separate collection or add after the loop"
             // analogous wrap in `Parser::assign_text` (operators.rs)
             // — local-text path — but for the RefVar(Text) parameter
             // path that lands here.
-            if !self.first_pass
-                && var_nr != u16::MAX
-                && super::operators::code_references_var(code, var_nr)
-            {
+            if !self.first_pass && var_nr != u16::MAX && code.reads_var(var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),

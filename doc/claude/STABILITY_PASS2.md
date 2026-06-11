@@ -32,8 +32,11 @@ Per-move gates: full suite + both backends; behavior-affecting unifications
 
 `Value::for_each_child(&mut FnMut(&Value))` — the ONE place that knows
 `Value`'s tree shape (exhaustive match, no wildcard) — plus
-`Value::any_node(&mut FnMut(&Value) -> bool)` (pre-order, Span-transparent)
-and the shared predicates built on them (`reads_var`, `base_var`).
+`Value::any_node` (pre-order boolean search, Span-transparent),
+`Value::walk` (pre-order visitor for collectors), the mutable twins
+`for_each_child_mut` / `map_nodes` (kept adjacent so the two matches
+cannot drift), the shared predicates (`reads_var`, `base_var`), and the
+`Type` twins (`Type::for_each_child` / `any_node` / `contains_def`).
 Hand-rolled walkers convert to closures over these; each conversion notes
 whether the unified coverage WIDENED the old walker's (drifted default arms
 are the #313/#330 disease — widening is deliberate and fail-safe direction
@@ -44,29 +47,29 @@ is checked per consumer).
 | File | Foreign routines / duplicates detected (survey 2026-06-11) | Action | Status |
 |---|---|---|---|
 | `src/scopes.rs` | ~22 hand-rolled `&Value` walkers: `value_reads_var` (pub, 3 ext. consumers), `contains_free`, `contains_alloc`(+`_unconditional`), `is_top_free`, `is_var_null_init`, `returned_var`, `expr_ends_in_return`, `escapes_value`, `guard_escapes`, `confine_reassign_safe`, `holder_retained`, `has_free_before_alloc`, `recover_backer`, `assigns_local`, `store_dead_after_block`, `binding_source`, `walk_par_safe_value`, `walk_classified`, `walk_shallow_parent_write`, `reclaim_safe`; `needs_pre_init`/`is_value_return_type` (`&Type`) | `reads_var` → `Value::reads_var`; exists-anywhere walkers → `any_node`/`walk` closures (done); the rest STAY with documented reasons — positional (`expr_ends_in_return`, `returned_var`, `escapes_value`), dominance-state (`confine_reassign_safe`, `store_dead_after_block`, `contains_alloc_unconditional`), receiver-position exception (`holder_retained`), sequenced flow (`store_liveness_walk`), shape tests (`is_var_null_init`, `binding_source`, `free_op_var`-alikes), Type policy (`needs_pre_init`, `is_value_return_type`), orchestrators (`reclaim_safe`, `has_free_before_alloc` — #260 pass-3 deletion), mutator (`prepend_to_scope` — `map_children` family) | ✅ waves 1+4 |
-| `src/parser/mod.rs` | `base_var_of`, `find_capturing_fn_ref` (`&Value`); `type_carries_closure` (pub), `type_contains_tv`, `is_*_vector_element_target` ×2, `type_element_size` (`&Type`); `is_addressable` | `base_var_of` → `Value::base_var` (done); `find_capturing_fn_ref` STAYS hand-rolled — it deliberately walks only the Block/Set/Span construction shape from vectors.rs; full descent would find unrelated FnRefs and change #313 layout decisions; Type classifiers → `Type` impl later | ▶ waves 1–2 |
+| `src/parser/mod.rs` | `base_var_of`, `find_capturing_fn_ref` (`&Value`); `type_carries_closure` (pub), `type_contains_tv`, `is_*_vector_element_target` ×2, `type_element_size` (`&Type`); `is_addressable` | `base_var_of` → `Value::base_var` (w1); `type_contains_tv` → `Type::contains_def` (w3); `find_capturing_fn_ref` stays (shape-targeted, #313 layout); `type_carries_closure` stays (prunes at the pointer marker — a layout walk, not a pure descent); `type_element_size` (vector-element storage policy), `is_addressable` (accessor-chain shape) stay | ✅ waves 1–5 |
 | `src/parser/control.rs` | `value_mentions_var` (dup of pre_eval's), `base_host_var` (dup of base_var_of), `tail_has_tuple_leaf`, `is_block_divergent`, `definitely_returns` (pub), `find_branch_terminal_var`, `tail_var`, `collect_hidden_ref_args`; `match_arm_types_unify` (`&Type`) | dups died into `Value::reads_var`/`Value::base_var`; tail/terminal walkers audited wave 4 — ALL positional (`tail_has_tuple_leaf`, `is_block_divergent`, `definitely_returns`, `find_branch_terminal_var`, `tail_var`, `collect_hidden_ref_args`), stay | ✅ waves 1+4 |
 | `src/generation/pre_eval.rs` | `value_mentions_var` (dup), `free_op_var`, `needs_pre_eval`, `is_void_value` (pub), `create_stack_var`; `heap_shape_matches` (`&Type`) | dup died into `Value::reads_var`; rest audited wave 4 — `needs_pre_eval` stays (pre-eval policy with a deliberate descend set; converting would change generated-code shape without a bug), `free_op_var`/`is_void_value`/`create_stack_var` are shape tests, `heap_shape_matches` Type policy | ✅ waves 1+4 |
 | `src/variables/validate.rs` | `slot_kind` (verbatim dup of slots_v2), `short_type` | dup dies — import `slots_v2::slot_kind` | ✅ wave 1 |
-| `src/generation/coroutine.rs` | `contains_yield`, `detect_yield_from` (`&Value`); `persistent_default` (`&Type`) | `contains_yield` → `any_node` closure; rest later | ▶ wave 1: contains_yield converted |
-| `src/parser/collections.rs` | `is_capturing_fnref`, `worker_returns_capturing_closure` (`&Value`); `narrow_route_for` (`&Type`) | walkers STAY — tail/return-POSITIONAL semantics, not exists-anywhere (a tail combinator is a different keystone); `narrow_route_for` → Type impl later | ▶ wave 2: audited, positional |
+| `src/generation/coroutine.rs` | `contains_yield`, `detect_yield_from` (`&Value`); `persistent_default` (`&Type`) | `contains_yield` → `any_node` (wave 1); `detect_yield_from` positional, `persistent_default` policy — stay | ✅ waves 1+5 |
+| `src/parser/collections.rs` | `is_capturing_fnref`, `worker_returns_capturing_closure` (`&Value`); `narrow_route_for` (`&Type`) | walkers STAY — tail/return-POSITIONAL semantics, not exists-anywhere (a tail combinator is a different keystone); `narrow_route_for` stays — narrow-int routing policy | ✅ waves 2+5: audited |
 | `src/parser/expressions.rs` | `leaf_tuple_lhs`, `inline_ref_set_in` (`&Value`) | `inline_ref_set_in` → `any_node` closure (done); `leaf_tuple_lhs` stays — positional LHS-shape extractor | ✅ wave 2 |
 | `src/parser/definitions.rs` | `type_contains_def` (`&Type`) | died into `Type::contains_def` | ✅ wave 3 |
-| `src/parser/vectors.rs` | `cell_struct_name` (pub), `cell_value_type` (`&Type`) | → Type impl / data.rs (used cross-file already) | ☐ todo |
-| `src/parser/objects.rs` | construction emission reaches `database.position` (fine — asks the home); `replace_record_ref` Value rewriter | rewriter needs a `map_children` (mutating walker twin) — design with the first mutating consumer | ☐ todo |
-| `src/parser/operators.rs`, `fields.rs`, `builtins.rs` | call_to_set GET→SET table (stays — op-layer fact); minor Value peeks | audit in a later wave | ☐ todo |
-| `src/generation/mod.rs` | `narrow_int_cast`, `default_native_value` (pub), `is_collection_field` (`&Type`); direct `data.definitions[]`/`known_type` reads | Type impls; field reads → accessors during privacy pass | ☐ todo |
+| `src/parser/vectors.rs` | `cell_struct_name` (pub), `cell_value_type` (`&Type`) | STAY — cell-promotion policy (plan-22 closure cells); every caller is inside vectors.rs, the policy's home | ✅ wave 5: audited |
+| `src/parser/objects.rs` | construction emission reaches `database.position` (fine — asks the home); `replace_record_ref` Value rewriter | mutable keystone added (`for_each_child_mut` + `map_nodes`); `replace_record_ref` is now a 5-line closure (in-place; preserves `Block.var_size` the old rebuild zeroed — fresh-parsed default exprs carry 0 anyway, suite-verified) | ✅ wave 5 |
+| `src/parser/operators.rs`, `fields.rs`, `builtins.rs` | call_to_set GET→SET table (stays — op-layer fact); `code_references_var` (a FOURTH reads-var copy, drifted: missed If/Loop/CallRef/Iter), nested `contains_break`; `lit_int`/`lit_nonzero`/`is_struct_returning_call` shape tests | `code_references_var` died into `Value::reads_var` (wider = more protective work-text wrapping, the safe direction — the doc comment itself described the bug when it under-detected); `contains_break` → `any_node`; shape tests stay | ✅ wave 5 |
+| `src/generation/mod.rs` | `narrow_int_cast`, `default_native_value` (pub), `is_collection_field` (`&Type`); direct `data.definitions[]`/`known_type` reads | classifiers STAY — they encode the NATIVE layer's value-mapping policy over Type, not Type's structure (their Spacial omissions are the known N9 native-coverage enhancement, [NATIVE.md § N9](NATIVE.md)); field reads → privacy pass | ✅ wave 5: audited |
 | `src/generation/emit.rs` | nested local `walk` (ncc skip-free finder), `tail_is_return` (`&Value`) | `walk` → `any_node` closure (done); `tail_is_return` stays — positional | ✅ wave 2 |
-| `src/generation/ops/parallel.rs` | `closure_shape`, `is_narrow_int_return`, `tuple_elem_read`, `is_by_value_scalar` (`&Type`) | → Type impls | ☐ todo |
-| `src/generation/dispatch.rs` | reads `stores.types[].name` directly | accessor (privacy pass); #260's declaration move also lands here | ☐ todo |
-| `src/typedef.rs` | `has_value_cycle` (Data/attrs walker); heavy direct `Definition` field mutation (it IS the type-resolution pass — co-owner by design) | `has_value_cycle` → method on `Data`; field writes stay (resolution is its job) | ☐ todo |
-| `src/variables/mod.rs` | `size`/`align` (pub, `&Type`) — THE slot-size table; `work_refs*` build from Type | `size`/`align` arguably belong to Type (data.rs)… but they encode the VARIABLE-TABLE's slot model — decide with the F5 family; keep, document ownership | ☐ todo (decision pending) |
-| `src/state/codegen.rs` | `emit_typed_null`, `known_type`, `add_const` (`&Type`); `ir_contains_var` (debug assert walker); Definition `.code/.variables` writes (it IS the bytecode owner of those fields) | `ir_contains_var` → `any_node` (done — old version had no Span arm, assertion strengthened); Type helpers → Type impl later | ▶ wave 2 |
-| `src/ir_store.rs` / `ir_schema.rs` / `ir_read.rs` / `ir_node.rs` / `data_store.rs` | the Value/Type CODECS (serialize the whole IR) | codecs are legitimate whole-structure visitors but should derive traversal from `for_each_child` where shape-walking (vs field-encoding); F9's "derive codec from one schema" is the bigger pass-2 item here | ☐ todo (design) |
+| `src/generation/ops/parallel.rs` | `closure_shape`, `is_narrow_int_return`, `tuple_elem_read`, `is_by_value_scalar` (`&Type`) | STAY — parallel-marshalling policy over Type (native layer), not Type structure | ✅ wave 5: audited |
+| `src/generation/dispatch.rs` | reads `stores.types[].name` directly | DEFERRED → privacy pass (out of scope per user); #260's declaration move also lands here | ➖ deferred |
+| `src/typedef.rs` | `has_value_cycle` (Data/attrs walker); heavy direct `Definition` field mutation (it IS the type-resolution pass — co-owner by design) | `has_value_cycle` → `Data::has_value_cycle`; field writes stay (resolution is its job) | ✅ wave 5 |
+| `src/variables/mod.rs` | `size`/`align` (pub, `&Type`) — THE slot-size table; `work_refs*` build from Type | DECIDED: stay in `variables/` — `size(tp, Context)` is the variable table's slot model (`Context` is a variables concept); data.rs `byte_width` covers the STORE layout side; the two are different facts, not a dup | ✅ wave 5: decided |
+| `src/state/codegen.rs` | `emit_typed_null`, `known_type`, `add_const` (`&Type`); `ir_contains_var` (debug assert walker); Definition `.code/.variables` writes (it IS the bytecode owner of those fields) | `ir_contains_var` → `any_node` (wave 2 — old version had no Span arm, assertion strengthened); Type helpers STAY — bytecode-layer constant/null mapping policy | ✅ waves 2+5 |
+| `src/ir_store.rs` / `ir_schema.rs` / `ir_read.rs` / `ir_node.rs` / `data_store.rs` | the Value/Type CODECS (serialize the whole IR) | DEFERRED → own design slot: codecs encode per-variant FIELDS (not just child edges), so `for_each_child` alone can't drive them; F9's "derive codec from one schema" is the real fix and deserves its own plan | ➖ deferred (design) |
 | `src/tree.rs`, `src/radix_tree.rs`, `src/vector.rs`, `src/hash.rs` | operate on `Store`/`DbRef` raw layouts — they ARE the collection algorithms over the store (co-owners by design, like fill.rs) | no move; privacy pass gives them a defined interface later | ➖ |
-| `src/parallel.rs`, `src/extensions.rs`, `src/native.rs`, `src/wasm_gl.rs`, `src/data_store.rs` | 60+ direct `stores.allocations[]` touches | accessor surface on `Stores` (worker-slot, swap-back, lock APIs) — design as ONE batch with THREADING.md in hand | ☐ todo (batch design) |
-| `src/state/io.rs`, `state/debug.rs`, `codegen_runtime.rs`, `repl.rs` | direct `stores.types[].parts` reads | same accessor batch | ☐ todo |
-| `src/compile.rs`, `src/state/mod.rs` | minor Definition field reads | accessors during privacy pass | ☐ todo |
+| `src/parallel.rs`, `src/extensions.rs`, `src/native.rs`, `src/wasm_gl.rs`, `src/data_store.rs` | 60+ direct `stores.allocations[]` touches | DEFERRED → the privacy pass IS this batch (accessor surface on `Stores`: worker-slot, swap-back, lock APIs; design with THREADING.md in hand) | ➖ deferred (privacy pass) |
+| `src/state/io.rs`, `state/debug.rs`, `codegen_runtime.rs`, `repl.rs` | direct `stores.types[].parts` reads | DEFERRED → same privacy-pass accessor batch | ➖ deferred (privacy pass) |
+| `src/compile.rs`, `src/state/mod.rs` | minor Definition field reads | DEFERRED → privacy pass | ➖ deferred (privacy pass) |
 | `src/main.rs`, `src/lexer.rs`, `src/keys.rs`, `src/store.rs`, `src/database/*` | own their structures | — | ➖ |
 
 ## Type walker note
@@ -173,3 +176,36 @@ graph walk, not a type-tree walk) move in later waves.
   flaky `moros_glb_cli_end_to_end` — its cdylib build race got a real fix
   in the same push: cross-process build lock + atomic `.so` install in
   `native_lib.rs`), clippy clean, fmt clean.
+
+### Wave 5 — 2026-06-11 — moves, the mutable keystone, the fourth reads-var copy
+
+- **Added** `Value::for_each_child_mut` + `Value::map_nodes` (the mutable
+  twins, kept adjacent to the immutable match so the two cannot drift).
+- **Moved:** `typedef::has_value_cycle` → `Data::has_value_cycle` (a walk
+  over `Data`'s definition graph lives with `Data`).
+- **Converted:** `objects::replace_record_ref` (45-line consume-and-rebuild
+  rewriter → 5-line `map_nodes` closure; in-place now preserves
+  `Block.var_size` the old rebuild zeroed — fresh-parsed default
+  expressions carry 0 anyway), `operators::contains_break` → `any_node`.
+- **Died:** `operators::code_references_var` — the FOURTH reads-var copy
+  (drifted: missed If / Loop / CallRef / Iter descent) → `Value::reads_var`.
+  Its own doc comment described the data-loss bug that under-detection
+  caused (`assign_text` clear-before-evaluate); wider detection = more
+  protective work-text wrapping, the safe direction.
+- **Audited, stay (reasons on the rows):** the native-layer Type
+  classifiers (generation/mod, ops/parallel, state/codegen), cell-promotion
+  policy (vectors.rs), `size`/`align` ownership DECIDED for variables/,
+  coroutine + collections leftovers.
+- **Deferred rows made explicit:** codecs (F9 design), `Stores` accessor
+  batch + Definition field reads (the privacy pass — out of scope per
+  user), dispatch.rs accessor (same; carries #260's declaration move).
+- Gates: full suite 2289 passed / 173 skipped, clippy clean, fmt clean.
+
+## Pass-2 relocation scope: COMPLETE (2026-06-11)
+
+Every row is now ✅ done, ✅ audited-with-reason, or ➖ explicitly deferred
+to its named successor (privacy pass / F9 codec design).  The keystone
+family in `src/data.rs` is the single source of tree shape for both `Value`
+and `Type`; four drifted copies of the reads-var predicate are one method;
+every remaining hand-rolled walker carries a documented reason it is NOT a
+plain exists-anywhere search.
