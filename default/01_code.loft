@@ -837,7 +837,7 @@ fn OpGetBoolean(v1: reference, fld: const u16) -> boolean;
 fn OpSetBoolean(v1: reference, fld: const u16, val: boolean);
 #rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(v));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; i64::from(stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
+#rust"{{let db = @v1; let r = stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }}}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
 #rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(@fld))))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
@@ -851,7 +851,7 @@ fn OpSetFloat(v1: reference, fld: const u16, val: float);
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
 #rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), v as i32);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), v as i32);}}"
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), v);}}"
 // 4-byte integer field read/write (post-2c `integer size(4)` subtypes).
 // Raw i32 storage with i32::MIN as the null sentinel; the stack value
 // stays i64 (widen on load, narrow on store).

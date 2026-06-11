@@ -1853,12 +1853,30 @@ impl Parser {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);
+            // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
+            // marker) is a 12-byte DbRef — its omitted default is the null
+            // sentinel.  The inline recursion below would write the INNER
+            // struct's field defaults over the DbRef bytes (it only looked
+            // harmless while integer defaults were zeros).
+            if let Type::Reference(_, deps) = &tp
+                && deps.contains(&u16::MAX)
+                && default == Value::Null
+            {
+                let sentinel = self.cl("OpNullRefSentinel", &[]);
+                list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), sentinel));
+                continue;
+            }
             if let Type::Reference(tp, _) = tp
                 && default == Value::Null
             {
                 self.object_init(list, tp, pos + fld, code, &HashSet::new());
                 continue;
             } else if default == Value::Null {
+                // LOFT.md § constructors: an omitted field gets "the zero
+                // value for its type" — numerics default to 0 (NOT null;
+                // tests/scripts/06-structs.loft locks this).  Pointer
+                // fields take the sentinel branch above: a pointer's zero
+                // value IS null.
                 default = to_default(&tp, &self.data);
             } else {
                 default = Self::replace_record_ref(default, code);

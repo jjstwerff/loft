@@ -14773,21 +14773,51 @@ fn run() -> integer {
 // null does not round-trip through `== null` — the narrow null encoding has
 // different write and compare homes.
 
+// FIXED 2026-06-11 for the short width: the OpSetShort/OpGetShort template
+// (the generated fill.rs follows) now translates the stack null (i64::MIN)
+// to/from the store null (i32::MIN → raw 0) like Int4/ShortRaw always did.
+// NOTE the spec correction found while fixing: an OMITTED field gets "the
+// zero value for its type" (LOFT.md § constructors; 06-structs.loft locks
+// it) — `omitted == null` being false is CORRECT; only the explicit-null
+// write round-trip was broken.  BYTE width remains a design gap (255
+// sentinel collides with the value range) — split to #334.
 #[test]
-#[ignore = "stability-sweep: #332 — documented, fix deferred to pass 2"]
 fn issue_332_nullable_narrow_field_null_roundtrip() {
     code!(
-        "struct N { a: i16, tail: integer not null }
+        "struct N { a: i16, c: i32, d: integer, tail: integer not null }
 fn run() -> integer {
     n = N { tail: 1 };
-    omitted = if n.a == null { 1 } else { 0 };
-    n.a = null;
-    rewritten = if n.a == null { 1 } else { 0 };
-    omitted * 10 + rewritten
+    om = 0;
+    if n.a == 0 { om += 100; }
+    if n.c == 0 { om += 10; }
+    if n.d == 0 { om += 1; }
+    n.a = 5; n.c = 5; n.d = 5;
+    n.a = null; n.c = null; n.d = null;
+    re = 0;
+    if n.a == null { re += 100; }
+    if n.c == null { re += 10; }
+    if n.d == null { re += 1; }
+    om * 1000 + re
 }"
     )
     .expr("run()")
-    .result(Value::Int(11));
+    .result(Value::Int(111_111));
+}
+
+// #334 (byte-width sentinel collision) — demonstrates the remaining gap.
+#[test]
+#[ignore = "stability-sweep: #334 — nullable byte width needs a design call"]
+fn issue_334_nullable_byte_field_null_roundtrip() {
+    code!(
+        "struct N { b: u8, tail: integer not null }
+fn run() -> integer {
+    n = N { tail: 1 };
+    n.b = null;
+    if n.b == null { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
 }
 
 // ── Issue 333 (stability-sweep F4; documented, NOT fixed) ────────────────────

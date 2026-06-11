@@ -1538,11 +1538,15 @@ fn get_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        i64::from(s.database.store(&db).get_short(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-        ))
+        let r =
+            s.database
+                .store(&db)
+                .get_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
+        if r == i32::MIN {
+            i64::MIN
+        } else {
+            i64::from(r)
+        }
     };
     s.put_stack(new_value);
 }
@@ -1634,13 +1638,14 @@ fn set_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
-        let v = v_val;
-        s.database.store_mut(&db).set_short(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-            v as i32,
-        );
+        let v = if v_val == i64::MIN {
+            i32::MIN
+        } else {
+            v_val as i32
+        };
+        s.database
+            .store_mut(&db)
+            .set_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 
