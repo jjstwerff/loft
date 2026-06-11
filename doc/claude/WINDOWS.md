@@ -96,14 +96,16 @@ unix-gated lifecycle suite leaves open.  Warm-cache round time: ~40 s.
   REBINDS (~72 µs) and resumes.  The freeze window grows only by the
   close-to-bind gap (negligible); the choreography gains one round-trip.
 
-**New bug found (affects products, not just tests):**
-- **`parse_str` with a VIRTUAL filename fails on Windows** — `Fatal:
-  Unknown file:<win-probe>` (`<`/`>` are invalid Windows path characters;
-  a resolution step treats the virtual name as a real path).  Implicates
-  every virtual-name consumer there: the REPL's snippet names and
-  live-reload's `"<live-reload>"` parse — i.e. **tier-0 live reload is
-  likely broken on Windows** until fixed.  Repro: `Parser::parse_str(src,
-  "<anything>", false)` after a `use` that triggers path resolution.
+**New bug found (and FIXED 2026-06-11 — never Windows-specific):**
+- **`parse_str` died on any `use` clause** — resolving a `use` halts the
+  current file and later RESUMES it by re-opening its NAME, which for a
+  virtual source (`<win-probe>`, REPL snippets, live-reload's
+  `"<live-reload>"`) is not an openable path on ANY platform (the Linux
+  cell failed identically — the probe merely found it first).  Fix: the
+  lexer registers `parse_string` sources by name and `switch` re-serves
+  them from memory (mirroring the wasm VIRT_FS branch).  Regression:
+  `tests/parse_str.rs` (cross-platform) + the windows-probe serve test
+  (the Windows leg).
 
 **Remaining unprobed**: process-group-free cleanup (`stop_game` orphans
 the `--native` grandchild on Windows — Job Objects / `taskkill /T` is the

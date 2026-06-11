@@ -46,19 +46,16 @@ fn main() {{
 }}
 "#
         );
-        // FINDING (round 1): parse_str with a VIRTUAL name ("<win-probe>")
-        // fails on Windows — "Fatal: Unknown file:<win-probe>" (angle
-        // brackets are invalid path chars; some resolution step treats the
-        // virtual name as a real path).  That implicates every virtual-name
-        // consumer on Windows (the REPL, live-reload's "<live-reload>").
-        // Recorded for WINDOWS.md; the probe uses a real file.
-        let probe_file = std::env::temp_dir().join("win_probe_server.loft");
-        std::fs::write(&probe_file, &src).expect("write probe");
-        let probe_path = probe_file.to_string_lossy().replace('\\', "/");
+        // Round-1 FINDING, now FIXED + validated here: parse_str with a
+        // virtual name died on the use-clause resume ("Fatal: Unknown
+        // file:<win-probe>") — never Windows-specific (Linux failed
+        // identically); the lexer now re-serves registered in-memory
+        // sources on switch.  tests/parse_str.rs is the cross-platform
+        // regression; this probe doubles as its Windows leg.
         let mut parser = Parser::new();
         parser.parse_dir("default", true, false).expect("stdlib");
         parser.lib_dirs = vec!["lib".to_string()];
-        parser.parse(&probe_path, false);
+        parser.parse_str(&src, "<win-probe>", false);
         assert!(
             parser.diagnostics.level() < loft::diagnostics::Level::Error,
             "probe server must parse clean: {:?}",
