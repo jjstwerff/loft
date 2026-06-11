@@ -434,12 +434,7 @@ fn debug_reapply_bps(st: &mut State, data: &crate::data::Data) {
 /// through the native control channel), but the call sites still name the
 /// pause handler — a typed no-op keeps the wasm build whole.
 #[cfg(target_arch = "wasm32")]
-fn debug_pause_loop(
-    _st: &mut State,
-    _data: &crate::data::Data,
-    _hit: &crate::debugger::BreakHit,
-) {
-}
+fn debug_pause_loop(_st: &mut State, _data: &crate::data::Data, _hit: &crate::debugger::BreakHit) {}
 
 /// THE PAUSE LOOP — runs between interpreter steps while a breakpoint holds
 /// the dispatch.  Mechanics stay alive (the kernel mini-pump answers

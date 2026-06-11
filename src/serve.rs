@@ -695,7 +695,8 @@ function pollGame() {
       $("out").textContent += m.output;
       // A kernel game announces its port — that port is the debug channel.
       if (!gport) {
-        const pm = m.output.match(/listening on ws:\/\/0\.0\.0\.0:(\d+)\//);
+        const pm = m.output.match(/listening on ws:\/\/0\.0\.0\.0:(\d+)\//)
+                || m.output.match(/debug control on 127\.0\.0\.1:(\d+)/);
         if (pm) { gport = +pm[1]; gdial(); }
       }
     }

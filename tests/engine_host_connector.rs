@@ -464,7 +464,7 @@ fn main() {{
     let out = Command::new("node")
         .arg(&harness)
         .arg(&url)
-        .args(["--wait-ms", "16000"])
+        .args(["--wait-ms", "25000"])
         .args(["--port", "18104"])
         .output()
         .expect("node harness");

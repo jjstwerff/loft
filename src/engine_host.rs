@@ -1090,6 +1090,13 @@ struct ClientKernel {
     last_tick_us: i64,
     /// False once the server connection closed — `run_client` then returns.
     alive: bool,
+    /// @PLN18 08-S7 — the client-side debug control endpoint.  A debuggable
+    /// CLIENT has no game port a debugger could dial, so under
+    /// LOFT_DEBUG_CONTROL=1 it announces its own loopback listener
+    /// ("engine_host: debug control on 127.0.0.1:<port>" on stdout — the
+    /// editor scrapes it exactly like a server's port announce).
+    ctl_listener: Option<TcpListener>,
+    ctl_conns: Vec<Option<TcpStream>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1238,9 +1245,72 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
             tick_interval_us: tick_us.max(1),
             last_tick_us: 0,
             alive: true,
+            ctl_listener: bind_ctl_listener(),
+            ctl_conns: Vec::new(),
         });
         Some(())
     })
+}
+
+/// Bind the client's loopback debug-control listener (None unless
+/// LOFT_DEBUG_CONTROL=1).  Ephemeral port, announced on stdout.
+#[cfg(not(target_arch = "wasm32"))]
+fn bind_ctl_listener() -> Option<TcpListener> {
+    if !debug_control_enabled() {
+        return None;
+    }
+    let listener = TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let _ = listener.set_nonblocking(true);
+    if let Ok(addr) = listener.local_addr() {
+        println!("engine_host: debug control on 127.0.0.1:{}", addr.port());
+    }
+    Some(listener)
+}
+
+/// Accept + serve the client's control connections: upgrade new dials, read
+/// `D!:` frames, dispatch through the SAME command core the server side
+/// uses.  Replies ride the control conn (see `debug_send`'s role routing).
+#[cfg(not(target_arch = "wasm32"))]
+fn pump_ctl(c: &mut ClientKernel) {
+    let Some(listener) = c.ctl_listener.as_ref() else {
+        return;
+    };
+    while let Ok((stream, _)) = listener.accept() {
+        if let Some(upgraded) = ws_upgrade(stream, "") {
+            let slot = c.ctl_conns.iter().position(Option::is_none);
+            match slot {
+                Some(i) => c.ctl_conns[i] = Some(upgraded),
+                None => c.ctl_conns.push(Some(upgraded)),
+            }
+        }
+    }
+    for i in 0..c.ctl_conns.len() {
+        loop {
+            let Some(stream) = c.ctl_conns[i].as_mut() else {
+                break;
+            };
+            match read_frame(stream) {
+                FrameRead::None => break,
+                FrameRead::Text(payload) => {
+                    if let Some(cmd) = payload.strip_prefix("D!:") {
+                        let reply = debug_cmd_dispatch(i as i64, cmd);
+                        if let Some(msg) = reply
+                            && let Some(stream) = c.ctl_conns[i].as_mut()
+                        {
+                            let _ = write_frame(stream, 1, msg.as_bytes());
+                        }
+                        if QUIT_AFTER_REPLY.load(std::sync::atomic::Ordering::Relaxed) {
+                            std::process::exit(0);
+                        }
+                    }
+                }
+                FrameRead::Closed => {
+                    c.ctl_conns[i] = None;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1256,6 +1326,7 @@ pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
 /// The connector pump body, shared by both calling conventions.
 #[cfg(not(target_arch = "wasm32"))]
 fn pump_client(c: &mut ClientKernel) -> i64 {
+    pump_ctl(c); // the debug control endpoint rides every pump (incl. pauses)
     {
         let mut added = 0i64;
         // WS frames: events from the server — except `S:`-framed keyframes,
@@ -1568,12 +1639,21 @@ fn debug_control_enabled() -> bool {
 }
 
 /// Send a control reply/notification to `cid` (no-op for -1 / dead conns).
+/// Role-routed: on a LISTENER process `cid` is a kernel client; on a
+/// CONNECTOR process it is a control-conn slot (a process is one role).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn debug_send(cid: i64, msg: &str) {
     if cid < 0 {
         return;
     }
-    let _ = with_kernel(|k| deliver(k, cid as usize, msg, false));
+    if with_kernel(|k| deliver(k, cid as usize, msg, false)).is_some() {
+        return;
+    }
+    let _ = with_client(|c| {
+        if let Some(Some(stream)) = c.ctl_conns.get_mut(cid as usize) {
+            let _ = write_frame(stream, 1, msg.as_bytes());
+        }
+    });
 }
 
 /// The mechanics-only mini-pump for the pause loop: accepts, reads frames
@@ -1582,6 +1662,7 @@ pub(crate) fn debug_send(cid: i64, msg: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn debug_pump() {
     let _ = with_kernel(pump_kernel);
+    let _ = with_client(|c| pump_client(c)); // incl. the client's control endpoint
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1596,9 +1677,28 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
     if !loopback {
         return;
     }
+    if let Some(msg) = debug_cmd_dispatch(cid as i64, cmd) {
+        let _ = deliver(k, cid, &msg, false);
+    }
+    if QUIT_AFTER_REPLY.load(std::sync::atomic::Ordering::Relaxed) {
+        std::process::exit(0);
+    }
+}
+
+/// Set by the `quit` command; the reply writers exit after flushing.
+#[cfg(not(target_arch = "wasm32"))]
+static QUIT_AFTER_REPLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The PROCESS-AGNOSTIC debug command core, shared by both roles (the
+/// listener's game-port channel and the connector's loopback endpoint).
+/// `cid` is the role-routed reply id (see `debug_send`).  Returns the
+/// immediate reply; mailbox-routed commands (eval/resume/reload) answer
+/// later through the pause loop.
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_cmd_dispatch(cid: i64, cmd: &str) -> Option<String> {
     let reply: Option<String> = match cmd.split_once(' ').map_or((cmd, ""), |(a, b)| (a, b)) {
         ("bp", name) if !name.is_empty() => {
-            let ok = crate::live_dispatch::debug_set_bp(name, cid as i64);
+            let ok = crate::live_dispatch::debug_set_bp(name, cid);
             Some(format!("D:{} bp {name}", if ok { "ok" } else { "err" }))
         }
         ("flip", rest) => {
@@ -1609,20 +1709,16 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
         ("eval", name) if !name.is_empty() => {
             crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Eval(
                 name.to_string(),
-                cid as i64,
+                cid,
             ));
             None // answered by the pause loop
         }
         ("resume", _) => {
-            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Resume(
-                cid as i64,
-            ));
+            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Resume(cid));
             None
         }
         ("reload", _) => {
-            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Reload(
-                cid as i64,
-            ));
+            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Reload(cid));
             None
         }
         ("rebuild", _) => {
@@ -1647,15 +1743,15 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
         }
         ("quit", _) => {
             // The editor's stop for a SWAPPED game (no longer its child).
+            // The exit happens AFTER the caller flushes this reply — sending
+            // here would re-borrow the role cell the caller already holds.
             eprintln!("loft-debug: quit via the control channel");
-            let _ = deliver(k, cid, "D:quitting", false);
-            std::process::exit(0);
+            QUIT_AFTER_REPLY.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some("D:quitting".to_string())
         }
         _ => Some(format!("D:err unknown command {cmd:?}")),
     };
-    if let Some(msg) = reply {
-        let _ = deliver(k, cid, &msg, false);
-    }
+    reply
 }
 
 // ── @PLN18 08-S5 — the native build swap: a new process under a running ────

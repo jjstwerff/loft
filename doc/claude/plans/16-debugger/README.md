@@ -539,6 +539,18 @@ M5d (the condition reuses **E**).
   grandchild).  `tests/serve.rs::serve_game_debug_control_end_to_end` drives the exact
   page flow through real components; the strip is smoke-locked in
   `serve_http_shell_has_game_debug_strip`.
+  **(Client games too — 2026-06-11.)**  A CONNECTOR process (a GL client
+  like the audience projector) has no game port a debugger could dial, so
+  under `LOFT_DEBUG_CONTROL=1` it binds its own loopback control endpoint
+  and announces it on stdout ("engine_host: debug control on
+  127.0.0.1:<port>") — the strip scrapes either announce form.  The same
+  `D!:` protocol drives both roles through ONE process-agnostic command
+  core (`debug_cmd_dispatch`); replies are role-routed.  Verified LIVE on
+  the GL projector: bp `cam_step` froze the window mid-frame with the
+  camera's easing state in the bindings; repeated resume = FRAME-STEPPING
+  (an emergent property of entry breakpoints on per-frame fns); `D!:quit`
+  exits cleanly.  CI: `engine_host_kernel::s7_client_debug_over_its_own_
+  endpoint` (headless connector fixture, the editor's exact scrape+dial).
   **Open work on this plan:** verify the **registry GL path** (`loft install graphics` →
   `launchGame` with a native window — see IDE.md slice 6's correction note); **multi-file
   navigation**; `--lib`-free **local path-dep resolution**; streamed (vs batched) test

@@ -601,6 +601,166 @@ fn main() {{
     let _ = std::fs::remove_file(&err_path);
 }
 
+/// @PLN18 08-S7 (connector half) — debug a CLIENT process via its own
+/// control endpoint.  A connector has no game port a debugger could dial,
+/// so under LOFT_DEBUG_CONTROL=1 it binds a loopback listener and announces
+/// "engine_host: debug control on 127.0.0.1:<port>" on stdout (the editor
+/// scrapes that line exactly like a server's port announce).  The SAME D!:
+/// protocol drives it: bp (entry, name-keyed, implies the flip) -> hit with
+/// frame bindings while the client's tick is HELD (its mini-pump keeps the
+/// server connection alive) -> eval -> resume -> a SECOND hit (still armed,
+/// still serving) -> quit over the channel.
+#[test]
+fn s7_client_debug_over_its_own_endpoint() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 18115u16;
+    const STEM: &str = "/.loft/cache/eh_s7c_";
+    s5_kill_stale(STEM);
+    let _hygiene = S5Hygiene(STEM);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // A minimal kernel server for the client to ride against.
+    let srv_prog = std::env::temp_dir().join(format!("eh_s7c_srv_{port}.loft"));
+    std::fs::write(
+        &srv_prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ t: integer not null }}
+fn main() {{
+  w = W {{ t: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{ }},
+    fn() {{ w.t = w.t + 1; }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let mut scmd = Command::new(loft_bin());
+    scmd.process_group(0);
+    let server = scmd
+        .arg("--interpret")
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&srv_prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn server");
+    let _sguard = Guard(Some(server));
+
+    // The COMPILED debuggable client: tick_step is the breakpoint target.
+    let cli_prog = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.loft"));
+    std::fs::write(
+        &cli_prog,
+        format!(
+            r#"
+use engine_host;
+struct C {{ ticks: integer not null }}
+fn tick_step(c: C) -> integer {{
+  c.ticks = c.ticks + 1;
+  c.ticks
+}}
+fn main() {{
+  c = C {{ ticks: 0 }};
+  engine_host::run_client(engine_host::default_host(), {port}, 50000,
+    fn(ev: engine_host::Event) {{ }},
+    fn() {{
+      t = tick_step(c);
+      if t > 2400 {{ engine_host::client_stop(); }}
+    }});
+  println("client: done");
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let out_path = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.out"));
+    let err_path = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.err"));
+    let mut ccmd = Command::new(loft_bin());
+    ccmd.env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_DEBUG_CONTROL", "1")
+        .env("LOFT_DISPATCH_DEBUG", "1");
+    ccmd.process_group(0);
+    let client = ccmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&cli_prog)
+        .current_dir(&root)
+        .stdout(Stdio::from(std::fs::File::create(&out_path).unwrap()))
+        .stderr(Stdio::from(std::fs::File::create(&err_path).unwrap()))
+        .spawn()
+        .expect("spawn client");
+    let mut cguard = Guard(Some(client));
+
+    // Scrape the announced control port (the editor's exact move).
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let ctl_port: u16 = loop {
+        let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+        if let Some(rest) = out.split("debug control on 127.0.0.1:").nth(1) {
+            break rest
+                .split_whitespace()
+                .next()
+                .and_then(|p| p.trim().parse().ok())
+                .expect("port parse");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "client never announced its control endpoint: {out}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    let ctl = ws_connect(ctl_port);
+    ws_send(&ctl, "D!:bp tick_step");
+    assert_eq!(ws_recv(&ctl), "D:ok bp tick_step");
+    let hit = ws_recv(&ctl); // the next tick pauses
+    assert!(
+        hit.starts_with("D:hit tick_step") && hit.contains("c="),
+        "hit with bindings: {hit}"
+    );
+    ws_send(&ctl, "D!:eval c");
+    let ev = ws_recv(&ctl);
+    assert!(
+        ev.starts_with("D:eval c=") && ev.contains("ticks"),
+        "frame eval: {ev}"
+    );
+    ws_send(&ctl, "D!:resume");
+    assert_eq!(ws_recv(&ctl), "D:resumed");
+    // Still armed, still serving: the NEXT tick hits again.
+    let hit2 = ws_recv(&ctl);
+    assert!(hit2.starts_with("D:hit tick_step"), "re-hit: {hit2}");
+    ws_send(&ctl, "D!:quit");
+    assert_eq!(ws_recv(&ctl), "D:quitting");
+    // The client process exits on quit.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(child) = cguard.0.as_mut() {
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "client never exited on D!:quit");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    assert!(
+        stderr.contains("loft-debug: paused in tick_step"),
+        "the pause must be real:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&srv_prog);
+    let _ = std::fs::remove_file(&cli_prog);
+    let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_file(&err_path);
+}
+
 /// @PLN18 08 scenario S8 — THE STANDING DIFFERENTIAL: one meaning scenario
 /// executed in four tier states — interpreted, compiled, mixed (the S2/S3
 /// standing state: a fn flipped to the interpreter), and post-swap (the

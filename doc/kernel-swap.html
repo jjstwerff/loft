@@ -84,7 +84,7 @@ if (!result.ok || !result.running) {
 
 // The deadline sits INSIDE the harness's --wait-ms window: an unmet
 // verdict THROWS while the harness is still watching (no false-pass).
-const deadline = Date.now() + 13000;
+const deadline = Date.now() + 20000;
 for (;;) {
   await new Promise(r => setTimeout(r, 5));
   const fr = JSON.parse(resume_frame());

@@ -350,6 +350,16 @@ mixed → background rebuild → swap → still debuggable.  **SHIPPED**:
   boundary surfaced as designed: an edit touching `main`'s lambdas
   warns and keeps the old body — named-fn edits reload.
 
+**Connector half (2026-06-11):** a CLIENT process announces its own
+loopback control endpoint under `LOFT_DEBUG_CONTROL=1` (it has no game
+port to dial); the command core is process-agnostic and replies are
+role-routed; the pause's mini-pump pumps the client kernel (server
+keepalives + the control endpoint) so a frozen GL frame never drops its
+connection.  Verified live on the audience projector — entry breakpoints
+on a per-frame fn give FRAME-STEPPING for free.  `D!:quit` is
+reply-then-exit (sending inside the pump's borrow would re-enter the role
+cell — probe-caught).
+
 > **Test:** `engine_host_kernel::s7_debugger_loop_end_to_end` — the
 > scripted session, every stage in order: hit with bindings (the game
 > reply HELD while mechanics stay alive), `eval w`, edit acknowledged
