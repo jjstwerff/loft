@@ -435,10 +435,13 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
         // inherits this listening fd across exec — the zombie copy stays in
         // the SO_REUSEPORT group and eats load-balanced SYNs into a backlog
         // nobody accepts (probe-caught: post-swap dials failed by hash luck).
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
         if fd < 0 {
             return None;
         }
+        // Portable CLOEXEC: macOS has no SOCK_CLOEXEC socket flag — set the
+        // fd flag right after creation (single-threaded; no exec in between).
+        let _ = libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         let one: libc::c_int = 1;
         let _ = libc::setsockopt(
             fd,
@@ -458,12 +461,11 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
             std::ptr::addr_of!(one).cast(),
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
-        let addr = libc::sockaddr_in {
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: port.to_be(),
-            sin_addr: libc::in_addr { s_addr: 0 }, // 0.0.0.0
-            sin_zero: [0; 8],
-        };
+        // Zero-init then set fields: BSD's sockaddr_in has an extra sin_len
+        // a struct literal would have to cfg around.
+        let mut addr: libc::sockaddr_in = std::mem::zeroed();
+        addr.sin_family = libc::AF_INET as libc::sa_family_t;
+        addr.sin_port = port.to_be(); // sin_addr stays 0.0.0.0
         if libc::bind(
             fd,
             std::ptr::addr_of!(addr).cast(),
@@ -551,11 +553,13 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
 fn bind_udp_reuseport(port: u16) -> std::io::Result<UdpSocket> {
     use std::os::fd::FromRawFd;
     unsafe {
-        // SOCK_CLOEXEC — same one-process invariant as the TCP listener.
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+        // CLOEXEC — same one-process invariant as the TCP listener (set via
+        // fcntl: macOS has no SOCK_CLOEXEC socket flag).
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        let _ = libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         let one: libc::c_int = 1;
         let _ = libc::setsockopt(
             fd,
@@ -564,12 +568,9 @@ fn bind_udp_reuseport(port: u16) -> std::io::Result<UdpSocket> {
             std::ptr::addr_of!(one).cast(),
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
-        let addr = libc::sockaddr_in {
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: port.to_be(),
-            sin_addr: libc::in_addr { s_addr: 0 },
-            sin_zero: [0; 8],
-        };
+        let mut addr: libc::sockaddr_in = std::mem::zeroed();
+        addr.sin_family = libc::AF_INET as libc::sa_family_t;
+        addr.sin_port = port.to_be(); // sin_addr stays 0.0.0.0
         if libc::bind(
             fd,
             std::ptr::addr_of!(addr).cast(),
