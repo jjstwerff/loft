@@ -43,10 +43,10 @@ is checked per consumer).
 
 | File | Foreign routines / duplicates detected (survey 2026-06-11) | Action | Status |
 |---|---|---|---|
-| `src/scopes.rs` | ~22 hand-rolled `&Value` walkers: `value_reads_var` (pub, 3 ext. consumers), `contains_free`, `contains_alloc`(+`_unconditional`), `is_top_free`, `is_var_null_init`, `returned_var`, `expr_ends_in_return`, `escapes_value`, `guard_escapes`, `confine_reassign_safe`, `holder_retained`, `has_free_before_alloc`, `recover_backer`, `assigns_local`, `store_dead_after_block`, `binding_source`, `walk_par_safe_value`, `walk_classified`, `walk_shallow_parent_write`, `reclaim_safe`; `needs_pre_init`/`is_value_return_type` (`&Type`) | `reads_var` → `Value::reads_var`; simple boolean walkers → `any_node` closures; analysis-specific walkers stay local but derive descent from `for_each_child` (convert incrementally — each carries semantic quirks to preserve or deliberately widen) | ▶ wave 1: reads_var moved, contains_free/contains_alloc/is_top_free converted |
+| `src/scopes.rs` | ~22 hand-rolled `&Value` walkers: `value_reads_var` (pub, 3 ext. consumers), `contains_free`, `contains_alloc`(+`_unconditional`), `is_top_free`, `is_var_null_init`, `returned_var`, `expr_ends_in_return`, `escapes_value`, `guard_escapes`, `confine_reassign_safe`, `holder_retained`, `has_free_before_alloc`, `recover_backer`, `assigns_local`, `store_dead_after_block`, `binding_source`, `walk_par_safe_value`, `walk_classified`, `walk_shallow_parent_write`, `reclaim_safe`; `needs_pre_init`/`is_value_return_type` (`&Type`) | `reads_var` → `Value::reads_var`; exists-anywhere walkers → `any_node`/`walk` closures (done); the rest STAY with documented reasons — positional (`expr_ends_in_return`, `returned_var`, `escapes_value`), dominance-state (`confine_reassign_safe`, `store_dead_after_block`, `contains_alloc_unconditional`), receiver-position exception (`holder_retained`), sequenced flow (`store_liveness_walk`), shape tests (`is_var_null_init`, `binding_source`, `free_op_var`-alikes), Type policy (`needs_pre_init`, `is_value_return_type`), orchestrators (`reclaim_safe`, `has_free_before_alloc` — #260 pass-3 deletion), mutator (`prepend_to_scope` — `map_children` family) | ✅ waves 1+4 |
 | `src/parser/mod.rs` | `base_var_of`, `find_capturing_fn_ref` (`&Value`); `type_carries_closure` (pub), `type_contains_tv`, `is_*_vector_element_target` ×2, `type_element_size` (`&Type`); `is_addressable` | `base_var_of` → `Value::base_var` (done); `find_capturing_fn_ref` STAYS hand-rolled — it deliberately walks only the Block/Set/Span construction shape from vectors.rs; full descent would find unrelated FnRefs and change #313 layout decisions; Type classifiers → `Type` impl later | ▶ waves 1–2 |
-| `src/parser/control.rs` | `value_mentions_var` (dup of pre_eval's), `base_host_var` (dup of base_var_of), `tail_has_tuple_leaf`, `is_block_divergent`, `definitely_returns` (pub), `find_branch_terminal_var`, `tail_var`, `collect_hidden_ref_args`; `match_arm_types_unify` (`&Type`) | dups die into `Value::reads_var`/`Value::base_var`; tail/terminal walkers → `any_node`/local closures later | ▶ wave 1: both dups removed |
-| `src/generation/pre_eval.rs` | `value_mentions_var` (dup), `free_op_var`, `needs_pre_eval`, `is_void_value` (pub), `create_stack_var`; `heap_shape_matches` (`&Type`) | dup dies into `Value::reads_var`; rest convert incrementally | ▶ wave 1: dup removed |
+| `src/parser/control.rs` | `value_mentions_var` (dup of pre_eval's), `base_host_var` (dup of base_var_of), `tail_has_tuple_leaf`, `is_block_divergent`, `definitely_returns` (pub), `find_branch_terminal_var`, `tail_var`, `collect_hidden_ref_args`; `match_arm_types_unify` (`&Type`) | dups died into `Value::reads_var`/`Value::base_var`; tail/terminal walkers audited wave 4 — ALL positional (`tail_has_tuple_leaf`, `is_block_divergent`, `definitely_returns`, `find_branch_terminal_var`, `tail_var`, `collect_hidden_ref_args`), stay | ✅ waves 1+4 |
+| `src/generation/pre_eval.rs` | `value_mentions_var` (dup), `free_op_var`, `needs_pre_eval`, `is_void_value` (pub), `create_stack_var`; `heap_shape_matches` (`&Type`) | dup died into `Value::reads_var`; rest audited wave 4 — `needs_pre_eval` stays (pre-eval policy with a deliberate descend set; converting would change generated-code shape without a bug), `free_op_var`/`is_void_value`/`create_stack_var` are shape tests, `heap_shape_matches` Type policy | ✅ waves 1+4 |
 | `src/variables/validate.rs` | `slot_kind` (verbatim dup of slots_v2), `short_type` | dup dies — import `slots_v2::slot_kind` | ✅ wave 1 |
 | `src/generation/coroutine.rs` | `contains_yield`, `detect_yield_from` (`&Value`); `persistent_default` (`&Type`) | `contains_yield` → `any_node` closure; rest later | ▶ wave 1: contains_yield converted |
 | `src/parser/collections.rs` | `is_capturing_fnref`, `worker_returns_capturing_closure` (`&Value`); `narrow_route_for` (`&Type`) | walkers STAY — tail/return-POSITIONAL semantics, not exists-anywhere (a tail combinator is a different keystone); `narrow_route_for` → Type impl later | ▶ wave 2: audited, positional |
@@ -150,3 +150,26 @@ graph walk, not a type-tree walk) move in later waves.
   Sorted/Index/Spacial/Hash) — harmless for the tv callers (def numbers are
   unique) and honest for future ones.
 - Gates: full suite 2289 passed / 173 skipped, clippy clean, fmt clean.
+
+### Wave 4 — 2026-06-11 — the scopes.rs cluster + the `walk` visitor keystone
+
+- **Added** `Value::walk` (pre-order visitor, Span-transparent) — for
+  collectors, the side-effecting sibling of `any_node`.
+- **Converted:** `guard_escapes` (descent inherited; positional
+  block-tail/return predicates stay in the closure), `recover_backer`,
+  `assigns_local`, `walk_par_safe_value`, `walk_classified`,
+  `walk_shallow_parent_write`, `collect_freed_vars` (debug leak check).
+  *Widened:* the par-safety walkers (`walk_par_safe_value`,
+  `walk_classified`, `walk_shallow_parent_write`) previously treated
+  Return / Tuple / Iter / ParFor / TuplePut positions as safe-by-default
+  leaves — a par-unsafe call hidden in a `return f()` value escaped the
+  scan.  Wider scan = more conservative par classification (the safe
+  direction).  `recover_backer`'s wider discovery stays downstream-gated by
+  the reclaim soundness checks.
+- **Audited, stay (reasons on the work-list rows):** the dominance-state,
+  positional, shape-test, sequenced-flow, and policy walkers across
+  scopes.rs / control.rs / pre_eval.rs.
+- Gates: full suite 2289 passed / 173 skipped (including the formerly
+  flaky `moros_glb_cli_end_to_end` — its cdylib build race got a real fix
+  in the same push: cross-process build lock + atomic `.so` install in
+  `native_lib.rs`), clippy clean, fmt clean.

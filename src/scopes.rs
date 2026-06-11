@@ -2296,38 +2296,14 @@ fn returned_var(expr: &Value) -> u16 {
 /// Used by `check_ref_leaks` to verify no Reference variable is leaked.
 #[cfg(debug_assertions)]
 fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
-    match ir {
-        Value::Call(d_nr, args) if *d_nr == free_ref_nr => {
-            if let Some(Value::Var(v)) = args.first() {
-                result.insert(*v);
-            }
+    ir.walk(&mut |n| {
+        if let Value::Call(d_nr, args) = n
+            && *d_nr == free_ref_nr
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            result.insert(*v);
         }
-        Value::Call(_, args) => {
-            for a in args {
-                collect_freed_vars(a, free_ref_nr, result);
-            }
-        }
-        Value::Set(_, inner) => collect_freed_vars(inner, free_ref_nr, result),
-        Value::If(cond, t, f) => {
-            collect_freed_vars(cond, free_ref_nr, result);
-            collect_freed_vars(t, free_ref_nr, result);
-            collect_freed_vars(f, free_ref_nr, result);
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            for op in &bl.operators {
-                collect_freed_vars(op, free_ref_nr, result);
-            }
-        }
-        Value::Insert(ops) => {
-            for op in ops {
-                collect_freed_vars(op, free_ref_nr, result);
-            }
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            collect_freed_vars(inner, free_ref_nr, result);
-        }
-        _ => {}
-    }
+    });
 }
 
 /// After scope analysis, assert that every Reference variable that should be
@@ -2547,35 +2523,13 @@ fn walk_par_safe(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> bool {
 
 #[allow(dead_code)]
 fn walk_par_safe_value(value: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
-    match value {
-        Value::Call(callee, args) => {
-            let safe = call_is_par_safe(*callee, data, visited);
-            safe && args.iter().all(|a| walk_par_safe_value(a, data, visited))
-        }
-        Value::CallRef(_, _args) => {
-            // Runtime fn-ref — actual callee is unknown at compile
-            // time.  Conservative: reject.
-            false
-        }
-        Value::Block(b) => b
-            .operators
-            .iter()
-            .all(|v| walk_par_safe_value(v, data, visited)),
-        Value::Insert(vs) => vs.iter().all(|v| walk_par_safe_value(v, data, visited)),
-        Value::If(c, t, e) => {
-            walk_par_safe_value(c, data, visited)
-                && walk_par_safe_value(t, data, visited)
-                && walk_par_safe_value(e, data, visited)
-        }
-        Value::Loop(body) => body
-            .operators
-            .iter()
-            .all(|v| walk_par_safe_value(v, data, visited)),
-        Value::Set(_, rhs) => walk_par_safe_value(rhs, data, visited),
-        Value::Span(b) => walk_par_safe_value(&b.1, data, visited),
-        // Leaves — primitive literals, var reads, etc.  Safe.
-        _ => true,
-    }
+    !value.any_node(&mut |n| match n {
+        Value::Call(callee, _) => !call_is_par_safe(*callee, data, visited),
+        // Runtime fn-ref — actual callee is unknown at compile
+        // time.  Conservative: reject.
+        Value::CallRef(_, _) => true,
+        _ => false,
+    })
 }
 
 #[allow(dead_code)]
@@ -3024,32 +2978,11 @@ pub fn analyse_par_safety_fixpoint(data: &Data) -> HashMap<u32, bool> {
 /// the fixed-point loop owns convergence.
 #[allow(dead_code)]
 fn walk_classified(value: &Value, data: &Data, classification: &HashMap<u32, bool>) -> bool {
-    match value {
-        Value::Call(callee, args) => {
-            let safe = call_classified(*callee, data, classification);
-            safe && args
-                .iter()
-                .all(|a| walk_classified(a, data, classification))
-        }
-        Value::CallRef(_, _) => false,
-        Value::Block(b) => b
-            .operators
-            .iter()
-            .all(|v| walk_classified(v, data, classification)),
-        Value::Insert(vs) => vs.iter().all(|v| walk_classified(v, data, classification)),
-        Value::If(c, t, e) => {
-            walk_classified(c, data, classification)
-                && walk_classified(t, data, classification)
-                && walk_classified(e, data, classification)
-        }
-        Value::Loop(body) => body
-            .operators
-            .iter()
-            .all(|v| walk_classified(v, data, classification)),
-        Value::Set(_, rhs) => walk_classified(rhs, data, classification),
-        Value::Span(b) => walk_classified(&b.1, data, classification),
-        _ => true,
-    }
+    !value.any_node(&mut |n| match n {
+        Value::Call(callee, _) => !call_classified(*callee, data, classification),
+        Value::CallRef(_, _) => true,
+        _ => false,
+    })
 }
 
 #[allow(dead_code)]
@@ -3355,63 +3288,24 @@ fn call_deep_parent_write(
 
 #[allow(dead_code)]
 fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
-    match value {
-        Value::Call(callee, args) => {
-            // Check this call's purity.
-            if (*callee as usize) < data.definitions.len() {
-                let cdef = &data.definitions[*callee as usize];
-                if matches!(cdef.purity, Purity::Impure(ImpureCategory::ParentWrite)) {
-                    return Some(cdef.name.clone());
-                }
-            }
-            // Walk arg expressions (could contain nested Call).
-            for a in args {
-                if let Some(name) = walk_shallow_parent_write(a, data) {
-                    return Some(name);
-                }
-            }
-            None
+    // "Shallow" = the runtime callee behind a `CallRef` is never followed
+    // (it is not a child node); arg expressions ARE scanned.
+    let mut found = None;
+    value.any_node(&mut |n| {
+        if let Value::Call(callee, _) = n
+            && (*callee as usize) < data.definitions.len()
+            && matches!(
+                data.definitions[*callee as usize].purity,
+                Purity::Impure(ImpureCategory::ParentWrite)
+            )
+        {
+            found = Some(data.definitions[*callee as usize].name.clone());
+            true
+        } else {
+            false
         }
-        // Don't recurse into CallRef target (runtime fn-ref); shallow.
-        Value::CallRef(_, args) => {
-            for a in args {
-                if let Some(name) = walk_shallow_parent_write(a, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Block(b) => {
-            for v in &b.operators {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Insert(vs) => {
-            for v in vs {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::If(c, t, e) => walk_shallow_parent_write(c, data)
-            .or_else(|| walk_shallow_parent_write(t, data))
-            .or_else(|| walk_shallow_parent_write(e, data)),
-        Value::Loop(body) => {
-            for v in &body.operators {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Set(_, rhs) => walk_shallow_parent_write(rhs, data),
-        Value::Span(b) => walk_shallow_parent_write(&b.1, data),
-        _ => None,
-    }
+    });
+    found
 }
 
 #[cfg(test)]
@@ -3727,41 +3621,17 @@ fn escapes_value(v: &Value, target: u16) -> bool {
 }
 
 fn guard_escapes(node: &Value, target: u16) -> bool {
-    match node {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            escapes_value(v, target) || guard_escapes(v, target)
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            // The block's VALUE is its last operator; if that hands out the local
-            // (directly or in a tuple/literal), it escapes (block-result `x = {
-            // …; a }` U3; `return (a, n)` t2).
-            bl.operators
-                .last()
-                .is_some_and(|o| escapes_value(o, target))
-                || bl.operators.iter().any(|op| guard_escapes(op, target))
-        }
-        Value::If(t, a, b) => {
-            guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target)
-        }
-        Value::Set(_, val) | Value::Drop(val) => guard_escapes(val, target),
-        Value::Iter(_, c, n, e) => {
-            guard_escapes(c, target) || guard_escapes(n, target) || guard_escapes(e, target)
-        }
-        Value::Call(_, args)
-        | Value::CallRef(_, args)
-        | Value::Insert(args)
-        | Value::Tuple(args)
-        | Value::Parallel(args) => args.iter().any(|a| guard_escapes(a, target)),
-        Value::TuplePut(_, _, inner) => guard_escapes(inner, target),
-        Value::Span(b) => guard_escapes(&b.1, target),
-        Value::ParFor(b) => {
-            guard_escapes(&b.input, target)
-                || guard_escapes(&b.worker, target)
-                || guard_escapes(&b.threads, target)
-                || guard_escapes(&b.body, target)
-        }
+    node.any_node(&mut |n| match n {
+        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target),
+        // The block's VALUE is its last operator; if that hands out the local
+        // (directly or in a tuple/literal), it escapes (block-result `x = {
+        // …; a }` U3; `return (a, n)` t2).
+        Value::Block(bl) | Value::Loop(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| escapes_value(o, target)),
         _ => false,
-    }
+    })
 }
 
 /// Soundness gate for confining a *multi-store* local — one reassigned a fresh
@@ -3869,56 +3739,27 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 /// reassigned.  Returns the local `L` the store flows into via its repoint
 /// `Set(L, OpGetField(Var(vdb), …))` (the canonical `z = [..]` lowering).
 fn recover_backer(code: &Value, vdb: u16, gf_nr: u32) -> Option<u16> {
-    match code {
-        Value::Set(l, val) => {
-            if let Value::Call(op, args) = val.unspan()
-                && *op == gf_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == vdb)
-            {
-                return Some(*l);
-            }
-            recover_backer(val, vdb, gf_nr)
+    let mut backer = None;
+    code.any_node(&mut |n| {
+        if let Value::Set(l, val) = n
+            && let Value::Call(op, args) = val.unspan()
+            && *op == gf_nr
+            && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == vdb)
+        {
+            backer = Some(*l);
+            true
+        } else {
+            false
         }
-        Value::Block(bl) | Value::Loop(bl) => bl
-            .operators
-            .iter()
-            .find_map(|o| recover_backer(o, vdb, gf_nr)),
-        Value::If(c, t, e) => recover_backer(c, vdb, gf_nr)
-            .or_else(|| recover_backer(t, vdb, gf_nr))
-            .or_else(|| recover_backer(e, vdb, gf_nr)),
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().find_map(|o| recover_backer(o, vdb, gf_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            recover_backer(v, vdb, gf_nr)
-        }
-        Value::Span(b) => recover_backer(&b.1, vdb, gf_nr),
-        _ => None,
-    }
+    });
+    backer
 }
 
 /// Does `node` contain a non-null reassignment of `local` anywhere?
 fn assigns_local(node: &Value, local: u16) -> bool {
-    match node {
-        Value::Set(v, val) => {
-            (*v == local && !matches!(val.unspan(), Value::Null)) || assigns_local(val, local)
-        }
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| assigns_local(o, local)),
-        Value::If(c, t, e) => {
-            assigns_local(c, local) || assigns_local(t, local) || assigns_local(e, local)
-        }
-        Value::Iter(_, c, n, e) => {
-            assigns_local(c, local) || assigns_local(n, local) || assigns_local(e, local)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| assigns_local(o, local))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            assigns_local(v, local)
-        }
-        Value::Span(b) => assigns_local(&b.1, local),
-        _ => false,
-    }
+    node.any_node(
+        &mut |n| matches!(n, Value::Set(v, val) if *v == local && !matches!(val.unspan(), Value::Null)),
+    )
 }
 
 /// Plan-57 cluster-III Route 2 soundness gate (STRONGER than `confine_reassign_safe`,

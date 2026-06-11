@@ -590,6 +590,16 @@ impl Value {
         found
     }
 
+    /// Pre-order visitor: calls `f` on this node and every descendant.
+    /// `Span` wrappers are transparent, matching [`Value::any_node`].
+    pub fn walk(&self, f: &mut impl FnMut(&Value)) {
+        if let Value::Span(b) = self {
+            return b.1.walk(f);
+        }
+        f(self);
+        self.for_each_child(&mut |c| c.walk(f));
+    }
+
     /// Does this expression read (or name) variable `v` anywhere?  The ONE
     /// reads-var predicate — it replaced `scopes::value_reads_var` and two
     /// `value_mentions_var` copies whose hand-rolled descents had drifted
