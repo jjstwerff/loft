@@ -209,23 +209,15 @@ fn kernel_port_matches_original() {
     assert_eq!(kb, expected_b, "kernel port, client B");
 
     // The original (lib/server pump).  `server` is a REGISTRY package (no
-    // in-repo lib/server), so a registry-less box (CI) can only run the
-    // kernel leg — the cross-server differential self-skips there, exactly
-    // like the chromium-gated tests.  It runs in full wherever
-    // `loft install server` has happened (every dev box).
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
-    let registry_has_server = std::path::Path::new(&home)
-        .join(".loft/registry")
-        .read_dir()
-        .map(|d| {
-            d.flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with("server-"))
-        })
-        .unwrap_or(false);
-    if !registry_has_server {
-        eprintln!("SKIP original-port leg: `server` not in the local registry");
+    // in-repo lib/server).  On CI the registry is a MUTATING shared medium:
+    // concurrent tests auto-install packages over the network mid-run, so
+    // any existence probe races (a half-installed entry passed the check
+    // while the spawned parse still went to network and blew the connect
+    // deadline — CI-forensics-caught twice).  Deterministic cut: the
+    // cross-server differential is a dev-box assertion; CI proves the
+    // kernel leg.
+    if std::env::var_os("CI").is_some() {
+        eprintln!("SKIP original-port leg on CI (registry = network-mutated medium)");
         return;
     }
     std::thread::sleep(Duration::from_millis(300)); // port release
