@@ -87,7 +87,7 @@ gets probed wherever its homes can drift apart.
 | `src/main.rs` | 5803 | F9 CLI dispatch | ➖ exercised by every suite mode; no dual-invariant suspect found |
 | `src/cache.rs` + `src/startup_cache.rs` | ~900 | F9; manifest vs inputs (#322 fixed) | ▶ warm≡cold held for new shapes; lib-PATH/env axes DEFERRED |
 | `src/ir_schema*.rs` + `ir_store.rs` + `ir_read.rs` + `data_store.rs` | ~7000 | F9 codec vs struct | ▶ marker-dep + split-field shapes round-trip held (f9/f9b); field-by-field codec audit DEFERRED (pass-2: derive codec from one schema) |
-| `src/parser/expressions.rs` | 2697 | F7; `change_var` merges (self-dep strip #328-narrow) | ▶ other degenerate merges DEFERRED |
+| `src/parser/expressions.rs` | 2697 | F7; `change_var` merges | ✅ swept: `x = x` corrupts both backends, divergently — logged on #330 (the predicate hole's degenerate cell) |
 | `src/parser/operators.rs` | 2173 | `call_to_set_op` GET→SET table vs get_val table | ▶ assignment shapes this sweep all held; table-completeness sentinel DEFERRED |
 | `src/parser/objects.rs` | 2058 | construction vs post-hoc assignment parity | ✅ swept: text/narrow/enum/tuple/hash/reference cells held (#328 fixed the reference cell) |
 | `src/parser/definitions.rs` | 2236 | F1; sub_type single funnel verified (#318 R3, #328 marker) | ✅ swept |
@@ -118,8 +118,10 @@ gets probed wherever its homes can drift apart.
   consumed by both free sites; longer term the free belongs to the store
   allocator's reassignment path, not codegen.
 - **Probe / damage**: `x = S { v: x.v + 1 }` → `x.v == null` through a
-  `not null` field, BOTH backends (`/tmp/p_followups/f2b.loft`, `f2c.loft`).
-  Nested ref-param call shape held; #328's borrow shape held (deps gate).
+  `not null` field, BOTH backends (`/tmp/p_followups/f2b.loft`, `f2c.loft`);
+  degenerate `x = x` corrupts divergently (interp reads the recycled slot,
+  native nulls — `fself.loft`).  Nested ref-param call shape held; #328's
+  borrow shape held (deps gate).
 - **Artifacts**: issue #330; `tests/issues.rs::issue_330_self_reading_literal_reassignment`
   (`#[ignore]`, fails-as-demonstration when forced).
 

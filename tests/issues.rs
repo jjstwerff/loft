@@ -14740,6 +14740,21 @@ fn run() -> integer {
 
 #[test]
 #[ignore = "stability-sweep: #330 — documented, fix deferred to pass 2"]
+fn issue_330_degenerate_self_assignment() {
+    code!(
+        "struct S { v: integer not null }
+fn run() -> integer {
+    x = S { v: 7 };
+    x = x;
+    x.v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+#[test]
+#[ignore = "stability-sweep: #330 — documented, fix deferred to pass 2"]
 fn issue_330_self_reading_literal_reassignment() {
     code!(
         "struct S { v: integer not null }
