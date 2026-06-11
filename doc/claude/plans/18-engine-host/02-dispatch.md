@@ -32,9 +32,27 @@
 > it between statements, so a synthetic frame starts above the new
 > `stack_high` high-water mark; (2) `fn_return` pops a `CallFrame`
 > unconditionally — every re-entry pushes one; (3) args are pushed inside
-> `reenter`'s closure, after the watermark lift.  REMAINING in 02: the
-> `--native`-baseline call-site indirection (compiled callers through the
-> table) + the 6b IDE wire-up.
+> `reenter`'s closure, after the watermark lift.
+>
+> **PHASE CLOSED (2026-06-11).**  Slice-2 findings, read off real generated
+> source (`LOFT_KEEP_NATIVE_RS=1`):
+> - **The native ABI IS reenter's push contract.**  Generated fns are
+>   `fn n_bump(cell: &UnsafeCell<Stores>, var_r: DbRef, var_n: i64) -> i64`
+>   — records as `DbRef`, scalars as `i64`, over the shared Stores: the
+>   marshaling for a native→interp flip is byte-for-byte what
+>   `reenter`'s closure pushes.  No translation layer needed.
+> - **Inlining is moot** (slice 1's last open probe): the dispatch check
+>   belongs at the CALLEE ENTRY (inside the generated body), so it stays
+>   semantic whether or not rustc inlines the fn — no `#[inline(never)]`
+>   required, no per-call-site emission.
+> - The native-baseline build itself (entry checks + the interp bootstrap
+>   sharing the program's Stores + result retrieval for value-returning
+>   fns) is **08 scenario S2's build** — one home, gated there; 02's own
+>   scope (the interpreter-target dispatch, C71 minimal, on the running
+>   demo) is fully shipped: live reload + reenter + the frame contract.
+> - The 6b wire-up shipped: `launch_game` sets `LOFT_LIVE_RELOAD=1` (opt
+>   out with `=0`) — every IDE-launched game is live-editable; the child's
+>   `live-reload:` stderr lines are the structured feedback.
 
 **Goal.** Editing one function of a RUNNING kernel game takes effect at the
 next frame boundary, with ONLY that function dropping to the interpreter —

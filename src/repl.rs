@@ -1725,6 +1725,13 @@ impl ReplSession {
         for d in &self.parser.lib_dirs {
             cmd.arg("--lib").arg(d);
         }
+        // @PLN18 02 (the 6b wire-up): an IDE-launched game is live-editable
+        // by default — the child's file watcher reacts to every IDE save and
+        // hot-swaps the edited fn (tier 0); its `live-reload:` stderr lines
+        // are the structured feedback.  LOFT_LIVE_RELOAD=0 opts out.
+        if std::env::var_os("LOFT_LIVE_RELOAD").is_none() {
+            cmd.env("LOFT_LIVE_RELOAD", "1");
+        }
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
