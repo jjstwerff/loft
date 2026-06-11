@@ -208,7 +208,26 @@ fn kernel_port_matches_original() {
     assert_eq!(ka, expected_a, "kernel port, client A");
     assert_eq!(kb, expected_b, "kernel port, client B");
 
-    // The original (lib/server pump).  Same port — sequential runs.
+    // The original (lib/server pump).  `server` is a REGISTRY package (no
+    // in-repo lib/server), so a registry-less box (CI) can only run the
+    // kernel leg — the cross-server differential self-skips there, exactly
+    // like the chromium-gated tests.  It runs in full wherever
+    // `loft install server` has happened (every dev box).
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let registry_has_server = std::path::Path::new(&home)
+        .join(".loft/registry")
+        .read_dir()
+        .map(|d| {
+            d.flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("server-"))
+        })
+        .unwrap_or(false);
+    if !registry_has_server {
+        eprintln!("SKIP original-port leg: `server` not in the local registry");
+        return;
+    }
     std::thread::sleep(Duration::from_millis(300)); // port release
     let (oa, ob) = {
         let _g = spawn_server("tools/audience-demo/server.loft");
