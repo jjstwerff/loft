@@ -91,10 +91,21 @@ always.
    wrappers changes shape, so `make rebuild-native-cdylibs` artifacts and
    the registry's `verified` libraries need a re-verify pass.
 
+**Status (2026-06-11)**: plan opened —
+[plans/59-return-abi](plans/59-return-abi/README.md) (@PLAN59).  Phase 0
+SHIPPED: the H1 census probe caught a LIVE #339 sibling (vector-literal
+tails promote late too; 7-line caller-first repro panicked on main) — the
+retrofit now covers all three heap-buffer kinds, regression in
+`tests/scripts/295`.  Census results validate the one-buffer design
+(ls ≤ 1 in 104/104 promotions); claims C1–C5 probed/read, C6–C8 (argument
+order ↔ attr order coupling, buffer-vs-return-value consumption,
+null-init suppression) are the named pre-implementation probes for
+phase 1's own window.
+
 **Until then** (standing rule, loft-write skill): a thin wrapper around a
 struct-returning fn is safe ONLY if the wide impl is defined before it in
-the file; #339's retro-patch covers the rest but new shapes (fn-refs to
-late-promoted fns, generics) should be probed before relying on them.
+the file; the widened retro-patch covers the rest but new shapes (fn-refs
+to late-promoted fns, generics) should be probed before relying on them.
 
 ---
 
