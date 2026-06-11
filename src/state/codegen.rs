@@ -202,7 +202,15 @@ impl State {
         // null-init + `OpDatabase` still run at their IR position, so
         // allocation timing (the watermark benefit) is unchanged.
         for v in 0..stack.function.count() {
-            if !stack.function.is_argument(v) && stack.function.name(v).starts_with("__vdb") {
+            // Slotless (`stack == u16::MAX`) vars are skipped: the allocator
+            // drops unused vars — e.g. a stale table entry from a #339 extra
+            // parse pass whose final lowering no longer touches it — and a
+            // var with no frame slot has nothing to sentinel-init (no free
+            // can reference it either).
+            if !stack.function.is_argument(v)
+                && stack.function.name(v).starts_with("__vdb")
+                && stack.function.stack(v) != u16::MAX
+            {
                 let slot_offset = stack.var_pos(v);
                 stack.add_op("OpInitRefSentinel", self);
                 self.code_add(slot_offset);

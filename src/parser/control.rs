@@ -901,6 +901,84 @@ impl Parser {
 
     /// @P377 / S1 — parse-time NRVO for the intermediate-local return shape.
     ///
+    /// #339 — pass-2 late-promotion fix-up.  `ref_return` just GREW
+    /// `self.context`'s arity during pass 2 (hidden Reference return-buffer
+    /// attrs).  Every function whose pass-2 body was already parsed
+    /// (definition order == parse order) may hold calls to it with the old,
+    /// short arg list; codegen would panic 'Too few parameters'.  Bring
+    /// those calls up to the new arity exactly the way `add_defaults` does
+    /// for in-order callers: a fresh `__ref_N` work-ref from the CALLER's
+    /// own variable table (marked `caller_hidden_buf`), passed in the
+    /// hidden slot, with the @PLAN51 `Set(vr, Null)` preamble prepended so
+    /// the slot allocator sees a first_def.  Only Reference returns can
+    /// promote late (the Vector/Enum arms have no `collect_hidden_ref_args`
+    /// recovery), and `filter_hidden` strips hidden deps from Reference
+    /// results — so callers' binding TYPES are unaffected; only the call
+    /// arity needs the patch.
+    fn retrofit_callers_hidden_args(&mut self) {
+        let target = self.context;
+        let n_attrs = self.data.def(target).attributes().len();
+        let hidden: Vec<(usize, u32)> = self
+            .data
+            .def(target)
+            .attributes()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                if a.hidden
+                    && let Type::Reference(td, _) = &a.typedef
+                {
+                    Some((i, *td))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if hidden.is_empty() {
+            return;
+        }
+        for d in 0..target {
+            if self.data.def_type(d) != crate::data::DefType::Function {
+                continue;
+            }
+            if *self.data.def(d).code() == Value::Null {
+                continue;
+            }
+            let mut code =
+                std::mem::replace(&mut self.data.definitions[d as usize].code, Value::Null);
+            let mut vars = std::mem::replace(
+                &mut self.data.definitions[d as usize].variables,
+                crate::variables::Function::new("", "none"),
+            );
+            let mut new_inits: Vec<Value> = Vec::new();
+            code.map_nodes(&mut |n| {
+                if let Value::Call(f, args) = n
+                    && *f == target
+                    && args.len() < n_attrs
+                {
+                    for &(i, td) in &hidden {
+                        if args.len() == i {
+                            let buf_tp = Type::Reference(td, Vec::new());
+                            let vr = vars.work_refs(&buf_tp, &mut self.lexer);
+                            vars.mark_caller_hidden_buf(vr);
+                            new_inits.push(crate::data::v_set(vr, Value::Null));
+                            args.push(Value::Var(vr));
+                        }
+                    }
+                }
+            });
+            if !new_inits.is_empty()
+                && let Value::Block(bl) = &mut code
+            {
+                for (k, init) in new_inits.into_iter().enumerate() {
+                    bl.operators.insert(k, init);
+                }
+            }
+            self.data.definitions[d as usize].variables = vars;
+            self.data.definitions[d as usize].code = code;
+        }
+    }
+
     /// After `ref_return` has promoted `cv` to the function's hidden return
     /// buffer attribute, an inner heap-returning call inside the body still
     /// targets its own parser-synthesised `__ref_N` work-ref, and the
@@ -3429,6 +3507,7 @@ impl Parser {
                     }
                 }
             }
+            let mut grew_in_pass2 = false;
             for (e_idx, v) in expanded.iter().enumerate() {
                 let transitive = e_idx >= direct_count;
                 // A reassigned returned local must NOT be NRVO-promoted (see above).
@@ -3454,6 +3533,16 @@ impl Parser {
                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
+                // #339: in pass 2 this promotion arrives LATE — the wrapper's
+                // `__ref_N` (and thus this attr) only materialises once the
+                // callee's own hidden attr exists, which a callee defined
+                // LATER in the source gets after this fn's pass-1 parse.
+                // Callers re-parsed EARLIER in pass 2 still carry the short
+                // arg list against the grown arity (codegen panics 'Too few
+                // parameters').  Patch them up after the loop.
+                if !self.first_pass {
+                    grew_in_pass2 = true;
+                }
             }
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
@@ -3469,6 +3558,9 @@ impl Parser {
                     return;
                 }
             };
+            if grew_in_pass2 {
+                self.retrofit_callers_hidden_args();
+            }
         }
     }
 
