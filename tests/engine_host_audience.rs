@@ -41,16 +41,14 @@ fn spawn_server(script: &str) -> Guard {
 
 fn ws_connect(port: u16) -> TcpStream {
     let deadline = Instant::now() + Duration::from_secs(15);
-    let mut last_err = String::new();
     let stream = loop {
         match TcpStream::connect(("127.0.0.1", port)) {
             Ok(s) => break s,
-            Err(e) => last_err = e.to_string(),
+            Err(e) => assert!(
+                Instant::now() < deadline,
+                "server never listened (last connect error: {e})"
+            ),
         }
-        assert!(
-            Instant::now() < deadline,
-            "server never listened (last connect error: {last_err})"
-        );
         std::thread::sleep(Duration::from_millis(100));
     };
     stream

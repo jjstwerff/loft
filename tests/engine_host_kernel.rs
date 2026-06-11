@@ -931,10 +931,10 @@ fn main() {{
     // The client process exits on quit.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Some(child) = cguard.0.as_mut() {
-            if child.try_wait().ok().flatten().is_some() {
-                break;
-            }
+        if let Some(child) = cguard.0.as_mut()
+            && child.try_wait().ok().flatten().is_some()
+        {
+            break;
         }
         assert!(Instant::now() < deadline, "client never exited on D!:quit");
         std::thread::sleep(Duration::from_millis(100));

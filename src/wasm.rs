@@ -989,10 +989,14 @@ thread_local! {
     static SWAP_STAGE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+// Consumed by the browser kernel's `swap_world` (wasm32 + feature "wasm");
+// a native build with --all-features sees it dead — that's the cfg, not rot.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn swap_root_set(root: crate::keys::DbRef, kt: u16) {
     SWAP_ROOT.with(|r| r.set(Some((root, kt))));
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn swap_stage_take() -> Option<String> {
     SWAP_STAGE.with(|s| s.borrow_mut().take())
 }

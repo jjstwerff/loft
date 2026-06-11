@@ -1292,10 +1292,7 @@ fn pump_ctl(c: &mut ClientKernel) {
         }
     }
     for i in 0..c.ctl_conns.len() {
-        loop {
-            let Some(stream) = c.ctl_conns[i].as_mut() else {
-                break;
-            };
+        while let Some(stream) = c.ctl_conns[i].as_mut() {
             match read_frame(stream) {
                 FrameRead::None => break,
                 FrameRead::Text(payload) => {
@@ -1669,7 +1666,7 @@ pub(crate) fn debug_send(cid: i64, msg: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn debug_pump() {
     let _ = with_kernel(pump_kernel);
-    let _ = with_client(|c| pump_client(c)); // incl. the client's control endpoint
+    let _ = with_client(pump_client); // incl. the client's control endpoint
 }
 
 #[cfg(not(target_arch = "wasm32"))]

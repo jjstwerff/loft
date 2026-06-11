@@ -13,6 +13,7 @@
 //! 2. `fn_return` pops a `CallFrame` unconditionally — every re-entry must
 //!    push one (imbalance corrupts teardown).
 //! 3. Args are pushed INSIDE `reenter`'s closure, after the watermark lift.
+//!
 //! The PROBE_MODE env reruns individual bisect cells (none / direct / push /
 //! callint / call1); default = the full matrix.
 //!
