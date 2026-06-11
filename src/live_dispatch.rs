@@ -53,8 +53,12 @@ struct Live {
     /// parked State's `data_ptr`/`parallel_ctx` raw pointers reference.
     _parser: Box<crate::parser::Parser>,
     state: Box<State>,
-    /// Per generated fn index: (d_nr, code_position) in the bootstrap world.
-    fns: Vec<(u32, u32)>,
+    /// Per generated fn index: the def number in the bootstrap world.  The
+    /// CODE POSITION is deliberately not cached here — every dispatch
+    /// resolves it through `state.fn_positions[d_nr]`, the one dispatch
+    /// home tier-0 live reload patches (@PLN18 08-S3): an edit moves the
+    /// target there, and a cached position would silently pin the old body.
+    fns: Vec<u32>,
     names: &'static [&'static str],
 }
 
@@ -151,13 +155,17 @@ fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
     let mut resolved = Vec::with_capacity(fn_names.len());
     for name in fn_names {
         let d_nr = p.data.def_nr(name);
-        if d_nr == u32::MAX {
-            fns.push((u32::MAX, 0));
-            resolved.push(false);
-        } else {
-            fns.push((d_nr, p.data.def(d_nr).code_position));
-            resolved.push(true);
-        }
+        fns.push(d_nr);
+        resolved.push(d_nr != u32::MAX);
+    }
+
+    // @PLN18 08-S3 — tier-0 live reload over the parked interpreter: an
+    // edit to a FLIPPED fn lands as new bytecode + a fn_positions patch
+    // (live_reload.rs), which the per-dispatch resolution picks up.  The
+    // compiled tier never changes — that is S4/S5's rebuild-and-swap.
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("LOFT_LIVE_RELOAD").is_ok_and(|v| v != "0") {
+        crate::live_reload::install(&src, &stdlib, &p.lib_dirs, &p.data);
     }
     let _ = RESOLVED.set(resolved.into_boxed_slice());
     let _ = FLIPS.set(
@@ -241,7 +249,7 @@ fn dispatch<R>(
         let live = borrow
             .as_mut()
             .expect("live_flipped() gates dispatch on a parked State");
-        let (d_nr, pos) = live.fns[idx];
+        let d_nr = live.fns[idx];
         let n = DISPATCHED.fetch_add(1, Ordering::Relaxed) + 1;
         if DEBUG.load(Ordering::Relaxed) {
             eprintln!("live-dispatch: {} #{n}", live.names[idx]);
@@ -251,6 +259,15 @@ fn dispatch<R>(
         // value moves, and no native frame touches it until we return.
         let in_cell = unsafe { &mut *cell.get() };
         std::mem::swap(&mut live.state.database, in_cell);
+        // @PLN18 08-S3 — the reload poll runs with the world swapped IN
+        // (an edit's new const texts append to the REAL CONST_STORE) and
+        // BEFORE the position resolution, so the dispatch that follows an
+        // edit already runs the new body.  Internally throttled (200 ms).
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::live_reload::active() {
+            crate::live_reload::poll(&mut live.state);
+        }
+        let pos = live.state.fn_positions[d_nr as usize];
         let r = run(&mut live.state, d_nr, pos);
         std::mem::swap(&mut live.state.database, in_cell);
         r

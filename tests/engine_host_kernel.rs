@@ -108,6 +108,208 @@ fn s1_native_baseline_matches_interpreted() {
     run_kernel_scenario(18094, false);
 }
 
+/// @PLN18 08 scenario S3 — edit the interpreted fn; the MIXED build keeps
+/// running.  The flip target is interpreted from startup (`LOFT_FLIP_FNS`);
+/// the test then EDITS the source file under the serving kernel: a good
+/// edit (+1 -> +100) applies live — observed as the world counter's STEP
+/// changing while the counter itself stays monotone (continuity: no
+/// restart, no reset); a broken edit (a real parse ERROR) keeps the +100
+/// body serving; a signature change is rejected (call sites embed frame
+/// sizes).  The timeline is differential: the interpreted leg (the original
+/// tier-0 reload path) passes the SAME milestones.  Application is
+/// asynchronous (dispatch-path poll vs the interp loop's op counter), so
+/// the legs assert step timelines + reload milestones, not raw vectors;
+/// the stderr file is the synchronization point for the REJECTED edits.
+#[test]
+fn s3_live_edit_under_native_baseline() {
+    let native = run_s3_scenario(18097, false);
+    let interp = run_s3_scenario(18098, true);
+    assert!(
+        native.stderr.contains("live-dispatch: n_bump_events"),
+        "the native leg must dispatch through the interpreter:\n{}",
+        native.stderr
+    );
+    for (leg, run) in [("native", &native), ("interp", &interp)] {
+        assert!(
+            run.stderr.contains("'bump_events' v1 live"),
+            "{leg}: the good edit must reload:\n{}",
+            run.stderr
+        );
+        assert!(
+            run.stderr.contains("kept its old body"),
+            "{leg}: the broken edit must be refused:\n{}",
+            run.stderr
+        );
+        assert!(
+            run.stderr.contains("changed its signature"),
+            "{leg}: the signature change must be refused:\n{}",
+            run.stderr
+        );
+    }
+}
+
+fn s3_fixture(port: u16, bump_decl: &str, bump_stmt: &str) -> String {
+    format!(
+        r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+{bump_decl} {{
+  {bump_stmt}
+  w.events
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = bump_events(w);
+      engine_host::broadcast("got:{{ev.payload}}#{{n}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+    )
+}
+
+/// One ping round trip; returns the counter and asserts it advanced
+/// (monotone = the world survived whatever just happened).
+fn s3_ping(ws: &TcpStream, last: &mut i64) -> i64 {
+    ws_send(ws, "p");
+    let r = ws_recv(ws);
+    let n: i64 = r
+        .rsplit('#')
+        .next()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or_else(|| panic!("unparseable reply {r:?}"));
+    assert!(n > *last, "world counter went backwards: {} -> {n}", *last);
+    let step = n - *last;
+    *last = n;
+    step
+}
+
+/// Ping until the counter's step matches `want` (the edit has applied).
+fn s3_await_step(ws: &TcpStream, last: &mut i64, want: i64) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if s3_ping(ws, last) == want {
+            return;
+        }
+        assert!(Instant::now() < deadline, "step never became {want}");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Block until the kernel's stderr contains `needle` — the deterministic
+/// sync point for an edit whose only observable is a refusal line.
+/// Keeps PINGING while it waits: in the mixed build the reload poll runs
+/// inside the dispatch path, so an edit is only examined when the flipped
+/// fn is actually called (lazy by construction — an S3 finding; the pings
+/// drive it, and stay step-correct on the old body, proving refusal en
+/// route).
+fn s3_await_stderr(ws: &TcpStream, last: &mut i64, path: &std::path::Path, needle: &str) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        s3_ping(ws, last);
+        if std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .contains(needle)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stderr never contained {needle:?}"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn run_s3_scenario(port: u16, interpret: bool) -> S2Run {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return S2Run {
+            replies: Vec::new(),
+            stderr: String::new(),
+        };
+    }
+    let decl_v0 = "fn bump_events(w: W) -> integer";
+    let prog = std::env::temp_dir().join(format!("eh_s3_{port}_{}.loft", std::process::id()));
+    std::fs::write(&prog, s3_fixture(port, decl_v0, "w.events = w.events + 1;")).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let err_path = std::env::temp_dir().join(format!("eh_s3_{port}_{}.err", std::process::id()));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_LIVE_RELOAD", "1");
+    if interpret {
+        cmd.arg("--interpret");
+    } else {
+        cmd.env("LOFT_LIVE_FLIP", "1")
+            .env("LOFT_FLIP_FNS", "bump_events")
+            .env("LOFT_DISPATCH_DEBUG", "1");
+    }
+    cmd.process_group(0); // own group, so Guard can kill driver + grandchild
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let ws = ws_connect(port);
+    let mut last = 0i64;
+    assert_eq!(s3_ping(&ws, &mut last), 1, "original body steps by 1");
+    // Good edit: the step becomes +100; the world counter continues.
+    std::fs::write(
+        &prog,
+        s3_fixture(port, decl_v0, "w.events = w.events + 100;"),
+    )
+    .unwrap();
+    s3_await_step(&ws, &mut last, 100);
+    // Broken edit: a real parse ERROR (the lenient parser downgrades a
+    // missing operand to warning + null, so use an unknown name).  Sync on
+    // the refusal line, then prove the +100 body still serves.
+    std::fs::write(
+        &prog,
+        s3_fixture(port, decl_v0, "w.events = w.events + nosuchvar;"),
+    )
+    .unwrap();
+    s3_await_stderr(&ws, &mut last, &err_path, "kept its old body");
+    assert_eq!(
+        s3_ping(&ws, &mut last),
+        100,
+        "broken edit must not change the body"
+    );
+    // Signature change: rejected; the +100 body still serves.
+    std::fs::write(
+        &prog,
+        s3_fixture(
+            port,
+            "fn bump_events(w: W, extra: integer) -> integer",
+            "w.events = w.events + extra;",
+        ),
+    )
+    .unwrap();
+    s3_await_stderr(&ws, &mut last, &err_path, "changed its signature");
+    assert_eq!(
+        s3_ping(&ws, &mut last),
+        100,
+        "sig change must not change the body"
+    );
+    drop(_guard); // kill now so the stderr file is complete
+    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&prog);
+    let _ = std::fs::remove_file(&err_path);
+    S2Run {
+        replies: vec![last.to_string()],
+        stderr,
+    }
+}
+
 /// @PLN18 08 scenario S2 — the debugger pushes one fn to the interpreter,
 /// LIVE, under a serving kernel.  The flip target (`bump_events(w: W) ->
 /// integer`) mutates the shared world; the event counter must count

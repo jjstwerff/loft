@@ -115,14 +115,46 @@ native → interp at a frame boundary; nothing else changes.  **SHIPPED**:
 > compiled→interp→compiled, the transcript is byte-equal to the
 > interpreted leg, and the flip is visible ONLY in the sentinel.
 
-### S3 — edit the interpreted fn; the mixed build keeps running
+### S3 — edit the interpreted fn; the mixed build keeps running  ✅ (2026-06-11)
 
 Tier-0 reload against the compiled baseline: the shadow session parses the
 edit, the dispatch target moves to the new bytecode, world state persists.
+**SHIPPED** — the integration is two small moves at one chokepoint:
 
-> **Test (extend `engine_host_reload` to the native baseline):** edit →
-> new behavior next frame; the world counter continues (no restart);
-> broken edit → old body keeps serving; signature change → rejected.
+- `live_dispatch::bootstrap` installs the existing reload host
+  (`live_reload::install`) over the SAME source path under
+  `LOFT_LIVE_RELOAD=1`; `dispatch()` polls it with the world swapped IN
+  (new const texts land in the real CONST_STORE) and BEFORE position
+  resolution, so the dispatch that follows an edit already runs the new
+  body.  Internally throttled (200 ms) — no per-call file stat.
+- The flip table stores ONLY `d_nr`; every dispatch resolves the position
+  through `state.fn_positions[d_nr]` — the one dispatch home the reload
+  patch writes.  (Caught at design time: a cached `(d_nr, pos)` pair would
+  have silently pinned the old body — the edit invisible forever.)
+
+**Findings:**
+
+- **Reload application is dispatch-driven in the mixed tier** — an edit to
+  a flipped fn is only examined when that fn is CALLED (lazy by
+  construction; correct, since the edit's only observable is its calls).
+  Residual for S7: the debugger's structured reload feedback wants a
+  control-channel poll-now rather than waiting for game traffic.
+- **The lenient parser bounds what "broken edit" means**: a missing
+  operand (`a + ;`) parses as warning + null (Goal F posture), so it
+  RELOADS as a legitimate body.  Only `Level::Error` edits (unknown
+  names, type errors) are refused.  A debugger UI should surface the
+  warning stream on reload, not assume rejection.
+- An edit while flipped, then un-flip → the COMPILED (old) body serves
+  again — inherent to the mixed tier; S4/S5's rebuild-and-swap closes it
+  (S5 sub-test 5 asserts the reset).
+
+> **Test:** `engine_host_kernel::s3_live_edit_under_native_baseline` —
+> native leg (flip + edit under a serving kernel) and interp leg (the
+> original tier-0 path) pass the same milestones: step 1 → edit → step
+> 100 with a MONOTONE world counter (no restart); broken edit → "kept its
+> old body" while serving continues; signature change → rejected.
+> Asynchronous application ⇒ the legs assert step timelines + reload
+> milestones (stderr as sync point), not byte-equal vectors.
 
 ### S4 — the background rebuild
 
