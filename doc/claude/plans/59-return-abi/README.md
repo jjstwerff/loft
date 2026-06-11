@@ -175,6 +175,32 @@ hidden-filter one-liner.
 Order: (1) classify-by-type refactor (standalone PR-able), (2)
 `git apply phase1-flip.patch`, (3) the full validation matrix.
 
+**Round 2 (2026-06-11, after the unlock landed)**: the classify-by-type
+refactor + par-closure dest emission SHIPPED (the live par landmine is
+fixed — `issues::plan59_par_worker_over_wrapper_promoted_callee`); the
+flip re-applied reduced the blast 25 → 15 — the cdylib family (C10) is
+fully green.  The two remaining lock families:
+
+- **C9 residue — the dest-less par lanes**: `state/mod.rs::execute_at_ref`
+  pushes `elem, dests…, extras…` and the ref stitch passes corrected
+  counts ✓, but OTHER lanes pass NO dests at all —
+  `parallel.rs:981 execute_at` (scalar queue lane) and the
+  `execute_at_text` lane.  A heap-returning worker routed through one
+  of them post-flip underflows (`8 < 12`): par_queue_ref +
+  threading + 22c-par-sources.  Fix: thread `n_hidden_dests` into every
+  lane (the A6.a allocation block is reusable), or route all
+  dest-carrying workers to the ref lane.
+- **C11 — the REPL session machinery** (`repl_interactive_edit_*`,
+  `repl_at_frame_*`, `completion_model_*`, `capture_heap_types_*`):
+  interactive eval/edit builds call frames with its own arity
+  assumptions (`src/repl.rs` / the session store) — needs the same
+  hidden-attr awareness or filtering.
+
+Also recorded: plain VECTOR-returning par workers do not compile
+natively TODAY (pre-existing queue-shape gap — `closure_shape` buckets
+Vector returns as Scalar, `… as i64` on a DbRef; independent of this
+plan; belongs to NATIVE.md § N9's par coverage list).
+
 ## Risks / open questions
 
 - Variable RENAME helper must update the names map atomically (old name
