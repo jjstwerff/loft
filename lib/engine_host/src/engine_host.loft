@@ -321,6 +321,17 @@ pub fn client_udp_bound() -> boolean;
 fn kernel_client_frame();
 #native
 
+fn kernel_client_stop();
+#native
+
+// Leave the connector loop from inside a handler: marks this connection
+// dead so `run_client` returns at its next turn.  The GL projector calls it
+// when the window closes — the loop belongs to the connector, the exit
+// decision to the script.
+pub fn client_stop() {
+  kernel_client_stop()
+}
+
 // The host a client connects to when the script doesn't choose: the page's
 // serving origin in a browser (the cabinet that handed out the QR), the
 // LOFT_HOST env (else loopback) on a native seat — so ONE script runs on

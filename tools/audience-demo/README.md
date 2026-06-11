@@ -28,6 +28,25 @@ because that's the GitHub Pages publish root (see
   whenever you want to test more than one tab / phone at once.
   Wire format and full sub-arc status documented at the top of the
   file.
+- [`projector.loft`](projector.loft) — the **GL projector view**, since
+  2026-06-11 a full **engine-host connector client** (@PLN18): it dials the
+  kernel server through `engine_host::run_client` (auto-hello, keepalives,
+  UDP auto-path — zero transport code), the render loop IS the connector's
+  tick (one `on_tick` = one frame), deltas arrive through `on_event`, and
+  closing the window calls the new `client_stop()`.  It reconnects through
+  a server restart mid-show (snapshot re-request heals the world).  Pair it
+  with `server_kernel.loft`:
+
+  ```
+  ./target/release/loft --no-warnings --lib lib tools/audience-demo/server_kernel.loft
+  ./target/release/loft --no-warnings --lib lib tools/audience-demo/projector.loft
+  ```
+
+  `LOFT_PROJ_SERVER` still accepts the legacy `ws://host:port/ws` form (or
+  `host:port`); the default host honours `LOFT_HOST`.  Cross-closure
+  mutable state lives in the `Proj` record (the #314 struct-world idiom);
+  captured vars feeding `&` params use the copy-out/copy-back locals
+  pattern (see the comments at the call sites).
 - `.loft/` — per-source native binary cache (gitignored).
 
 ## Run end-to-end locally — fastest loop

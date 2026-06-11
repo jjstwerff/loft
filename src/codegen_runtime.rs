@@ -163,6 +163,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_kernel_connect",             abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_pump",         abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_alive",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_stop",         abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_next_event",   abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_event_kind",   abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_event_payload", abi: Abi::Cell },

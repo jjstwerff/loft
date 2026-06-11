@@ -1365,6 +1365,15 @@ pub fn n_kernel_client_alive(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, v);
 }
 
+/// `client_stop()` — the client's own exit: mark the connection dead so
+/// `run_client` returns at the top of its next turn.  The GL projector calls
+/// it when the WINDOW closes (the loop owner is the connector, so the
+/// script needs a way to leave it).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn n_kernel_client_stop(_stores: &mut Stores, _stack: &mut DbRef) {
+    let _ = with_client(|c| c.alive = false);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn n_kernel_client_next_event(stores: &mut Stores, stack: &mut DbRef) {
     let got = with_client(|c| match c.events.pop_front() {
@@ -2013,6 +2022,11 @@ pub mod browser {
         stores.put(stack, v);
     }
 
+    /// `client_stop()` — mirror of the native connector's exit surface.
+    pub fn n_kernel_client_stop(_stores: &mut Stores, _stack: &mut DbRef) {
+        let _ = with_client(|c| c.alive = false);
+    }
+
     pub fn n_kernel_client_next_event(stores: &mut Stores, stack: &mut DbRef) {
         let got = with_client(|c| match c.events.pop_front() {
             Some(ev) => {
@@ -2278,6 +2292,10 @@ pub mod typed {
     pub fn n_kernel_client_pump(_cell: &UnsafeCell<Stores>) -> i64 {
         with_client(pump_client).unwrap_or(0)
     }
+    pub fn n_kernel_client_stop(_cell: &UnsafeCell<Stores>) {
+        let _ = super::with_client(|c| c.alive = false);
+    }
+
     pub fn n_kernel_client_alive(_cell: &UnsafeCell<Stores>) -> u8 {
         u8::from(with_client(|c| c.alive).unwrap_or(false))
     }

@@ -312,6 +312,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ),
     #[cfg(not(target_arch = "wasm32"))]
     (
+        "n_kernel_client_stop",
+        crate::engine_host::n_kernel_client_stop,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
         "n_kernel_client_next_event",
         crate::engine_host::n_kernel_client_next_event,
     ),
@@ -626,6 +631,10 @@ pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
     (
         "n_kernel_client_alive",
         crate::engine_host::browser::n_kernel_client_alive,
+    ),
+    (
+        "n_kernel_client_stop",
+        crate::engine_host::browser::n_kernel_client_stop,
     ),
     (
         "n_kernel_client_next_event",
