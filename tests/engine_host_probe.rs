@@ -25,7 +25,10 @@ fn on_call(args: vector<text>) {{
   f.write("call {{n}} sum={{n * (n + 1) / 2}}");
 }}
 "#,
-        outp.to_string_lossy()
+        // Windows temp paths carry backslashes, which a loft string literal
+        // reads as ESCAPES (\U, \T…) — forward slashes are valid on every
+        // platform's filesystem API.
+        outp.to_string_lossy().replace('\\', "/")
     );
     let tmp = std::env::temp_dir().join(format!("eh_probe_{}.loft", std::process::id()));
     std::fs::write(&tmp, &src).unwrap();
