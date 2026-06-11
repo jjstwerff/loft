@@ -86,6 +86,14 @@ A move is complete when the old sites contain **no remaining copy of the
 decision** — only calls.  Each move is an ordinary change with the ordinary
 gates (probes from pass 1 re-run as its verification matrix; both backends).
 
+**When to run pass 2 (user, 2026-06-11): in a quiet stretch — when there is
+not much rewrite activity in flight.**  Relocations cut across the same
+files feature branches touch, so running them concurrently multiplies merge
+conflicts and re-introduces drift while homes are mid-move.  The catalog is
+deliberately durable for this: it waits, fully specified, until a low-churn
+window (typically right after a release ships, before the next dogfood wave
+starts), and each entry names everything needed to execute the move cold.
+
 ## Pass 3 — remove the duplications
 
 Only now delete: the flags nobody reads, the re-derivations that became
