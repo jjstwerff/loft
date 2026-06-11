@@ -14730,3 +14730,25 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(2));
 }
+
+// ── Issue 330 (stability-sweep F2; documented, NOT fixed — see
+// STABILITY_SWEEP.md) ────────────────────────────────────────────────────────
+// Self-reading struct-literal reassignment: the pre-Set OpFreeRef releases
+// x's store, the literal's OpDatabase reuses the slot, and the RHS field
+// initialiser then reads the recycled store — silent null through a
+// `not null` field, both backends.
+
+#[test]
+#[ignore = "stability-sweep: #330 — documented, fix deferred to pass 2"]
+fn issue_330_self_reading_literal_reassignment() {
+    code!(
+        "struct S { v: integer not null }
+fn run() -> integer {
+    x = S { v: 7 };
+    x = S { v: x.v + 1 };
+    x.v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(8));
+}

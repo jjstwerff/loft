@@ -53,12 +53,12 @@ gets probed wherever its homes can drift apart.
 | # | Family | The fact | Known homes | Status / findings |
 |---|---|---|---|---|
 | F1 | **Two-pass parse determinism** | pass 1 and pass 2 must derive identical facts (def numbering, lambda numbering, attr types, flags) | every `first_pass` branch (≈40 sites in `parser/*`); `data.reset()` keeps definitions but pass 2 re-parses bodies | ☐ todo — #313/#314 were instances; probe: facts set late in pass 1 vs consumed early in pass 2 |
-| F2 | **Ownership of a store** | who frees a store, exactly once | `scopes.rs get_free_vars` (dep-empty = owned, captured-ref exemption, work-refs, in_ret); `scan_set owned_refs` (#316); `state/codegen.rs generate_set` pre-Set free + S1 guard; `check_ref_leaks` (debug assert); `free_named` cascade (`__closure_*` only); `paired_witness`/`witness_buffer` OpFreeRefIfDistinct | ☐ todo — FIVE homes; #316/#323 were instances; probe: each pair of homes disagreeing |
-| F3 | **Null representation of a DbRef** | what bytes mean "null pointer" | `OpNullRefSentinel` (store_nr = u16::MAX); zero-default record bytes (store 0, rec 0); `free_named`'s skip pattern (store 0 ∧ rec 0); `OpEqRef` comparisons | ☐ todo — TWO encodings exist; #328 r9 passed but which encoding did the default field hold? probe equality/deref/free on BOTH encodings |
+| F2 | **Ownership of a store** | who frees a store, exactly once | `scopes.rs get_free_vars` (dep-empty = owned, captured-ref exemption, work-refs, in_ret); `scan_set owned_refs` (#316); `state/codegen.rs generate_set` pre-Set free + S1 guard; `check_ref_leaks` (debug assert); `free_named` cascade (`__closure_*` only); `paired_witness`/`witness_buffer` OpFreeRefIfDistinct | ▶ first finding: **#330** (see log); remaining pairs todo |
+| F3 | **Null representation of a DbRef** | what bytes mean "null pointer" | `OpNullRefSentinel` (store_nr = u16::MAX); zero-default record bytes (store 0, rec 0); `free_named`'s skip pattern (store 0 ∧ rec 0); `OpEqRef` comparisons | ✅ probed, HELD (see log) — comparator normalises; dual encoding persists as latent risk for byte-level consumers |
 | F4 | **Interp op ≡ native op** | every opcode's semantics on both backends | `fill.rs` (interp) vs `generation/ops/*` + `codegen_runtime.rs` (native); `cross_mode` harness covers a sample, not the op set | ☐ todo — #323-native was an instance; probe: ops with no cross_mode cell (list them first — a usage-sentinel sweep) |
 | F5 | **Stack slot layout** | a value's slot size/alignment as parser, codegen, and runtime each compute it | `variables/mod.rs` size table (fn-ref = 20B …); `state/codegen.rs stack_step`/`size_*`; `state/mod.rs` runtime reads; LOFT_ALIGN duality | ☐ todo — PLAN53 cluster 2 was an instance; probe: odd-sized types (12B DbRef) adjacent to 8B slots |
 | F6 | **DB field layout** | a struct field's position/width as the parser reads it vs fill_database wrote it | `parser/mod.rs get_val/set_field_check` width selection (alias forced_size, byte_width, vector_narrow_width); `typedef.rs fill_database` arms; `database/types.rs finish_type` packing; native `generation/mod.rs emit_field` re-derivation | ☐ todo — #313/#328 + the emit_field schema split were instances; probe: every Type arm where get_val's width logic and fill_database's arm could pick differently (narrow ints, enums, tuples, child recs) |
-| F7 | **Value vs pointer copy semantics** | what `a = b` / field-assign / capture copies | LOFT.md:570 says struct var assign copies the DbRef; codegen `gen_set_first_ref_var_copy` deep-copies; `OpCopyRecord` field copies; `reference<T>` repoints (#328); captures share by DbRef (P260) | ☐ todo — the doc and the code DISAGREE today (INCONSISTENCIES.md candidate); probe aliasing expectations on every assignment shape |
+| F7 | **Value vs pointer copy semantics** | what `a = b` / field-assign / capture copies | LOFT.md:570 says struct var assign copies the DbRef; codegen `gen_set_first_ref_var_copy` deep-copies; `OpCopyRecord` field copies; `reference<T>` repoints (#328); captures share by DbRef (P260) | ✅ probed, BROKEN at the spec home: **#331** (see log) |
 | F8 | **Deps as liveness vs deps as ownership vs deps as markers** | what `Type::*(…, deps)` means | borrow liveness (scopes); ownership negation (dep-empty = owned); the `u16::MAX` share marker (#328/closure records); `@P302` self-dep = ownership marker for keyed locals; attribute-index deps in returned types (`dep_has_var` resolves attr-index vs var-nr with a FALLBACK comparing raw numbers) | ☐ todo — one Vec<u16> carries FOUR meanings; probe: collisions (a var-nr that equals an attr index; a marker surviving into liveness analysis) |
 | F9 | **The startup/stdlib caches vs live state** | cached parse must equal fresh parse | `startup_cache.rs` manifest (sources, sig); `cache.rs` keys; `ir_store`/`ir_read` round-trip; REPL `rollback_to` | ☐ todo — #322 was an instance; probe: IR round-trip of marker deps / split fn-fields / closure records (new #328/#313 shapes through the snapshot codec!) |
 | F10 | **Text ownership** | who frees a String buffer | `free_text` / `OpFreeText`; work-text result buffers; `skip_free` texts; text-returning-fn cell exemption (02d-vii) | ☐ todo — plan-53 cluster 5 was an instance |
@@ -105,4 +105,51 @@ gets probed wherever its homes can drift apart.
 
 ## Findings log
 
-(append per sweep: family/module → probe → verdict → issue/test refs)
+### F2-1 — #330: self-reading struct-literal reassignment reads the recycled store (2026-06-11)
+
+- **Invariant**: a reassignment's old store must outlive every read the RHS
+  performs; equivalently, exactly one predicate decides "does the RHS read
+  `v`" for every free site.
+- **Homes today**: `state/codegen.rs generate_set` pre-Set `OpFreeRef` with
+  the S1 guard (top-level Call args only; struct-literal RHS explicitly
+  bails toward freeing) vs `scopes.rs value_reads_var` (recursive, used only
+  by the #316 transition free).
+- **Natural home**: ONE RHS-reads-v predicate owned by the IR (`Value`),
+  consumed by both free sites; longer term the free belongs to the store
+  allocator's reassignment path, not codegen.
+- **Probe / damage**: `x = S { v: x.v + 1 }` → `x.v == null` through a
+  `not null` field, BOTH backends (`/tmp/p_followups/f2b.loft`, `f2c.loft`).
+  Nested ref-param call shape held; #328's borrow shape held (deps gate).
+- **Artifacts**: issue #330; `tests/issues.rs::issue_330_self_reading_literal_reassignment`
+  (`#[ignore]`, fails-as-demonstration when forced).
+
+### F7-1 — #331: LOFT.md:570 alias claim vs codegen deep copy (2026-06-11)
+
+- **Invariant**: `a = b` for struct vars has ONE defined meaning, asserted
+  identically by the spec and the implementation.
+- **Homes today**: LOFT.md:570 ("the DbRef is copied — both point to the
+  same record") vs `gen_set_first_ref_var_copy` (deep copy, relied on by
+  #316's ownership tracking and C38's capture rationale).
+- **Natural home**: the spec section + one codegen arm; which semantics wins
+  is a pass-2 design decision (alias would need the lifetime model to carry
+  it; deep-copy needs a sanctioned borrow idiom for walks).
+- **Probe / damage**: `b.v = 42` after `a = b` → `a.v == 1` (probe
+  `/tmp/p_followups/f7.loft`); doc misleads; the #316 walk-leak residual is
+  a downstream cost of the copy.
+- **Artifacts**: issue #331.
+
+### F3-1 — two null encodings, comparator normalises: probed, HELD (2026-06-11)
+
+- **Invariant**: one byte-pattern means "null DbRef" — or every consumer
+  must accept both.
+- **Homes today**: `OpNullRefSentinel` (store u16::MAX) for explicit null /
+  clears; zero-default bytes (0,0) from `set_default_value` for omitted
+  fields; `OpEqRef`; `free_named`'s skip patterns (MAX early-return AND the
+  (0,0) cascade skip).
+- **Probe**: defaults vs explicit null — `== null` true for both, the two
+  nulls compare EQUAL to each other, both deref gracefully
+  (`/tmp/claude/sweep/f3a.loft`, `f3b.loft`).  Verdict: held — the
+  comparison home normalises.  Residual risk: byte-level consumers (codecs,
+  `get_u32_raw` walkers, future ops) must keep accepting both; the dual
+  encoding itself is a pass-3 dedup candidate (pick one encoding at write
+  time).
