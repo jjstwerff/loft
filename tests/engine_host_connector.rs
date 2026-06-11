@@ -286,6 +286,205 @@ fn main() {{
     let _ = std::fs::remove_file(&client_prog);
 }
 
+/// Minimal masked-client WS for the S6 push driver (16-bit length frames —
+/// the build blob exceeds 125 bytes).
+fn s6_ws_connect(port: u16) -> std::net::TcpStream {
+    use std::io::{Read, Write};
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let stream = loop {
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            break s;
+        }
+        assert!(Instant::now() < deadline, "server never listened on {port}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let req = "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+               Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+               Sec-WebSocket-Version: 13\r\n\r\n";
+    (&stream).write_all(req.as_bytes()).unwrap();
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        (&stream).read_exact(&mut b).unwrap();
+        head.push(b[0]);
+    }
+    assert!(String::from_utf8_lossy(&head).contains("101"));
+    stream
+}
+
+fn s6_ws_send(stream: &std::net::TcpStream, text: &str) {
+    use std::io::Write;
+    let mask = [0x21u8, 0x43, 0x65, 0x87];
+    let bytes = text.as_bytes();
+    let mut frame = vec![0x81u8];
+    assert!(bytes.len() <= 0xFFFF, "frame too large for the 16-bit form");
+    if bytes.len() <= 125 {
+        frame.push(0x80 | bytes.len() as u8);
+    } else {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    }
+    frame.extend_from_slice(&mask);
+    frame.extend(bytes.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    let mut s = stream;
+    s.write_all(&frame).unwrap();
+}
+
+/// FNV-1a 64 — must match `fnv64` in doc/kernel-swap.html.
+fn s6_fnv64(s: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// @PLN18 08 scenario S6 — the browser swap: a new build under a LIVING
+/// page.  The kernel server relays a build push (the bulk-channel role);
+/// the PAGE (the persistent host layer) verifies the hash, exports the
+/// world out of the parked instance A, and boots instance B over the SAME
+/// WebSocket (the loft-rt adoption hook).  Asserted in the page
+/// (doc/kernel-swap.html, which throws on any unmet clause): (a) socket
+/// identity (one open ever), (b) world continuity (B's counter resumes
+/// from A's, no reset), (c) B advances within the window, (d) a corrupt
+/// push is rejected and A keeps running.  The pushed script is THE build
+/// artifact of this tier (the interpreter-bundle tier: the script is the
+/// build, the wasm module is the substrate); the compiled-module variant
+/// arrives with the --html/kernel integration.
+#[test]
+fn s6_browser_swap_under_living_page() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let chrome_ok = ["google-chrome", "chromium", "chromium-browser", "chrome"]
+        .iter()
+        .any(|c| {
+            Command::new("sh")
+                .arg("-c")
+                .arg(format!("command -v {c}"))
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+    let node_ok = Command::new("sh")
+        .arg("-c")
+        .arg("command -v node")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    let harness = root.join("tools/html_render_check.mjs");
+    if !chrome_ok || !node_ok || !harness.exists() || !root.join("doc/pkg/loft.js").exists() {
+        eprintln!("SKIP: chromium/node/harness/bundle missing");
+        return;
+    }
+
+    let port = 18102u16;
+    // The relay server: ticks the sync class; relays "pushblob:" payloads
+    // verbatim to every client (the bulk-channel role — content-agnostic).
+    let server_prog = std::env::temp_dir().join(format!("eh_s6_srv_{}.loft", std::process::id()));
+    std::fs::write(
+        &server_prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ tick: integer not null }}
+fn main() {{
+  engine_host::sync_class(2);
+  w = W {{ tick: 0 }};
+  engine_host::run({port}, 50000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind == 1 && ev.payload.starts_with("pushblob:") {{
+        engine_host::broadcast(ev.payload[9..]);
+      }}
+    }},
+    fn() {{
+      w.tick = w.tick + 1;
+      engine_host::broadcast("2:{{w.tick}}");
+    }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let _server = Guard(Some(spawn_loft(&server_prog, false)));
+
+    // Serve doc/ for the page + bundle.
+    let http_port = 18103u16;
+    let mut http = Command::new("python3")
+        .args([
+            "-m",
+            "http.server",
+            &http_port.to_string(),
+            "--bind",
+            "127.0.0.1",
+        ])
+        .current_dir(root.join("doc"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("http server");
+
+    // Build B's script — THE SAME template as the page's (kept in step by
+    // the comment on both sides), marker v2.
+    let v2_script = format!(
+        r#"
+use engine_host;
+struct C {{ count: integer not null }}
+fn main() {{
+  engine_host::sync_class(2);
+  c = C {{ count: 0 }};
+  engine_host::swap_world(c);
+  engine_host::run_client(engine_host::default_host(), {port}, 50000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind == 1 && ev.payload.starts_with("2:") {{
+        c.count = c.count + 1;
+      }}
+    }},
+    fn() {{ engine_host::client_send("c:v2:{{c.count}}"); }});
+}}
+"#
+    );
+    let good_blob = format!("B!:{}:{v2_script}", s6_fnv64(&v2_script));
+    let bad_blob = format!("B!:{}:{v2_script}", s6_fnv64("not the script"));
+
+    // The push driver: wait for the page to be connected and counting,
+    // push the CORRUPT blob (rejection leg), then the good one (the swap).
+    let pusher = std::thread::spawn(move || {
+        let ws = s6_ws_connect(port);
+        std::thread::sleep(Duration::from_secs(4));
+        s6_ws_send(&ws, &format!("pushblob:{bad_blob}"));
+        std::thread::sleep(Duration::from_secs(2));
+        s6_ws_send(&ws, &format!("pushblob:{good_blob}"));
+        std::thread::sleep(Duration::from_secs(12));
+        drop(ws);
+    });
+
+    let url = format!("http://127.0.0.1:{http_port}/kernel-swap.html?port={port}");
+    let out = Command::new("node")
+        .arg(&harness)
+        .arg(&url)
+        .args(["--wait-ms", "16000"])
+        .args(["--port", "18104"])
+        .output()
+        .expect("node harness");
+    let _ = pusher.join();
+    let _ = http.kill();
+    let _ = http.wait();
+    if out.status.code() == Some(2) {
+        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+        let _ = std::fs::remove_file(&server_prog);
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "browser swap failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&server_prog);
+}
+
 /// @PLN18 phase 07 acceptance — the ONE-SCRIPT differential: the same loft
 /// client source (the template in `doc/kernel-differential.html`, port
 /// substituted) runs natively (`run_client`) and in the BROWSER kernel
@@ -293,10 +492,6 @@ fn main() {{
 /// the identical transcript.  Self-skips without chromium/node (the
 /// html_render harness pattern).
 #[test]
-#[ignore = "browser leg trips an Instant::now panic ('time not implemented') in the \
-compile_and_run + frame-yield + run_client combo — the native leg passes and the \
-harness works end-to-end (it CAUGHT this).  Un-ignore once the wasm time source in \
-that path is bridged; see 07-browser-kernel.md § Remaining."]
 fn browser_kernel_one_script_differential() {
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
@@ -323,7 +518,7 @@ fn browser_kernel_one_script_differential() {
         return;
     }
 
-    let port = 18095u16;
+    let port = 18105u16;
     let server_prog = std::env::temp_dir().join(format!("eh_diff_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
@@ -393,7 +588,7 @@ fn main() {{
     {
         let _server = Guard(Some(spawn_loft(&server_prog, false)));
         std::thread::sleep(Duration::from_millis(800));
-        let mut client = Command::new(loft_bin())
+        let client = Command::new(loft_bin())
             .arg("--interpret")
             .arg("--no-warnings")
             .arg("--lib")
@@ -418,7 +613,7 @@ fn main() {{
     std::thread::sleep(Duration::from_millis(800));
     // Serve doc/ (the page + bundle); kill the kernel server mid-run so the
     // browser client exits and the page compares its transcript.
-    let http_port = 18096u16;
+    let http_port = 18106u16;
     let mut http = Command::new("python3")
         .args([
             "-m",
@@ -447,7 +642,7 @@ fn main() {{
         .arg(&harness)
         .arg(&url)
         .args(["--wait-ms", "9000"])
-        .args(["--port", "18097"])
+        .args(["--port", "18107"])
         .output()
         .expect("node harness");
     let _ = killer.join();

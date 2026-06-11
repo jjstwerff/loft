@@ -975,6 +975,54 @@ pub fn resume_frame() -> String {
     }
 }
 
+// ── @PLN18 08-S6 — the living-page swap bridges ─────────────────────────────
+// The page (the persistent host layer) drives the swap: it exports the world
+// out of the PARKED instance A, stages it, starts instance B (whose
+// `swap_world` consumes the stage), and hands B the living WebSocket via the
+// loft-rt adoption hook.  These are the two wasm-side halves.
+
+thread_local! {
+    /// The world record registered by the running script's `swap_world(w)`.
+    static SWAP_ROOT: std::cell::Cell<Option<(crate::keys::DbRef, u16)>> =
+        const { std::cell::Cell::new(None) };
+    /// A snapshot staged by the page for the NEXT run's `swap_world`.
+    static SWAP_STAGE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn swap_root_set(root: crate::keys::DbRef, kt: u16) {
+    SWAP_ROOT.with(|r| r.set(Some((root, kt))));
+}
+
+pub(crate) fn swap_stage_take() -> Option<String> {
+    SWAP_STAGE.with(|s| s.borrow_mut().take())
+}
+
+/// Export the registered world of the PARKED (frame-yielded) run as the
+/// snapshot JSON; "" when no run is parked or no world was registered.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn swap_export() -> String {
+    let Some((root, kt)) = SWAP_ROOT.with(std::cell::Cell::get) else {
+        return String::new();
+    };
+    GAME_SESSION.with(|gs| {
+        gs.borrow().as_ref().map_or_else(String::new, |session| {
+            let mut json = String::new();
+            session
+                .state
+                .database
+                .show_json(&mut json, &root, kt, false);
+            json
+        })
+    })
+}
+
+/// Stage a snapshot for the next run's `swap_world` (the browser analog of
+/// the native LOFT_RESUME env).
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn swap_stage(snapshot: &str) {
+    SWAP_STAGE.with(|s| *s.borrow_mut() = Some(snapshot.to_string()));
+}
+
 /// Parse `[{name: string, content: string}]` JSON into a Vec of pairs.
 fn parse_files_json(json: &str) -> Result<Vec<(String, String)>, String> {
     let json = json.trim();

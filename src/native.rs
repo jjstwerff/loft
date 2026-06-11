@@ -675,6 +675,9 @@ pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
         "n_kernel_default_host_dest",
         crate::engine_host::browser::n_kernel_default_host_dest,
     ),
+    // @PLN18 08-S6 — the living-page swap (page-driven; see wasm.rs).
+    ("n_swap_world", crate::engine_host::browser::n_swap_world),
+    ("n_swap_start", crate::engine_host::browser::n_swap_start),
 ];
 
 pub fn init(state: &mut State) {

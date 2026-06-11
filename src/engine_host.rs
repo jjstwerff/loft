@@ -1785,6 +1785,37 @@ pub mod browser {
         CLIENT.with(|c| c.borrow_mut().as_mut().map(f))
     }
 
+    /// @PLN18 08-S6 — `swap_world(w)` in the browser: register the world as
+    /// the page's snapshot root, and when the PAGE staged a snapshot (the
+    /// swap target's boot), restore it INTO `w` in place — the same
+    /// in-place-restore contract as the native LOFT_RESUME leg.
+    pub fn n_swap_world(stores: &mut Stores, stack: &mut DbRef) {
+        let w = *stores.get::<DbRef>(stack);
+        let kt = stores.allocations[w.store_nr as usize].known_type;
+        if kt == u16::MAX {
+            eprintln!("loft-swap: swap_world got a record with no known type; swaps disabled");
+            stores.put(stack, false);
+            return;
+        }
+        crate::wasm::swap_root_set(w, kt);
+        let resumed = if let Some(json) = crate::wasm::swap_stage_take() {
+            let jv = crate::native::json_parse_into_stores(stores, &json);
+            crate::native::populate_struct_from_jsonvalue(stores, &w, kt, &jv);
+            true
+        } else {
+            false
+        };
+        stores.put(stack, resumed);
+    }
+
+    /// Browser builds cannot self-swap (the PAGE drives the swap) — a
+    /// script's `swap_start` is a warned no-op, never a halt.
+    pub fn n_swap_start(stores: &mut Stores, stack: &mut DbRef) {
+        let _artifact = stores.get::<Str>(stack).str().to_owned();
+        eprintln!("loft-swap: swap_start is page-driven in a browser; ignored");
+        stores.put(stack, false);
+    }
+
     /// `kernel_connect(host, port, tick_interval_us) -> boolean` — open the
     /// browser WebSocket (async; the pump completes the handshake contract).
     pub fn n_kernel_connect(stores: &mut Stores, stack: &mut DbRef) {

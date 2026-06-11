@@ -515,12 +515,30 @@ export function createHost(tree = { '/': {} }, options = {}) {
   const WS = options.WebSocket
     || (typeof WebSocket !== 'undefined' ? WebSocket : null);
   const wsConns = [];
+  // @PLN18 08-S6 — the living-page swap hooks.  The PAGE is the persistent
+  // host layer: it owns the sockets across loft instances.
+  //  * onBuildPush: frames starting "B!:" are build pushes — consumed at
+  //    the host (the script never sees them) and handed to the page.
+  //  * ws_adopt_next(id): the NEXT ws_connect call ADOPTS the existing open
+  //    socket `id` instead of dialing — the new build resumes on the SAME
+  //    WebSocket object (no reconnect, the S6 identity clause).
+  //  * ws_opens counts real socket constructions (the identity assert).
+  host.onBuildPush = null;
+  host.ws_opens = 0;
+  host.onSend = null;
+  let wsAdoptNext = -1;
+  host.ws_adopt_next = (id) => { wsAdoptNext = id; };
   const wsOpen = (slot) => {
     slot.socket.binaryType = 'arraybuffer';
     slot.socket.addEventListener('open',  () => { slot.ready = true; });
     slot.socket.addEventListener('close', () => { slot.ready = false; });
     slot.socket.addEventListener('error', () => { slot.ready = false; });
     slot.socket.addEventListener('message', (ev) => {
+      if (typeof ev.data === 'string' && ev.data.startsWith('B!:')) {
+        // A build push — host-level, invisible to the running script.
+        if (host.onBuildPush) host.onBuildPush(ev.data);
+        return;
+      }
       if (typeof ev.data === 'string') {
         slot.inbox.push({ data: ev.data, opcode: 1 });
       } else {
@@ -537,9 +555,15 @@ export function createHost(tree = { '/': {} }, options = {}) {
     });
   };
   host.ws_connect = (url) => {
+    if (wsAdoptNext >= 0 && wsConns[wsAdoptNext]) {
+      const id = wsAdoptNext;
+      wsAdoptNext = -1;
+      return id; // the swap target adopts the living socket
+    }
     if (!WS) return -1;
     let socket;
     try { socket = new WS(url); } catch { return -1; }
+    host.ws_opens++;
     const id = wsConns.length;
     const slot = {
       socket, inbox: [], lastMessage: '', lastOpcode: 0, ready: false,
@@ -551,8 +575,10 @@ export function createHost(tree = { '/': {} }, options = {}) {
   // Is the socket open?  The browser kernel buffers sends until this is 1
   // (a native connect blocks until upgraded; the same contract, async).
   host.ws_ready = (id) => {
-    const ws = sockets[id];
-    return ws && ws.readyState === 1 ? 1 : 0;
+    // (Was `sockets[id]` — an undefined table; ws_ready THREW on every
+    // call.  Latent until the swap path needed it.)
+    const slot = wsConns[id];
+    return slot && slot.socket.readyState === 1 ? 1 : 0;
   };
   // The serving origin's host — engine_host::default_host() on a phone is
   // the cabinet that served the page.
@@ -560,6 +586,7 @@ export function createHost(tree = { '/': {} }, options = {}) {
   host.ws_send = (id, msg, binary) => {
     const slot = wsConns[id];
     if (!slot || !slot.ready) return 0;
+    if (host.onSend && !binary) host.onSend(msg); // page-side observability
     try {
       if (binary) {
         // Loft passed a JS string whose codepoints are the byte values

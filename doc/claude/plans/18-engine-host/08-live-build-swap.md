@@ -260,23 +260,58 @@ Rollback if the new build fails to boot.  **SHIPPED**:
 > 5. **Dispatch reset** ✅ — zero `live-dispatch:` lines after the
 >    handover marker (the flipped fn runs compiled in the new build).
 
-### S6 — the browser swap: a new module under a living page
+### S6 — the browser swap: a new module under a living page  ✅ (2026-06-11)
 
-The server pushes the new wasm bundle over the WS bulk channel (05c's
-first real consumer); the page snapshots the store out of instance A,
-instantiates B, imports the store, resumes at the next animation frame —
-the SAME WebSocket object, no reconnect.
+The server pushes the new build over the wire; the page snapshots the
+world out of instance A, instantiates B, imports the world, resumes —
+the SAME WebSocket object, no reconnect.  **SHIPPED** (the
+interpreter-bundle tier: the SCRIPT is the build, the wasm module is the
+substrate — the compiled-module variant arrives with the --html/kernel
+integration, listed below):
 
-> **Test (headless-chromium, the kernel-differential harness lineage):**
-> client page runs build A with a visible behavior marker + a counting
-> world; the server pushes build B (marker changed); assert (a) the
-> page's WebSocket object identity is unchanged (no reconnect event),
-> (b) the counter continues exactly, (c) B's marker appears within a
-> bounded number of frames, (d) a corrupt push (bad hash) is rejected
-> and A keeps running.
-> **Gate first:** the known `Instant::now` panic in the compile_and_run +
-> frame-yield combo must be fixed (it blocks ANY long-running browser
-> client test — already `#[ignore]`-documented in the 07 differential).
+- **The gate fell in two pieces.**  (1) The `Instant::now` panic was a
+  timing breadcrumb in `compile::byte_code_from` whose CLOCK READS ran
+  even with `LOFT_TIMING` unset — now gated with the print.  (2) Beneath
+  it: the 07 page was written against the WRONG API — `compile_and_run`
+  is run-to-completion (a frame-yield silently DROPS the parked state);
+  the frame-yield pairing is `compile_and_start` + `resume_frame`.  The
+  07 one-script differential is fixed + UN-IGNORED (07 fully closed).
+- **The page is the persistent host layer**: `loft-rt.js` gained the
+  swap hooks — `B!:`-framed build pushes are consumed AT THE HOST (the
+  running script never sees them) and handed to `host.onBuildPush`;
+  `host.ws_adopt_next(id)` makes the next `ws_connect` ADOPT the living
+  socket instead of dialing (B resumes on the SAME WebSocket object);
+  `host.ws_opens` counts real constructions (the identity assert);
+  `host.onSend` gives the page meaning-level observability.  En route:
+  `host.ws_ready` read an undefined table and THREW on every call —
+  latent until the adoption path needed it.
+- **The wasm-side halves** (`swap_export`/`swap_stage` in wasm.rs +
+  `swap_world` registered for the browser): the SAME `swap_world(w)`
+  surface as native — the page exports the world of the PARKED instance
+  (schema-walked JSON, the S5 snapshot format verbatim), stages it, and
+  B's `swap_world` restores it in place.  One snapshot format, three
+  hosts.
+- **Probe gate 6 verdict (store export/import)**: at world scale the
+  JSON snapshot is microseconds — the freeze budget is dominated by B's
+  compile (~100–300 ms interpreter-tier), well inside a level-load
+  moment; the page never blocks the event loop (the swap runs between
+  frames).
+
+> **Test:** `engine_host_connector::s6_browser_swap_under_living_page` —
+> headless-chromium; the kernel server relays a pushed build blob
+> (`B!:<fnv64>:<script>`, the bulk-channel role, content-agnostic):
+> (a) socket identity: ONE open ever (B adopted A's socket) ✅;
+> (b) world continuity: B's counter resumes from A's (sync-class
+> freshness semantics across the gap, per design) ✅;
+> (c) B's marker appears and advances within the window ✅;
+> (d) a corrupt push (bad hash) is rejected and A keeps running ✅.
+> The page THROWS on any unmet clause with its deadline INSIDE the
+> harness window (negative-control verified: no pushes → harness fails).
+
+**Residual (compiled-module variant):** swapping a whole `--html` wasm
+module under the page (store export across INSTANCES rather than runs)
+— gated on the --html pipeline meeting the kernel scripts; the host
+hooks and the snapshot format are already module-agnostic.
 
 ### S7 — the debugger loop end-to-end (@PLN16 6b/6c convergence)
 
