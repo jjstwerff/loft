@@ -131,6 +131,22 @@ the @PLAN50 probe targets with a loss% axis).
   (broadcast/multicast + NACK chunks) is the case TCP structurally can't
   match; single-receiver bulk stays on WS by design.  Trigger: a consumer
   that pushes big payloads to many seats.
+  **Evaluated for game-code distribution (2026-06-11) — stays parked.**
+  (1) The lean walk-up tier is BROWSERS, which have no UDP receive path at
+  all (no raw sockets; WebRTC channels are DTLS unicast) — the S6 wasm
+  bundle can only arrive over HTTP/WS, so broadcast's audience shrinks to
+  native seats.  (2) On Wi-Fi, broadcast frames go out at the base rate
+  (~6 Mbps, no L2 acks) while unicast runs 100–400+ Mbps — broadcast loses
+  until seat counts far beyond a cabinet; only WIRED seats remain.
+  (3) Artifacts are small (kernel binary ~1.0 MB, wasm bundle ~2.5 MB):
+  10 wired seats × 1 MB ≈ 80 ms of WS unicast in a path that is not
+  latency-critical (S4/S5: the old build serves throughout).  (4) The one
+  real broadcast advantage is INTERFERENCE (push bytes contending with
+  live sync datagrams), and a token-bucket pace on the WS bulk sends buys
+  the same protection without re-building reliability/congestion control
+  — the machinery 05a deliberately refused.  Sharpened trigger: a measured
+  cabinet profile (many WIRED seats, frequent swaps) where bulk pacing
+  demonstrably cannot hold sync latency — the stamp chain shows it.
 - ~~Client-side kernel (connector role)~~ — **LANDED 2026-06-10** (pulled
   forward from phase 04; see § The connector role below).
 - **Broadcast discovery beacon** (~30 lines, discovery only) — with the first
