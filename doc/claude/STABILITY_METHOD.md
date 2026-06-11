@@ -63,6 +63,17 @@ spends the fresh diagnostic context on one instance instead of the class.
 The discipline mirrors the matrix-first debugging rule: the urge to fix is
 the signal the survey is not finished.
 
+## Between the passes — fix the known bugs first
+
+**Fix as many open bugs as possible BEFORE the pass-2 rewrite (user,
+2026-06-11).**  Each fix sharpens the contract between the routines the
+relocation will touch: a routine whose edge cases are correct documents its
+own obligations, while a buggy one leaves the mover guessing which
+behaviours are contract and which are accident.  The sweep's findings list
+is therefore also the fixing queue — work it down (ordinary bug-fix rigor,
+one issue at a time) until what remains is exactly the structural moves
+pass 2 exists for.
+
 ## Pass 2 — move each algorithm to its data structure
 
 For each catalog entry, relocate the deciding logic INTO the natural home

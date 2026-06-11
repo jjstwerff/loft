@@ -14731,15 +14731,18 @@ fn run() -> integer {
     .result(Value::Int(2));
 }
 
-// ── Issue 330 (stability-sweep F2; documented, NOT fixed — see
-// STABILITY_SWEEP.md) ────────────────────────────────────────────────────────
-// Self-reading struct-literal reassignment: the pre-Set OpFreeRef releases
-// x's store, the literal's OpDatabase reuses the slot, and the RHS field
-// initialiser then reads the recycled store — silent null through a
-// `not null` field, both backends.
+// ── Issue 330 (FIXED 2026-06-11) ─────────────────────────────────────────────
+// Self-reading reassignment, three repairs sharing one invariant ("the old
+// store outlives every RHS read"):
+// 1. parser: a reassignment-construction whose fields READ the target routes
+//    to the fresh-work-ref path instead of the in-place OpDatabase re-init
+//    (objects.rs construction_mentions lookahead);
+// 2. parser: `x = x` is the identity — emitted as nothing (both backends);
+// 3. codegen: the pre-Set free now uses the recursive scopes::value_reads_var
+//    predicate (not the top-level-arg S1 scan); a self-reading RHS stashes
+//    the old DbRef and frees it post-assignment via OpFreeRefIfDistinct.
 
 #[test]
-#[ignore = "stability-sweep: #330 — documented, fix deferred to pass 2"]
 fn issue_330_degenerate_self_assignment() {
     code!(
         "struct S { v: integer not null }
@@ -14754,7 +14757,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "stability-sweep: #330 — documented, fix deferred to pass 2"]
 fn issue_330_self_reading_literal_reassignment() {
     code!(
         "struct S { v: integer not null }

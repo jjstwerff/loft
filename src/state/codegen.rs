@@ -1545,18 +1545,37 @@ impl State {
                     .iter()
                     .any(|a| a.hidden && stack.function.var(&a.name) == v)
             };
-            if matches!(
+            // #330 — ONE recursive "does the RHS read v?" predicate decides
+            // the free strategy (shared with scopes' #316 transition logic).
+            // The old top-level-arg S1 scan missed struct-literal field
+            // initialisers (`x = S { v: x.v + 1 }`) and the bare self-assign
+            // (`x = x`): the pre-Set free released the store, the literal's
+            // OpDatabase reused the slot, and the RHS read the recycled
+            // record — silent null/corruption on both backends.
+            //
+            // When the RHS reads v, the old DbRef is STASHED on the eval
+            // stack before anything runs and freed AFTER the assignment via
+            // OpFreeRefIfDistinct — which also degrades to a no-op for the
+            // S1 in-place shapes (the new value IS the old store).
+            let rhs_reads_v = crate::scopes::value_reads_var(value, v);
+            let owned_ref = matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && stack.function.tp(v).depend().is_empty()
-                && !s1_substituted
-                && !is_hidden_buf_arg
-            {
+                && !is_hidden_buf_arg;
+            let mut stash_old_for_post_free = false;
+            if owned_ref && rhs_reads_v {
+                let free_pos = stack.var_pos(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(free_pos);
+                stash_old_for_post_free = true;
+            } else if owned_ref && !s1_substituted {
                 let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
-
+            }
+            if owned_ref && !s1_substituted {
                 // when the value is a call with visible Ref
                 // params, the callee returns via a hidden __ref_N that is
                 // reused across calls.  OpPutRef would alias v with __ref_N;
@@ -1725,6 +1744,15 @@ impl State {
                         stack.add_op("OpInitRefSentinel", self);
                         self.code_add(slot_offset);
                     }
+                    if stash_old_for_post_free {
+                        // #330 epilogue: free the stashed old store unless
+                        // the assignment kept it (witness = v's NEW DbRef;
+                        // same store → no-op).
+                        let free_pos = stack.var_pos(v);
+                        stack.add_op("OpVarRef", self);
+                        self.code_add(free_pos);
+                        stack.add_op("OpFreeRefIfDistinct", self);
+                    }
                     return;
                 }
                 // #306 — reassignment `v = src` of same-struct References must
@@ -1767,10 +1795,26 @@ impl State {
                         ],
                     );
                     self.generate(&copy_val, stack, false);
+                    if stash_old_for_post_free {
+                        // #330 epilogue: free the stashed old store unless
+                        // the assignment kept it (witness = v's NEW DbRef;
+                        // same store → no-op).
+                        let free_pos = stack.var_pos(v);
+                        stack.add_op("OpVarRef", self);
+                        self.code_add(free_pos);
+                        stack.add_op("OpFreeRefIfDistinct", self);
+                    }
                     return;
                 }
             }
             self.set_var(stack, v, value);
+            if stash_old_for_post_free {
+                // #330 epilogue (fall-through path): see above.
+                let free_pos = stack.var_pos(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(free_pos);
+                stack.add_op("OpFreeRefIfDistinct", self);
+            }
         } else {
             // First allocation — slot pre-assigned by assign_slots.
             #[cfg(debug_assertions)]

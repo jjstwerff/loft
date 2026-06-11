@@ -6,8 +6,6 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
-issue_330_degenerate_self_assignment	stability-sweep: #330 — documented, fix deferred to pass 2
-issue_330_self_reading_literal_reassignment	stability-sweep: #330 — documented, fix deferred to pass 2
 issue_334_nullable_byte_field_null_roundtrip	stability-sweep: #334 — nullable byte width needs a design call
 p4d_a2_par_vector_fn_ref_single	p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path.
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
