@@ -111,6 +111,13 @@ pub struct CoroutineFrame {
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
+    /// @PLN18 02 — the stack store's high-water mark: the highest `stack_pos`
+    /// ever reached.  `reenter` builds its synthetic frame ABOVE this, because
+    /// the CURRENT `stack_pos` is only the transient eval height — a frame's
+    /// variable slots live at fixed positions the eval stack dips below
+    /// between statements (probe-proven: live text slots at [watermark..+48)
+    /// at a yield point).
+    pub stack_high: u32,
     pub stack_pos: u32,
     /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
@@ -304,6 +311,7 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
+            stack_high: 4,
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -1505,6 +1513,9 @@ impl State {
         let step = self.stack_step(u32::from(size));
         self.ensure_stack(step);
         self.stack_pos += step;
+        if self.stack_pos > self.stack_high {
+            self.stack_high = self.stack_pos;
+        }
     }
 
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
@@ -1857,6 +1868,9 @@ impl State {
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
         *m = val;
         self.stack_pos += self.stack_step(size_of::<T>() as u32);
+        if self.stack_pos > self.stack_high {
+            self.stack_high = self.stack_pos;
+        }
     }
 
     /**
@@ -3695,9 +3709,21 @@ impl State {
     /// v1 bounds: the callee must not yield (asserted) and stack-returning
     /// results are not retrieved (store-writing callees — the shared store
     /// is the ABI; a result record arg is the supported result path).
-    pub fn reenter(&mut self, d_nr: u32, code_position: u32) {
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    pub fn reenter(&mut self, d_nr: u32, code_position: u32, push_args: impl FnOnce(&mut Self)) {
         let saved_pos = self.code_pos;
         let saved_sp = self.stack_pos;
+        // The synthetic frame starts ABOVE the high-water mark, never at the
+        // transient eval height: live variable slots of the paused frames sit
+        // between `stack_pos` and `stack_high` (the frame contract, mapped by
+        // tests/dispatch_reentry.rs — stomping them corrupts Strings whose
+        // later drop aborts).  Args are pushed via the closure AFTER the lift,
+        // so they land above the mark too.
+        let base = self.stack_high.next_multiple_of(8);
+        self.stack_pos = base;
+        push_args(self);
         // Balance: the callee's return pops a CallFrame unconditionally
         // (`fn_return`) — without this push the FIRST re-entry pops the
         // paused program's own frame (probe-caught: heap corruption at
@@ -3705,7 +3731,7 @@ impl State {
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: 0,
-            args_base: saved_sp,
+            args_base: base,
             args_size: 0,
             line: 0,
         });
@@ -3871,6 +3897,7 @@ impl State {
         State {
             stack_cur,
             stack_pos: 4,
+            stack_high: 4,
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,

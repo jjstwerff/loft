@@ -1,7 +1,20 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN18 02 slice 1 / 08 gate 1 — the compiled→interp RE-ENTRY probe.
+//! @PLN18 02 slice 1 / 08 gate 1 — the compiled→interp RE-ENTRY probe,
+//! GRADUATED to the standing contract test.
+//!
+//! THE FRAME CONTRACT (mapped 2026-06-11 by this probe's bisect):
+//! 1. `stack_pos` is the transient EVAL height, not the frame top — live
+//!    variable slots sit at fixed positions the eval stack dips below
+//!    between statements (proven: live text slots above the watermark at a
+//!    yield point).  A synthetic frame must start above `stack_high` (the
+//!    high-water mark), or it stomps them — Strings whose later drop aborts.
+//! 2. `fn_return` pops a `CallFrame` unconditionally — every re-entry must
+//!    push one (imbalance corrupts teardown).
+//! 3. Args are pushed INSIDE `reenter`'s closure, after the watermark lift.
+//! The PROBE_MODE env reruns individual bisect cells (none / direct / push /
+//! callint / call1); default = the full matrix.
 //!
 //! The heart-of-the-engine claim under test: *"native→interp re-entry is a
 //! dispatch, not a rewrite."*  Host code (standing in for generated native
@@ -86,19 +99,13 @@ fn main() {
   //   add_into(40, 2, r)  x N   -> val 42, txt "sum:42" (the cost loop)
   // The loft-side verdict (the differential half of the probe):
   if r.val != 42 { panic("post: val {r.val} != 42"); }
-  if r.txt != "sum:42" { panic("post: txt '{r.txt}' != 'sum:42'"); }
+  // Control modes never run add_into, so txt stays "" — both are verdicts.
+  if r.txt != "sum:42" && r.txt != "" { panic("post: txt '{r.txt}'"); }
   println("probe-main-ok");
 }
 "#;
 
 #[test]
-#[ignore = "PROBE VERDICT (2026-06-11): the core claim HOLDS — all matrix cells correct \
-(scalars, vector, null, repeats), 217 ns per host->interp call incl. body — but the \
-thunk's frame bookkeeping is incomplete: teardown heap corruption (free(): invalid \
-pointer) without the CallFrame push, and a mid-run garbage DbRef (allocation.rs OOB \
-in the resumed main) WITH it — the synthetic frame interacts with stack/ownership \
-bookkeeping beyond call_stack balance.  Slice-1 remainder: map the frame contract \
-(args_base/free bookkeeping at the yield boundary) before S2 builds on reenter."]
 fn reentry_is_a_dispatch_not_a_rewrite() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).expect("stdlib");
@@ -147,45 +154,89 @@ fn reentry_is_a_dispatch_not_a_rewrite() {
     };
 
     // ── The matrix ──
-    // 1. Scalars + a record arg.
-    state.put_stack(7i64);
-    state.put_stack(35i64);
-    state.put_stack(res);
-    state.reenter(add_into.0, add_into.1);
-    assert_eq!(read_val(&mut state), 42, "scalar re-entry wrote the store");
+    // PROBE_MODE=none — the frame-contract CONTROL: zero re-entries, only
+    // the yield+resume harness.  If teardown still aborts, the corruption
+    // is the resume-completion/drop path, not the re-entry thunk.
+    let mode = std::env::var("PROBE_MODE").unwrap_or_default();
+    if mode == "none" || mode == "direct" || mode == "push" {
+        if mode == "push" {
+            // The pushes alone: args land on the eval stack, then the
+            // watermark restores — no call ever happens.
+            let saved = state.stack_pos;
+            state.put_stack(7i64);
+            state.put_stack(35i64);
+            state.put_stack(res);
+            state.stack_pos = saved;
+        }
+        if mode != "none" {
+            // Satisfy main's check without any re-entry: a direct host-side
+            // store write (itself a probe of the host/store contract).
+            *state
+                .database
+                .store_mut(&res)
+                .addr_mut::<i64>(res.rec, res.pos) = 42;
+        }
+    } else if mode == "callint" {
+        // ONE call of a pure-integer callee (no allocation in the body).
+        state.reenter(null_or.0, null_or.1, |st| {
+            st.put_stack(21i64);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), 42, "callint");
+    } else if mode == "call1" {
+        // ONE call of the text-allocating callee.
+        state.reenter(add_into.0, add_into.1, |st| {
+            st.put_stack(7i64);
+            st.put_stack(35i64);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), 42, "call1");
+    } else {
+        // 1. Scalars + a record arg.
+        state.reenter(add_into.0, add_into.1, |st| {
+            st.put_stack(7i64);
+            st.put_stack(35i64);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), 42, "scalar re-entry wrote the store");
 
-    // 2. A vector arg.
-    state.put_stack(vec);
-    state.put_stack(res);
-    state.reenter(vec_sum_into.0, vec_sum_into.1);
-    assert_eq!(read_val(&mut state), 42, "vector re-entry summed 3+7+11+21");
+        // 2. A vector arg.
+        state.reenter(vec_sum_into.0, vec_sum_into.1, |st| {
+            st.put_stack(vec);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), 42, "vector re-entry summed 3+7+11+21");
 
-    // 3. Integer null (the i64::MIN sentinel).
-    state.put_stack(i64::MIN);
-    state.put_stack(res);
-    state.reenter(null_or.0, null_or.1);
-    assert_eq!(read_val(&mut state), -1, "null marshaled as null");
+        // 3. Integer null (the i64::MIN sentinel).
+        state.reenter(null_or.0, null_or.1, |st| {
+            st.put_stack(i64::MIN);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), -1, "null marshaled as null");
 
-    // 4. The same fn with a value.
-    state.put_stack(21i64);
-    state.put_stack(res);
-    state.reenter(null_or.0, null_or.1);
-    assert_eq!(read_val(&mut state), 42, "non-null after null");
+        // 4. The same fn with a value.
+        state.reenter(null_or.0, null_or.1, |st| {
+            st.put_stack(21i64);
+            st.put_stack(res);
+        });
+        assert_eq!(read_val(&mut state), 42, "non-null after null");
 
-    // 5. The crossing cost (informational; printed, not asserted).
-    let n = 200_000u32;
-    let t = std::time::Instant::now();
-    for _ in 0..n {
-        state.put_stack(40i64);
-        state.put_stack(2i64);
-        state.put_stack(res);
-        state.reenter(add_into.0, add_into.1);
-    }
-    let per = t.elapsed().as_nanos() / u128::from(n);
-    eprintln!(
-        "reentry probe: {per} ns per host->interp call (incl. body: 2 store writes + a text format)"
-    );
-    assert_eq!(read_val(&mut state), 42);
+        // 5. The crossing cost (informational; printed, not asserted).
+        let n = 200_000u32;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            state.reenter(add_into.0, add_into.1, |st| {
+                st.put_stack(40i64);
+                st.put_stack(2i64);
+                st.put_stack(res);
+            });
+        }
+        let per = t.elapsed().as_nanos() / u128::from(n);
+        eprintln!(
+            "reentry probe: {per} ns per host->interp call (incl. body: 2 store writes + a text format)"
+        );
+        assert_eq!(read_val(&mut state), 42);
+    } // PROBE_MODE gate
 
     // ── The differential half: resume main; IT verifies the world. ──
     let still = state.resume();

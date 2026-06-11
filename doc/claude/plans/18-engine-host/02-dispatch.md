@@ -20,17 +20,21 @@
 > story) and the 6b IDE wire-up (the IDE drives saves; the watcher already
 > reacts to them).
 
-> **Slice-1 probe ran (2026-06-11; `tests/dispatch_reentry.rs`, parked with
-> the verdict in its ignore attribute).**  The core claim HOLDS: host code
-> re-entered interpreted fns over a paused program's live State — scalars,
-> vector, struct (DbRef) and null args all correct, the resumed `main`
-> verified the world in loft, and the crossing costs **217 ns/call**
-> (body included) — dispatch, not rewrite.  `State::reenter` (the thunk)
-> landed probe-grade.  The OPEN remainder: the synthetic frame's contract —
-> without a CallFrame push, 200k re-entries corrupt the heap at teardown
-> (fn_return pops unconditionally); WITH the push, the resumed program
-> reads a garbage DbRef — the frame's args_base/ownership bookkeeping at
-> the yield boundary needs mapping before S2 builds on it.
+> **Slice 1 DONE (2026-06-11)** — the re-entry claim PROVED and the frame
+> contract MAPPED (`tests/dispatch_reentry.rs`, graduated to a standing
+> contract test; bisect cells re-runnable via `PROBE_MODE`).  Verdict:
+> host→interp re-entry is a dispatch — **320 ns/call release (incl. a
+> 2-store-write + text-format body)**, full arg matrix correct
+> (scalar/vector/struct/null), 200k-call churn clean in debug AND release,
+> the resumed program verifies the world in loft.  The contract the bisect
+> mapped (now enforced by `State::reenter`): (1) `stack_pos` is the
+> transient EVAL height, not the frame top — live variable slots sit above
+> it between statements, so a synthetic frame starts above the new
+> `stack_high` high-water mark; (2) `fn_return` pops a `CallFrame`
+> unconditionally — every re-entry pushes one; (3) args are pushed inside
+> `reenter`'s closure, after the watermark lift.  REMAINING in 02: the
+> `--native`-baseline call-site indirection (compiled callers through the
+> table) + the 6b IDE wire-up.
 
 **Goal.** Editing one function of a RUNNING kernel game takes effect at the
 next frame boundary, with ONLY that function dropping to the interpreter —
