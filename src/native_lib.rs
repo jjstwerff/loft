@@ -808,6 +808,11 @@ pub fn build_shared_cdylib(
     let rs = out_dir.join(format!("{stem}.rs"));
     std::fs::write(&rs, &src).map_err(|e| format!("write {}: {e}", rs.display()))?;
     let so = out_dir.join(platform_cdylib_name(stem));
+    // Compile to a temp name, rename into place on success: a concurrent
+    // reader (fast path of `cached_or_build_shared_cdylib`) then always sees
+    // either the old complete `.so` or the new complete one, never a torn
+    // file mid-write ("file too short" on dlopen).
+    let tmp_so = out_dir.join(format!("{stem}.building"));
 
     // Pass rustc args via an `@argfile`: the `--extern <crate>=<path>` list + `-L`
     // search paths routinely exceed Windows' ~32 KB `CreateProcessW` command-line
@@ -823,7 +828,7 @@ pub fn build_shared_cdylib(
         "--crate-type".to_string(),
         "cdylib".to_string(),
         "-o".to_string(),
-        so.display().to_string(),
+        tmp_so.display().to_string(),
         rs.display().to_string(),
         "--extern".to_string(),
         format!("loft={}", rlib.display()),
@@ -892,6 +897,8 @@ pub fn build_shared_cdylib(
             rs.display()
         ));
     }
+    std::fs::rename(&tmp_so, &so)
+        .map_err(|e| format!("install {} -> {}: {e}", tmp_so.display(), so.display()))?;
     Ok(so)
 }
 
@@ -957,6 +964,26 @@ pub fn cached_or_build_shared_cdylib(
     let fp = crate::cache::loft_build_fingerprint();
 
     // 1. Fresh artifact → native, no hashing.
+    if so.exists()
+        && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
+        && !source_newer_than(pkg_dir, &so)
+    {
+        return Ok(Some(so));
+    }
+
+    // Concurrent `loft` processes (parallel tests are the common case)
+    // routinely load the same library at once; an unserialized double-build
+    // rewrites the generated `.rs` under a running rustc and tears the `.so`
+    // (mixed-object "dangerous relocation" link errors, "file too short" on
+    // load).  Take an exclusive advisory lock for the check+build, then
+    // RE-CHECK freshness: the waiter adopts the winner's artifact instead of
+    // rebuilding over it.  Released when `lock` drops, on every return path.
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
+    let lock_path = out_dir.join(".build.lock");
+    let lock = std::fs::File::create(&lock_path)
+        .map_err(|e| format!("create {}: {e}", lock_path.display()))?;
+    lock.lock()
+        .map_err(|e| format!("lock {}: {e}", lock_path.display()))?;
     if so.exists()
         && crate::cache::native_artifact_fingerprint_matches(&out_dir, fp)
         && !source_newer_than(pkg_dir, &so)
