@@ -283,6 +283,10 @@ fn with_kernel<R>(f: impl FnOnce(&mut Kernel) -> R) -> Option<R> {
 /// client's kernel reads it and auto-hellos, earning the UDP fast path with
 /// zero meaning-level code on either side.
 fn ws_upgrade(mut stream: TcpStream, udp_cookie: &str) -> Option<TcpStream> {
+    // BSD/macOS accepted sockets INHERIT the listener's non-blocking flag
+    // (Linux ones don't): force blocking before the bounded head read, or
+    // the first byte EAGAINs instantly and every upgrade drops.
+    stream.set_nonblocking(false).ok()?;
     // The upgrade request is in flight from a live client; bound the read.
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
