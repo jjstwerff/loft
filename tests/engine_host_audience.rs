@@ -44,11 +44,30 @@ fn spawn_server(script: &str) -> Guard {
         .arg(root().join("lib"))
         .arg(&tmp)
         .current_dir(root())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // Captured, not nulled: when the server dies at startup on a CI
+        // box, ws_connect's panic prints these (the only forensics there).
+        .stdout(Stdio::from(
+            std::fs::File::create(server_log_path("out")).unwrap(),
+        ))
+        .stderr(Stdio::from(
+            std::fs::File::create(server_log_path("err")).unwrap(),
+        ))
         .spawn()
         .expect("spawn server");
     Guard(Some(child))
+}
+
+fn server_log_path(ext: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("eh_aud_srv_{}.{ext}", std::process::id()))
+}
+
+fn server_logs() -> String {
+    let read = |ext: &str| std::fs::read_to_string(server_log_path(ext)).unwrap_or_default();
+    format!(
+        "server stdout:\n{}\nserver stderr:\n{}",
+        read("out"),
+        read("err")
+    )
 }
 
 fn ws_connect(port: u16) -> TcpStream {
@@ -58,7 +77,8 @@ fn ws_connect(port: u16) -> TcpStream {
             Ok(s) => break s,
             Err(e) => assert!(
                 Instant::now() < deadline,
-                "server never listened (last connect error: {e})"
+                "server never listened (last connect error: {e})\n{}",
+                server_logs()
             ),
         }
         std::thread::sleep(Duration::from_millis(100));
