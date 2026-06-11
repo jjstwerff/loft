@@ -1961,10 +1961,7 @@ impl Parser {
             return d_nr;
         }
         // Check if any attribute's type references the type variable.
-        let has_tv = def
-            .attributes
-            .iter()
-            .any(|a| Self::type_contains_tv(&a.typedef, tv_nr));
+        let has_tv = def.attributes.iter().any(|a| a.typedef.contains_def(tv_nr));
         if !has_tv {
             // Also check for Integer(0, tv_nr) patterns — operators sometimes encode
             // type info in the Integer bounds.
@@ -1994,15 +1991,6 @@ impl Parser {
             resolved
         } else {
             d_nr
-        }
-    }
-
-    /// Check if a type references the type variable.
-    fn type_contains_tv(tp: &Type, tv_nr: u32) -> bool {
-        match tp {
-            Type::Reference(d, _) | Type::Unknown(d) => *d == tv_nr,
-            Type::Vector(inner, _) => Self::type_contains_tv(inner, tv_nr),
-            _ => false,
         }
     }
 

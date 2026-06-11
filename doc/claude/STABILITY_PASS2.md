@@ -51,7 +51,7 @@ is checked per consumer).
 | `src/generation/coroutine.rs` | `contains_yield`, `detect_yield_from` (`&Value`); `persistent_default` (`&Type`) | `contains_yield` → `any_node` closure; rest later | ▶ wave 1: contains_yield converted |
 | `src/parser/collections.rs` | `is_capturing_fnref`, `worker_returns_capturing_closure` (`&Value`); `narrow_route_for` (`&Type`) | walkers STAY — tail/return-POSITIONAL semantics, not exists-anywhere (a tail combinator is a different keystone); `narrow_route_for` → Type impl later | ▶ wave 2: audited, positional |
 | `src/parser/expressions.rs` | `leaf_tuple_lhs`, `inline_ref_set_in` (`&Value`) | `inline_ref_set_in` → `any_node` closure (done); `leaf_tuple_lhs` stays — positional LHS-shape extractor | ✅ wave 2 |
-| `src/parser/definitions.rs` | `type_contains_def` (`&Type`) | → Type impl (needs a Type::for_each_child twin — see below) | ☐ todo |
+| `src/parser/definitions.rs` | `type_contains_def` (`&Type`) | died into `Type::contains_def` | ✅ wave 3 |
 | `src/parser/vectors.rs` | `cell_struct_name` (pub), `cell_value_type` (`&Type`) | → Type impl / data.rs (used cross-file already) | ☐ todo |
 | `src/parser/objects.rs` | construction emission reaches `database.position` (fine — asks the home); `replace_record_ref` Value rewriter | rewriter needs a `map_children` (mutating walker twin) — design with the first mutating consumer | ☐ todo |
 | `src/parser/operators.rs`, `fields.rs`, `builtins.rs` | call_to_set GET→SET table (stays — op-layer fact); minor Value peeks | audit in a later wave | ☐ todo |
@@ -71,10 +71,12 @@ is checked per consumer).
 
 ## Type walker note
 
-`Type` needs the same keystone (`Type::for_each_child` over
-Vector/Tuple/Function/Iterator/RefVar children + def-nr leaves) before the
-`&Type` classifier wave moves — `type_carries_closure`, `has_value_cycle`,
-`type_contains_def`, `type_contains_tv` all hand-roll that descent today.
+Wave 3 added the `Type` keystone: `Type::for_each_child` (exhaustive over
+RefVar/Vector/Rewritten/Iterator/Function/Tuple children; def-nr heads are
+leaves) + `Type::any_node` + `Type::contains_def`.  Remaining `&Type`
+classifiers (`type_carries_closure` — prunes at the pointer marker, so it
+keeps a hand-rolled match even after moving; `has_value_cycle` — a `Data`
+graph walk, not a type-tree walk) move in later waves.
 
 ## Move log
 
@@ -134,3 +136,17 @@ Vector/Tuple/Function/Iterator/RefVar children + def-nr leaves) before the
   cdylib-build race (passes in isolation after clearing `native-auto/`;
   the known concurrent-build truncation), debug smoke on closure-heavy
   scripts, clippy clean, fmt clean.
+
+### Wave 3 — 2026-06-11 — the Type keystone + the contains-def twins
+
+- **Added** `Type::for_each_child` / `Type::any_node` /
+  `Type::contains_def` — `src/data.rs`.
+- **Died:** `definitions::type_contains_def` + `parser/mod::type_contains_tv`
+  (same predicate, drifted arms, both only ever called with type-variable
+  numbers) → `Type::contains_def`.  *Widened:* descends Tuple / Function /
+  Iterator / RefVar / Rewritten children — `substitute_type` already
+  rewrites through Tuple (plan-17), so the GET-side predicate had drifted
+  behind the SET side; also matches all def-carrying heads (Routine,
+  Sorted/Index/Spacial/Hash) — harmless for the tv callers (def numbers are
+  unique) and honest for future ones.
+- Gates: full suite 2289 passed / 173 skipped, clippy clean, fmt clean.

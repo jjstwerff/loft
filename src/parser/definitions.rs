@@ -8,16 +8,6 @@ use super::{
 };
 
 impl Parser {
-    /// Check whether a type tree contains a reference to a specific definition.
-    /// Used to validate that a generic type variable appears in a parameter type.
-    fn type_contains_def(tp: &Type, d_nr: u32) -> bool {
-        match tp {
-            Type::Reference(d, _) | Type::Unknown(d) | Type::Enum(d, _, _) => *d == d_nr,
-            Type::Vector(inner, _) => Self::type_contains_def(inner, d_nr),
-            _ => false,
-        }
-    }
-
     pub(crate) fn warn_missing_enum_variants(&mut self, e_nr: u32, nrs: &[usize], name: &str) {
         let implemented: HashSet<u32> = nrs
             .iter()
@@ -622,7 +612,7 @@ impl Parser {
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
             let tv_nr = self.data.def_nr(&type_var_name);
-            let has_tv = Self::type_contains_def(&arguments[0].typedef, tv_nr);
+            let has_tv = arguments[0].typedef.contains_def(tv_nr);
             if !has_tv && !self.first_pass {
                 diagnostic!(
                     self.lexer,

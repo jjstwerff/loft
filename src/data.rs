@@ -721,6 +721,78 @@ pub enum Type {
 }
 
 impl Type {
+    /// Pass-2 keystone, the `Type` twin of `Value::for_each_child`
+    /// (STABILITY_PASS2.md): the ONE place that knows which `Type`
+    /// variants carry child types.  Exhaustive on purpose — a new
+    /// variant forces a decision here and every walker inherits it.
+    pub fn for_each_child(&self, f: &mut impl FnMut(&Type)) {
+        match self {
+            Type::RefVar(t) | Type::Vector(t, _) | Type::Rewritten(t) => f(t),
+            Type::Iterator(a, b) => {
+                f(a);
+                f(b);
+            }
+            Type::Function(args, ret, _) => {
+                args.iter().for_each(&mut *f);
+                f(ret);
+            }
+            Type::Tuple(ts) => ts.iter().for_each(&mut *f),
+            // Leaves — def-nr heads carry no child `Type`.
+            Type::Unknown(_)
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Integer(_)
+            | Type::Boolean
+            | Type::Float
+            | Type::Single
+            | Type::Character
+            | Type::Text(_)
+            | Type::Keys
+            | Type::Enum(_, _, _)
+            | Type::Reference(_, _)
+            | Type::Routine(_)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Hash(_, _, _) => {}
+        }
+    }
+
+    /// Pre-order search: does `pred` hold on this type or any nested type?
+    pub fn any_node(&self, pred: &mut impl FnMut(&Type) -> bool) -> bool {
+        if pred(self) {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(&mut |c| {
+            if !found && c.any_node(pred) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    /// Does this type mention definition `d_nr` anywhere — as a struct /
+    /// enum reference, routine, keyed-collection record, or unresolved
+    /// forward ref?  Unified from the parser's `type_contains_def` /
+    /// `type_contains_tv` twins, whose hand-rolled descents missed the
+    /// Tuple / Function / Iterator children that `substitute_type` DOES
+    /// rewrite (the GET-side predicate had drifted behind the SET side).
+    pub fn contains_def(&self, d_nr: u32) -> bool {
+        self.any_node(&mut |t| {
+            matches!(t,
+                Type::Unknown(d)
+                | Type::Enum(d, _, _)
+                | Type::Reference(d, _)
+                | Type::Routine(d)
+                | Type::Sorted(d, _, _)
+                | Type::Index(d, _, _)
+                | Type::Spacial(d, _, _)
+                | Type::Hash(d, _, _) if *d == d_nr)
+        })
+    }
+
     /// Returns the dep list if this is a heap-allocated, store-backed type
     /// (Reference, Vector, struct-enum with is_ref=true, or any keyed
     /// collection: Sorted/Hash/Index/Spacial — each `gen_set_first_keyed_null`
