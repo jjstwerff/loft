@@ -27,10 +27,22 @@ impl Drop for Guard {
 }
 
 fn spawn_server(script: &str) -> Guard {
+    // The fixture lives in tools/audience-demo/ — a PACKAGE dir whose
+    // loft.toml wants registry deps (graphics etc.) the CI box doesn't
+    // have.  The server scripts themselves only need `--lib lib`, so run
+    // a copy from a bare temp dir to escape the package context.
+    let src = std::fs::read_to_string(root().join(script)).expect("read fixture");
+    let name = std::path::Path::new(script)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let tmp = std::env::temp_dir().join(format!("eh_aud_{}_{name}", std::process::id()));
+    std::fs::write(&tmp, src).expect("write fixture copy");
     let child = Command::new(root().join("target/release/loft"))
         .args(["--interpret", "--no-warnings", "--lib"])
         .arg(root().join("lib"))
-        .arg(root().join(script))
+        .arg(&tmp)
         .current_dir(root())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

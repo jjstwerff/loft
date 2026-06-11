@@ -1,6 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+// The kernel lifecycle suite is unix-only v1: the swap machinery rides
+// SO_REUSEPORT + process groups (killpg cleans the --native grandchildren),
+// neither of which Windows has in this shape — the Windows kernel story is
+// the WINDOWS.md G-gap set.
+#![cfg(unix)]
+
 //! @PLN18 phase 01 — the kernel end-to-end: a loft program on
 //! `engine_host::run` (the Rust-mechanics loop), driven by a real WebSocket
 //! client.  Proves: connect event → handler closure (captures mutating) →
