@@ -888,8 +888,8 @@ impl Scopes {
             // reading borrow (`x = x.next`, #328) keeps its owned store
             // until scope exit — a bounded, documented residual of this
             // conservatism (LIFETIME.md § Ownership-transition free).
-            && !value_reads_var(value, v)
-            && !value_reads_var(value, ov)
+            && !value.reads_var(v)
+            && !value.reads_var(ov)
         {
             transition_free = Some(call("OpFreeRef", v, data));
         }
@@ -2171,33 +2171,6 @@ enum RefRhs {
     View,
     /// Not provable either way.
     Unknown,
-}
-
-/// #316 — true when `value` reads variable `v` anywhere (its old store may
-/// feed the new value, so a pre-Set free would be a use-after-free).
-pub(crate) fn value_reads_var(value: &Value, v: u16) -> bool {
-    match value {
-        Value::Var(x) => *x == v,
-        Value::Set(x, inner) => *x == v || value_reads_var(inner, v),
-        Value::Span(b) => value_reads_var(&b.1, v),
-        Value::Call(_, args)
-        | Value::CallRef(_, args)
-        | Value::Insert(args)
-        | Value::Tuple(args)
-        | Value::Parallel(args) => args.iter().any(|a| value_reads_var(a, v)),
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| value_reads_var(o, v)),
-        Value::If(c, t, e) => {
-            value_reads_var(c, v) || value_reads_var(t, v) || value_reads_var(e, v)
-        }
-        Value::Iter(_, c, n, e) => {
-            value_reads_var(c, v) || value_reads_var(n, v) || value_reads_var(e, v)
-        }
-        Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
-            value_reads_var(x, v)
-        }
-        Value::TupleGet(x, _) => *x == v,
-        _ => false,
-    }
 }
 
 fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
@@ -4305,28 +4278,10 @@ fn store_liveness_walk(
 
 /// True if `node` contains the `OpDatabase(Var(store), …)` allocation of `store`.
 fn contains_alloc(node: &Value, store: u16, db_nr: u32) -> bool {
-    match node.unspan() {
-        Value::Call(op, args) => {
-            (*op == db_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
-                || args.iter().any(|a| contains_alloc(a, store, db_nr))
-        }
-        Value::Set(_, val) => contains_alloc(val, store, db_nr),
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| contains_alloc(o, store, db_nr))
-        }
-        Value::If(c, t, e) => {
-            contains_alloc(c, store, db_nr)
-                || contains_alloc(t, store, db_nr)
-                || contains_alloc(e, store, db_nr)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| contains_alloc(o, store, db_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => contains_alloc(v, store, db_nr),
-        Value::Span(b) => contains_alloc(&b.1, store, db_nr),
-        _ => false,
-    }
+    node.any_node(&mut |n| {
+        matches!(n, Value::Call(op, args) if *op == db_nr
+        && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
+    })
 }
 
 /// Plan-57 Phase-3 soundness gate (dominance): true only if `store`'s `OpDatabase`
@@ -4546,31 +4501,10 @@ fn is_top_free(op: &Value, st: u16, fr_nr: u32) -> bool {
 }
 
 /// True if `node` (recursively) contains an `OpFreeRef(Var(store))` — the free
-/// counterpart of [`contains_alloc`].  Descends nested blocks (e.g. an early-return
+/// counterpart of [`contains_alloc`].  Descends everywhere (e.g. an early-return
 /// `If`), unlike [`is_top_free`].
 fn contains_free(node: &Value, store: u16, fr_nr: u32) -> bool {
-    match node.unspan() {
-        Value::Call(op, args) => {
-            (*op == fr_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
-                || args.iter().any(|a| contains_free(a, store, fr_nr))
-        }
-        Value::Set(_, val) => contains_free(val, store, fr_nr),
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| contains_free(o, store, fr_nr))
-        }
-        Value::If(c, t, e) => {
-            contains_free(c, store, fr_nr)
-                || contains_free(t, store, fr_nr)
-                || contains_free(e, store, fr_nr)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| contains_free(o, store, fr_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => contains_free(v, store, fr_nr),
-        Value::Span(b) => contains_free(&b.1, store, fr_nr),
-        _ => false,
-    }
+    node.any_node(&mut |n| is_top_free(n, store, fr_nr))
 }
 
 /// True if a free of `st` occurs in a top-level body op BEFORE the op that allocates

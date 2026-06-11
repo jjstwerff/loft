@@ -9,37 +9,6 @@ use super::{
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
 
-/// Plan-07 phase 4d.2 — recursive walker that returns `true` if
-/// `op` references `var_nr` anywhere.  Used by
-/// `Parser::rewrite_defended_fault_sites` to detect when an `if`
-/// condition guards on the variable assigned in the immediately-
-/// preceding `Set`.  Same recursion shape as
-/// `src/generation/pre_eval.rs::value_mentions_var` (kept as a
-/// free function here because parser/control needs it without the
-/// generation/pre_eval `impl` context).
-fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
-    match op {
-        Value::Span(b) => value_mentions_var(&b.1, var_nr),
-        Value::Var(v) => *v == var_nr,
-        Value::Set(v, inner) => *v == var_nr || value_mentions_var(inner, var_nr),
-        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
-            args.iter().any(|a| value_mentions_var(a, var_nr))
-        }
-        Value::If(cond, t, f) => {
-            value_mentions_var(cond, var_nr)
-                || value_mentions_var(t, var_nr)
-                || value_mentions_var(f, var_nr)
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| value_mentions_var(o, var_nr))
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            value_mentions_var(inner, var_nr)
-        }
-        _ => false,
-    }
-}
-
 /// Why an enclosing-scope capture inside a `parallel {}` arm is rejected.
 /// See `parse_parallel` — each arm runs in an isolated worker (read-only heap
 /// clone + private stack), so only *reading* an enclosing local is sound.
@@ -78,17 +47,6 @@ fn is_mutating_op(name: &str) -> bool {
             | "OpFinishRecord"
             | "OpCopyRecord"
     )
-}
-
-/// Descend a mutating op's host expression (`args[0]`) through any nesting of
-/// read projections (`OpGetVector`/`OpVectorRef`/`OpGetRecord`/`OpGetField`/
-/// `OpGetInt`/…) to the base `Var(nr)` it ultimately mutates.
-fn base_host_var(node: &Value) -> Option<u16> {
-    match node.unspan() {
-        Value::Var(v) => Some(*v),
-        Value::Call(_, args) if !args.is_empty() => base_host_var(&args[0]),
-        _ => None,
-    }
 }
 
 /// A7.1: walk a body-tail expression and report whether it ends in
@@ -516,7 +474,7 @@ impl Parser {
             let Value::If(test, _, _) = ops[j].unspan() else {
                 continue;
             };
-            if !value_mentions_var(test, var) {
+            if !test.reads_var(var) {
                 continue;
             }
             to_rewrite.push(i);
@@ -4717,7 +4675,7 @@ impl Parser {
             // In-place / element / field mutation hides the host in args[0].
             Value::Call(d, args) => {
                 if is_mutating_op(self.data.def(*d).name())
-                    && let Some(host) = args.first().and_then(base_host_var)
+                    && let Some(host) = args.first().and_then(Value::base_var)
                 {
                     self.note_mutation(host, encl, out);
                 }

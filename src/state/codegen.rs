@@ -1563,7 +1563,7 @@ impl State {
             // stack before anything runs and freed AFTER the assignment via
             // OpFreeRefIfDistinct — which also degrades to a no-op for the
             // S1 in-place shapes (the new value IS the old store).
-            let rhs_reads_v = crate::scopes::value_reads_var(value, v);
+            let rhs_reads_v = value.reads_var(v);
             let owned_ref = matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)

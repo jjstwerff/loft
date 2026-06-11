@@ -253,7 +253,7 @@ impl Output<'_> {
             // No other use of `target` between set_idx+1 and ret_pos-1.
             let target_used_between = result[set_idx + 1..ret_pos]
                 .iter()
-                .any(|op| Self::value_mentions_var(op, target));
+                .any(|op| op.reads_var(target));
             if target_used_between {
                 continue;
             }
@@ -277,7 +277,7 @@ impl Output<'_> {
                 call_val.is_some_and(|cv| {
                     result[set_idx + 1..ret_pos].iter().any(|op| {
                         Self::free_op_var(op, self.data)
-                            .is_some_and(|fv| Self::value_mentions_var(cv, fv))
+                            .is_some_and(|fv| cv.reads_var(fv))
                     })
                 })
             };
@@ -367,7 +367,7 @@ impl Output<'_> {
                 let mut conflict = false;
                 for between in &result[idx + 1..ret_pos] {
                     if let Some(v) = freed_var(between)
-                        && Self::value_mentions_var(expr, v)
+                        && expr.reads_var(v)
                     {
                         conflict = true;
                         break;
@@ -387,37 +387,6 @@ impl Output<'_> {
             }
         }
         std::borrow::Cow::Owned(result)
-    }
-
-    /// Does `op` read or write the variable `var_nr` (recursively)?
-    /// Used by `patch_hoisted_returns` to confirm that a `__ret_N` temp
-    /// isn't touched between its `Set` and `Return(Var)` before collapsing.
-    fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
-        match op {
-            // Plan-12 phase 01: unspan recursively.  Without this, the
-            // walker silently bails on Span-wrapped operators (which
-            // the parser commonly produces) and `target_used_between`
-            // returns an incorrect `false` → unsafe collapse.
-            Value::Span(b) => Self::value_mentions_var(&b.1, var_nr),
-            Value::Var(v) => *v == var_nr,
-            Value::Set(v, inner) => *v == var_nr || Self::value_mentions_var(inner, var_nr),
-            Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
-                args.iter().any(|a| Self::value_mentions_var(a, var_nr))
-            }
-            Value::If(cond, t, f) => {
-                Self::value_mentions_var(cond, var_nr)
-                    || Self::value_mentions_var(t, var_nr)
-                    || Self::value_mentions_var(f, var_nr)
-            }
-            Value::Block(bl) | Value::Loop(bl) => bl
-                .operators
-                .iter()
-                .any(|o| Self::value_mentions_var(o, var_nr)),
-            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-                Self::value_mentions_var(inner, var_nr)
-            }
-            _ => false,
-        }
     }
 
     /// @P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /

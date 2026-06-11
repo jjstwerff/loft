@@ -3683,7 +3683,7 @@ impl Parser {
                     // frame's captures (silent corruption on slot
                     // reuse once the frame dies).
                     if !self.first_pass
-                        && let Some(base) = base_var_of(&ref_code)
+                        && let Some(base) = ref_code.base_var()
                         && self.vars.is_argument(base)
                     {
                         diagnostic!(
@@ -6439,18 +6439,6 @@ fn tests_base_dir(cur_dir: &str) -> &str {
 /// `None` when no capturing FnRef is present.  Walks Block / Set /
 /// Span wrappers built by `parser/vectors.rs` around the `OpDatabase`
 /// allocation steps.
-/// #318: the frame variable a field-write host expression is rooted
-/// at — `Var(h)` itself, or the first argument of an accessor chain
-/// (`OpGetField(OpGetField(h, …), …)`).  `None` for shapes with no
-/// single var root (literals, fresh allocations inside blocks).
-fn base_var_of(v: &Value) -> Option<u16> {
-    match v.unspan() {
-        Value::Var(nr) => Some(*nr),
-        Value::Call(_, args) => args.first().and_then(base_var_of),
-        _ => None,
-    }
-}
-
 fn find_capturing_fn_ref(data: &Data, v: &Value) -> Option<(i32, u16)> {
     match v.unspan() {
         // `w != MAX` only appears in the second pass (`emit_lambda_code`

@@ -1668,7 +1668,7 @@ impl Parser {
             // (spliced in parse_object), so they see the OLD record.
             if let Some(xv) = in_place_var
                 && !primed
-                && crate::scopes::value_reads_var(&value, xv)
+                && value.reads_var(xv)
             {
                 let tmp = self.vars.work_refs(&exp_tp, &mut self.lexer);
                 if !self.first_pass {

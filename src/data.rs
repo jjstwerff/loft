@@ -513,6 +513,117 @@ impl Value {
             self
         }
     }
+
+    /// Pass-2 keystone (STABILITY_PASS2.md): the ONE place that knows
+    /// `Value`'s tree shape.  Calls `f` once per direct child expression.
+    /// Every traversal derives from this — the match is exhaustive on
+    /// purpose (no wildcard), so a new `Value` variant forces a decision
+    /// here and every walker inherits the edge.
+    pub fn for_each_child(&self, f: &mut impl FnMut(&Value)) {
+        match self {
+            Value::Span(b) => f(&b.1),
+            Value::Call(_, items)
+            | Value::CallRef(_, items)
+            | Value::Insert(items)
+            | Value::Tuple(items)
+            | Value::Parallel(items) => items.iter().for_each(&mut *f),
+            Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().for_each(&mut *f),
+            Value::Set(_, inner)
+            | Value::Return(inner)
+            | Value::BreakWith(_, inner)
+            | Value::Drop(inner)
+            | Value::Yield(inner)
+            | Value::TuplePut(_, _, inner) => f(inner),
+            Value::If(c, t, e) => {
+                f(c);
+                f(t);
+                f(e);
+            }
+            Value::Iter(_, a, b, c) => {
+                f(a);
+                f(b);
+                f(c);
+            }
+            Value::ParFor(b) => {
+                f(&b.input);
+                f(&b.worker);
+                f(&b.threads);
+                f(&b.body);
+            }
+            // Leaves — no child expressions.
+            Value::RawExpr(_)
+            | Value::Null
+            | Value::Line(_)
+            | Value::Int(_)
+            | Value::Enum(_, _)
+            | Value::Boolean(_)
+            | Value::Float(_)
+            | Value::Long(_)
+            | Value::Single(_)
+            | Value::Text(_)
+            | Value::Var(_)
+            | Value::Break(_)
+            | Value::Continue(_)
+            | Value::Keys(_)
+            | Value::TupleGet(_, _)
+            | Value::FnRef(_, _, _)
+            | Value::FnRefDnr(_) => {}
+        }
+    }
+
+    /// Pre-order search: does `pred` hold on this node or any descendant?
+    /// `Span` wrappers are transparent — `pred` never sees them, so node
+    /// predicates match on the bare variants.
+    pub fn any_node(&self, pred: &mut impl FnMut(&Value) -> bool) -> bool {
+        if let Value::Span(b) = self {
+            return b.1.any_node(pred);
+        }
+        if pred(self) {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(&mut |c| {
+            if !found && c.any_node(pred) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    /// Does this expression read (or name) variable `v` anywhere?  The ONE
+    /// reads-var predicate — it replaced `scopes::value_reads_var` and two
+    /// `value_mentions_var` copies whose hand-rolled descents had drifted
+    /// apart (#330's predicate hole).  Deliberately conservative: `Set` /
+    /// `TuplePut` targets count, a `FnRef`'s closure work var counts, a
+    /// `CallRef`'s callee var counts — every consumer fails safe on a
+    /// too-wide answer (a suppressed free), never on a too-narrow one (a
+    /// premature free of a store the RHS still reads).
+    pub fn reads_var(&self, v: u16) -> bool {
+        self.any_node(&mut |n| match n {
+            Value::Var(x)
+            | Value::Set(x, _)
+            | Value::TupleGet(x, _)
+            | Value::TuplePut(x, _, _)
+            | Value::FnRefDnr(x)
+            | Value::CallRef(x, _)
+            | Value::Iter(x, _, _, _) => *x == v,
+            Value::FnRef(_, w, _) => *w == v,
+            Value::ParFor(b) => b.x_var == v || b.r_var == v,
+            _ => false,
+        })
+    }
+
+    /// The frame variable an accessor expression is rooted at: `Var(h)`
+    /// itself, or the first argument of an accessor chain
+    /// (`OpGetField(OpGetField(h, …), …)`).  `None` for shapes with no
+    /// single var root (literals, fresh allocations inside blocks).
+    pub fn base_var(&self) -> Option<u16> {
+        match self.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Call(_, args) => args.first().and_then(Value::base_var),
+            _ => None,
+        }
+    }
 }
 
 #[must_use]

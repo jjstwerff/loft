@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::io::{Error, Write};
 
 use super::Variable;
+use super::slots_v2::{SlotKind, slot_kind};
 use super::{Function, size};
 
 fn short_type(tp: &Type) -> String {
@@ -192,30 +193,6 @@ pub(super) fn find_conflict(
 /// exit (`OpFreeText` for `RefSlot` of size 24, `OpFreeRef` for
 /// `RefSlot` of size 12, none for `Inline`).  V2's placement allows
 /// dead-slot reuse only between compatible kinds / sizes (SPEC.md
-/// § 5a invariant I5).  The same compatibility is checked
-/// post-placement by `check_i5_kind_consistency`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SlotKind {
-    Inline,
-    RefSlot,
-}
-
-fn slot_kind(tp: &Type) -> SlotKind {
-    match tp {
-        Type::Text(_)
-        | Type::Reference(_, _)
-        | Type::Vector(_, _)
-        | Type::Index(_, _, _)
-        | Type::Hash(_, _, _)
-        | Type::Sorted(_, _, _)
-        | Type::Spacial(_, _, _)
-        | Type::Iterator(_, _)
-        | Type::Enum(_, true, _)
-        | Type::RefVar(_) => SlotKind::RefSlot,
-        _ => SlotKind::Inline,
-    }
-}
-
 /// Compute the frame's `local_start` — the first byte above the
 /// argument + return-address prefix.  Matches the formula in
 /// `src/scopes.rs:156–164`: `sum(arg sizes) + 4`.
