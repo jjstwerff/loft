@@ -82,26 +82,36 @@ The signature-time attr needs a BACKING VAR (`def_code` builds the callee
 frame from vars flagged `argument`, not from the attr list) — so phase 1
 creates BOTH at declaration parse: the `__retbuf` attr (hidden, typed as
 the return type, last position) and a `__retbuf` argument var right after
-the user args.  `ref_return`'s promotion arm then REWRITES the body
-(`Value::map_nodes` — the pass-2 keystone) redirecting every reference to
-the promoted local onto the buffer var, instead of `become_argument` +
-`add_attribute`.  Probe before building:
+the user args (BEFORE any body parsing can intern other vars).
 
-- **C6**: the implicit coupling `arguments() var order ↔ attribute order`
-  — today the promoted local (a HIGH var number) must land in the LAST
-  argument slot to match its appended attr.  Verify the ordering rule in
-  `Function::arguments()` + `def_code`'s frame walk, and that a
-  signature-time `__retbuf` var (LOW number, pre-body) keeps the same
-  slot ↔ attr alignment.
-- **C7**: who consumes the result — the caller's `__ref` buffer var or
-  the by-value `OpReturn` DbRef?  (Decides whether the callee may
-  reallocate over the incoming buffer pointer.)  Read the promoted-fn IR
-  of `tests/scripts/295`'s `full339` + the caller's consumption ops on
-  both backends.
-- **C8**: is the promoted local's null-init (`Set(v, Null)` +
-  `OpDatabase`) suppressed once it becomes an argument, or does the
-  callee deliberately overwrite the incoming buffer with a fresh store?
-  (LOFT_LOG=static on a promoted fn answers in seconds.)
+**Probes C6–C8: ANSWERED (2026-06-11, IR dumps + source read)**
+
+- **C6 ✅** — `Function::arguments()` returns argument-flagged vars in
+  VAR-NUMBER order; `def_code` frames them in that order.  The implicit
+  invariant: *the K-th argument-flagged var (by number) ↔ the K-th
+  attribute*.  Today's promoted local (high var nr) therefore lands in
+  the LAST slot matching its appended attr; a signature-time `__retbuf`
+  var created immediately after the user args aligns by the same rule.
+- **C7 ✅** — the caller consumes the result BY VALUE (`x = call(...)`
+  binds the returned DbRef); the buffer var is only the allocation
+  vehicle.  Cleanup is the witness pair `OpFreeRef(x)` +
+  `OpFreeRefIfDistinct(__ref_1, x)` — so a callee REALLOCATING over the
+  incoming pointer is already the handled contract (the distinct case
+  frees both stores, the identity case frees once).
+- **C8 ✅** — the promoted local's `Set(v, Null)` null-init is
+  SUPPRESSED once it becomes an argument; the callee's body starts with
+  `OpDatabase(s, tp)` ON THE INCOMING SLOT (alloc-from-sentinel / clear
+  in place) and `return s` returns the DbRef by value.
+  IR: `fn n_full59(a, c, s: P59) -> P59["s"] { OpDatabase(s, 64); … ;
+  return s }`.
+
+**Refined promotion mechanism** (replaces the map_nodes rewrite):
+because the binding is by NAME (C3) and frame position by NUMBER-order
+(C6), promotion becomes a ROLE SWAP — rename the pre-created placeholder
+var away + drop its argument flag, rename the promoted local to
+`__retbuf` + flag it argument.  The local keeps its var number (all IR
+references stay valid); order-of-flagged puts it in the same last slot;
+the attr↔var name lookup hits.  No body rewriting needed.
 
 ## Risks / open questions
 
