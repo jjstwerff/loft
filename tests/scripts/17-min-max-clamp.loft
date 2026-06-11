@@ -47,17 +47,17 @@ fn main() {
   assert(clamp(0.5f, 1.0f, 3.0f) == 1.0f, "single clamp below lo");
   assert(clamp(2.0f, 1.0f, 3.0f) == 2.0f, "single clamp inside");
   assert(clamp(4.0f, 1.0f, 3.0f) == 3.0f, "single clamp above hi");
-  assert(!min(0.0f / 0.0f, 2.0f), "single min null propagation");
-  assert(!max(0.0f / 0.0f, 2.0f), "single max null propagation");
+  assert(!min((0.0f / 0.0f ?? null), 2.0f), "single min null propagation");
+  assert(!max((0.0f / 0.0f ?? null), 2.0f), "single max null propagation");
   // --- float min/max/clamp ---
   assert(min(1.0, 2.0) == 1.0, "float min");
   assert(max(1.0, 2.0) == 2.0, "float max");
   assert(clamp(0.5, 1.0, 3.0) == 1.0, "float clamp below lo");
   assert(clamp(2.0, 1.0, 3.0) == 2.0, "float clamp inside");
   assert(clamp(4.0, 1.0, 3.0) == 3.0, "float clamp above hi");
-  assert(!min(0.0 / 0.0, 2.0), "float min null propagation");
-  assert(!max(0.0 / 0.0, 2.0), "float max null propagation");
-  assert(!clamp(0.0 / 0.0, 1.0, 3.0), "float clamp null propagation");
+  assert(!min((0.0 / 0.0 ?? null), 2.0), "float min null propagation");
+  assert(!max((0.0 / 0.0 ?? null), 2.0), "float max null propagation");
+  assert(!clamp((0.0 / 0.0 ?? null), 1.0, 3.0), "float clamp null propagation");
   // --- min/max with negative values across types ---
   assert(min(-100, 100) == -100, "int min extremes");
   assert(max(-100, 100) == 100, "int max extremes");

@@ -2175,7 +2175,7 @@ enum RefRhs {
 
 /// #316 — true when `value` reads variable `v` anywhere (its old store may
 /// feed the new value, so a pre-Set free would be a use-after-free).
-fn value_reads_var(value: &Value, v: u16) -> bool {
+pub(crate) fn value_reads_var(value: &Value, v: u16) -> bool {
     match value {
         Value::Var(x) => *x == v,
         Value::Set(x, inner) => *x == v || value_reads_var(inner, v),

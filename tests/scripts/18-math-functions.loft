@@ -42,7 +42,7 @@ fn main() {
   assert(round(ln(exp(2.5)) * 1000.0) == 2500.0, "float ln(exp(2.5)) == 2.5");
   // --- null propagation ---
   // NaN input produces NaN output (consistent with all other float ops)
-  nan = 0.0 / 0.0;
+  nan = 0.0 / 0.0 ?? null;
   assert(!exp(nan), "float exp(null) is null");
   assert(!ln(nan), "float ln(null) is null");
   assert(!log2(nan), "float log2(null) is null");

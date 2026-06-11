@@ -31,8 +31,10 @@ fn main() {
   assert(round(PI * 1000.0) == 3142.0, "PI rounded");
   // --- Null (NaN) ---
   n = 0.0;
-  // 0.0 / 0.0 produces NaN which is null for float
-  bad = n / n;
+  // The DEFENDED 0.0 / 0.0 produces NaN which is null for float
+  // (the undefended form raises `divide by zero` per plan-07 4f.5 —
+  // guarded by tests/scripts/184-i333-div-zero-raises.loft).
+  bad = n / n ?? null;
   assert(!bad, "float nan is null");
   // Null float comparisons: null is not equal to anything, not even itself.
   assert(!(bad == bad), "null == null is false");

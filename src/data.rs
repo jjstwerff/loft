@@ -169,9 +169,12 @@ impl IntegerSpec {
             return n.get();
         }
         let range = self.range();
-        if range <= 256 || (nullable && range == 257) {
+        // #334: a nullable narrow field reserves one code as the null
+        // sentinel, so the width must hold range + 1 codes when nullable.
+        let codes = if nullable { range + 1 } else { range };
+        if codes <= 256 {
             1
-        } else if range <= 65536 || (nullable && range == 65537) {
+        } else if codes <= 65536 {
             2
         } else {
             8

@@ -3084,7 +3084,18 @@ impl Parser {
                      by the OpGet* family"
                 );
                 if s == 1 {
-                    self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
+                    // #334: see the OpSetByteNullable note — nullable byte
+                    // STRUCT FIELDS decode the reserved 256th code to null.
+                    // Vector elements (alias-less forced_size(1)) keep the
+                    // raw direct encoding — their stride/value contract is
+                    // the narrow-vector one, not the field-sentinel one.
+                    let byte_vec = alias == u32::MAX && spec.forced_size.is_some();
+                    let op = if nullable && !byte_vec {
+                        "OpGetByteNullable"
+                    } else {
+                        "OpGetByte"
+                    };
+                    self.cl(op, &[code, p, Value::Int(spec.min)])
                 } else if s == 2 && narrow_vec {
                     // narrow vector element, direct encoding.
                     self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
@@ -3546,7 +3557,16 @@ impl Parser {
                     },
                 );
                 if s == 1 {
-                    self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
+                    // #334: a NULLABLE byte field reserves the 256th code as
+                    // the null sentinel (255 distinct values) — the Nullable
+                    // op pair translates integer null ↔ the sentinel.
+                    // `not null` fields keep the full range via the raw op.
+                    let op = if f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr) {
+                        "OpSetByteNullable"
+                    } else {
+                        "OpSetByte"
+                    };
+                    self.cl(op, &[ref_code, pos_val, m, val_code])
                 } else if s == 2 && narrow_vec {
                     self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
