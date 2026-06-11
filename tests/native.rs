@@ -16,7 +16,6 @@ use loft::generation::Output;
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
-use std::collections::HashSet;
 use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -356,28 +355,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     // Generate Rust source into an in-memory buffer first.
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut out = Output {
-            data: &p.data,
-            stores: &state.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: HashSet::new(),
-            active_pre_eval: std::collections::HashMap::new(),
-            reachable: HashSet::new(),
-            dup_fn_names: HashSet::new(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: std::collections::HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut out = Output::new(&p.data, &state.database);
         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)?;
     }
 

@@ -116,28 +116,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     let tmp_rs = std::env::temp_dir().join(format!("loft_wasm_{stem}.rs"));
     {
         let mut f = std::fs::File::create(&tmp_rs)?;
-        let mut out = Output {
-            data: &p.data,
-            stores: &state.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: HashSet::new(),
-            active_pre_eval: std::collections::HashMap::new(),
-            reachable: HashSet::new(),
-            dup_fn_names: HashSet::new(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: std::collections::HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut out = Output::new(&p.data, &state.database);
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }
 

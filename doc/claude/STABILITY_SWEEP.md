@@ -205,8 +205,17 @@ trace dumper on reference-field programs.
   E0425 `--html` build (now reproducible locally — binaryen + chromium
   installed 2026-06-11, `make game` + `tests/html_render.rs` green), full
   native + wasm suites, ASan gate.
-- **Status**: documented, scheduled for pass 2 (issue #260 stays
-  `status:deferred`).
+- **Status**: EXECUTED 2026-06-11 (#260 Fix B, branch bugs325).  The
+  instrument showed brick-buster's generator forfeited 46/46 owning
+  stores; the move landed as a prologue on BOTH backends (native:
+  sentinel `let mut` per `__vdb` from the variable table + the
+  non-`Block`-body branch covered; interpreter: `OpInitRefSentinel` per
+  slot after the frame reserve), `Set(v, Null)` keeps its IR position
+  (allocation timing unchanged; native first-Set still emits the named
+  `null_named` + `OpDatabase` pair via the `predeclared` set), and the
+  Fix-A guard (`has_free_before_alloc` + `contains_free`) is deleted.
+  Validated: 92×-E0425 `--html` build clean, full suite, headless GL
+  render gate, 177 regression on both backends.
 
 ### F3-1 — two null encodings, comparator normalises: probed, HELD (2026-06-11)
 

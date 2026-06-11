@@ -21,7 +21,6 @@ use crate::parser::Parser;
 use crate::scopes;
 use crate::state::State;
 use crate::variables;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -402,28 +401,7 @@ fn emit_rust(
     stores: &crate::database::Stores,
     end_def: u32,
 ) -> std::io::Result<()> {
-    let mut out = generation::Output {
-        data,
-        stores,
-        counter: 0,
-        indent: 0,
-        def_nr: 0,
-        declared: HashSet::new(),
-        active_pre_eval: std::collections::HashMap::new(),
-        reachable: HashSet::new(),
-        dup_fn_names: HashSet::new(),
-        loop_stack: Vec::new(),
-        next_format_count: 0,
-        yield_collect: false,
-        yield_collect_text: false,
-        fn_ref_context: false,
-        i32_literal_context: false,
-        tuple_text_to_string: false,
-        coroutine_persistent_vars: HashSet::new(),
-        call_stack_prefix: None,
-        wasm_browser: false,
-        live_fns: Vec::new(),
-    };
+    let mut out = generation::Output::new(data, stores);
     out.output_native(w, 0, end_def)
 }
 

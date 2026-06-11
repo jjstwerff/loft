@@ -4301,25 +4301,6 @@ fn is_top_free(op: &Value, st: u16, fr_nr: u32) -> bool {
         && matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == st))
 }
 
-/// True if `node` (recursively) contains an `OpFreeRef(Var(store))` — the free
-/// counterpart of [`contains_alloc`].  Descends everywhere (e.g. an early-return
-/// `If`), unlike [`is_top_free`].
-fn contains_free(node: &Value, store: u16, fr_nr: u32) -> bool {
-    node.any_node(&mut |n| is_top_free(n, store, fr_nr))
-}
-
-/// True if a free of `st` occurs in a top-level body op BEFORE the op that allocates
-/// `st` (e.g. an early-return scope-exit free emitted, nested, before the alloc).
-/// Relocating `st`'s null-init declaration below such a free would strand the free out
-/// of scope (native/wasm rustc `E0425`), so the reclaim pass must leave these stores at
-/// their body-0 declaration.
-fn has_free_before_alloc(ops: &[Value], st: u16, db_nr: u32, fr_nr: u32) -> bool {
-    let Some(alloc_idx) = ops.iter().position(|o| contains_alloc(o, st, db_nr)) else {
-        return false;
-    };
-    ops[..alloc_idx].iter().any(|o| contains_free(o, st, fr_nr))
-}
-
 /// Plan-57 Phase-4 guard (Goal-E enforcement): after [`lastuse_reclaim`] has run,
 /// every store in the reclaim plan's `intent` must have its `OpFreeRef` placed at
 /// body top-level BEFORE the op that allocates its `trigger`.  Returns the count of
@@ -4384,30 +4365,13 @@ fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr
         return 0;
     }
     let Value::Block(bl) = code else { return 0 };
-    // Fix A (plan-57 / @PLN2 follow-up): a store whose null-init *declaration* would be
-    // relocated DOWN past a free that already references it — e.g. an early-return
-    // scope-exit `OpFreeRef` emitted (nested) BEFORE the store's alloc — must NOT be
-    // reclaimed: moving its `let` below that free strands the free out of scope
-    // (native/wasm rustc `E0425`).  Exclude such stores from the whole pass; they fall
-    // back to the body-0 declaration + scope-exit free — the reclaim-OFF baseline the
-    // full native/interpreter/ASan suite already passes.  Pure subtraction from the
-    // reclaim set: strictly fewer relocations, no new frees.
-    let problematic: HashSet<u16> = owning
-        .iter()
-        .copied()
-        .filter(|&st| has_free_before_alloc(&bl.operators, st, db_nr, fr_nr))
-        .collect();
-    let owning: Vec<u16> = owning
-        .into_iter()
-        .filter(|st| !problematic.contains(st))
-        .collect();
-    if owning.is_empty() {
-        return 0;
-    }
-    let intent: Vec<(u16, u16)> = intent
-        .into_iter()
-        .filter(|(st, _)| !problematic.contains(st))
-        .collect();
+    // #260 Fix B replaced Fix A here: native codegen now declares every
+    // `__vdb` local up front (sentinel-bound prologue, `generation/mod.rs::
+    // output_function`), so relocating a null-init below an early-return
+    // scope-exit free can no longer strand the free's `var_…` reference out
+    // of scope (rustc E0425) — the `has_free_before_alloc` exclusion guard
+    // is gone and those stores get their watermark reclaim back (46/46
+    // owning stores were forfeited in brick-buster's generator pre-B).
     // Early-free groups: before[trigger] = dead stores to free right before
     // `trigger` allocates.  Their scope-exit `OpFreeRef` is REMOVED, not kept as an
     // "idempotent double-free": under reclaim the freed slot is reused by a later

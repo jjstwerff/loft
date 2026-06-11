@@ -416,6 +416,13 @@ pub struct Output<'a> {
     pub def_nr: u32,
     pub indent: u32,
     pub declared: HashSet<u16>,
+    /// #260 Fix B: `__vdb` store locals declared up front in the function
+    /// prologue (sentinel-bound, no allocation).  The first body
+    /// `Set(v, Null)` consumes its entry so it still emits the named-store
+    /// `null_named` + `OpDatabase` pair at its (possibly reclaim-relocated)
+    /// IR position — allocation order and store naming stay unchanged;
+    /// only the `let` position moved.
+    pub predeclared: HashSet<u16>,
     /// Active hoisted sub-expressions for the statement being emitted: IR node
     /// address → its `_pre_N` name.  `output_code_inner` consults this at every
     /// node so a hoisted operand emits its name instead of being re-generated
@@ -771,6 +778,40 @@ enum BareIo {
     Index(u16, Vec<(u16, bool)>),
 }
 
+impl<'a> Output<'a> {
+    /// All-defaults constructor — the ONE place that knows the field list.
+    /// Eleven hand-rolled struct literals (src + tests) previously each
+    /// enumerated every field and drifted one field at a time on every
+    /// addition (pass-3 dedupe).  Callers flip the rare non-default flag
+    /// (`wasm_browser`) on the returned value.
+    #[must_use]
+    pub fn new(data: &'a Data, stores: &'a Stores) -> Self {
+        Output {
+            data,
+            stores,
+            counter: 0,
+            def_nr: 0,
+            indent: 0,
+            declared: HashSet::new(),
+            predeclared: HashSet::new(),
+            active_pre_eval: HashMap::new(),
+            reachable: HashSet::new(),
+            dup_fn_names: HashSet::new(),
+            loop_stack: Vec::new(),
+            next_format_count: 0,
+            yield_collect: false,
+            yield_collect_text: false,
+            coroutine_persistent_vars: HashSet::new(),
+            fn_ref_context: false,
+            i32_literal_context: false,
+            tuple_text_to_string: false,
+            call_stack_prefix: None,
+            wasm_browser: false,
+            live_fns: Vec::new(),
+        }
+    }
+}
+
 impl Output<'_> {
     /// The Rust identifier this generation emits for function `def` — the bare
     /// name unless it collides across modules (see [`disambiguated_fn_ident`]).
@@ -796,6 +837,7 @@ impl Output<'_> {
         self.def_nr = def_nr;
         self.indent = 0;
         self.declared.clear();
+        self.predeclared.clear();
         self.next_format_count = 0;
     }
 
@@ -2469,6 +2511,34 @@ extern crate loft;"
         for arg_nr in def.variables().arguments() {
             self.declared.insert(arg_nr);
         }
+        // #260 Fix B: declare the owning `__vdb` store locals UP FRONT, from
+        // the variable table, decoupling the `let` position from the IR
+        // null-init position — `lastuse_reclaim` may then relocate a
+        // null-init below an early-return scope-exit free without stranding
+        // the free's `var_…` reference out of scope (rustc E0425, 92× on the
+        // pre-Fix-A brick-buster `--html` build).  The prologue binds the
+        // NULL SENTINEL only (no allocation; `OpFreeRef` no-ops on it); the
+        // first body `Set(v, Null)` still emits `null_named` + `OpDatabase`
+        // at its IR position via `predeclared`.
+        let mut vdb_prologue = String::new();
+        {
+            let vars = def.variables();
+            for v in 0..vars.count() {
+                if !vars.is_argument(v)
+                    && vars.name(v).starts_with("__vdb")
+                    && rust_type(vars.tp(v), &Context::Variable) == "DbRef"
+                {
+                    use std::fmt::Write as _;
+                    let _ = write!(
+                        vdb_prologue,
+                        "\n  let mut var_{}: DbRef = DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }};",
+                        sanitize(vars.name(v))
+                    );
+                    self.declared.insert(v);
+                    self.predeclared.insert(v);
+                }
+            }
+        }
         // Determine the user-visible loft name for the shadow call stack.
         let loft_name = def.name().strip_prefix("n_").unwrap_or(def.name());
         let loft_file = &def.position().file;
@@ -2515,7 +2585,7 @@ extern crate loft;"
                 self.call_stack_prefix = Some(format!(
                     "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
-                     let _call_guard = codegen_runtime::CallGuard;"
+                     let _call_guard = codegen_runtime::CallGuard;{vdb_prologue}"
                 ));
                 self.output_block(w, body, returns_text)?;
                 self.call_stack_prefix = None;
@@ -2523,8 +2593,9 @@ extern crate loft;"
                 // Non-instrumented user-fn (e.g. `t_…` methods) — still
                 // needs the `&mut Stores` derivation from the UnsafeCell
                 // parameter for templates / inner calls.
-                self.call_stack_prefix =
-                    Some("  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string());
+                self.call_stack_prefix = Some(format!(
+                    "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};{vdb_prologue}"
+                ));
                 self.output_block(w, body, returns_text)?;
                 self.call_stack_prefix = None;
             }
@@ -2670,6 +2741,14 @@ extern crate loft;"
                 w,
                 "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
             )?;
+            // #260 Fix B: this branch (non-`Block` body shapes) bypasses
+            // `output_block`, so the prologue cannot ride
+            // `call_stack_prefix` — emit it directly or the `__vdb`
+            // declarations marked in `declared` above never materialise
+            // (E0425 on their frees).
+            if !vdb_prologue.is_empty() {
+                writeln!(w, "{}", vdb_prologue.trim_start_matches('\n'))?;
+            }
             self.output_code_inner(w, def.code())?;
             writeln!(w, "\n}}")?;
         }

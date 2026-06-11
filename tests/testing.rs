@@ -436,28 +436,7 @@ impl Test {
     fn generate_code(&self, p: &Parser, start: u32) -> std::io::Result<()> {
         std::fs::create_dir_all("tests/generated")?;
         let w = &mut File::create("tests/generated/default.rs")?;
-        let mut o = Output {
-            data: &p.data,
-            stores: &p.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: Default::default(),
-            active_pre_eval: Default::default(),
-            reachable: Default::default(),
-            dup_fn_names: Default::default(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: std::collections::HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut o = Output::new(&p.data, &p.database);
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.
         if self.result != Value::Null || !self.tp.is_unknown() {

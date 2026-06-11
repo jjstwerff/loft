@@ -54,7 +54,6 @@ use crate::native_utils::{
 use crate::test_runner::run_tests;
 use loft::diagnostics::Level;
 use loft::state::State;
-use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 
@@ -4554,28 +4553,7 @@ fn main() {
             // collides across libraries (no-op without a collision; calls
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
-            let mut out = generation::Output {
-                data: &p.data,
-                stores: &state.database,
-                counter: 0,
-                indent: 0,
-                def_nr: 0,
-                declared: HashSet::new(),
-                active_pre_eval: std::collections::HashMap::new(),
-                reachable: HashSet::new(),
-                dup_fn_names: HashSet::new(),
-                loop_stack: Vec::new(),
-                next_format_count: 0,
-                yield_collect: false,
-                yield_collect_text: false,
-                fn_ref_context: false,
-                i32_literal_context: false,
-                tuple_text_to_string: false,
-                coroutine_persistent_vars: HashSet::new(),
-                call_stack_prefix: None,
-                wasm_browser: false,
-                live_fns: Vec::new(),
-            };
+            let mut out = generation::Output::new(&p.data, &state.database);
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -4666,28 +4644,8 @@ fn main() {
             // collides across libraries (no-op without a collision; calls
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
-            let mut out = generation::Output {
-                data: &p.data,
-                stores: &state.database,
-                counter: 0,
-                indent: 0,
-                def_nr: 0,
-                declared: HashSet::new(),
-                active_pre_eval: std::collections::HashMap::new(),
-                reachable: HashSet::new(),
-                dup_fn_names: HashSet::new(),
-                loop_stack: Vec::new(),
-                next_format_count: 0,
-                yield_collect: false,
-                yield_collect_text: false,
-                fn_ref_context: false,
-                i32_literal_context: false,
-                tuple_text_to_string: false,
-                coroutine_persistent_vars: HashSet::new(),
-                call_stack_prefix: None,
-                wasm_browser: true,
-                live_fns: Vec::new(),
-            };
+            let mut out = generation::Output::new(&p.data, &state.database);
+            out.wasm_browser = true;
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -5081,28 +5039,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // collides across libraries (no-op without a collision; calls
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
-            let mut out = generation::Output {
-                data: &p.data,
-                stores: &state.database,
-                counter: 0,
-                indent: 0,
-                def_nr: 0,
-                declared: HashSet::new(),
-                active_pre_eval: std::collections::HashMap::new(),
-                reachable: HashSet::new(),
-                dup_fn_names: HashSet::new(),
-                loop_stack: Vec::new(),
-                next_format_count: 0,
-                yield_collect: false,
-                yield_collect_text: false,
-                fn_ref_context: false,
-                i32_literal_context: false,
-                tuple_text_to_string: false,
-                coroutine_persistent_vars: HashSet::new(),
-                call_stack_prefix: None,
-                wasm_browser: false,
-                live_fns: Vec::new(),
-            };
+            let mut out = generation::Output::new(&p.data, &state.database);
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
                 let entry_defs: Vec<u32> = if main_nr < end_def {

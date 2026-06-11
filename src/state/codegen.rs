@@ -193,6 +193,21 @@ impl State {
             self.code_add(reserve);
             stack.position += reserve;
         }
+        // #260 Fix B (interpreter twin of the native `__vdb` prologue):
+        // sentinel-init every `__vdb` slot at function entry, so an
+        // early-return scope-exit free that `lastuse_reclaim` left ABOVE the
+        // store's relocated null-init frees a null sentinel (`OpFreeRef`
+        // no-ops on it) instead of reading uninitialized slot bytes (a
+        // garbage `DbRef` → allocation-table index panic).  The relocated
+        // null-init + `OpDatabase` still run at their IR position, so
+        // allocation timing (the watermark benefit) is unchanged.
+        for v in 0..stack.function.count() {
+            if !stack.function.is_argument(v) && stack.function.name(v).starts_with("__vdb") {
+                let slot_offset = stack.var_pos(v);
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
+            }
+        }
         if console {
             println!("{} ", stack.data.def(def_nr).header(stack.data, def_nr));
             stack.data.dump(def_nr);

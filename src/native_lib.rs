@@ -313,28 +313,7 @@ impl LibArg {
 fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut out = Output {
-            data,
-            stores,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: HashSet::new(),
-            active_pre_eval: std::collections::HashMap::new(),
-            reachable: HashSet::new(),
-            dup_fn_names: HashSet::new(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut out = Output::new(data, stores);
         // Only the exported functions + their transitive deps (header + init + the
         // reachable subset) — exactly what a `--native` binary emits from `n_main`,
         // so unreachable operator stubs never surface.
