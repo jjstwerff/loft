@@ -601,6 +601,180 @@ fn main() {{
     let _ = std::fs::remove_file(&err_path);
 }
 
+/// @PLN18 08 scenario S7 — the debugger loop end-to-end (@PLN16 6b/6c
+/// convergence): a scripted control-channel session against a serving
+/// compiled kernel, asserting each stage IN ORDER — breakpoint hit with
+/// frame bindings (the pause's mini-pump keeps mechanics alive), frame
+/// eval, live edit acknowledged through the pause (the S3 poll-now),
+/// resume, the SECOND hit proving breakpoint re-resolution across the
+/// reload (offsets moved, identity did not), rebuild driven over the
+/// channel, swap — and a post-swap breakpoint hitting in the NEW build
+/// over the RESTORED world.
+#[test]
+fn s7_debugger_loop_end_to_end() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    const STEM: &str = "/.loft/cache/eh_s7_18108-";
+    s5_kill_stale(STEM);
+    let _hygiene = S5Hygiene(STEM);
+    std::thread::sleep(Duration::from_millis(200));
+    let port = 18108u16;
+    // The edit touches ONLY the named fn (lambdas don't reload — the
+    // documented v1 boundary); each build's identity shows in the STEP:
+    // +1 = original, +100 = the edit (and post-swap, its compiled form).
+    let fixture = |step: u32| {
+        format!(
+            r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn bump_events(w: W) -> integer {{
+  w.events = w.events + {step};
+  w.events
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  resumed = engine_host::swap_world(w);
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = bump_events(w);
+      engine_host::send(ev.cid, "got:{{ev.payload}}#{{n}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+        )
+    };
+    let prog = std::env::temp_dir().join(format!("eh_s7_{port}.loft"));
+    std::fs::write(&prog, fixture(1)).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let err_path = std::env::temp_dir().join(format!("eh_s7_{port}.err"));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_LIVE_RELOAD", "1")
+        .env("LOFT_DEBUG_CONTROL", "1")
+        .env("LOFT_DISPATCH_DEBUG", "1");
+    cmd.process_group(0);
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let ctl = ws_connect(port);
+    let game = ws_connect(port);
+
+    // Stage 1: breakpoint set over the control channel (sets + flips).
+    ws_send(&ctl, "D!:bp bump_events");
+    assert_eq!(ws_recv(&ctl), "D:ok bp bump_events");
+
+    // Stage 2: the hit, with frame bindings (the game's reply is HELD —
+    // the dispatch is paused; mechanics stay alive underneath).
+    ws_send(&game, "a");
+    let hit = ws_recv(&ctl);
+    assert!(
+        hit.starts_with("D:hit bump_events") && hit.contains("w="),
+        "first hit with bindings: {hit}"
+    );
+
+    // Stage 3: evaluate a frame variable at the pause.
+    ws_send(&ctl, "D!:eval w");
+    let ev = ws_recv(&ctl);
+    assert!(
+        ev.starts_with("D:eval w=") && ev.contains("events"),
+        "frame eval: {ev}"
+    );
+
+    // Stage 4: live edit THROUGH the pause (the S3 poll-now finding),
+    // structured ack.  The 200 ms reload throttle needs the edit to settle.
+    std::fs::write(&prog, fixture(100)).unwrap();
+    std::thread::sleep(Duration::from_millis(350));
+    ws_send(&ctl, "D!:reload");
+    assert_eq!(ws_recv(&ctl), "D:reload applied");
+
+    // Stage 5: resume — the held call completes on the OLD body (append-only).
+    ws_send(&ctl, "D!:resume");
+    assert_eq!(ws_recv(&ctl), "D:resumed");
+    assert_eq!(ws_recv(&game), "got:a#1");
+
+    // Stage 6: the next call runs the NEW body AND hits again — breakpoint
+    // re-resolution across the reload (offsets moved, identity did not).
+    ws_send(&game, "b");
+    let hit2 = ws_recv(&ctl);
+    assert!(
+        hit2.starts_with("D:hit bump_events"),
+        "re-resolved hit: {hit2}"
+    );
+    ws_send(&ctl, "D!:resume");
+    assert_eq!(ws_recv(&ctl), "D:resumed");
+    assert_eq!(ws_recv(&game), "got:b#101");
+
+    // Stage 7: rebuild over the channel; poll to ready.
+    ws_send(&ctl, "D!:rebuild");
+    assert_eq!(ws_recv(&ctl), "D:rebuild started");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        ws_send(&ctl, "D!:rebuild?");
+        let st = ws_recv(&ctl);
+        if st == "D:rebuild 2" {
+            break;
+        }
+        assert!(st == "D:rebuild 1", "rebuild status: {st}");
+        assert!(Instant::now() < deadline, "rebuild never ready");
+    }
+
+    // Stage 8: swap over the channel; both seats reconnect into the new
+    // build and the debugger RE-ARMS — still debuggable after the swap.
+    ws_send(&ctl, "D!:swap auto");
+    assert_eq!(ws_recv(&ctl), "D:swap true");
+    ctl.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    while ws_try_recv(&ctl).is_some() {}
+    let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+    let (ctl2, game2) = loop {
+        if let (Some(c), Some(g)) = (ws_try_connect(port), ws_try_connect(port)) {
+            break (c, g);
+        }
+        assert!(
+            Instant::now() < reconnect_deadline,
+            "never reconnected into the new build"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    ws_send(&ctl2, "D!:bp bump_events");
+    assert_eq!(ws_recv(&ctl2), "D:ok bp bump_events");
+
+    // Stage 9: the post-swap hit, over the RESTORED world (events=101).
+    ws_send(&game2, "c");
+    let hit3 = ws_recv(&ctl2);
+    assert!(
+        hit3.starts_with("D:hit bump_events") && hit3.contains("101"),
+        "post-swap hit over the restored world: {hit3}"
+    );
+    ws_send(&ctl2, "D!:resume");
+    assert_eq!(ws_recv(&ctl2), "D:resumed");
+    assert_eq!(ws_recv(&game2), "got:c#201");
+
+    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    assert!(
+        stderr.contains("loft-debug: paused in bump_events"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("loft-swap: world restored"), "{stderr}");
+    drop(_guard);
+    let _ = std::fs::remove_file(&prog);
+    let _ = std::fs::remove_file(&err_path);
+}
+
 /// @PLN18 08 scenario S4 — the background rebuild: the serve host compiles
 /// the full project (a real rustc run) while the OLD build keeps serving.
 /// Asserts the design's three clauses:

@@ -715,6 +715,14 @@ fn pump_kernel(k: &mut Kernel) -> i64 {
                 match read_frame(stream) {
                     FrameRead::None => break,
                     FrameRead::Text(payload) => {
+                        // @PLN18 08-S7 — the debug control channel: `D!:`
+                        // frames are kernel-handled (the game script never
+                        // sees them), gated on LOFT_DEBUG_CONTROL=1 and a
+                        // LOOPBACK peer.
+                        if let Some(cmd) = payload.strip_prefix("D!:") {
+                            handle_debug_control(k, cid, cmd);
+                            continue;
+                        }
                         // Wire-schema routing on the inbound reliable carrier
                         // too: a sync-class frame (a phone's pose) conflates
                         // exactly like a datagram — the server script reads
@@ -1533,6 +1541,106 @@ pub fn n_kernel_default_host_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&v);
+}
+
+// ── @PLN18 08-S7 — the debug control channel (transport half) ──────────────
+//
+// `D!:` frames from a LOOPBACK peer (gated on LOFT_DEBUG_CONTROL=1) drive
+// the debugger loop: breakpoints, frame eval, resume, reload-now, rebuild,
+// swap.  THIS module is transport only — semantics (the parked State, the
+// pause loop, the mailbox) live in live_dispatch.  Replies are plain text
+// frames to the requesting client; `D:hit` notifications go to the client
+// that set the breakpoint.
+
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_control_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LOFT_DEBUG_CONTROL").is_ok_and(|v| v == "1"))
+}
+
+/// Send a control reply/notification to `cid` (no-op for -1 / dead conns).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn debug_send(cid: i64, msg: &str) {
+    if cid < 0 {
+        return;
+    }
+    let _ = with_kernel(|k| deliver(k, cid as usize, msg, false));
+}
+
+/// The mechanics-only mini-pump for the pause loop: accepts, reads frames
+/// (control frames are handled en route; game events QUEUE for after the
+/// resume), answers keepalives.  Never dispatches meaning.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn debug_pump() {
+    let _ = with_kernel(pump_kernel);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
+    if !debug_control_enabled() {
+        return; // not a debug host: the frame is silently dropped
+    }
+    let loopback = k.conns[cid]
+        .as_ref()
+        .and_then(|c| c.peer_addr().ok())
+        .is_some_and(|a| a.ip().is_loopback());
+    if !loopback {
+        return;
+    }
+    let reply: Option<String> = match cmd.split_once(' ').map_or((cmd, ""), |(a, b)| (a, b)) {
+        ("bp", name) if !name.is_empty() => {
+            let ok = crate::live_dispatch::debug_set_bp(name, cid as i64);
+            Some(format!("D:{} bp {name}", if ok { "ok" } else { "err" }))
+        }
+        ("flip", rest) => {
+            let (name, on) = rest.split_once(' ').unwrap_or((rest, "1"));
+            let ok = crate::live_dispatch::set_flip(name, on != "0");
+            Some(format!("D:flip {ok}"))
+        }
+        ("eval", name) if !name.is_empty() => {
+            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Eval(
+                name.to_string(),
+                cid as i64,
+            ));
+            None // answered by the pause loop
+        }
+        ("resume", _) => {
+            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Resume(
+                cid as i64,
+            ));
+            None
+        }
+        ("reload", _) => {
+            crate::live_dispatch::debug_mailbox_push(crate::live_dispatch::DebugCmd::Reload(
+                cid as i64,
+            ));
+            None
+        }
+        ("rebuild", _) => {
+            let ok = crate::live_dispatch::n_rebuild_start_ctl();
+            Some(format!(
+                "D:rebuild {}",
+                if ok { "started" } else { "refused" }
+            ))
+        }
+        ("rebuild?", _) => Some(format!(
+            "D:rebuild {}",
+            crate::live_dispatch::rebuild_status_ctl()
+        )),
+        ("swap", artifact) => {
+            let target = if artifact == "auto" || artifact.is_empty() {
+                crate::live_dispatch::rebuild_artifact_ctl()
+            } else {
+                artifact.to_string()
+            };
+            let ok = swap_start_impl(&target);
+            Some(format!("D:swap {ok}"))
+        }
+        _ => Some(format!("D:err unknown command {cmd:?}")),
+    };
+    if let Some(msg) = reply {
+        let _ = deliver(k, cid, &msg, false);
+    }
 }
 
 // ── @PLN18 08-S5 — the native build swap: a new process under a running ────

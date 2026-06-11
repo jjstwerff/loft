@@ -207,19 +207,28 @@ fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
 /// or back to compiled (`!on`).  Returns false when the name is unknown or
 /// unresolved — a refused flip, never a halt.
 pub fn set_flip(name: &str, on: bool) -> bool {
+    LIVE.with(|l| {
+        l.borrow()
+            .as_ref()
+            .is_some_and(|live| set_flip_in(live, name, on))
+    })
+}
+
+/// The flip body against an already-borrowed [`Live`] — shared by the public
+/// `set_flip` and the debug-control path (which may already hold the borrow).
+fn set_flip_in(live: &Live, name: &str, on: bool) -> bool {
     let (Some(flips), Some(resolved)) = (FLIPS.get(), RESOLVED.get()) else {
         return false;
     };
     let full = format!("n_{name}");
-    let found = LIVE.with(|l| {
-        l.borrow().as_ref().and_then(|live| {
-            live.names
-                .iter()
-                .position(|n| **n == full)
-                .filter(|&i| resolved[i])
-        })
-    });
-    let Some(idx) = found else { return false };
+    let Some(idx) = live
+        .names
+        .iter()
+        .position(|n| **n == full)
+        .filter(|&i| resolved[i])
+    else {
+        return false;
+    };
     flips[idx].store(on, Ordering::Relaxed);
     if DEBUG.load(Ordering::Relaxed) {
         eprintln!(
@@ -242,7 +251,7 @@ pub fn dispatch_count() -> u64 {
 fn dispatch<R>(
     cell: &UnsafeCell<Stores>,
     idx: usize,
-    run: impl FnOnce(&mut State, u32, u32) -> R,
+    run: impl FnOnce(&mut State, &crate::data::Data, u32, u32) -> R,
 ) -> R {
     LIVE.with(|l| {
         let mut borrow = l.borrow_mut();
@@ -264,11 +273,14 @@ fn dispatch<R>(
         // BEFORE the position resolution, so the dispatch that follows an
         // edit already runs the new body.  Internally throttled (200 ms).
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::live_reload::active() {
-            crate::live_reload::poll(&mut live.state);
+        if crate::live_reload::active() && crate::live_reload::poll(&mut live.state) {
+            // @PLN18 08-S7 — offsets moved; breakpoint identity must not.
+            debug_reapply_bps(&mut live.state, &live._parser.data);
         }
         let pos = live.state.fn_positions[d_nr as usize];
-        let r = run(&mut live.state, d_nr, pos);
+        let state = &mut live.state;
+        let data = &live._parser.data;
+        let r = run(state, data, d_nr, pos);
         std::mem::swap(&mut live.state.database, in_cell);
         r
     })
@@ -277,28 +289,43 @@ fn dispatch<R>(
 /// Dispatch a `Void` fn.  `push` lands the args via [`State::put_stack`] in
 /// declared order — the 02 probe's contract (and the generated signature's).
 pub fn live_call_void(cell: &UnsafeCell<Stores>, idx: usize, push: impl FnOnce(&mut State)) {
-    dispatch(cell, idx, |st, d_nr, pos| st.reenter(d_nr, pos, push));
+    dispatch(cell, idx, |st, data, d_nr, pos| {
+        if st.debug.is_some() {
+            st.reenter_dbg::<()>(d_nr, pos, data, push, debug_pause_loop);
+        } else {
+            st.reenter(d_nr, pos, push);
+        }
+    });
+}
+
+/// One dispatched typed call, debug-aware: with breakpoints registered the
+/// call runs under [`State::reenter_dbg`] (suspensions block in the pause
+/// loop — mechanics stay alive); without, the plain fast path.
+macro_rules! call_typed {
+    ($cell:expr, $idx:expr, $push:expr, $t:ty) => {
+        dispatch($cell, $idx, |st, data, d_nr, pos| {
+            if st.debug.is_some() {
+                st.reenter_dbg::<$t>(d_nr, pos, data, $push, debug_pause_loop)
+            } else {
+                st.reenter_ret::<$t>(d_nr, pos, $push)
+            }
+        })
+    };
 }
 
 /// Dispatch an `integer`-returning fn.
 pub fn live_call_i64(cell: &UnsafeCell<Stores>, idx: usize, push: impl FnOnce(&mut State)) -> i64 {
-    dispatch(cell, idx, |st, d_nr, pos| {
-        st.reenter_ret::<i64>(d_nr, pos, push)
-    })
+    call_typed!(cell, idx, push, i64)
 }
 
 /// Dispatch a `float`-returning fn.
 pub fn live_call_f64(cell: &UnsafeCell<Stores>, idx: usize, push: impl FnOnce(&mut State)) -> f64 {
-    dispatch(cell, idx, |st, d_nr, pos| {
-        st.reenter_ret::<f64>(d_nr, pos, push)
-    })
+    call_typed!(cell, idx, push, f64)
 }
 
 /// Dispatch a `boolean`-returning fn (storage byte: 0/1/255).
 pub fn live_call_u8(cell: &UnsafeCell<Stores>, idx: usize, push: impl FnOnce(&mut State)) -> u8 {
-    dispatch(cell, idx, |st, d_nr, pos| {
-        st.reenter_ret::<u8>(d_nr, pos, push)
-    })
+    call_typed!(cell, idx, push, u8)
 }
 
 /// Dispatch a record/vector/hash-returning fn (a `DbRef` into the shared world).
@@ -307,9 +334,170 @@ pub fn live_call_ref(
     idx: usize,
     push: impl FnOnce(&mut State),
 ) -> DbRef {
-    dispatch(cell, idx, |st, d_nr, pos| {
-        st.reenter_ret::<DbRef>(d_nr, pos, push)
-    })
+    call_typed!(cell, idx, push, DbRef)
+}
+
+// ── @PLN18 08-S7 — the debugger loop: control-channel semantics ────────────
+//
+// The kernel (engine_host) owns the TRANSPORT (`D!:` frames, loopback +
+// LOFT_DEBUG_CONTROL-gated); THIS module owns the semantics.  Commands that
+// need the parked State arrive through a MAILBOX: when a dispatch is paused
+// at a breakpoint, `LIVE` is mutably borrowed, so the control handler (which
+// runs inside the pause loop's mini-pump) must never borrow it again — it
+// posts, and the pause loop (which legally holds `&mut State`) applies.
+
+/// A control command that needs the parked State (applied by the pause loop)
+/// or arrived while one was borrowed.  `i64` = the requesting client's cid.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum DebugCmd {
+    SetBp(String, i64),
+    Eval(String, i64),
+    Resume(i64),
+    Reload(i64),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static DEBUG_MAILBOX: RefCell<Vec<DebugCmd>> = const { RefCell::new(Vec::new()) };
+    /// Breakpoint NAMES — the identity that survives reloads and re-resolution.
+    static DEBUG_BPS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The control client that hears `D:hit` notifications.
+    static DEBUG_SUB: std::cell::Cell<i64> = const { std::cell::Cell::new(-1) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn debug_mailbox_push(cmd: DebugCmd) {
+    DEBUG_MAILBOX.with(|m| m.borrow_mut().push(cmd));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_mailbox_drain() -> Vec<DebugCmd> {
+    DEBUG_MAILBOX.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+/// Set a breakpoint at the entry of `name` (and flip it to the interpreter —
+/// a compiled body cannot pause).  Direct when the parked State is free;
+/// posted to the mailbox when a pause holds it (the pause loop applies and
+/// acks).  Returns false only when the fn is unknown at direct application.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn debug_set_bp(name: &str, cid: i64) -> bool {
+    DEBUG_SUB.with(|s| s.set(cid));
+    let direct = LIVE.with(|l| match l.try_borrow_mut() {
+        Ok(mut guard) => guard.as_mut().map(|live| debug_apply_bp(live, name)),
+        Err(_) => None, // paused: the pause loop applies it
+    });
+    if let Some(ok) = direct {
+        ok
+    } else {
+        debug_mailbox_push(DebugCmd::SetBp(name.to_string(), cid));
+        true
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_apply_bp(live: &mut Live, name: &str) -> bool {
+    let d_nr = live._parser.data.def_nr(&format!("n_{name}"));
+    if d_nr == u32::MAX || live.state.set_breakpoint_fn_current(d_nr).is_none() {
+        return false;
+    }
+    DEBUG_BPS.with(|b| {
+        let mut b = b.borrow_mut();
+        if !b.iter().any(|n| n == name) {
+            b.push(name.to_string());
+        }
+    });
+    set_flip_in(live, name, true);
+    eprintln!("loft-debug: breakpoint at {name} (flipped to interp)");
+    true
+}
+
+/// Re-resolve every name-keyed breakpoint against the CURRENT bodies — the
+/// offsets move (a reload appends code and patches `fn_positions`); the
+/// identity must not.  A fresh `Debugger` drops the stale offsets.
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_reapply_bps(st: &mut State, data: &crate::data::Data) {
+    let names = DEBUG_BPS.with(|b| b.borrow().clone());
+    if names.is_empty() {
+        return;
+    }
+    st.debug = None;
+    st.enable_debug();
+    for name in &names {
+        let d_nr = data.def_nr(&format!("n_{name}"));
+        if d_nr == u32::MAX || st.set_breakpoint_fn_current(d_nr).is_none() {
+            eprintln!("loft-debug: breakpoint on {name} could not re-resolve");
+        }
+    }
+}
+
+/// THE PAUSE LOOP — runs between interpreter steps while a breakpoint holds
+/// the dispatch.  Mechanics stay alive (the kernel mini-pump answers
+/// keepalives and queues game events for after the resume); control commands
+/// needing the State are applied here, where `&mut State` is legal.
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_pause_loop(st: &mut State, data: &crate::data::Data, hit: &crate::debugger::BreakHit) {
+    let sub = DEBUG_SUB.with(std::cell::Cell::get);
+    let bindings = hit
+        .locals
+        .iter()
+        .map(|(n, v)| format!("{n}={v}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    eprintln!("loft-debug: paused in {}", hit.function);
+    crate::engine_host::debug_send(sub, &format!("D:hit {} {bindings}", hit.function));
+    loop {
+        crate::engine_host::debug_pump();
+        for cmd in debug_mailbox_drain() {
+            match cmd {
+                DebugCmd::Resume(cid) => {
+                    crate::engine_host::debug_send(cid, "D:resumed");
+                    eprintln!("loft-debug: resumed");
+                    return;
+                }
+                DebugCmd::Eval(name, cid) => {
+                    let val = hit
+                        .locals
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map_or("<unknown>", |(_, v)| v.as_str());
+                    crate::engine_host::debug_send(cid, &format!("D:eval {name}={val}"));
+                }
+                DebugCmd::Reload(cid) => {
+                    // The S3 poll-now: the world is swapped IN at a pause, so
+                    // the reload host sees the real CONST_STORE.  Offsets the
+                    // edit moved re-resolve before anything fires again.
+                    let grew = crate::live_reload::poll(st);
+                    if grew {
+                        debug_reapply_bps(st, data);
+                    }
+                    crate::engine_host::debug_send(
+                        cid,
+                        if grew {
+                            "D:reload applied"
+                        } else {
+                            "D:reload unchanged"
+                        },
+                    );
+                }
+                DebugCmd::SetBp(name, cid) => {
+                    // Applied with the State at hand (LIVE is borrowed, so
+                    // no set_flip — the fn is interpreted ALREADY if we are
+                    // paused inside it; otherwise the flip lands on the next
+                    // un-paused set).
+                    let d_nr = data.def_nr(&format!("n_{name}"));
+                    let ok = d_nr != u32::MAX && st.set_breakpoint_fn_current(d_nr).is_some();
+                    if ok {
+                        DEBUG_BPS.with(|b| b.borrow_mut().push(name.clone()));
+                    }
+                    crate::engine_host::debug_send(
+                        cid,
+                        &format!("D:{} bp {name}", if ok { "ok" } else { "err" }),
+                    );
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 }
 
 // ── @PLN18 08-S4 — the background rebuild ──────────────────────────────────
@@ -509,6 +697,23 @@ fn rebuild_status() -> i64 {
         *r = Rebuild::Ready { artifact };
         REBUILD_READY
     })
+}
+
+/// Control-channel shims (@PLN18 08-S7) — the kernel's debug handler drives
+/// the rebuild machinery without reaching the private internals.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn n_rebuild_start_ctl() -> bool {
+    rebuild_start()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rebuild_status_ctl() -> i64 {
+    rebuild_status()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rebuild_artifact_ctl() -> String {
+    rebuild_artifact()
 }
 
 /// The READY build's artifact path; "" unless `rebuild_status() == 2`.

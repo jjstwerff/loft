@@ -313,20 +313,52 @@ module under the page (store export across INSTANCES rather than runs)
 — gated on the --html pipeline meeting the kernel scripts; the host
 hooks and the snapshot format are already module-agnostic.
 
-### S7 — the debugger loop end-to-end (@PLN16 6b/6c convergence)
+### S7 — the debugger loop end-to-end (@PLN16 6b/6c convergence)  ✅ (2026-06-11)
 
 Breakpoint in a compiled fn → flip + pause (the debug suspension loop
 keeps mechanics alive: a mechanics-only mini-pump answers keepalives) →
 frame bindings into the REPL over the control channel → edit → resume
-mixed → background rebuild → swap → still debuggable.
+mixed → background rebuild → swap → still debuggable.  **SHIPPED**:
 
-> **Test:** a scripted control-channel session against a child kernel
-> process asserting each stage's observable in order: hit reported with
-> bindings, REPL evaluates a frame variable, edit acknowledged
-> (structured reload feedback), resume, rebuild notice, swap notice,
-> a post-swap breakpoint hits in the NEW build.
-> **Sub-tests:** breakpoint re-resolution by (fn, line) across both a
-> reload (S3) and a swap (S5) — offsets move, identity must not.
+- **The control channel** rides the game port: `D!:`-prefixed frames are
+  kernel-handled (the script never sees them), gated on
+  `LOFT_DEBUG_CONTROL=1` AND a loopback peer.  Commands: `bp <fn>`,
+  `flip <fn> <0|1>`, `eval <var>`, `resume`, `reload`, `rebuild`,
+  `rebuild?`, `swap auto|<path>`.  Transport lives in engine_host;
+  SEMANTICS in live_dispatch — split by a MAILBOX, because a paused
+  dispatch holds the `LIVE` borrow and the control handler runs inside
+  the pause's own mini-pump (`try_borrow` direct path when free; posted
+  and applied by the pause loop when held).
+- **The pause**: `State::reenter_dbg` drives a dispatched call with
+  `debug_step(Continue)`; a breakpoint SUSPENDS it and the pause loop
+  (holding `&mut State` legally, between resume steps) notifies `D:hit
+  <fn> <bindings>`, answers `eval` from the captured frame (the M5e
+  `BreakHit` renderer — v1 eval = frame-variable lookup; full
+  expressions are the @PLN14 store-resident-env upgrade), applies
+  reload-now (the S3 finding closed: the world is swapped IN at a pause,
+  so the reload host sees the real CONST_STORE), and pumps kernel
+  mechanics so keepalives never lapse.  Probe-caught: `debug_step`'s
+  first-op skip (correct when resuming FROM a pause) silently stepped
+  over a breakpoint AT the entry pc — `reenter_dbg` checks the entry
+  explicitly.
+- **Breakpoint identity is the FN NAME** (entry breakpoints v1): bps
+  re-resolve through `fn_positions` (`set_breakpoint_fn_current`) after
+  every reload — offsets move, identity does not.  Line-keyed bps are a
+  residual: a reloaded body's line numbers come from the reload
+  snippet's own parse, so line identity needs source-mapping work.
+- `bp` implies the flip (a compiled body cannot pause).  The lambda
+  boundary surfaced as designed: an edit touching `main`'s lambdas
+  warns and keeps the old body — named-fn edits reload.
+
+> **Test:** `engine_host_kernel::s7_debugger_loop_end_to_end` — the
+> scripted session, every stage in order: hit with bindings (the game
+> reply HELD while mechanics stay alive), `eval w`, edit acknowledged
+> THROUGH the pause (`D:reload applied`), resume → the held call
+> completes on the old body (append-only), the next call runs the new
+> body AND hits the re-resolved breakpoint, rebuild driven to ready over
+> the channel, `swap auto`, seats reconnect, the debugger re-arms, and
+> the post-swap hit shows the RESTORED world (events=101) in its
+> bindings before the new build serves 201.
 
 ### S8 — the standing differential (cross-cutting)
 
