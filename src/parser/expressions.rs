@@ -26,75 +26,13 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
-/// Returns true if `val` contains a `Set(r, _)` node at any depth.
-/// Used to find which block statement first assigns an inline-ref temporary.
-///
-/// The match is exhaustive over all current `Value` variants so that adding a new
-/// compound variant without updating this function is a **compile error** rather than
-/// a silent miss that would insert the null-init at the wrong position (A15).
-fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
-    if depth > 1000 {
-        return false;
-    }
-    match val {
-        // Compound variants — recurse into sub-expressions.
-        Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r, depth + 1),
-        Value::Call(_, args) | Value::CallRef(_, args) => {
-            args.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
-        }
-        Value::Block(bl) | Value::Loop(bl) => bl
-            .operators
-            .iter()
-            .any(|a| inline_ref_set_in(a, r, depth + 1)),
-        Value::Insert(ops) => ops.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
-        Value::If(cond, then_val, else_val) => {
-            inline_ref_set_in(cond, r, depth + 1)
-                || inline_ref_set_in(then_val, r, depth + 1)
-                || inline_ref_set_in(else_val, r, depth + 1)
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            inline_ref_set_in(inner, r, depth + 1)
-        }
-        Value::Iter(_, a, b, c) => {
-            inline_ref_set_in(a, r, depth + 1)
-                || inline_ref_set_in(b, r, depth + 1)
-                || inline_ref_set_in(c, r, depth + 1)
-        }
-        Value::Tuple(elems) | Value::Parallel(elems) => {
-            elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
-        }
-        Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
-        // Plan-07 phase 1 — Span is transparent; recurse into the
-        // wrapped node.
-        Value::Span(b) => inline_ref_set_in(&b.1, r, depth + 1),
-        // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            inline_ref_set_in(&b.input, r, depth + 1)
-                || inline_ref_set_in(&b.worker, r, depth + 1)
-                || inline_ref_set_in(&b.threads, r, depth + 1)
-                || inline_ref_set_in(&b.body, r, depth + 1)
-        }
-        // Leaf variants — cannot contain a Set node.
-        Value::Null
-        | Value::Int(_)
-        | Value::Enum(_, _)
-        | Value::Boolean(_)
-        | Value::Float(_)
-        | Value::Long(_)
-        | Value::Single(_)
-        | Value::Text(_)
-        | Value::Var(_)
-        | Value::Line(_)
-        | Value::Break(_)
-        | Value::BreakWith(_, _)
-        | Value::Continue(_)
-        | Value::Keys(_)
-        | Value::TupleGet(_, _)
-        | Value::FnRef(_, _, _)
-        | Value::FnRefDnr(_) => false,
-        // Phase 09 phase 00 step 0.7 — RawExpr is codegen-internal.
-        Value::RawExpr(_) => false,
-    }
+/// Descent comes from `Value::for_each_child`, so a new compound variant
+/// cannot be silently missed (A15).  The hand-rolled predecessor treated
+/// `BreakWith` as a leaf and missed a `Set` inside its value — the unified
+/// walker descends it (pass-2 wave 2 widening; the wider answer is the
+/// correct null-init insertion point).
+fn inline_ref_set_in(val: &Value, r: u16) -> bool {
+    val.any_node(&mut |n| matches!(n, Value::Set(v, _) if *v == r))
 }
 
 /// P248 — extracted nested-tuple LHS shape for assignment.
@@ -520,7 +458,7 @@ impl Parser {
                     if !self.vars.is_argument(*r) && self.vars.tp(*r).depend().is_empty() {
                         let pos = ls
                             .iter()
-                            .position(|stmt| inline_ref_set_in(stmt, *r, 0))
+                            .position(|stmt| inline_ref_set_in(stmt, *r))
                             .unwrap_or(fallback);
                         insertions.push((pos, *r));
                     }
@@ -2696,9 +2634,9 @@ mod tests {
     use super::inline_ref_set_in;
     use crate::data::{Block, Type, Value};
 
-    /// `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
+    /// Deep nesting must neither overflow the stack nor change the answer.
     #[test]
-    fn inline_ref_set_in_depth_limit_returns_false() {
+    fn inline_ref_set_in_deep_nesting_is_safe() {
         let mut v: Value = Value::Null;
         for _ in 0..1100 {
             v = Value::Block(Box::new(Block {
@@ -2709,8 +2647,17 @@ mod tests {
                 var_size: 0,
             }));
         }
-        // At depth limit, inline_ref_set_in must not overflow the stack.
-        let result = inline_ref_set_in(&v, 0, 0);
-        assert!(!result, "depth-exceeded should return false conservatively");
+        assert!(!inline_ref_set_in(&v, 0), "no Set node anywhere");
+        let mut w: Value = Value::Set(7, Box::new(Value::Null));
+        for _ in 0..1100 {
+            w = Value::Block(Box::new(Block {
+                name: "",
+                operators: vec![w],
+                result: Type::Void,
+                scope: 0,
+                var_size: 0,
+            }));
+        }
+        assert!(inline_ref_set_in(&w, 7), "deeply nested Set must be found");
     }
 }

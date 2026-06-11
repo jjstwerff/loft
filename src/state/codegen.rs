@@ -3627,23 +3627,10 @@ fn is_divergent(node: IrNode) -> bool {
 /// Used in debug builds to detect first-assignment self-reference bugs.
 #[cfg(debug_assertions)]
 fn ir_contains_var(value: &Value, v: u16) -> bool {
-    match value {
-        Value::Var(n) => *n == v,
-        Value::Call(_, args) => args.iter().any(|a| ir_contains_var(a, v)),
-        Value::CallRef(_, args) => args.iter().any(|a| ir_contains_var(a, v)),
-        Value::Set(_, inner) | Value::Return(inner) | Value::Drop(inner) => {
-            ir_contains_var(inner, v)
-        }
-        Value::If(cond, then, els) => {
-            ir_contains_var(cond, v) || ir_contains_var(then, v) || ir_contains_var(els, v)
-        }
-        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(|op| ir_contains_var(op, v)),
-        Value::Insert(items) => items.iter().any(|i| ir_contains_var(i, v)),
-        Value::Iter(_, create, next, extra) => {
-            ir_contains_var(create, v) || ir_contains_var(next, v) || ir_contains_var(extra, v)
-        }
-        _ => false,
-    }
+    // Pass-2 wave 2: descent now comes from `Value::any_node`.  The
+    // hand-rolled predecessor had no `Span` arm, so a Span-wrapped
+    // self-reference escaped this assertion entirely.
+    value.any_node(&mut |n| matches!(n, Value::Var(x) if *x == v))
 }
 
 /// Recursively prints a `Value` IR tree to stderr in a loft-like syntax.

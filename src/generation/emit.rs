@@ -1291,22 +1291,14 @@ impl Output<'_> {
     // variable is marked `skip_free`.  Used to gate scratch-buffer
     // materialisation for value-block `??` patterns.
     pub(super) fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
-        fn walk(this: &Output, v: &Value) -> bool {
-            match v.unspan() {
-                Value::Set(var, val) => {
-                    let variables = this.data.def(this.def_nr).variables();
-                    if variables.name(*var).starts_with("__ncc_") && variables.is_skip_free(*var) {
-                        return true;
-                    }
-                    walk(this, val)
-                }
-                Value::Block(b) => b.operators.iter().any(|op| walk(this, op)),
-                Value::If(c, t, f) => walk(this, c) || walk(this, t) || walk(this, f),
-                Value::Insert(ops) => ops.iter().any(|op| walk(this, op)),
-                _ => false,
-            }
-        }
-        bl.operators.iter().any(|op| walk(self, op))
+        let variables = self.data.def(self.def_nr).variables();
+        bl.operators.iter().any(|op| {
+            op.any_node(&mut |n| {
+                matches!(n, Value::Set(var, _)
+                    if variables.name(*var).starts_with("__ncc_")
+                        && variables.is_skip_free(*var))
+            })
+        })
     }
 
     #[allow(clippy::too_many_lines)]
