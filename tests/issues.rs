@@ -14806,9 +14806,15 @@ fn run() -> integer {
     .result(Value::Int(111_111));
 }
 
-// #334 (byte-width sentinel collision) — demonstrates the remaining gap.
+// FIXED 2026-06-11 per the documented design (LOFT.md § integer widths):
+// a nullable byte field reserves the 256th code as the null sentinel (255
+// distinct values, 0..=254) via the OpGetByteNullable/OpSetByteNullable op
+// pair the parser picks on attribute nullability; `not null` byte fields
+// keep the full 256-value range through the raw pair.  byte_width now
+// counts the sentinel code (limit-derived nullable ranges widen when they
+// have no spare code), and the dead `||` range checks in Store::set_byte /
+// set_short are `&&`.
 #[test]
-#[ignore = "stability-sweep: #334 — nullable byte width needs a design call"]
 fn issue_334_nullable_byte_field_null_roundtrip() {
     code!(
         "struct N { b: u8, tail: integer not null }
@@ -14844,4 +14850,18 @@ fn issue_333_undefended_div_zero_raises() {
     )
     .expr("run()")
     .result(Value::Int(-1));
+}
+
+// #334 companion: `not null` byte fields keep the full 0..=255 range.
+#[test]
+fn issue_334_not_null_byte_keeps_full_range() {
+    code!(
+        "struct M { full: u8 not null, tail: integer not null }
+fn run() -> integer {
+    m = M { full: 255, tail: 1 };
+    m.full
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(255));
 }

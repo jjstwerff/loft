@@ -198,6 +198,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     get_single,
     get_float,
     get_byte,
+    get_byte_nullable,
     get_enum,
     set_enum,
     get_boolean,
@@ -209,6 +210,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     set_single,
     set_float,
     set_byte,
+    set_byte_nullable,
     set_short,
     get_int4,
     set_int4,
@@ -1478,6 +1480,25 @@ fn get_byte(s: &mut State) {
     s.put_stack(new_value);
 }
 
+fn get_byte_nullable(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_min = s.code::<i16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r = s
+            .database
+            .store(&db)
+            .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
+        if r == i32::from(v_min) + 255 {
+            i64::MIN
+        } else {
+            i64::from(r)
+        }
+    };
+    s.put_stack(new_value);
+}
+
 fn get_enum(s: &mut State) {
     let v_fld = s.code::<u16>();
     let v_v1 = *s.get_stack::<DbRef>();
@@ -1628,6 +1649,24 @@ fn set_byte(s: &mut State) {
             i32::from(v_min),
             v as i32,
         );
+    }
+}
+
+fn set_byte_nullable(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_min = s.code::<i16>();
+    let v_val = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = if v_val == i64::MIN {
+            i32::MIN
+        } else {
+            v_val as i32
+        };
+        s.database
+            .store_mut(&db)
+            .set_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 

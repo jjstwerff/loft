@@ -1866,7 +1866,7 @@ impl Store {
             if val == i32::MIN {
                 *self.addr_mut(rec, fld) = 0;
                 true
-            } else if val >= min || val <= min + 65536 {
+            } else if val >= min && val <= min + 65536 {
                 *self.addr_mut(rec, fld) = (val - min + 1) as u16;
                 true
             } else {
@@ -1938,7 +1938,7 @@ impl Store {
             if val == i32::MIN {
                 *self.addr_mut(rec, fld) = 255;
                 true
-            } else if val >= min || val <= min + 256 {
+            } else if val >= min && val <= min + 256 {
                 *self.addr_mut(rec, fld) = (val - min) as u8;
                 true
             } else {
