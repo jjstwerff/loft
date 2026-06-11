@@ -336,18 +336,13 @@ fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::Hash
     }
     for a_nr in 0..data.attributes(d_nr) {
         let a_type = data.attr_type(d_nr, a_nr);
-        // Only recurse into value-typed struct fields — `reference<T>` fields
-        // are pointers, not inline, and must NOT count (the diagnostic itself
-        // prescribes them as the cycle-breaker).  A reference field's TYPE is
-        // indistinguishable from a plain struct field (`Type::Reference`
-        // either way); the reference-ness lives in the `referenced` registry
-        // (recorded by `set_referenced`).  The registry is keyed by content
-        // only (one entry per referenced type), so the test is per-TYPE, not
-        // per-edge: a struct that is `reference<>`-held anywhere is exempt.
-        // Conservative enough — a value cycle with NO reference declared
-        // anywhere still errors, and a value-cycle instance could never be
-        // constructed regardless (no base case).
-        if let Type::Reference(child_nr, _) = &a_type
+        // Only recurse into value-typed struct fields.  A `reference<T>`
+        // field (the `u16::MAX` share-marker dep, #328) is a 12-byte
+        // pointer, not inline bytes — it cannot cause an infinite-size
+        // cycle, and skipping it here is exactly what makes
+        // `reference<Self>` legal.
+        if let Type::Reference(child_nr, deps) = &a_type
+            && !deps.contains(&u16::MAX)
             && data.def_type(*child_nr) == DefType::Struct
             && !data.def_referenced(*child_nr)
             && has_value_cycle(data, *child_nr, visiting)

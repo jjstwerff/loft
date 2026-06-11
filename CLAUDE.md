@@ -338,6 +338,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, root-cause vs CPython/Rust, wasm-vs-native gap, optimisation designs. Open follow-ups in § Open work |
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
+| [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) | The three-pass stability method: sweep dual invariants (document, don't fix) → move algorithms to their data structures → de-duplicate |
+| [STABILITY_SWEEP.md](doc/claude/STABILITY_SWEEP.md) | The live pass-1 catalog: invariant families F1–F10, per-module work list, findings log |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives |

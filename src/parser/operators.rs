@@ -403,6 +403,11 @@ impl Parser {
                 "OpSetByte",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
+            // #334: the nullable byte pair (sentinel-translating twin).
+            "OpGetByteNullable" => self.cl(
+                "OpSetByteNullable",
+                &[args[0].clone(), args[1].clone(), args[2].clone(), code],
+            ),
             "OpGetEnum" => self.cl("OpSetEnum", &[args[0].clone(), args[1].clone(), code]),
             // @PLN17: byte-stored boolean write, storing the u8 form 0/1/255 directly.
             "OpGetBoolean" => self.cl("OpSetBoolean", &[args[0].clone(), args[1].clone(), code]),

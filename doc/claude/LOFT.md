@@ -166,11 +166,22 @@ i32   // integer (explicit 32-bit)          — 4 bytes signed
 u32   // integer limit(0, 4_294_967_294)    — 4 bytes unsigned (post-2a)
 ```
 
-`u32` covers the `0 ..= 4_294_967_294` range (one sentinel reserved for
-null).  Values up to `u32::MAX - 1` round-trip through arithmetic and
-storage.  Typical use: RGBA pixels, large file offsets, bitmasks wider
-than i32.  `u32 not null` unlocks the full 2³² range when the field
-can't carry null.
+**Nullable narrow fields reserve one code for null** (decision 2026-06-11,
+#334).  The convention runs through every width:
+
+- a nullable `u8` field holds **255** distinct values (`0 ..= 254`) — the
+  byte's 256th code is the null sentinel;
+- a nullable `u16` field holds **65 535** distinct values — one short code
+  is the sentinel (the `+1` storage encoding reserves raw `0`);
+- `u32` covers `0 ..= 4_294_967_294` — one 32-bit code reserved.
+
+The reserved code is expressed in the effective `min`/`max` of the integer
+type behind the field, and the read/write contract is symmetric: reading a
+narrow field into an `integer` widens the stored sentinel to integer null,
+and writing integer null (or `null`) stores the sentinel — a null always
+round-trips, at every width.  `not null` on the field unlocks the full
+range (256 / 65 536 / 2³²) when it never carries null.  Typical `u32` use:
+RGBA pixels, large file offsets, bitmasks wider than i32.
 
 **Migration note:** the `long` type keyword and the `l` literal
 suffix (e.g. `42l`) were removed in 0.9.0.  There are no external
@@ -565,10 +576,17 @@ add5(10)               // 15
 ```
 
 **Capture rules:**
-- Integers, floats, booleans: copied by value.
-- Text: deep-copied (independent of original after capture).
-- Struct references: the DbRef is copied (both point to the same store record while both are alive).
-- Mutation inside the closure does not affect the outer variable (and vice versa).
+- Integers, floats, booleans: copied by value at definition time — unless the
+  closure MUTATES the capture, in which case the scalar is promoted to a
+  shared heap cell and writes propagate both ways (plan-22; the
+  single-closure accumulator pattern).  A mutated scalar may be captured by
+  only ONE closure (C74, #314).
+- Text: deep-copied (independent of original after capture); mutated text
+  captures are cell-promoted like scalars.
+- Struct references: the DbRef is copied — both point to the same store
+  record while both are alive, and mutations from either side are visible to
+  the other (#318/C75 bound such closures to the frame that owns the
+  captures).
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
@@ -990,6 +1008,12 @@ then `,` or `}`, it is a field capture; otherwise it is the if-body.
 ## Variables
 
 Variables are declared implicitly on first assignment. Their type is inferred:
+
+**Struct assignment copies the record.**  `a = b` for struct-typed variables
+deep-copies `b`'s record into a fresh store owned by `a` — the two variables
+do NOT alias afterwards (`b.v = 42` leaves `a.v` unchanged).  Aliasing is
+explicit: `reference<T>` struct fields share by pointer (#328), and closure
+captures of struct references share the live record (capture rules above).
 ```
 x = 42
 name = "hello"

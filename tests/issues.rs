@@ -14650,3 +14650,221 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(9));
 }
+
+// ── Issue 328 ────────────────────────────────────────────────────────────────
+// `reference<T>` struct fields were never laid out: the parse erased the
+// pointer-ness to the same Type as inline nesting, so `fill_database` either
+// embedded T's bytes inline (writes silently deep-copied — violating the
+// documented pointer semantics) or, for `reference<Self>`, rejected the
+// struct with the self-contradictory "use reference<Node>" cycle error;
+// `next: null` construction panicked on the unpositioned-field marker.
+//
+// Fix: in struct-field position `reference<T>` parses to the auto-Reference
+// share marker (`Type::Reference(d, [u16::MAX])`), riding the proven
+// 12-byte Parts::DbRef layout + OpGetDbRef/OpSetDbRef paths; the value-cycle
+// checker skips marker fields (making `reference<Self>` legal); pointer
+// field assignment repoints via OpSetDbRef (`= null` writes the sentinel);
+// self-deps from `x = x.next` are stripped at the type merge (a var cannot
+// borrow from itself — the dep flipped codegen into the dependent-view
+// class and corrupted the frame).
+
+#[test]
+fn issue_328_reference_field_pointer_semantics() {
+    code!(
+        "struct Leaf { value: integer }
+struct Node { value: integer, next: reference<Leaf> }
+fn run() -> integer {
+    a = Leaf { value: 1 };
+    b = Leaf { value: 2 };
+    n = Node { value: 0, next: a };
+    a.value = 41;
+    aliased = n.next.value;
+    n.next = b;
+    repointed = n.next.value;
+    untouched = a.value;
+    n.next = null;
+    cleared = if n.next == null { 1 } else { 0 };
+    d = Node { value: 9 };
+    default_null = if d.next == null { 1 } else { 0 };
+    aliased * 100000 + repointed * 1000 + untouched * 10 + cleared * 2 + default_null
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(4_102_413));
+}
+
+#[test]
+fn issue_328_reference_self_recursive_walk() {
+    code!(
+        "struct Node { value: integer, next: reference<Node> }
+fn run() -> integer {
+    c = Node { value: 4, next: null };
+    b = Node { value: 2, next: c };
+    a = Node { value: 1, next: b };
+    m = a.next;
+    m.value = 20;
+    cur = a;
+    total = 0;
+    while cur != null {
+        total = total + cur.value;
+        cur = cur.next;
+    }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(25));
+}
+
+// `x = x.next` (same-var self-read reassign): the stripped self-dep keeps
+// the var on the plain ref-slot codegen path (pre-fix: InitCreateStack frame
+// corruption → SIGSEGV reading the result).
+#[test]
+fn issue_328_self_reassign_through_reference_field() {
+    code!(
+        "struct Node { value: integer, next: reference<Node> }
+fn run() -> integer {
+    b = Node { value: 2, next: null };
+    x = Node { value: 1, next: b };
+    x = x.next;
+    x.value
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+// ── Issue 330 (FIXED 2026-06-11) ─────────────────────────────────────────────
+// Self-reading reassignment, three repairs sharing one invariant ("the old
+// store outlives every RHS read"):
+// 1. parser: a reassignment-construction whose fields READ the target routes
+//    to the fresh-work-ref path instead of the in-place OpDatabase re-init
+//    (objects.rs construction_mentions lookahead);
+// 2. parser: `x = x` is the identity — emitted as nothing (both backends);
+// 3. codegen: the pre-Set free now uses the recursive scopes::value_reads_var
+//    predicate (not the top-level-arg S1 scan); a self-reading RHS stashes
+//    the old DbRef and frees it post-assignment via OpFreeRefIfDistinct.
+
+#[test]
+fn issue_330_degenerate_self_assignment() {
+    code!(
+        "struct S { v: integer not null }
+fn run() -> integer {
+    x = S { v: 7 };
+    x = x;
+    x.v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+#[test]
+fn issue_330_self_reading_literal_reassignment() {
+    code!(
+        "struct S { v: integer not null }
+fn run() -> integer {
+    x = S { v: 7 };
+    x = S { v: x.v + 1 };
+    x.v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(8));
+}
+
+// ── Issue 332 (stability-sweep F6; documented, NOT fixed) ────────────────────
+// Nullable narrow integer field: omitted default is not null, and a written
+// null does not round-trip through `== null` — the narrow null encoding has
+// different write and compare homes.
+
+// FIXED 2026-06-11 for the short width: the OpSetShort/OpGetShort template
+// (the generated fill.rs follows) now translates the stack null (i64::MIN)
+// to/from the store null (i32::MIN → raw 0) like Int4/ShortRaw always did.
+// NOTE the spec correction found while fixing: an OMITTED field gets "the
+// zero value for its type" (LOFT.md § constructors; 06-structs.loft locks
+// it) — `omitted == null` being false is CORRECT; only the explicit-null
+// write round-trip was broken.  BYTE width remains a design gap (255
+// sentinel collides with the value range) — split to #334.
+#[test]
+fn issue_332_nullable_narrow_field_null_roundtrip() {
+    code!(
+        "struct N { a: i16, c: i32, d: integer, tail: integer not null }
+fn run() -> integer {
+    n = N { tail: 1 };
+    om = 0;
+    if n.a == 0 { om += 100; }
+    if n.c == 0 { om += 10; }
+    if n.d == 0 { om += 1; }
+    n.a = 5; n.c = 5; n.d = 5;
+    n.a = null; n.c = null; n.d = null;
+    re = 0;
+    if n.a == null { re += 100; }
+    if n.c == null { re += 10; }
+    if n.d == null { re += 1; }
+    om * 1000 + re
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(111_111));
+}
+
+// FIXED 2026-06-11 per the documented design (LOFT.md § integer widths):
+// a nullable byte field reserves the 256th code as the null sentinel (255
+// distinct values, 0..=254) via the OpGetByteNullable/OpSetByteNullable op
+// pair the parser picks on attribute nullability; `not null` byte fields
+// keep the full 256-value range through the raw pair.  byte_width now
+// counts the sentinel code (limit-derived nullable ranges widen when they
+// have no spare code), and the dead `||` range checks in Store::set_byte /
+// set_short are `&&`.
+#[test]
+fn issue_334_nullable_byte_field_null_roundtrip() {
+    code!(
+        "struct N { b: u8, tail: integer not null }
+fn run() -> integer {
+    n = N { tail: 1 };
+    n.b = null;
+    if n.b == null { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
+
+// ── Issue 333 (stability-sweep F4; documented, NOT fixed) ────────────────────
+// Float division by zero must follow the documented null semantics (the
+// divide-by-zero lint promises null; native yields null) — the interpreter
+// currently aborts with a hard error instead.
+
+// RESOLVED 2026-06-11: the issue's premise was inverted — per plan-07 4f.5
+// the RAISE is the semantics (interp was right); native missed it because
+// `raise_runtime` only recorded and nothing checked.  Fixed by
+// `NATIVE_FAIL_FAST` (database/mod.rs) armed in the generated binary's main
+// + the had_fatal exit backstop.  Cross-backend guard:
+// tests/scripts/178-i333-div-zero-raises.loft (@EXPECT_FAIL on both suites).
+#[test]
+fn issue_333_undefended_div_zero_raises() {
+    code!(
+        "fn run() -> integer {
+    z = 0;
+    a = 5 % z ?? -1;
+    a
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(-1));
+}
+
+// #334 companion: `not null` byte fields keep the full 0..=255 range.
+#[test]
+fn issue_334_not_null_byte_keeps_full_range() {
+    code!(
+        "struct M { full: u8 not null, tail: integer not null }
+fn run() -> integer {
+    m = M { full: 255, tail: 1 };
+    m.full
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(255));
+}

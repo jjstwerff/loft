@@ -884,7 +884,10 @@ impl Scopes {
                 RefRhs::View
             )
             // `value` is pre-scan IR: reads may name the original id (`ov`)
-            // or the remapped one (`v`) — guard against both.
+            // or the remapped one (`v`) — guard against both.  A self-
+            // reading borrow (`x = x.next`, #328) keeps its owned store
+            // until scope exit — a bounded, documented residual of this
+            // conservatism (LIFETIME.md § Ownership-transition free).
             && !value_reads_var(value, v)
             && !value_reads_var(value, ov)
         {
@@ -2172,7 +2175,7 @@ enum RefRhs {
 
 /// #316 — true when `value` reads variable `v` anywhere (its old store may
 /// feed the new value, so a pre-Set free would be a use-after-free).
-fn value_reads_var(value: &Value, v: u16) -> bool {
+pub(crate) fn value_reads_var(value: &Value, v: u16) -> bool {
     match value {
         Value::Var(x) => *x == v,
         Value::Set(x, inner) => *x == v || value_reads_var(inner, v),

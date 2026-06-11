@@ -1596,6 +1596,8 @@ impl Parser {
         code: &mut Value,
         list: &mut Vec<Value>,
         found_fields: &mut HashSet<String>,
+        in_place_var: Option<u16>,
+        hoists: &mut Vec<Value>,
     ) -> bool {
         // Accept both bare identifiers and JSON-style quoted strings as field names.
         let field = if let Some(id) = self.lexer.has_identifier() {
@@ -1656,7 +1658,25 @@ impl Parser {
             if let Value::Var(v) = code {
                 parent_tp = parent_tp.depending(*v);
             }
+            // Collection fields prime `value` with an in-field write target
+            // (the literal writes THROUGH the field) — those must not be
+            // hoisted; only pure value expressions (`value` started Null).
+            let primed = !matches!(value, Value::Null);
             let exp_tp = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
+            // #330: an initialiser that READS the in-place target is hoisted
+            // into a typed temp; the temps run before the OpDatabase re-init
+            // (spliced in parse_object), so they see the OLD record.
+            if let Some(xv) = in_place_var
+                && !primed
+                && crate::scopes::value_reads_var(&value, xv)
+            {
+                let tmp = self.vars.work_refs(&exp_tp, &mut self.lexer);
+                if !self.first_pass {
+                    self.change_var_type(tmp, &exp_tp);
+                }
+                let prev = std::mem::replace(&mut value, Value::Var(tmp));
+                hoists.push(v_set(tmp, prev));
+            }
             self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp);
         }
         true
@@ -1670,12 +1690,22 @@ impl Parser {
         }
         let mut list = Vec::new();
         let mut new_object = false;
+        let mut in_place_var: Option<u16> = None;
+        let mut hoists: Vec<Value> = Vec::new();
         let work = self.vars.work_ref();
         if let Value::Var(v_nr) = code {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
                 var_tp.is_unknown() || matches!(&var_tp, Type::Reference(d, _) if *d == td_nr);
             if self.vars.is_independent(*v_nr) && type_matches {
+                // #330: remember the in-place target — a field initialiser
+                // that READS it must be hoisted ABOVE the OpDatabase re-init
+                // (see the hoist in parse_object_field and the splice after
+                // the field loop), because the re-init clears the record
+                // before the initialisers run.
+                if !self.first_pass && !self.vars.is_compiler_generated(*v_nr) {
+                    in_place_var = Some(*v_nr);
+                }
                 if !self.vars.is_argument(*v_nr) {
                     list.push(v_set(*v_nr, Value::Null));
                 }
@@ -1733,7 +1763,14 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
-            if !self.parse_object_field(td_nr, code, &mut list, &mut found_fields) {
+            if !self.parse_object_field(
+                td_nr,
+                code,
+                &mut list,
+                &mut found_fields,
+                in_place_var,
+                &mut hoists,
+            ) {
                 self.lexer.revert(link);
                 self.vars.clean_work_refs(work);
                 return Type::Unknown(0);
@@ -1743,6 +1780,12 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+        // #330 splice: run the hoisted self-reading field values BEFORE the
+        // in-place `Set(x, Null) + OpDatabase(x)` prelude clears the record.
+        if !hoists.is_empty() {
+            hoists.append(&mut list);
+            list = hoists;
+        }
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
             // emit all field constraint checks after construction completes.
@@ -1853,12 +1896,30 @@ impl Parser {
                 continue;
             }
             let mut default = self.data.attr_value(td_nr, aid);
+            // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
+            // marker) is a 12-byte DbRef — its omitted default is the null
+            // sentinel.  The inline recursion below would write the INNER
+            // struct's field defaults over the DbRef bytes (it only looked
+            // harmless while integer defaults were zeros).
+            if let Type::Reference(_, deps) = &tp
+                && deps.contains(&u16::MAX)
+                && default == Value::Null
+            {
+                let sentinel = self.cl("OpNullRefSentinel", &[]);
+                list.push(self.set_field_no_check(td_nr, aid, pos, code.clone(), sentinel));
+                continue;
+            }
             if let Type::Reference(tp, _) = tp
                 && default == Value::Null
             {
                 self.object_init(list, tp, pos + fld, code, &HashSet::new());
                 continue;
             } else if default == Value::Null {
+                // LOFT.md § constructors: an omitted field gets "the zero
+                // value for its type" — numerics default to 0 (NOT null;
+                // tests/scripts/06-structs.loft locks this).  Pointer
+                // fields take the sentinel branch above: a pointer's zero
+                // value IS null.
                 default = to_default(&tp, &self.data);
             } else {
                 default = Self::replace_record_ref(default, code);

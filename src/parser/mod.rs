@@ -3020,6 +3020,13 @@ impl Parser {
             seen: &mut std::collections::HashSet<u32>,
         ) -> bool {
             match tp {
+                // #328: a `reference<T>` POINTER field (the u16::MAX share
+                // marker) copies only a 12-byte DbRef, never the record —
+                // it cannot smuggle a closure record's bytes, so the
+                // carrying-walk stops at the pointer boundary.  (Escaping
+                // a pointer to frame-local state is the generic, documented
+                // reference<T> borrow hazard — not the #318 copy class.)
+                Type::Reference(_, deps) if deps.contains(&u16::MAX) => false,
                 Type::Reference(d, _) => walk_def(data, db, *d, seen),
                 Type::Vector(c, _) => walk(data, db, c, seen),
                 Type::Hash(d, _, _)
@@ -3083,7 +3090,18 @@ impl Parser {
                      by the OpGet* family"
                 );
                 if s == 1 {
-                    self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
+                    // #334: see the OpSetByteNullable note — nullable byte
+                    // STRUCT FIELDS decode the reserved 256th code to null.
+                    // Vector elements (alias-less forced_size(1)) keep the
+                    // raw direct encoding — their stride/value contract is
+                    // the narrow-vector one, not the field-sentinel one.
+                    let byte_vec = alias == u32::MAX && spec.forced_size.is_some();
+                    let op = if nullable && !byte_vec {
+                        "OpGetByteNullable"
+                    } else {
+                        "OpGetByte"
+                    };
+                    self.cl(op, &[code, p, Value::Int(spec.min)])
                 } else if s == 2 && narrow_vec {
                     // narrow vector element, direct encoding.
                     self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
@@ -3545,7 +3563,16 @@ impl Parser {
                     },
                 );
                 if s == 1 {
-                    self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
+                    // #334: a NULLABLE byte field reserves the 256th code as
+                    // the null sentinel (255 distinct values) — the Nullable
+                    // op pair translates integer null ↔ the sentinel.
+                    // `not null` fields keep the full range via the raw op.
+                    let op = if f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr) {
+                        "OpSetByteNullable"
+                    } else {
+                        "OpSetByte"
+                    };
+                    self.cl(op, &[ref_code, pos_val, m, val_code])
                 } else if s == 2 && narrow_vec {
                     self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {

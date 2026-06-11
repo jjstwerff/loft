@@ -833,6 +833,23 @@ impl Parser {
             {
                 is_text = true;
             }
+            // #328: `x = x.next` would give x a SELF-dep ("x borrows from
+            // x") — a degenerate borrow that flips the var into the
+            // dependent-view codegen class (InitCreateStack) and corrupts
+            // the frame.  Strip the self-entry; the remaining deps (if
+            // any) still carry the real borrow sources.  The pre-Set free
+            // stays safe: codegen's S1 guard skips it whenever the RHS
+            // reads `v` itself.
+            let stripped: Type;
+            let tp = if let Type::Reference(d, deps) = tp
+                && deps.contains(v_nr)
+            {
+                let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
+                stripped = Type::Reference(*d, kept);
+                &stripped
+            } else {
+                tp
+            };
             if !is_text || *tp != Type::Character {
                 self.change_var_type(*v_nr, tp);
             }
@@ -964,6 +981,25 @@ use a separate collection or add after the loop"
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
+        // #330: `x = x` is the identity — emit nothing.  Letting it through
+        // produced a deep-copy-onto-self whose pre-Set free released the
+        // store the RHS was about to read (silent corruption on the
+        // interpreter, null on native — and the two diverged).  Killing it
+        // here covers BOTH backends and keeps the store identity stable
+        // for any live borrows.
+        if op == "="
+            && let Value::Var(lhs) = to
+            && self.lexer.peek().has
+                == crate::lexer::LexItem::Identifier(self.vars.name(*lhs).to_string())
+        {
+            let link = self.lexer.link();
+            self.lexer.cont();
+            if self.lexer.peek_token(";") {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            self.lexer.revert(link);
+        }
         // @P277 — `local_keyed += [literal]`.  Without this branch, the
         // RHS parse below descends into `parse_vector` (vectors.rs:1372)
         // which at line ~1434 calls `change_var_type(vec, Vector<T>, …)`
