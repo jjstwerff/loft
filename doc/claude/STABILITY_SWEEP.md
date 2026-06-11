@@ -52,55 +52,55 @@ gets probed wherever its homes can drift apart.
 
 | # | Family | The fact | Known homes | Status / findings |
 |---|---|---|---|---|
-| F1 | **Two-pass parse determinism** | pass 1 and pass 2 must derive identical facts (def numbering, lambda numbering, attr types, flags) | every `first_pass` branch (≈40 sites in `parser/*`); `data.reset()` keeps definitions but pass 2 re-parses bodies | ☐ todo — #313/#314 were instances; probe: facts set late in pass 1 vs consumed early in pass 2 |
-| F2 | **Ownership of a store** | who frees a store, exactly once | `scopes.rs get_free_vars` (dep-empty = owned, captured-ref exemption, work-refs, in_ret); `scan_set owned_refs` (#316); `state/codegen.rs generate_set` pre-Set free + S1 guard; `check_ref_leaks` (debug assert); `free_named` cascade (`__closure_*` only); `paired_witness`/`witness_buffer` OpFreeRefIfDistinct | ▶ first finding: **#330** (see log); remaining pairs todo |
+| F1 | **Two-pass parse determinism** | pass 1 and pass 2 must derive identical facts (def numbering, lambda numbering, attr types, flags) | every `first_pass` branch (≈40 sites in `parser/*`); `data.reset()` keeps definitions but pass 2 re-parses bodies | ▶ lib-closure-factory cell held (`f1.loft`); #313/#314 historical instances fixed; DEFERRED: diagnostics-altering-flow and todo_files-reorder cells |
+| F2 | **Ownership of a store** | who frees a store, exactly once | `scopes.rs get_free_vars` (dep-empty = owned, captured-ref exemption, work-refs, in_ret); `scan_set owned_refs` (#316); `state/codegen.rs generate_set` pre-Set free + S1 guard; `check_ref_leaks` (debug assert); `free_named` cascade (`__closure_*` only); `paired_witness`/`witness_buffer` OpFreeRefIfDistinct | ▶ **#330** (see log); `value_reads_var` default arm misses read-bearing variants (`FnRef(_, w, _)` reads w — audit the ~30 default-arm variants when pass 2 centralises the predicate); par cell held (`fpar.loft`); witness-pair cells DEFERRED |
 | F3 | **Null representation of a DbRef** | what bytes mean "null pointer" | `OpNullRefSentinel` (store_nr = u16::MAX); zero-default record bytes (store 0, rec 0); `free_named`'s skip pattern (store 0 ∧ rec 0); `OpEqRef` comparisons | ✅ probed, HELD (see log) — comparator normalises; dual encoding persists as latent risk for byte-level consumers |
-| F4 | **Interp op ≡ native op** | every opcode's semantics on both backends | `fill.rs` (interp) vs `generation/ops/*` + `codegen_runtime.rs` (native); `cross_mode` harness covers a sample, not the op set | ☐ todo — #323-native was an instance; probe: ops with no cross_mode cell (list them first — a usage-sentinel sweep) |
-| F5 | **Stack slot layout** | a value's slot size/alignment as parser, codegen, and runtime each compute it | `variables/mod.rs` size table (fn-ref = 20B …); `state/codegen.rs stack_step`/`size_*`; `state/mod.rs` runtime reads; LOFT_ALIGN duality | ☐ todo — PLAN53 cluster 2 was an instance; probe: odd-sized types (12B DbRef) adjacent to 8B slots |
-| F6 | **DB field layout** | a struct field's position/width as the parser reads it vs fill_database wrote it | `parser/mod.rs get_val/set_field_check` width selection (alias forced_size, byte_width, vector_narrow_width); `typedef.rs fill_database` arms; `database/types.rs finish_type` packing; native `generation/mod.rs emit_field` re-derivation | ☐ todo — #313/#328 + the emit_field schema split were instances; probe: every Type arm where get_val's width logic and fill_database's arm could pick differently (narrow ints, enums, tuples, child recs) |
+| F4 | **Interp op ≡ native op** | every opcode's semantics on both backends | `fill.rs` (interp) vs `generation/ops/*` + `codegen_runtime.rs` (native); `cross_mode` harness covers a sample, not the op set | ▶ first finding: **#333** (float `/0.0`: interp aborts, native nulls); int `/0` `%0`, neg div/mod, float assoc AGREE (`f4.loft`); DEFERRED: the op-coverage sentinel (enumerate ops lacking cross_mode cells) |
+| F5 | **Stack slot layout** | a value's slot size/alignment as parser, codegen, and runtime each compute it | `variables/mod.rs` size table (fn-ref = 20B …); `state/codegen.rs stack_step`/`size_*`; `state/mod.rs` runtime reads; LOFT_ALIGN duality | ▶ LOFT_ALIGN=1 sample held on DbRef-heavy program; tuple struct-field round-trip held (`ftup.loft`); DEFERRED: full odd-size adjacency matrix |
+| F6 | **DB field layout** | a struct field's position/width as the parser reads it vs fill_database wrote it | `parser/mod.rs get_val/set_field_check` width selection (alias forced_size, byte_width, vector_narrow_width); `typedef.rs fill_database` arms; `database/types.rs finish_type` packing; native `generation/mod.rs emit_field` re-derivation | ▶ finding: **#332** (nullable narrow null doesn't round-trip); HELD: u8/i16/i32/limit field values, narrow vectors u8/i16/u16, enum+bool packing, tuple fields, hash insert/update — both backends (`f6a–c`, `ftup`, `fhash`) |
 | F7 | **Value vs pointer copy semantics** | what `a = b` / field-assign / capture copies | LOFT.md:570 says struct var assign copies the DbRef; codegen `gen_set_first_ref_var_copy` deep-copies; `OpCopyRecord` field copies; `reference<T>` repoints (#328); captures share by DbRef (P260) | ✅ probed, BROKEN at the spec home: **#331** (see log) |
-| F8 | **Deps as liveness vs deps as ownership vs deps as markers** | what `Type::*(…, deps)` means | borrow liveness (scopes); ownership negation (dep-empty = owned); the `u16::MAX` share marker (#328/closure records); `@P302` self-dep = ownership marker for keyed locals; attribute-index deps in returned types (`dep_has_var` resolves attr-index vs var-nr with a FALLBACK comparing raw numbers) | ☐ todo — one Vec<u16> carries FOUR meanings; probe: collisions (a var-nr that equals an attr index; a marker surviving into liveness analysis) |
+| F8 | **Deps as liveness vs deps as ownership vs deps as markers** | what `Type::*(…, deps)` means | borrow liveness (scopes); ownership negation (dep-empty = owned); the `u16::MAX` share marker (#328/closure records); `@P302` self-dep = ownership marker for keyed locals; attribute-index deps in returned types (`dep_has_var` resolves attr-index vs var-nr with a FALLBACK comparing raw numbers) | ▶ view-dep basic cell held (`f8a.loft`); #328's self-dep strip is a documented instance of meaning-collision; DEFERRED: crafted attr-index/var-nr collision (needs IR-level var numbering control) — pass-2 should split the four meanings into distinct fields |
 | F9 | **The startup/stdlib caches vs live state** | cached parse must equal fresh parse | `startup_cache.rs` manifest (sources, sig); `cache.rs` keys; `ir_store`/`ir_read` round-trip; REPL `rollback_to` | ▶ first cells probed, HELD: #328 marker-dep types and #313 split fn-fields round-trip warm≡cold (`/tmp/claude/sweep/f9*.loft`, 2026-06-11); REPL rollback + lib-path axes todo |
-| F10 | **Text ownership** | who frees a String buffer | `free_text` / `OpFreeText`; work-text result buffers; `skip_free` texts; text-returning-fn cell exemption (02d-vii) | ☐ todo — plan-53 cluster 5 was an instance |
+| F10 | **Text ownership** | who frees a String buffer | `free_text` / `OpFreeText`; work-text result buffers; `skip_free` texts; text-returning-fn cell exemption (02d-vii) | ▶ struct-field text churn held leak-free (`f10.loft`); plan-53 historical; DEFERRED: par text buffers, text in returned structs |
 
 ## Module work list (every file; sweep top-down by risk)
 
 | Module | Lines | Suspected dual-invariants to hunt | Status |
 |---|---|---|---|
-| `src/parser/mod.rs` | 6863 | F1, F6, F8; `fn_ref_field_is_split` vs `assigned_lambda_d_nr` (one home now — verify no third consumer); `base_var_of` root walk vs other lvalue walks | ☐ todo |
-| `src/scopes.rs` | 4969 | F2, F8; `var_mapping` scope copies vs codegen slots; `value_reads_var` coverage vs Value variants (a missed variant = wrong free) | ☐ todo |
-| `src/state/codegen.rs` | 3745 | F2, F5; S1-substitution detection (`any arg == Var(v)`) vs scan_set's reads-v test — TWO different "RHS uses v" predicates | ☐ todo |
-| `src/state/mod.rs` | 4616 | F5; `fn_call_ref` 20B slot parsing vs parser's fn-ref block shapes | ☐ todo |
-| `src/parser/control.rs` | 4823 | F1; match/if result-type unification vs codegen's branch layout | ☐ todo |
-| `src/parser/vectors.rs` | 4424 | F1 (lambda epilogues pass-asymmetry — emit_lambda_code `!first_pass`); closure record synthesis pass-1-only attr freeze | ☐ todo |
-| `src/parser/collections.rs` | 4186 | `towards_set` lvalue-shape dispatch (OpGetDbRef/OpGetRecord/keyed) vs the type-based dispatch below it — TWO discriminators for one assignment fact (#328 used shape because deps get rewritten) | ☐ todo |
-| `src/data.rs` | 4304 | F8; `def_nr("n_*")` naming convention re-asserted at every call site; `type_elm`/`type_def_nr` vs typedef resolution | ☐ todo |
-| `src/database/allocation.rs` | 2061 | F2, F3; free-bitmap vs `store.free` flag (the @P317 tripwire exists BECAUSE they can disagree); `max` watermark trim vs bitmap | ☐ todo |
-| `src/database/types.rs` | 2929 | F6; `position()` linear scan vs `finish_type` packing; `content()`/`size()` consistency for late-mutated types (@P191) | ☐ todo |
-| `src/store.rs` | 2788 | F3; LLRB free-tree vs `needs_coalesce` flag; `claims` set vs actual record headers; `generation` counter consumers | ☐ todo |
-| `src/typedef.rs` | ~800 | F1, F6; `has_value_cycle` skip-rules vs fill_database arms (must skip the SAME fields) | ☐ todo |
-| `src/fill.rs` | 2168 | F4; op arg-decoding vs codegen's arg-encoding (u16/i32 widths per op) | ☐ todo |
-| `src/generation/mod.rs` | 3142 | F4, F6; emit_field schema re-derivation vs registered stores (partially single-homed by #313 — sweep the OTHER Type arms) | ☐ todo |
-| `src/generation/emit.rs` | 1768 | F4; per-op Rust templates vs fill.rs semantics | ☐ todo |
-| `src/generation/ops/*` | ~3000 | F4; ref_ops/refcount remnants post plan-57 (does dead rc code still emit?) | ☐ todo |
-| `src/codegen_runtime.rs` | 4118 | F4, F5; runtime helpers duplicating `state/*` logic for native | ☐ todo |
-| `src/main.rs` | 5803 | F9; CLI mode dispatch (interpret/native/html/introspect) re-deciding pipeline stages | ☐ todo |
-| `src/cache.rs` + `src/startup_cache.rs` | ~900 | F9; manifest coverage vs actual inputs (#322 fixed sources — what about `--lib` PATHS, env, registry index?) | ☐ todo |
-| `src/ir_schema*.rs` + `ir_store.rs` + `ir_read.rs` + `data_store.rs` | ~7000 | F9; serialized Definition fields vs `Definition` struct (a field added to one and not the other = silent cache corruption — `assigned_lambda_d_nr` IS serialized; are marker deps?) | ☐ todo |
-| `src/parser/expressions.rs` | 2697 | F7; `change_var` type merges (self-dep strip is #328-narrow — other degenerate merges?) | ☐ todo |
-| `src/parser/operators.rs` | 2173 | `call_to_set_op` GET→SET table vs get_val emission table (a get emitted with no set twin = silent no-op assignment) | ☐ todo |
-| `src/parser/objects.rs` | 2058 | construction field-init vs post-hoc assignment (#328 showed they diverge; sweep other field types) | ☐ todo |
-| `src/parser/definitions.rs` | 2236 | F1; sub_type wrappers; attribute re-creation across passes | ☐ todo |
-| `src/parser/fields.rs` + `builtins.rs` | ~1500 | field-access dispatch vs get_val arms | ☐ todo |
-| `src/variables/mod.rs` | 1704 | F5; size table vs Type (every new Type variant must be added — usage sentinel?) | ☐ todo |
-| `src/parallel.rs` + `src/state/io.rs` | ~3500 | F2 across threads (worker slot dispenser vs free-bitmap; store swap-back) | ☐ todo |
-| `src/extensions.rs` + `src/native_lib.rs` | ~3000 | shared-bridge marshallability (#303 unified it — verify single home held) | ☐ todo |
+| `src/parser/mod.rs` | 6863 | F1, F6, F8; `fn_ref_field_is_split` single home verified (#313); `base_var_of` vs other lvalue walks | ▶ family-covered (#332 cells); base_var_of unification → pass 2 |
+| `src/scopes.rs` | 4969 | F2, F8; `value_reads_var` default-arm gap NOTED (FnRef reads w) | ▶ #330; predicate centralisation → pass 2 |
+| `src/state/codegen.rs` | 3745 | F2, F5; the S1 top-level-arg predicate IS #330's broken home | ✅ swept → #330 |
+| `src/state/mod.rs` | 4616 | F5; `fn_call_ref` 20B slot | ✅ covered by closure/mut_closure matrices (both backends, 44 cells) | |
+| `src/parser/control.rs` | 4823 | F1; match/if result-type unification vs codegen's branch layout | ▶ enum/tuple cells held (`f6c`, `ftup`); match-unification DEFERRED |
+| `src/parser/vectors.rs` | 4424 | F1 lambda-epilogue asymmetry (#313/#314 fixed); factory cell held (`f1.loft`) | ✅ swept via #313/#314/#323 arcs |
+| `src/parser/collections.rs` | 4186 | `towards_set` dual discriminators (shape vs type) — documented in #328 fix comments | ▶ keyed insert/update held (`fhash`); discriminator unification → pass 2 |
+| `src/data.rs` | 4304 | `def_nr` convention sentinel grep: only system/type names lack prefixes — convention holds | ✅ swept (static sentinel) |
+| `src/database/allocation.rs` | 2061 | F2, F3; free-bitmap vs `store.free` (@P317 tripwire) | ▶ F3 held; bitmap/flag disagreement cells DEFERRED (tripwire already guards) |
+| `src/database/types.rs` | 2929 | F6 | ▶ width/packing cells held (#332 is the narrow-null exception); @P191 late-mutation DEFERRED (validator exists) |
+| `src/store.rs` | 2788 | F3 held; LLRB vs `needs_coalesce`, `claims` vs headers | ▶ DEFERRED (needs store-level fuzz harness — pass-2 candidate instrument) |
+| `src/typedef.rs` | ~800 | `has_value_cycle` skip ≡ fill arms — aligned in #328 | ✅ swept |
+| `src/fill.rs` | 2168 | F4 | ▶ #333 (float div); arg-width audit → the F4 op sentinel (DEFERRED) |
+| `src/generation/mod.rs` | 3142 | F4, F6; emit_field re-derivation (fn-fields single-homed in #313) | ▶ narrow/enum/tuple/hash native cells held; remaining Type arms DEFERRED |
+| `src/generation/emit.rs` | 1768 | F4 | ▶ see F4 row (#333; sentinel deferred) |
+| `src/generation/ops/*` | ~3000 | F4; post-plan-57 rc remnants | ▶ DEFERRED to pass 3 (deletion candidates by usage sentinel) |
+| `src/codegen_runtime.rs` | 4118 | F4, F5 | ▶ covered by cross-backend probes this sweep; helper-duplication inventory → pass 2 |
+| `src/main.rs` | 5803 | F9 CLI dispatch | ➖ exercised by every suite mode; no dual-invariant suspect found |
+| `src/cache.rs` + `src/startup_cache.rs` | ~900 | F9; manifest vs inputs (#322 fixed) | ▶ warm≡cold held for new shapes; lib-PATH/env axes DEFERRED |
+| `src/ir_schema*.rs` + `ir_store.rs` + `ir_read.rs` + `data_store.rs` | ~7000 | F9 codec vs struct | ▶ marker-dep + split-field shapes round-trip held (f9/f9b); field-by-field codec audit DEFERRED (pass-2: derive codec from one schema) |
+| `src/parser/expressions.rs` | 2697 | F7; `change_var` merges (self-dep strip #328-narrow) | ▶ other degenerate merges DEFERRED |
+| `src/parser/operators.rs` | 2173 | `call_to_set_op` GET→SET table vs get_val table | ▶ assignment shapes this sweep all held; table-completeness sentinel DEFERRED |
+| `src/parser/objects.rs` | 2058 | construction vs post-hoc assignment parity | ✅ swept: text/narrow/enum/tuple/hash/reference cells held (#328 fixed the reference cell) |
+| `src/parser/definitions.rs` | 2236 | F1; sub_type single funnel verified (#318 R3, #328 marker) | ✅ swept |
+| `src/parser/fields.rs` + `builtins.rs` | ~1500 | field-access dispatch | ▶ chained/nested reads held across #328 probes; iterator-op dispatch DEFERRED |
+| `src/variables/mod.rs` | 1704 | F5 size table vs Type variants | ▶ exercised broadly; add-a-variant drift is a pass-2 chokepoint candidate (exhaustive match) |
+| `src/parallel.rs` + `src/state/io.rs` | ~3500 | F2 across threads | ▶ par result cell held (`fpar`, both backends); dispenser/swap-back stress DEFERRED |
+| `src/extensions.rs` + `src/native_lib.rs` | ~3000 | #303 marshallability single home | ✅ verified by cdylib suites each run |
 | `src/lexer.rs` | 1759 | position/link invariants under `revert` | ➖ low-risk |
-| `src/repl.rs` | 3141 | F9 (`rollback_to` vs caches/lambda counters/fn_lambdas) | ☐ todo |
-| `src/state/text.rs` + `debug.rs` | ~2500 | F10; the trace dumper deref-safety (it SIGSEGV'd on #328 records — known instance, file?) | ☐ todo |
-| `src/database/format.rs` + `journal.rs` | ~3000 | F9 persistence round-trips | ☐ todo |
+| `src/repl.rs` | 3141 | F9 `rollback_to` | ▶ error-recovery cell held; counter/caches-after-rollback cells DEFERRED |
+| `src/state/text.rs` + `debug.rs` | ~2500 | F10; dumper deref-safety | ✅ re-probed post-#328: dumper clean on reference-field + walk programs (the crash was the fixed frame corruption) |
+| `src/database/format.rs` + `journal.rs` | ~3000 | F9 persistence | ▶ covered by store_durable/persist suites; new-shape persistence cells DEFERRED |
 | `src/keys.rs`, `src/log_config.rs`, misc leaf files | ~2000 | — | ➖ low-risk |
-| `default/01_code.loft` (+02,03…) | ~3000 | `#rust` template bodies vs interp registration (one fn, two bodies) | ☐ todo |
+| `default/01_code.loft` (+02,03…) | ~3000 | `#rust` twin bodies | ▶ #333 IS this dual for float-div; systematic twin-audit = the F4 sentinel (DEFERRED) |
 | `tools/indexer`, `lib/*` consumers | — | dogfood surface; run, don't sweep | ➖ low-risk |
 
 ## Findings log
@@ -137,6 +137,45 @@ gets probed wherever its homes can drift apart.
   `/tmp/p_followups/f7.loft`); doc misleads; the #316 walk-leak residual is
   a downstream cost of the copy.
 - **Artifacts**: issue #331.
+
+### F6-1 — #332: nullable narrow field null never round-trips (2026-06-11)
+
+- **Invariant**: a nullable field's null state survives write→read→compare,
+  whatever the storage width.
+- **Homes today**: narrow-width selection in `get_val`/`set_field_check`
+  (Parts::Short legacy `+1` vs ShortRaw vs Int sentinels) vs the null write
+  encoding vs the `== null` decode — the omitted-field zero default matches
+  none of them.
+- **Natural home**: the `Parts` variant — each storage width owns its null
+  sentinel and BOTH the write and the compare ask it.
+- **Probe / damage**: `a: i16` omitted → `== null` false; `a = null` →
+  still false; values round-trip fine.  Both backends
+  (`/tmp/p_followups/f6d.loft`).
+- **Artifacts**: issue #332; ignored test
+  `issue_332_nullable_narrow_field_null_roundtrip`.
+
+### F4-1 — #333: float ÷0 — interp aborts, native nulls (2026-06-11)
+
+- **Invariant**: one semantics per operator edge case, asserted by the lint
+  text, the interp body, and the native body alike (null per C66/C67).
+- **Homes today**: `fill.rs` float-div (traps) vs the generated native body
+  (nulls) vs the lint's own promise ("may produce null").
+- **Natural home**: the op's single definition — `default/01_code.loft`'s
+  `#rust` template and the interp body must be one artifact (the F4 family's
+  general cure).
+- **Probe / damage**: `1.0 / 0.0` halts interp with exit 1; native prints
+  `null` and continues (`/tmp/p_followups/f4.loft`).  Integer edges agree.
+- **Artifacts**: issue #333; ignored test
+  `issue_333_float_div_by_zero_yields_null`.
+
+### Held-cells log (2026-06-11 sweep day 1)
+
+`f6a/b/c` narrow+enum+limit fields and vectors (both backends) · `f6d`
+value cells · `ftup` tuple field repoint+destructure (both) · `fhash` keyed
+insert/update (both) · `fpar` par loop (both) · `f8a` view dep · `f1` lib
+closure factory · `f10` text-field churn leak-free · `f9/f9b` program-cache
+warm≡cold for #328/#313 shapes · LOFT_ALIGN=1 sample · REPL error rollback ·
+trace dumper on reference-field programs.
 
 ### F3-1 — two null encodings, comparator normalises: probed, HELD (2026-06-11)
 

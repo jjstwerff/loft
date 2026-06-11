@@ -14752,3 +14752,43 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(8));
 }
+
+// ── Issue 332 (stability-sweep F6; documented, NOT fixed) ────────────────────
+// Nullable narrow integer field: omitted default is not null, and a written
+// null does not round-trip through `== null` — the narrow null encoding has
+// different write and compare homes.
+
+#[test]
+#[ignore = "stability-sweep: #332 — documented, fix deferred to pass 2"]
+fn issue_332_nullable_narrow_field_null_roundtrip() {
+    code!(
+        "struct N { a: i16, tail: integer not null }
+fn run() -> integer {
+    n = N { tail: 1 };
+    omitted = if n.a == null { 1 } else { 0 };
+    n.a = null;
+    rewritten = if n.a == null { 1 } else { 0 };
+    omitted * 10 + rewritten
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(11));
+}
+
+// ── Issue 333 (stability-sweep F4; documented, NOT fixed) ────────────────────
+// Float division by zero must follow the documented null semantics (the
+// divide-by-zero lint promises null; native yields null) — the interpreter
+// currently aborts with a hard error instead.
+
+#[test]
+#[ignore = "stability-sweep: #333 — documented, fix deferred to pass 2"]
+fn issue_333_float_div_by_zero_yields_null() {
+    code!(
+        "fn run() -> integer {
+    a = 1.0 / 0.0;
+    if a == null { 1 } else { 0 }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1));
+}
