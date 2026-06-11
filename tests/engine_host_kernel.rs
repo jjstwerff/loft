@@ -11,6 +11,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -19,10 +20,17 @@ fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft")
 }
 
+/// Kills the whole PROCESS GROUP: a `--native` run spawns the compiled
+/// binary as a grandchild of the loft driver — killing only the child
+/// orphans the actual server (probe-caught: a rerun connected to the
+/// previous test's orphan and read its counter).
 struct Guard(Option<Child>);
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Some(mut c) = self.0.take() {
+            unsafe {
+                libc::killpg(c.id() as i32, libc::SIGKILL);
+            }
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -88,12 +96,24 @@ fn ws_recv(stream: &TcpStream) -> String {
 
 #[test]
 fn kernel_event_broadcast_and_ticks() {
+    run_kernel_scenario(18087, true);
+}
+
+/// @PLN18 08 scenario S1 — the COMPILED baseline serves the same game:
+/// the identical fixture, built `--native` (the kernel natives' typed twins
+/// in `codegen_runtime`), must produce the identical transcript.  The first
+/// run pays the rustc build (cached by content hash afterwards).
+#[test]
+fn s1_native_baseline_matches_interpreted() {
+    run_kernel_scenario(18094, false);
+}
+
+fn run_kernel_scenario(port: u16, interpret: bool) {
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18087u16;
-    let prog = std::env::temp_dir().join(format!("eh_kernel_{}.loft", std::process::id()));
+    let prog = std::env::temp_dir().join(format!("eh_kernel_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,
         format!(
@@ -119,8 +139,12 @@ fn main() {{
     )
     .unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let child = Command::new(loft_bin())
-        .arg("--interpret")
+    let mut cmd = Command::new(loft_bin());
+    if interpret {
+        cmd.arg("--interpret");
+    }
+    cmd.process_group(0); // own group, so Guard can kill driver + grandchild
+    let child = cmd
         .arg("--no-warnings")
         .arg("--lib")
         .arg(root.join("lib"))

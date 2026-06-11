@@ -476,7 +476,15 @@ fn bind_reuseaddr(port: u16) -> Option<TcpListener> {
 pub fn n_kernel_listen(stores: &mut Stores, stack: &mut DbRef) {
     let tick_us = *stores.get::<i64>(stack);
     let port = *stores.get::<i64>(stack);
-    let ok = bind_reuseaddr(port as u16)
+    let ok = listen_impl(port, tick_us);
+    stores.put(stack, ok);
+}
+
+/// The listen body, shared by the bytecode-stack native and the typed
+/// (`--native` codegen) twin — one implementation, two calling conventions.
+#[cfg(not(target_arch = "wasm32"))]
+fn listen_impl(port: i64, tick_us: i64) -> bool {
+    bind_reuseaddr(port as u16)
         .map(|listener| {
             let _ = listener.set_nonblocking(true);
             let udp = match UdpSocket::bind(("0.0.0.0", port as u16)) {
@@ -509,8 +517,7 @@ pub fn n_kernel_listen(stores: &mut Stores, stack: &mut DbRef) {
                 });
             });
         })
-        .is_some();
-    stores.put(stack, ok);
+        .is_some()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -588,7 +595,14 @@ fn pump_udp(k: &mut Kernel) {
 /// One sweep, non-blocking throughout (idle clients cost a peek-µs each).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
-    let n = with_kernel(|k| {
+    let n = with_kernel(pump_kernel).unwrap_or(0);
+    stores.put(stack, n);
+}
+
+/// The pump body, shared by both calling conventions.
+#[cfg(not(target_arch = "wasm32"))]
+fn pump_kernel(k: &mut Kernel) -> i64 {
+    {
         let mut added = 0i64;
         // Accept every pending connection this turn.
         loop {
@@ -660,9 +674,7 @@ pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
         // the tick reads the newest; see pump_udp).
         pump_udp(k);
         added
-    })
-    .unwrap_or(0);
-    stores.put(stack, n);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -723,21 +735,23 @@ pub fn n_kernel_event_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
 /// `last_tick += interval` (never `= now`), so missed time is caught up tick
 /// by tick instead of silently dropped.
 pub fn n_kernel_tick_due(stores: &mut Stores, stack: &mut DbRef) {
-    let due = with_kernel(|k| {
-        let now = k.start.elapsed().as_micros() as i64;
-        if now - k.last_tick_us >= k.tick_interval_us {
-            if k.last_tick_us == 0 {
-                k.last_tick_us = now; // first tick anchors the grid
-            } else {
-                k.last_tick_us += k.tick_interval_us;
-            }
-            true
-        } else {
-            false
-        }
-    })
-    .unwrap_or(false);
+    let due = with_kernel(tick_due_kernel).unwrap_or(false);
     stores.put(stack, due);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tick_due_kernel(k: &mut Kernel) -> bool {
+    let now = k.start.elapsed().as_micros() as i64;
+    if now - k.last_tick_us >= k.tick_interval_us {
+        if k.last_tick_us == 0 {
+            k.last_tick_us = now; // first tick anchors the grid
+        } else {
+            k.last_tick_us += k.tick_interval_us;
+        }
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -916,22 +930,24 @@ pub fn n_kernel_keyframe(stores: &mut Stores, stack: &mut DbRef) {
 /// inside `on_tick` gives late-latch by construction: the freshest datagram
 /// that arrived before the tick is the one read.
 pub fn n_kernel_sync_next(stores: &mut Stores, stack: &mut DbRef) {
-    let got = with_kernel(|k| {
-        for cid in 0..k.net.len() {
-            for slot in &mut k.net[cid].slots {
-                if slot.dirty {
-                    slot.dirty = false;
-                    // The payload carries its own `<msg_id>:` framing, so the
-                    // drained message reads exactly like an event payload.
-                    k.last_sync = (cid as i64, slot.seq, slot.payload.clone());
-                    return true;
-                }
+    let got = with_kernel(sync_next_kernel).unwrap_or(false);
+    stores.put(stack, got);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_next_kernel(k: &mut Kernel) -> bool {
+    for cid in 0..k.net.len() {
+        for slot in &mut k.net[cid].slots {
+            if slot.dirty {
+                slot.dirty = false;
+                // The payload carries its own `<msg_id>:` framing, so the
+                // drained message reads exactly like an event payload.
+                k.last_sync = (cid as i64, slot.seq, slot.payload.clone());
+                return true;
             }
         }
-        false
-    })
-    .unwrap_or(false);
-    stores.put(stack, got);
+    }
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1142,7 +1158,14 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
 /// keepalive cadences.  Datagram arrivals are not counted as work (they
 /// conflate; the tick reads the newest — same rule as the listener).
 pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
-    let n = with_client(|c| {
+    let n = with_client(pump_client).unwrap_or(0);
+    stores.put(stack, n);
+}
+
+/// The connector pump body, shared by both calling conventions.
+#[cfg(not(target_arch = "wasm32"))]
+fn pump_client(c: &mut ClientKernel) -> i64 {
+    {
         let mut added = 0i64;
         // WS frames: events from the server — except `S:`-framed keyframes,
         // which are promoted sync samples riding the reliable channel in the
@@ -1240,9 +1263,7 @@ pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
             }
         }
         added
-    })
-    .unwrap_or(0);
-    stores.put(stack, n);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1286,21 +1307,23 @@ pub fn n_kernel_client_event_payload_dest(stores: &mut Stores, stack: &mut DbRef
 #[cfg(not(target_arch = "wasm32"))]
 /// `kernel_client_tick_due() -> boolean` — the listener's drift-free rule.
 pub fn n_kernel_client_tick_due(stores: &mut Stores, stack: &mut DbRef) {
-    let due = with_client(|c| {
-        let now = c.now_us();
-        if now - c.last_tick_us >= c.tick_interval_us {
-            if c.last_tick_us == 0 {
-                c.last_tick_us = now;
-            } else {
-                c.last_tick_us += c.tick_interval_us;
-            }
-            true
-        } else {
-            false
-        }
-    })
-    .unwrap_or(false);
+    let due = with_client(tick_due_client).unwrap_or(false);
     stores.put(stack, due);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tick_due_client(c: &mut ClientKernel) -> bool {
+    let now = c.now_us();
+    if now - c.last_tick_us >= c.tick_interval_us {
+        if c.last_tick_us == 0 {
+            c.last_tick_us = now;
+        } else {
+            c.last_tick_us += c.tick_interval_us;
+        }
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1328,58 +1351,63 @@ pub fn n_kernel_client_idle(stores: &mut Stores, stack: &mut DbRef) {
 pub fn n_kernel_client_send(stores: &mut Stores, stack: &mut DbRef) {
     let msg = stores.get::<Str>(stack).str().to_owned();
     let sync = is_sync_msg(&msg);
-    let ok = with_client(|c| {
-        if !c.alive {
-            return false;
-        }
-        if sync {
-            // One counter across BOTH carriers: pre-bind WS sync sends count
-            // too, so the first datagram after binding is newer than every
-            // ordered-carrier send the server already conflated.
-            c.out_seq += 1;
-        }
-        if sync
-            && c.udp_bound
-            && let Some(udp) = c.udp.as_ref()
-        {
-            let dgram = format!("S:{}:{msg}", c.out_seq);
-            if dgram.len() > UDP_MAX_DATAGRAM {
-                return false; // state frames must stay small (see the listener)
-            }
-            return udp.send(dgram.as_bytes()).is_ok();
-        }
-        if write_frame_masked(&mut c.conn, 0x1, msg.as_bytes()).is_err() {
-            c.alive = false;
-            c.udp_bound = false;
-            c.events.push_back(Event {
-                cid: 0,
-                kind: 2,
-                payload: String::new(),
-            });
-            return false;
-        }
-        true
-    })
-    .unwrap_or(false);
+    let ok = with_client(|c| client_send_impl(c, &msg, sync)).unwrap_or(false);
     stores.put(stack, ok);
+}
+
+/// The connector send body, shared by both calling conventions.
+#[cfg(not(target_arch = "wasm32"))]
+fn client_send_impl(c: &mut ClientKernel, msg: &str, sync: bool) -> bool {
+    if !c.alive {
+        return false;
+    }
+    if sync {
+        // One counter across BOTH carriers: pre-bind WS sync sends count
+        // too, so the first datagram after binding is newer than every
+        // ordered-carrier send the server already conflated.
+        c.out_seq += 1;
+    }
+    if sync
+        && c.udp_bound
+        && let Some(udp) = c.udp.as_ref()
+    {
+        let dgram = format!("S:{}:{msg}", c.out_seq);
+        if dgram.len() > UDP_MAX_DATAGRAM {
+            return false; // state frames must stay small (see the listener)
+        }
+        return udp.send(dgram.as_bytes()).is_ok();
+    }
+    if write_frame_masked(&mut c.conn, 0x1, msg.as_bytes()).is_err() {
+        c.alive = false;
+        c.udp_bound = false;
+        c.events.push_back(Event {
+            cid: 0,
+            kind: 2,
+            payload: String::new(),
+        });
+        return false;
+    }
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 /// `client_sync_next() -> boolean` — drain the newest unread server state,
 /// one slot per call (drain inside `on_tick`: late-latch, the listener rule).
 pub fn n_kernel_client_sync_next(stores: &mut Stores, stack: &mut DbRef) {
-    let got = with_client(|c| {
-        for slot in &mut c.slots {
-            if slot.dirty {
-                slot.dirty = false;
-                c.last_sync = (slot.seq, slot.payload.clone());
-                return true;
-            }
-        }
-        false
-    })
-    .unwrap_or(false);
+    let got = with_client(sync_next_client).unwrap_or(false);
     stores.put(stack, got);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_next_client(c: &mut ClientKernel) -> bool {
+    for slot in &mut c.slots {
+        if slot.dirty {
+            slot.dirty = false;
+            c.last_sync = (slot.seq, slot.payload.clone());
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1670,5 +1698,186 @@ pub mod browser {
             .store_mut(&dest)
             .addr_mut::<String>(dest.rec, dest.pos)
             .push_str(&v);
+    }
+}
+
+// ── Typed twins for `--native` codegen (@PLN18 08 scenario S1) ──────────────
+//
+// A compiled loft program calls natives by NAME with TYPED Rust signatures
+// (the codegen_runtime convention: `cell: &UnsafeCell<Stores>`, `i64`
+// scalars, `&str` text args, `String` text returns, `u8` booleans).  These
+// twins share the kernel internals with the bytecode-stack natives above —
+// one implementation, two calling conventions; the queue machinery never
+// forks.  Re-exported by `codegen_runtime` (glob-imported into generated
+// crates) and registered in `CODEGEN_RUNTIME_FNS`.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(non_snake_case, clippy::missing_panics_doc)]
+pub mod typed {
+    #[allow(clippy::wildcard_imports)] // the twins mirror the whole module
+    use super::*;
+    use std::cell::UnsafeCell;
+
+    // ── Listener role ──
+    pub fn n_kernel_listen(_cell: &UnsafeCell<Stores>, port: i64, tick_us: i64) -> u8 {
+        u8::from(listen_impl(port, tick_us))
+    }
+    pub fn n_kernel_pump(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(pump_kernel).unwrap_or(0)
+    }
+    pub fn n_kernel_next_event(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(
+            with_kernel(|k| match k.events.pop_front() {
+                Some(ev) => {
+                    k.last = ev;
+                    true
+                }
+                None => false,
+            })
+            .unwrap_or(false),
+        )
+    }
+    pub fn n_kernel_event_cid(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.last.cid).unwrap_or(-1)
+    }
+    pub fn n_kernel_event_kind(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.last.kind).unwrap_or(-1)
+    }
+    pub fn n_kernel_event_payload(_cell: &UnsafeCell<Stores>) -> String {
+        with_kernel(|k| k.last.payload.clone()).unwrap_or_default()
+    }
+    pub fn n_kernel_tick_due(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_kernel(tick_due_kernel).unwrap_or(false))
+    }
+    pub fn n_send(_cell: &UnsafeCell<Stores>, cid: i64, msg: &str) -> u8 {
+        let sync = is_sync_msg(msg);
+        u8::from(with_kernel(|k| deliver(k, cid as usize, msg, sync)).unwrap_or(false))
+    }
+    pub fn n_broadcast(_cell: &UnsafeCell<Stores>, msg: &str) -> i64 {
+        let sync = is_sync_msg(msg);
+        with_kernel(|k| {
+            let mut sent = 0i64;
+            for cid in 0..k.conns.len() {
+                if k.conns[cid].is_none() {
+                    continue;
+                }
+                if deliver(k, cid, msg, sync) {
+                    sent += 1;
+                }
+            }
+            sent
+        })
+        .unwrap_or(0)
+    }
+    pub fn n_kernel_idle(_cell: &UnsafeCell<Stores>, max_us: i64) {
+        let sleep_us = with_kernel(|k| {
+            let now = k.start.elapsed().as_micros() as i64;
+            let until_tick = if k.last_tick_us == 0 {
+                k.tick_interval_us
+            } else {
+                (k.last_tick_us + k.tick_interval_us - now).max(0)
+            };
+            max_us.clamp(0, until_tick.max(1))
+        })
+        .unwrap_or(max_us.max(0));
+        std::thread::sleep(Duration::from_micros(sleep_us as u64));
+    }
+    pub fn n_clients(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.conns.iter().filter(|c| c.is_some()).count() as i64).unwrap_or(0)
+    }
+    pub fn n_udp_bound(_cell: &UnsafeCell<Stores>, cid: i64) -> u8 {
+        u8::from(
+            with_kernel(|k| k.net.get(cid as usize).is_some_and(|n| n.path.is_some()))
+                .unwrap_or(false),
+        )
+    }
+    pub fn n_sync_class(_cell: &UnsafeCell<Stores>, msg_id: i64) {
+        SYNC_IDS.with(|s| {
+            s.borrow_mut().insert(msg_id, false);
+        });
+    }
+    pub fn n_sync_class_keyed(_cell: &UnsafeCell<Stores>, msg_id: i64) {
+        SYNC_IDS.with(|s| {
+            s.borrow_mut().insert(msg_id, true);
+        });
+    }
+    pub fn n_keyframe(_cell: &UnsafeCell<Stores>, cid: i64, msg: &str) -> u8 {
+        u8::from(with_kernel(|k| deliver_keyframe(k, cid as usize, msg)).unwrap_or(false))
+    }
+    pub fn n_sync_next(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_kernel(sync_next_kernel).unwrap_or(false))
+    }
+    pub fn n_sync_cid(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.last_sync.0).unwrap_or(-1)
+    }
+    pub fn n_sync_seq(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.last_sync.1).unwrap_or(-1)
+    }
+    pub fn n_kernel_sync_payload(_cell: &UnsafeCell<Stores>) -> String {
+        with_kernel(|k| k.last_sync.2.clone()).unwrap_or_default()
+    }
+    pub fn n_kernel_client_frame(_cell: &UnsafeCell<Stores>) {}
+    pub fn n_kernel_default_host(_cell: &UnsafeCell<Stores>) -> String {
+        std::env::var("LOFT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
+    }
+
+    // ── Connector role ──
+    pub fn n_kernel_connect(_cell: &UnsafeCell<Stores>, host: &str, port: i64, tick_us: i64) -> u8 {
+        u8::from(client_connect(host, port as u16, tick_us).is_some())
+    }
+    pub fn n_kernel_client_pump(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(pump_client).unwrap_or(0)
+    }
+    pub fn n_kernel_client_alive(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_client(|c| c.alive).unwrap_or(false))
+    }
+    pub fn n_kernel_client_next_event(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(
+            with_client(|c| match c.events.pop_front() {
+                Some(ev) => {
+                    c.last = ev;
+                    true
+                }
+                None => false,
+            })
+            .unwrap_or(false),
+        )
+    }
+    pub fn n_kernel_client_event_kind(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(|c| c.last.kind).unwrap_or(-1)
+    }
+    pub fn n_kernel_client_event_payload(_cell: &UnsafeCell<Stores>) -> String {
+        with_client(|c| c.last.payload.clone()).unwrap_or_default()
+    }
+    pub fn n_kernel_client_tick_due(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_client(tick_due_client).unwrap_or(false))
+    }
+    pub fn n_kernel_client_idle(_cell: &UnsafeCell<Stores>, max_us: i64) {
+        let sleep_us = with_client(|c| {
+            let now = c.now_us();
+            let until_tick = if c.last_tick_us == 0 {
+                c.tick_interval_us
+            } else {
+                (c.last_tick_us + c.tick_interval_us - now).max(0)
+            };
+            max_us.clamp(0, until_tick.max(1))
+        })
+        .unwrap_or(max_us.max(0));
+        std::thread::sleep(Duration::from_micros(sleep_us as u64));
+    }
+    pub fn n_client_send(_cell: &UnsafeCell<Stores>, msg: &str) -> u8 {
+        let sync = is_sync_msg(msg);
+        u8::from(with_client(|c| client_send_impl(c, msg, sync)).unwrap_or(false))
+    }
+    pub fn n_client_sync_next(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_client(sync_next_client).unwrap_or(false))
+    }
+    pub fn n_client_sync_seq(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(|c| c.last_sync.0).unwrap_or(-1)
+    }
+    pub fn n_kernel_client_sync_payload(_cell: &UnsafeCell<Stores>) -> String {
+        with_client(|c| c.last_sync.1.clone()).unwrap_or_default()
+    }
+    pub fn n_client_udp_bound(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_client(|c| c.udp_bound).unwrap_or(false))
     }
 }

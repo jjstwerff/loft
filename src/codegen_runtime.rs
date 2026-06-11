@@ -135,7 +135,49 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_struct_from_jsonvalue",      abi: Abi::Cell },
     RuntimeFn { name: "n_struct_to_json",             abi: Abi::Cell },
     RuntimeFn { name: "n_struct_to_json_pretty",      abi: Abi::Cell },
+    // @PLN18 08-S1 — the engine-host kernel natives, typed twins in
+    // `engine_host::typed` (re-exported below): a compiled kernel program
+    // calls the SAME in-binary kernel the interpreter uses — one
+    // implementation, two calling conventions.
+    RuntimeFn { name: "n_kernel_listen",              abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_pump",                abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_next_event",          abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_cid",           abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_kind",          abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_payload",       abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_tick_due",            abi: Abi::Cell },
+    RuntimeFn { name: "n_send",                       abi: Abi::Cell },
+    RuntimeFn { name: "n_broadcast",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_idle",                abi: Abi::Cell },
+    RuntimeFn { name: "n_clients",                    abi: Abi::Cell },
+    RuntimeFn { name: "n_udp_bound",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_class",                 abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_class_keyed",           abi: Abi::Cell },
+    RuntimeFn { name: "n_keyframe",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_next",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_cid",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_seq",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_sync_payload",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_frame",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_default_host",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_connect",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_pump",         abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_alive",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_next_event",   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_event_kind",   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_event_payload", abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_tick_due",     abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_idle",         abi: Abi::Cell },
+    RuntimeFn { name: "n_client_send",                abi: Abi::Cell },
+    RuntimeFn { name: "n_client_sync_next",           abi: Abi::Cell },
+    RuntimeFn { name: "n_client_sync_seq",            abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_sync_payload", abi: Abi::Cell },
+    RuntimeFn { name: "n_client_udp_bound",           abi: Abi::Cell },
 ];
+
+// @PLN18 08-S1 — the typed kernel twins, glob-importable by generated crates.
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::engine_host::typed::*;
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
 /// unknown names — user-defined functions and Op stubs default to the

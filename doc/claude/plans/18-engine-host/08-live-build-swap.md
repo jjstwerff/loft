@@ -57,10 +57,20 @@ Each scenario names its observable and its test.  The differential rule
 (Goal D, extended): at EVERY stage the meaning output must be identical
 across interp / mixed / compiled — only timing may differ.
 
-### S1 — the compiled baseline serves the game
+### S1 — the compiled baseline serves the game  ✅ (2026-06-11)
 
 A kernel program (`run`/`run_client`) built `--native`, driven by the
-existing e2e clients.
+existing e2e clients.  **SHIPPED**: the kernel natives gained TYPED TWINS
+(`engine_host::typed`, re-exported through `codegen_runtime`, registered in
+`CODEGEN_RUNTIME_FNS`) sharing the kernel internals with the bytecode-stack
+natives — one implementation, two calling conventions; the bodies that were
+inline in the stack natives (listen/pump×2/tick×2/sync-next×2/client-send)
+were factored into shared `_impl`/`_kernel`/`_client` helpers so the queue
+machinery cannot fork.  `engine_host_kernel::s1_native_baseline_matches_
+interpreted` runs the SAME fixture both ways — transcripts byte-equal.
+Process-model finding: a `--native` run spawns the compiled binary as a
+GRANDCHILD of the loft driver — test guards must kill the process group
+(probe-caught: a rerun connected to the previous run's orphan).
 
 > **Test (extend `engine_host_kernel`/`_audience`):** the same scenario
 > transcripts as the interpreted run — the audience-differential pattern
