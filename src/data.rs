@@ -688,6 +688,31 @@ impl Value {
         })
     }
 
+    /// The TAIL expression of this value: descends `Span` wrappers and the
+    /// last operator of `Block` / `Insert` sequences (skipping trailing
+    /// `Line` position markers, which are never values).  Stops at `If` —
+    /// branch policy belongs to the caller.  Pass-3 keystone: the tail
+    /// walkers in scopes / emit / control each hand-rolled this descent
+    /// with drifted arm sets (one missed `Insert`, two missed `Span`, none
+    /// skipped `Line`).
+    pub fn tail(&self) -> &Value {
+        match self {
+            Value::Span(b) => b.1.tail(),
+            Value::Block(bl) => bl
+                .operators
+                .iter()
+                .rev()
+                .find(|v| !matches!(v.unspan(), Value::Line(_)))
+                .map_or(self, Value::tail),
+            Value::Insert(ops) => ops
+                .iter()
+                .rev()
+                .find(|v| !matches!(v.unspan(), Value::Line(_)))
+                .map_or(self, Value::tail),
+            _ => self,
+        }
+    }
+
     /// The frame variable an accessor expression is rooted at: `Var(h)`
     /// itself, or the first argument of an accessor chain
     /// (`OpGetField(OpGetField(h, …), …)`).  `None` for shapes with no

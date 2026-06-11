@@ -1575,14 +1575,10 @@ impl Output<'_> {
                     // rustc rejects with E0282 because `to_string()` can't
                     // be inferred on the never type.  Walk through Blocks
                     // and Spans to detect tail-Return.
-                    fn tail_is_return(v: &Value) -> bool {
-                        match v.unspan() {
-                            Value::Return(_) => true,
-                            Value::Block(bl) => bl.operators.last().is_some_and(tail_is_return),
-                            _ => false,
-                        }
-                    }
-                    let value_is_return = tail_is_return(v);
+                    // Pass-3: `Value::tail` also descends Insert — scopes
+                    // wraps a tail return in `Insert([frees…, Return])`,
+                    // which the old hand-rolled walker missed.
+                    let value_is_return = matches!(v.tail(), Value::Return(_));
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
                     // Iterator-next blocks (name "iter next" / "sorted iter next")
                     // return their element value OR `i64::MIN` as the

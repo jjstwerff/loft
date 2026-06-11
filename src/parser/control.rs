@@ -56,14 +56,11 @@ fn is_mutating_op(name: &str) -> bool {
 /// `rewrite_tail_tuple_with_work_ref` so the gate and the rewrite stay
 /// in sync.
 fn tail_has_tuple_leaf(value: &Value) -> bool {
-    match value {
+    match value.tail() {
         Value::Tuple(_) => true,
-        Value::Span(b) => tail_has_tuple_leaf(&b.1),
         Value::If(_, then_branch, else_branch) => {
             tail_has_tuple_leaf(then_branch) || tail_has_tuple_leaf(else_branch)
         }
-        Value::Block(b) => b.operators.last().is_some_and(tail_has_tuple_leaf),
-        Value::Insert(ops) => ops.last().is_some_and(tail_has_tuple_leaf),
         _ => false,
     }
 }
@@ -92,16 +89,8 @@ struct EnumArm {
 /// A block definitely-returns if its last statement is a `return`, or if it is
 /// an `if` with an `else` where both branches definitely-return (recursive).
 pub(crate) fn definitely_returns(val: &Value) -> bool {
-    match val {
+    match val.tail() {
         Value::Return(_) => true,
-        Value::Block(bl) => {
-            // A block definitely-returns if its last non-Line statement does.
-            bl.operators
-                .iter()
-                .rev()
-                .find(|v| !matches!(v, Value::Line(_)))
-                .is_some_and(definitely_returns)
-        }
         Value::If(_, t_branch, f_branch) => {
             // Both branches must definitely-return, and the else must not be null.
             !matches!(**f_branch, Value::Null)

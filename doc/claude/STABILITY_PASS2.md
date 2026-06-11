@@ -233,3 +233,39 @@ plain exists-anywhere search.
   (the safe-by-default leaves `walk_shallow_parent_write` had).
 - Gates: full suite 2291 passed / 173 skipped (2 new unit tests), clippy
   clean, fmt clean, cdylib rebuild log clean of the imaging failure.
+
+### Pass-3 wave 1 — 2026-06-11 — function-level de-duplication
+
+- **Dominance twins unified.**  `confine_reassign_safe` and
+  `store_dead_after_block` were ~80 identical lines apart ("mirrors …"
+  by its own doc); both are now thin wrappers over ONE `dominance_walk`
+  differing only in start value + `invalidate_conditional`.  Drift
+  closed: the stronger gate had silently lost the `ParFor` arm its twin
+  had (reads inside a parallel body escaped the over-free check; under
+  invalidation a `ParFor` assignment now also invalidates — both
+  conservative directions).
+- **Par-safety pair unified.**  `walk_par_safe_value`+`call_is_par_safe`
+  (5b recursive walk) and `walk_classified`+`call_classified`
+  (fixed-point pass) differed ONLY in the unknown-user-fn policy — now
+  `body_calls_par_safe` + `call_purity_safe` with the policy as a
+  closure (visited-set recursion vs classification lookup).
+- **`Value::tail` keystone** (Span-transparent, Block/Insert last
+  non-`Line` operator) replaces four hand-rolled tail descents with
+  drifted arm sets: `scopes::expr_ends_in_return` (missed Span + Line),
+  `emit::tail_is_return` (missed `Insert` — scopes wraps tail returns in
+  `Insert([frees…, Return])`, the exact shape `codegen::is_divergent`'s
+  comment documents), `control::definitely_returns` (missed Span),
+  `control::tail_has_tuple_leaf` (no Line skip).
+- **Free-op recognizer unified** (pre_eval.rs had FOUR copies in one
+  file, two stale): `is_free_op` + `freed_var` closures and the
+  line-818 cleanup-skip list now all derive from `free_op_var` — the
+  only copy that knew `OpFreeRefIfDistinct` (the #330 alias-witness
+  free that `scopes::get_free_vars` emits into the IR).  Real holes
+  closed: the @P274 use-after-free guard could miss a hoist past an
+  if-distinct free of the expr's own operand, and the native tail-ret
+  capture ABORTED (`Op*` fall-through → lost tail result shape) on
+  meeting one in its cleanup window.
+- **`probe_cur_dir_lib`/`probe_base_dir_lib`** (verbatim dup) →
+  `probe_dir_lib`.
+- Gates: full suite 2292 passed / 173 skipped, clippy 0 warnings, fmt
+  clean.

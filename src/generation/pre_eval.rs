@@ -180,14 +180,11 @@ impl Output<'_> {
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);
         }
-        let is_free_op = |op: &Value| {
-            if let Value::Call(d, _) = op {
-                let name = self.data.def(*d).name();
-                name == "OpFreeText" || name == "OpFreeRef"
-            } else {
-                false
-            }
-        };
+        // Pass-3 dedupe: ONE free-op recognizer (`free_op_var`) — this
+        // closure and `freed_var` below were stale hand-rolled copies that
+        // missed `OpFreeRefIfDistinct` (the #330 alias-witness free), so a
+        // window containing one mis-classified the op.
+        let is_free_op = |op: &Value| Self::free_op_var(op, self.data).is_some();
 
         // Pass 1 — B5-L3 text-temp collapse:
         //   [Set(__ret_N, Call(...)), ..., Return(Var(__ret_N))]
@@ -313,20 +310,11 @@ impl Output<'_> {
                 std::borrow::Cow::Owned(result)
             };
         }
-        // Helper: extract the variable freed by an OpFreeRef / OpFreeText op
-        // (the first arg, which is always a `Var(_)` for these builtins).
-        let freed_var = |op: &Value| -> Option<u16> {
-            if let Value::Call(d, args) = op.unspan() {
-                let name = self.data.def(*d).name();
-                if (name == "OpFreeRef" || name == "OpFreeText")
-                    && let Some(first) = args.first()
-                    && let Value::Var(v) = first.unspan()
-                {
-                    return Some(*v);
-                }
-            }
-            None
-        };
+        // The @P274 use-after-free guard MUST see every free flavour —
+        // the old hand-rolled copy here missed `OpFreeRefIfDistinct`, so a
+        // hoist past an if-distinct free of one of the expr's operands went
+        // undetected.  `free_op_var` is the one recognizer.
+        let freed_var = |op: &Value| -> Option<u16> { Self::free_op_var(op, self.data) };
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
@@ -815,7 +803,13 @@ impl Output<'_> {
                 Value::Line(_) => {}
                 Value::Call(d_nr, _) => {
                     let name = self.data.def(*d_nr).name();
-                    if name == "OpFreeText" || name == "OpFreeRef" || name == "n_set_store_lock" {
+                    // Cleanup window: every free flavour (via the one
+                    // recognizer — the old name list missed
+                    // `OpFreeRefIfDistinct`, and the `Op*` fall-through
+                    // below then ABORTED the tail capture) + the lock op.
+                    if Self::free_op_var(&operators[i], self.data).is_some()
+                        || name == "n_set_store_lock"
+                    {
                         continue;
                     }
                     // Candidate tail Call — require its return type to match

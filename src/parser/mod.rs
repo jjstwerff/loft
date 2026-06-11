@@ -4845,8 +4845,8 @@ impl Parser {
         if blocked(&f) {
             f = format!("{id}.loft");
         }
-        Self::probe_cur_dir_lib(id, cur_dir, &mut f);
-        Self::probe_base_dir_lib(id, base_dir, &mut f);
+        Self::probe_dir_lib(id, cur_dir, &mut f);
+        Self::probe_dir_lib(id, base_dir, &mut f);
         if blocked(&f) {
             f = format!("{id}.loft");
         }
@@ -4922,18 +4922,12 @@ impl Parser {
         }
     }
 
-    /// `<cur_dir>/lib/<id>.loft` — lib dir relative to the script being parsed.
-    fn probe_cur_dir_lib(id: &str, cur_dir: &str, f: &mut String) {
-        if !cur_dir.is_empty() && !std::path::Path::new(f).exists() {
-            *f = format!("{cur_dir}{0}lib{0}{id}.loft", sep_str());
-        }
-    }
-
-    /// `<base_dir>/lib/<id>.loft` — lib dir relative to the base directory
-    /// when the script lives inside a `/tests/` tree.
-    fn probe_base_dir_lib(id: &str, base_dir: &str, f: &mut String) {
-        if !base_dir.is_empty() && !std::path::Path::new(f).exists() {
-            *f = format!("{base_dir}{0}lib{0}{id}.loft", sep_str());
+    /// `<dir>/lib/<id>.loft` — a `lib/` directory relative to `dir`
+    /// (called for the script's own dir, then for the base dir when the
+    /// script lives inside a `/tests/` tree).
+    fn probe_dir_lib(id: &str, dir: &str, f: &mut String) {
+        if !dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{dir}{0}lib{0}{id}.loft", sep_str());
         }
     }
 

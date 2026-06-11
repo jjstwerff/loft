@@ -2236,12 +2236,7 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
 /// produce `let _ret = return …` in native and double-emit the inner
 /// Return inside the Set's expression generator.
 fn expr_ends_in_return(expr: &Value) -> bool {
-    match expr {
-        Value::Return(_) => true,
-        Value::Insert(ops) => ops.last().is_some_and(expr_ends_in_return),
-        Value::Block(bl) => bl.operators.last().is_some_and(expr_ends_in_return),
-        _ => false,
-    }
+    matches!(expr.tail(), Value::Return(_))
 }
 
 /// Whether a function's return type holds a plain value (no heap ownership).
@@ -2523,38 +2518,54 @@ fn walk_par_safe(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> bool {
 
 #[allow(dead_code)]
 fn walk_par_safe_value(value: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
+    body_calls_par_safe(value, data, &mut |callee, data| {
+        walk_par_safe(data, callee, visited)
+    })
+}
+
+/// Shared body walk behind the two par-safety analyses (pass-3 dedupe):
+/// every `Call` must pass the purity gate; a `CallRef` (runtime fn-ref,
+/// callee unknown at compile time) rejects conservatively.  The two
+/// analyses differ ONLY in how an UNKNOWN user fn is decided — `user_fn`
+/// supplies that policy (the 5b walk recurses with a visited set; the
+/// fixed-point pass looks up its classification table).
+fn body_calls_par_safe(
+    value: &Value,
+    data: &Data,
+    user_fn: &mut dyn FnMut(u32, &Data) -> bool,
+) -> bool {
     !value.any_node(&mut |n| match n {
-        Value::Call(callee, _) => !call_is_par_safe(*callee, data, visited),
-        // Runtime fn-ref — actual callee is unknown at compile
-        // time.  Conservative: reject.
+        Value::Call(callee, _) => !call_purity_safe(*callee, data, user_fn),
         Value::CallRef(_, _) => true,
         _ => false,
     })
 }
 
-#[allow(dead_code)]
-fn call_is_par_safe(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> bool {
+/// The shared purity gate: Purity decides directly except for UNKNOWN
+/// user fns, which `user_fn` decides.
+fn call_purity_safe(callee: u32, data: &Data, user_fn: &mut dyn FnMut(u32, &Data) -> bool) -> bool {
     if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
         return false;
     }
     let def = &data.definitions[callee as usize];
     match def.purity {
-        Purity::Pure => true,
-        Purity::Impure(ImpureCategory::HostIo | ImpureCategory::Prng | ImpureCategory::Io) => true,
-        Purity::Impure(ImpureCategory::ParCall) => {
-            // Nested par: D8 R2 says inner worker fn must itself be
-            // par-safe.  Minimum impl returns true; full 5b looks
-            // up the worker fn arg and recurses into it.
-            true
-        }
+        Purity::Pure
+        | Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Prng
+            | ImpureCategory::Io
+            // Nested par: D8 R2 says the inner worker fn must itself be
+            // par-safe.  Minimum impl accepts; full 5b looks up the worker
+            // fn arg and recurses into it.
+            | ImpureCategory::ParCall,
+        ) => true,
         Purity::Impure(ImpureCategory::ParentWrite) => false,
         Purity::Unknown => {
             if matches!(def.code, Value::Null) {
                 // Native stdlib fn with no annotation — conservative.
                 false
             } else {
-                // User fn: recurse into its body.
-                walk_par_safe(data, callee, visited)
+                user_fn(callee, data)
             }
         }
     }
@@ -2978,38 +2989,11 @@ pub fn analyse_par_safety_fixpoint(data: &Data) -> HashMap<u32, bool> {
 /// the fixed-point loop owns convergence.
 #[allow(dead_code)]
 fn walk_classified(value: &Value, data: &Data, classification: &HashMap<u32, bool>) -> bool {
-    !value.any_node(&mut |n| match n {
-        Value::Call(callee, _) => !call_classified(*callee, data, classification),
-        Value::CallRef(_, _) => true,
-        _ => false,
+    body_calls_par_safe(value, data, &mut |callee, _| {
+        // User fn — look up the classification.  If absent
+        // (user_fn_d_nrs missed it), conservative false.
+        classification.get(&callee).copied().unwrap_or(false)
     })
-}
-
-#[allow(dead_code)]
-fn call_classified(callee: u32, data: &Data, classification: &HashMap<u32, bool>) -> bool {
-    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
-        return false;
-    }
-    let def = &data.definitions[callee as usize];
-    match def.purity {
-        Purity::Pure
-        | Purity::Impure(
-            ImpureCategory::HostIo
-            | ImpureCategory::Prng
-            | ImpureCategory::Io
-            | ImpureCategory::ParCall,
-        ) => true,
-        Purity::Impure(ImpureCategory::ParentWrite) => false,
-        Purity::Unknown => {
-            if matches!(def.code, Value::Null) {
-                false
-            } else {
-                // User fn — look up the classification.  If absent
-                // (user_fn_d_nrs missed it), conservative false.
-                classification.get(&callee).copied().unwrap_or(false)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -3676,94 +3660,128 @@ fn guard_escapes(node: &Value, target: u16) -> bool {
 /// Conditional assignments (inside `if`/`loop`) do NOT establish dominance for
 /// code after the construct — the walk under-claims, so it stays sound.
 fn confine_reassign_safe(code: &Value, local: u16) -> bool {
-    fn walk(node: &Value, local: u16, dominated: bool, ok: &mut bool) -> bool {
-        match node {
-            Value::Set(v, val) => {
-                // RHS evaluated before the write lands; a read of `local` in it
-                // is gated by the *current* dominance.
-                walk(val, local, dominated, ok);
-                if *v == local {
-                    return !matches!(val.unspan(), Value::Null);
-                }
-                dominated
-            }
-            Value::Var(v) | Value::CallRef(v, _) | Value::TupleGet(v, _) => {
-                if *v == local && !dominated {
-                    *ok = false;
-                }
-                if let Value::CallRef(_, args) = node {
-                    let mut d = dominated;
-                    for a in args {
-                        d = walk(a, local, d, ok);
-                    }
-                }
-                dominated
-            }
-            Value::Block(bl) => {
-                let mut d = dominated;
-                for op in &bl.operators {
-                    d = walk(op, local, d, ok);
-                }
-                d
-            }
-            Value::Loop(lp) => {
-                // Body runs 0+ times → conditional; dominance does not leak out.
-                let mut d = dominated;
-                for op in &lp.operators {
-                    d = walk(op, local, d, ok);
-                }
-                dominated
-            }
-            Value::If(t, a, b) => {
-                let dc = walk(t, local, dominated, ok);
-                walk(a, local, dc, ok);
-                walk(b, local, dc, ok);
-                dc // branch assignments are conditional — no post-`if` dominance.
-            }
-            Value::Call(_, args)
-            | Value::Insert(args)
-            | Value::Tuple(args)
-            | Value::Parallel(args) => {
-                let mut d = dominated;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                d
-            }
-            Value::Iter(idx, c, n, e) => {
-                if *idx == local && !dominated {
-                    *ok = false;
-                }
-                let mut d = walk(c, local, dominated, ok);
-                d = walk(n, local, d, ok);
-                walk(e, local, d, ok); // body conditional
-                d
-            }
-            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-                walk(v, local, dominated, ok);
-                dominated
-            }
-            Value::TuplePut(v, _, inner) => {
-                if *v == local && !dominated {
-                    *ok = false;
-                }
-                walk(inner, local, dominated, ok);
-                dominated
-            }
-            Value::Span(b) => walk(&b.1, local, dominated, ok),
-            Value::ParFor(b) => {
-                let mut d = walk(&b.input, local, dominated, ok);
-                d = walk(&b.worker, local, d, ok);
-                d = walk(&b.threads, local, d, ok);
-                walk(&b.body, local, d, ok);
-                d
-            }
-            _ => dominated,
-        }
-    }
     let mut ok = true;
-    walk(code, local, false, &mut ok);
+    dominance_walk(code, local, false, &mut ok, false);
     ok
+}
+
+/// Shared dominance walk behind the two Plan-57 soundness gates
+/// (pass-3 dedupe: the two walkers were 80 identical lines apart, and the
+/// stronger one had silently lost the `ParFor` arm).  `dom` = "every read
+/// of `local` here is preceded by a non-null assignment that definitely
+/// executed".  The two gates differ ONLY in:
+/// - the START value (`confine_reassign_safe` starts false — a definite
+///   reassignment must precede any read; `store_dead_after_block` starts
+///   true — the fn-level init counts);
+/// - `invalidate_conditional` (`store_dead_after_block` only): a
+///   reassignment inside an `If`/`Loop`/`Iter`/`ParFor` body INVALIDATES
+///   dominance — afterwards `local` may hold that block's confined store.
+///
+/// A read of `local` while `!dom` clears `ok`.
+fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool) -> bool {
+    match node {
+        Value::Set(v, val) => {
+            // RHS evaluated before the write lands; a read of `local` in it
+            // is gated by the *current* dominance.
+            dominance_walk(val, local, dom, ok, inv);
+            if *v == local {
+                return !matches!(val.unspan(), Value::Null);
+            }
+            dom
+        }
+        Value::Var(v) | Value::TupleGet(v, _) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            dom
+        }
+        Value::CallRef(v, args) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            let mut d = dom;
+            for a in args {
+                d = dominance_walk(a, local, d, ok, inv);
+            }
+            dom
+        }
+        Value::Block(bl) => {
+            let mut d = dom;
+            for op in &bl.operators {
+                d = dominance_walk(op, local, d, ok, inv);
+            }
+            d
+        }
+        Value::Loop(lp) => {
+            // Body runs 0+ times → conditional; dominance does not leak out.
+            let mut d = dom;
+            for op in &lp.operators {
+                d = dominance_walk(op, local, d, ok, inv);
+            }
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                dom
+            }
+        }
+        Value::If(t, a, b) => {
+            let dc = dominance_walk(t, local, dom, ok, inv);
+            dominance_walk(a, local, dc, ok, inv);
+            dominance_walk(b, local, dc, ok, inv);
+            // Branch assignments are conditional — they establish no
+            // post-`if` dominance; under `inv` they additionally invalidate.
+            if inv && (assigns_local(a, local) || assigns_local(b, local)) {
+                false
+            } else {
+                dc
+            }
+        }
+        Value::Iter(idx, c, n, e) => {
+            if *idx == local && !dom {
+                *ok = false;
+            }
+            let mut d = dominance_walk(c, local, dom, ok, inv); // the iteration SOURCE reads `local`
+            d = dominance_walk(n, local, d, ok, inv);
+            dominance_walk(e, local, d, ok, inv); // body conditional
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                d
+            }
+        }
+        Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            let mut d = dom;
+            for a in args {
+                d = dominance_walk(a, local, d, ok, inv);
+            }
+            d
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            dominance_walk(v, local, dom, ok, inv);
+            dom
+        }
+        Value::TuplePut(v, _, inner) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            dominance_walk(inner, local, dom, ok, inv);
+            dom
+        }
+        Value::Span(b) => dominance_walk(&b.1, local, dom, ok, inv),
+        Value::ParFor(b) => {
+            let mut d = dominance_walk(&b.input, local, dom, ok, inv);
+            d = dominance_walk(&b.worker, local, d, ok, inv);
+            d = dominance_walk(&b.threads, local, d, ok, inv);
+            dominance_walk(&b.body, local, d, ok, inv);
+            // The parallel body is conditional from the caller's view.
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                d
+            }
+        }
+        _ => dom,
+    }
 }
 
 /// Plan-57 cluster-III Route 2: recover the backer of an *orphaned* store — one
@@ -3807,98 +3825,8 @@ fn assigns_local(node: &Value, local: u16) -> bool {
 /// over-free hazard → unsound to confine.  Mirrors `confine_reassign_safe` but with
 /// the conditional-reassignment invalidation (the missing soundness property).
 fn store_dead_after_block(code: &Value, local: u16) -> bool {
-    fn walk(node: &Value, local: u16, dom: bool, ok: &mut bool) -> bool {
-        match node {
-            Value::Set(v, val) => {
-                walk(val, local, dom, ok);
-                if *v == local {
-                    return !matches!(val.unspan(), Value::Null);
-                }
-                dom
-            }
-            Value::Var(v) | Value::TupleGet(v, _) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                dom
-            }
-            Value::CallRef(v, args) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                let mut d = dom;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                dom
-            }
-            Value::Block(bl) => {
-                let mut d = dom;
-                for op in &bl.operators {
-                    d = walk(op, local, d, ok);
-                }
-                d
-            }
-            Value::Loop(lp) => {
-                let mut d = dom;
-                for op in &lp.operators {
-                    d = walk(op, local, d, ok);
-                }
-                // Conditional (0+ iterations): a reassignment inside invalidates dom.
-                if assigns_local(node, local) {
-                    false
-                } else {
-                    dom
-                }
-            }
-            Value::If(c, t, e) => {
-                let dc = walk(c, local, dom, ok);
-                walk(t, local, dc, ok);
-                walk(e, local, dc, ok);
-                // A branch reassignment is conditional → `local` may hold that block's
-                // (confined) store afterwards.  Invalidate.
-                if assigns_local(t, local) || assigns_local(e, local) {
-                    false
-                } else {
-                    dc
-                }
-            }
-            Value::Iter(idx, c, n, e) => {
-                if *idx == local && !dom {
-                    *ok = false;
-                }
-                let d = walk(c, local, dom, ok); // the iteration SOURCE reads `local`
-                let d = walk(n, local, d, ok);
-                walk(e, local, d, ok); // body conditional
-                if assigns_local(node, local) { false } else { d }
-            }
-            Value::Call(_, args)
-            | Value::Insert(args)
-            | Value::Tuple(args)
-            | Value::Parallel(args) => {
-                let mut d = dom;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                d
-            }
-            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-                walk(v, local, dom, ok);
-                dom
-            }
-            Value::TuplePut(v, _, inner) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                walk(inner, local, dom, ok);
-                dom
-            }
-            Value::Span(b) => walk(&b.1, local, dom, ok),
-            _ => dom,
-        }
-    }
     let mut ok = true;
-    walk(code, local, true, &mut ok);
+    dominance_walk(code, local, true, &mut ok, true);
     ok
 }
 
