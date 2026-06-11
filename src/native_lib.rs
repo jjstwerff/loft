@@ -57,7 +57,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
         for a in def
             .attributes()
             .iter()
-            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef))
         {
             collect_type_defs(data, &a.typedef, &mut types);
         }
@@ -78,7 +78,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
         let params: Vec<String> = def
             .attributes()
             .iter()
-            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef) && !a.name.starts_with("__"))
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef))
             .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
             .collect();
         let ret = def.returned();

@@ -159,15 +159,22 @@ pub enum BridgeAttrKind {
 #[must_use]
 pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Option<BridgeAttrKind> {
     if a.hidden {
-        // The only hidden destination the bridge allocates is a vector.
-        return matches!(a.typedef, Type::Vector(_, _)).then_some(BridgeAttrKind::HiddenDest);
+        // @PLAN59: every heap-kind hidden destination (Reference / Vector /
+        // struct-Enum) is bridge-allocatable the same way — the wrapper's
+        // HiddenDest arm resolves the store type via `hidden_dest_type_id`,
+        // which already covers all three.  (Was Vector-only by accident.)
+        return matches!(
+            a.typedef,
+            Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+        )
+        .then_some(BridgeAttrKind::HiddenDest);
     }
     if crate::native_lib::is_text_work_buffer(&a.typedef) {
         // Valid iff the function actually returns text.
         return ret_text.then_some(BridgeAttrKind::WorkText);
     }
-    if a.name.starts_with("__") {
-        return None; // closures — not handled
+    if matches!(a.typedef, Type::Function(_, _, _)) {
+        return None; // closures — not handled (was a '__' name test)
     }
     is_bridge_type(&a.typedef).then_some(BridgeAttrKind::Marshal)
 }

@@ -14805,3 +14805,65 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(255));
 }
+
+/// @PLAN59 — par dispatch classified hidden attrs by NAME PREFIX
+/// ('__'-named ⇒ text buffer): a worker whose tail calls a wider
+/// heap-returning fn gets a wrapper-promoted hidden dest named
+/// `__ref_1`, which landed in the text bucket — frame underflow
+/// "No elements left on the stack 8 < 12" at runtime.  Classification
+/// is now by TYPE.  (The native arm of this shape is a separate
+/// pre-existing par gap — plain vector-returning workers don't compile
+/// natively either; tracked in plans/59-return-abi.)
+#[test]
+fn plan59_par_worker_over_wrapper_promoted_callee() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("plan59_landmine.loft");
+    std::fs::write(
+        &path,
+        r#"
+fn use_first() -> integer {
+  v = wrapped(2);
+  len(v)
+}
+
+pub fn wrapped(n: integer) -> vector<integer> {
+  widened(n, 1)
+}
+
+pub fn widened(n: integer, extra: integer) -> vector<integer> {
+  acc: vector<integer> = [];
+  for i in 0..n + extra { acc += [i * 10]; }
+  acc
+}
+
+fn worker(x: integer) -> vector<integer> {
+  wrapped(x)
+}
+
+fn main() {
+  assert(use_first() == 3, "plain: {use_first()}");
+  inputs = [1, 2, 3];
+  outs: vector<integer> = [];
+  for x in inputs par(r = worker(x), 2) {
+    outs += [len(r)];
+  }
+  assert(len(outs) == 3, "par count: {len(outs)}");
+  print("ok");
+}
+"#,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new(root.join("target/release/loft"))
+        .args(["--interpret", "--no-warnings"])
+        .arg(&path)
+        .current_dir(&root)
+        .output()
+        .expect("run loft");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.contains("ok"),
+        "par over wrapper-promoted callee regressed: stdout={stdout:?} stderr={stderr:?}"
+    );
+}
