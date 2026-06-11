@@ -5599,7 +5599,19 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
 
         if check_only {
             // --check --native: compile succeeded, report ok and exit.
-            println!("ok {abs_file}");
+            // @PLN18 08-S4 — the artifact path rides the ok line so the
+            // background-rebuild host (live_dispatch) can find the build
+            // without re-deriving the cache key (which hashes the GENERATED
+            // source + rlib mtimes — only this pipeline can compute it).
+            // Prefer the DURABLE content-addressed cache path over the
+            // per-pid temp the miss branch built into (the consumer is the
+            // S5 swap; a temp path is clobbered by the next same-pid run).
+            let artifact = if !no_cache && cached_binary.exists() {
+                &cached_binary
+            } else {
+                &binary
+            };
+            println!("ok {abs_file} {}", artifact.display());
             return;
         }
         // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
@@ -5616,6 +5628,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         }
         if std::env::var("LOFT_LIVE_LIBS").is_err() && !p.lib_dirs.is_empty() {
             cmd.env("LOFT_LIVE_LIBS", p.lib_dirs.join(":"));
+        }
+        // @PLN18 08-S4 — the background rebuild re-invokes THIS driver.
+        if std::env::var("LOFT_LIVE_DRIVER").is_err()
+            && let Ok(me) = std::env::current_exe()
+        {
+            cmd.env("LOFT_LIVE_DRIVER", me);
         }
         let run_status = cmd.status().unwrap_or_else(|e| {
             eprintln!("loft: failed to run native binary: {e}");

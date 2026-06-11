@@ -213,6 +213,22 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_ticks", n_ticks),
     // @PLN18 08-S2 — live dispatch flip (no-op under the interpreter).
     ("n_live_flip", crate::live_dispatch::n_live_flip_stack),
+    // @PLN18 08-S4 — background rebuild (env-driven; real on any tier).
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_rebuild_start",
+        crate::live_dispatch::n_rebuild_start_stack,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_rebuild_status",
+        crate::live_dispatch::n_rebuild_status_stack,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_rebuild_artifact_dest",
+        crate::live_dispatch::n_kernel_rebuild_artifact_dest,
+    ),
     // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
     // declares them; native targets only — the kernel has no wasm story).
     #[cfg(not(target_arch = "wasm32"))]

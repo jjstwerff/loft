@@ -63,6 +63,25 @@ pub fn broadcast(msg: text) -> integer;
 pub fn live_flip(name: text, on: boolean) -> boolean;
 #native
 
+// @PLN18 08-S4 — background rebuild of the served program: the loft driver's
+// own build pipeline (`--check --native`) runs as a background child while
+// THIS build keeps serving.  start: true = building (idempotent while one
+// runs).  status: 0 idle, 1 building, 2 ready, 3 failed; a source edit
+// during the build automatically requeues (status stays 1) so a ready
+// artifact always corresponds to the source as of the status call.
+pub fn rebuild_start() -> boolean;
+#native
+pub fn rebuild_status() -> integer;
+#native
+
+fn kernel_rebuild_artifact() -> text;
+#native
+
+// The ready build's binary path; "" unless rebuild_status() == 2.
+pub fn rebuild_artifact() -> text {
+  kernel_rebuild_artifact()
+}
+
 fn kernel_idle(max_us: integer);
 #native
 

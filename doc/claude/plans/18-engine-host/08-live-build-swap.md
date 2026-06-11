@@ -156,15 +156,46 @@ edit, the dispatch target moves to the new bytecode, world state persists.
 > Asynchronous application ⇒ the legs assert step timelines + reload
 > milestones (stderr as sync point), not byte-equal vectors.
 
-### S4 — the background rebuild
+### S4 — the background rebuild  ✅ (2026-06-11)
 
 The serve host compiles the full project (rustc, minutes) keyed to the
-source hash, while the old build keeps serving.
+source hash, while the old build keeps serving.  **SHIPPED** — the build
+pipeline already existed as `loft --check --native` (compiles into the
+content-hash cache without running); S4 only orchestrates it:
 
-> **Test:** request a rebuild mid-run; assert (a) the artifact lands and
-> its embedded source-hash matches, (b) the stamp chain shows NO tick
-> degradation while rustc runs (build isolation), (c) an edit during the
-> build invalidates the artifact (hash mismatch → rebuild requeued).
+- `live_dispatch` spawns the DRIVER (`LOFT_LIVE_DRIVER`, handed down at
+  spawn like the other live paths) as a background child; stdout/stderr to
+  temp FILES (a failed rustc overflows a pipe buffer and would hang the
+  poll).  The artifact path now rides the ok line — `ok <src> <artifact>`
+  — preferring the DURABLE content-addressed cache path over the per-pid
+  temp the miss branch builds into (probe-caught: the temp is clobbered
+  by the next same-pid run; the S5 swap needs the durable one).
+- **The staleness contract is snapshot-vs-settled, not read-racing**: the
+  loft source bytes are snapshotted at REQUEST time; completion compares
+  the file as of the status call — wherever an edit lands relative to the
+  child's own file read, drift requeues.  Converges when the source
+  settles (already-cached content → instant).
+- Surface: `rebuild_start() -> boolean` (idempotent while one runs),
+  `rebuild_status() -> 0|1|2|3` (idle/building/ready/failed — requeue
+  stays 1), `rebuild_artifact() -> text`.  Env-driven, not tier-driven:
+  an interp host that exports the live env gets the real thing.
+- Failure posture: a failed build warns with the rustc tail and the OLD
+  build keeps serving — never a halt.
+
+**Findings:** (1) the binary cache keeps ONE entry per source stem — a
+different-content build EVICTS the previous artifact, so S5 must copy or
+exec the artifact promptly after ready; (2) fixture-sized programs build
+in under a second (reachable-only emission keeps the generated crate
+tiny) — the "minutes" case is real projects; build isolation is an OS
+process property either way, measured here across the real (small)
+window.
+
+> **Test:** `engine_host_kernel::s4_background_rebuild_under_serving_
+> kernel` — (a) artifact lands; a repeat request on unchanged source is a
+> cache hit on the SAME durable path; (b) the tick counter advances in
+> every poll interval of a clean unique-content build; (c) an edit during
+> a build requeues ("rebuild stale … requeued") and the ready artifact is
+> the settled source's build.
 
 ### S5 — the native swap: a new process under a running world
 

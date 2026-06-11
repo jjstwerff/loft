@@ -63,6 +63,7 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             | "n_kernel_client_event_payload"
             | "n_kernel_client_sync_payload"
             | "n_kernel_default_host"
+            | "n_kernel_rebuild_artifact"
             | "n_json_errors"
             | "t_9JsonValue_kind"
             | "t_9JsonValue_to_json"

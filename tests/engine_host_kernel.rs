@@ -310,6 +310,169 @@ fn run_s3_scenario(port: u16, interpret: bool) -> S2Run {
     }
 }
 
+/// @PLN18 08 scenario S4 — the background rebuild: the serve host compiles
+/// the full project (a real rustc run) while the OLD build keeps serving.
+/// Asserts the design's three clauses:
+/// (a) the artifact lands and corresponds to the source — a repeat request
+///     on unchanged source is an instant cache hit on the SAME path;
+/// (b) build isolation — the tick counter keeps advancing in every poll
+///     interval while rustc runs (probe gate 4);
+/// (c) an edit DURING the build invalidates it — "requeued" on stderr, and
+///     the final artifact is the settled source's build.
+/// The during-build edit sets the source back to the spawn content; the
+/// cache keeps ONE binary per source stem, so the unique-content build
+/// evicts it and the requeued build is a second real rustc — both builds
+/// are measurement windows for (b).
+#[test]
+fn s4_background_rebuild_under_serving_kernel() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 18099u16;
+    // Tick step: unique per run -> the rebuild is ALWAYS a cache miss (a
+    // real rustc window for (b)/(c)); behavior-equal (ticks just advance).
+    let unique_step = (std::process::id() % 1000) + 2;
+    let fixture = |tick_step: u32| {
+        format!(
+            r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      if ev.payload == "rebuild" {{
+        engine_host::send(ev.cid, "rebuild:{{engine_host::rebuild_start()}}");
+        return;
+      }}
+      if ev.payload == "status" {{
+        engine_host::send(ev.cid, "status:{{engine_host::rebuild_status()}}");
+        return;
+      }}
+      if ev.payload == "artifact" {{
+        engine_host::send(ev.cid, "artifact:{{engine_host::rebuild_artifact()}}");
+        return;
+      }}
+      engine_host::send(ev.cid, "ticks:{{w.ticks}}");
+    }},
+    fn() {{ w.ticks = w.ticks + {tick_step}; }});
+}}
+"#
+        )
+    };
+    let prog = std::env::temp_dir().join(format!("eh_s4_{port}.loft"));
+    std::fs::write(&prog, fixture(1)).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let err_path = std::env::temp_dir().join(format!("eh_s4_{port}.err"));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let mut cmd = Command::new(loft_bin());
+    cmd.process_group(0);
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let ws = ws_connect(port);
+    let ask = |msg: &str| -> String {
+        ws_send(&ws, msg);
+        ws_recv(&ws)
+    };
+    let ticks = |reply: String| -> i64 {
+        reply
+            .strip_prefix("ticks:")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("unparseable {reply:?}"))
+    };
+
+    // ── Phase 1 (b): a clean unique-content rebuild — a real rustc window
+    // with no interference; every poll interval must show tick progress.
+    // (The running v0 binary is unaffected: reload is OFF.)
+    std::fs::write(&prog, fixture(unique_step)).unwrap();
+    assert_eq!(ask("rebuild"), "rebuild:true");
+    let mut last_ticks = ticks(ask("t"));
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let now_ticks = ticks(ask("t"));
+        assert!(
+            now_ticks > last_ticks,
+            "tick stalled during the background build (build isolation broken)"
+        );
+        last_ticks = now_ticks;
+        let st = ask("status");
+        if st == "status:2" {
+            break;
+        }
+        assert!(
+            st == "status:1",
+            "rebuild must stay building/ready, got {st}"
+        );
+        assert!(Instant::now() < deadline, "rebuild never became ready");
+    }
+
+    // ── Phase 2 (c): an edit DURING a build invalidates it.  The snapshot
+    // is taken at request time, so wherever the edit lands relative to the
+    // child's own file read, completion sees drift -> requeue.  The settled
+    // content (v0) is already cached -> the requeued build converges fast.
+    std::fs::write(&prog, fixture(unique_step + 1)).unwrap();
+    assert_eq!(ask("rebuild"), "rebuild:true");
+    std::fs::write(&prog, fixture(1)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        let st = ask("status");
+        if st == "status:2" {
+            break;
+        }
+        assert!(
+            st == "status:1",
+            "requeue path must stay building, got {st}"
+        );
+        assert!(Instant::now() < deadline, "requeued rebuild never ready");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    assert!(
+        stderr.contains("rebuild stale (source changed during build) — requeued"),
+        "the mid-build edit must requeue:\n{stderr}"
+    );
+    // (a) the artifact exists and is the settled source's build.
+    let artifact = ask("artifact");
+    let path = artifact.strip_prefix("artifact:").unwrap().to_string();
+    assert!(!path.is_empty(), "ready artifact must have a path");
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "artifact must exist: {path}"
+    );
+    // (a) repeat request on unchanged source: instant cache hit, SAME path.
+    assert_eq!(ask("rebuild"), "rebuild:true");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let st = ask("status");
+        if st == "status:2" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "cache-hit rebuild never ready");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert_eq!(
+        ask("artifact"),
+        format!("artifact:{path}"),
+        "unchanged source must yield the SAME artifact (hash-stable)"
+    );
+    drop(_guard);
+    let _ = std::fs::remove_file(&prog);
+    let _ = std::fs::remove_file(&err_path);
+}
+
 /// @PLN18 08 scenario S2 — the debugger pushes one fn to the interpreter,
 /// LIVE, under a serving kernel.  The flip target (`bump_events(w: W) ->
 /// integer`) mutates the shared world; the event counter must count
