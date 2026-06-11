@@ -30,7 +30,11 @@ aimed at *breakage discovery*:
    `#[ignore = "stability-sweep: #NNN"]` so the suite stays green.  Fixes are
    a SEPARATE later pass — the sweep's output is the documented invariant
    catalog, not patches (fixing mid-sweep would re-shuffle the very ground
-   being surveyed).
+   being surveyed).  **The later pass's shape (user, 2026-06-11): move each
+   algorithm toward the data structure it runs on — so the fact and the
+   logic that asserts it share one home — and THEN remove the duplications.**
+   The catalog should therefore name, per finding, which data structure is
+   the invariant's natural home (where the algorithm should eventually live).
 4. **A probe that holds is also a result.**  Record it in the row — "probed,
    held" tells the next session what was covered.
 
