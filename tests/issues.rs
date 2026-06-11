@@ -14795,15 +14795,21 @@ fn run() -> integer {
 // divide-by-zero lint promises null; native yields null) — the interpreter
 // currently aborts with a hard error instead.
 
+// RESOLVED 2026-06-11: the issue's premise was inverted — per plan-07 4f.5
+// the RAISE is the semantics (interp was right); native missed it because
+// `raise_runtime` only recorded and nothing checked.  Fixed by
+// `NATIVE_FAIL_FAST` (database/mod.rs) armed in the generated binary's main
+// + the had_fatal exit backstop.  Cross-backend guard:
+// tests/scripts/178-i333-div-zero-raises.loft (@EXPECT_FAIL on both suites).
 #[test]
-#[ignore = "stability-sweep: #333 — documented, fix deferred to pass 2"]
-fn issue_333_float_div_by_zero_yields_null() {
+fn issue_333_undefended_div_zero_raises() {
     code!(
         "fn run() -> integer {
-    a = 1.0 / 0.0;
-    if a == null { 1 } else { 0 }
+    z = 0;
+    a = 5 % z ?? -1;
+    a
 }"
     )
     .expr("run()")
-    .result(Value::Int(1));
+    .result(Value::Int(-1));
 }

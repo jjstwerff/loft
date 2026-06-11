@@ -990,6 +990,15 @@ mod store_rebase_tests {
 }
 
 #[allow(dead_code)]
+/// #333 — armed (process-locally) by the generated native binary's `main`
+/// so `raise_runtime` halts at the faulting op with the interpreter's exit
+/// contract (render + exit 1).  Stays false inside a host interpreter that
+/// loads auto-native cdylibs: each cdylib links its own copy of this static,
+/// so a bridged fn's raise keeps the record-only behaviour and the host's
+/// dispatch loop reports it.
+pub static NATIVE_FAIL_FAST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl Stores {
     #[must_use]
     pub fn new() -> Stores {
@@ -1133,7 +1142,7 @@ impl Stores {
             return;
         }
         let message = kind.describe();
-        self.runtime_error = Some(Box::new(crate::runtime_error::RuntimeError {
+        let err = crate::runtime_error::RuntimeError {
             kind,
             position: None,
             op_pc: u32::MAX,
@@ -1142,7 +1151,16 @@ impl Stores {
             // access to call_stack; slice 2 of 4g.1 will thread
             // it through.
             call_chain: Vec::new(),
-        }));
+        };
+        // #333 — the standalone native binary mirrors the interpreter's
+        // halt-at-the-op contract: render the error and exit 1 instead of
+        // recording it for a check nobody runs (pre-fix, `5 / 0` printed
+        // a wrong value and exited 0 on --native).
+        if NATIVE_FAIL_FAST.load(std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("error: {}", err.message);
+            std::process::exit(1);
+        }
+        self.runtime_error = Some(Box::new(err));
         self.had_fatal = true;
     }
 

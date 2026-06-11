@@ -565,10 +565,17 @@ add5(10)               // 15
 ```
 
 **Capture rules:**
-- Integers, floats, booleans: copied by value.
-- Text: deep-copied (independent of original after capture).
-- Struct references: the DbRef is copied (both point to the same store record while both are alive).
-- Mutation inside the closure does not affect the outer variable (and vice versa).
+- Integers, floats, booleans: copied by value at definition time — unless the
+  closure MUTATES the capture, in which case the scalar is promoted to a
+  shared heap cell and writes propagate both ways (plan-22; the
+  single-closure accumulator pattern).  A mutated scalar may be captured by
+  only ONE closure (C74, #314).
+- Text: deep-copied (independent of original after capture); mutated text
+  captures are cell-promoted like scalars.
+- Struct references: the DbRef is copied — both point to the same store
+  record while both are alive, and mutations from either side are visible to
+  the other (#318/C75 bound such closures to the frame that owns the
+  captures).
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
@@ -990,6 +997,12 @@ then `,` or `}`, it is a field capture; otherwise it is the if-body.
 ## Variables
 
 Variables are declared implicitly on first assignment. Their type is inferred:
+
+**Struct assignment copies the record.**  `a = b` for struct-typed variables
+deep-copies `b`'s record into a fresh store owned by `a` — the two variables
+do NOT alias afterwards (`b.v = 42` leaves `a.v` unchanged).  Aliasing is
+explicit: `reference<T>` struct fields share by pointer (#328), and closure
+captures of struct references share the live record (capture rules above).
 ```
 x = 42
 name = "hello"
