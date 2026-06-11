@@ -12,6 +12,18 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -40,6 +52,7 @@ fn spawn_server(script: &str) -> Guard {
     let tmp = std::env::temp_dir().join(format!("eh_aud_{}_{name}", std::process::id()));
     std::fs::write(&tmp, src).expect("write fixture copy");
     let child = Command::new(root().join("target/release/loft"))
+        .env("LOFT_OFFLINE", "1") // hermetic: no registry fetches from fixtures
         .args(["--interpret", "--no-warnings", "--lib"])
         .arg(root().join("lib"))
         .arg(&tmp)
@@ -71,7 +84,7 @@ fn server_logs() -> String {
 }
 
 fn ws_connect(port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     let stream = loop {
         match TcpStream::connect(("127.0.0.1", port)) {
             Ok(s) => break s,

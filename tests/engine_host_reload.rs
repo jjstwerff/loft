@@ -17,6 +17,18 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 const PORT: u16 = 18093;
 
 fn loft_bin() -> PathBuf {
@@ -34,7 +46,7 @@ impl Drop for Guard {
 }
 
 fn ws_connect(port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     let stream = loop {
         if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
             break s;
@@ -80,7 +92,7 @@ fn ws_recv(stream: &TcpStream) -> String {
 
 /// Poll until the echo's prefix matches `want`; returns the counter suffix.
 fn await_prefix(ws: &TcpStream, want: &str) -> i64 {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = vm_deadline(10);
     loop {
         ws_send(ws, "ping");
         let r = ws_recv(ws);
@@ -105,6 +117,7 @@ fn program(body: &str, sig: &str) -> String {
     format!(
         r#"
 use engine_host;
+
 
 fn reply({sig}) -> text {{
   {body}

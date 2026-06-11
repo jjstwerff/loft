@@ -9,6 +9,18 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
     // Tag-keyed: the two tests run in parallel in one process, so a pid-only name would
     // collide and one's cleanup would delete the other's file mid-`launch`.
@@ -30,7 +42,7 @@ fn start_server(port: u16, file: String) {
     std::thread::spawn(move || {
         let _ = loft::serve::run_serve("default", &[], port, &file);
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = vm_deadline(10);
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
@@ -549,7 +561,7 @@ fn start_server_libs(port: u16, file: String, libs: Vec<String>) {
     std::thread::spawn(move || {
         let _ = loft::serve::run_serve("default", &libs, port, &file);
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = vm_deadline(10);
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;

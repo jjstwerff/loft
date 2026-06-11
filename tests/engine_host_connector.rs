@@ -16,6 +16,18 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 const PORT: u16 = 18089;
 
 fn loft_bin() -> PathBuf {
@@ -35,6 +47,7 @@ impl Drop for Guard {
 fn spawn_loft(prog: &PathBuf, piped: bool) -> Child {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     Command::new(loft_bin())
+        .env("LOFT_OFFLINE", "1") // hermetic fixtures
         .arg("--interpret")
         .arg("--no-warnings")
         .arg("--lib")
@@ -255,7 +268,7 @@ fn main() {{
     // pre-bind beacons legitimately arrive over WS and — since the routing
     // symmetry landed — surface through the same sync slots, possibly
     // drained after the bind; they are NOT leaks.)
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "keyframe never arrived under blackout");
@@ -269,7 +282,7 @@ fn main() {{
     // Phase 2: AFTER a keyframe (definitely post-bind), the only sync that
     // may arrive is more keyframes — a plain beacon now would be a datagram
     // that slipped the blackout.
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = vm_deadline(2);
     while let Ok(line) = rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
         if line.contains("udp=true") && line.contains("sync 2:") {
             assert!(
@@ -290,7 +303,7 @@ fn main() {{
 /// the build blob exceeds 125 bytes).
 fn s6_ws_connect(port: u16) -> std::net::TcpStream {
     use std::io::{Read, Write};
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     let stream = loop {
         if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
             break s;
@@ -552,6 +565,7 @@ fn main() {{
     let client_src = format!(
         r#"
 use engine_host;
+
 struct C {{ saw_sync: boolean not null }}
 fn main() {{
   engine_host::sync_class(2);

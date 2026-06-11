@@ -5510,7 +5510,11 @@ impl Parser {
         let opts = crate::install::InstallOptions {
             allow_unsigned: true,
             refresh: false,
-            offline: false,
+            // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
+            // fails fast and deterministically instead of fetching — what a
+            // test-spawned fixture (or an air-gapped box) wants.  Mirrors
+            // the CLI paths (src/main.rs) that already honour it.
+            offline: std::env::var_os("LOFT_OFFLINE").is_some(),
             allow_prerelease: false,
             lock_path,
         };

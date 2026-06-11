@@ -22,6 +22,18 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft")
 }
@@ -44,7 +56,7 @@ impl Drop for Guard {
 }
 
 fn ws_connect(port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     let stream = loop {
         if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
             break s;
@@ -195,7 +207,7 @@ fn s3_ping(ws: &TcpStream, last: &mut i64) -> i64 {
 
 /// Ping until the counter's step matches `want` (the edit has applied).
 fn s3_await_step(ws: &TcpStream, last: &mut i64, want: i64) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     loop {
         if s3_ping(ws, last) == want {
             return;
@@ -213,7 +225,7 @@ fn s3_await_step(ws: &TcpStream, last: &mut i64, want: i64) {
 /// drive it, and stay step-correct on the old body, proving refusal en
 /// route).
 fn s3_await_stderr(ws: &TcpStream, last: &mut i64, path: &std::path::Path, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = vm_deadline(15);
     loop {
         s3_ping(ws, last);
         if std::fs::read_to_string(path)
@@ -245,6 +257,7 @@ fn run_s3_scenario(port: u16, interpret: bool) -> S2Run {
     let err_path = std::env::temp_dir().join(format!("eh_s3_{port}_{}.err", std::process::id()));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     cmd.env("LOFT_LIVE_RELOAD", "1");
     if interpret {
         cmd.arg("--interpret");
@@ -454,6 +467,7 @@ fn main() {{
     let err_path = std::env::temp_dir().join(format!("eh_s5_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     cmd.env("LOFT_LIVE_FLIP", "1")
         .env("LOFT_FLIP_FNS", "bump_events")
         .env("LOFT_DISPATCH_DEBUG", "1");
@@ -514,7 +528,7 @@ fn main() {{
     // S3+S4: live edit, then background rebuild to ready.
     std::fs::write(&prog, fixture("v2")).unwrap();
     assert_eq!(ask(&ws, "rebuild", &mut count), "rebuild:true");
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = vm_deadline(300);
     loop {
         let st = ask(&ws, "status", &mut count);
         if st == "status:2" {
@@ -538,7 +552,7 @@ fn main() {{
     // Reconnect into the NEW build (seat-reconnect semantics; measure it).
     // Full-attempt retry: a dial in the dual-bind overlap can land on the
     // dying process and drop mid-upgrade.
-    let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+    let reconnect_deadline = vm_deadline(10);
     let new_ws = loop {
         if let Some(ws) = ws_try_connect(port) {
             break ws;
@@ -703,7 +717,7 @@ fn main() {{
     let mut cguard = Guard(Some(client));
 
     // Scrape the FIRST control endpoint.
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = vm_deadline(120);
     let ctl_port: u16 = loop {
         let out = std::fs::read_to_string(&out_path).unwrap_or_default();
         if let Some(rest) = out.split("debug control on 127.0.0.1:").nth(1) {
@@ -722,7 +736,7 @@ fn main() {{
     std::thread::sleep(Duration::from_millis(300)); // let some ticks land
     ws_send(&ctl, "D!:rebuild");
     assert_eq!(ws_recv(&ctl), "D:rebuild started");
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = vm_deadline(300);
     loop {
         std::thread::sleep(Duration::from_millis(200));
         ws_send(&ctl, "D!:rebuild?");
@@ -737,7 +751,7 @@ fn main() {{
     assert_eq!(ws_recv(&ctl), "D:swap true");
 
     // The OLD driver chain exits (run_client returns 2 -> main ends).
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = vm_deadline(30);
     loop {
         if let Some(child) = cguard.0.as_mut()
             && child.try_wait().ok().flatten().is_some()
@@ -751,7 +765,7 @@ fn main() {{
     // Evidence: retirement printed; the NEW process resumed the world (a
     // scalar tick counter restores fully -> it resumed counting from a
     // positive value) and announced its own endpoint.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = vm_deadline(30);
     let (resumed_ticks, ctl2_port): (i64, u16) = loop {
         let out = std::fs::read_to_string(&out_path).unwrap_or_default();
         let announce2 = out.match_indices("debug control on 127.0.0.1:").nth(1);
@@ -896,7 +910,7 @@ fn main() {{
     let mut cguard = Guard(Some(client));
 
     // Scrape the announced control port (the editor's exact move).
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = vm_deadline(120);
     let ctl_port: u16 = loop {
         let out = std::fs::read_to_string(&out_path).unwrap_or_default();
         if let Some(rest) = out.split("debug control on 127.0.0.1:").nth(1) {
@@ -935,7 +949,7 @@ fn main() {{
     ws_send(&ctl, "D!:quit");
     assert_eq!(ws_recv(&ctl), "D:quitting");
     // The client process exits on quit.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = vm_deadline(10);
     loop {
         if let Some(child) = cguard.0.as_mut()
             && child.try_wait().ok().flatten().is_some()
@@ -1020,6 +1034,7 @@ fn main() {{
     let err_path = std::env::temp_dir().join(format!("eh_s8_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     match mode {
         "interpreted" => {
             cmd.arg("--interpret");
@@ -1064,7 +1079,7 @@ fn main() {{
         let ctl = ws_connect(port);
         ws_send(&ctl, "D!:rebuild");
         assert_eq!(ws_recv(&ctl), "D:rebuild started");
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = vm_deadline(120);
         loop {
             ws_send(&ctl, "D!:rebuild?");
             let st = ws_recv(&ctl);
@@ -1078,7 +1093,7 @@ fn main() {{
         assert_eq!(ws_recv(&ctl), "D:swap true");
         ws.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
         while ws_try_recv(&ws).is_some() {}
-        let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+        let reconnect_deadline = vm_deadline(10);
         loop {
             if let Some(nws) = ws_try_connect(port) {
                 break nws;
@@ -1186,6 +1201,7 @@ fn main() {{
     let err_path = std::env::temp_dir().join(format!("eh_s7_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     cmd.env("LOFT_LIVE_FLIP", "1")
         .env("LOFT_LIVE_RELOAD", "1")
         .env("LOFT_DEBUG_CONTROL", "1")
@@ -1254,7 +1270,7 @@ fn main() {{
     // Stage 7: rebuild over the channel; poll to ready.
     ws_send(&ctl, "D!:rebuild");
     assert_eq!(ws_recv(&ctl), "D:rebuild started");
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = vm_deadline(300);
     loop {
         std::thread::sleep(Duration::from_millis(300));
         ws_send(&ctl, "D!:rebuild?");
@@ -1272,7 +1288,7 @@ fn main() {{
     assert_eq!(ws_recv(&ctl), "D:swap true");
     ctl.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     while ws_try_recv(&ctl).is_some() {}
-    let reconnect_deadline = Instant::now() + Duration::from_secs(10);
+    let reconnect_deadline = vm_deadline(10);
     let (ctl2, game2) = loop {
         if let (Some(c), Some(g)) = (ws_try_connect(port), ws_try_connect(port)) {
             break (c, g);
@@ -1366,6 +1382,7 @@ fn main() {{
     let err_path = std::env::temp_dir().join(format!("eh_s4_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     cmd.process_group(0);
     let child = cmd
         .arg("--no-warnings")
@@ -1397,7 +1414,7 @@ fn main() {{
     std::fs::write(&prog, fixture(unique_step)).unwrap();
     assert_eq!(ask("rebuild"), "rebuild:true");
     let mut last_ticks = ticks(ask("t"));
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = vm_deadline(300);
     loop {
         std::thread::sleep(Duration::from_millis(300));
         let now_ticks = ticks(ask("t"));
@@ -1424,7 +1441,7 @@ fn main() {{
     std::fs::write(&prog, fixture(unique_step + 1)).unwrap();
     assert_eq!(ask("rebuild"), "rebuild:true");
     std::fs::write(&prog, fixture(1)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = vm_deadline(300);
     loop {
         let st = ask("status");
         if st == "status:2" {
@@ -1452,7 +1469,7 @@ fn main() {{
     );
     // (a) repeat request on unchanged source: instant cache hit, SAME path.
     assert_eq!(ask("rebuild"), "rebuild:true");
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = vm_deadline(60);
     loop {
         let st = ask("status");
         if st == "status:2" {
@@ -1550,6 +1567,7 @@ fn main() {{
     let err_path = std::env::temp_dir().join(format!("eh_s2_{port}_{}.err", std::process::id()));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     if interpret {
         cmd.arg("--interpret");
     } else {
@@ -1607,6 +1625,7 @@ fn run_kernel_scenario(port: u16, interpret: bool) {
         format!(
             r#"
 use engine_host;
+
 struct W {{ events: integer not null, ticks: integer not null }}
 fn main() {{
   w = W {{ events: 0, ticks: 0 }};
@@ -1628,6 +1647,7 @@ fn main() {{
     .unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
     if interpret {
         cmd.arg("--interpret");
     }
