@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
+use crate::data::Deps;
 
 /// P194 helper — extract the host reference and base position from
 /// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
@@ -26,75 +27,13 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
-/// Returns true if `val` contains a `Set(r, _)` node at any depth.
-/// Used to find which block statement first assigns an inline-ref temporary.
-///
-/// The match is exhaustive over all current `Value` variants so that adding a new
-/// compound variant without updating this function is a **compile error** rather than
-/// a silent miss that would insert the null-init at the wrong position (A15).
-fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
-    if depth > 1000 {
-        return false;
-    }
-    match val {
-        // Compound variants — recurse into sub-expressions.
-        Value::Set(v, inner) => *v == r || inline_ref_set_in(inner, r, depth + 1),
-        Value::Call(_, args) | Value::CallRef(_, args) => {
-            args.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
-        }
-        Value::Block(bl) | Value::Loop(bl) => bl
-            .operators
-            .iter()
-            .any(|a| inline_ref_set_in(a, r, depth + 1)),
-        Value::Insert(ops) => ops.iter().any(|a| inline_ref_set_in(a, r, depth + 1)),
-        Value::If(cond, then_val, else_val) => {
-            inline_ref_set_in(cond, r, depth + 1)
-                || inline_ref_set_in(then_val, r, depth + 1)
-                || inline_ref_set_in(else_val, r, depth + 1)
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            inline_ref_set_in(inner, r, depth + 1)
-        }
-        Value::Iter(_, a, b, c) => {
-            inline_ref_set_in(a, r, depth + 1)
-                || inline_ref_set_in(b, r, depth + 1)
-                || inline_ref_set_in(c, r, depth + 1)
-        }
-        Value::Tuple(elems) | Value::Parallel(elems) => {
-            elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
-        }
-        Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
-        // Plan-07 phase 1 — Span is transparent; recurse into the
-        // wrapped node.
-        Value::Span(b) => inline_ref_set_in(&b.1, r, depth + 1),
-        // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            inline_ref_set_in(&b.input, r, depth + 1)
-                || inline_ref_set_in(&b.worker, r, depth + 1)
-                || inline_ref_set_in(&b.threads, r, depth + 1)
-                || inline_ref_set_in(&b.body, r, depth + 1)
-        }
-        // Leaf variants — cannot contain a Set node.
-        Value::Null
-        | Value::Int(_)
-        | Value::Enum(_, _)
-        | Value::Boolean(_)
-        | Value::Float(_)
-        | Value::Long(_)
-        | Value::Single(_)
-        | Value::Text(_)
-        | Value::Var(_)
-        | Value::Line(_)
-        | Value::Break(_)
-        | Value::BreakWith(_, _)
-        | Value::Continue(_)
-        | Value::Keys(_)
-        | Value::TupleGet(_, _)
-        | Value::FnRef(_, _, _)
-        | Value::FnRefDnr(_) => false,
-        // Phase 09 phase 00 step 0.7 — RawExpr is codegen-internal.
-        Value::RawExpr(_) => false,
-    }
+/// Descent comes from `Value::for_each_child`, so a new compound variant
+/// cannot be silently missed (A15).  The hand-rolled predecessor treated
+/// `BreakWith` as a leaf and missed a `Set` inside its value — the unified
+/// walker descends it (pass-2 wave 2 widening; the wider answer is the
+/// correct null-init insertion point).
+fn inline_ref_set_in(val: &Value, r: u16) -> bool {
+    val.any_node(&mut |n| matches!(n, Value::Set(v, _) if *v == r))
 }
 
 /// P248 — extracted nested-tuple LHS shape for assignment.
@@ -358,7 +297,7 @@ impl Parser {
             let call = std::mem::replace(v, Value::Null);
             *v = v_block(
                 vec![v_set(w, call), Value::Var(w)],
-                Type::Text(vec![w]),
+                Type::Text(Deps::frame1(w)),
                 "synth text dest",
             );
             return;
@@ -520,7 +459,7 @@ impl Parser {
                     if !self.vars.is_argument(*r) && self.vars.tp(*r).depend().is_empty() {
                         let pos = ls
                             .iter()
-                            .position(|stmt| inline_ref_set_in(stmt, *r, 0))
+                            .position(|stmt| inline_ref_set_in(stmt, *r))
                             .unwrap_or(fallback);
                         insertions.push((pos, *r));
                     }
@@ -845,7 +784,7 @@ impl Parser {
                 && deps.contains(v_nr)
             {
                 let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
-                stripped = Type::Reference(*d, kept);
+                stripped = Type::Reference(*d, Deps::frame(kept));
                 &stripped
             } else {
                 tp
@@ -1146,7 +1085,7 @@ use a separate collection or add after the loop"
             && ir_mentions_var(code, var_nr)
         {
             let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
             let tmp = self.create_unique("__p390_tmp", &vec_tp);
             self.vars.defined(tmp);
             // (1) materialise the slice iterator into the fresh temp (reads the
@@ -1191,7 +1130,7 @@ use a separate collection or add after the loop"
             && self.is_field(to)
         {
             let iter_tp = Type::Iterator(Box::new(elm_tp.clone()), Box::new(Type::Null));
-            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
             let tmp = self.create_unique("__p287_tmp", &vec_tp);
             self.vars.defined(tmp);
             // (2) materialise iter → tmp (mutates *code into the materialise IR).
@@ -1331,7 +1270,7 @@ use a separate collection or add after the loop"
                 let name = self.vars.name(var_nr).to_string();
                 let shadow = self.vars.add_variable(
                     &format!("__tp_{name}"),
-                    &Type::Text(Vec::new()),
+                    &Type::Text(Deps::none()),
                     &mut self.lexer,
                 );
                 self.vars.set_promoted_from(shadow, var_nr);
@@ -1445,7 +1384,7 @@ use a separate collection or add after the loop"
                     // lowering) — build the temp as a fresh empty vector and
                     // element-append the borrow into it BEFORE the clear.
                     let rhs_saved = code.clone();
-                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+                    let dep_free_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
                     let tmp = self.vars.unique("_p154_rhs", &dep_free_tp, &mut self.lexer);
                     let init_tmp = v_set(tmp, Value::Null);
                     let fill_tmp = self.cl(
@@ -1537,7 +1476,7 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Vec::new());
+            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
             self.change_var(to, &vec_tp);
             if !self.first_pass {
                 // Break the alias.  The standard type-inference copied the RHS
@@ -1659,7 +1598,7 @@ use a separate collection or add after the loop"
                     Type::Sorted(_, _, d)
                     | Type::Hash(_, _, d)
                     | Type::Index(_, _, d)
-                    | Type::Spacial(_, _, d) => d.clone(),
+                    | Type::Spacial(_, _, d) => d.to_vec(),
                     _ => Vec::new(),
                 };
                 for d in deps {
@@ -2268,10 +2207,7 @@ use a separate collection or add after the loop"
             // analogous wrap in `Parser::assign_text` (operators.rs)
             // — local-text path — but for the RefVar(Text) parameter
             // path that lands here.
-            if !self.first_pass
-                && var_nr != u16::MAX
-                && super::operators::code_references_var(code, var_nr)
-            {
+            if !self.first_pass && var_nr != u16::MAX && code.reads_var(var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),
@@ -2526,7 +2462,7 @@ use a separate collection or add after the loop"
         } else if op == "+=" && matches!(f_type, Type::Text(_)) {
             let v = self
                 .vars
-                .unique("field", &Type::Text(vec![]), &mut self.lexer);
+                .unique("field", &Type::Text(Deps::none()), &mut self.lexer);
             *code = Value::Var(v);
             *parent_tp = Type::Null;
             v
@@ -2637,7 +2573,7 @@ use a separate collection or add after the loop"
             unreachable!()
         };
         let elm_tp = *elm_tp;
-        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Vec::new());
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
         self.change_var(to, &vec_tp);
         if !self.first_pass
             && let Value::Iter(_, init, next, _) = code.clone()
@@ -2696,9 +2632,9 @@ mod tests {
     use super::inline_ref_set_in;
     use crate::data::{Block, Type, Value};
 
-    /// `inline_ref_set_in` must return false conservatively when nesting exceeds the limit.
+    /// Deep nesting must neither overflow the stack nor change the answer.
     #[test]
-    fn inline_ref_set_in_depth_limit_returns_false() {
+    fn inline_ref_set_in_deep_nesting_is_safe() {
         let mut v: Value = Value::Null;
         for _ in 0..1100 {
             v = Value::Block(Box::new(Block {
@@ -2709,8 +2645,17 @@ mod tests {
                 var_size: 0,
             }));
         }
-        // At depth limit, inline_ref_set_in must not overflow the stack.
-        let result = inline_ref_set_in(&v, 0, 0);
-        assert!(!result, "depth-exceeded should return false conservatively");
+        assert!(!inline_ref_set_in(&v, 0), "no Set node anywhere");
+        let mut w: Value = Value::Set(7, Box::new(Value::Null));
+        for _ in 0..1100 {
+            w = Value::Block(Box::new(Block {
+                name: "",
+                operators: vec![w],
+                result: Type::Void,
+                scope: 0,
+                var_size: 0,
+            }));
+        }
+        assert!(inline_ref_set_in(&w, 7), "deeply nested Set must be found");
     }
 }

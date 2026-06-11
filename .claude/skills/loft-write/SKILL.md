@@ -293,6 +293,8 @@ v[i];                // index read
 
 **Slices return iterators, not vectors.** `arr[lo..hi]` cannot be passed where a `vector<T>` is expected — pass the array with index bounds instead.
 
+**Never swap `vector<STRUCT>` elements in-place via a temp (#338).** `tmp = v[j]` is a VIEW of slot j (not a copy), but `v[j] = v[k]` COPIES into the slot — so `tmp = v[j]; v[j] = v[k]; v[k] = tmp;` silently loses j's record and duplicates k's. Swap scalar fields one by one, or build a fresh vector (selection instead of in-place insertion sort).
+
 ---
 
 ## Hash collections

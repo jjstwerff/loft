@@ -172,16 +172,16 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
         TypeKind::Float => Type::Float,
         TypeKind::Single => Type::Single,
         TypeKind::Character => Type::Character,
-        TypeKind::Text => Type::Text(read_dep_list(stores, slot, ds::TYTEXT_DEP)),
+        TypeKind::Text => Type::Text(read_deps(stores, slot, ds::TYTEXT_DEP)),
         TypeKind::Keys => Type::Keys,
         TypeKind::Enum => Type::Enum(
             slot.field_int(stores, ds::TYENUM_N) as u32,
             slot.field_bool(stores, ds::TYENUM_IS_REF),
-            read_dep_list(stores, slot, ds::TYENUM_DEP),
+            read_deps(stores, slot, ds::TYENUM_DEP),
         ),
         TypeKind::Reference => Type::Reference(
             slot.field_int(stores, ds::TYREF_N) as u32,
-            read_dep_list(stores, slot, ds::TYREF_DEP),
+            read_deps(stores, slot, ds::TYREF_DEP),
         ),
         TypeKind::RefVar => Type::RefVar(Box::new(read_type_child(
             stores,
@@ -192,7 +192,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYVECTOR_INNER, ds::TYPET_STRIDE),
             )),
-            read_dep_list(stores, slot, ds::TYVECTOR_DEP),
+            read_deps(stores, slot, ds::TYVECTOR_DEP),
         ),
         TypeKind::Routine => Type::Routine(slot.field_int(stores, ds::TYROUTINE_N) as u32),
         TypeKind::Iterator => Type::Iterator(
@@ -211,7 +211,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYSORTED_KEYS, ds::SORTKEY_STRIDE),
             ),
-            read_dep_list(stores, slot, ds::TYSORTED_DEP),
+            read_deps(stores, slot, ds::TYSORTED_DEP),
         ),
         TypeKind::Index => Type::Index(
             slot.field_int(stores, ds::TYINDEX_N) as u32,
@@ -219,7 +219,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYINDEX_KEYS, ds::SORTKEY_STRIDE),
             ),
-            read_dep_list(stores, slot, ds::TYINDEX_DEP),
+            read_deps(stores, slot, ds::TYINDEX_DEP),
         ),
         TypeKind::Spacial => Type::Spacial(
             slot.field_int(stores, ds::TYSPACIAL_N) as u32,
@@ -227,7 +227,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYSPACIAL_NAMES, ds::NAMEREF_STRIDE),
             ),
-            read_dep_list(stores, slot, ds::TYSPACIAL_DEP),
+            read_deps(stores, slot, ds::TYSPACIAL_DEP),
         ),
         TypeKind::Hash => Type::Hash(
             slot.field_int(stores, ds::TYHASH_N) as u32,
@@ -235,7 +235,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYHASH_NAMES, ds::NAMEREF_STRIDE),
             ),
-            read_dep_list(stores, slot, ds::TYHASH_DEP),
+            read_deps(stores, slot, ds::TYHASH_DEP),
         ),
         TypeKind::Function => Type::Function(
             read_type_list(stores, slot.field_recvec(ds::TYFUNC_ARGS, ds::TYPET_STRIDE)),
@@ -243,7 +243,7 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
                 stores,
                 slot.field_recvec(ds::TYFUNC_RESULT, ds::TYPET_STRIDE),
             )),
-            read_dep_list(stores, slot, ds::TYFUNC_DEP),
+            read_deps(stores, slot, ds::TYFUNC_DEP),
         ),
         TypeKind::Rewritten => Type::Rewritten(Box::new(read_type_child(
             stores,
@@ -284,6 +284,12 @@ fn read_type_list(stores: &Stores, v: ds::RecVector) -> Vec<Type> {
 }
 
 /// Read a `vector<integer>` dep list (field `off` of `slot`) as a `Vec<u16>`.
+/// Type-dep wrapper: the same u16-list read, tagged space-`Unknown`
+/// (the snapshot does not record the address space — H2 DEPS_INVENTORY).
+fn read_deps(stores: &Stores, slot: Record, off: u32) -> crate::data::Deps {
+    crate::data::Deps::unknown(read_dep_list(stores, slot, off))
+}
+
 fn read_dep_list(stores: &Stores, slot: Record, off: u32) -> Vec<u16> {
     let v = slot.field_recvec(off, ds::INT_STRIDE);
     (0..v.len(stores))
@@ -945,6 +951,7 @@ fn read_field_groups_at(stores: &Stores, parent: Record, off: u32) -> Vec<Linked
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Deps;
     use crate::data_store::{RecVector, ValuesVector};
     use crate::ir_schema_gen::register_ir_schema;
     use crate::ir_store::{materialize_node, materialize_type};
@@ -1086,13 +1093,16 @@ mod tests {
             Type::Integer(IntegerSpec::wide()),
             Type::Integer(IntegerSpec::u8()),
             Type::Integer(IntegerSpec::signed32()),
-            Type::Text(vec![]),
-            Type::Text(vec![1, 2, 3]),
-            Type::Enum(4, true, vec![5]),
-            Type::Enum(4, false, vec![]),
-            Type::Reference(9, vec![0, 1]),
+            Type::Text(crate::data::Deps::none()),
+            Type::Text(crate::data::Deps::unknown(vec![1, 2, 3])),
+            Type::Enum(4, true, crate::data::Deps::unknown(vec![5])),
+            Type::Enum(4, false, crate::data::Deps::none()),
+            Type::Reference(9, crate::data::Deps::unknown(vec![0, 1])),
             Type::RefVar(Box::new(Type::Boolean)),
-            Type::Vector(Box::new(Type::Text(vec![])), vec![2]),
+            Type::Vector(
+                Box::new(Type::Text(crate::data::Deps::none())),
+                crate::data::Deps::unknown(vec![2]),
+            ),
             Type::Routine(11),
             Type::Iterator(
                 Box::new(Type::Integer(IntegerSpec::wide())),
@@ -1101,18 +1111,25 @@ mod tests {
             Type::Sorted(
                 3,
                 vec![("name".into(), true), ("age".into(), false)],
-                vec![1],
+                crate::data::Deps::unknown(vec![1]),
             ),
-            Type::Index(3, vec![("key".into(), true)], vec![]),
-            Type::Spacial(3, vec!["x".into(), "y".into()], vec![1]),
-            Type::Hash(3, vec!["id".into()], vec![]),
+            Type::Index(3, vec![("key".into(), true)], crate::data::Deps::none()),
+            Type::Spacial(
+                3,
+                vec!["x".into(), "y".into()],
+                crate::data::Deps::unknown(vec![1]),
+            ),
+            Type::Hash(3, vec!["id".into()], crate::data::Deps::none()),
             Type::Function(
-                vec![Type::Integer(IntegerSpec::wide()), Type::Text(vec![])],
+                vec![Type::Integer(IntegerSpec::wide()), Type::Text(Deps::none())],
                 Box::new(Type::Boolean),
-                vec![0],
+                Deps::unknown(vec![0]),
             ),
-            Type::Rewritten(Box::new(Type::Text(vec![]))),
-            Type::Tuple(vec![Type::Integer(IntegerSpec::wide()), Type::Text(vec![])]),
+            Type::Rewritten(Box::new(Type::Text(Deps::none()))),
+            Type::Tuple(vec![
+                Type::Integer(IntegerSpec::wide()),
+                Type::Text(Deps::none()),
+            ]),
         ] {
             round_trip_type(&t);
         }
@@ -1122,13 +1139,22 @@ mod tests {
     fn type_nested_recursion_round_trips() {
         // vector<vector<reference>> and a function returning a vector.
         round_trip_type(&Type::Vector(
-            Box::new(Type::Vector(Box::new(Type::Reference(2, vec![])), vec![])),
-            vec![],
+            Box::new(Type::Vector(
+                Box::new(Type::Reference(2, Deps::none())),
+                Deps::none(),
+            )),
+            Deps::none(),
         ));
         round_trip_type(&Type::Function(
-            vec![Type::Integer(IntegerSpec::i32()), Type::Text(vec![1, 2])],
-            Box::new(Type::Vector(Box::new(Type::Boolean), vec![3])),
-            vec![7],
+            vec![
+                Type::Integer(IntegerSpec::i32()),
+                Type::Text(Deps::unknown(vec![1, 2])),
+            ],
+            Box::new(Type::Vector(
+                Box::new(Type::Boolean),
+                Deps::unknown(vec![3]),
+            )),
+            Deps::unknown(vec![7]),
         ));
     }
 

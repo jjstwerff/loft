@@ -292,7 +292,7 @@ impl Parser {
         types: &[Type],
     ) -> Type {
         let ref_d_nr = self.data.def_nr("reference");
-        let result_ref_type = Type::Reference(ref_d_nr, Vec::new());
+        let result_ref_type = Type::Reference(ref_d_nr, crate::data::Deps::none());
         if self.first_pass {
             return result_ref_type;
         }

@@ -26,7 +26,7 @@
 //! **Return-value exemption:** the variable holding the function's return value
 //! (`ret_var`) is never freed — its value is consumed by the caller.
 
-use crate::data::{Block, Context, Data, DefType, Type, Value, v_if, v_set};
+use crate::data::{Block, Context, Data, DefType, Deps, Type, Value, v_if, v_set};
 use crate::variables::{Function, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -888,8 +888,8 @@ impl Scopes {
             // reading borrow (`x = x.next`, #328) keeps its owned store
             // until scope exit — a bounded, documented residual of this
             // conservatism (LIFETIME.md § Ownership-transition free).
-            && !value_reads_var(value, v)
-            && !value_reads_var(value, ov)
+            && !value.reads_var(v)
+            && !value.reads_var(ov)
         {
             transition_free = Some(call("OpFreeRef", v, data));
         }
@@ -1455,7 +1455,7 @@ impl Scopes {
                 {
                     self.ret_temp_counter += 1;
                     let name = format!("__ret_text_{}", self.ret_temp_counter);
-                    let tmp = function.add_temp_var(&name, &Type::Text(vec![]));
+                    let tmp = function.add_temp_var(&name, &Type::Text(Deps::none()));
                     function.set_skip_free(tmp);
                     self.var_scope.insert(tmp, self.scope);
                     self.var_order.push(tmp);
@@ -1623,7 +1623,17 @@ impl Scopes {
                         if a_idx < def.attributes.len() {
                             function.var(&def.attributes[a_idx].name) == v
                         } else {
-                            a == v // fallback for non-attribute deps
+                            // NOT a fossil (H2 bisect 2026-06-11): block-result
+                            // types reach here with MIXED-space deps — entries
+                            // below the attr count are attribute indices,
+                            // entries above are FRAME var numbers (e.g. the
+                            // closure work var a factory's returned fn-ref
+                            // depends on).  Removing this arm freed closure
+                            // records early (26-closures: two make_adder
+                            // results shared one record).  The positional
+                            // disambiguation IS the current contract —
+                            // documented in DEPS_INVENTORY § crossing sites.
+                            a == v
                         }
                     })
                 };
@@ -2033,9 +2043,9 @@ impl Scopes {
             return None;
         }
         match &def.returned {
-            Type::Vector(elem, _) => Some(Type::Vector(elem.clone(), Vec::new())),
-            Type::Reference(d_nr, _) => Some(Type::Reference(*d_nr, Vec::new())),
-            Type::Enum(d_nr, true, _) => Some(Type::Enum(*d_nr, true, Vec::new())),
+            Type::Vector(elem, _) => Some(Type::Vector(elem.clone(), Deps::none())),
+            Type::Reference(d_nr, _) => Some(Type::Reference(*d_nr, Deps::none())),
+            Type::Enum(d_nr, true, _) => Some(Type::Enum(*d_nr, true, Deps::none())),
             _ => None,
         }
     }
@@ -2059,7 +2069,7 @@ impl Scopes {
             let def = data.def(*fn_nr);
             if def.name.starts_with("n_") && def.code != Value::Null {
                 if let Type::Reference(d_nr, _) = &def.returned {
-                    return Some(Type::Reference(*d_nr, Vec::new()));
+                    return Some(Type::Reference(*d_nr, Deps::none()));
                 }
                 // @P303 — a user fn returning a struct-enum by FRESH owned
                 // store (empty dep) leaks its result temp when used directly
@@ -2072,7 +2082,7 @@ impl Scopes {
                 if let Type::Enum(d_nr, true, dep) = &def.returned
                     && dep.is_empty()
                 {
-                    return Some(Type::Enum(*d_nr, true, Vec::new()));
+                    return Some(Type::Enum(*d_nr, true, Deps::none()));
                 }
                 // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
                 // whose fn-ref carries a fresh closure record) leaks its result temp
@@ -2087,7 +2097,7 @@ impl Scopes {
                 // is a safe no-op; a borrowed fn-ref copy is marked `skip_free`
                 // elsewhere, so only a freshly produced closure is lifted here.
                 if let Type::Function(params, ret, _) = &def.returned {
-                    return Some(Type::Function(params.clone(), ret.clone(), Vec::new()));
+                    return Some(Type::Function(params.clone(), ret.clone(), Deps::none()));
                 }
             }
         }
@@ -2114,7 +2124,7 @@ impl Scopes {
                 && let Type::Vector(elem, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Vector(elem.clone(), Vec::new()));
+                return Some(Type::Vector(elem.clone(), Deps::none()));
             }
         }
         // The native-constructor branches below are intentionally matched on the
@@ -2133,7 +2143,7 @@ impl Scopes {
                 && let Type::Enum(d_nr, true, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Enum(*d_nr, true, Vec::new()));
+                return Some(Type::Enum(*d_nr, true, Deps::none()));
             }
             // Native vector-returning fns (e.g. `keys()`, `fields()` on
             // JsonValue) allocate a fresh vector store that the caller owns.
@@ -2143,7 +2153,7 @@ impl Scopes {
                 && let Type::Vector(elem, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(Type::Vector(elem.clone(), Vec::new()));
+                return Some(Type::Vector(elem.clone(), Deps::none()));
             }
         }
         None
@@ -2171,33 +2181,6 @@ enum RefRhs {
     View,
     /// Not provable either way.
     Unknown,
-}
-
-/// #316 — true when `value` reads variable `v` anywhere (its old store may
-/// feed the new value, so a pre-Set free would be a use-after-free).
-pub(crate) fn value_reads_var(value: &Value, v: u16) -> bool {
-    match value {
-        Value::Var(x) => *x == v,
-        Value::Set(x, inner) => *x == v || value_reads_var(inner, v),
-        Value::Span(b) => value_reads_var(&b.1, v),
-        Value::Call(_, args)
-        | Value::CallRef(_, args)
-        | Value::Insert(args)
-        | Value::Tuple(args)
-        | Value::Parallel(args) => args.iter().any(|a| value_reads_var(a, v)),
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| value_reads_var(o, v)),
-        Value::If(c, t, e) => {
-            value_reads_var(c, v) || value_reads_var(t, v) || value_reads_var(e, v)
-        }
-        Value::Iter(_, c, n, e) => {
-            value_reads_var(c, v) || value_reads_var(n, v) || value_reads_var(e, v)
-        }
-        Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
-            value_reads_var(x, v)
-        }
-        Value::TupleGet(x, _) => *x == v,
-        _ => false,
-    }
 }
 
 fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
@@ -2263,12 +2246,7 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
 /// produce `let _ret = return …` in native and double-emit the inner
 /// Return inside the Set's expression generator.
 fn expr_ends_in_return(expr: &Value) -> bool {
-    match expr {
-        Value::Return(_) => true,
-        Value::Insert(ops) => ops.last().is_some_and(expr_ends_in_return),
-        Value::Block(bl) => bl.operators.last().is_some_and(expr_ends_in_return),
-        _ => false,
-    }
+    matches!(expr.tail(), Value::Return(_))
 }
 
 /// Whether a function's return type holds a plain value (no heap ownership).
@@ -2323,38 +2301,14 @@ fn returned_var(expr: &Value) -> u16 {
 /// Used by `check_ref_leaks` to verify no Reference variable is leaked.
 #[cfg(debug_assertions)]
 fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
-    match ir {
-        Value::Call(d_nr, args) if *d_nr == free_ref_nr => {
-            if let Some(Value::Var(v)) = args.first() {
-                result.insert(*v);
-            }
+    ir.walk(&mut |n| {
+        if let Value::Call(d_nr, args) = n
+            && *d_nr == free_ref_nr
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            result.insert(*v);
         }
-        Value::Call(_, args) => {
-            for a in args {
-                collect_freed_vars(a, free_ref_nr, result);
-            }
-        }
-        Value::Set(_, inner) => collect_freed_vars(inner, free_ref_nr, result),
-        Value::If(cond, t, f) => {
-            collect_freed_vars(cond, free_ref_nr, result);
-            collect_freed_vars(t, free_ref_nr, result);
-            collect_freed_vars(f, free_ref_nr, result);
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            for op in &bl.operators {
-                collect_freed_vars(op, free_ref_nr, result);
-            }
-        }
-        Value::Insert(ops) => {
-            for op in ops {
-                collect_freed_vars(op, free_ref_nr, result);
-            }
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            collect_freed_vars(inner, free_ref_nr, result);
-        }
-        _ => {}
-    }
+    });
 }
 
 /// After scope analysis, assert that every Reference variable that should be
@@ -2432,7 +2386,22 @@ fn check_ref_leaks(
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, free_ref_nr, &mut freed);
 
-    let mut ret_deps: HashSet<u16> = ret_type.depend().into_iter().collect();
+    // H2: `ret_type` deps are ATTRIBUTE indices — translate each to its
+    // frame var through the attribute name before pooling with the
+    // frame-space deps below (the old code inserted them raw, so an attr
+    // index colliding with an unrelated var number silently suppressed a
+    // leak report).
+    let fn_def_nr = data.def_nr(fn_name);
+    let mut ret_deps: HashSet<u16> = HashSet::new();
+    for a in ret_type.depend() {
+        let a_idx = a as usize;
+        if fn_def_nr != u32::MAX && a_idx < data.def(fn_def_nr).attributes().len() {
+            let av = function.var(&data.def(fn_def_nr).attributes()[a_idx].name);
+            if av != u16::MAX {
+                ret_deps.insert(av);
+            }
+        }
+    }
     // The directly-returned variable (e.g. the owned struct constructed by a function
     // whose return type is Reference) passes ownership to the caller — no FreeRef is
     // emitted for it and that is correct.  Exclude it so check_ref_leaks does not
@@ -2574,60 +2543,54 @@ fn walk_par_safe(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> bool {
 
 #[allow(dead_code)]
 fn walk_par_safe_value(value: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
-    match value {
-        Value::Call(callee, args) => {
-            let safe = call_is_par_safe(*callee, data, visited);
-            safe && args.iter().all(|a| walk_par_safe_value(a, data, visited))
-        }
-        Value::CallRef(_, _args) => {
-            // Runtime fn-ref — actual callee is unknown at compile
-            // time.  Conservative: reject.
-            false
-        }
-        Value::Block(b) => b
-            .operators
-            .iter()
-            .all(|v| walk_par_safe_value(v, data, visited)),
-        Value::Insert(vs) => vs.iter().all(|v| walk_par_safe_value(v, data, visited)),
-        Value::If(c, t, e) => {
-            walk_par_safe_value(c, data, visited)
-                && walk_par_safe_value(t, data, visited)
-                && walk_par_safe_value(e, data, visited)
-        }
-        Value::Loop(body) => body
-            .operators
-            .iter()
-            .all(|v| walk_par_safe_value(v, data, visited)),
-        Value::Set(_, rhs) => walk_par_safe_value(rhs, data, visited),
-        Value::Span(b) => walk_par_safe_value(&b.1, data, visited),
-        // Leaves — primitive literals, var reads, etc.  Safe.
-        _ => true,
-    }
+    body_calls_par_safe(value, data, &mut |callee, data| {
+        walk_par_safe(data, callee, visited)
+    })
 }
 
-#[allow(dead_code)]
-fn call_is_par_safe(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> bool {
+/// Shared body walk behind the two par-safety analyses (pass-3 dedupe):
+/// every `Call` must pass the purity gate; a `CallRef` (runtime fn-ref,
+/// callee unknown at compile time) rejects conservatively.  The two
+/// analyses differ ONLY in how an UNKNOWN user fn is decided — `user_fn`
+/// supplies that policy (the 5b walk recurses with a visited set; the
+/// fixed-point pass looks up its classification table).
+fn body_calls_par_safe(
+    value: &Value,
+    data: &Data,
+    user_fn: &mut dyn FnMut(u32, &Data) -> bool,
+) -> bool {
+    !value.any_node(&mut |n| match n {
+        Value::Call(callee, _) => !call_purity_safe(*callee, data, user_fn),
+        Value::CallRef(_, _) => true,
+        _ => false,
+    })
+}
+
+/// The shared purity gate: Purity decides directly except for UNKNOWN
+/// user fns, which `user_fn` decides.
+fn call_purity_safe(callee: u32, data: &Data, user_fn: &mut dyn FnMut(u32, &Data) -> bool) -> bool {
     if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
         return false;
     }
     let def = &data.definitions[callee as usize];
     match def.purity {
-        Purity::Pure => true,
-        Purity::Impure(ImpureCategory::HostIo | ImpureCategory::Prng | ImpureCategory::Io) => true,
-        Purity::Impure(ImpureCategory::ParCall) => {
-            // Nested par: D8 R2 says inner worker fn must itself be
-            // par-safe.  Minimum impl returns true; full 5b looks
-            // up the worker fn arg and recurses into it.
-            true
-        }
+        Purity::Pure
+        | Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Prng
+            | ImpureCategory::Io
+            // Nested par: D8 R2 says the inner worker fn must itself be
+            // par-safe.  Minimum impl accepts; full 5b looks up the worker
+            // fn arg and recurses into it.
+            | ImpureCategory::ParCall,
+        ) => true,
         Purity::Impure(ImpureCategory::ParentWrite) => false,
         Purity::Unknown => {
             if matches!(def.code, Value::Null) {
                 // Native stdlib fn with no annotation — conservative.
                 false
             } else {
-                // User fn: recurse into its body.
-                walk_par_safe(data, callee, visited)
+                user_fn(callee, data)
             }
         }
     }
@@ -3051,59 +3014,11 @@ pub fn analyse_par_safety_fixpoint(data: &Data) -> HashMap<u32, bool> {
 /// the fixed-point loop owns convergence.
 #[allow(dead_code)]
 fn walk_classified(value: &Value, data: &Data, classification: &HashMap<u32, bool>) -> bool {
-    match value {
-        Value::Call(callee, args) => {
-            let safe = call_classified(*callee, data, classification);
-            safe && args
-                .iter()
-                .all(|a| walk_classified(a, data, classification))
-        }
-        Value::CallRef(_, _) => false,
-        Value::Block(b) => b
-            .operators
-            .iter()
-            .all(|v| walk_classified(v, data, classification)),
-        Value::Insert(vs) => vs.iter().all(|v| walk_classified(v, data, classification)),
-        Value::If(c, t, e) => {
-            walk_classified(c, data, classification)
-                && walk_classified(t, data, classification)
-                && walk_classified(e, data, classification)
-        }
-        Value::Loop(body) => body
-            .operators
-            .iter()
-            .all(|v| walk_classified(v, data, classification)),
-        Value::Set(_, rhs) => walk_classified(rhs, data, classification),
-        Value::Span(b) => walk_classified(&b.1, data, classification),
-        _ => true,
-    }
-}
-
-#[allow(dead_code)]
-fn call_classified(callee: u32, data: &Data, classification: &HashMap<u32, bool>) -> bool {
-    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
-        return false;
-    }
-    let def = &data.definitions[callee as usize];
-    match def.purity {
-        Purity::Pure
-        | Purity::Impure(
-            ImpureCategory::HostIo
-            | ImpureCategory::Prng
-            | ImpureCategory::Io
-            | ImpureCategory::ParCall,
-        ) => true,
-        Purity::Impure(ImpureCategory::ParentWrite) => false,
-        Purity::Unknown => {
-            if matches!(def.code, Value::Null) {
-                false
-            } else {
-                // User fn — look up the classification.  If absent
-                // (user_fn_d_nrs missed it), conservative false.
-                classification.get(&callee).copied().unwrap_or(false)
-            }
-        }
-    }
+    body_calls_par_safe(value, data, &mut |callee, _| {
+        // User fn — look up the classification.  If absent
+        // (user_fn_d_nrs missed it), conservative false.
+        classification.get(&callee).copied().unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
@@ -3382,63 +3297,24 @@ fn call_deep_parent_write(
 
 #[allow(dead_code)]
 fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
-    match value {
-        Value::Call(callee, args) => {
-            // Check this call's purity.
-            if (*callee as usize) < data.definitions.len() {
-                let cdef = &data.definitions[*callee as usize];
-                if matches!(cdef.purity, Purity::Impure(ImpureCategory::ParentWrite)) {
-                    return Some(cdef.name.clone());
-                }
-            }
-            // Walk arg expressions (could contain nested Call).
-            for a in args {
-                if let Some(name) = walk_shallow_parent_write(a, data) {
-                    return Some(name);
-                }
-            }
-            None
+    // "Shallow" = the runtime callee behind a `CallRef` is never followed
+    // (it is not a child node); arg expressions ARE scanned.
+    let mut found = None;
+    value.any_node(&mut |n| {
+        if let Value::Call(callee, _) = n
+            && (*callee as usize) < data.definitions.len()
+            && matches!(
+                data.definitions[*callee as usize].purity,
+                Purity::Impure(ImpureCategory::ParentWrite)
+            )
+        {
+            found = Some(data.definitions[*callee as usize].name.clone());
+            true
+        } else {
+            false
         }
-        // Don't recurse into CallRef target (runtime fn-ref); shallow.
-        Value::CallRef(_, args) => {
-            for a in args {
-                if let Some(name) = walk_shallow_parent_write(a, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Block(b) => {
-            for v in &b.operators {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Insert(vs) => {
-            for v in vs {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::If(c, t, e) => walk_shallow_parent_write(c, data)
-            .or_else(|| walk_shallow_parent_write(t, data))
-            .or_else(|| walk_shallow_parent_write(e, data)),
-        Value::Loop(body) => {
-            for v in &body.operators {
-                if let Some(name) = walk_shallow_parent_write(v, data) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Value::Set(_, rhs) => walk_shallow_parent_write(rhs, data),
-        Value::Span(b) => walk_shallow_parent_write(&b.1, data),
-        _ => None,
-    }
+    });
+    found
 }
 
 #[cfg(test)]
@@ -3465,6 +3341,38 @@ mod par_shallow_tests {
         assert_eq!(
             worker_calls_parent_write(&d, worker),
             Some("vector_add".to_string())
+        );
+    }
+
+    /// Pass-2 wave 4 regression: the hand-rolled walker had no `Return`
+    /// arm (`_ => None`), so a parent-write call appearing only in
+    /// `return f(...)` escaped the scan — the worker classified safe.
+    /// The keystone descent sees every position.
+    #[test]
+    fn parent_write_in_return_value_detected() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Return(Box::new(Value::Call(bad, vec![])));
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("vector_add".to_string())
+        );
+    }
+
+    /// Same hole for a tuple element (`(f(...), 1)` result shapes).
+    #[test]
+    fn parent_write_in_tuple_element_detected() {
+        let mut d = Data::new();
+        let bad = d.add_def("hash_set", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code =
+            Value::Tuple(vec![Value::Call(bad, vec![]), Value::Int(1)]);
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("hash_set".to_string())
         );
     }
 
@@ -3754,41 +3662,17 @@ fn escapes_value(v: &Value, target: u16) -> bool {
 }
 
 fn guard_escapes(node: &Value, target: u16) -> bool {
-    match node {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            escapes_value(v, target) || guard_escapes(v, target)
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            // The block's VALUE is its last operator; if that hands out the local
-            // (directly or in a tuple/literal), it escapes (block-result `x = {
-            // …; a }` U3; `return (a, n)` t2).
-            bl.operators
-                .last()
-                .is_some_and(|o| escapes_value(o, target))
-                || bl.operators.iter().any(|op| guard_escapes(op, target))
-        }
-        Value::If(t, a, b) => {
-            guard_escapes(t, target) || guard_escapes(a, target) || guard_escapes(b, target)
-        }
-        Value::Set(_, val) | Value::Drop(val) => guard_escapes(val, target),
-        Value::Iter(_, c, n, e) => {
-            guard_escapes(c, target) || guard_escapes(n, target) || guard_escapes(e, target)
-        }
-        Value::Call(_, args)
-        | Value::CallRef(_, args)
-        | Value::Insert(args)
-        | Value::Tuple(args)
-        | Value::Parallel(args) => args.iter().any(|a| guard_escapes(a, target)),
-        Value::TuplePut(_, _, inner) => guard_escapes(inner, target),
-        Value::Span(b) => guard_escapes(&b.1, target),
-        Value::ParFor(b) => {
-            guard_escapes(&b.input, target)
-                || guard_escapes(&b.worker, target)
-                || guard_escapes(&b.threads, target)
-                || guard_escapes(&b.body, target)
-        }
+    node.any_node(&mut |n| match n {
+        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target),
+        // The block's VALUE is its last operator; if that hands out the local
+        // (directly or in a tuple/literal), it escapes (block-result `x = {
+        // …; a }` U3; `return (a, n)` t2).
+        Value::Block(bl) | Value::Loop(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| escapes_value(o, target)),
         _ => false,
-    }
+    })
 }
 
 /// Soundness gate for confining a *multi-store* local — one reassigned a fresh
@@ -3801,94 +3685,128 @@ fn guard_escapes(node: &Value, target: u16) -> bool {
 /// Conditional assignments (inside `if`/`loop`) do NOT establish dominance for
 /// code after the construct — the walk under-claims, so it stays sound.
 fn confine_reassign_safe(code: &Value, local: u16) -> bool {
-    fn walk(node: &Value, local: u16, dominated: bool, ok: &mut bool) -> bool {
-        match node {
-            Value::Set(v, val) => {
-                // RHS evaluated before the write lands; a read of `local` in it
-                // is gated by the *current* dominance.
-                walk(val, local, dominated, ok);
-                if *v == local {
-                    return !matches!(val.unspan(), Value::Null);
-                }
-                dominated
-            }
-            Value::Var(v) | Value::CallRef(v, _) | Value::TupleGet(v, _) => {
-                if *v == local && !dominated {
-                    *ok = false;
-                }
-                if let Value::CallRef(_, args) = node {
-                    let mut d = dominated;
-                    for a in args {
-                        d = walk(a, local, d, ok);
-                    }
-                }
-                dominated
-            }
-            Value::Block(bl) => {
-                let mut d = dominated;
-                for op in &bl.operators {
-                    d = walk(op, local, d, ok);
-                }
-                d
-            }
-            Value::Loop(lp) => {
-                // Body runs 0+ times → conditional; dominance does not leak out.
-                let mut d = dominated;
-                for op in &lp.operators {
-                    d = walk(op, local, d, ok);
-                }
-                dominated
-            }
-            Value::If(t, a, b) => {
-                let dc = walk(t, local, dominated, ok);
-                walk(a, local, dc, ok);
-                walk(b, local, dc, ok);
-                dc // branch assignments are conditional — no post-`if` dominance.
-            }
-            Value::Call(_, args)
-            | Value::Insert(args)
-            | Value::Tuple(args)
-            | Value::Parallel(args) => {
-                let mut d = dominated;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                d
-            }
-            Value::Iter(idx, c, n, e) => {
-                if *idx == local && !dominated {
-                    *ok = false;
-                }
-                let mut d = walk(c, local, dominated, ok);
-                d = walk(n, local, d, ok);
-                walk(e, local, d, ok); // body conditional
-                d
-            }
-            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-                walk(v, local, dominated, ok);
-                dominated
-            }
-            Value::TuplePut(v, _, inner) => {
-                if *v == local && !dominated {
-                    *ok = false;
-                }
-                walk(inner, local, dominated, ok);
-                dominated
-            }
-            Value::Span(b) => walk(&b.1, local, dominated, ok),
-            Value::ParFor(b) => {
-                let mut d = walk(&b.input, local, dominated, ok);
-                d = walk(&b.worker, local, d, ok);
-                d = walk(&b.threads, local, d, ok);
-                walk(&b.body, local, d, ok);
-                d
-            }
-            _ => dominated,
-        }
-    }
     let mut ok = true;
-    walk(code, local, false, &mut ok);
+    dominance_walk(code, local, false, &mut ok, false);
     ok
+}
+
+/// Shared dominance walk behind the two Plan-57 soundness gates
+/// (pass-3 dedupe: the two walkers were 80 identical lines apart, and the
+/// stronger one had silently lost the `ParFor` arm).  `dom` = "every read
+/// of `local` here is preceded by a non-null assignment that definitely
+/// executed".  The two gates differ ONLY in:
+/// - the START value (`confine_reassign_safe` starts false — a definite
+///   reassignment must precede any read; `store_dead_after_block` starts
+///   true — the fn-level init counts);
+/// - `invalidate_conditional` (`store_dead_after_block` only): a
+///   reassignment inside an `If`/`Loop`/`Iter`/`ParFor` body INVALIDATES
+///   dominance — afterwards `local` may hold that block's confined store.
+///
+/// A read of `local` while `!dom` clears `ok`.
+fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool) -> bool {
+    match node {
+        Value::Set(v, val) => {
+            // RHS evaluated before the write lands; a read of `local` in it
+            // is gated by the *current* dominance.
+            dominance_walk(val, local, dom, ok, inv);
+            if *v == local {
+                return !matches!(val.unspan(), Value::Null);
+            }
+            dom
+        }
+        Value::Var(v) | Value::TupleGet(v, _) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            dom
+        }
+        Value::CallRef(v, args) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            let mut d = dom;
+            for a in args {
+                d = dominance_walk(a, local, d, ok, inv);
+            }
+            dom
+        }
+        Value::Block(bl) => {
+            let mut d = dom;
+            for op in &bl.operators {
+                d = dominance_walk(op, local, d, ok, inv);
+            }
+            d
+        }
+        Value::Loop(lp) => {
+            // Body runs 0+ times → conditional; dominance does not leak out.
+            let mut d = dom;
+            for op in &lp.operators {
+                d = dominance_walk(op, local, d, ok, inv);
+            }
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                dom
+            }
+        }
+        Value::If(t, a, b) => {
+            let dc = dominance_walk(t, local, dom, ok, inv);
+            dominance_walk(a, local, dc, ok, inv);
+            dominance_walk(b, local, dc, ok, inv);
+            // Branch assignments are conditional — they establish no
+            // post-`if` dominance; under `inv` they additionally invalidate.
+            if inv && (assigns_local(a, local) || assigns_local(b, local)) {
+                false
+            } else {
+                dc
+            }
+        }
+        Value::Iter(idx, c, n, e) => {
+            if *idx == local && !dom {
+                *ok = false;
+            }
+            let mut d = dominance_walk(c, local, dom, ok, inv); // the iteration SOURCE reads `local`
+            d = dominance_walk(n, local, d, ok, inv);
+            dominance_walk(e, local, d, ok, inv); // body conditional
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                d
+            }
+        }
+        Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            let mut d = dom;
+            for a in args {
+                d = dominance_walk(a, local, d, ok, inv);
+            }
+            d
+        }
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+            dominance_walk(v, local, dom, ok, inv);
+            dom
+        }
+        Value::TuplePut(v, _, inner) => {
+            if *v == local && !dom {
+                *ok = false;
+            }
+            dominance_walk(inner, local, dom, ok, inv);
+            dom
+        }
+        Value::Span(b) => dominance_walk(&b.1, local, dom, ok, inv),
+        Value::ParFor(b) => {
+            let mut d = dominance_walk(&b.input, local, dom, ok, inv);
+            d = dominance_walk(&b.worker, local, d, ok, inv);
+            d = dominance_walk(&b.threads, local, d, ok, inv);
+            dominance_walk(&b.body, local, d, ok, inv);
+            // The parallel body is conditional from the caller's view.
+            if inv && assigns_local(node, local) {
+                false
+            } else {
+                d
+            }
+        }
+        _ => dom,
+    }
 }
 
 /// Plan-57 cluster-III Route 2: recover the backer of an *orphaned* store — one
@@ -3896,56 +3814,27 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 /// reassigned.  Returns the local `L` the store flows into via its repoint
 /// `Set(L, OpGetField(Var(vdb), …))` (the canonical `z = [..]` lowering).
 fn recover_backer(code: &Value, vdb: u16, gf_nr: u32) -> Option<u16> {
-    match code {
-        Value::Set(l, val) => {
-            if let Value::Call(op, args) = val.unspan()
-                && *op == gf_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == vdb)
-            {
-                return Some(*l);
-            }
-            recover_backer(val, vdb, gf_nr)
+    let mut backer = None;
+    code.any_node(&mut |n| {
+        if let Value::Set(l, val) = n
+            && let Value::Call(op, args) = val.unspan()
+            && *op == gf_nr
+            && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == vdb)
+        {
+            backer = Some(*l);
+            true
+        } else {
+            false
         }
-        Value::Block(bl) | Value::Loop(bl) => bl
-            .operators
-            .iter()
-            .find_map(|o| recover_backer(o, vdb, gf_nr)),
-        Value::If(c, t, e) => recover_backer(c, vdb, gf_nr)
-            .or_else(|| recover_backer(t, vdb, gf_nr))
-            .or_else(|| recover_backer(e, vdb, gf_nr)),
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().find_map(|o| recover_backer(o, vdb, gf_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            recover_backer(v, vdb, gf_nr)
-        }
-        Value::Span(b) => recover_backer(&b.1, vdb, gf_nr),
-        _ => None,
-    }
+    });
+    backer
 }
 
 /// Does `node` contain a non-null reassignment of `local` anywhere?
 fn assigns_local(node: &Value, local: u16) -> bool {
-    match node {
-        Value::Set(v, val) => {
-            (*v == local && !matches!(val.unspan(), Value::Null)) || assigns_local(val, local)
-        }
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| assigns_local(o, local)),
-        Value::If(c, t, e) => {
-            assigns_local(c, local) || assigns_local(t, local) || assigns_local(e, local)
-        }
-        Value::Iter(_, c, n, e) => {
-            assigns_local(c, local) || assigns_local(n, local) || assigns_local(e, local)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| assigns_local(o, local))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-            assigns_local(v, local)
-        }
-        Value::Span(b) => assigns_local(&b.1, local),
-        _ => false,
-    }
+    node.any_node(
+        &mut |n| matches!(n, Value::Set(v, val) if *v == local && !matches!(val.unspan(), Value::Null)),
+    )
 }
 
 /// Plan-57 cluster-III Route 2 soundness gate (STRONGER than `confine_reassign_safe`,
@@ -3961,98 +3850,8 @@ fn assigns_local(node: &Value, local: u16) -> bool {
 /// over-free hazard → unsound to confine.  Mirrors `confine_reassign_safe` but with
 /// the conditional-reassignment invalidation (the missing soundness property).
 fn store_dead_after_block(code: &Value, local: u16) -> bool {
-    fn walk(node: &Value, local: u16, dom: bool, ok: &mut bool) -> bool {
-        match node {
-            Value::Set(v, val) => {
-                walk(val, local, dom, ok);
-                if *v == local {
-                    return !matches!(val.unspan(), Value::Null);
-                }
-                dom
-            }
-            Value::Var(v) | Value::TupleGet(v, _) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                dom
-            }
-            Value::CallRef(v, args) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                let mut d = dom;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                dom
-            }
-            Value::Block(bl) => {
-                let mut d = dom;
-                for op in &bl.operators {
-                    d = walk(op, local, d, ok);
-                }
-                d
-            }
-            Value::Loop(lp) => {
-                let mut d = dom;
-                for op in &lp.operators {
-                    d = walk(op, local, d, ok);
-                }
-                // Conditional (0+ iterations): a reassignment inside invalidates dom.
-                if assigns_local(node, local) {
-                    false
-                } else {
-                    dom
-                }
-            }
-            Value::If(c, t, e) => {
-                let dc = walk(c, local, dom, ok);
-                walk(t, local, dc, ok);
-                walk(e, local, dc, ok);
-                // A branch reassignment is conditional → `local` may hold that block's
-                // (confined) store afterwards.  Invalidate.
-                if assigns_local(t, local) || assigns_local(e, local) {
-                    false
-                } else {
-                    dc
-                }
-            }
-            Value::Iter(idx, c, n, e) => {
-                if *idx == local && !dom {
-                    *ok = false;
-                }
-                let d = walk(c, local, dom, ok); // the iteration SOURCE reads `local`
-                let d = walk(n, local, d, ok);
-                walk(e, local, d, ok); // body conditional
-                if assigns_local(node, local) { false } else { d }
-            }
-            Value::Call(_, args)
-            | Value::Insert(args)
-            | Value::Tuple(args)
-            | Value::Parallel(args) => {
-                let mut d = dom;
-                for a in args {
-                    d = walk(a, local, d, ok);
-                }
-                d
-            }
-            Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
-                walk(v, local, dom, ok);
-                dom
-            }
-            Value::TuplePut(v, _, inner) => {
-                if *v == local && !dom {
-                    *ok = false;
-                }
-                walk(inner, local, dom, ok);
-                dom
-            }
-            Value::Span(b) => walk(&b.1, local, dom, ok),
-            _ => dom,
-        }
-    }
     let mut ok = true;
-    walk(code, local, true, &mut ok);
+    dominance_walk(code, local, true, &mut ok, true);
     ok
 }
 
@@ -4305,28 +4104,10 @@ fn store_liveness_walk(
 
 /// True if `node` contains the `OpDatabase(Var(store), …)` allocation of `store`.
 fn contains_alloc(node: &Value, store: u16, db_nr: u32) -> bool {
-    match node.unspan() {
-        Value::Call(op, args) => {
-            (*op == db_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
-                || args.iter().any(|a| contains_alloc(a, store, db_nr))
-        }
-        Value::Set(_, val) => contains_alloc(val, store, db_nr),
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| contains_alloc(o, store, db_nr))
-        }
-        Value::If(c, t, e) => {
-            contains_alloc(c, store, db_nr)
-                || contains_alloc(t, store, db_nr)
-                || contains_alloc(e, store, db_nr)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| contains_alloc(o, store, db_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => contains_alloc(v, store, db_nr),
-        Value::Span(b) => contains_alloc(&b.1, store, db_nr),
-        _ => false,
-    }
+    node.any_node(&mut |n| {
+        matches!(n, Value::Call(op, args) if *op == db_nr
+        && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
+    })
 }
 
 /// Plan-57 Phase-3 soundness gate (dominance): true only if `store`'s `OpDatabase`
@@ -4545,46 +4326,6 @@ fn is_top_free(op: &Value, st: u16, fr_nr: u32) -> bool {
         && matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == st))
 }
 
-/// True if `node` (recursively) contains an `OpFreeRef(Var(store))` — the free
-/// counterpart of [`contains_alloc`].  Descends nested blocks (e.g. an early-return
-/// `If`), unlike [`is_top_free`].
-fn contains_free(node: &Value, store: u16, fr_nr: u32) -> bool {
-    match node.unspan() {
-        Value::Call(op, args) => {
-            (*op == fr_nr
-                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == store))
-                || args.iter().any(|a| contains_free(a, store, fr_nr))
-        }
-        Value::Set(_, val) => contains_free(val, store, fr_nr),
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| contains_free(o, store, fr_nr))
-        }
-        Value::If(c, t, e) => {
-            contains_free(c, store, fr_nr)
-                || contains_free(t, store, fr_nr)
-                || contains_free(e, store, fr_nr)
-        }
-        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
-            ops.iter().any(|o| contains_free(o, store, fr_nr))
-        }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => contains_free(v, store, fr_nr),
-        Value::Span(b) => contains_free(&b.1, store, fr_nr),
-        _ => false,
-    }
-}
-
-/// True if a free of `st` occurs in a top-level body op BEFORE the op that allocates
-/// `st` (e.g. an early-return scope-exit free emitted, nested, before the alloc).
-/// Relocating `st`'s null-init declaration below such a free would strand the free out
-/// of scope (native/wasm rustc `E0425`), so the reclaim pass must leave these stores at
-/// their body-0 declaration.
-fn has_free_before_alloc(ops: &[Value], st: u16, db_nr: u32, fr_nr: u32) -> bool {
-    let Some(alloc_idx) = ops.iter().position(|o| contains_alloc(o, st, db_nr)) else {
-        return false;
-    };
-    ops[..alloc_idx].iter().any(|o| contains_free(o, st, fr_nr))
-}
-
 /// Plan-57 Phase-4 guard (Goal-E enforcement): after [`lastuse_reclaim`] has run,
 /// every store in the reclaim plan's `intent` must have its `OpFreeRef` placed at
 /// body top-level BEFORE the op that allocates its `trigger`.  Returns the count of
@@ -4649,30 +4390,13 @@ fn lastuse_reclaim(code: &mut Value, vars: &Function, db_nr: u32, gf_nr: u32, fr
         return 0;
     }
     let Value::Block(bl) = code else { return 0 };
-    // Fix A (plan-57 / @PLN2 follow-up): a store whose null-init *declaration* would be
-    // relocated DOWN past a free that already references it — e.g. an early-return
-    // scope-exit `OpFreeRef` emitted (nested) BEFORE the store's alloc — must NOT be
-    // reclaimed: moving its `let` below that free strands the free out of scope
-    // (native/wasm rustc `E0425`).  Exclude such stores from the whole pass; they fall
-    // back to the body-0 declaration + scope-exit free — the reclaim-OFF baseline the
-    // full native/interpreter/ASan suite already passes.  Pure subtraction from the
-    // reclaim set: strictly fewer relocations, no new frees.
-    let problematic: HashSet<u16> = owning
-        .iter()
-        .copied()
-        .filter(|&st| has_free_before_alloc(&bl.operators, st, db_nr, fr_nr))
-        .collect();
-    let owning: Vec<u16> = owning
-        .into_iter()
-        .filter(|st| !problematic.contains(st))
-        .collect();
-    if owning.is_empty() {
-        return 0;
-    }
-    let intent: Vec<(u16, u16)> = intent
-        .into_iter()
-        .filter(|(st, _)| !problematic.contains(st))
-        .collect();
+    // #260 Fix B replaced Fix A here: native codegen now declares every
+    // `__vdb` local up front (sentinel-bound prologue, `generation/mod.rs::
+    // output_function`), so relocating a null-init below an early-return
+    // scope-exit free can no longer strand the free's `var_…` reference out
+    // of scope (rustc E0425) — the `has_free_before_alloc` exclusion guard
+    // is gone and those stores get their watermark reclaim back (46/46
+    // owning stores were forfeited in brick-buster's generator pre-B).
     // Early-free groups: before[trigger] = dead stores to free right before
     // `trigger` allocates.  Their scope-exit `OpFreeRef` is REMOVED, not kept as an
     // "idempotent double-free": under reclaim the freed slot is reused by a later

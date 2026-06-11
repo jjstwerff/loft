@@ -802,28 +802,7 @@ pub(crate) fn run_tests(
                     };
                     let gen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut buf: Vec<u8> = Vec::new();
-                        let mut out = generation::Output {
-                            data: &native_data,
-                            stores: &native_db,
-                            counter: 0,
-                            indent: 0,
-                            def_nr: 0,
-                            declared: HashSet::new(),
-                            active_pre_eval: std::collections::HashMap::new(),
-                            reachable: HashSet::new(),
-                            dup_fn_names: HashSet::new(),
-                            loop_stack: Vec::new(),
-                            next_format_count: 0,
-                            yield_collect: false,
-                            yield_collect_text: false,
-                            fn_ref_context: false,
-                            i32_literal_context: false,
-                            tuple_text_to_string: false,
-                            coroutine_persistent_vars: std::collections::HashSet::new(),
-                            call_stack_prefix: None,
-                            wasm_browser: false,
-                            live_fns: Vec::new(),
-                        };
+                        let mut out = generation::Output::new(&native_data, &native_db);
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");
                         // output_native_reachable emits fn main() when n_main

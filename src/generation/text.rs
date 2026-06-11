@@ -211,7 +211,7 @@ impl Output<'_> {
             // raises E0502 — mutable and immutable borrows of the same
             // place.  Hoist the RHS through a fresh `String` so the
             // self-borrow never overlaps the `+=` target.
-            if crate::parser::operators::code_references_var(val, *nr) {
+            if val.reads_var(*nr) {
                 write!(
                     w,
                     "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); var_{s_nr} += &__p222_tmp; }}"

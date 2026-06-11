@@ -13,4 +13,14 @@ loft-ffi = "0.1"
 loft-ffi-macros = "0.1"
 
 [build-dependencies]
-loft-ffi-build = "0.1"
+loft-ffi-build = "0.2"
+
+# The fixture validates the CURRENT tree, so build against the in-repo
+# crates: `generate_register_from_loft_with_bridges` (plan-25 F3) exists
+# locally but is not yet in the published 0.2.0 — the next loft-ffi-build
+# publish lifts this patch.  (Stage B of scripts/sync-fixtures.sh replaces
+# the path when fixtures leave the monorepo.)
+[patch.crates-io]
+loft-ffi-build = { path = "../../../../../loft-ffi-build" }
+loft-ffi = { path = "../../../../../loft-ffi" }
+loft-ffi-macros = { path = "../../../../../loft-ffi-macros" }

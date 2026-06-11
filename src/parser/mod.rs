@@ -5,8 +5,8 @@
 //! Including type checking.
 
 use crate::data::{
-    Argument, Context, Data, DefType, I32, IntegerSpec, Type, Value, to_default, v_block, v_if,
-    v_loop, v_set,
+    Argument, Context, Data, DefType, Deps, I32, IntegerSpec, Type, Value, to_default, v_block,
+    v_if, v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{DiagEntry, Diagnostics, Level, diagnostic_format};
@@ -414,12 +414,12 @@ impl Parser {
             pos: 0,
         };
         let d = data.add_def("i_parse_errors", &pos, DefType::Function);
-        data.definitions[d as usize].returned = Type::Text(Vec::new());
+        data.definitions[d as usize].returned = Type::Text(Deps::none());
         let d = data.add_def("i_parse_error_push", &pos, DefType::Function);
         data.definitions[d as usize].returned = Type::Void;
         {
             let mut lexer = Lexer::default();
-            data.add_attribute(&mut lexer, d, "msg", Type::Text(Vec::new()));
+            data.add_attribute(&mut lexer, d, "msg", Type::Text(Deps::none()));
         }
         Parser {
             todo_files: Vec::new(),
@@ -1199,7 +1199,7 @@ impl Parser {
                     ls.push(self.cl("OpCreateStack", &[Value::Var(wv)]));
                     *code = v_block(
                         ls,
-                        Type::Reference(self.data.def_nr("reference"), vec![wv]),
+                        Type::Reference(self.data.def_nr("reference"), Deps::frame1(wv)),
                         "text_ref",
                     );
                 }
@@ -1235,8 +1235,8 @@ impl Parser {
             return true;
         }
         let mut check_type = is_type;
-        let r = Type::Reference(self.data.def_nr("reference"), Vec::new());
-        let e = Type::Enum(0, false, Vec::new());
+        let r = Type::Reference(self.data.def_nr("reference"), Deps::none());
+        let e = Type::Enum(0, false, Deps::none());
         if let Type::Vector(_nr, _) = is_type {
             if let Type::Vector(v, _) = should
                 && v.is_unknown()
@@ -1961,10 +1961,7 @@ impl Parser {
             return d_nr;
         }
         // Check if any attribute's type references the type variable.
-        let has_tv = def
-            .attributes
-            .iter()
-            .any(|a| Self::type_contains_tv(&a.typedef, tv_nr));
+        let has_tv = def.attributes.iter().any(|a| a.typedef.contains_def(tv_nr));
         if !has_tv {
             // Also check for Integer(0, tv_nr) patterns — operators sometimes encode
             // type info in the Integer bounds.
@@ -1994,15 +1991,6 @@ impl Parser {
             resolved
         } else {
             d_nr
-        }
-    }
-
-    /// Check if a type references the type variable.
-    fn type_contains_tv(tp: &Type, tv_nr: u32) -> bool {
-        match tp {
-            Type::Reference(d, _) | Type::Unknown(d) => *d == tv_nr,
-            Type::Vector(inner, _) => Self::type_contains_tv(inner, tv_nr),
-            _ => false,
         }
     }
 
@@ -2591,7 +2579,10 @@ impl Parser {
                 // `self.vars.depend(elm, vec)` so elm doesn't outlive the
                 // backing store.
                 let content_def_nr = data.type_def_nr(concrete);
-                vars.set_type(elm_var, Type::Reference(content_def_nr, vec![out_var]));
+                vars.set_type(
+                    elm_var,
+                    Type::Reference(content_def_nr, Deps::frame1(out_var)),
+                );
                 // 1. OpPreAllocVector(Var(out_var), Int(1), Int(elem_size))
                 //    Mirrors `vectors.rs:1161-1178` for perf parity with
                 //    concrete-T vector pushes.
@@ -3683,7 +3674,7 @@ impl Parser {
                     // frame's captures (silent corruption on slot
                     // reuse once the frame dies).
                     if !self.first_pass
-                        && let Some(base) = base_var_of(&ref_code)
+                        && let Some(base) = ref_code.base_var()
                         && self.vars.is_argument(base)
                     {
                         diagnostic!(
@@ -3859,7 +3850,7 @@ impl Parser {
                 return if tv_nr == u32::MAX {
                     Type::Unknown(0)
                 } else {
-                    Type::Reference(tv_nr, Vec::new())
+                    Type::Reference(tv_nr, Deps::none())
                 };
             }
             let op_method = format!("Op{}", rename(op));
@@ -4113,26 +4104,63 @@ impl Parser {
                 .collect()
         };
         if let Type::Text(d) = tp {
-            Type::Text(Self::resolve_deps(types, &d))
+            Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
         } else if let Type::Vector(to, d) = tp {
-            Type::Vector(to, Self::resolve_deps(types, &d))
+            Type::Vector(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Sorted(to, key, d) = tp {
-            Type::Sorted(to, key, Self::resolve_deps(types, &d))
+            Type::Sorted(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Hash(to, key, d) = tp {
-            Type::Hash(to, key, Self::resolve_deps(types, &d))
+            Type::Hash(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Index(to, key, d) = tp {
-            Type::Index(to, key, Self::resolve_deps(types, &d))
+            Type::Index(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Spacial(to, key, d) = tp {
-            Type::Spacial(to, key, Self::resolve_deps(types, &d))
+            Type::Spacial(
+                to,
+                key,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            )
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(to, Self::resolve_deps(types, &filter_hidden(&d)))
+            Type::Reference(
+                to,
+                Deps::frame(Self::resolve_deps(
+                    types,
+                    &filter_hidden(d.as_attr_indices()),
+                )),
+            )
         } else if let Type::Enum(to, true, d) = tp {
-            Type::Enum(to, true, Self::resolve_deps(types, &filter_hidden(&d)))
+            Type::Enum(
+                to,
+                true,
+                Deps::frame(Self::resolve_deps(
+                    types,
+                    &filter_hidden(d.as_attr_indices()),
+                )),
+            )
         } else {
             tp
         }
     }
 
+    /// THE def→frame dep converter (H2 / DEPS_INVENTORY): maps the
+    /// callee's ATTR-INDEX deps through the actual argument types at a
+    /// call site into caller FRAME var deps.  `d` must be attr-space
+    /// (callers read it via `Deps::as_attr_indices`); the result is
+    /// wrapped `Deps::frame` by `call_dependencies`.
     fn resolve_deps(types: &[Type], d: &[u16]) -> Vec<u16> {
         let mut dp = HashSet::new();
         for ar in d {
@@ -4185,7 +4213,7 @@ impl Parser {
                     // #306: the attr's dep list is callee-internal (attr
                     // indices); inherited verbatim it reads as CALLER var
                     // numbers and mislabels the fresh buffer a borrow.
-                    let buf_tp = Type::Vector(content.clone(), Vec::new());
+                    let buf_tp = Type::Vector(content.clone(), Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
@@ -4198,7 +4226,7 @@ impl Parser {
                     // skips → codegen panics.
                     self.vars.mark_caller_hidden_buf(vr);
                     self.data.vector_def(&mut self.lexer, content);
-                    all_types[a_nr] = Type::Vector(content.clone(), vec![vr]);
+                    all_types[a_nr] = Type::Vector(content.clone(), Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Reference(content, _) = tp {
                     assert_eq!(
@@ -4207,14 +4235,14 @@ impl Parser {
                         "Expect a null default on database references"
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
-                    let buf_tp = Type::Reference(content, Vec::new());
+                    let buf_tp = Type::Reference(content, Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
                         self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
-                    all_types[a_nr] = Type::Reference(content, vec![vr]);
+                    all_types[a_nr] = Type::Reference(content, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::Enum(content, true, _) = tp {
                     // @P301 — struct-enums are heap records like
@@ -4232,14 +4260,14 @@ impl Parser {
                         "Expect a null default on database references"
                     );
                     // #306: strip the callee-internal dep list (see Vector arm).
-                    let buf_tp = Type::Enum(content, true, Vec::new());
+                    let buf_tp = Type::Enum(content, true, Deps::none());
                     let vr = if is_recursive_self {
                         self.vars.work_refs_recursive(&buf_tp, &mut self.lexer)
                     } else {
                         self.vars.work_refs(&buf_tp, &mut self.lexer)
                     };
                     self.vars.mark_caller_hidden_buf(vr);
-                    all_types[a_nr] = Type::Enum(content, true, vec![vr]);
+                    all_types[a_nr] = Type::Enum(content, true, Deps::frame1(vr));
                     actual[a_nr] = Value::Var(vr);
                 } else if let Type::RefVar(vtp) = &tp {
                     let mut ls = Vec::new();
@@ -4270,7 +4298,7 @@ impl Parser {
                     ls.push(self.cl("OpCreateStack", &[Value::Var(vr)]));
                     actual[a_nr] = v_block(
                         ls,
-                        Type::Reference(self.data.def_nr("reference"), vec![vr]),
+                        Type::Reference(self.data.def_nr("reference"), Deps::frame1(vr)),
                         "default ref",
                     );
                     all_types[a_nr] = tp.clone();
@@ -4857,11 +4885,12 @@ impl Parser {
         if blocked(&f) {
             f = format!("{id}.loft");
         }
-        Self::probe_cur_dir_lib(id, cur_dir, &mut f);
-        Self::probe_base_dir_lib(id, base_dir, &mut f);
+        Self::probe_dir_lib(id, cur_dir, &mut f);
+        Self::probe_dir_lib(id, base_dir, &mut f);
         if blocked(&f) {
             f = format!("{id}.loft");
         }
+        self.probe_manifest_path_dep(id, cur_dir, &mut f);
         self.probe_sibling_package(id, cur_dir, &mut f);
         Self::probe_script_sibling_dir(id, &cur_script, &mut f);
         if blocked(&f) {
@@ -4933,18 +4962,63 @@ impl Parser {
         }
     }
 
-    /// `<cur_dir>/lib/<id>.loft` — lib dir relative to the script being parsed.
-    fn probe_cur_dir_lib(id: &str, cur_dir: &str, f: &mut String) {
-        if !cur_dir.is_empty() && !std::path::Path::new(f).exists() {
-            *f = format!("{cur_dir}{0}lib{0}{id}.loft", sep_str());
+    /// `<dir>/lib/<id>.loft` — a `lib/` directory relative to `dir`
+    /// (called for the script's own dir, then for the base dir when the
+    /// script lives inside a `/tests/` tree).
+    fn probe_dir_lib(id: &str, dir: &str, f: &mut String) {
+        if !dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{dir}{0}lib{0}{id}.loft", sep_str());
         }
     }
 
-    /// `<base_dir>/lib/<id>.loft` — lib dir relative to the base directory
-    /// when the script lives inside a `/tests/` tree.
-    fn probe_base_dir_lib(id: &str, base_dir: &str, f: &mut String) {
-        if !base_dir.is_empty() && !std::path::Path::new(f).exists() {
-            *f = format!("{base_dir}{0}lib{0}{id}.loft", sep_str());
+    /// #337 / PACKAGES.md resolution step 2 — `[dependencies] <id> =
+    /// { path = "…" }` in the consuming package's `loft.toml`.  Walk up
+    /// from `cur_dir` to the owning manifest; if it declares `id` as a
+    /// path dependency, resolve the path relative to the manifest's
+    /// directory and locate the dep package's entry file (its own
+    /// `[library] entry`, defaulting to `src/<id>.loft`).  Registers the
+    /// dep's manifest so its `#native` symbols resolve, mirroring
+    /// `probe_sibling_package`.
+    fn probe_manifest_path_dep(&mut self, id: &str, cur_dir: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() || cur_dir.is_empty() {
+            return;
+        }
+        let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+        loop {
+            let manifest_path = search_dir.join("loft.toml");
+            if manifest_path.exists() {
+                let dep_rel = crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                    .and_then(|m| {
+                        m.dependencies.iter().find_map(|(name, value)| {
+                            (name == id)
+                                .then(|| crate::manifest::extract_path_dep(value))
+                                .flatten()
+                                .map(str::to_string)
+                        })
+                    });
+                if let Some(rel) = dep_rel {
+                    let pkg_root = search_dir.join(rel);
+                    let dep_manifest = pkg_root.join("loft.toml");
+                    let entry = dep_manifest
+                        .exists()
+                        .then(|| crate::manifest::read_manifest(&dep_manifest.to_string_lossy()))
+                        .flatten()
+                        .and_then(|m| m.entry)
+                        .unwrap_or_else(|| format!("src{}{id}.loft", sep_str()));
+                    let file = pkg_root.join(entry);
+                    if file.exists() {
+                        *f = file.to_string_lossy().to_string();
+                        if dep_manifest.exists() {
+                            self.register_native_manifest(&dep_manifest, &pkg_root);
+                        }
+                    }
+                }
+                break;
+            }
+            let Some(p) = search_dir.parent() else {
+                break;
+            };
+            search_dir = p.to_path_buf();
         }
     }
 
@@ -6439,18 +6513,6 @@ fn tests_base_dir(cur_dir: &str) -> &str {
 /// `None` when no capturing FnRef is present.  Walks Block / Set /
 /// Span wrappers built by `parser/vectors.rs` around the `OpDatabase`
 /// allocation steps.
-/// #318: the frame variable a field-write host expression is rooted
-/// at — `Var(h)` itself, or the first argument of an accessor chain
-/// (`OpGetField(OpGetField(h, …), …)`).  `None` for shapes with no
-/// single var root (literals, fresh allocations inside blocks).
-fn base_var_of(v: &Value) -> Option<u16> {
-    match v.unspan() {
-        Value::Var(nr) => Some(*nr),
-        Value::Call(_, args) => args.first().and_then(base_var_of),
-        _ => None,
-    }
-}
-
 fn find_capturing_fn_ref(data: &Data, v: &Value) -> Option<(i32, u16)> {
     match v.unspan() {
         // `w != MAX` only appears in the second pass (`emit_lambda_code`
@@ -6667,7 +6729,7 @@ fn merge_dependencies(a: &Type, b: &Type) -> Type {
         for v in db {
             d.insert(*v);
         }
-        Type::Text(d.into_iter().collect())
+        Type::Text(Deps::frame(d.into_iter().collect()))
     } else {
         a.clone()
     }

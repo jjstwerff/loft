@@ -6,27 +6,6 @@ use super::{
     v_if, v_set,
 };
 
-/// Check if a Value tree contains a reference to the given variable.
-///
-/// P223: walks `Value::Block` too — the work-text Block produced by
-/// `parse_append_text` for shapes like `"lit" + var` carries a
-/// `Var(var)` deep inside its operator list.  Without descending into
-/// the Block, the `assign_text` self-reference branch skipped the
-/// protective work-text wrapping and the interpreter's clear-before-
-/// evaluate semantics on text Sets read `var` AFTER it had been
-/// cleared, dropping the original content.
-pub(crate) fn code_references_var(code: &Value, var_nr: u16) -> bool {
-    match code {
-        Value::Var(v) => *v == var_nr,
-        Value::Call(_, args) => args.iter().any(|a| code_references_var(a, var_nr)),
-        Value::Set(_, inner) => code_references_var(inner, var_nr),
-        Value::Insert(ls) => ls.iter().any(|v| code_references_var(v, var_nr)),
-        Value::Block(bl) => bl.operators.iter().any(|v| code_references_var(v, var_nr)),
-        Value::Span(b) => code_references_var(&b.1, var_nr),
-        _ => false,
-    }
-}
-
 // Operator parsing and type dispatch.
 
 impl Parser {
@@ -103,7 +82,7 @@ impl Parser {
             // detect self-reference (t = t[N..], t = fn(t), etc.)
             // If the RHS reads from the same variable being assigned, use a
             // work text to avoid the clear-before-read problem.
-            if code_references_var(code, var_nr) {
+            if code.reads_var(var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),
@@ -182,7 +161,7 @@ impl Parser {
                                 && *d == append_nr
                                 && args.len() == 3
                                 && matches!(args[0].unspan(), Value::Var(t) if *t == var_nr)
-                                && code_references_var(&args[1], var_nr)
+                                && args[1].reads_var(var_nr)
                             {
                                 let rec = args[2].clone();
                                 let tmp = self.create_unique("__trail_tmp", f_type);
@@ -534,7 +513,7 @@ impl Parser {
                             *code = Value::Text(String::new());
                             return self.parse_append_text(
                                 code,
-                                &Type::Text(Vec::new()),
+                                &Type::Text(crate::data::Deps::none()),
                                 &ls,
                                 u16::MAX,
                             );
@@ -796,10 +775,10 @@ impl Parser {
                     let orig = code.clone();
                     *code = v_block(
                         vec![v_set(w, orig), Value::Var(w)],
-                        Type::Reference(d_nr, vec![w]),
+                        Type::Reference(d_nr, crate::data::Deps::frame1(w)),
                         "inline ref",
                     );
-                    t = Type::Reference(d_nr, vec![w]);
+                    t = Type::Reference(d_nr, crate::data::Deps::frame1(w));
                 }
             } else if self.lexer.has_token("[") {
                 wrap_chain = true;
@@ -815,7 +794,11 @@ impl Parser {
             } else if self.lexer.has_token("(") {
                 // chained call on a Type::Function expression — expr(args).
                 if let Type::Function(param_types, ret_type, _) = t.clone() {
-                    let fn_type = Type::Function(param_types.clone(), ret_type.clone(), vec![]);
+                    let fn_type = Type::Function(
+                        param_types.clone(),
+                        ret_type.clone(),
+                        crate::data::Deps::none(),
+                    );
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
@@ -867,7 +850,7 @@ impl Parser {
                                     v_set(wv, Value::Text(String::new())),
                                     self.cl("OpCreateStack", &[Value::Var(wv)]),
                                 ],
-                                Type::Reference(ref_def, vec![wv]),
+                                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
                                 "cref_work_buf",
                             ));
                         }
@@ -1792,13 +1775,7 @@ impl Parser {
                 // Both are robust to parser-name changes — (b) is the
                 // semantic check, (a) is the fast-path.
                 fn contains_break(v: &Value) -> bool {
-                    match v.unspan() {
-                        Value::Break(_) | Value::BreakWith(_, _) => true,
-                        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(contains_break),
-                        Value::If(_, t, e) => contains_break(t) || contains_break(e),
-                        Value::Set(_, s) | Value::Drop(s) | Value::Return(s) => contains_break(s),
-                        _ => false,
-                    }
+                    v.any_node(&mut |n| matches!(n, Value::Break(_) | Value::BreakWith(_, _)))
                 }
                 let mut loop_vars_added: Vec<u16> = Vec::new();
                 for child in &b.operators {

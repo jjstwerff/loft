@@ -8,16 +8,6 @@ use super::{
 };
 
 impl Parser {
-    /// Check whether a type tree contains a reference to a specific definition.
-    /// Used to validate that a generic type variable appears in a parameter type.
-    fn type_contains_def(tp: &Type, d_nr: u32) -> bool {
-        match tp {
-            Type::Reference(d, _) | Type::Unknown(d) | Type::Enum(d, _, _) => *d == d_nr,
-            Type::Vector(inner, _) => Self::type_contains_def(inner, d_nr),
-            _ => false,
-        }
-    }
-
     pub(crate) fn warn_missing_enum_variants(&mut self, e_nr: u32, nrs: &[usize], name: &str) {
         let implemented: HashSet<u32> = nrs
             .iter()
@@ -78,7 +68,7 @@ impl Parser {
         let mut args = Vec::new();
         args.push(Argument {
             name: "self".to_string(),
-            typedef: Type::Enum(e_nr, true, vec![]),
+            typedef: Type::Enum(e_nr, true, crate::data::Deps::none()),
             default: Value::Null,
             constant: false,
         });
@@ -232,14 +222,14 @@ impl Parser {
             if self.lexer.has_token("{") {
                 if self.first_pass {
                     self.data.definitions[d_nr as usize].returned =
-                        Type::Enum(d_nr, true, Vec::new());
+                        Type::Enum(d_nr, true, crate::data::Deps::none());
                     self.data
-                        .set_returned(v_nr, Type::Enum(d_nr, true, Vec::new()));
+                        .set_returned(v_nr, Type::Enum(d_nr, true, crate::data::Deps::none()));
                     self.data.add_attribute(
                         &mut self.lexer,
                         d_nr,
                         &value_name,
-                        Type::Enum(d_nr, true, Vec::new()),
+                        Type::Enum(d_nr, true, crate::data::Deps::none()),
                     );
                     self.data.definitions[d_nr as usize].attributes[nr as usize].constant = true;
                     // Enum values start with 1 as 0 is de null/undefined value.
@@ -250,7 +240,11 @@ impl Parser {
                         &mut self.lexer,
                         v_nr,
                         "enum",
-                        Type::Enum(self.data.def_nr("enumerate"), false, Vec::new()),
+                        Type::Enum(
+                            self.data.def_nr("enumerate"),
+                            false,
+                            crate::data::Deps::none(),
+                        ),
                     );
                     // Enum values start with 1 as 0 is de null/undefined value.
                     self.data
@@ -280,12 +274,12 @@ impl Parser {
                 self.lexer.token("}");
             } else if self.first_pass {
                 self.data
-                    .set_returned(v_nr, Type::Enum(d_nr, false, Vec::new()));
+                    .set_returned(v_nr, Type::Enum(d_nr, false, crate::data::Deps::none()));
                 self.data.add_attribute(
                     &mut self.lexer,
                     d_nr,
                     &value_name,
-                    Type::Enum(d_nr, false, Vec::new()),
+                    Type::Enum(d_nr, false, crate::data::Deps::none()),
                 );
                 self.data.definitions[d_nr as usize].attributes[nr as usize].constant = true;
                 // Enum values start with 1 as 0 is de null/undefined value.
@@ -374,7 +368,7 @@ impl Parser {
         }
         if self.first_pass && !conflict {
             self.data
-                .set_returned(d_nr, Type::Enum(d_nr, false, Vec::new()));
+                .set_returned(d_nr, Type::Enum(d_nr, false, crate::data::Deps::none()));
         }
         if !self.lexer.token("{") {
             return false;
@@ -612,7 +606,7 @@ impl Parser {
                     .data
                     .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
                 self.data
-                    .set_returned(tv_nr, Type::Reference(tv_nr, Vec::new()));
+                    .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
             }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;
@@ -622,7 +616,7 @@ impl Parser {
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
             let tv_nr = self.data.def_nr(&type_var_name);
-            let has_tv = Self::type_contains_def(&arguments[0].typedef, tv_nr);
+            let has_tv = arguments[0].typedef.contains_def(tv_nr);
             if !has_tv && !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -749,7 +743,7 @@ impl Parser {
                             let new_type = Self::substitute_type(
                                 a_type,
                                 self_nr,
-                                &crate::data::Type::Reference(tv_nr, Vec::new()),
+                                &crate::data::Type::Reference(tv_nr, crate::data::Deps::none()),
                             );
                             self.data
                                 .add_attribute(&mut self.lexer, t_stub_nr, &a_name, new_type);
@@ -758,7 +752,7 @@ impl Parser {
                         let t_ret_type = Self::substitute_type(
                             ret_type,
                             self_nr,
-                            &crate::data::Type::Reference(tv_nr, Vec::new()),
+                            &crate::data::Type::Reference(tv_nr, crate::data::Deps::none()),
                         );
                         self.data.set_returned(t_stub_nr, t_ret_type.clone());
                         // I9-text: if the interface method returns text, add the hidden
@@ -772,7 +766,7 @@ impl Parser {
                                 t_stub_nr,
                                 "__work_1",
                                 crate::data::Type::RefVar(Box::new(crate::data::Type::Text(
-                                    Vec::new(),
+                                    crate::data::Deps::none(),
                                 ))),
                             );
                         }
@@ -855,7 +849,7 @@ impl Parser {
         {
             let elems_clone = elems.clone();
             let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems_clone);
-            result = crate::data::Type::Reference(synthetic_d_nr, Vec::new());
+            result = crate::data::Type::Reference(synthetic_d_nr, crate::data::Deps::none());
         }
         self.vars
             .append(&mut self.data.definitions[self.context as usize].variables);
@@ -878,7 +872,7 @@ impl Parser {
                 && ret_nr == self_nr
             {
                 self.data.definitions[self.context as usize].returned =
-                    Type::Enum(*ret_nr, true, vec![0]);
+                    Type::Enum(*ret_nr, true, crate::data::Deps::attrs(vec![0]));
             }
         }
         if !self.lexer.has_token(";") {
@@ -1265,7 +1259,7 @@ impl Parser {
         {
             r_type = tp2;
         }
-        Type::Function(args, Box::new(r_type), vec![])
+        Type::Function(args, Box::new(r_type), crate::data::Deps::none())
     }
 
     // <type> ::= <identifier> [::<identifier>] [ '<' ( <sub_type> | <type> ) '>' ] [ <depend> ]
@@ -1358,9 +1352,9 @@ impl Parser {
             if matches!(dt, DefType::EnumValue)
                 || (self.first_pass && matches!(dt, DefType::Struct))
             {
-                Some(Type::Reference(tp_nr, dep))
+                Some(Type::Reference(tp_nr, crate::data::Deps::unknown(dep)))
             } else if matches!(self.data.def(tp_nr).returned(), Type::Text(_)) {
-                Some(Type::Text(dep))
+                Some(Type::Text(crate::data::Deps::unknown(dep)))
             } else {
                 // when a user-typed integer alias carries an
                 // explicit `size(N)` annotation (e.g. `i32`, `u8`, `u16`),
@@ -1489,7 +1483,7 @@ impl Parser {
             return Some(match type_name {
                 "vector" => {
                     self.lexer.closing_angle();
-                    Type::Vector(Box::new(tp), Vec::new())
+                    Type::Vector(Box::new(tp), crate::data::Deps::none())
                 }
                 "iterator" => {
                     self.lexer.closing_angle();
@@ -1530,7 +1524,7 @@ impl Parser {
             return Some(match type_name {
                 "vector" => {
                     self.lexer.closing_angle();
-                    Type::Vector(Box::new(tp), Vec::new())
+                    Type::Vector(Box::new(tp), crate::data::Deps::none())
                 }
                 "iterator" => {
                     self.lexer.closing_angle();
@@ -1593,7 +1587,11 @@ impl Parser {
                 return Some(match type_name {
                     "index" => {
                         self.parse_fields(true, &mut fields);
-                        Type::Index(self.data.type_def_nr(&tp), fields, Vec::new())
+                        Type::Index(
+                            self.data.type_def_nr(&tp),
+                            fields,
+                            crate::data::Deps::none(),
+                        )
                     }
                     "hash" => {
                         self.parse_fields(false, &mut fields);
@@ -1602,15 +1600,15 @@ impl Parser {
                         for (field, _) in fields {
                             f.push(field);
                         }
-                        Type::Hash(sub_nr, f, Vec::new())
+                        Type::Hash(sub_nr, f, crate::data::Deps::none())
                     }
                     "vector" => {
                         self.lexer.closing_angle();
-                        Type::Vector(Box::new(tp), Vec::new())
+                        Type::Vector(Box::new(tp), crate::data::Deps::none())
                     }
                     "sorted" => {
                         self.parse_fields(true, &mut fields);
-                        Type::Sorted(sub_nr, fields, Vec::new())
+                        Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
                     "spacial" => {
                         // Consume the optional `[field, ...]` key-spec then
@@ -1660,9 +1658,9 @@ impl Parser {
                                 DefType::Struct | DefType::EnumValue
                             )
                         {
-                            Type::Reference(sub_nr, vec![u16::MAX])
+                            Type::Reference(sub_nr, crate::data::Deps::pointer_marker())
                         } else {
-                            Type::Reference(sub_nr, Vec::new())
+                            Type::Reference(sub_nr, crate::data::Deps::none())
                         }
                     }
                     "iterator" => {
@@ -1786,7 +1784,8 @@ impl Parser {
         let mut d_nr = self.data.def_nr(&id);
         if d_nr == u32::MAX {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
-            self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
+            self.data.definitions[d_nr as usize].returned =
+                Type::Reference(d_nr, crate::data::Deps::none());
         } else if self.first_pass {
             // fix-tvscope: a type variable placeholder (e.g., `T` from generic stdlib
             // functions) blocks user-defined struct of the same name.  Produce a clear
@@ -1810,7 +1809,8 @@ impl Parser {
             ) {
                 self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
-                self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
+                self.data.definitions[d_nr as usize].returned =
+                    Type::Reference(d_nr, crate::data::Deps::none());
             } else {
                 let prev_pos = self.data.def(d_nr).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();
@@ -1904,7 +1904,7 @@ impl Parser {
         if self.first_pass && self.data.def_nr("Self") == u32::MAX {
             let self_nr = self.data.add_def("Self", self.lexer.pos(), DefType::Struct);
             self.data
-                .set_returned(self_nr, Type::Reference(self_nr, Vec::new()));
+                .set_returned(self_nr, Type::Reference(self_nr, crate::data::Deps::none()));
         }
         let context = self.context;
         if d_nr != u32::MAX {

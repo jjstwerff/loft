@@ -3,7 +3,7 @@
 
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
-use crate::data::{Block, Context, IntegerSpec, Type, Value};
+use crate::data::{Block, Context, Deps, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
@@ -936,8 +936,12 @@ impl Output<'_> {
             ValueType::Float => Some(Type::Float),
             ValueType::Single => Some(Type::Single),
             ValueType::Boolean => Some(Type::Boolean),
-            ValueType::Text => Some(Type::Text(Vec::new())),
-            ValueType::Enum => Some(Type::Enum(u32::from(node.enum_pair().1), false, Vec::new())),
+            ValueType::Text => Some(Type::Text(Deps::none())),
+            ValueType::Enum => Some(Type::Enum(
+                u32::from(node.enum_pair().1),
+                false,
+                Deps::none(),
+            )),
             ValueType::Var => Some(
                 self.data
                     .def(self.def_nr)
@@ -1291,22 +1295,14 @@ impl Output<'_> {
     // variable is marked `skip_free`.  Used to gate scratch-buffer
     // materialisation for value-block `??` patterns.
     pub(super) fn block_contains_ncc_skip_free(&self, bl: &Block) -> bool {
-        fn walk(this: &Output, v: &Value) -> bool {
-            match v.unspan() {
-                Value::Set(var, val) => {
-                    let variables = this.data.def(this.def_nr).variables();
-                    if variables.name(*var).starts_with("__ncc_") && variables.is_skip_free(*var) {
-                        return true;
-                    }
-                    walk(this, val)
-                }
-                Value::Block(b) => b.operators.iter().any(|op| walk(this, op)),
-                Value::If(c, t, f) => walk(this, c) || walk(this, t) || walk(this, f),
-                Value::Insert(ops) => ops.iter().any(|op| walk(this, op)),
-                _ => false,
-            }
-        }
-        bl.operators.iter().any(|op| walk(self, op))
+        let variables = self.data.def(self.def_nr).variables();
+        bl.operators.iter().any(|op| {
+            op.any_node(&mut |n| {
+                matches!(n, Value::Set(var, _)
+                    if variables.name(*var).starts_with("__ncc_")
+                        && variables.is_skip_free(*var))
+            })
+        })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1583,14 +1579,10 @@ impl Output<'_> {
                     // rustc rejects with E0282 because `to_string()` can't
                     // be inferred on the never type.  Walk through Blocks
                     // and Spans to detect tail-Return.
-                    fn tail_is_return(v: &Value) -> bool {
-                        match v.unspan() {
-                            Value::Return(_) => true,
-                            Value::Block(bl) => bl.operators.last().is_some_and(tail_is_return),
-                            _ => false,
-                        }
-                    }
-                    let value_is_return = tail_is_return(v);
+                    // Pass-3: `Value::tail` also descends Insert — scopes
+                    // wraps a tail return in `Insert([frees…, Return])`,
+                    // which the old hand-rolled walker missed.
+                    let value_is_return = matches!(v.tail(), Value::Return(_));
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
                     // Iterator-next blocks (name "iter next" / "sorted iter next")
                     // return their element value OR `i64::MIN` as the

@@ -936,28 +936,7 @@ fn n1_native_pipeline_trivial_program() {
     assert_ne!(main_nr, u32::MAX, "n_main not found");
     let tmp_rs = std::env::temp_dir().join("loft_n1_test.rs");
     let mut f = std::fs::File::create(&tmp_rs).expect("tmp file");
-    let mut out = Output {
-        data: &p.data,
-        stores: &state.database,
-        counter: 0,
-        indent: 0,
-        def_nr: 0,
-        declared: Default::default(),
-        active_pre_eval: Default::default(),
-        reachable: Default::default(),
-        dup_fn_names: Default::default(),
-        loop_stack: Vec::new(),
-        next_format_count: 0,
-        yield_collect: false,
-        yield_collect_text: false,
-        fn_ref_context: false,
-        i32_literal_context: false,
-        tuple_text_to_string: false,
-        coroutine_persistent_vars: std::collections::HashSet::new(),
-        call_stack_prefix: None,
-        wasm_browser: false,
-        live_fns: Vec::new(),
-    };
+    let mut out = Output::new(&p.data, &state.database);
     out.output_native_reachable(&mut f, start_def, end_def, &[main_nr])
         .expect("output_native_reachable");
     drop(f);
@@ -9045,28 +9024,7 @@ fn p144_ref_param_forward_native() {
         } else {
             (start_def..end_def).collect()
         };
-        let mut out = loft::generation::Output {
-            data: &p.data,
-            stores: &state.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: std::collections::HashSet::new(),
-            active_pre_eval: std::collections::HashMap::new(),
-            reachable: std::collections::HashSet::new(),
-            dup_fn_names: std::collections::HashSet::new(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: std::collections::HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut out = loft::generation::Output::new(&p.data, &state.database);
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
             .unwrap();
     }
@@ -9441,28 +9399,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
     {
         let mut f = std::fs::File::create(&rs_path).unwrap();
         let main_nr = p.data.def_nr("n_main");
-        let mut out = loft::generation::Output {
-            data: &p.data,
-            stores: &state.database,
-            counter: 0,
-            indent: 0,
-            def_nr: 0,
-            declared: std::collections::HashSet::new(),
-            active_pre_eval: std::collections::HashMap::new(),
-            reachable: std::collections::HashSet::new(),
-            dup_fn_names: std::collections::HashSet::new(),
-            loop_stack: Vec::new(),
-            next_format_count: 0,
-            yield_collect: false,
-            yield_collect_text: false,
-            fn_ref_context: false,
-            i32_literal_context: false,
-            tuple_text_to_string: false,
-            coroutine_persistent_vars: std::collections::HashSet::new(),
-            call_stack_prefix: None,
-            wasm_browser: false,
-            live_fns: Vec::new(),
-        };
+        let mut out = loft::generation::Output::new(&p.data, &state.database);
         out.output_native_reachable(&mut f, 0, p.data.definitions(), &[main_nr])
             .unwrap();
     }

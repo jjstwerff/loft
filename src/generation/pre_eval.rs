@@ -180,14 +180,11 @@ impl Output<'_> {
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);
         }
-        let is_free_op = |op: &Value| {
-            if let Value::Call(d, _) = op {
-                let name = self.data.def(*d).name();
-                name == "OpFreeText" || name == "OpFreeRef"
-            } else {
-                false
-            }
-        };
+        // Pass-3 dedupe: ONE free-op recognizer (`free_op_var`) — this
+        // closure and `freed_var` below were stale hand-rolled copies that
+        // missed `OpFreeRefIfDistinct` (the #330 alias-witness free), so a
+        // window containing one mis-classified the op.
+        let is_free_op = |op: &Value| Self::free_op_var(op, self.data).is_some();
 
         // Pass 1 — B5-L3 text-temp collapse:
         //   [Set(__ret_N, Call(...)), ..., Return(Var(__ret_N))]
@@ -253,7 +250,7 @@ impl Output<'_> {
             // No other use of `target` between set_idx+1 and ret_pos-1.
             let target_used_between = result[set_idx + 1..ret_pos]
                 .iter()
-                .any(|op| Self::value_mentions_var(op, target));
+                .any(|op| op.reads_var(target));
             if target_used_between {
                 continue;
             }
@@ -277,7 +274,7 @@ impl Output<'_> {
                 call_val.is_some_and(|cv| {
                     result[set_idx + 1..ret_pos].iter().any(|op| {
                         Self::free_op_var(op, self.data)
-                            .is_some_and(|fv| Self::value_mentions_var(cv, fv))
+                            .is_some_and(|fv| cv.reads_var(fv))
                     })
                 })
             };
@@ -313,20 +310,11 @@ impl Output<'_> {
                 std::borrow::Cow::Owned(result)
             };
         }
-        // Helper: extract the variable freed by an OpFreeRef / OpFreeText op
-        // (the first arg, which is always a `Var(_)` for these builtins).
-        let freed_var = |op: &Value| -> Option<u16> {
-            if let Value::Call(d, args) = op.unspan() {
-                let name = self.data.def(*d).name();
-                if (name == "OpFreeRef" || name == "OpFreeText")
-                    && let Some(first) = args.first()
-                    && let Value::Var(v) = first.unspan()
-                {
-                    return Some(*v);
-                }
-            }
-            None
-        };
+        // The @P274 use-after-free guard MUST see every free flavour —
+        // the old hand-rolled copy here missed `OpFreeRefIfDistinct`, so a
+        // hoist past an if-distinct free of one of the expr's operands went
+        // undetected.  `free_op_var` is the one recognizer.
+        let freed_var = |op: &Value| -> Option<u16> { Self::free_op_var(op, self.data) };
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
@@ -367,7 +355,7 @@ impl Output<'_> {
                 let mut conflict = false;
                 for between in &result[idx + 1..ret_pos] {
                     if let Some(v) = freed_var(between)
-                        && Self::value_mentions_var(expr, v)
+                        && expr.reads_var(v)
                     {
                         conflict = true;
                         break;
@@ -387,37 +375,6 @@ impl Output<'_> {
             }
         }
         std::borrow::Cow::Owned(result)
-    }
-
-    /// Does `op` read or write the variable `var_nr` (recursively)?
-    /// Used by `patch_hoisted_returns` to confirm that a `__ret_N` temp
-    /// isn't touched between its `Set` and `Return(Var)` before collapsing.
-    fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
-        match op {
-            // Plan-12 phase 01: unspan recursively.  Without this, the
-            // walker silently bails on Span-wrapped operators (which
-            // the parser commonly produces) and `target_used_between`
-            // returns an incorrect `false` → unsafe collapse.
-            Value::Span(b) => Self::value_mentions_var(&b.1, var_nr),
-            Value::Var(v) => *v == var_nr,
-            Value::Set(v, inner) => *v == var_nr || Self::value_mentions_var(inner, var_nr),
-            Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
-                args.iter().any(|a| Self::value_mentions_var(a, var_nr))
-            }
-            Value::If(cond, t, f) => {
-                Self::value_mentions_var(cond, var_nr)
-                    || Self::value_mentions_var(t, var_nr)
-                    || Self::value_mentions_var(f, var_nr)
-            }
-            Value::Block(bl) | Value::Loop(bl) => bl
-                .operators
-                .iter()
-                .any(|o| Self::value_mentions_var(o, var_nr)),
-            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-                Self::value_mentions_var(inner, var_nr)
-            }
-            _ => false,
-        }
     }
 
     /// @P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
@@ -846,7 +803,13 @@ impl Output<'_> {
                 Value::Line(_) => {}
                 Value::Call(d_nr, _) => {
                     let name = self.data.def(*d_nr).name();
-                    if name == "OpFreeText" || name == "OpFreeRef" || name == "n_set_store_lock" {
+                    // Cleanup window: every free flavour (via the one
+                    // recognizer — the old name list missed
+                    // `OpFreeRefIfDistinct`, and the `Op*` fall-through
+                    // below then ABORTED the tail capture) + the lock op.
+                    if Self::free_op_var(&operators[i], self.data).is_some()
+                        || name == "n_set_store_lock"
+                    {
                         continue;
                     }
                     // Candidate tail Call — require its return type to match

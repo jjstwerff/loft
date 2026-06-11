@@ -139,3 +139,14 @@ go* (pass 3).
   sites — the catalog already did both — then probe to falsify).
 - [STABILITY_SWEEP.md](STABILITY_SWEEP.md) — the live pass-1 catalog and
   work list.
+
+---
+
+## Where the method points next
+
+[STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) (2026-06-11) applies this
+method's lens to *designs* instead of routines: the eight structures the
+bug history says will keep manufacturing bugs (H1 analysis-dependent
+arity is the headline), each with sized mitigation work and a landing
+order.  Treat it as the input queue for the next pass-2-style quiet
+window.

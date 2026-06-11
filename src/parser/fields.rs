@@ -180,7 +180,7 @@ impl Parser {
                         );
                     }
                 }
-                return Type::Text(Vec::new());
+                return Type::Text(crate::data::Deps::none());
             }
             // Plan-19 phase 03 — method-on-parent-enum dispatch.  When
             // the receiver is a variant value (`Type::Reference(child_d, …)`
@@ -356,10 +356,13 @@ impl Parser {
                     // `vec![w]` the LHS got `dep=[__ref_N]` which made it a
                     // borrower — nothing freed the store.
                     self.vars.set_skip_free(w);
-                    *code =
-                        crate::data::v_block(list, Type::Enum(dnr, true, vec![]), "EnumUnitLit");
+                    *code = crate::data::v_block(
+                        list,
+                        Type::Enum(dnr, true, crate::data::Deps::none()),
+                        "EnumUnitLit",
+                    );
                     self.data.attr_used(dnr, fnr);
-                    return Type::Enum(dnr, true, vec![]);
+                    return Type::Enum(dnr, true, crate::data::Deps::none());
                 }
             }
             *code = Self::replace_record_ref(expr, &code.clone());
@@ -414,10 +417,16 @@ impl Parser {
             if let Type::Vector(elm, _) = t {
                 let elem = *elm.clone();
                 let hint = match (method, m_arg_idx) {
-                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem), vec![])),
-                    ("filter", 1) => {
-                        Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
-                    }
+                    ("map", 1) => Some(Type::Function(
+                        vec![elem.clone()],
+                        Box::new(elem),
+                        crate::data::Deps::none(),
+                    )),
+                    ("filter", 1) => Some(Type::Function(
+                        vec![elem],
+                        Box::new(Type::Boolean),
+                        crate::data::Deps::none(),
+                    )),
                     // @P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
                     // ARG 2 (init is arg 1), so the hint goes on m_arg_idx == 2.
                     // Both lambda params take the vector's element type; the
@@ -429,7 +438,7 @@ impl Parser {
                     ("reduce", 2) => Some(Type::Function(
                         vec![elem.clone(), elem.clone()],
                         Box::new(elem),
-                        vec![],
+                        crate::data::Deps::none(),
                     )),
                     _ => None,
                 };
@@ -616,7 +625,7 @@ impl Parser {
             // so that field access and range-query for-loops resolve fields against the
             // variant struct (not the parent enum), and for_type() can map the element type.
             if matches!(ret, Type::Enum(_, true, _)) {
-                Type::Reference(*d_nr, Vec::new())
+                Type::Reference(*d_nr, crate::data::Deps::none())
             } else {
                 ret
             }
@@ -804,7 +813,7 @@ impl Parser {
     pub(crate) fn unbox_tuple_from_dbref(&mut self, dbref: Value, elems: &[Type]) -> Value {
         let elems_vec = elems.to_vec();
         let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
-        let ref_tp = Type::Reference(tuple_d_nr, Vec::new());
+        let ref_tp = Type::Reference(tuple_d_nr, crate::data::Deps::none());
         let tmp = self.vars.work_refs(&ref_tp, &mut self.lexer);
         if !self.first_pass {
             self.change_var_type(tmp, &ref_tp);
@@ -865,7 +874,7 @@ impl Parser {
                 }
                 *code = self.cl("OpGetTextSub", &[code.clone(), p.clone(), other]);
             }
-            Type::Text(Vec::new())
+            Type::Text(crate::data::Deps::none())
         } else {
             *code = self.cl("OpTextCharacter", &[code.clone(), p.clone()]);
             Type::Character

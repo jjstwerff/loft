@@ -306,6 +306,12 @@ fn as_str(p: &Parsed) -> Result<String, TypeDecodeError> {
     }
 }
 
+/// Type-dep wrapper: tagged space-`Unknown` (the JSON snapshot does not
+/// record the address space — H2 DEPS_INVENTORY).
+fn deps(p: &Parsed) -> Result<crate::data::Deps, TypeDecodeError> {
+    dep_list(p).map(crate::data::Deps::unknown)
+}
+
 fn dep_list(p: &Parsed) -> Result<Vec<u16>, TypeDecodeError> {
     if let Parsed::Array(items) = p {
         items.iter().map(as_u16).collect()
@@ -367,17 +373,17 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
         "Character" => Type::Character,
         "Keys" => Type::Keys,
         "Integer" => Type::Integer(integer_spec(field(p, "spec")?)?),
-        "Text" => Type::Text(dep_list(field(p, "dep")?)?),
+        "Text" => Type::Text(deps(field(p, "dep")?)?),
         "Enum" => Type::Enum(
             as_u32(field(p, "n")?)?,
             as_bool(field(p, "ref")?)?,
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
-        "Reference" => Type::Reference(as_u32(field(p, "n")?)?, dep_list(field(p, "dep")?)?),
+        "Reference" => Type::Reference(as_u32(field(p, "n")?)?, deps(field(p, "dep")?)?),
         "RefVar" => Type::RefVar(Box::new(type_from_parsed(field(p, "t")?)?)),
         "Vector" => Type::Vector(
             Box::new(type_from_parsed(field(p, "t")?)?),
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Routine" => Type::Routine(as_u32(field(p, "n")?)?),
         "Iterator" => Type::Iterator(
@@ -387,27 +393,27 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
         "Sorted" => Type::Sorted(
             as_u32(field(p, "n")?)?,
             sort_keys(field(p, "keys")?)?,
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Index" => Type::Index(
             as_u32(field(p, "n")?)?,
             sort_keys(field(p, "keys")?)?,
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Spacial" => Type::Spacial(
             as_u32(field(p, "n")?)?,
             str_list(field(p, "names")?)?,
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Hash" => Type::Hash(
             as_u32(field(p, "n")?)?,
             str_list(field(p, "names")?)?,
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Function" => Type::Function(
             type_list(field(p, "args")?)?,
             Box::new(type_from_parsed(field(p, "result")?)?),
-            dep_list(field(p, "dep")?)?,
+            deps(field(p, "dep")?)?,
         ),
         "Rewritten" => Type::Rewritten(Box::new(type_from_parsed(field(p, "t")?)?)),
         "Tuple" => Type::Tuple(type_list(field(p, "elems")?)?),
@@ -1461,6 +1467,7 @@ pub fn compare_data(reference: &Data, loaded: &Data) -> Result<(), DataDiff> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Deps;
 
     // ── Type JSON round-trip (Step 2 first slice) ───────────────────────────
 
@@ -1489,13 +1496,13 @@ mod tests {
             Type::Integer(IntegerSpec::wide()),
             Type::Integer(IntegerSpec::u8()),
             Type::Integer(IntegerSpec::signed32()),
-            Type::Text(vec![]),
-            Type::Text(vec![1, 2, 3]),
-            Type::Enum(4, true, vec![5]),
-            Type::Enum(4, false, vec![]),
-            Type::Reference(9, vec![0, 1]),
+            Type::Text(Deps::none()),
+            Type::Text(Deps::unknown(vec![1, 2, 3])),
+            Type::Enum(4, true, Deps::unknown(vec![5])),
+            Type::Enum(4, false, Deps::none()),
+            Type::Reference(9, Deps::unknown(vec![0, 1])),
             Type::RefVar(Box::new(Type::Boolean)),
-            Type::Vector(Box::new(Type::Text(vec![])), vec![2]),
+            Type::Vector(Box::new(Type::Text(Deps::none())), Deps::unknown(vec![2])),
             Type::Routine(11),
             Type::Iterator(
                 Box::new(Type::Integer(IntegerSpec::wide())),
@@ -1504,22 +1511,28 @@ mod tests {
             Type::Sorted(
                 3,
                 vec![("name".into(), true), ("age".into(), false)],
-                vec![1],
+                Deps::unknown(vec![1]),
             ),
-            Type::Index(3, vec![("key".into(), true)], vec![]),
-            Type::Spacial(3, vec!["x".into(), "y".into()], vec![1]),
-            Type::Hash(3, vec!["id".into()], vec![]),
+            Type::Index(3, vec![("key".into(), true)], Deps::none()),
+            Type::Spacial(3, vec!["x".into(), "y".into()], Deps::unknown(vec![1])),
+            Type::Hash(3, vec!["id".into()], Deps::none()),
             Type::Function(
-                vec![Type::Integer(IntegerSpec::wide()), Type::Text(vec![])],
+                vec![Type::Integer(IntegerSpec::wide()), Type::Text(Deps::none())],
                 Box::new(Type::Boolean),
-                vec![0],
+                Deps::unknown(vec![0]),
             ),
-            Type::Rewritten(Box::new(Type::Text(vec![]))),
-            Type::Tuple(vec![Type::Integer(IntegerSpec::wide()), Type::Text(vec![])]),
+            Type::Rewritten(Box::new(Type::Text(Deps::none()))),
+            Type::Tuple(vec![
+                Type::Integer(IntegerSpec::wide()),
+                Type::Text(Deps::none()),
+            ]),
             // Nested recursion: vector<vector<reference>>.
             Type::Vector(
-                Box::new(Type::Vector(Box::new(Type::Reference(2, vec![])), vec![])),
-                vec![],
+                Box::new(Type::Vector(
+                    Box::new(Type::Reference(2, Deps::none())),
+                    Deps::none(),
+                )),
+                Deps::none(),
             ),
         ];
         for ty in &cases {
@@ -1533,7 +1546,7 @@ mod tests {
         let ty = Type::Sorted(
             1,
             vec![("a\"b\\c\nd".into(), true), ("tab\there".into(), false)],
-            vec![],
+            Deps::none(),
         );
         round_trip(&ty);
     }
@@ -1585,7 +1598,7 @@ mod tests {
     fn golden_index_carrying_variant() {
         // def_nr + dep list stored verbatim (absolute, whole-bundle image).
         assert_eq!(
-            type_to_json(&Type::Reference(9, vec![0, 1])),
+            type_to_json(&Type::Reference(9, Deps::unknown(vec![0, 1]))),
             r#"{"k":"Reference","n":9,"dep":[0,1]}"#
         );
     }
@@ -1594,7 +1607,10 @@ mod tests {
     fn golden_recursive_variant() {
         // Box<Type> recursion nests the child object inline under "t".
         assert_eq!(
-            type_to_json(&Type::Vector(Box::new(Type::Text(vec![])), vec![2])),
+            type_to_json(&Type::Vector(
+                Box::new(Type::Text(Deps::none())),
+                Deps::unknown(vec![2])
+            )),
             r#"{"k":"Vector","t":{"k":"Text","dep":[]},"dep":[2]}"#
         );
     }
@@ -1605,7 +1621,7 @@ mod tests {
             type_to_json(&Type::Sorted(
                 3,
                 vec![("name".into(), true), ("age".into(), false)],
-                vec![1],
+                Deps::unknown(vec![1]),
             )),
             r#"{"k":"Sorted","n":3,"keys":[{"name":"name","asc":true},{"name":"age","asc":false}],"dep":[1]}"#
         );
@@ -1617,7 +1633,7 @@ mod tests {
             type_to_json(&Type::Function(
                 vec![Type::Boolean, Type::Float],
                 Box::new(Type::Null),
-                vec![],
+                Deps::none(),
             )),
             r#"{"k":"Function","args":[{"k":"Boolean"},{"k":"Float"}],"result":{"k":"Null"},"dep":[]}"#
         );
@@ -1631,8 +1647,11 @@ mod tests {
         let samples = [
             Type::Boolean,
             Type::Integer(IntegerSpec::u8()),
-            Type::Vector(Box::new(Type::Reference(2, vec![3])), vec![]),
-            Type::Sorted(1, vec![("k".into(), true)], vec![]),
+            Type::Vector(
+                Box::new(Type::Reference(2, Deps::unknown(vec![3]))),
+                Deps::none(),
+            ),
+            Type::Sorted(1, vec![("k".into(), true)], Deps::none()),
         ];
         for ty in &samples {
             let json = type_to_json(ty);
@@ -1905,7 +1924,7 @@ mod tests {
             Value::FnRef(
                 -1,
                 u16::MAX,
-                Box::new(Type::Function(vec![], Box::new(Type::Null), vec![])),
+                Box::new(Type::Function(vec![], Box::new(Type::Null), Deps::none())),
             ),
             Value::ParFor(Box::new(ParForBody {
                 input: Value::Var(0),
@@ -2136,7 +2155,7 @@ mod tests {
             ],
             attr_names: std::collections::HashMap::new(),
             code: Value::Null,
-            returned: Type::Reference(7, vec![]),
+            returned: Type::Reference(7, Deps::none()),
             returned_not_null: false,
             rust: String::new(),
             native: String::new(),

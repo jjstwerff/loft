@@ -14,7 +14,7 @@
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.
 
-use crate::data::{Data, DefType, I32, IntegerSpec, Type, Value};
+use crate::data::{Data, DefType, Deps, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
 use crate::lexer::Lexer;
@@ -25,7 +25,7 @@ use crate::lexer::Lexer;
 pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
     match data.def(d_nr).name.as_str() {
         "vector" => {
-            data.set_returned(d_nr, Type::Vector(Box::new(Type::Unknown(0)), Vec::new()));
+            data.set_returned(d_nr, Type::Vector(Box::new(Type::Unknown(0)), Deps::none()));
             data.definitions[d_nr as usize].known_type = 7;
         }
         "integer" => {
@@ -41,7 +41,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 2;
         }
         "text" => {
-            data.set_returned(d_nr, Type::Text(Vec::new()));
+            data.set_returned(d_nr, Type::Text(Deps::none()));
             data.definitions[d_nr as usize].known_type = 5;
         }
         "boolean" => {
@@ -49,7 +49,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 4;
         }
         "enumerate" => {
-            data.set_returned(d_nr, Type::Enum(0, false, Vec::new()));
+            data.set_returned(d_nr, Type::Enum(0, false, Deps::none()));
         }
         "function" => {
             data.set_returned(d_nr, Type::Routine(d_nr));
@@ -59,7 +59,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 6;
         }
         "radix" | "hash" | "reference" | "index" | "sorted" | "spacial" => {
-            data.set_returned(d_nr, Type::Reference(d_nr, Vec::new()));
+            data.set_returned(d_nr, Type::Reference(d_nr, Deps::none()));
         }
         "keys_definition" => {
             data.set_returned(d_nr, Type::Keys);
@@ -104,7 +104,7 @@ pub fn actual_types_deferred(
     // Determine the actual type of structs regarding their use
     for d in start_def..data.definitions() {
         if matches!(data.def_type(d), DefType::Struct) {
-            data.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+            data.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         }
     }
     for d in start_def..data.definitions() {
@@ -155,7 +155,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     for d_nr in start_def..data.definitions() {
         if matches!(data.def_type(d_nr), DefType::Struct) {
             let mut visiting = std::collections::HashSet::new();
-            if has_value_cycle(data, d_nr, &mut visiting) {
+            if data.has_value_cycle(d_nr, &mut visiting) {
                 lexer.pos_diagnostic(
                     Level::Error,
                     &data.def(d_nr).position,
@@ -222,7 +222,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                         lexer,
                         d_nr,
                         "enum",
-                        Type::Enum(enumerate_d_nr, false, Vec::new()),
+                        Type::Enum(enumerate_d_nr, false, Deps::none()),
                     );
                     let attr_nr = data.def(d_nr).attr_names["enum"];
                     data.set_attr_value(d_nr, attr_nr, Value::Enum(discriminant, u16::MAX));
@@ -326,33 +326,6 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-}
-
-/// Check if struct `d_nr` contains itself as a value type (not reference) field,
-/// directly or through other structs.
-fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::HashSet<u32>) -> bool {
-    if !visiting.insert(d_nr) {
-        return true; // Already visiting this type — cycle found.
-    }
-    for a_nr in 0..data.attributes(d_nr) {
-        let a_type = data.attr_type(d_nr, a_nr);
-        // Only recurse into value-typed struct fields.  A `reference<T>`
-        // field (the `u16::MAX` share-marker dep, #328) is a 12-byte
-        // pointer, not inline bytes — it cannot cause an infinite-size
-        // cycle, and skipping it here is exactly what makes
-        // `reference<Self>` legal.
-        if let Type::Reference(child_nr, deps) = &a_type
-            && !deps.contains(&u16::MAX)
-            && data.def_type(*child_nr) == DefType::Struct
-            && !data.def_referenced(*child_nr)
-            && has_value_cycle(data, *child_nr, visiting)
-        {
-            visiting.remove(&d_nr);
-            return true;
-        }
-    }
-    visiting.remove(&d_nr);
-    false
 }
 
 fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {

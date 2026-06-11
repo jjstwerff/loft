@@ -187,7 +187,7 @@ fn walk_record_translates_tuple_dbref_field() {
     // Type::Reference(struct_d, _) recurses into a struct with no
     // owned attributes → owned_elements returns empty → recursion
     // terminates immediately.
-    let elem_tp = Type::Reference(struct_d, vec![]);
+    let elem_tp = Type::Reference(struct_d, loft::data::Deps::none());
     let record_tp = Type::Tuple(vec![elem_tp]);
     let record_ref = DbRef {
         store_nr: parent_nr,
@@ -345,7 +345,7 @@ fn walk_record_visited_breaks_cycle() {
 
     let mut data = Data::new();
     let struct_d = register_empty_struct(&mut data);
-    let record_tp = Type::Tuple(vec![Type::Reference(struct_d, vec![])]);
+    let record_tp = Type::Tuple(vec![Type::Reference(struct_d, loft::data::Deps::none())]);
     let record_ref = DbRef {
         store_nr: parent_nr,
         rec: 1,

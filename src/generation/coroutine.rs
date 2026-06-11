@@ -154,16 +154,7 @@ fn detect_yield_from(val: &Value) -> Option<Value> {
 
 /// Returns true if `v` contains any `Value::Yield` node at any depth.
 fn contains_yield(v: &Value) -> bool {
-    match v {
-        // Plan-12 phase 01: descend through Span wrappers so a
-        // Span-wrapped Yield isn't silently missed.
-        Value::Span(b) => contains_yield(&b.1),
-        Value::Yield(_) => true,
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(contains_yield),
-        Value::If(_, t, f) => contains_yield(t) || contains_yield(f),
-        Value::Set(_, rhs) | Value::Drop(rhs) | Value::Return(rhs) => contains_yield(rhs),
-        _ => false,
-    }
+    v.any_node(&mut |n| matches!(n, Value::Yield(_)))
 }
 
 /// Scan the top-level operators of a function body and build yield segments.

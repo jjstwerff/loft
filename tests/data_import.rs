@@ -28,7 +28,7 @@ fn add_pub(data: &mut Data, src: u16, name: &str, def_type: DefType) -> u32 {
     if is_struct {
         // Mirror what typedef::actual_types does: struct returned type points
         // to itself via Type::Reference.
-        data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
+        data.definitions[d_nr as usize].returned = Type::Reference(d_nr, loft::data::Deps::none());
     }
     d_nr
 }
@@ -139,7 +139,7 @@ fn rewrite_replaces_vector_of_unknown() {
     d.source = 2;
     let fn_nr = d.add_def("players", &pos(), DefType::Function);
     d.definitions[fn_nr as usize].returned =
-        Type::Vector(Box::new(Type::Unknown(stub)), Vec::new());
+        Type::Vector(Box::new(Type::Unknown(stub)), loft::data::Deps::none());
 
     d.rewrite_unknown_refs(stub, real_player);
 

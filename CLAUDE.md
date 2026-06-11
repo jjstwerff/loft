@@ -340,6 +340,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
 | [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) | The three-pass stability method: sweep dual invariants (document, don't fix) → move algorithms to their data structures → de-duplicate |
 | [STABILITY_SWEEP.md](doc/claude/STABILITY_SWEEP.md) | The live pass-1 catalog: invariant families F1–F10, per-module work list, findings log |
+| [STABILITY_HOTSPOTS.md](doc/claude/STABILITY_HOTSPOTS.md) | Forward risk register H1–H8: the designs that will manufacture future bugs (analysis-dependent arity, dep-list overload, ownership-by-shape-analysis, …) — each with sized mitigation work, landing order, validation gates |
+| [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) | H2 deliverable: the dep-list `Vec<u16>` semantic model (frame vs def address space, five marker overloads), every site classified, corpus-probe findings, the typed-`Deps` migration design |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives |

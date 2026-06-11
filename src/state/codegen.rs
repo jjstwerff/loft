@@ -13,7 +13,7 @@
 //! (control flow).
 
 use super::State;
-use crate::data::{Context, Data, I32, IntegerSpec, Type, Value};
+use crate::data::{Context, Data, Deps, I32, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;
 use crate::database::Stores;
 use crate::ir_node::{IrBlock, IrNode, IrNodeList};
@@ -193,6 +193,29 @@ impl State {
             self.code_add(reserve);
             stack.position += reserve;
         }
+        // #260 Fix B (interpreter twin of the native `__vdb` prologue):
+        // sentinel-init every `__vdb` slot at function entry, so an
+        // early-return scope-exit free that `lastuse_reclaim` left ABOVE the
+        // store's relocated null-init frees a null sentinel (`OpFreeRef`
+        // no-ops on it) instead of reading uninitialized slot bytes (a
+        // garbage `DbRef` → allocation-table index panic).  The relocated
+        // null-init + `OpDatabase` still run at their IR position, so
+        // allocation timing (the watermark benefit) is unchanged.
+        for v in 0..stack.function.count() {
+            // Slotless (`stack == u16::MAX`) vars are skipped: the allocator
+            // drops unused vars — e.g. a stale table entry from a #339 extra
+            // parse pass whose final lowering no longer touches it — and a
+            // var with no frame slot has nothing to sentinel-init (no free
+            // can reference it either).
+            if !stack.function.is_argument(v)
+                && stack.function.name(v).starts_with("__vdb")
+                && stack.function.stack(v) != u16::MAX
+            {
+                let slot_offset = stack.var_pos(v);
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
+            }
+        }
         if console {
             println!("{} ", stack.data.def(def_nr).header(stack.data, def_nr));
             stack.data.dump(def_nr);
@@ -357,7 +380,7 @@ impl State {
                 self.types.insert(self.code_pos, tp);
                 stack.add_op("OpConstEnum", self);
                 self.code_add(ord);
-                Type::Enum(0, false, Vec::new())
+                Type::Enum(0, false, Deps::none())
             }
             ValueType::Text => self.gen_text(node.text(), stack),
             ValueType::Var => self.generate_var(stack, node.var_nr()),
@@ -697,7 +720,7 @@ impl State {
             // We encode the record position; the opcode reads length from the store.
             self.code_add(0i64); // pos offset within the record (length is at rec+4)
         }
-        Type::Text(Vec::new())
+        Type::Text(Deps::none())
     }
 
     pub(super) fn gen_loop(&mut self, lp: IrBlock, stack: &mut Stack) -> Type {
@@ -1072,7 +1095,7 @@ impl State {
         let slot_offset = stack.position - pos;
         let dep = match stack.function.tp(v).clone() {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
-            _ => Vec::new(),
+            _ => Deps::none(),
         };
         if dep.is_empty() {
             if stack.function.is_inline_ref(v) {
@@ -1563,7 +1586,7 @@ impl State {
             // stack before anything runs and freed AFTER the assignment via
             // OpFreeRefIfDistinct — which also degrades to a no-op for the
             // S1 in-place shapes (the new value IS the old store).
-            let rhs_reads_v = crate::scopes::value_reads_var(value, v);
+            let rhs_reads_v = value.reads_var(v);
             let owned_ref = matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
@@ -1634,8 +1657,22 @@ impl State {
                         let deps = def.returned().depend();
                         !deps.is_empty()
                             && deps.iter().any(|&a| {
-                                (a as usize) >= def.attributes().len()
-                                    || !def.attributes()[a as usize].hidden
+                                {
+                                    // H2: out-of-range = def-space dep list
+                                    // contaminated with a frame var.  The
+                                    // DEPS_INVENTORY corpus probe found zero;
+                                    // keep the conservative borrowed-view
+                                    // answer (never free a maybe-borrowed
+                                    // source) but scream in debug.
+                                    debug_assert!(
+                                        (a as usize) < def.attributes().len(),
+                                        "dep-space violation: returned dep {a} \
+                                         outside attr range of '{}'",
+                                        def.name()
+                                    );
+                                    (a as usize) >= def.attributes().len()
+                                        || !def.attributes()[a as usize].hidden
+                                }
                             })
                     };
                     let tp_val = if is_borrowed_view {
@@ -2326,6 +2363,14 @@ impl State {
                 let deps = def.returned().depend();
                 !deps.is_empty()
                     && deps.iter().any(|&a| {
+                        // H2: see the twin site above — conservative answer
+                        // kept, debug scream on def-space contamination.
+                        debug_assert!(
+                            (a as usize) < def.attributes().len(),
+                            "dep-space violation: returned dep {a} outside \
+                             attr range of '{}'",
+                            def.name()
+                        );
                         (a as usize) >= def.attributes().len()
                             || !def.attributes()[a as usize].hidden
                     })
@@ -3627,23 +3672,10 @@ fn is_divergent(node: IrNode) -> bool {
 /// Used in debug builds to detect first-assignment self-reference bugs.
 #[cfg(debug_assertions)]
 fn ir_contains_var(value: &Value, v: u16) -> bool {
-    match value {
-        Value::Var(n) => *n == v,
-        Value::Call(_, args) => args.iter().any(|a| ir_contains_var(a, v)),
-        Value::CallRef(_, args) => args.iter().any(|a| ir_contains_var(a, v)),
-        Value::Set(_, inner) | Value::Return(inner) | Value::Drop(inner) => {
-            ir_contains_var(inner, v)
-        }
-        Value::If(cond, then, els) => {
-            ir_contains_var(cond, v) || ir_contains_var(then, v) || ir_contains_var(els, v)
-        }
-        Value::Block(b) | Value::Loop(b) => b.operators.iter().any(|op| ir_contains_var(op, v)),
-        Value::Insert(items) => items.iter().any(|i| ir_contains_var(i, v)),
-        Value::Iter(_, create, next, extra) => {
-            ir_contains_var(create, v) || ir_contains_var(next, v) || ir_contains_var(extra, v)
-        }
-        _ => false,
-    }
+    // Pass-2 wave 2: descent now comes from `Value::any_node`.  The
+    // hand-rolled predecessor had no `Span` arm, so a Span-wrapped
+    // self-reference escaped this assertion entirely.
+    value.any_node(&mut |n| matches!(n, Value::Var(x) if *x == v))
 }
 
 /// Recursively prints a `Value` IR tree to stderr in a loft-like syntax.

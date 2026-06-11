@@ -124,3 +124,48 @@ fn declared_dep_beats_same_named_package_file() {
          the declared dependency.  stdout={stdout:?} stderr={stderr:?}"
     );
 }
+
+/// #337 — PACKAGES.md resolution step 2: `use a;` resolves through the
+/// consuming package's `[dependencies] a = { path = "…" }` even when the
+/// dep is NOT a sibling package (previously only lib/, lib_dirs, and
+/// sibling layouts worked; the compile-time resolver never consulted
+/// path entries).
+#[test]
+fn i337_manifest_path_dep_resolves_non_sibling() {
+    let tmp = std::env::temp_dir().join("loft_i337_pathdep");
+    let _ = std::fs::remove_dir_all(&tmp);
+    let dep_root = tmp.join("elsewhere").join("nested").join("a");
+    std::fs::create_dir_all(dep_root.join("src")).unwrap();
+    std::fs::write(
+        dep_root.join("loft.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.1\"\n[library]\nentry = \"src/a.loft\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dep_root.join("src").join("a.loft"),
+        "pub fn a_hello() -> text { \"hello from a\" }\n",
+    )
+    .unwrap();
+    let b_root = tmp.join("b");
+    std::fs::create_dir_all(b_root.join("src")).unwrap();
+    std::fs::write(
+        b_root.join("loft.toml"),
+        "[package]\nname = \"b\"\nversion = \"0.0.1\"\n[library]\nentry = \"src/b.loft\"\n\
+         [dependencies]\na = { path = \"../elsewhere/nested/a\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b_root.join("src").join("b.loft"),
+        "use a;\n\nfn main() {\n  log_info(\"{a_hello()}\");\n}\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse(&b_root.join("src").join("b.loft").to_string_lossy(), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "path dep should resolve; diagnostics: {:?}",
+        p.diagnostics.lines()
+    );
+}

@@ -313,7 +313,10 @@ impl Output<'_> {
         }
         // @P302 — capture first-vs-reassign BEFORE the `declared` insert below
         // (the first-decl branch inserts `var`, so the flag must be read now).
-        let first_assign = !self.declared.contains(&var);
+        // A #260-predeclared `__vdb` counts as FIRST here (consume the entry):
+        // its prologue `let` bound only the sentinel, so this Set still emits
+        // the named-store `null_named` + `OpDatabase` pair.
+        let first_assign = !self.declared.contains(&var) || self.predeclared.remove(&var);
         if self.declared.contains(&var) {
             write!(w, "var_{name} = ")?;
         } else {

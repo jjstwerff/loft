@@ -1009,11 +1009,16 @@ then `,` or `}`, it is a field capture; otherwise it is the if-body.
 
 Variables are declared implicitly on first assignment. Their type is inferred:
 
-**Struct assignment copies the record.**  `a = b` for struct-typed variables
-deep-copies `b`'s record into a fresh store owned by `a` — the two variables
-do NOT alias afterwards (`b.v = 42` leaves `a.v` unchanged).  Aliasing is
-explicit: `reference<T>` struct fields share by pointer (#328), and closure
-captures of struct references share the live record (capture rules above).
+**Struct assignment copies the record — but vector-element READS are
+views.**  `a = b` for struct-typed VARIABLES deep-copies `b`'s record into
+a fresh store owned by `a` — the two variables do NOT alias afterwards
+(`b.v = 42` leaves `a.v` unchanged).  Reading a struct ELEMENT into a
+local (`e = v[i]`) is different: it yields a dep-tracked VIEW of the
+slot's record (`e.f = x` mutates `v[i]`, and a later write to `v[i]`
+changes what `e` reads) — see the swap warning under § Vectors.  Other
+explicit aliasing: `reference<T>` struct fields share by pointer (#328),
+and closure captures of struct references share the live record (capture
+rules above).
 ```
 x = 42
 name = "hello"
@@ -1058,6 +1063,22 @@ element."  To get "everything except the last", write
 `v[0..len(v) - 1]`.  Early drafts of this doc claimed negative indices
 counted from the end; the claim was aspirational and the form was
 never implemented.
+
+**Struct elements: reads are views, writes are copies — never swap
+in-place via a temp (#338).**  For a `vector<STRUCT>`, `tmp = v[j]` yields
+a dep-tracked LINK to slot `j`'s record (writes through `tmp` mutate
+`v[j]`); but `v[j] = v[k]` COPIES `k`'s record bytes into slot `j`'s
+storage.  The classic swap therefore silently corrupts:
+
+```loft
+tmp = v[j];     // a view of slot j
+v[j] = v[k];    // copies k's record INTO slot j — tmp now reads k's record
+v[k] = tmp;     // writes k's record back: j's record is LOST, k's DUPLICATED
+```
+
+Swap through scalar temps per field, rebuild into a fresh vector
+(selection sort instead of in-place insertion sort), or copy the record
+explicitly through a fresh struct literal before overwriting the slot.
 
 **Empty vectors** require a type annotation so the compiler knows the element type.
 Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.

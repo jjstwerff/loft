@@ -1,6 +1,7 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+use crate::data::Deps;
 use crate::data::IntegerSpec;
 use std::collections::HashSet;
 
@@ -8,37 +9,6 @@ use super::{
     DefType, I32, Level, LexItem, Parser, Position, Type, Value, diagnostic_format,
     merge_dependencies, v_block, v_if, v_loop, v_set,
 };
-
-/// Plan-07 phase 4d.2 — recursive walker that returns `true` if
-/// `op` references `var_nr` anywhere.  Used by
-/// `Parser::rewrite_defended_fault_sites` to detect when an `if`
-/// condition guards on the variable assigned in the immediately-
-/// preceding `Set`.  Same recursion shape as
-/// `src/generation/pre_eval.rs::value_mentions_var` (kept as a
-/// free function here because parser/control needs it without the
-/// generation/pre_eval `impl` context).
-fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
-    match op {
-        Value::Span(b) => value_mentions_var(&b.1, var_nr),
-        Value::Var(v) => *v == var_nr,
-        Value::Set(v, inner) => *v == var_nr || value_mentions_var(inner, var_nr),
-        Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
-            args.iter().any(|a| value_mentions_var(a, var_nr))
-        }
-        Value::If(cond, t, f) => {
-            value_mentions_var(cond, var_nr)
-                || value_mentions_var(t, var_nr)
-                || value_mentions_var(f, var_nr)
-        }
-        Value::Block(bl) | Value::Loop(bl) => {
-            bl.operators.iter().any(|o| value_mentions_var(o, var_nr))
-        }
-        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-            value_mentions_var(inner, var_nr)
-        }
-        _ => false,
-    }
-}
 
 /// Why an enclosing-scope capture inside a `parallel {}` arm is rejected.
 /// See `parse_parallel` — each arm runs in an isolated worker (read-only heap
@@ -80,17 +50,6 @@ fn is_mutating_op(name: &str) -> bool {
     )
 }
 
-/// Descend a mutating op's host expression (`args[0]`) through any nesting of
-/// read projections (`OpGetVector`/`OpVectorRef`/`OpGetRecord`/`OpGetField`/
-/// `OpGetInt`/…) to the base `Var(nr)` it ultimately mutates.
-fn base_host_var(node: &Value) -> Option<u16> {
-    match node.unspan() {
-        Value::Var(v) => Some(*v),
-        Value::Call(_, args) if !args.is_empty() => base_host_var(&args[0]),
-        _ => None,
-    }
-}
-
 /// A7.1: walk a body-tail expression and report whether it ends in
 /// a literal `Value::Tuple(...)` at any reachable tail position.  Used
 /// by `block_result` to decide whether the synthetic-struct rewrite
@@ -98,14 +57,11 @@ fn base_host_var(node: &Value) -> Option<u16> {
 /// `rewrite_tail_tuple_with_work_ref` so the gate and the rewrite stay
 /// in sync.
 fn tail_has_tuple_leaf(value: &Value) -> bool {
-    match value {
+    match value.tail() {
         Value::Tuple(_) => true,
-        Value::Span(b) => tail_has_tuple_leaf(&b.1),
         Value::If(_, then_branch, else_branch) => {
             tail_has_tuple_leaf(then_branch) || tail_has_tuple_leaf(else_branch)
         }
-        Value::Block(b) => b.operators.last().is_some_and(tail_has_tuple_leaf),
-        Value::Insert(ops) => ops.last().is_some_and(tail_has_tuple_leaf),
         _ => false,
     }
 }
@@ -134,16 +90,8 @@ struct EnumArm {
 /// A block definitely-returns if its last statement is a `return`, or if it is
 /// an `if` with an `else` where both branches definitely-return (recursive).
 pub(crate) fn definitely_returns(val: &Value) -> bool {
-    match val {
+    match val.tail() {
         Value::Return(_) => true,
-        Value::Block(bl) => {
-            // A block definitely-returns if its last non-Line statement does.
-            bl.operators
-                .iter()
-                .rev()
-                .find(|v| !matches!(v, Value::Line(_)))
-                .is_some_and(definitely_returns)
-        }
         Value::If(_, t_branch, f_branch) => {
             // Both branches must definitely-return, and the else must not be null.
             !matches!(**f_branch, Value::Null)
@@ -251,7 +199,7 @@ impl Parser {
             self.lexer.revert(link);
             if looks_like_struct_body {
                 self.parse_object(r, val);
-                return Type::Reference(r, Vec::new());
+                return Type::Reference(r, Deps::none());
             }
         }
         self.lexer.token("{");
@@ -516,7 +464,7 @@ impl Parser {
             let Value::If(test, _, _) = ops[j].unspan() else {
                 continue;
             };
-            if !value_mentions_var(test, var) {
+            if !test.reads_var(var) {
                 continue;
             }
             to_rewrite.push(i);
@@ -954,6 +902,84 @@ impl Parser {
 
     /// @P377 / S1 — parse-time NRVO for the intermediate-local return shape.
     ///
+    /// #339 — pass-2 late-promotion fix-up.  `ref_return` just GREW
+    /// `self.context`'s arity during pass 2 (hidden Reference return-buffer
+    /// attrs).  Every function whose pass-2 body was already parsed
+    /// (definition order == parse order) may hold calls to it with the old,
+    /// short arg list; codegen would panic 'Too few parameters'.  Bring
+    /// those calls up to the new arity exactly the way `add_defaults` does
+    /// for in-order callers: a fresh `__ref_N` work-ref from the CALLER's
+    /// own variable table (marked `caller_hidden_buf`), passed in the
+    /// hidden slot, with the @PLAN51 `Set(vr, Null)` preamble prepended so
+    /// the slot allocator sees a first_def.  Only Reference returns can
+    /// promote late (the Vector/Enum arms have no `collect_hidden_ref_args`
+    /// recovery), and `filter_hidden` strips hidden deps from Reference
+    /// results — so callers' binding TYPES are unaffected; only the call
+    /// arity needs the patch.
+    fn retrofit_callers_hidden_args(&mut self) {
+        let target = self.context;
+        let n_attrs = self.data.def(target).attributes().len();
+        let hidden: Vec<(usize, u32)> = self
+            .data
+            .def(target)
+            .attributes()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                if a.hidden
+                    && let Type::Reference(td, _) = &a.typedef
+                {
+                    Some((i, *td))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if hidden.is_empty() {
+            return;
+        }
+        for d in 0..target {
+            if self.data.def_type(d) != crate::data::DefType::Function {
+                continue;
+            }
+            if *self.data.def(d).code() == Value::Null {
+                continue;
+            }
+            let mut code =
+                std::mem::replace(&mut self.data.definitions[d as usize].code, Value::Null);
+            let mut vars = std::mem::replace(
+                &mut self.data.definitions[d as usize].variables,
+                crate::variables::Function::new("", "none"),
+            );
+            let mut new_inits: Vec<Value> = Vec::new();
+            code.map_nodes(&mut |n| {
+                if let Value::Call(f, args) = n
+                    && *f == target
+                    && args.len() < n_attrs
+                {
+                    for &(i, td) in &hidden {
+                        if args.len() == i {
+                            let buf_tp = Type::Reference(td, Deps::none());
+                            let vr = vars.work_refs(&buf_tp, &mut self.lexer);
+                            vars.mark_caller_hidden_buf(vr);
+                            new_inits.push(crate::data::v_set(vr, Value::Null));
+                            args.push(Value::Var(vr));
+                        }
+                    }
+                }
+            });
+            if !new_inits.is_empty()
+                && let Value::Block(bl) = &mut code
+            {
+                for (k, init) in new_inits.into_iter().enumerate() {
+                    bl.operators.insert(k, init);
+                }
+            }
+            self.data.definitions[d as usize].variables = vars;
+            self.data.definitions[d as usize].code = code;
+        }
+    }
+
     /// After `ref_return` has promoted `cv` to the function's hidden return
     /// buffer attribute, an inner heap-returning call inside the body still
     /// targets its own parser-synthesised `__ref_N` work-ref, and the
@@ -1143,7 +1169,7 @@ impl Parser {
         // single work-ref whose value is well-defined at the join
         // point.  Mirrors the unification done by P236's
         // `unify_if_branches_work_refs` for struct returns.
-        let synth_ref_type = Type::Reference(synthetic_d_nr, Vec::new());
+        let synth_ref_type = Type::Reference(synthetic_d_nr, Deps::none());
         let w = self.vars.work_refs(&synth_ref_type, &mut self.lexer);
         let known_type = self.data.def(synthetic_d_nr).known_type();
         self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
@@ -1170,7 +1196,7 @@ impl Parser {
                 if let Some(last) = b.operators.last_mut() {
                     self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, last);
                 }
-                b.result = Type::Reference(synthetic_d_nr, vec![w]);
+                b.result = Type::Reference(synthetic_d_nr, Deps::frame1(w));
                 return;
             }
             Value::Insert(ops) => {
@@ -1200,7 +1226,7 @@ impl Parser {
         ops.push(Value::Var(w));
         *tail = crate::data::v_block(
             ops,
-            Type::Reference(synthetic_d_nr, vec![w]),
+            Type::Reference(synthetic_d_nr, Deps::frame1(w)),
             "synthetic_tuple_return",
         );
     }
@@ -2170,7 +2196,7 @@ impl Parser {
             Type::Float
         } else if let Some(s) = self.lexer.has_cstring() {
             lit = Value::Text(s);
-            Type::Text(Vec::new())
+            Type::Text(Deps::none())
         } else if let Some(c) = self.lexer.has_char() {
             lit = self.cl("OpConvCharacterFromInt", &[Value::Int(c as i32)]);
             Type::Character
@@ -3103,7 +3129,7 @@ impl Parser {
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
             if let Type::Enum(nr, true, _) = t {
-                t = Type::Reference(nr, vec![]);
+                t = Type::Reference(nr, Deps::none());
             }
             // P189b: vector elements that are tuples live as inline bytes
             // in the vector record.  Iteration yields a 12-byte DbRef
@@ -3116,7 +3142,7 @@ impl Parser {
             if let Type::Tuple(ref elems) = t {
                 let elems_clone = elems.clone();
                 let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
-                t = Type::Reference(tuple_d, vec![]);
+                t = Type::Reference(tuple_d, Deps::none());
             }
             for d in dep {
                 t = t.depending(*d);
@@ -3186,12 +3212,12 @@ impl Parser {
                         &mut self.lexer,
                         self.context,
                         n,
-                        Type::RefVar(Box::new(Type::Text(Vec::new()))),
+                        Type::RefVar(Box::new(Type::Text(Deps::none()))),
                     );
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                     self.vars
-                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Vec::new()))));
+                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                 } else if matches!(tp, Type::Tuple(_)) {
                     // @P330: a tuple local hoisted to a tuple parameter
                     // doesn't have a well-defined caller-side null-init —
@@ -3244,7 +3270,7 @@ impl Parser {
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
                 );
             if self.first_pass && is_lambda && !has_work_buf {
-                let work_tp = Type::RefVar(Box::new(Type::Text(Vec::new())));
+                let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
                     self.context,
@@ -3353,7 +3379,7 @@ impl Parser {
         if let Value::Return(inner) = tail {
             return self.materialize_view_return(td, inner);
         }
-        let ref_tp = Type::Reference(td, Vec::new());
+        let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
         let kt = self.data.def(td).known_type();
         let copy_d = self.data.def_nr("OpCopyRecord");
@@ -3365,7 +3391,7 @@ impl Parser {
                 Value::Call(copy_d, vec![orig, Value::Var(w), Value::Int(i32::from(kt))]),
                 Value::Var(w),
             ],
-            Type::Reference(td, vec![w]),
+            Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
         w
@@ -3482,6 +3508,7 @@ impl Parser {
                     }
                 }
             }
+            let mut grew_in_pass2 = false;
             for (e_idx, v) in expanded.iter().enumerate() {
                 let transitive = e_idx >= direct_count;
                 // A reassigned returned local must NOT be NRVO-promoted (see above).
@@ -3507,7 +3534,20 @@ impl Parser {
                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
+                // #339: in pass 2 this promotion arrives LATE — the wrapper's
+                // `__ref_N` (and thus this attr) only materialises once the
+                // callee's own hidden attr exists, which a callee defined
+                // LATER in the source gets after this fn's pass-1 parse.
+                // Callers re-parsed EARLIER in pass 2 still carry the short
+                // arg list against the grown arity (codegen panics 'Too few
+                // parameters').  Patch them up after the loop.
+                if !self.first_pass {
+                    grew_in_pass2 = true;
+                }
             }
+            // H2: the rebuilt return-type deps are ATTRIBUTE indices —
+            // tag them so `as_attr_indices` readers verify in debug builds.
+            let dep = Deps::attrs(dep.to_vec());
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
                 Type::Reference(td, _) => Type::Reference(td, dep),
@@ -3522,6 +3562,9 @@ impl Parser {
                     return;
                 }
             };
+            if grew_in_pass2 {
+                self.retrofit_callers_hidden_args();
+            }
         }
     }
 
@@ -3551,7 +3594,7 @@ impl Parser {
                 // inheriting that on the literal would fool the `Type::Vector`
                 // arm below (`!dep.contains(ref1_var)`) into skipping the
                 // OpAppendVector copy into __ref_1.  Element type only.
-                let hint = Type::Vector(elm.clone(), Vec::new());
+                let hint = Type::Vector(elm.clone(), Deps::none());
                 let mut parent_tp = Type::Null;
                 self.parse_operators(&hint, &mut v, &mut parent_tp, 0)
             } else {
@@ -3925,7 +3968,7 @@ impl Parser {
                                     crate::data::v_set(wv, Value::Text(String::new())),
                                     self.cl("OpCreateStack", &[Value::Var(wv)]),
                                 ],
-                                Type::Reference(ref_def, vec![wv]),
+                                Type::Reference(ref_def, Deps::frame1(wv)),
                                 "cref_work_buf",
                             ));
                         }
@@ -3989,16 +4032,22 @@ impl Parser {
             {
                 let elem = *elm.clone();
                 let hint = match (name, arg_idx) {
-                    ("map", 1) => Some(Type::Function(vec![elem.clone()], Box::new(elem), vec![])),
-                    ("filter" | "any" | "all" | "count_if", 1) => {
-                        Some(Type::Function(vec![elem], Box::new(Type::Boolean), vec![]))
-                    }
+                    ("map", 1) => Some(Type::Function(
+                        vec![elem.clone()],
+                        Box::new(elem),
+                        Deps::none(),
+                    )),
+                    ("filter" | "any" | "all" | "count_if", 1) => Some(Type::Function(
+                        vec![elem],
+                        Box::new(Type::Boolean),
+                        Deps::none(),
+                    )),
                     ("reduce", 2) => {
                         let init_tp = types.get(1).cloned().unwrap_or(elem.clone());
                         Some(Type::Function(
                             vec![init_tp.clone(), elem],
                             Box::new(init_tp),
-                            vec![],
+                            Deps::none(),
                         ))
                     }
                     _ => None,
@@ -4218,7 +4267,7 @@ impl Parser {
                         crate::data::v_set(wv, Value::Text(String::new())),
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
                     ],
-                    Type::Reference(ref_def, vec![wv]),
+                    Type::Reference(ref_def, Deps::frame1(wv)),
                     "cref_work_buf",
                 ));
             }
@@ -4556,7 +4605,7 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        Type::Text(Vec::new())
+        Type::Text(Deps::none())
     }
 
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
@@ -4717,7 +4766,7 @@ impl Parser {
             // In-place / element / field mutation hides the host in args[0].
             Value::Call(d, args) => {
                 if is_mutating_op(self.data.def(*d).name())
-                    && let Some(host) = args.first().and_then(base_host_var)
+                    && let Some(host) = args.first().and_then(Value::base_var)
                 {
                     self.note_mutation(host, encl, out);
                 }
