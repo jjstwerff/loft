@@ -79,6 +79,35 @@ export function resume_frame() {
 }
 
 /**
+ * Export the registered world of the PARKED (frame-yielded) run as the
+ * snapshot JSON; "" when no run is parked or no world was registered.
+ * @returns {string}
+ */
+export function swap_export() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.swap_export();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Stage a snapshot for the next run's `swap_world` (the browser analog of
+ * the native LOFT_RESUME env).
+ * @param {string} snapshot
+ */
+export function swap_stage(snapshot) {
+    const ptr0 = passStringToWasm0(snapshot, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.swap_stage(ptr0, len0);
+}
+
+/**
  * Entry point called by each Worker Thread.  The JS worker loop calls
  * this with the function index and element range.  The worker reads from the
  * shared WASM memory (Store heap) and writes results directly back.

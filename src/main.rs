@@ -4394,6 +4394,14 @@ fn main() {
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
     for pkg_dir in &pending_native {
+        // @PLN18 — `[native] in_binary = true`: the library's natives are
+        // registered inside this binary (src/native.rs); a cdylib compile can
+        // only fail (the symbols exist nowhere else).  Skip it silently.
+        if manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+            .is_some_and(|m| m.native_in_binary)
+        {
+            continue;
+        }
         let export = loft::native_lib::library_export_set(&p.data, pkg_dir);
         if export.is_empty() {
             continue;
@@ -4566,6 +4574,7 @@ fn main() {
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
+                live_fns: Vec::new(),
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -4677,6 +4686,7 @@ fn main() {
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: true,
+                live_fns: Vec::new(),
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -5091,6 +5101,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 coroutine_persistent_vars: HashSet::new(),
                 call_stack_prefix: None,
                 wasm_browser: false,
+                live_fns: Vec::new(),
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
@@ -5588,16 +5599,46 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
 
         if check_only {
             // --check --native: compile succeeded, report ok and exit.
-            println!("ok {abs_file}");
+            // @PLN18 08-S4 — the artifact path rides the ok line so the
+            // background-rebuild host (live_dispatch) can find the build
+            // without re-deriving the cache key (which hashes the GENERATED
+            // source + rlib mtimes — only this pipeline can compute it).
+            // Prefer the DURABLE content-addressed cache path over the
+            // per-pid temp the miss branch built into (the consumer is the
+            // S5 swap; a temp path is clobbered by the next same-pid run).
+            let artifact = if !no_cache && cached_binary.exists() {
+                &cached_binary
+            } else {
+                &binary
+            };
+            println!("ok {abs_file} {}", artifact.display());
             return;
         }
-        let run_status = std::process::Command::new(&binary)
-            .args(&user_args)
-            .status()
-            .unwrap_or_else(|e| {
-                eprintln!("loft: failed to run native binary: {e}");
-                std::process::exit(1);
-            });
+        // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
+        // re-parses the same sources, so hand it the resolved paths the driver
+        // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;
+        // explicit user-set values win.
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.args(&user_args);
+        if std::env::var("LOFT_LIVE_SRC").is_err() {
+            cmd.env("LOFT_LIVE_SRC", &abs_file);
+        }
+        if std::env::var("LOFT_LIVE_STDLIB").is_err() {
+            cmd.env("LOFT_LIVE_STDLIB", &default_str);
+        }
+        if std::env::var("LOFT_LIVE_LIBS").is_err() && !p.lib_dirs.is_empty() {
+            cmd.env("LOFT_LIVE_LIBS", p.lib_dirs.join(":"));
+        }
+        // @PLN18 08-S4 — the background rebuild re-invokes THIS driver.
+        if std::env::var("LOFT_LIVE_DRIVER").is_err()
+            && let Ok(me) = std::env::current_exe()
+        {
+            cmd.env("LOFT_LIVE_DRIVER", me);
+        }
+        let run_status = cmd.status().unwrap_or_else(|e| {
+            eprintln!("loft: failed to run native binary: {e}");
+            std::process::exit(1);
+        });
         // Clean up temp binary (not the cached copy).
         if binary != cached_binary {
             let _ = std::fs::remove_file(&binary);
@@ -5745,6 +5786,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             std::process::exit(1);
         }
     } else {
+        // @PLN18 phase 02 — tier-0 live reload (opt-in): watch the program
+        // file and hot-swap edited fns into the running State.
+        if std::env::var_os("LOFT_LIVE_RELOAD").is_some() {
+            loft::live_reload::install(&abs_file, "default", &p.lib_dirs, &p.data);
+        }
         state.execute_argv("main", &p.data, &user_args);
         // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
         // causing execute_argv to return. Resume until the program finishes.

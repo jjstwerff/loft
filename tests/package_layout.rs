@@ -92,3 +92,35 @@ fn struct_fields_resolve_in_use_loaded_package() {
         p.diagnostics.lines()
     );
 }
+
+/// Dep-shadowing regression: a package file named EXACTLY like a declared
+/// dependency must not shadow that dependency in `use` resolution.
+///
+/// The package root sits in `lib_dirs` (that is what makes intra-package
+/// `use otherfile;` work), so before the guard in `Parser::lib_path`,
+/// `use shadowlib;` inside `consumer/shadowlib.loft` resolved to the file
+/// itself: the real library never loaded, `shadowlib::Probe` came back
+/// "Undefined type", and every qualified reference in the package errored.
+/// This is how `tools/audience-demo/server.loft` (a package file named
+/// `server.loft` next to a `server` dependency) silently broke.
+///
+/// Runs the real binary because the shadowing needs main.rs's package
+/// detection (the walk-up that pushes the package root onto `lib_dirs`) —
+/// an in-process `Parser` with hand-set `lib_dirs` cannot reproduce it.
+#[test]
+fn declared_dep_beats_same_named_package_file() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new(root.join("target/release/loft"))
+        .args(["--interpret", "--no-warnings"])
+        .arg(root.join("tests/fixtures/dep_shadow/consumer/shadowlib.loft"))
+        .current_dir(&root)
+        .output()
+        .expect("run the dep_shadow consumer fixture");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("shadow-ok 42"),
+        "dep-shadowing guard regressed: `use shadowlib;` did not resolve to \
+         the declared dependency.  stdout={stdout:?} stderr={stderr:?}"
+    );
+}

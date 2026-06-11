@@ -211,6 +211,172 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
+    // @PLN18 08-S2 — live dispatch flip (no-op under the interpreter).
+    ("n_live_flip", crate::live_dispatch::n_live_flip_stack),
+    // @PLN18 08-S4 — background rebuild (env-driven; real on any tier).
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_rebuild_start",
+        crate::live_dispatch::n_rebuild_start_stack,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_rebuild_status",
+        crate::live_dispatch::n_rebuild_status_stack,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_rebuild_artifact_dest",
+        crate::live_dispatch::n_kernel_rebuild_artifact_dest,
+    ),
+    // @PLN18 08-S5 — the native build swap.
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_world", crate::engine_host::n_swap_world),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_start", crate::engine_host::n_swap_start),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_swap_step", crate::engine_host::n_kernel_swap_step),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_swap_retired", crate::engine_host::n_swap_retired),
+    // @PLN18 — engine-host kernel natives (mechanics only; lib/engine_host
+    // declares them; native targets only — the kernel has no wasm story).
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_listen", crate::engine_host::n_kernel_listen),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_pump", crate::engine_host::n_kernel_pump),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_next_event",
+        crate::engine_host::n_kernel_next_event,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_event_cid", crate::engine_host::n_kernel_event_cid),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_event_kind",
+        crate::engine_host::n_kernel_event_kind,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_event_payload_dest",
+        crate::engine_host::n_kernel_event_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_tick_due", crate::engine_host::n_kernel_tick_due),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_send", crate::engine_host::n_kernel_send),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_broadcast", crate::engine_host::n_kernel_broadcast),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_idle", crate::engine_host::n_kernel_idle),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_clients", crate::engine_host::n_kernel_clients),
+    // @PLN18 phase 05a — the state-sync UDP channel.  (No cookie native: the
+    // handshake cookie rides the WS 101 response as an `X-Loft-UDP` header —
+    // transport negotiation is kernel-internal, invisible to loft code.)
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_udp_bound", crate::engine_host::n_kernel_udp_bound),
+    // Pure (no sockets): registered on EVERY target — the browser kernel
+    // reads the same wire-schema table.
+    (
+        "n_kernel_sync_class",
+        crate::engine_host::n_kernel_sync_class,
+    ),
+    (
+        "n_kernel_sync_class_keyed",
+        crate::engine_host::n_kernel_sync_class_keyed,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_keyframe", crate::engine_host::n_kernel_keyframe),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_next", crate::engine_host::n_kernel_sync_next),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_cid", crate::engine_host::n_kernel_sync_cid),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_sync_seq", crate::engine_host::n_kernel_sync_seq),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_sync_payload_dest",
+        crate::engine_host::n_kernel_sync_payload_dest,
+    ),
+    // @PLN18 — the connector role (the client-side kernel).
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_connect", crate::engine_host::n_kernel_connect),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_pump",
+        crate::engine_host::n_kernel_client_pump,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_alive",
+        crate::engine_host::n_kernel_client_alive,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_stop",
+        crate::engine_host::n_kernel_client_stop,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_next_event",
+        crate::engine_host::n_kernel_client_next_event,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_kind",
+        crate::engine_host::n_kernel_client_event_kind,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_payload_dest",
+        crate::engine_host::n_kernel_client_event_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_tick_due",
+        crate::engine_host::n_kernel_client_tick_due,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_idle",
+        crate::engine_host::n_kernel_client_idle,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_send",
+        crate::engine_host::n_kernel_client_send,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_next",
+        crate::engine_host::n_kernel_client_sync_next,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_seq",
+        crate::engine_host::n_kernel_client_sync_seq,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_sync_payload_dest",
+        crate::engine_host::n_kernel_client_sync_payload_dest,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_udp_bound",
+        crate::engine_host::n_kernel_client_udp_bound,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_frame",
+        crate::engine_host::n_kernel_client_frame,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_default_host_dest",
+        crate::engine_host::n_kernel_default_host_dest,
+    ),
     ("n_stack_trace", n_stack_trace),
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
@@ -450,6 +616,81 @@ fn n_byte_at(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, i64::from(result));
 }
 
+/// @PLN18 phase 07 — the BROWSER kernel: the connector role's natives over
+/// the browser's own machinery, registered under the SAME symbols as the
+/// native connector so `lib/engine_host` (and every script over it) is
+/// shared verbatim — the script is the contract, the kernel is swappable.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
+    (
+        "n_kernel_connect",
+        crate::engine_host::browser::n_kernel_connect,
+    ),
+    (
+        "n_kernel_client_pump",
+        crate::engine_host::browser::n_kernel_client_pump,
+    ),
+    (
+        "n_kernel_client_alive",
+        crate::engine_host::browser::n_kernel_client_alive,
+    ),
+    (
+        "n_kernel_client_stop",
+        crate::engine_host::browser::n_kernel_client_stop,
+    ),
+    (
+        "n_kernel_client_next_event",
+        crate::engine_host::browser::n_kernel_client_next_event,
+    ),
+    (
+        "n_kernel_client_event_kind",
+        crate::engine_host::browser::n_kernel_client_event_kind,
+    ),
+    (
+        "n_kernel_client_event_payload_dest",
+        crate::engine_host::browser::n_kernel_client_event_payload_dest,
+    ),
+    (
+        "n_kernel_client_tick_due",
+        crate::engine_host::browser::n_kernel_client_tick_due,
+    ),
+    (
+        "n_kernel_client_idle",
+        crate::engine_host::browser::n_kernel_client_idle,
+    ),
+    (
+        "n_kernel_client_send",
+        crate::engine_host::browser::n_kernel_client_send,
+    ),
+    (
+        "n_kernel_client_sync_next",
+        crate::engine_host::browser::n_kernel_client_sync_next,
+    ),
+    (
+        "n_kernel_client_sync_seq",
+        crate::engine_host::browser::n_kernel_client_sync_seq,
+    ),
+    (
+        "n_kernel_client_sync_payload_dest",
+        crate::engine_host::browser::n_kernel_client_sync_payload_dest,
+    ),
+    (
+        "n_kernel_client_udp_bound",
+        crate::engine_host::browser::n_kernel_client_udp_bound,
+    ),
+    (
+        "n_kernel_client_frame",
+        crate::engine_host::browser::n_kernel_client_frame,
+    ),
+    (
+        "n_kernel_default_host_dest",
+        crate::engine_host::browser::n_kernel_default_host_dest,
+    ),
+    // @PLN18 08-S6 — the living-page swap (page-driven; see wasm.rs).
+    ("n_swap_world", crate::engine_host::browser::n_swap_world),
+    ("n_swap_start", crate::engine_host::browser::n_swap_start),
+];
+
 pub fn init(state: &mut State) {
     for (name, implement) in FUNCTIONS {
         state.static_fn(name, *implement);
@@ -459,6 +700,11 @@ pub fn init(state: &mut State) {
     // cdylib (which the browser can't load).
     #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
     for (name, implement) in WEB_FUNCTIONS_WASM {
+        state.static_fn(name, *implement);
+    }
+    // @PLN18 phase 07 — the browser kernel (see KERNEL_FUNCTIONS_WASM).
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    for (name, implement) in KERNEL_FUNCTIONS_WASM {
         state.static_fn(name, *implement);
     }
 }

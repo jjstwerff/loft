@@ -1,0 +1,413 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 — the engine-host kernel: loft surface over the in-binary natives
+// (src/engine_host.rs).  The host-boundary principle: the natives carry ALL
+// mechanics (non-blocking pump with the peek pattern, event queue, drift-free
+// ticks, send/broadcast); this library carries the loop SKELETON and nothing
+// else — user code supplies meaning as closures:
+//
+//   use engine_host;
+//   fn main() {
+//     world = World { ... };
+//     engine_host::run(18083, 33333,
+//       fn(ev: engine_host::Event) { ...world... },
+//       fn() { ...world... });
+//   }
+//
+// Closures are passed as ARGUMENTS (not struct fields) per the probed crash
+// boundary in loft-lang/loft#313.
+
+// One pumped event.  kind: 0 = connect, 1 = message, 2 = disconnect.
+pub struct Event {
+  cid:     integer not null,
+  kind:    integer not null,
+  payload: text not null,
+}
+
+fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;
+#native
+
+fn kernel_pump() -> integer;
+#native
+
+fn kernel_next_event() -> boolean;
+#native
+
+fn kernel_event_cid() -> integer;
+#native
+
+fn kernel_event_kind() -> integer;
+#native
+
+fn kernel_event_payload() -> text;
+#native
+
+fn kernel_tick_due() -> boolean;
+#native
+
+// Send a text frame to one client.  False = the client is gone (a disconnect
+// event is queued for it).
+pub fn send(cid: integer, msg: text) -> boolean;
+#native "n_kernel_send"
+
+// Broadcast a text frame to every live client; returns the delivery count.
+pub fn broadcast(msg: text) -> integer;
+#native "n_kernel_broadcast"
+
+// @PLN18 08-S2 — push one function to the interpreter (on=true) or back to
+// compiled (on=false), live.  Real only in a compiled build started under
+// LOFT_LIVE_FLIP=1; interpreted runs (where everything is already
+// interpreted) and unknown names return false.  Behavior never changes —
+// only the execution tier of that one function.
+pub fn live_flip(name: text, on: boolean) -> boolean;
+#native
+
+// @PLN18 08-S4 — background rebuild of the served program: the loft driver's
+// own build pipeline (`--check --native`) runs as a background child while
+// THIS build keeps serving.  start: true = building (idempotent while one
+// runs).  status: 0 idle, 1 building, 2 ready, 3 failed; a source edit
+// during the build automatically requeues (status stays 1) so a ready
+// artifact always corresponds to the source as of the status call.
+pub fn rebuild_start() -> boolean;
+#native
+pub fn rebuild_status() -> integer;
+#native
+
+fn kernel_rebuild_artifact() -> text;
+#native
+
+// The ready build's binary path; "" unless rebuild_status() == 2.
+pub fn rebuild_artifact() -> text {
+  kernel_rebuild_artifact()
+}
+
+// @PLN18 08-S5 — the live build swap.  Name your world record ONCE before
+// run(): it becomes the snapshot root for swaps, and when this process is
+// booted AS a swap target the previous build's world is restored INTO it
+// (in place — every alias sees it) before serving starts.  Returns true
+// iff a restore happened (a resumed boot).
+pub fn swap_world(w: reference) -> boolean;
+#native
+
+// Swap to a new build (normally rebuild_artifact()) without stopping the
+// game: the run loop freezes meaning at the next frame boundary, boots the
+// artifact with the world snapshot, keeps mechanics alive until the new
+// build SERVES, then retires.  A new build that fails to serve rolls back
+// — the old build never stopped listening.  Returns false when the
+// artifact path is missing or a swap is already in progress.
+pub fn swap_start(artifact: text) -> boolean;
+#native
+
+fn kernel_swap_step() -> integer;
+#native
+
+// Did THIS process hand its world to a new build?  A reconnect wrapper
+// around run_client must tell "the server vanished" (redial) apart from
+// "this build retired after a swap" (exit) — both return from the loop.
+pub fn swap_retired() -> boolean;
+#native
+
+fn kernel_idle(max_us: integer);
+#native
+
+// Live connection count (diagnostics).
+pub fn clients() -> integer;
+#native "n_kernel_clients"
+
+// ── 05a — the state-sync UDP channel (events + bulk stay on WS) ─────────────
+//
+// The kernel binds a UDP socket on the SAME port as the WS listener, and the
+// transport negotiation is FULLY kernel-internal — the developer never sees
+// it (a core lavition/loft value: never bother the developer with details
+// that don't aid them; the server takes the fastest path available,
+// automatically).  The handshake cookie rides the WS 101 upgrade response as
+// an `X-Loft-UDP` header; a native client's kernel reads it and hellos
+// (`H:<cookie>` → `A:<cid>`).  The developer declares per message KIND, not
+// per call: `sync_class(msg_id)` marks a kind as latest-value state, and the
+// ordinary `send`/`broadcast` then ride UDP for that kind whenever the client
+// can.  Web pages cannot send UDP, never hello, and the same calls keep
+// sending WS frames — meaning-code never branches on transport.
+
+// Does this client currently have a live UDP path?
+pub fn udp_bound(cid: integer) -> boolean;
+#native "n_kernel_udp_bound"
+
+// Declare a msg_id as latest-value state in the wire-schema table — data,
+// not a per-call API.  `send`/`broadcast` then route messages of that kind to
+// the sync channel automatically (datagram when the client can, WS frame when
+// it can't), and inbound datagrams of that kind conflate to newest.  Declare
+// once at startup; everything else is ordinary `send`.  Undeclared kinds are
+// events: must-deliver, in order, on WS — the safe default.
+pub fn sync_class(msg_id: integer);
+#native "n_kernel_sync_class"
+
+// A sync kind whose payload's FIRST comma-field is an entity id ("2:7,x,y" →
+// entity 7): conflation keeps the newest per (peer, kind, entity), so one
+// kind carries N entities' latest-values — poses keyed by plane, health by
+// unit.  Use plain sync_class for singleton state (one latest-value per kind).
+pub fn sync_class_keyed(msg_id: integer);
+#native "n_kernel_sync_class_keyed"
+
+// PRIORITY KEYFRAME: promote ONE sample of a sync kind to must-deliver — the
+// discontinuity rule (a bounce/teleport must arrive even when datagrams
+// drop).  Same seq space as the datagrams, so the receiver keeps total order
+// and an in-flight older sample is discarded as stale.  WHAT counts as a
+// discontinuity is yours; delivery is the kernel's.  (Listener-side: the
+// authority owns discontinuities; client input is already reliable.)
+pub fn keyframe(cid: integer, msg: text) -> boolean;
+#native "n_kernel_keyframe"
+
+// ── Lanes — the service model's vocabulary (assign speed LATE, as data) ─────
+//
+// Build meaning first; afterwards one line per message kind decides its bus.
+// fast = latest-value state (conflates; rides UDP when the peer can);
+// normal = the default (must-deliver, in order, on WS);
+// slow = bulk (budget-ingested — declared today, lands with 05c; behaves as
+// normal until then, so the line is already correct to write).
+// The handler-registry column of the service model waits on collected
+// closures (@P213/@P214); until then the per-kind split lives in your
+// on_event — exactly the shape the language prescribes (#318).
+
+pub fn fast_lane(msg_id: integer) {
+  sync_class(msg_id);
+}
+
+pub fn fast_lane_keyed(msg_id: integer) {
+  sync_class_keyed(msg_id);
+}
+
+pub fn slow_lane(msg_id: integer) {
+  // Reserved: the bulk machinery is phase 05c; normal delivery until then.
+}
+
+// Drain the inbound conflation slots: each call loads the NEWEST unread state
+// from one client (stale/reordered datagrams were already discarded by the
+// kernel).  Drain inside `on_tick` — that reads the freshest data that arrived
+// before the tick (late-latch by construction).
+pub fn sync_next() -> boolean;
+#native "n_kernel_sync_next"
+
+pub fn sync_cid() -> integer;
+#native "n_kernel_sync_cid"
+
+pub fn sync_seq() -> integer;
+#native "n_kernel_sync_seq"
+
+// Text-returning natives keep the `kernel_` def name (the dest-passing route
+// in `is_text_dest_native` keys on it — the `n_kernel_event_payload` pattern);
+// the pub wrapper carries the surface name.
+fn kernel_sync_payload() -> text;
+#native
+
+pub fn sync_payload() -> text {
+  kernel_sync_payload()
+}
+
+// The kernel loop: pump → budgeted event drain → tick when due → idle.
+// Never returns.  `on_event` and `on_tick` are the user's meaning; their
+// captures (the world) live in the caller's frame, which stays alive because
+// this fn never returns.
+pub fn run(port: integer, tick_interval_us: integer,
+           on_event: fn(Event), on_tick: fn()) {
+  ok = kernel_listen(port, tick_interval_us);
+  if !ok {
+    println("engine_host: cannot listen on port {port}");
+    return;
+  }
+  println("engine_host: listening on ws://0.0.0.0:{port}/ (tick every {tick_interval_us} us)");
+  while true {
+    // @PLN18 08-S5 — the swap step: 0 = serve normally, 1 = FROZEN (a new
+    // build is booting; mechanics stay alive, meaning waits), 2 = handed
+    // over (the new build serves; this process retires).
+    swapping = kernel_swap_step();
+    if swapping == 2 {
+      println("engine_host: swapped to the new build; this process retires");
+      return;
+    }
+    work = kernel_pump();
+    if swapping == 1 {
+      kernel_idle(1000);
+      continue;
+    }
+    // Budgeted drain (the ENGINE_HOST drain rule): events to a bounded count
+    // per turn, so the tick check below is never starved by a flood.
+    for _ in 0..256 {
+      more = kernel_next_event();
+      if !more { break; }
+      ev = Event {
+        cid:     kernel_event_cid(),
+        kind:    kernel_event_kind(),
+        payload: kernel_event_payload(),
+      };
+      on_event(ev);
+      work = work + 1;
+    }
+    if kernel_tick_due() {
+      // ONE receive surface: fast-lane state (the conflation slots) arrives
+      // through on_event like everything else — newest per (sender, kind,
+      // entity), late-latched to this tick.  Handlers never know the lane.
+      while sync_next() {
+        sev = Event {
+          cid:     sync_cid(),
+          kind:    1,
+          payload: sync_payload(),
+        };
+        on_event(sev);
+        work = work + 1;
+      }
+      on_tick();
+      work = work + 1;
+    }
+    if work == 0 {
+      kernel_idle(2000);
+    }
+  }
+}
+
+// ── The connector role — the client-side kernel (one core, two roles) ───────
+//
+// A native client's half of the auto-path, with the same zero-transport
+// surface as the listener: `run_client` connects, upgrades, reads the
+// kernel-negotiated UDP cookie from the 101 head, hellos until acked and
+// keepalives after — all invisible.  `client_send` routes by the SAME
+// wire-schema table (`sync_class`): declared kinds ride datagrams once the
+// path is live, everything else (and everything before) rides WS.  Inbound
+// server sync conflates per msg_id; drain it inside `on_tick` (late-latch).
+// Unlike `run`, `run_client` RETURNS when the server connection dies.
+
+fn kernel_connect(host: text, port: integer, tick_interval_us: integer) -> boolean;
+#native
+
+fn kernel_client_pump() -> integer;
+#native
+
+fn kernel_client_alive() -> boolean;
+#native
+
+fn kernel_client_next_event() -> boolean;
+#native
+
+fn kernel_client_event_kind() -> integer;
+#native
+
+fn kernel_client_event_payload() -> text;
+#native
+
+fn kernel_client_tick_due() -> boolean;
+#native
+
+fn kernel_client_idle(max_us: integer);
+#native
+
+// Send to the server, class-routed: a `sync_class` kind rides a seq-stamped
+// datagram once the UDP path is acked, everything else a WS frame.  False =
+// dropped (dead connection or an oversized datagram).
+pub fn client_send(msg: text) -> boolean;
+#native "n_kernel_client_send"
+
+// Drain the newest unread server state, one kind per call — inside `on_tick`.
+pub fn client_sync_next() -> boolean;
+#native "n_kernel_client_sync_next"
+
+pub fn client_sync_seq() -> integer;
+#native "n_kernel_client_sync_seq"
+
+fn kernel_client_sync_payload() -> text;
+#native
+
+pub fn client_sync_payload() -> text {
+  kernel_client_sync_payload()
+}
+
+// Read-only introspection: is the UDP fast path live?
+pub fn client_udp_bound() -> boolean;
+#native "n_kernel_client_udp_bound"
+
+fn kernel_client_frame();
+#native
+
+fn kernel_client_stop();
+#native
+
+// Leave the connector loop from inside a handler: marks this connection
+// dead so `run_client` returns at its next turn.  The GL projector calls it
+// when the window closes — the loop belongs to the connector, the exit
+// decision to the script.
+pub fn client_stop() {
+  kernel_client_stop()
+}
+
+// The host a client connects to when the script doesn't choose: the page's
+// serving origin in a browser (the cabinet that handed out the QR), the
+// LOFT_HOST env (else loopback) on a native seat — so ONE script runs on
+// both without even the address differing.
+fn kernel_default_host() -> text;
+#native
+
+pub fn default_host() -> text {
+  kernel_default_host()
+}
+
+// The connector loop: pump → budgeted event drain → tick when due → idle.
+// Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
+// once the server connection closes — the kind-2 disconnect event reaches
+// `on_event` first.
+pub fn run_client(host: text, port: integer, tick_interval_us: integer,
+                  on_event: fn(Event), on_tick: fn()) {
+  ok = kernel_connect(host, port, tick_interval_us);
+  if !ok {
+    println("engine_host: cannot connect to {host}:{port}");
+    return;
+  }
+  while kernel_client_alive() {
+    // @PLN18 08-S5/S7 — the swap step on the CLIENT side too: 0 = run
+    // normally, 1 = FROZEN (the new build is booting; keep pumping so the
+    // server connection and the debug endpoint stay alive), 2 = handed
+    // over (the new process is connected; this one retires).
+    swapping = kernel_swap_step();
+    if swapping == 2 {
+      println("engine_host: swapped to the new build; this client retires");
+      return;
+    }
+    work = kernel_client_pump();
+    if swapping == 1 {
+      kernel_client_idle(1000);
+      kernel_client_frame();
+      continue;
+    }
+    for _ in 0..256 {
+      more = kernel_client_next_event();
+      if !more { break; }
+      ev = Event {
+        cid:     0,
+        kind:    kernel_client_event_kind(),
+        payload: kernel_client_event_payload(),
+      };
+      on_event(ev);
+      work = work + 1;
+    }
+    if kernel_client_tick_due() {
+      // ONE receive surface — the server's fast-lane state arrives through
+      // on_event, late-latched to this tick (see run()).
+      while client_sync_next() {
+        sev = Event {
+          cid:     0,
+          kind:    1,
+          payload: client_sync_payload(),
+        };
+        on_event(sev);
+        work = work + 1;
+      }
+      on_tick();
+      work = work + 1;
+    }
+    if work == 0 {
+      kernel_client_idle(2000);
+    }
+    // The per-turn yield point: a no-op on native; in a browser it hands the
+    // tab back to the event loop (resumed next animation frame).  Lives here
+    // in the SHARED loop so scripts never know which kernel runs them.
+    kernel_client_frame();
+  }
+}

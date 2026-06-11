@@ -1,0 +1,124 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 phase 04 — the NATIVE probe client (the connector role): joins the
+// probe server's world through `run_client` with zero transport code and
+// measures the UDP fast path under load:
+//
+//   - pose receive count (sync class, datagrams once the path binds)
+//   - the 00(c) stamp chain natively: echo `4:t0` rides WS (event class),
+//     the `5:t0,t1,t5` reply rides sync — total = t6−t0 on ONE clock
+//     (both stamps client-side), server hold = t5−t1 (server clock, exact)
+//
+// Reports every 150 ticks (5 s at 30 Hz):
+//   nclient: report ticks=N udp=B poses=N echoes=N tot_p50=..us tot_p95=..us hold_p50=..us
+//
+// Run beside the web-tier probe.loft load (same server, port 18084):
+//   ./target/release/loft --interpret --no-warnings --lib lib \
+//       tools/audience-demo-50/probe_client_kernel.loft
+//
+// Loss axis: LOFT_UDP_DROP_NTH=4 drops every 4th inbound sync datagram
+// (kernel measurement instrument) — pose rate should scale by 3/4 with NO
+// stall and unchanged survivor latency (conflation = graceful degradation).
+
+use engine_host;
+
+const TICK_US: integer = 33333;   // 30 Hz, the server's grid
+
+struct Stats {
+  tick_n:       integer not null,
+  poses:        integer not null,
+  echoes:       integer not null,
+  last_echo_us: integer not null,
+  tot:          vector<integer>,   // t6 - t0, one clock
+  hold:         vector<integer>,   // t5 - t1, server clock
+}
+
+fn sort_us(v: vector<integer>) {
+  for i in 1..v.len() {
+    key = v[i];
+    j = i - 1;
+    while j >= 0 && v[j] > key {
+      v[j + 1] = v[j];
+      j = j - 1;
+    }
+    v[j + 1] = key;
+  }
+}
+
+fn pctl(v: vector<integer>, p: integer) -> integer {
+  if v.len() == 0 { return 0; }
+  idx = (v.len() - 1) * p / 100;
+  v[idx]
+}
+
+// "5:t0,t1,t5" → record total + hold.
+fn note_echo(st: Stats, payload: text) {
+  body = payload[2..];
+  i = body.find(",");
+  if i == null { return; }
+  t0 = body[..i] as integer;
+  rest = body[i + 1..];
+  j = rest.find(",");
+  if j == null { return; }
+  t1 = rest[..j] as integer;
+  t5 = rest[j + 1..] as integer;
+  st.tot += [ticks() - t0];
+  st.hold += [t5 - t1];
+  st.echoes = st.echoes + 1;
+}
+
+fn report(st: Stats) {
+  ub = engine_host::client_udp_bound();
+  sort_us(st.tot);
+  sort_us(st.hold);
+  tp50 = pctl(st.tot, 50);
+  tp95 = pctl(st.tot, 95);
+  hp50 = pctl(st.hold, 50);
+  println("nclient: report ticks={st.tick_n} udp={ub} poses={st.poses} echoes={st.echoes} tot_p50={tp50}us tot_p95={tp95}us hold_p50={hp50}us");
+}
+
+fn main() {
+  // The wire-schema table — must match the server's declarations.
+  engine_host::fast_lane_keyed(2);   // poses: latest-value per plane
+  engine_host::fast_lane(5);
+
+  st = Stats { tick_n: 0, poses: 0, echoes: 0, last_echo_us: 0, tot: [], hold: [] };
+
+  engine_host::run_client("127.0.0.1", 18084, TICK_US,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 0 {
+        println("nclient: connected");
+        // Our plane at the grid center — in sight of every web-tier plane.
+        engine_host::client_send("1:99,50,40,0");
+      } else if ev.kind == 1 {
+        // Pre-bind, sync kinds fall back to WS events — count them the same.
+        if ev.payload.starts_with("2:") { st.poses = st.poses + 1; }
+        else if ev.payload.starts_with("5:") { note_echo(st, ev.payload); }
+      } else if ev.kind == 2 {
+        println("nclient: disconnected");
+      }
+    },
+    fn() {
+      // Late-latch drain: poses + echo replies arrive via the sync slots.
+      while engine_host::client_sync_next() {
+        sp = engine_host::client_sync_payload();
+        if sp.starts_with("2:") { st.poses = st.poses + 1; }
+        else if sp.starts_with("5:") { note_echo(st, sp); }
+      }
+      // 207 ms — deliberately co-prime with the 33.33 ms tick: a cadence
+      // that divides the tick interval phase-locks the echo to one fixed
+      // queue position (measured: 200 ms = exactly 6 ticks froze hold at a
+      // full tick, p50 == p95).  The phase-lock itself is a real finding —
+      // input sent AT tick cadence sits at a fixed phase offset.
+      if ticks() - st.last_echo_us > 207000 {
+        engine_host::client_send("4:{ticks()}");
+        st.last_echo_us = ticks();
+      }
+      st.tick_n = st.tick_n + 1;
+      if st.tick_n - (st.tick_n / 150) * 150 == 0 {
+        report(st);
+      }
+    });
+  println("nclient: loop exited");
+}

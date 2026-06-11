@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 phase 00(a) — the bridge-tax probe, v1: execution-mode ratios.
+//
+// One frame-path-shaped function (thin gameplay orchestration: walk ~100
+// entities, integrate, bounce in a box, accumulate a checksum) self-timed
+// for ~1 second per measurement, so the SAME program reports ns/call under:
+//
+//   loft --interpret  tools/engine-host/bridge_tax.loft     (tier 0)
+//   loft --native     tools/engine-host/bridge_tax.loft     (baseline)
+//   loft --native-wasm + wasmtime <out.wasm>                (tier-1 substrate)
+//
+// v1 caveat (recorded in the plan): the wasm number includes wasmtime's
+// execution overhead but NOT the per-call host↔wasm bridge over the store —
+// that machinery is phase 03's; this probe bounds the EXECUTION side of the
+// tier and the full bridge tax is measured when the dispatch table exists.
+
+struct Ent {
+  x:  float not null,  y:  float not null,
+  vx: float not null,  vy: float not null,
+}
+
+const N_ENTS: integer = 100;
+const BOX: float = 100.0;
+
+fn step_entities(ents: vector<Ent>, dt: float) -> float {
+  sum = 0.0;
+  for e in ents {
+    e.x = e.x + e.vx * dt;
+    e.y = e.y + e.vy * dt;
+    if e.x < 0.0 { e.x = 0.0 - e.x; e.vx = 0.0 - e.vx; }
+    if e.x > BOX { e.x = BOX + BOX - e.x; e.vx = 0.0 - e.vx; }
+    if e.y < 0.0 { e.y = 0.0 - e.y; e.vy = 0.0 - e.vy; }
+    if e.y > BOX { e.y = BOX + BOX - e.y; e.vy = 0.0 - e.vy; }
+    sum = sum + e.x + e.y;
+  }
+  sum
+}
+
+fn main() {
+  ents: vector<Ent> = [];
+  for i in 0..N_ENTS {
+    ents += [Ent {
+      x: (i * 7 - (i * 7 / 100) * 100) as float,
+      y: (i * 13 - (i * 13 / 100) * 100) as float,
+      vx: 1.5, vy: 0.75,
+    }];
+  }
+  // Warmup.
+  acc = 0.0;
+  for _ in 0..10 { acc = acc + step_entities(ents, 0.016); }
+
+  // Timed: run for ~1 second, count calls.
+  t0 = ticks();
+  calls = 0;
+  while ticks() - t0 < 1000000 {
+    acc = acc + step_entities(ents, 0.016);
+    calls = calls + 1;
+  }
+  el_us = ticks() - t0;
+  ns_per_call = el_us * 1000 / calls;
+  println("bridge_tax: calls={calls} in {el_us}us -> {ns_per_call} ns/call (checksum {acc})");
+}

@@ -39,7 +39,42 @@ struct Counts {
   garbled:  integer not null,
 }
 
-fn count_for(h: web::WsHandler) -> Counts {
+// @PLN18 00c — turn-around samples (client 0 only; kind-5 echo replies).
+// total = t6−t0 (client clock, full round trip); hold = t5−t1 (server clock,
+// one clock so EXACT: drain→send = the tick wait + queue position); the wire
+// legs + client drain = total − hold.
+fn note_echo(m: text, i: integer, tot: vector<integer>, hold: vector<integer>) {
+  payload = m[i + 1..];
+  a = payload.find(",");
+  if a == null { return; }
+  b = payload[a + 1..].find(",");
+  if b == null { return; }
+  t0 = payload[..a] as integer;
+  t1 = payload[a + 1..a + 1 + b] as integer;
+  t5 = payload[a + 1 + b + 1..] as integer;
+  t6 = ticks();
+  tot  += [t6 - t0];
+  hold += [t5 - t1];
+}
+
+// @PLN18 00c — small-N insertion sort + percentile (≈50 samples).
+fn sort_us(v: vector<integer>) {
+  for si in 1..v.len() {
+    sj = si;
+    while sj > 0 {
+      if v[sj - 1] <= v[sj] { break; }
+      tmp = v[sj]; v[sj] = v[sj - 1]; v[sj - 1] = tmp;
+      sj = sj - 1;
+    }
+  }
+}
+fn pctl(v: vector<integer>, p: integer) -> integer {
+  if v.len() == 0 { return 0; }
+  k = (v.len() - 1) * p / 100;
+  v[k]
+}
+
+fn count_for(h: web::WsHandler, tot: vector<integer>, hold: vector<integer>) -> Counts {
   c = Counts { poses: 0, exits: 0, garbled: 0 };
   while true {
     m = h.try_recv();
@@ -50,6 +85,7 @@ fn count_for(h: web::WsHandler) -> Counts {
     kind = m[..i] as integer;
     if      kind == 2 { c.poses = c.poses + 1; }
     else if kind == 3 { c.exits = c.exits + 1; }
+    else if kind == 5 { note_echo(m, i, tot, hold); }
     else              { c.garbled = c.garbled + 1; }
   }
   c
@@ -101,13 +137,45 @@ fn run_probe(n: integer, secs: integer) {
   per_client_exits: vector<integer> = [];
   for _ in 0..clients.len() { per_client_poses += [0]; per_client_exits += [0]; }
 
+  echo_tot:  vector<integer> = [];
+  echo_hold: vector<integer> = [];
+  // @PLN18 00c — drain via WsGroup.poll(): the group scan is non-blocking
+  // (µs per idle socket), where per-handle try_recv pays lib/web's 7 ms
+  // blocking read timeout per idle client (measured: ~93 ms client-leg p50
+  // at 12 clients — the same pathology class as the server pump's 20 ms).
+  grp = web::ws_group();
+  handle_to_ci: vector<integer> = [];
+  for gi in 0..clients.len() {
+    grp.add(clients[gi]);
+    h_id = clients[gi].id;
+    while handle_to_ci.len() <= h_id { handle_to_ci += [0 - 1]; }
+    handle_to_ci[h_id] = gi;
+  }
+  last_echo = ticks();
   while (ticks() - start_us) < (secs * 1000000) {
-    for ci in 0..clients.len() {
-      c = count_for(clients[ci]);
-      per_client_poses[ci] = per_client_poses[ci] + c.poses;
-      per_client_exits[ci] = per_client_exits[ci] + c.exits;
+    // @PLN18 00c — client 0 fires a turn-around echo every 200 ms.
+    if ticks() - last_echo > 200000 {
+      clients[0].send("4:{ticks()}");
+      last_echo = ticks();
     }
-    web::sleep_ms(10);
+    // Drain pending events across the group — BUDGETED (256/cycle): an
+    // unbudgeted drain-to-empty never exits once per-event interp cost
+    // reaches the inter-arrival time (observed at tier 3), starving the
+    // outer clock check.  The kernel design's drain rule, in miniature.
+    for _gd in 0..256 {
+      ge = grp.poll();
+      if ge.handle < 0 { break; }
+      gci = handle_to_ci[ge.handle] ?? (0 - 1);
+      if gci < 0 { continue; }
+      gm = ge.message;
+      gidx = gm.find(":");
+      if gidx == null { continue; }
+      gkind = gm[..gidx] as integer;
+      if      gkind == 2 { per_client_poses[gci] = per_client_poses[gci] + 1; }
+      else if gkind == 3 { per_client_exits[gci] = per_client_exits[gci] + 1; }
+      else if gkind == 5 { note_echo(gm, gidx, echo_tot, echo_hold); }
+    }
+    web::sleep_ms(2);
   }
 
   // 4. Stationary-phase report.
@@ -126,6 +194,16 @@ fn run_probe(n: integer, secs: integer) {
   println("  expected ~{expected_per_client} POSE/client at full sight, no LOD");
   println("  total POSE received: {total_poses}");
 
+  // @PLN18 00c — turn-around report (client 0's echoes).
+  if echo_tot.len() > 0 {
+    sort_us(echo_tot);
+    sort_us(echo_hold);
+    n_e = echo_tot.len();
+    println("  turn-around ({n_e} echoes): total min/p50/p95/max = {echo_tot[0]}/{pctl(echo_tot, 50)}/{pctl(echo_tot, 95)}/{echo_tot[n_e - 1]} us");
+    println("  server hold (t5-t1, exact): min/p50/p95/max = {echo_hold[0]}/{pctl(echo_hold, 50)}/{pctl(echo_hold, 95)}/{echo_hold[n_e - 1]} us");
+    println("  wire+client legs (total-hold) p50 ~ {pctl(echo_tot, 50) - pctl(echo_hold, 50)} us");
+  }
+
   // 5. Move client 0 to (1000, 1000, 0) — far out of sight of everyone
   //    else.  Other clients should receive an EXIT for plane_id=0.
   if clients.len() >= 2 {
@@ -139,7 +217,7 @@ fn run_probe(n: integer, secs: integer) {
     start_us2 = ticks();
     while (ticks() - start_us2) < 500000 {   // 0.5 sec drain
       for ci in 0..clients.len() {
-        c = count_for(clients[ci]);
+        c = count_for(clients[ci], echo_tot, echo_hold);
         moved_exits[ci] = moved_exits[ci] + c.exits;
       }
       web::sleep_ms(5);

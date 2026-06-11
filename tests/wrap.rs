@@ -136,6 +136,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             coroutine_persistent_vars: std::collections::HashSet::new(),
             call_stack_prefix: None,
             wasm_browser: false,
+            live_fns: Vec::new(),
         };
         out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)?;
     }

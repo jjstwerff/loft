@@ -1107,7 +1107,7 @@ struct BpMeta {
 
 /// A live REPL session: stdlib + the statements entered so far.
 pub struct ReplSession {
-    parser: Parser,
+    pub(crate) parser: Parser,
     /// The standard-library directory this session was built from, kept so the test runner
     /// can spin up a **fresh** parser (stdlib + the file under test) — the clean single-parse
     /// the CLI runner uses, which the persistent session's accumulated parser state can't
@@ -1725,9 +1725,30 @@ impl ReplSession {
         for d in &self.parser.lib_dirs {
             cmd.arg("--lib").arg(d);
         }
+        // @PLN18 02 (the 6b wire-up): an IDE-launched game is live-editable
+        // by default — the child's file watcher reacts to every IDE save and
+        // hot-swaps the edited fn (tier 0); its `live-reload:` stderr lines
+        // are the structured feedback.  LOFT_LIVE_RELOAD=0 opts out.
+        if std::env::var_os("LOFT_LIVE_RELOAD").is_none() {
+            cmd.env("LOFT_LIVE_RELOAD", "1");
+        }
+        // @PLN18 08-S7 editor support — an IDE-launched game is DEBUGGABLE by
+        // default: the D!: control channel answers on the game's port
+        // (loopback-only) and a compiled game keeps the parked interpreter
+        // for breakpoint flips.  Opt out with =0 (the LIVE_RELOAD pattern).
+        if std::env::var_os("LOFT_DEBUG_CONTROL").is_none() {
+            cmd.env("LOFT_DEBUG_CONTROL", "1");
+        }
+        if std::env::var_os("LOFT_LIVE_FLIP").is_none() {
+            cmd.env("LOFT_LIVE_FLIP", "1");
+        }
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // A `--native` game serves from a GRANDCHILD of this child (the S1
+        // process-model finding) — own group so stop_game can reach it all.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("cannot launch game: {e}"))?;
@@ -1767,6 +1788,12 @@ impl ReplSession {
     /// is running.
     pub fn stop_game(&mut self) -> Option<String> {
         let mut g = self.game.take()?;
+        // Kill the whole process GROUP this session created: a native game's
+        // real server is a grandchild (driver -> compiled binary).
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(g.child.id() as i32, libc::SIGKILL);
+        }
         let _ = g.child.kill();
         let _ = g.child.wait();
         Some(std::mem::take(

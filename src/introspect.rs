@@ -422,6 +422,7 @@ fn emit_rust(
         coroutine_persistent_vars: HashSet::new(),
         call_stack_prefix: None,
         wasm_browser: false,
+        live_fns: Vec::new(),
     };
     out.output_native(w, 0, end_def)
 }

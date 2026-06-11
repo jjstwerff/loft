@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!-- @PLN18 08-S6 — the browser swap: a new build under a LIVING page.
+     The page is the persistent host layer (it owns the WebSocket across
+     loft instances).  Build A runs and counts; the server pushes a build
+     over the wire (a "B!:<fnv64>:<script>" frame, consumed at the host —
+     the script never sees it); a corrupt push is rejected and A keeps
+     running; a good push swaps: the world is exported out of the PARKED
+     instance A, staged, and instance B resumes ON THE SAME SOCKET (the
+     loft-rt adoption hook) with the restored world.  Throws on any unmet
+     clause; logs SWAP-OK on success.  ?port=N selects the kernel server.
+     The pushed script template is duplicated in the s6 test
+     (tests/engine_host_connector.rs) — keep them in step. -->
+<html><head><meta charset="utf-8"><title>kernel swap</title></head>
+<body><script type="module">
+import init, { compile_and_start, resume_frame, swap_export, swap_stage } from './pkg/loft.js';
+import { createHost } from './loft-rt.js';
+
+const { host } = createHost();
+globalThis.loftHost = host;
+const port = new URLSearchParams(location.search).get('port') || '18095';
+
+// ONE template, marker substituted — build A locally; build B arrives over
+// the wire (the test pushes the same template with marker v2).
+const TEMPLATE = (marker) => `
+use engine_host;
+struct C { count: integer not null }
+fn main() {
+  engine_host::sync_class(2);
+  c = C { count: 0 };
+  engine_host::swap_world(c);
+  engine_host::run_client(engine_host::default_host(), ${port}, 50000,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 1 && ev.payload.starts_with("2:") {
+        c.count = c.count + 1;
+      }
+    },
+    fn() { engine_host::client_send("c:${marker}:{c.count}"); });
+}
+`;
+
+const fnv64 = (s) => {
+  let h = 0xcbf29ce484222325n;
+  for (const b of new TextEncoder().encode(s)) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, '0');
+};
+
+// ── Page-side observability + verdict state ──
+const sends = { v1: [], v2: [] };
+host.onSend = (msg) => {
+  const m = msg.match(/^c:(v[12]):(-?\d+)$/);
+  if (m) sends[m[1]].push(parseInt(m[2], 10));
+};
+let rejected = false;
+let swapped = false;
+let lastAtSwap = -1;
+
+host.onBuildPush = (blob) => {
+  const m = blob.match(/^B!:([0-9a-f]{16}):([\s\S]*)$/);
+  if (!m || fnv64(m[2]) !== m[1]) {
+    rejected = true; // corrupt push: refuse, keep serving build A
+    return;
+  }
+  if (swapped) return;
+  // THE SWAP: export the world out of the parked A, stage it, adopt the
+  // living socket, boot B (as received over the wire).
+  const snap = swap_export();
+  if (!snap) throw new Error('SWAP-FAIL no world snapshot from build A');
+  lastAtSwap = sends.v1.length ? sends.v1[sends.v1.length - 1] : -1;
+  swap_stage(snap);
+  host.ws_adopt_next(0);
+  const r = JSON.parse(compile_and_start(JSON.stringify([{ name: 'main.loft', content: m[2] }])));
+  if (!r.ok || !r.running) throw new Error('SWAP-FAIL build B did not start: ' + JSON.stringify(r));
+  swapped = true;
+};
+
+await init();
+let result = JSON.parse(compile_and_start(JSON.stringify([{ name: 'main.loft', content: TEMPLATE('v1') }])));
+if (!result.ok || !result.running) {
+  throw new Error('SWAP-FAIL build A did not start: ' + JSON.stringify(result));
+}
+
+// The deadline sits INSIDE the harness's --wait-ms window: an unmet
+// verdict THROWS while the harness is still watching (no false-pass).
+const deadline = Date.now() + 20000;
+for (;;) {
+  await new Promise(r => setTimeout(r, 5));
+  const fr = JSON.parse(resume_frame());
+  if (fr.error) throw new Error('SWAP-CRASH ' + fr.error);
+  if (!fr.running) throw new Error('SWAP-FAIL the client run ended: ' + JSON.stringify(fr));
+  // The verdict: every clause met.
+  if (rejected && swapped && sends.v2.length >= 3) {
+    if (host.ws_opens !== 1) {
+      throw new Error(`SWAP-FAIL socket identity: ${host.ws_opens} opens (want 1 — B must adopt A's socket)`);
+    }
+    const firstB = sends.v2[0];
+    if (lastAtSwap < 1 || firstB < lastAtSwap) {
+      throw new Error(`SWAP-FAIL world continuity: A's count ${lastAtSwap} -> B's first ${firstB}`);
+    }
+    const lastB = sends.v2[sends.v2.length - 1];
+    if (lastB <= firstB) {
+      throw new Error('SWAP-FAIL build B is not advancing');
+    }
+    console.log(`SWAP-OK a_last=${lastAtSwap} b_first=${firstB} b_last=${lastB} opens=${host.ws_opens}`);
+    break;
+  }
+  if (Date.now() > deadline) {
+    throw new Error(`SWAP-FAIL timeout: rejected=${rejected} swapped=${swapped} v1=${sends.v1.length} v2=${sends.v2.length}`);
+  }
+}
+</script></body></html>

@@ -1,0 +1,14 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# Dep-shadowing regression fixture — the consumer package.  Its entry
+# file is named `shadowlib.loft`, EXACTLY like the declared dependency:
+# `use shadowlib;` must load the dependency, not the package's own file.
+
+[package]
+name    = "dep_shadow_consumer"
+version = "0.0.0"
+loft    = ">=0.8"
+
+[dependencies]
+shadowlib = { path = "../shadowlib" }

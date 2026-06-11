@@ -3,10 +3,17 @@
 //
 // @PLN6 phase 3 MVP — pure-OpenGL projector view (basis for the beamer).
 //
-// Connects as a WebSocket client to the multi-client audience server
-// (tools/audience-demo/server.loft, ws://127.0.0.1:18083/), receives
-// every `4:x,y,color` delta the server broadcasts, and renders the
-// painted hexes live in a desktop GL window.
+// Connects through the ENGINE-HOST CONNECTOR (@PLN18 — `run_client`, the
+// same kernel the server runs on: auto-hello, keepalives, and the UDP fast
+// path negotiated invisibly) to the audience server — preferably the kernel
+// port (server_kernel.loft) — receives every `4:x,y,color` delta the server
+// broadcasts, and renders the painted hexes live in a desktop GL window.
+// The render loop IS the connector's tick: one `on_tick` = one frame
+// (poll window events, rebuild dirty VBOs, draw, swap); deltas arrive
+// through `on_event` between frames.  Closing the window calls
+// `client_stop()` — the loop belongs to the connector, the exit decision
+// to the script.  Cross-closure mutable state lives in the `Proj` record
+// (the #314 struct-world idiom).
 //
 // MVP scope:
 //   - Single OpenGL window, 1280x800.
@@ -17,8 +24,8 @@
 //     camera + 3D crystal mesh per `03-projector-view.md`.
 //
 // Run:
-//   # Terminal A — start the multi-client server.
-//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/server.loft
+//   # Terminal A — start the kernel server.
+//   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/server_kernel.loft
 //
 //   # Terminal B — start the projector.
 //   ./target/release/loft --no-warnings --lib lib/ tools/audience-demo/projector.loft
@@ -28,7 +35,7 @@
 
 use graphics;
 use math;
-use web;
+use engine_host;
 use gridmesh;              // build_index (shared spatial-index primitive)
 use audience_crystal::*;   // CellSnap, CrystalMesh, CrystalState, crystal_segments_aged,
                            // update_state, pick_centers, palette_r/g/b, cell_wx/wz,
@@ -39,10 +46,14 @@ use audience_crystal::*;   // CellSnap, CrystalMesh, CrystalState, crystal_segme
 WIN_W = 1280;
 WIN_H = 800;
 
-// Server URL (hard-coded for the MVP — separate binary per the user's
-// scope decision).  Multi-client `server.loft` listens on 18083 and
-// broadcasts every paint event over text frames `4:x,y,color`.
-SERVER_URL = "ws://127.0.0.1:18083/ws";
+// Default server port (the audience servers listen on 18083).  The host
+// comes from engine_host::default_host() (LOFT_HOST overrides), and
+// LOFT_PROJ_SERVER still accepts the legacy ws:// URL form.
+SERVER_PORT = 18083;
+
+// One connector tick = one frame; vsync inside gl_swap_buffers dominates
+// when enabled, this caps the cadence when it is not (~60 fps).
+FRAME_US = 16667;
 
 // ── Helpers — leaves first (per @P281: pass-1 fn return-type inference) ─────
 
@@ -738,6 +749,54 @@ fn apply_frame(world: World, cryst: &CrystalIncr, crystal_births: &vector<single
   }
 }
 
+// Cross-closure mutable state for the connector port: `on_event` and
+// `on_tick` each get their own capture record, so a bare scalar mutated in
+// one closure is invisible to the other (#314) — every mutable scalar (and
+// the births vector, whose handle reassigns on growth) lives HERE, behind
+// the one record both closures share.
+struct Proj {
+  frames:             integer not null,
+  delta_count:        integer not null,
+  last_built_version: integer not null,
+  ground_vao:         integer not null,
+  ground_vert_count:  integer not null,
+  fading_vao:         integer not null,
+  cell_shader:        integer not null,
+  crystal_shader:     integer not null,
+  qr_tex:             integer not null,
+  win_w:              integer not null,
+  win_h:              integer not null,
+  shot_path:          text not null,
+  shot_done:          boolean not null,
+  snapshot_retry_at:  integer not null,
+  snapshot_retries:   integer not null,
+  closing:            boolean not null,
+  crystal_births:     vector<single>,
+}
+
+// Accept the legacy LOFT_PROJ_SERVER forms — "ws://host:port/ws",
+// "host:port", or bare "host" — and yield the host half.
+fn server_host(url: text, fallback: text) -> text {
+  if url == "" { return fallback; }
+  rest = if url.starts_with("ws://") { url[5..] } else { url };
+  slash = rest.find("/");
+  hp = if slash != null { rest[..slash] } else { rest };
+  colon = hp.find(":");
+  if colon != null { hp[..colon] } else { hp }
+}
+
+// The port half of the same forms; `fallback` when absent.
+fn server_port(url: text, fallback: integer) -> integer {
+  if url == "" { return fallback; }
+  rest = if url.starts_with("ws://") { url[5..] } else { url };
+  slash = rest.find("/");
+  hp = if slash != null { rest[..slash] } else { rest };
+  colon = hp.find(":");
+  if colon == null { return fallback; }
+  port = hp[colon + 1..] as integer;
+  if port == null { fallback } else { port }
+}
+
 fn main() {
   // LOFT_PROJ_FULLSCREEN=1 opens borderless fullscreen at the monitor's
   // native resolution; otherwise a 1280x800 window.
@@ -788,48 +847,27 @@ fn main() {
     else { println("projector: QR overlay from {qr_path}"); }
   }
 
-  // Server URL: LOFT_PROJ_SERVER overrides the local default, so the same
-  // projector can point at a remote audience server (e.g. a public demo).
+  // Server address: LOFT_PROJ_SERVER overrides (legacy ws:// URLs still
+  // accepted); the default host honours LOFT_HOST via default_host().
   server_url = env_variable("LOFT_PROJ_SERVER");
-  if server_url == "" { server_url = SERVER_URL; }
-  println("projector: connecting to {server_url}");
-  ws = web::ws_handler(server_url);
-  if ws == null {
-    println("projector: FAILED ws_handler({server_url})");
-    graphics::gl_destroy_window();
-    return;
-  }
-  println("projector: ws session opened (auto-reconnects on drop)");
+  host = server_host(server_url, engine_host::default_host());
+  port = server_port(server_url, SERVER_PORT);
+  println("projector: connecting to {host}:{port} (engine-host connector)");
 
   world = World{cells: [], version: 0, paint_tick_next: 0, fades: []};
 
   // Optional one-shot framebuffer capture (LOFT_PROJ_SHOT=<path>): grab the
   // GL back-buffer once the world has replayed + the camera has settled, so
   // the live 3D output can be inspected on a headless / Wayland desktop.
-  shot_path = env_variable("LOFT_PROJ_SHOT");
-  shot_done = false;
   // Persistent crystal aging state — owned by main, updated whenever
-  // world.version changes.  `lookup_main_birth(state, …)` is queried by
-  // crystal_segments_aged to scale side-branch length by main age.
+  // world.version changes.
   crystal_state = CrystalState{
     main_x: [], main_y: [], main_d: [], birth_tick: [],
   };
-  // Mesh state — rebuilt lazily when world.version changes.  Start at
-  // -1 / 0 so the first frame after the snapshot arrives triggers an
-  // initial build (an empty world bakes empty VBOs, harmless).
-  last_built_version: integer = 0 - 1;
-  ground_vao: integer = 0;
-  ground_vert_count: integer = 0;
-  // C4: the crystal is an INCREMENTAL field rendered as PER-GROUP VBOs.
-  // `crystal` mirrors every world edit (apply_frame); `crystal_births` is the
-  // per-cell bloom birth (parallel to its cells); `crystal_set` holds one VBO
-  // per render group so an edit re-uploads only the dirty groups (O(dirty)).
   crystal = crystal_incr_new(CellSnap{xs: [], ys: [], colors: []},
                              CRYSTAL_CHUNK_SHIFT, CRYSTAL_GROUP_DIM, CRYSTAL_HALO_K,
                              crystal_state, 0);
-  crystal_births: vector<single> = [];
   crystal_set = graphics::group_vbos_new(14, graphics::DRAW_TRIANGLES);
-  fading_vao: integer = 0;
   auto_cam = AutoCam{
     pos_x: 0.0, pos_y: 0.0,
     end_x: 0.0, end_y: 0.0,
@@ -839,37 +877,69 @@ fn main() {
     ready_tick: 0 - 1,
   };
 
-  // Ask the server for a full snapshot.  Catches the case where the
-  // initial connect-time replay missed frames (lib/web buffer ramp-up,
-  // WS handshake race, mid-show reconnect, etc.).  Re-requested below
-  // every 2 seconds while world is still empty.
-  ws.send("6:");
-  snapshot_retry_at = 120;          // frame number; re-request if still empty
-  snapshot_retries  = 0;            // capped at 3 attempts; see watchdog below
+  p = Proj{
+    frames: 0, delta_count: 0,
+    last_built_version: 0 - 1,
+    ground_vao: 0, ground_vert_count: 0, fading_vao: 0,
+    cell_shader: cell_shader, crystal_shader: crystal_shader,
+    qr_tex: qr_tex, win_w: win_w, win_h: win_h,
+    shot_path: env_variable("LOFT_PROJ_SHOT"), shot_done: false,
+    snapshot_retry_at: 120, snapshot_retries: 0,
+    closing: false,
+    crystal_births: [],
+  };
+
+  // Name the world for live build swaps (@PLN18 08-S5).  The hash fields
+  // (cells/fades) restore to defaults across a swap — by design for a
+  // VIEWER: the snapshot carries the scalars, and the post-swap connect's
+  // "6:" re-request replays the cells from the server (the same recovery
+  // path a fresh start uses).
+  resumed = engine_host::swap_world(world);
+  if resumed {
+    println("projector: resumed from a build swap (world replay requested on connect)");
+  }
 
   // Dark-blue background — matches doc/audience-demo/index.html --bg.
   bg = graphics::rgba(10, 10, 20, 255);
 
-  frames = 0;
-  delta_count = 0;
-  while graphics::gl_poll_events() {
-    // 1. Drain any pending server frames into world state.
-    while true {
-      msg = ws.try_recv();
-      if msg == null { break; }
-      apply_frame(world, crystal, crystal_births, auto_cam, frames, msg);
-      delta_count = delta_count + 1;
-    }
-
+  // The connector loop: `on_event` applies world deltas, `on_tick` IS the
+  // frame.  run_client returns when the server drops — reconnect (the
+  // mid-show resilience the old lib/web session gave us) until the window
+  // itself closes.
+  while !p.closing && !engine_host::swap_retired() {
+    engine_host::run_client(host, port, FRAME_US,
+      fn(ev: engine_host::Event) {
+        if ev.kind == 0 {
+          // Connected: ask for the full world replay.
+          engine_host::client_send("6:");
+          println("projector: connected; snapshot requested");
+        } else if ev.kind == 1 {
+          // '&' params need plain locals: copy the handles out (and the
+          // births vector back — its append may regrow the handle).
+          c = crystal;
+          births = p.crystal_births;
+          apply_frame(world, c, births, auto_cam, p.frames, ev.payload);
+          p.crystal_births = births;
+          p.delta_count = p.delta_count + 1;
+        } else if ev.kind == 2 {
+          println("projector: server connection lost");
+        }
+      },
+      fn() {
+        if !graphics::gl_poll_events() {
+          p.closing = true;
+          engine_host::client_stop();
+          return;
+        }
     // 2. Step the auto-camera: heat-field decay + lerp toward the
     //    exp-weighted centroid of recent activity.  Cheap when
     //    `recent` is small; bounded by CAMERA_MAX_HIST in the worst
     //    case.  Runs every frame so the motion stays smooth at 60 fps.
-    cam_step(auto_cam, frames);
+    cam_step(auto_cam, p.frames);
     // Log camera position every ~2 seconds so an outside observer
     // (tail -f the projector log) can see it swing without needing
     // to read pixels off the screen.
-    if frames - (frames / 120) * 120 == 0 && frames > 0 {
+    if p.frames - (p.frames / 120) * 120 == 0 && p.frames > 0 {
       println("projector: cam pos=({auto_cam.pos_x}, {auto_cam.pos_y}) end=({auto_cam.end_x}, {auto_cam.end_y}) rot={auto_cam.rotation}/{auto_cam.end_rot} tilt={auto_cam.tilt}");
     }
 
@@ -879,14 +949,14 @@ fn main() {
     //    every filled cell.  Both are baked here only when the
     //    world has actually mutated since last frame — between
     //    edits, render is one draw call per VBO.
-    if world.version != last_built_version {
-      if ground_vao != 0 { graphics::gl_delete_vao(ground_vao); }
+    if world.version != p.last_built_version {
+      if p.ground_vao != 0 { graphics::gl_delete_vao(p.ground_vao); }
       ss = snapshot_cells(world);
       snap = ss.snap;
       // Ground stays ONE VBO (cheap flat hexes), rebuilt on change.
       gres = build_ground_vbo(snap);
-      ground_vao        = gres.0;
-      ground_vert_count = gres.1;
+      p.ground_vao        = gres.0;
+      p.ground_vert_count = gres.1;
       // Crystal (C4): re-upload only the DIRTY render groups.  `crystal` was kept
       // in sync incrementally by apply_frame, so capture the dirty groups BEFORE
       // the rebuild (which clears the dirty set), rebuild just those chunks, then
@@ -895,13 +965,15 @@ fn main() {
       // shader still animates the GROW-IN per frame via uNow (no CPU rebuild
       // between edits).
       dirty_groups = collect_dirty_groups(crystal.field, crystal.group_dim);
-      crystal_incr_rebuild(crystal, crystal_state, frames);
+      ci = crystal;
+      crystal_incr_rebuild(ci, crystal_state, p.frames);
+      vset = crystal_set;     // captured var -> a plain local for the '&' param
       for dg in dirty_groups {
         gmesh = crystal_incr_assemble_group(crystal, dg);
-        gverts = bake_crystal_group(gmesh, crystal_births);
-        graphics::group_vbos_upsert(crystal_set, dg.key.gk, gverts, 0.0f, 0.0f, 0.0f, 0.0f);
+        gverts = bake_crystal_group(gmesh, p.crystal_births);
+        graphics::group_vbos_upsert(vset, dg.key.gk, gverts, 0.0f, 0.0f, 0.0f, 0.0f);
       }
-      last_built_version = world.version;
+      p.last_built_version = world.version;
     }
 
     // (Crystal growth animation disabled — crystals render statically at
@@ -912,20 +984,20 @@ fn main() {
     graphics::gl_clear(bg);
     view_matrix = build_view_matrix(auto_cam);
     proj_view = math::mat4_mul(proj_matrix, view_matrix);
-    graphics::gl_use_shader(cell_shader);
-    graphics::gl_set_uniform_mat4(cell_shader, "uMVP", proj_view.m);
+    graphics::gl_use_shader(p.cell_shader);
+    graphics::gl_set_uniform_mat4(p.cell_shader, "uMVP", proj_view.m);
     // (a) Ground layer — filled hex per painted cell, in the cell's
     //     palette colour.  Empty cells render nothing.
-    if ground_vert_count > 0 {
-      graphics::gl_draw(ground_vao, ground_vert_count);
+    if p.ground_vert_count > 0 {
+      graphics::gl_draw(p.ground_vao, p.ground_vert_count);
     }
     // (b) Crystal layer — 3D beams, GROWN in by the crystal shader:
     //     each vertex eases out from its cell's centre over GROWTH_FRAMES,
     //     so a new paint blooms in.  Mesh is cached; only uNow advances.
-    graphics::gl_use_shader(crystal_shader);
-    graphics::gl_set_uniform_mat4(crystal_shader, "uMVP", proj_view.m);
-    graphics::gl_set_uniform_float(crystal_shader, "uNow", frames as float);
-    graphics::gl_set_uniform_float(crystal_shader, "uGrowth", GROWTH_FRAMES);
+    graphics::gl_use_shader(p.crystal_shader);
+    graphics::gl_set_uniform_mat4(p.crystal_shader, "uMVP", proj_view.m);
+    graphics::gl_set_uniform_float(p.crystal_shader, "uNow", p.frames as float);
+    graphics::gl_set_uniform_float(p.crystal_shader, "uGrowth", GROWTH_FRAMES);
     // One draw call per render group (C4) — untouched groups keep their cached VBOs.
     graphics::group_vbos_draw_all(crystal_set);
     // (c) Fade layer — translucent ground footprints of recently-erased
@@ -933,62 +1005,67 @@ fn main() {
     //     frame while any fade is active (few cells, cheap) and drawn last
     //     so the blend sits correctly over the opaque layers.  Skipped —
     //     and the VAO released — when nothing is fading.  Stride-10 VBO →
-    //     switch back to cell_shader (the crystal layer left crystal_shader
+    //     switch back to p.cell_shader (the crystal layer left p.crystal_shader
     //     bound, which expects the stride-14 growth attributes).
     if len(world.fades) > 0 {
-      graphics::gl_use_shader(cell_shader);
-      graphics::gl_set_uniform_mat4(cell_shader, "uMVP", proj_view.m);
-      if fading_vao != 0 { graphics::gl_delete_vao(fading_vao); }
-      fres = build_fading_vbo(world, frames);
-      fading_vao = fres.0;
+      graphics::gl_use_shader(p.cell_shader);
+      graphics::gl_set_uniform_mat4(p.cell_shader, "uMVP", proj_view.m);
+      if p.fading_vao != 0 { graphics::gl_delete_vao(p.fading_vao); }
+      fres = build_fading_vbo(world, p.frames);
+      p.fading_vao = fres.0;
       fading_count = fres.1;
       if fading_count > 0 {
-        graphics::gl_draw(fading_vao, fading_count);
+        graphics::gl_draw(p.fading_vao, fading_count);
       }
-      prune_fades(world, frames);
-    } else if fading_vao != 0 {
-      graphics::gl_delete_vao(fading_vao);
-      fading_vao = 0;
+      prune_fades(world, p.frames);
+    } else if p.fading_vao != 0 {
+      graphics::gl_delete_vao(p.fading_vao);
+      p.fading_vao = 0;
     }
     // "Scan to join" QR overlay, top-right corner (screen-space, on top of
     // the 3D scene).  Depth test off so it always draws over the crystals.
-    if qr_tex != 0 {
-      qr_size = win_h as float * 0.22;     // scales with the window
-      qr_margin = win_h as float * 0.03;
+    if p.qr_tex != 0 {
+      qr_size = p.win_h as float * 0.22;     // scales with the window
+      qr_margin = p.win_h as float * 0.03;
       qr_pad = qr_size * 0.06;
-      qr_x = win_w as float - qr_size - qr_margin;
+      qr_x = p.win_w as float - qr_size - qr_margin;
       graphics::gl_disable(graphics::GL_DEPTH_TEST);
       // white backing card (also the QR quiet-zone) then the QR on top
       graphics::draw_rect_at(qr_painter, qr_x - qr_pad, qr_margin - qr_pad,
                              qr_size + qr_pad * 2.0, qr_size + qr_pad * 2.0,
                              1.0, 1.0, 1.0, 1.0);
-      graphics::draw_texture_at(qr_painter, qr_tex, qr_x, qr_margin, qr_size, qr_size);
+      graphics::draw_texture_at(qr_painter, p.qr_tex, qr_x, qr_margin, qr_size, qr_size);
       graphics::gl_enable(graphics::GL_DEPTH_TEST);
     }
 
     // One-shot capture (before swap → reads the freshly-drawn GL_BACK).
     // Fire after ~3 s so the world has replayed and the camera has settled.
-    if shot_path != "" && !shot_done && frames > 180 {
-      graphics::gl_screenshot(win_w, win_h, shot_path);
-      shot_done = true;
-      println("projector: screenshot -> {shot_path}");
+    if p.shot_path != "" && !p.shot_done && p.frames > 180 {
+      graphics::gl_screenshot(p.win_w, p.win_h, p.shot_path);
+      p.shot_done = true;
+      println("projector: screenshot -> {p.shot_path}");
     }
     graphics::gl_swap_buffers();
-    frames = frames + 1;
+    p.frames = p.frames + 1;
 
     // Watchdog: re-request snapshot a small number of times while the
     // world is still empty (covers the case where the initial replay
     // missed frames).  Capped at 3 attempts so a genuinely empty world
     // doesn't spam the server / log forever.
-    if len(world.cells) == 0 && frames >= snapshot_retry_at && snapshot_retries < 3 {
-      println("projector: still empty after {frames} frames; re-requesting snapshot");
-      ws.send("6:");
-      snapshot_retry_at = frames + 120;
-      snapshot_retries = snapshot_retries + 1;
+    if len(world.cells) == 0 && p.frames >= p.snapshot_retry_at && p.snapshot_retries < 3 {
+      println("projector: still empty after {p.frames} frames; re-requesting snapshot");
+      engine_host::client_send("6:");
+      p.snapshot_retry_at = p.frames + 120;
+      p.snapshot_retries = p.snapshot_retries + 1;
+    }
+      });
+    if engine_host::swap_retired() {
+      println("projector: this build retired after a swap — the new one carries on");
+    } else if !p.closing {
+      println("projector: reconnecting…");
     }
   }
 
-  println("projector: window closed after {frames} frames, {delta_count} deltas applied");
-  ws.close();
+  println("projector: window closed after {p.frames} frames, {p.delta_count} deltas applied");
   graphics::gl_destroy_window();
 }

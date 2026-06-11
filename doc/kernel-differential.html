@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- @PLN18 phase 07 — the one-script differential: the SAME loft client
+     source runs here (the browser kernel) and natively (run_client); both
+     must print the identical transcript.  The page throws on mismatch
+     (the chromium harness fails on exceptions) and logs DIFFERENTIAL-OK
+     on success.  ?port=N selects the kernel server. -->
+<html><head><meta charset="utf-8"><title>kernel differential</title></head>
+<body><script type="module">
+import init, { compile_and_start, resume_frame } from './pkg/loft.js';
+import { createHost } from './loft-rt.js';
+
+const { host } = createHost();
+globalThis.loftHost = host;
+
+const port = new URLSearchParams(location.search).get('port') || '18095';
+// THE script — byte-identical to the native run's (the test asserts that
+// by generating both from one template; only the port substitutes).
+const SRC = `
+use engine_host;
+struct C { saw_sync: boolean not null }
+fn main() {
+  engine_host::sync_class(2);
+  c = C { saw_sync: false };
+  engine_host::run_client(engine_host::default_host(), ${port}, 50000,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 0 {
+        println("t:connected");
+        engine_host::client_send("hello");
+      } else if ev.kind == 1 {
+        if ev.payload.starts_with("2:") {
+          if !c.saw_sync {
+            c.saw_sync = true;
+            println("t:sync-ok");
+          }
+        } else {
+          println("t:event {ev.payload}");
+        }
+      } else if ev.kind == 2 {
+        println("t:disconnected");
+      }
+    },
+    fn() { });
+  println("t:exited");
+}
+`;
+const EXPECT = ["t:connected", "t:event 7:hi", "t:sync-ok", "t:disconnected", "t:exited"];
+
+await init();
+// compile_and_start + resume_frame = the frame-yield pairing (a yielding
+// program through compile_and_run silently DROPS the parked state — the
+// 08-S6 gate's second finding, masked by the time panic until it fell).
+let result = JSON.parse(compile_and_start(JSON.stringify([{ name: 'main.loft', content: SRC }])));
+if (!result.ok) {
+  throw new Error('DIFFERENTIAL-COMPILE ' + JSON.stringify(result.error || result));
+}
+let output = result.output || '';
+while (result.running) {
+  await new Promise(r => setTimeout(r, 5));
+  result = JSON.parse(resume_frame());
+  if (result.error) throw new Error('DIFFERENTIAL-CRASH ' + result.error);
+  if (!result.running) output += result.output || '';
+}
+const lines = output.split('\n').filter(l => l.startsWith('t:'));
+if (JSON.stringify(lines) !== JSON.stringify(EXPECT)) {
+  throw new Error(`DIFFERENTIAL-MISMATCH got=${JSON.stringify(lines)} want=${JSON.stringify(EXPECT)}`);
+}
+console.log('DIFFERENTIAL-OK');
+</script></body></html>

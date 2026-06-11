@@ -662,13 +662,26 @@ impl Stores {
             let s = self.store_mut(file);
             let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                if let Ok(f) = std::fs::File::create(&resolved_name) {
-                    s.set_i32_raw(file.rec, file.pos + 28, f_nr);
-                    self.files.push(Some(f));
+                match std::fs::File::create(&resolved_name) {
+                    Ok(f) => {
+                        s.set_i32_raw(file.rec, file.pos + 28, f_nr);
+                        self.files.push(Some(f));
+                        file_ref = f_nr;
+                    }
+                    Err(e) => {
+                        // A failed create must NOT leave a dangling ref —
+                        // indexing self.files with it panicked (CI-caught on
+                        // a Windows runner with a transient FS refusal).
+                        // Warn and skip the write (the recoverable-fault
+                        // posture); the next write retries the create.
+                        eprintln!(
+                            "loft: cannot create {resolved_name} for writing: {e} — write skipped"
+                        );
+                        return;
+                    }
                 }
-                file_ref = f_nr;
             }
-            if let Some(f) = &mut self.files[file_ref as usize] {
+            if let Some(Some(f)) = self.files.get_mut(file_ref as usize) {
                 f.write_all(v.as_bytes()).unwrap_or_default();
             }
         }

@@ -57,14 +57,17 @@ pub fn byte_code_from(
 ) {
     // Step 0 (startup-cache plan): env-gated phase timing.  No-op unless
     // LOFT_TIMING is set.  Separates native::init from the codegen loop.
+    // The clock reads are gated too, not just the print: `Instant::now()`
+    // PANICS on wasm32-unknown-unknown ("time not implemented") — it took
+    // the browser kernel down at compile time (@PLN18 08-S6 gate).
     let timing = std::env::var("LOFT_TIMING").is_ok();
-    let t_init = std::time::Instant::now();
+    let t_init = timing.then(std::time::Instant::now);
     if start_d_nr == 0 {
         native::init(state);
         register_native_stubs(state, data);
     }
-    let init_ms = t_init.elapsed().as_secs_f64() * 1000.0;
-    let t_codegen = std::time::Instant::now();
+    let init_ms = t_init.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+    let t_codegen = timing.then(std::time::Instant::now);
     // @PLN11 G2/M2/M6 — codegen body source:
     //  * `warm_store` (M6): a pre-loaded mmap'd cache bundle — read bodies
     //    straight from it (no materialise, no `read_data` body rebuild).
@@ -93,7 +96,7 @@ pub fn byte_code_from(
         state.database.allocations[crate::database::CONST_STORE as usize]
             .lock_with_origin("compile.rs::compile (CONST_STORE init)");
     }
-    if timing {
+    if let Some(t_codegen) = t_codegen {
         eprintln!(
             "LOFT_TIMING byte_code_from start={start_d_nr} native_init={init_ms:.2}ms codegen={:.2}ms",
             t_codegen.elapsed().as_secs_f64() * 1000.0
@@ -286,6 +289,9 @@ fn register_native_stubs(state: &mut State, data: &Data) {
             continue;
         }
         stub_syms.insert(sym.to_string());
+        if std::env::var("LOFT_STUB_DEBUG").is_ok() {
+            eprintln!("STUBDBG panic-stub registered for native symbol '{sym}'");
+        }
         // Register a stub that panics with an **actionable** message.  Reaching it
         // means a `#native` function's cdylib symbol could not be resolved at load
         // (`wire_native_fns` left the stub in place), so calling it aborts.  The cause

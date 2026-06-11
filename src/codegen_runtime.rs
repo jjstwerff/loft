@@ -135,7 +135,66 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_struct_from_jsonvalue",      abi: Abi::Cell },
     RuntimeFn { name: "n_struct_to_json",             abi: Abi::Cell },
     RuntimeFn { name: "n_struct_to_json_pretty",      abi: Abi::Cell },
+    // @PLN18 08-S1 — the engine-host kernel natives, typed twins in
+    // `engine_host::typed` (re-exported below): a compiled kernel program
+    // calls the SAME in-binary kernel the interpreter uses — one
+    // implementation, two calling conventions.
+    RuntimeFn { name: "n_kernel_listen",              abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_pump",                abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_next_event",          abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_cid",           abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_kind",          abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_event_payload",       abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_tick_due",            abi: Abi::Cell },
+    RuntimeFn { name: "n_send",                       abi: Abi::Cell },
+    RuntimeFn { name: "n_broadcast",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_idle",                abi: Abi::Cell },
+    RuntimeFn { name: "n_clients",                    abi: Abi::Cell },
+    RuntimeFn { name: "n_udp_bound",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_class",                 abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_class_keyed",           abi: Abi::Cell },
+    RuntimeFn { name: "n_keyframe",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_next",                  abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_cid",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_sync_seq",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_sync_payload",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_frame",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_default_host",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_connect",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_pump",         abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_alive",        abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_stop",         abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_next_event",   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_event_kind",   abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_event_payload", abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_tick_due",     abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_idle",         abi: Abi::Cell },
+    RuntimeFn { name: "n_client_send",                abi: Abi::Cell },
+    RuntimeFn { name: "n_client_sync_next",           abi: Abi::Cell },
+    RuntimeFn { name: "n_client_sync_seq",            abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_client_sync_payload", abi: Abi::Cell },
+    RuntimeFn { name: "n_client_udp_bound",           abi: Abi::Cell },
+    // @PLN18 08-S2 — live dispatch: flip a fn to the interpreter at runtime.
+    RuntimeFn { name: "n_live_flip",                  abi: Abi::Cell },
+    // @PLN18 08-S4 — background rebuild of the served program.
+    RuntimeFn { name: "n_rebuild_start",              abi: Abi::Cell },
+    RuntimeFn { name: "n_rebuild_status",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_rebuild_artifact",    abi: Abi::Cell },
+    // @PLN18 08-S5 — the native build swap.
+    RuntimeFn { name: "n_swap_world",                 abi: Abi::Cell },
+    RuntimeFn { name: "n_swap_start",                 abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_swap_step",           abi: Abi::Cell },
+    RuntimeFn { name: "n_swap_retired",               abi: Abi::Cell },
 ];
+
+// @PLN18 08-S1 — the typed kernel twins, glob-importable by generated crates.
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::engine_host::typed::*;
+// @PLN18 08-S2 — the live-flip surface (typed twin in live_dispatch).
+pub use crate::live_dispatch::n_live_flip;
+// @PLN18 08-S4 — the background-rebuild surface.
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::live_dispatch::{n_kernel_rebuild_artifact, n_rebuild_start, n_rebuild_status};
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
 /// unknown names — user-defined functions and Op stubs default to the

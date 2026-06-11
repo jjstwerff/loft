@@ -1,0 +1,171 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN18 phase 01 — probe_server.loft's meaning on the engine-host kernel.
+// Same wire protocol + port as the original (tools/audience-demo-50/
+// probe_server.loft), so the unchanged probe.loft client drives both; the
+// 00(c) stamp chain (4:t0 → 5:t0,t1,t5) measures the kernel against the
+// lib/server baseline.  The acceptance: the server-hold residual above the
+// half-tick wait (the interp-harness pump/drain term, ~40 ms at baseline)
+// must collapse — the kernel pump is the Rust peek loop.
+//
+// Run:
+//   ./target/release/loft --interpret --no-warnings --lib lib \
+//       tools/audience-demo-50/probe_server_kernel.loft
+
+use engine_host;
+
+const PORT: integer = 18084;
+const TICK_INTERVAL_US: integer = 33333;   // 30 Hz
+const SIGHT_RANGE_SQ: float = 6400.0;      // 80 m sight range, squared
+
+struct Plane {
+  cid: integer not null,
+  x:   float not null,
+  y:   float not null,
+  z:   float not null,
+  seq: integer not null,
+}
+
+struct SightEntry {
+  peer_cid: integer not null,
+  in_range: boolean not null,
+}
+struct Vis {
+  cid:   integer not null,
+  peers: vector<SightEntry>,
+}
+
+// One pending turn-around echo: requester, their t0 (verbatim), and the
+// server clock when the request was DRAINED (t1).
+struct EchoReq {
+  cid: integer not null,
+  t0:  text not null,
+  t1:  integer not null,
+}
+
+struct World {
+  planes: hash<Plane[cid]>,
+  vis:    hash<Vis[cid]>,
+  tick:   integer not null,
+  echoes: vector<EchoReq>,
+}
+
+fn dist_sq(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> float {
+  dx = ax - bx; dy = ay - by; dz = az - bz;
+  dx * dx + dy * dy + dz * dz
+}
+
+struct InputParts {
+  cid: integer not null,
+  x:   float not null,
+  y:   float not null,
+  z:   float not null,
+  ok:  boolean not null,
+}
+
+fn parse_input(payload: text) -> InputParts {
+  parts = payload.split(',');
+  if parts.len() != 4 {
+    return InputParts { cid: 0, x: 0.0, y: 0.0, z: 0.0, ok: false };
+  }
+  InputParts {
+    cid: parts[0] as integer,
+    x:   parts[1] as float,
+    y:   parts[2] as float,
+    z:   parts[3] as float,
+    ok:  true,
+  }
+}
+
+fn find_or_add_sight(vis: Vis, peer_cid: integer) -> integer {
+  for foa_e in vis.peers {
+    if foa_e.peer_cid == peer_cid { return foa_e#index; }
+  }
+  vis.peers += [SightEntry { peer_cid: peer_cid, in_range: false }];
+  vis.peers.len() - 1
+}
+
+fn broadcast_tick(world: World) {
+  for bt_r in world.planes {
+    for bt_p in world.planes {
+      if bt_p.cid == bt_r.cid { continue; }
+      d2 = dist_sq(bt_r.x, bt_r.y, bt_r.z, bt_p.x, bt_p.y, bt_p.z);
+      in_range_now = d2 < SIGHT_RANGE_SQ;
+
+      v_r = world.vis[bt_r.cid];
+      idx = find_or_add_sight(v_r, bt_p.cid);
+      was_in_range = v_r.peers[idx].in_range;
+
+      if in_range_now {
+        // POSE is declared sync (main) — this ordinary send rides UDP for a
+        // helloed native client and falls back to a WS frame for a web page;
+        // the kernel picks the fastest path per client.
+        engine_host::send(bt_r.cid, "2:{bt_p.cid},{bt_p.seq},{bt_p.x},{bt_p.y},{bt_p.z}");
+        v_r.peers[idx].in_range = true;
+      } else if was_in_range {
+        // EXIT = must-deliver event -> stays on the reliable WS channel.
+        engine_host::send(bt_r.cid, "3:{bt_p.cid}");
+        v_r.peers[idx].in_range = false;
+      }
+    }
+  }
+  for bt_q in world.planes { bt_q.seq = bt_q.seq + 1; }
+  // Flush pending echoes with the send-time stamp (t5), after the poses so
+  // the echo experiences a full tick's queue position, like a pose.
+  for er in world.echoes {
+    // The echo measures the GAME-DATA path; msg 5 is declared sync (main)
+    // so it rides the same channel the poses do.
+    engine_host::send(er.cid, "5:{er.t0},{er.t1},{ticks()}");
+  }
+  world.echoes = [];
+}
+
+fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
+  // ECHO request: stamp t1 (server clock at drain) and queue the reply for
+  // the NEXT tick, so it traverses the same tick-wait game data does.
+  if msg_id == 4 {
+    world.echoes += [EchoReq { cid: cid, t0: payload, t1: ticks() }];
+    return;
+  }
+  if msg_id != 1 { return; }
+  parts = parse_input(payload);
+  if !parts.ok { return; }
+  if world.planes[cid] == null { return; }
+  world.planes[cid].x = parts.x;
+  world.planes[cid].y = parts.y;
+  world.planes[cid].z = parts.z;
+}
+
+fn main() {
+  println("probe_server (kernel): sight 80 m, tick 30 Hz");
+
+  // The wire-schema table: POSE (2) + ECHO reply (5) are latest-value state;
+  // everything else (EXIT 3, inbound INPUT 1 / ECHO request 4) stays the
+  // event class.  Declared once — every send below is ordinary.
+  engine_host::fast_lane_keyed(2);   // poses: latest-value per plane
+  engine_host::fast_lane(5);         // echo replies ride the state bus
+
+  world = World { planes: [], vis: [], tick: 0, echoes: [] };
+
+  engine_host::run(PORT, TICK_INTERVAL_US,
+    fn(ev: engine_host::Event) {
+      if ev.kind == 0 {
+        world.planes += [Plane { cid: ev.cid, x: 0.0, y: 0.0, z: 0.0, seq: 0 }];
+        world.vis    += [Vis    { cid: ev.cid, peers: [] }];
+        println("probe_server (kernel): client {ev.cid} connected (active: {world.planes.len()})");
+      } else if ev.kind == 1 {
+        i = ev.payload.find(":");
+        if i != null {
+          handle_message(world, ev.cid, ev.payload[..i] as integer, ev.payload[i + 1..]);
+        }
+      }
+    },
+    fn() {
+      broadcast_tick(world);
+      world.tick = world.tick + 1;
+      if world.tick - (world.tick / 150) * 150 == 0 {
+        println("probe_server (kernel): tick={world.tick} planes={world.planes.len()}");
+      }
+    });
+}

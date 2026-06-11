@@ -9,6 +9,18 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+/// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
+/// binaries + native-build storms) — scale every wait there so timing
+/// reflects the machine, not the meaning.
+fn vm_deadline(secs: u64) -> Instant {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Instant::now() + Duration::from_secs(secs * scale)
+}
+
 fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
     // Tag-keyed: the two tests run in parallel in one process, so a pid-only name would
     // collide and one's cleanup would delete the other's file mid-`launch`.
@@ -30,7 +42,7 @@ fn start_server(port: u16, file: String) {
     std::thread::spawn(move || {
         let _ = loft::serve::run_serve("default", &[], port, &file);
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = vm_deadline(10);
     while Instant::now() < deadline {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
@@ -122,6 +134,40 @@ fn recv_until(
         }
     }
     msgs
+}
+
+#[test]
+fn serve_http_shell_has_game_debug_strip() {
+    // @PLN18 08-S7 editor support — the shell ships the game-debug strip
+    // (fn-entry breakpoints, resume, rebuild, swap) and the control-channel
+    // client that dials the game port directly.
+    let path = tmp_program("gshell", "fn main() { print(\"x\") }\n");
+    let port = 18794;
+    start_server(port, path.to_string_lossy().into_owned());
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    use std::io::Write as _;
+    write!(
+        stream,
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut body = String::new();
+    use std::io::Read as _;
+    stream.read_to_string(&mut body).unwrap();
+    for needle in [
+        "id=\"gdbg\"",
+        "id=\"gbp\"",
+        "id=\"gresume\"",
+        "id=\"grebuild\"",
+        "id=\"gswap\"",
+        "D!:bp ",
+        "D!:swap auto",
+        "D!:quit",
+        "listening on ws:",
+    ] {
+        assert!(body.contains(needle), "shell must ship {needle:?}");
+    }
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -507,6 +553,120 @@ fn serve_ws_run_suite_runs_package_tests() {
         "summary counts across both files: {all}"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Variant of [`start_server`] with library import paths (a kernel game
+/// needs `use engine_host`).
+fn start_server_libs(port: u16, file: String, libs: Vec<String>) {
+    std::thread::spawn(move || {
+        let _ = loft::serve::run_serve("default", &libs, port, &file);
+    });
+    let deadline = vm_deadline(10);
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("server did not start listening on {port}");
+}
+
+#[test]
+fn serve_game_debug_control_end_to_end() {
+    // @PLN18 08-S7 editor support — the EXACT flow the editor shell drives:
+    // launch a kernel game through the serve RPC (launch_game now defaults
+    // LOFT_DEBUG_CONTROL=1 + LOFT_LIVE_FLIP=1), scrape the game port from the
+    // streamed output (the page does the same), dial the game's D!: control
+    // channel DIRECTLY, set a fn-entry breakpoint, observe the hit with
+    // bindings while a game client's reply is held, resume, and stop the game
+    // over the channel (D!:quit — the editor's stop for a swapped game).
+    let loft_bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft");
+    if !loft_bin.exists() {
+        eprintln!("skipping: {} not built", loft_bin.display());
+        return;
+    }
+    // SAFETY: same contract as the slice-6 test — a constant, valid path.
+    unsafe { std::env::set_var("LOFT_BIN", &loft_bin) };
+    let game_port = 18114u16;
+    let path = tmp_program(
+        "gamedbg",
+        &format!(
+            "use engine_host;\n\
+             struct W {{ events: integer not null, ticks: integer not null }}\n\
+             fn bump_events(w: W) -> integer {{\n  w.events = w.events + 1;\n  w.events\n}}\n\
+             fn main() {{\n  w = W {{ events: 0, ticks: 0 }};\n  resumed = engine_host::swap_world(w);\n  \
+             engine_host::run({game_port}, 10000,\n    fn(ev: engine_host::Event) {{\n      \
+             if ev.kind != 1 {{ return; }}\n      n = bump_events(w);\n      \
+             engine_host::send(ev.cid, \"got:{{ev.payload}}#{{n}}\");\n    }},\n    \
+             fn() {{ w.ticks = w.ticks + 1; }});\n}}\n"
+        ),
+    );
+    let file = path.to_string_lossy().into_owned();
+    let jfile = json_path(&path);
+    let port = 18793;
+    let lib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("lib")
+        .to_string_lossy()
+        .into_owned();
+    start_server_libs(port, file, vec![lib]);
+    let mut ws = ws_connect(port);
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"launchGame\",\"file\":\"{jfile}\"}}"),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
+    // Scrape the port announcement from the streamed output (the page's move).
+    let mut announced = false;
+    for i in 0..100 {
+        std::thread::sleep(Duration::from_millis(100));
+        ws_send(
+            ws.get_ref(),
+            &format!("{{\"id\":{},\"req\":\"gameStatus\"}}", 10 + i),
+        );
+        let r = ws_recv(&mut ws);
+        if r.contains(&format!("listening on ws://0.0.0.0:{game_port}/")) {
+            announced = true;
+            break;
+        }
+        assert!(
+            r.contains("\"running\":true"),
+            "the game must stay up until it announces: {r}"
+        );
+    }
+    assert!(announced, "the kernel game never announced its port");
+
+    // The control channel + a game client — the editor's two sockets.
+    let mut ctl = ws_connect(game_port);
+    let mut game = ws_connect(game_port);
+    ws_send(ctl.get_ref(), "D!:bp bump_events");
+    assert_eq!(ws_recv(&mut ctl), "D:ok bp bump_events");
+    ws_send(game.get_ref(), "a");
+    let hit = ws_recv(&mut ctl);
+    assert!(
+        hit.starts_with("D:hit bump_events") && hit.contains("w="),
+        "hit with bindings: {hit}"
+    );
+    ws_send(ctl.get_ref(), "D!:resume");
+    assert_eq!(ws_recv(&mut ctl), "D:resumed");
+    assert_eq!(ws_recv(&mut game), "got:a#1");
+
+    // Stop over the channel (the editor's post-swap stop path).
+    ws_send(ctl.get_ref(), "D!:quit");
+    assert_eq!(ws_recv(&mut ctl), "D:quitting");
+    let mut stopped = false;
+    for i in 0..50 {
+        std::thread::sleep(Duration::from_millis(100));
+        ws_send(
+            ws.get_ref(),
+            &format!("{{\"id\":{},\"req\":\"gameStatus\"}}", 200 + i),
+        );
+        if ws_recv(&mut ws).contains("\"running\":false") {
+            stopped = true;
+            break;
+        }
+    }
+    assert!(stopped, "the game must exit on D!:quit");
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

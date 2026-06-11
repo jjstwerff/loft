@@ -126,6 +126,26 @@ export function initLoftGL(canvas) {
   });
   canvas.addEventListener('mousedown', e => { mouseBtn |= (1 << e.button); });
   canvas.addEventListener('mouseup', e => { mouseBtn &= ~(1 << e.button); });
+  // @PLN18 phase 07 — phones: touches map onto the SAME mouse state, so
+  // loft scripts read one input surface on every host (a tap = button 0).
+  const touchPos = (t) => {
+    const r = canvas.getBoundingClientRect();
+    mouseX = t.clientX - r.left;
+    mouseY = t.clientY - r.top;
+  };
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    touchPos(e.changedTouches[0]);
+    mouseBtn |= 1;
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    touchPos(e.changedTouches[0]);
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    mouseBtn &= ~1;
+  }, { passive: false });
 
   // ── Control object ──────────────────────────────────────────────────────
 
@@ -159,7 +179,7 @@ export function initLoftGL(canvas) {
 
     // Time — milliseconds since epoch (used by loft ticks())
     time_now() { return Date.now(); },
-    time_ticks() { return performance.now(); },
+    time_ticks() { return Math.round(performance.now() * 1000); }, // µs — ticks()'s unit (was ms: a 1000× clock bug)
 
     // Window lifecycle
     gl_create_window(w, h, _title) {

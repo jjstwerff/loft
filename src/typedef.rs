@@ -344,6 +344,7 @@ fn has_value_cycle(data: &Data, d_nr: u32, visiting: &mut std::collections::Hash
         if let Type::Reference(child_nr, deps) = &a_type
             && !deps.contains(&u16::MAX)
             && data.def_type(*child_nr) == DefType::Struct
+            && !data.def_referenced(*child_nr)
             && has_value_cycle(data, *child_nr, visiting)
         {
             visiting.remove(&d_nr);

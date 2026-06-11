@@ -508,6 +508,40 @@ pub fn host_ws_connect(url: &str) -> i32 {
     }
 }
 
+/// Is slot `id` an OPEN socket?  The browser kernel buffers sends until 1
+/// (a native connect blocks until upgraded — same contract, async form).
+#[allow(dead_code)]
+pub fn host_ws_ready(id: i32) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&id.into());
+        host_call("ws_ready", &args)
+            .as_f64()
+            .is_some_and(|n| n as i32 == 1)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = id;
+        false
+    }
+}
+
+/// The serving origin's hostname — `engine_host::default_host()` on a phone
+/// is the cabinet that served the page.
+#[allow(dead_code)]
+pub fn host_origin_host() -> String {
+    #[cfg(feature = "wasm")]
+    {
+        host_call("origin_host", &js_sys::Array::new())
+            .as_string()
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        "127.0.0.1".to_string()
+    }
+}
+
 /// Send `msg` on slot `id`.  `binary=true` ships an opcode-2 frame;
 /// `binary=false` ships opcode-1 (text).  Returns 1 on success, 0 if
 /// the slot is in backoff / disconnected.
@@ -696,6 +730,12 @@ const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
     (
         "web.loft",
         include_str!("../tests/fixtures/libs/web/src/web.loft"),
+    ),
+    // @PLN18 phase 07 — the browser kernel's loft surface: the SAME lib
+    // source the native kernel uses (the script is the contract).
+    (
+        "engine_host.loft",
+        include_str!("../lib/engine_host/src/engine_host.loft"),
     ),
 ];
 
@@ -933,6 +973,58 @@ pub fn resume_frame() -> String {
             "{\"running\":false,\"error\":\"internal panic\"}".to_string()
         }
     }
+}
+
+// ── @PLN18 08-S6 — the living-page swap bridges ─────────────────────────────
+// The page (the persistent host layer) drives the swap: it exports the world
+// out of the PARKED instance A, stages it, starts instance B (whose
+// `swap_world` consumes the stage), and hands B the living WebSocket via the
+// loft-rt adoption hook.  These are the two wasm-side halves.
+
+thread_local! {
+    /// The world record registered by the running script's `swap_world(w)`.
+    static SWAP_ROOT: std::cell::Cell<Option<(crate::keys::DbRef, u16)>> =
+        const { std::cell::Cell::new(None) };
+    /// A snapshot staged by the page for the NEXT run's `swap_world`.
+    static SWAP_STAGE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+// Consumed by the browser kernel's `swap_world` (wasm32 + feature "wasm");
+// a native build with --all-features sees it dead — that's the cfg, not rot.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn swap_root_set(root: crate::keys::DbRef, kt: u16) {
+    SWAP_ROOT.with(|r| r.set(Some((root, kt))));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn swap_stage_take() -> Option<String> {
+    SWAP_STAGE.with(|s| s.borrow_mut().take())
+}
+
+/// Export the registered world of the PARKED (frame-yielded) run as the
+/// snapshot JSON; "" when no run is parked or no world was registered.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn swap_export() -> String {
+    let Some((root, kt)) = SWAP_ROOT.with(std::cell::Cell::get) else {
+        return String::new();
+    };
+    GAME_SESSION.with(|gs| {
+        gs.borrow().as_ref().map_or_else(String::new, |session| {
+            let mut json = String::new();
+            session
+                .state
+                .database
+                .show_json(&mut json, &root, kt, false);
+            json
+        })
+    })
+}
+
+/// Stage a snapshot for the next run's `swap_world` (the browser analog of
+/// the native LOFT_RESUME env).
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn swap_stage(snapshot: &str) {
+    SWAP_STAGE.with(|s| *s.borrow_mut() = Some(snapshot.to_string()));
 }
 
 /// Parse `[{name: string, content: string}]` JSON into a Vec of pairs.

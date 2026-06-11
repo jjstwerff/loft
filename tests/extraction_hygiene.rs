@@ -237,6 +237,17 @@ fn forbidden_library_symbols() -> Vec<(String, String)> {
         let Ok(content) = fs::read_to_string(&manifest_path) else {
             continue;
         };
+        // @PLN18 — `[native] in_binary = true`: the library's natives are
+        // DELIBERATELY inside the compiler crate (registered in
+        // `src/native.rs`); its symbols are sanctioned in `src/**`, so the
+        // package is excluded from the forbidden scan.  The same mark makes
+        // the auto-native driver skip the doomed cdylib compile (main.rs).
+        if content
+            .lines()
+            .any(|l| l.trim().starts_with("in_binary") && l.contains("true"))
+        {
+            continue;
+        }
         let pkg_name = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())

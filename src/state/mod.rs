@@ -111,6 +111,13 @@ pub struct CoroutineFrame {
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
+    /// @PLN18 02 — the stack store's high-water mark: the highest `stack_pos`
+    /// ever reached.  `reenter` builds its synthetic frame ABOVE this, because
+    /// the CURRENT `stack_pos` is only the transient eval height — a frame's
+    /// variable slots live at fixed positions the eval stack dips below
+    /// between statements (probe-proven: live text slots at [watermark..+48)
+    /// at a yield point).
+    pub stack_high: u32,
     pub stack_pos: u32,
     /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
@@ -304,6 +311,7 @@ impl State {
             bytecode: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
+            stack_high: 4,
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,
@@ -1505,6 +1513,9 @@ impl State {
         let step = self.stack_step(u32::from(size));
         self.ensure_stack(step);
         self.stack_pos += step;
+        if self.stack_pos > self.stack_high {
+            self.stack_high = self.stack_pos;
+        }
     }
 
     pub(crate) fn copy_result(&mut self, value: u8, pos: u32, fn_stack: u32) {
@@ -1857,6 +1868,9 @@ impl State {
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
         *m = val;
         self.stack_pos += self.stack_step(size_of::<T>() as u32);
+        if self.stack_pos > self.stack_high {
+            self.stack_high = self.stack_pos;
+        }
     }
 
     /**
@@ -3493,9 +3507,30 @@ impl State {
         let mut trail_op = [0u8; 16usize];
         #[cfg(debug_assertions)]
         let mut trail_head: usize = 0;
-        let bytecode_len = self.bytecode.len() as u32;
+        #[allow(unused_mut)]
+        let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
+        // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
+        // save can swap one fn's dispatch targets mid-run (append-only code, so
+        // the cached length refreshes after a swap).  One decrement + one
+        // predictable branch per op; only ever true under LOFT_LIVE_RELOAD=1.
+        const RELOAD_POLL_OPS: u32 = 32_768;
+        #[cfg(not(target_arch = "wasm32"))]
+        let reload_on = crate::live_reload::active();
+        #[cfg(target_arch = "wasm32")]
+        let reload_on = false;
+        let mut reload_tick: u32 = RELOAD_POLL_OPS;
         while self.code_pos < bytecode_len {
+            if reload_on {
+                reload_tick -= 1;
+                if reload_tick == 0 {
+                    reload_tick = RELOAD_POLL_OPS;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if crate::live_reload::poll(self) {
+                        bytecode_len = self.bytecode.len() as u32;
+                    }
+                }
+            }
             let op_pos_rt = self.code_pos;
             // @PLN16 debugger — at a registered breakpoint, capture the frame (and
             // in stepping mode, suspend: return to the driver with the frame in
@@ -3660,6 +3695,185 @@ impl State {
 
     /// FY.2: Resume execution after a frame yield.  Returns `true` while the
     /// program is still running, `false` when it finishes.
+    /// @PLN18 02 (the heart's aorta) — the compiled→interp RE-ENTRY thunk:
+    /// call one interpreted function from HOST code (generated native code,
+    /// the debugger, a test) over the live State, between or inside frames.
+    ///
+    /// Contract: the caller has pushed the args in declaration order via
+    /// [`put_stack`](Self::put_stack) (scalars as `i64`, records/vectors as
+    /// `DbRef`, integer null = `i64::MIN`).  `reenter` pushes the synthetic
+    /// return address, jumps to the callee, runs it to completion, and
+    /// restores the PC and stack watermark — the surrounding execution (a
+    /// paused `main`, a yielded frame loop) continues unperturbed.
+    ///
+    /// v1 bounds: the callee must not yield (asserted) and stack-returning
+    /// results are not retrieved (store-writing callees — the shared store
+    /// is the ABI; a result record arg is the supported result path).
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    /// `reenter` for a value-returning callee: after completion the result
+    /// sits at the synthetic frame's BASE (`copy_result` copies it to
+    /// `fn_stack` = the base and leaves `stack_pos = base + step(size)`).
+    /// Read it before restoring the watermark.
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    pub fn reenter_ret<T: Copy + 'static>(
+        &mut self,
+        d_nr: u32,
+        code_position: u32,
+        push_args: impl FnOnce(&mut Self),
+    ) -> T {
+        let saved_pos = self.code_pos;
+        let saved_sp = self.stack_pos;
+        let base = self.stack_high.next_multiple_of(8);
+        self.stack_pos = base;
+        push_args(self);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: base,
+            args_size: 0,
+            line: 0,
+        });
+        self.put_stack(u32::MAX);
+        self.code_pos = code_position;
+        let yielded = self.resume();
+        assert!(!yielded, "reenter_ret: the callee yielded mid-call");
+        let result = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + base);
+        self.code_pos = saved_pos;
+        self.stack_pos = saved_sp;
+        result
+    }
+
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    /// @PLN18 08-S7 — `reenter` under the debugger: drive the call with
+    /// [`debug_step`](Self::debug_step) so registered breakpoints SUSPEND it;
+    /// each suspension hands the live `&mut State` plus the captured frame to
+    /// `on_pause` (called BETWEEN resume steps — the legal aliasing seam),
+    /// which blocks until the debugger resumes.  `T = ()` serves void callees
+    /// (a zero-sized read at the frame base).
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported under a dispatch).
+    pub fn reenter_dbg<T: Copy + 'static>(
+        &mut self,
+        d_nr: u32,
+        code_position: u32,
+        data: &crate::data::Data,
+        push_args: impl FnOnce(&mut Self),
+        mut on_pause: impl FnMut(&mut Self, &crate::data::Data, &crate::debugger::BreakHit),
+    ) -> T {
+        let saved_pos = self.code_pos;
+        let saved_sp = self.stack_pos;
+        let base = self.stack_high.next_multiple_of(8);
+        self.stack_pos = base;
+        push_args(self);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: base,
+            args_size: 0,
+            line: 0,
+        });
+        self.put_stack(u32::MAX);
+        self.code_pos = code_position;
+        // An entry breakpoint sits exactly where this call STARTS —
+        // `debug_step`'s first-op skip (correct when resuming FROM a pause)
+        // would silently step over it, so check the entry explicitly.
+        if self
+            .debug
+            .as_ref()
+            .is_some_and(|d| d.is_breakpoint(self.code_pos))
+        {
+            let hit = self.capture_break_frame(self.code_pos, data);
+            on_pause(self, data, &hit);
+        }
+        loop {
+            let suspended = self.debug_step(crate::debugger::StepMode::Continue, data);
+            if !suspended {
+                break;
+            }
+            assert!(
+                !self.database.frame_yield,
+                "reenter_dbg: the callee yielded mid-call"
+            );
+            let Some(hit) = self.debug.as_mut().and_then(|d| d.paused.take()) else {
+                break;
+            };
+            on_pause(self, data, &hit);
+        }
+        let result = *self
+            .database
+            .store(&self.stack_cur)
+            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + base);
+        self.code_pos = saved_pos;
+        self.stack_pos = saved_sp;
+        result
+    }
+
+    /// @PLN18 08-S7 — register a breakpoint at the CURRENT body of `d_nr`,
+    /// resolved through `fn_positions` (the live dispatch table) rather than
+    /// `data.def().code_position`: after a tier-0 reload the body moved to the
+    /// appended bytecode and the def's recorded position is stale.  This is
+    /// the re-resolution primitive — breakpoint identity is the FN, offsets
+    /// move.  Returns the resolved offset.
+    pub fn set_breakpoint_fn_current(&mut self, d_nr: u32) -> Option<u32> {
+        let start = *self.fn_positions.get(d_nr as usize)?;
+        let &offset = self
+            .line_numbers
+            .range(start..)
+            .next()
+            .map(|(off, _)| off)?;
+        self.enable_debug();
+        if let Some(dbg) = self.debug.as_mut() {
+            dbg.add_offset(offset);
+        }
+        Some(offset)
+    }
+
+    /// Re-enter the interpreter for one call over the live State (the 02
+    /// frame contract; see `reenter_ret` for the value-returning form).
+    ///
+    /// # Panics
+    /// When the callee yields mid-call (not supported in v1).
+    pub fn reenter(&mut self, d_nr: u32, code_position: u32, push_args: impl FnOnce(&mut Self)) {
+        let saved_pos = self.code_pos;
+        let saved_sp = self.stack_pos;
+        // The synthetic frame starts ABOVE the high-water mark, never at the
+        // transient eval height: live variable slots of the paused frames sit
+        // between `stack_pos` and `stack_high` (the frame contract, mapped by
+        // tests/dispatch_reentry.rs — stomping them corrupts Strings whose
+        // later drop aborts).  Args are pushed via the closure AFTER the lift,
+        // so they land above the mark too.
+        let base = self.stack_high.next_multiple_of(8);
+        self.stack_pos = base;
+        push_args(self);
+        // Balance: the callee's return pops a CallFrame unconditionally
+        // (`fn_return`) — without this push the FIRST re-entry pops the
+        // paused program's own frame (probe-caught: heap corruption at
+        // teardown after 200k imbalanced pops).
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: base,
+            args_size: 0,
+            line: 0,
+        });
+        self.put_stack(u32::MAX);
+        self.code_pos = code_position;
+        let yielded = self.resume();
+        assert!(!yielded, "reenter: the callee yielded mid-call");
+        self.code_pos = saved_pos;
+        self.stack_pos = saved_sp;
+    }
+
     pub fn resume(&mut self) -> bool {
         self.database.frame_yield = false;
         let bytecode_len = self.bytecode.len() as u32;
@@ -3814,6 +4028,7 @@ impl State {
         State {
             stack_cur,
             stack_pos: 4,
+            stack_high: 4,
             stack_cap_bytes,
             code_pos: 0,
             def_pos: 0,

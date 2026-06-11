@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# @PLN18 — the engine-host kernel's loft surface.  The natives live INSIDE the
+# loft binary (src/engine_host.rs, registered in native.rs) — no cdylib; this
+# package only declares them and ships the run() loop skeleton.
+
+[package]
+name    = "engine_host"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/engine_host.loft"
+
+# The kernel natives are registered inside the loft binary (src/native.rs) —
+# there is no cdylib to build.  Readers of this mark: the auto-native driver
+# (skips the doomed compile + its warning) and the extraction-hygiene gate
+# (the n_kernel_* symbols are sanctioned in src/**).
+[native]
+in_binary = true

@@ -34,6 +34,12 @@ pub struct Manifest {
     pub dependencies: Vec<(String, String)>,
     /// PKG.4: Rust crate directory name from `[native] crate = "..."`.
     pub native_crate: Option<String>,
+    /// @PLN18 — `[native] in_binary = true`: this library's `#native` symbols
+    /// live INSIDE the loft binary (registered in `src/native.rs`), not in a
+    /// cdylib.  Readers: the auto-native driver (skips the doomed cdylib
+    /// compile + its warning) and the extraction-hygiene gate (the symbols
+    /// are sanctioned in `src/**`).  One mark, every consumer.
+    pub native_in_binary: bool,
     /// PKG.4: loft function name → Rust symbol path from `[native.functions]`.
     pub native_functions: Vec<(String, String)>,
     /// PKG.5: WASM-specific overrides from `[native.wasm]`.
@@ -94,6 +100,7 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                         .push((key.to_string(), value.to_string()));
                 }
                 ("native", "crate") => manifest.native_crate = Some(value.to_string()),
+                ("native", "in_binary") => manifest.native_in_binary = value == "true",
                 ("native.functions", _) => {
                     manifest
                         .native_functions

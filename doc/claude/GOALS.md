@@ -562,10 +562,25 @@ default it, or cut it. The store-confinement analysis is the worked model: zero
 user-facing surface, and a **silent fallback** to a higher watermark when it cannot
 prove confinement — the programmer never learns the analysis exists.
 
+**F beyond the compiler — the engine takes the fastest path (user-stated core
+value, 2026-06-10).** The same test governs the whole lavition surface, not just
+syntax: *we do not bother the developer with details where they don't help/aid
+them* — and no developer wants slow network traffic, so speed is never a knob.
+The engine-host transport stack is the worked model (@PLN18 05a): the kernel
+negotiates UDP per client *inside* the WS handshake (an `X-Loft-UDP` response
+header — no loft code on either side touches it), `sync_send` rides the fastest
+path that client supports, web pages stay on WS from the very same call, and a
+silent keepalive timeout falls the path back — meaning-code never branches on
+transport. The bulk channel (05c, parked) applies it one level deeper:
+broadcast vs unicast vs WS is **measured per seat** and picked automatically.
+The pattern generalizes: defaults = the fastest correct path; what surfaces is
+read-only introspection (`udp_bound`), never a switch the developer must set to
+get speed.
+
 **Relation.** F is **orthogonal** to the useful → safe → predictable axis: it limits
 the user-friction cost of delivering any of A–E. It is closest to E (both keep
 hidden machinery from leaking out), but E guards the **memory model** while F guards
-the **whole syntax**.
+the **whole syntax** — and, per the paragraph above, the engine surface too.
 
 ---
 
