@@ -113,6 +113,38 @@ var away + drop its argument flag, rename the promoted local to
 references stay valid); order-of-flagged puts it in the same last slot;
 the attr↔var name lookup hits.  No body rewriting needed.
 
+## Phase-1 attempt 1 (2026-06-11): the flip works for plain calls — the
+## dispatchers are the remaining work
+
+The three-part implementation (signature-time attr + backing var in
+`parse_function`; `ref_return` role swap — ATTR renamed to the promoted
+local, placeholder var retired via `Function::retire_argument`; legacy
+grow kept for lambda-class defs with a debug assert) — was BUILT and
+verified on the plain-call path: the promoted-fn IR is byte-identical
+(`fn n_full59(a, c, s: P59)`), a non-promoted fn uniformly becomes
+`fn n_reassigned(__retbuf: vector<integer>)`, and the caller-first /
+wrapper-chain / closure probes pass on both backends.
+
+The full suite then failed 25 tests, naming the consumers the C5 census
+missed — every NON-`add_defaults` dispatcher that derives call arity:
+
+- **C9 — par worker marshalling** (`par_struct_to_*`,
+  `par_tuple_return_*`, `par_queue_ref_*`, `wrap::threading`,
+  `22c-par-sources` "No elements left on the stack 8 < 12"):
+  `generation/ops/parallel.rs` + `src/parallel.rs` size/pass worker args
+  from their own tables and never fill the buffer.
+- **C10 — cdylib shared dispatch** (`lean_interface_drives_shared_dispatch`,
+  `dispatches_struct_return_from_shared_cdylib`,
+  `dispatches_data_enum_into_shared_cdylib`): the lean-interface marshal
+  builds frames from the attribute list on ONE side only.
+- **C11 — completion / capture introspection**
+  (`completion_model_resolves_members_from_schema`,
+  `capture_heap_types_run_once`): schema-driven signature consumers.
+
+The flip itself is sound; phase 1 = teach C9–C11 the buffer (or filter
+hidden attrs there), THEN re-apply the three-part change.  The reverted
+diff is reproducible from this README §§ mechanics + the probes.
+
 ## Risks / open questions
 
 - Variable RENAME helper must update the names map atomically (old name
