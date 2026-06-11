@@ -418,6 +418,16 @@ fn s5_native_swap_under_running_world() {
     let _hygiene = S5Hygiene(STEM); // and OUR swap child must die at exit
     std::thread::sleep(Duration::from_millis(200));
     let port = 18100u16;
+    // A test-OWNED always-fails binary: /bin/false varies across platforms
+    // and runners (macOS CI refused it — forensics pending); a temp script
+    // is deterministic everywhere this unix-only suite runs.
+    let bad_bin = std::env::temp_dir().join(format!("eh_s5_false_{port}.sh"));
+    std::fs::write(&bad_bin, "#!/bin/sh\nexit 1\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bad_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bad_bin = bad_bin.to_string_lossy().into_owned();
     let fixture = |ver: &str| {
         format!(
             r#"
@@ -451,7 +461,7 @@ fn main() {{
         return;
       }}
       if ev.payload == "badswap" {{
-        engine_host::send(ev.cid, "badswap:{{engine_host::swap_start("/bin/false")}}");
+        engine_host::send(ev.cid, "badswap:{{engine_host::swap_start("{bad_bin}")}}");
         return;
       }}
       engine_host::send(ev.cid, "{ver}:{{ev.payload}}#{{n}}t{{w.ticks}}");
@@ -513,7 +523,13 @@ fn main() {{
     // Rollback leg 2: a build that dies before serving.  The freeze defers
     // the next replies; they drain after the rollback (recv timeout rides
     // it).  The world must keep counting and the old build keep serving.
-    assert_eq!(ask(&ws, "badswap", &mut count), "badswap:true");
+    let badswap = ask(&ws, "badswap", &mut count);
+    assert_eq!(
+        badswap,
+        "badswap:true",
+        "swap_start must accept the test's false-binary; server stderr:\n{}",
+        std::fs::read_to_string(&err_path).unwrap_or_default()
+    );
     let r = ask(&ws, "b", &mut count);
     assert!(
         r.starts_with(&format!("v1:b#{count}t")),
