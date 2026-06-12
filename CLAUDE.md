@@ -229,6 +229,15 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
 
 ## Bug-filing policy — MANDATORY
 
+> **STANDING RULE for stability work** (queue in
+> [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md)): in stability/bug-fixing work — this
+> agent's stream; feature building (gaming/engine) belongs to a parallel agent; work-limited,
+> not time-limited — the file-instead-of-fix escape hatches below do NOT apply: a surfaced bug
+> gets fixed in the same working session, with its regression test. This is the same standing
+> rule already documented for investigation plans (below), generalized: fixing IS the work, so
+> there is no "later" to file for. An issue may exist only as the record of a fix in flight
+> (`fixed-pending-merge`), never as a deferral.
+
 **When you surface a bug, the default is to FIX it — not file it.** Bugs surfaced while
 diagnosing/fixing another are the cheapest you'll ever fix: code paths loaded, diagnostics warm,
 repro within reach — fix on the spot with a regression test. Filing only documents a bug for

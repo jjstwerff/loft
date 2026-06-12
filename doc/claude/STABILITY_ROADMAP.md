@@ -5,6 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # STABILITY_ROADMAP.md — every open stability item, in finishing order
 
+> **STANDING RULE — in stability work, bugs get FIXED, not filed.**
+> This queue is this agent's stream (feature work — gaming/engine —
+> belongs to a parallel agent) and it is **work-limited, not
+> time-limited**: done when the queue is finished, not at a date.  A
+> surfaced bug gets fixed in the same working session; the bug-filing
+> escape hatches (blocks-the-task, too-big-now) do not apply here.
+> This is the same standing rule long documented for investigation
+> plans (findings live in the plan's catalog and get fixed, never
+> double-filed), generalized to all stability work: fixing IS the
+> work, so there is no "later" to file for.  Filing re-pays the
+> scope/repro/mechanism derivation later and grows a backlog instead
+> of shrinking the bug count; with diagnostics warm, the fix is the
+> cheapest it will ever be.  An issue is acceptable only as the RECORD
+> of a fix in flight (fixed-pending-merge), never as a deferral.
+
 The ONE tracking view over the open stability work that is otherwise spread
 across [STABILITY_SWEEP.md](STABILITY_SWEEP.md) (the pass-1 catalog),
 [STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) (the H register),
