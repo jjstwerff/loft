@@ -21,23 +21,19 @@ single concern:
 | Sub-plan | File | Status |
 |---|---|---|
 | JSON serialization + deserialization | [JSON.md](JSON.md) | **Shipped** — `Type.parse()` + `:j` format flag work today; re-verified hands-on 2026-06-12 against a real ~100-field GitHub API payload (unknown-field tolerance, nested structs, JSON `null` → loft null caught with `??`, `:j` round-trip, dynamic `json_parse` navigation with safe `JNull` on missing fields) |
-| HTTP client (verbs + headers) | [HTTP_CLIENT.md](HTTP_CLIENT.md) | **Planned** — locked-in design; deferred to 1.1+ per ROADMAP H4 |
+| HTTP client (verbs + headers) | [HTTP_CLIENT.md](HTTP_CLIENT.md) | **Shipped** — as the **`web` registry package** in [`loft-lang/loft-libs-net`](https://github.com/loft-lang/loft-libs-net) (cdylib + `ureq`), NOT in-repo `lib/` or `default/`; full verb set + `_h` header variants + WebSocket client + session/cookie/base64 (@PLAN23).  Verified end-to-end 2026-06-12: `use web; http_get(...)` + `Repo.parse(resp.body)` against the live GitHub API |
 | Future expansions | (this file, see below) | Sketched only — no scheduled work |
 
-The JSON layer is reference documentation for capabilities
-already in production; the HTTP layer is the primary planned
-work; the future-expansions section sketches what else a
-"fully functioning" library would cover.
+The JSON layer and the HTTP client are reference documentation
+for capabilities already in production; the future-expansions
+section sketches what else a "fully functioning" library would
+cover.
 
-The 2026-06-12 "loft as a web-service reader" evaluation
-sharpened the priority: loft is **parse-strong, fetch-missing**.
-There is no way to perform an HTTP request from loft (and no
-subprocess primitive to shell out to `curl` —
-[`15-process`](../future/15-process/README.md)), so the only
-workflow today is a bash wrapper fetching into a file that loft
-parses.  Ship-order step 1 (`http_get` + friends) is the single
-highest-leverage unlock; per the dogfood loop a small real
-consumer (e.g. a GitHub-API CLI tool) should drive it.
+**Caveat (2026-06-12):** on `main`'s binary, `use web` +
+`http_get` panics in the interpreter
+(`src/database/allocation.rs:1632` index OOB) before the request
+runs; the same program works on the `windows-probe` stability
+branch.  Re-verify once the stability stream merges.
 
 ## Scope
 
@@ -165,10 +161,13 @@ The same `Type.parse()` mechanism could underlie:
 When the H tier opens (1.1+ or earlier per release decisions),
 the suggested ordering is:
 
-1. **HTTP client basics** — Steps 1–5 of
-   [HTTP_CLIENT.md § Implementation plan](HTTP_CLIENT.md#implementation-plan).
-   Lands `http_get` / `http_post` / `http_put` / `http_delete`
-   + the `_h` header variants.
+1. **HTTP client basics** — ~~Steps 1–5 of
+   [HTTP_CLIENT.md § Implementation plan](HTTP_CLIENT.md#implementation-plan)~~
+   **SHIPPED** as the `web` package (`loft-libs-net`):
+   `http_get` / `http_post` / `http_put` / `http_delete`
+   + the `_h` header variants, plus a WebSocket client and
+   session/cookie/base64 helpers (@PLAN23) beyond the
+   original step list.
 2. **URL handling** — `URL` struct + parser, `url_with_params`
    helper.  Required by anything more sophisticated than
    string-concat URLs.

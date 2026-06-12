@@ -418,7 +418,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
 | Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |
 | Implement a planned language feature | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
-| Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [lib_plans/19-web-services/](doc/claude/lib_plans/19-web-services/) → [STDLIB.md](doc/claude/STDLIB.md) |
+| Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [lib_plans/06-web-services/](doc/claude/lib_plans/06-web-services/) → [STDLIB.md](doc/claude/STDLIB.md) |
 | Implement `loft install <name>` registry | [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) → [PACKAGES.md § Open work](doc/claude/PACKAGES.md#open-work) → [PACKAGES.md](doc/claude/PACKAGES.md) |
 | Build or understand the `server` library | [lib_plans/future/08-server/README.md](doc/claude/lib_plans/future/08-server/README.md) |
 | Build or understand the `game_client` library | [lib_plans/future/10-game-client/README.md](doc/claude/lib_plans/future/10-game-client/README.md) |
