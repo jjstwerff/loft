@@ -349,6 +349,9 @@ pub fn default_host() -> text {
   kernel_default_host()
 }
 
+fn kernel_local(tick_interval_us: integer) -> boolean;
+#native
+
 // The connector loop: pump → budgeted event drain → tick when due → idle.
 // Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
 // once the server connection closes — the kind-2 disconnect event reaches
@@ -360,6 +363,29 @@ pub fn run_client(host: text, port: integer, tick_interval_us: integer,
     println("engine_host: cannot connect to {host}:{port}");
     return;
   }
+  client_loop(on_event, on_tick);
+}
+
+// The standalone windowed host: the SAME loop as `run_client` — drift-free
+// ticks (one tick = one frame for a GL host), the frame yield, the swap
+// machinery, the debug control endpoint — with NO server.  `on_tick` is the
+// frame (poll window events, draw, swap); leave by calling `client_stop()`
+// when the window closes.  `send`/`client_send` report false (no peer);
+// switching the program to `run_client` later changes ONE line, not the
+// handlers.
+pub fn run_local(tick_interval_us: integer,
+                 on_event: fn(Event), on_tick: fn()) {
+  ok = kernel_local(tick_interval_us);
+  if !ok {
+    println("engine_host: cannot start the local kernel");
+    return;
+  }
+  client_loop(on_event, on_tick);
+}
+
+// The shared loop body (one copy — `run_client` and `run_local` differ only
+// in how the kernel boots).  Closures stay arguments throughout (#313).
+fn client_loop(on_event: fn(Event), on_tick: fn()) {
   while kernel_client_alive() {
     // @PLN18 08-S5/S7 — the swap step on the CLIENT side too: 0 = run
     // normally, 1 = FROZEN (the new build is booting; keep pumping so the

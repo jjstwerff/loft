@@ -161,6 +161,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_kernel_client_frame",        abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_default_host",        abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_connect",             abi: Abi::Cell },
+    RuntimeFn { name: "n_kernel_local",               abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_pump",         abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_alive",        abi: Abi::Cell },
     RuntimeFn { name: "n_kernel_client_stop",         abi: Abi::Cell },

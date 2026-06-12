@@ -329,6 +329,17 @@ keepalives at 500 ms; `tests/engine_host_connector.rs` is the loopback proof
 deliberate asymmetry: `run_client` returns when the server dies; `run`
 serves forever.  Window/GL remains the future client-only module.
 
+**Update (2026-06-12): the standalone windowed host landed as `run_local`** —
+the third kernel configuration, proving "cadence source is a parameter": the
+connector loop with NO transport (`ClientKernel.conn: Option`, a `kernel_local`
+native on all three calling conventions).  A windowed program with no server
+gets the same drift-free tick (one tick = one frame), frame yield, swap
+machinery and debug control endpoint; `send` reports false (no peer), and
+moving the program online later means swapping `run_local` for `run_client` —
+the handlers never change.  Regression:
+`tests/engine_host_kernel.rs::run_local_ticks_and_stops_without_a_server`
+(both backends).
+
 Compounding payoffs: **loopback testing** (server + client kernels in one process
 over an in-memory channel — the whole protocol tested without sockets; also
 single-player for free), **the IDE host converges** (`--serve`'s hand-rolled WS loop
