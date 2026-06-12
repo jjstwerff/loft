@@ -16,6 +16,11 @@ irreversible moves not to make.
   build the `/tmp` boundary matrix on `--interpret`; find the real boundary (the filed
   scope is usually wrong); fix at the chokepoint enforcing the *invariant* (no
   narrower / no wider); verify BOTH backends at the end.
+- **Run the matrix with `scripts/probe-matrix`** (`init` scaffolds a probe dir; cells
+  carry `// @EXPECT:` / `// @CONTROL` headers; `--baseline <main-worktree-binary>`
+  labels each failure REGRESSION vs PRE-EXISTING; the validity rules — hand-computed
+  expectations, no vacuous cells, control stays red — are hard errors).  Usage:
+  `doc/claude/DEBUG.md` § Boundary-matrix runner.
 - **Composition axes** (what to vary in the matrix) — `doc/claude/plans/README.md`
   § The composition axes.
 - **Brittleness vs bugs** — `doc/claude/DESIGN_VERIFICATION.md` § C1 (the real target

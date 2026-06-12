@@ -15,6 +15,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -49,7 +60,7 @@ fn spawn_server(script: &str) -> Guard {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let tmp = std::env::temp_dir().join(format!("eh_aud_{}_{name}", std::process::id()));
+    let tmp = test_tmp().join(format!("eh_aud_{}_{name}", std::process::id()));
     std::fs::write(&tmp, src).expect("write fixture copy");
     let child = Command::new(root().join("target/release/loft"))
         .env("LOFT_OFFLINE", "1") // hermetic: no registry fetches from fixtures
@@ -71,7 +82,7 @@ fn spawn_server(script: &str) -> Guard {
 }
 
 fn server_log_path(ext: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("eh_aud_srv_{}.{ext}", std::process::id()))
+    test_tmp().join(format!("eh_aud_srv_{}.{ext}", std::process::id()))
 }
 
 fn server_logs() -> String {

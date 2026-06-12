@@ -5223,32 +5223,13 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // (explicit `--native` proceeds and errors with the rebuild
             // diagnostic).  The lazy post-compile fallback still backstops
             // anything missed here (e.g. a matching rustc but a missing rlib).
-            if !native_requested {
-                let stamp = option_env!("LOFT_BUILD_RUSTC").unwrap_or("");
-                let live = std::process::Command::new("rustc")
-                    .arg("--version")
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-                let usable = match &live {
-                    Some(v) => stamp.is_empty() || v == stamp,
-                    None => false,
-                };
-                if !usable {
-                    let reason = match &live {
-                        Some(v) => {
-                            format!("rustc changed since this loft was built ({stamp} → {v})")
-                        }
-                        None => "rustc not found".to_string(),
-                    };
-                    eprintln!(
-                        "Warning: native compilation unavailable ({reason}); falling \
-                         back to interpreter mode. Rebuild loft to restore native."
-                    );
-                    let _ = std::fs::remove_file(&emit_path);
-                    break 'native;
-                }
+            if !native_requested && let Some(reason) = loft::cache::rustc_mismatch() {
+                eprintln!(
+                    "Warning: native compilation unavailable ({reason}); falling \
+                     back to interpreter mode. Rebuild loft to restore native."
+                );
+                let _ = std::fs::remove_file(&emit_path);
+                break 'native;
             }
             // Per-process tmp path — same rationale as the emit_path
             // above: avoids races between concurrent `loft <file>`
@@ -5566,6 +5547,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         // explicit user-set values win.
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(&user_args);
+        // The artifact anchors relative paths at its OWN dir (the
+        // standalone-bundle rule) — in driver mode that is the cache/tmp
+        // dir, not the program's.  Hand the source anchor down so file I/O
+        // matches the interpreter; an explicit user value wins.
+        if std::env::var("LOFT_SOURCE_DIR").is_err()
+            && let Some(dir) = std::path::Path::new(&abs_file).parent()
+        {
+            cmd.env("LOFT_SOURCE_DIR", dir);
+        }
         if std::env::var("LOFT_LIVE_SRC").is_err() {
             cmd.env("LOFT_LIVE_SRC", &abs_file);
         }
@@ -5745,6 +5735,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         while state.database.frame_yield {
             state.resume();
         }
+        // The program is over HERE in the frame-yield case — unwire the
+        // parallel ctx at its program-scope owner (`resume` deliberately
+        // does not: it also serves per-call re-entry, where the standing
+        // ctx must survive).
+        state.database.parallel_ctx = None;
     }
     // Plan-07 phase 4 — render typed runtime errors through the
     // phase-2 pretty renderer.  `panic("msg")`, failed `assert`, and

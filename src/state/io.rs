@@ -418,23 +418,34 @@ impl State {
             let store = self.database.store_mut(&file);
             let mut file_ref = store.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                if let Ok(mut f) = File::open(&resolved_name) {
-                    // apply stored seek position on first open.
-                    if next_pos != 0 {
-                        let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                match File::open(&resolved_name) {
+                    Ok(mut f) => {
+                        // apply stored seek position on first open.
+                        if next_pos != 0 {
+                            let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                        }
+                        store.set_i32_raw(file.rec, file.pos + 28, f_nr);
+                        self.database.files.push(Some(f));
+                        file_ref = f_nr;
                     }
-                    store.set_i32_raw(file.rec, file.pos + 28, f_nr);
-                    self.database.files.push(Some(f));
+                    Err(e) => {
+                        // A failed open must NOT leave a dangling ref — indexing
+                        // `files[]` with it panicked.  Warn and skip the read (the
+                        // recoverable-fault posture), mirroring both the write
+                        // path's create fix and the native runtime
+                        // (`file_handle_read` → i32::MIN → return).
+                        eprintln!("file open error for {resolved_name:?}: {e}");
+                        return;
+                    }
                 }
-                file_ref = f_nr;
-            } else if let Some(f) = &mut self.database.files[file_ref as usize] {
+            } else if let Some(Some(f)) = self.database.files.get_mut(file_ref as usize) {
                 // Handle already open: user may have set #next explicitly to seek.
                 // Sync the OS file handle with the stored next_pos.
                 let _ = f.seek(SeekFrom::Start(next_pos as u64));
             }
             let is_text = self.database.is_text_type(db_tp);
             let mut data = vec![0u8; n];
-            let actual = if let Some(f) = &mut self.database.files[file_ref as usize] {
+            let actual = if let Some(Some(f)) = self.database.files.get_mut(file_ref as usize) {
                 if is_text {
                     f.read(&mut data).unwrap_or_else(|e| {
                         eprintln!("file read error: {e}");
@@ -815,7 +826,12 @@ impl State {
             *self.mut_var::<DbRef>(var) = db;
         }
         self.database.clear(&db);
-        let r = self.database.claim(&db, u32::from(size));
+        // The record layout is: word 0 = size header (4 B) + type tag (4 B),
+        // payload from byte 8.  `Stores::claim` takes WORDS, so the payload's
+        // `size` BYTES need `1 + ceil(size / 8)` words — passing `size` raw
+        // under-claims for 1-byte payloads (a single-boolean struct/closure
+        // record got zero payload bytes and wrote into the next word).
+        let r = self.database.claim(&db, 1 + u32::from(size).div_ceil(8));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
         // P259 commit 3 — record the type allocated into this store so
         // free_named can recognise closure-record stores at free time

@@ -18,6 +18,49 @@ impl Output<'_> {
         var: u16,
         to: &Value,
     ) -> std::io::Result<()> {
+        // REASSIGNING an owned heap ref orphans its previous store unless
+        // someone frees it — the interpreter's Set emits a pre-free
+        // (state/codegen.rs `owned_ref`), but native callees mint a FRESH
+        // store per call, so a plain `var_x = n_f(...)` in a loop leaked one
+        // store per iteration (the `sweep`/`hexn` tuple leak that blocked
+        // #354, and `s = grow(s)` per-iteration struct leaks).  Mirror the
+        // interpreter at the same chokepoint with the post-free shape: stash
+        // the old DbRef, run the assignment, free the stash when the new
+        // value is a different store (an adopting callee returns the SAME
+        // store — the free must then no-op, and a never-assigned sentinel
+        // store_nr is a no-op inside OpFreeRef).  Excluded, matching the
+        // interpreter's predicate: borrowed views (non-empty dep), the
+        // fn's hidden return buffer (the CALLER owns that store), and
+        // coroutine-persistent fields (no `var_x` local exists).
+        {
+            let variables = self.data.def(self.def_nr).variables();
+            let owned_ref_reassign = self.declared.contains(&var)
+                && matches!(
+                    variables.tp(var),
+                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                )
+                && variables.tp(var).depend().is_empty()
+                && !self.coroutine_persistent_vars.contains(&var)
+                && matches!(to.unspan(), Value::Call(_, _) | Value::Insert(_))
+                && !self.data.def(self.def_nr).attributes().iter().any(|a| {
+                    a.hidden && self.data.def(self.def_nr).variables().var(&a.name) == var
+                });
+            if owned_ref_reassign {
+                let name = sanitize(variables.name(var));
+                write!(w, "{{ let _old_{name}: DbRef = var_{name}; ")?;
+                self.output_set_inner(w, var, to)?;
+                write!(
+                    w,
+                    "; if _old_{name}.store_nr != var_{name}.store_nr \
+                     {{ OpFreeRef(cell, _old_{name}, \"var_{name}(prev)\"); }} }}"
+                )?;
+                return Ok(());
+            }
+        }
+        self.output_set_inner(w, var, to)
+    }
+
+    fn output_set_inner(&mut self, w: &mut dyn Write, var: u16, to: &Value) -> std::io::Result<()> {
         let variables = self.data.def(self.def_nr).variables();
         // P224: writes to coroutine-persistent locals target the struct
         // field directly so the value survives across `next_*` calls.
@@ -126,7 +169,19 @@ impl Output<'_> {
             // return type carries a `dep` chain naming one of its args): the
             // "source" is then a slice of an arg's store, and freeing it would
             // corrupt the caller.  Return-dep inference tags these correctly.
-            let is_borrowed_view = !self.data.def(*fn_nr).returned().depend().is_empty();
+            // A dep naming only HIDDEN attrs is NOT a borrow — it is the
+            // one-buffer return marker (`["??"]`): the callee minted a fresh
+            // store into its buffer param and nobody else owns it, so the
+            // source-free bit must stay set (skipping it leaked one store
+            // per `s = grow(s)` loop iteration).
+            let callee_attrs = self.data.def(*fn_nr).attributes();
+            let is_borrowed_view = self
+                .data
+                .def(*fn_nr)
+                .returned()
+                .depend()
+                .iter()
+                .any(|&d| callee_attrs.get(d as usize).is_none_or(|a| !a.hidden));
             let tp_with_free: i32 = if is_borrowed_view {
                 i32::from(tp_nr)
             } else {
@@ -316,13 +371,41 @@ impl Output<'_> {
         // A #260-predeclared `__vdb` counts as FIRST here (consume the entry):
         // its prologue `let` bound only the sentinel, so this Set still emits
         // the named-store `null_named` + `OpDatabase` pair.
+        // #354: the `_` discard loop var shares ONE table entry across all
+        // the fn's loops, so a later loop whose iter-value type differs from
+        // the table type (an integer range after a float range gives an i64
+        // value into the f64 `var__`) fails E0308.  `_` is a discard, so
+        // emit a fresh shadowing `let` typed from THIS loop's own iter
+        // value.  Restricted to a SCALAR table type AND scalar iter value:
+        // a collection `for _ in <vec>` binds a DbRef view whose OpFreeRef
+        // (emitted by scope analysis against the table type) must keep
+        // seeing a DbRef — re-typing it scalar there orphaned the store (a
+        // leak, crawler's hex/sim libs).
+        fn is_scalar(t: &Type) -> bool {
+            matches!(
+                t,
+                Type::Integer(_)
+                    | Type::Float
+                    | Type::Single
+                    | Type::Boolean
+                    | Type::Character
+                    | Type::Enum(_, false, _)
+            )
+        }
+        let discard_loop_var = variables.name(var) == "_"
+            && is_scalar(variables.tp(var))
+            && matches!(to.unspan(), Value::Block(bl) if is_scalar(&bl.result));
         let first_assign = !self.declared.contains(&var) || self.predeclared.remove(&var);
-        if self.declared.contains(&var) {
+        if self.declared.contains(&var) && !discard_loop_var {
             write!(w, "var_{name} = ")?;
         } else {
             self.declared.insert(var);
-            let var_tp = variables.tp(var);
-            let tp_str = rust_type(var_tp, &Context::Variable);
+            let var_tp = if discard_loop_var && let Value::Block(bl) = to.unspan() {
+                bl.result.clone()
+            } else {
+                variables.tp(var).clone()
+            };
+            let tp_str = rust_type(&var_tp, &Context::Variable);
             write!(w, "let mut var_{name}: {tp_str} = ")?;
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"

@@ -203,16 +203,31 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
 1. **Don't fix on the first read.** A coherent (especially elegant one-line) explanation is a
    *hypothesis* — real bugs are complex-variant; the clean story is usually the part you haven't
    looked at yet.
-2. **Build the matrix** in throwaway `/tmp` probes, on `--interpret` only. Vary ONE dimension per
-   probe along the **composition axes**
+2. **Build the matrix** in throwaway `/tmp` probes, on `--interpret` only — use
+   **`scripts/probe-matrix`** (`init` scaffolds; the runner enforces every rule below as a hard
+   error and `--baseline <main-worktree-binary>` auto-classifies REGRESSION vs PRE-EXISTING; usage:
+   [DEBUG.md § Boundary-matrix runner](doc/claude/DEBUG.md#boundary-matrix-runner-scriptsprobe-matrix)).
+   Vary ONE dimension per probe along the **composition axes**
    ([plans/README § composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)):
    type-kind / construction-path / context / access / depth / null / backend. Distinctive
    collision-resistant values at every index/position — weak probes (small values, only `[0]`, no
    length check) hide cases. SEE on the interpreter (strides/types surface in seconds); `--native`
    pays a rustc compile per probe — that cost belongs at the final verify (step 7).
+   **Validate the matrix itself before trusting any cell** (both rules from the 2026-06-12
+   vector-ABI session, where a 24-cell matrix was vacuous — every cell a parse error read as
+   "clean"):
+   - **Hand-compute each cell's EXPECTED value before running it.** A cell without an expected
+     value can only detect crashes, never wrong results — and "two binaries agree" is NOT a pass
+     (HEAD and main both printed `acc=39` where the true value was 12: agreement on shared
+     corruption).
+   - **Prove the harness can fail**: a cell that produces no output is vacuous, not clean — check
+     the probe's own output appears; keep one deliberately-broken control cell red.
 3. **Map pass/fail; find the real boundary.** Expect the filed/assumed scope to be wrong — it
    usually is (#263 was *any runtime fn-ref value*; #262 was *every context*; cluster III was three
    different mechanisms).
+   When a cell's mechanism resists two reading passes, STOP theorizing and instrument — one
+   `eprintln` behind an env flag (e.g. `LOFT_TRACE_VADD`) settles in one run what code-reading
+   debates for thirty minutes (the rec_tp=20 stride bug fell to three prints).
 4. **The matrix is how you SEE the root** — the shared mechanism behind a family of "different"
    symptoms is visible in the matrix and invisible in any one repro. "Can't see the root yet" =
    "the matrix isn't finished," NEVER license to patch the one case in hand.
@@ -228,6 +243,15 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
 ---
 
 ## Bug-filing policy — MANDATORY
+
+> **STANDING RULE for stability work** (queue in
+> [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md)): in stability/bug-fixing work — this
+> agent's stream; feature building (gaming/engine) belongs to a parallel agent; work-limited,
+> not time-limited — the file-instead-of-fix escape hatches below do NOT apply: a surfaced bug
+> gets fixed in the same working session, with its regression test. This is the same standing
+> rule already documented for investigation plans (below), generalized: fixing IS the work, so
+> there is no "later" to file for. An issue may exist only as the record of a fix in flight
+> (`fixed-pending-merge`), never as a deferral.
 
 **When you surface a bug, the default is to FIX it — not file it.** Bugs surfaced while
 diagnosing/fixing another are the cheapest you'll ever fix: code paths loaded, diagnostics warm,
@@ -338,6 +362,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, root-cause vs CPython/Rust, wasm-vs-native gap, optimisation designs. Open follow-ups in § Open work |
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
+| [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md) | THE single tracking view: every open stability item in finishing order (order/size/status only; detail stays in the canonical homes) |
 | [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) | The three-pass stability method: sweep dual invariants (document, don't fix) → move algorithms to their data structures → de-duplicate |
 | [STABILITY_SWEEP.md](doc/claude/STABILITY_SWEEP.md) | The live pass-1 catalog: invariant families F1–F10, per-module work list, findings log |
 | [STABILITY_HOTSPOTS.md](doc/claude/STABILITY_HOTSPOTS.md) | Forward risk register H1–H8: the designs that will manufacture future bugs (analysis-dependent arity, dep-list overload, ownership-by-shape-analysis, …) — each with sized mitigation work, landing order, validation gates |

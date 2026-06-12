@@ -16,7 +16,7 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
     } else {
         keys::store(hash, stores).get_u32_raw(claim, 4)
     };
-    let room = *keys::store(hash, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(hash, stores).record_words(claim);
     let elms = (room - 1) * 2;
     if (length * 2 / 3) + 1 >= room {
         // rehash
@@ -50,7 +50,7 @@ fn hash_set(claim: u32, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
 }
 
 fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
-    let room = *keys::store(rec, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(rec, stores).record_words(claim);
     let elms = (room - 1) * 2;
     let hash_val = keys::hash(rec, stores, keys);
     let mut index = (hash_val % u64::from(elms)) as u32;
@@ -68,7 +68,7 @@ fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32
 
 /// Return the 0-based slot index in `claim` that currently holds `rec.rec`.
 fn hash_rec_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
-    let room = *keys::store(rec, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(rec, stores).record_words(claim);
     let elms = (room - 1) * 2;
     let hash_val = keys::hash(rec, stores, keys);
     let mut index = (hash_val % u64::from(elms)) as u32;
@@ -96,7 +96,7 @@ pub fn find(hash_ref: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -
     if claim == 0 {
         return record;
     }
-    let room = *store.addr::<i32>(claim, 0) as u32;
+    let room = store.record_words(claim);
     if room == 0 {
         return record;
     }
@@ -134,7 +134,7 @@ pub fn remove(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key])
     if length == 0 {
         return;
     }
-    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(hash_ref, stores).record_words(claim);
     let elms = (room - 1) * 2;
     // Find the slot holding rec and zero it (create the hole).
     let mut hole = hash_rec_pos(claim, rec, stores, keys);
@@ -186,7 +186,7 @@ pub fn count(hash_ref: &DbRef, stores: &[Store]) -> u32 {
     if claim == 0 {
         return 0;
     }
-    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(hash_ref, stores).record_words(claim);
     let elms = (room - 1) * 2;
     let mut total: u32 = 0;
     for i in 0..elms {
@@ -216,7 +216,7 @@ pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
     if claim == 0 {
         return Vec::new();
     }
-    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(hash_ref, stores).record_words(claim);
     let elms = (room - 1) * 2;
     let mut out = Vec::new();
     for i in 0..elms {
@@ -285,7 +285,7 @@ pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<u
 pub fn validate(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) {
     let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
     let length = keys::store(hash_ref, stores).get_u32_raw(claim, 4);
-    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let room = keys::store(hash_ref, stores).record_words(claim);
     let elms = (room - 1) * 2;
     let mut record = DbRef {
         store_nr: hash_ref.store_nr,

@@ -70,6 +70,50 @@ the MSVC toolchain is the missing piece.
 
 ## Known gaps
 
+### Engine-host kernel on Windows — PROBED 2026-06-11 (the focused windows-probe loop)
+
+The `windows-probe` branch + `.github/workflows/windows-probe.yml` (the
+non-PR platform-debug loop, user-directed) answered the @PLN18 questions the
+unix-gated lifecycle suite leaves open.  Warm-cache round time: ~40 s.
+
+**Verified working on `windows-latest`:**
+- **The kernel SERVES**: listen (the std-bind fallback), WS upgrade, event
+  echo over world state, drift-free 10 ms ticks — the whole serve path
+  (`tests/windows_probe.rs::probe_kernel_serves_on_windows`).
+- **Sequential rebind is instant**: close-listener → rebind the same port
+  succeeds after **~72 µs** (no TIME_WAIT penalty for listeners).
+
+**Measured constraints:**
+- **No bind overlap**: a second plain bind on a held port → `AddrInUse`
+  (the first listener unaffected).  The S5 swap's unix shape (SO_REUSEPORT
+  overlap, rollback-by-default because the old build never stops
+  listening) does NOT port as-is.
+- **Windows swap design (from the numbers)**: a TWO-PHASE handover —
+  new build restores the world and signals *restored* (pre-bind READY
+  variant) → old closes its listener + signals GO → new binds (~72 µs)
+  and serves.  Rollback: no *restored* within the deadline → the old
+  build never closed, keeps serving; post-GO child death → the old
+  REBINDS (~72 µs) and resumes.  The freeze window grows only by the
+  close-to-bind gap (negligible); the choreography gains one round-trip.
+
+**New bug found (and FIXED 2026-06-11 — never Windows-specific):**
+- **`parse_str` died on any `use` clause** — resolving a `use` halts the
+  current file and later RESUMES it by re-opening its NAME, which for a
+  virtual source (`<win-probe>`, REPL snippets, live-reload's
+  `"<live-reload>"`) is not an openable path on ANY platform (the Linux
+  cell failed identically — the probe merely found it first).  Fix: the
+  lexer registers `parse_string` sources by name and `switch` re-serves
+  them from memory (mirroring the wasm VIRT_FS branch).  Regression:
+  `tests/parse_str.rs` (cross-platform) + the windows-probe serve test
+  (the Windows leg — VALIDATED on windows-latest 2026-06-11, run
+  27380012429: parse_str + use + serve all green).
+
+**Remaining unprobed**: process-group-free cleanup (`stop_game` orphans
+the `--native` grandchild on Windows — Job Objects / `taskkill /T` is the
+shape); the full flip/reload/rebuild lifecycle (gated on the virtual-name
+fix); UDP same-port behavior beside the listener.
+
+
 ### ~~G2~~ — `--native` `windows-targets` link search path (`LNK1181`) — FIXED 2026-05-30
 
 - **Root cause:** a diamond dependency pulls TWO versions of

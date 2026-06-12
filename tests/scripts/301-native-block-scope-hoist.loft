@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// #354 — native block-scope hoisting.  A local first WRITTEN inside one
+// `{ }` block and READ in a sibling block is fn-scoped in loft (frame
+// slots) but block-scoped in the emitted Rust — so the `let` at the
+// first write was lost for the sibling read (E0425).  Scalars carry no
+// IR-level fn-scope null-init (unlike heap locals, which scope analysis
+// already hoists), so they are the cases that need the native-codegen
+// hoist.  This is the exact `intown` / `nhouse` shape from crawler's
+// sim town-generation, plus the discriminating axes (float, enum, loop
+// body, nested block).  Cross-mode: the interpreter treats all locals
+// as fn-scoped, so both backends must agree.
+
+enum Dir { North, South, East }
+
+fn town(wwx: integer, wwy: integer) -> integer {
+  acc = 0;
+  // bool from an `&&` expression + an int, both written in one if-block...
+  if wwx >= 0 {
+    intown = wwx == 0 && wwy == 0;
+    nhouse = 3 + wwx * 2;
+    scale = 1.5 * wwx as float;
+  }
+  // ...and read in a SIBLING if-block (the block-scope-loss shape).
+  if wwx >= 0 {
+    if intown { acc = acc + nhouse; }
+    acc = acc + scale as integer;
+  }
+  acc
+}
+
+fn loop_then_read() -> integer {
+  acc = 0;
+  // scalar first-written inside a loop body, read after the loop
+  for k in 0..5 { if k == 3 { hit = k * 10; } }
+  if hit > 0 { acc = acc + hit; }
+  acc
+}
+
+fn enum_across_blocks(n: integer) -> integer {
+  acc = 0;
+  if n == 0 { d = Dir.South; }
+  if n == 0 { if d == Dir.South { acc = acc + 1; } }
+  acc
+}
+
+fn main() {
+  a = town(0, 0);   // intown true: nhouse 3 + scale 0 = 3
+  b = town(1, 1);   // intown false: nhouse skipped, scale 1.5->1
+  assert(a == 3, "town in: {a}");
+  assert(b == 1, "town out: {b}");
+  assert(loop_then_read() == 30, "loop hoist");
+  assert(enum_across_blocks(0) == 1, "enum hoist");
+  println("301-native-block-scope-hoist ok");
+}

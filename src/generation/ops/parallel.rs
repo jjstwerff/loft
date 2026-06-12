@@ -321,28 +321,55 @@ impl OpEmitter for ParallelForEmitter {
             _ => 8,
         };
         let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
+        // @PLAN59: hidden heap DESTINATION attrs (ref_return promotion /
+        // the signature-time `__retbuf`) — allocate one backing store per
+        // dest inside the worker closure and pass it in attr order (dests
+        // are the trailing attrs).  Classified by TYPE, mirroring
+        // `native_gate::classify_bridge_attr`; workers without dests emit
+        // nothing (today's literal-returning corpus is byte-identical).
+        let (prep, dests) = {
+            let mut prep = prep;
+            let mut dests = String::new();
+            use std::fmt::Write as _;
+            for (i, a) in ctx.output.data.def(fn_d_nr).attributes().iter().enumerate() {
+                if a.hidden
+                    && matches!(
+                        a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    write!(
+                        prep,
+                        "let _pd{i}: DbRef = unsafe {{ &mut *cell.get() }}.database(100); "
+                    )
+                    .unwrap();
+                    write!(dests, ", _pd{i}").unwrap();
+                }
+            }
+            (prep, dests)
+        };
         match shape {
             ClosureShape::Text if owned_text => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             ClosureShape::Text => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
+                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}{dests}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             // #281 — fn-ref return: the worker yields the native fn-ref tuple
             // `(u32, DbRef)` directly; the closure returns it verbatim.
             ClosureShape::Fn => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             ClosureShape::Float => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}).to_bits() as i64 }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}).to_bits() as i64 }})"
             )?,
             ClosureShape::Scalar => {
                 // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
@@ -353,12 +380,12 @@ impl OpEmitter for ParallelForEmitter {
                 if matches!(worker_ret, Type::Boolean) {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as u8 as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as u8 as i64 }})"
                     )?;
                 } else {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as i64 }})"
                     )?;
                 }
             }
@@ -462,28 +489,55 @@ impl OpEmitter for ParallelQueueEmitter {
             _ => 8,
         };
         let (prep, arg) = tuple_arg_prep(ctx, fn_d_nr, elem_sz);
+        // @PLAN59: hidden heap DESTINATION attrs (ref_return promotion /
+        // the signature-time `__retbuf`) — allocate one backing store per
+        // dest inside the worker closure and pass it in attr order (dests
+        // are the trailing attrs).  Classified by TYPE, mirroring
+        // `native_gate::classify_bridge_attr`; workers without dests emit
+        // nothing (today's literal-returning corpus is byte-identical).
+        let (prep, dests) = {
+            let mut prep = prep;
+            let mut dests = String::new();
+            use std::fmt::Write as _;
+            for (i, a) in ctx.output.data.def(fn_d_nr).attributes().iter().enumerate() {
+                if a.hidden
+                    && matches!(
+                        a.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    write!(
+                        prep,
+                        "let _pd{i}: DbRef = unsafe {{ &mut *cell.get() }}.database(100); "
+                    )
+                    .unwrap();
+                    write!(dests, ", _pd{i}").unwrap();
+                }
+            }
+            (prep, dests)
+        };
         match shape {
             ClosureShape::Text if owned_text => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             ClosureShape::Text => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}, &mut _w); _w }})"
+                ", |cell, elm| {{ {prep}let mut _w = String::new(); {worker_name}(cell, {arg}{extras}{dests}, &mut _w); _w }})"
             )?,
             ClosureShape::HeapRef => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             // #281 — fn-ref return: the worker yields the native fn-ref tuple
             // `(u32, DbRef)` directly; the closure returns it verbatim.
             ClosureShape::Fn => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) }})"
             )?,
             ClosureShape::Float => write!(
                 ctx.w,
-                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}).to_bits() as i64 }})"
+                ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}).to_bits() as i64 }})"
             )?,
             ClosureShape::Scalar => {
                 // Plan-06 ARC.md A3.5 — Boolean returns map to Rust
@@ -494,12 +548,12 @@ impl OpEmitter for ParallelQueueEmitter {
                 if matches!(worker_ret, Type::Boolean) {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as u8 as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as u8 as i64 }})"
                     )?;
                 } else {
                     write!(
                         ctx.w,
-                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}) as i64 }})"
+                        ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as i64 }})"
                     )?;
                 }
             }

@@ -14805,3 +14805,229 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(255));
 }
+
+/// @PLAN59 — par dispatch classified hidden attrs by NAME PREFIX
+/// ('__'-named ⇒ text buffer): a worker whose tail calls a wider
+/// heap-returning fn gets a wrapper-promoted hidden dest named
+/// `__ref_1`, which landed in the text bucket — frame underflow
+/// "No elements left on the stack 8 < 12" at runtime.  Classification
+/// is now by TYPE.  (The native arm of this shape is a separate
+/// pre-existing par gap — plain vector-returning workers don't compile
+/// natively either; tracked in plans/59-return-abi.)
+#[test]
+fn plan59_par_worker_over_wrapper_promoted_callee() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("plan59_landmine.loft");
+    std::fs::write(
+        &path,
+        r#"
+fn use_first() -> integer {
+  v = wrapped(2);
+  len(v)
+}
+
+pub fn wrapped(n: integer) -> vector<integer> {
+  widened(n, 1)
+}
+
+pub fn widened(n: integer, extra: integer) -> vector<integer> {
+  acc: vector<integer> = [];
+  for i in 0..n + extra { acc += [i * 10]; }
+  acc
+}
+
+fn worker(x: integer) -> vector<integer> {
+  wrapped(x)
+}
+
+fn main() {
+  assert(use_first() == 3, "plain: {use_first()}");
+  inputs = [1, 2, 3];
+  outs: vector<integer> = [];
+  for x in inputs par(r = worker(x), 2) {
+    outs += [len(r)];
+  }
+  assert(len(outs) == 3, "par count: {len(outs)}");
+  print("ok");
+}
+"#,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let bin = root.join("target/release/loft");
+    if !bin.exists() {
+        // Sanitizer CI jobs (ASan gate, stack_align sweep) run the test
+        // binaries without building the release CLI — skip like the
+        // engine_host_kernel spawning tests do instead of dying NotFound.
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let out = std::process::Command::new(bin)
+        .args(["--interpret", "--no-warnings"])
+        .arg(&path)
+        .current_dir(&root)
+        .output()
+        .expect("run loft");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.contains("ok"),
+        "par over wrapper-promoted callee regressed: stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+// ── @PLAN59 pass-2 arity growth — forward CALLER of a multi-return-site fn ──
+// Found 2026-06-12 by the restored armed-assert channel: `ref_return`'s
+// pass-1 growth re-fires in PASS 2 under different work-ref names (pass 2
+// sees the forward callee already parsed, so the per-site work refs differ
+// from pass 1's), and a caller parsed earlier in pass 2 holds a short arg
+// list — codegen halts with "Too few parameters on n_pick (got 2, need 4)"
+// on BOTH backends.  The armed assert "@PLAN59: arity grew in PASS 2 on
+// plain fn" (parser/control.rs ref_return) flags exactly this.  Repro:
+// /tmp/p_followups/p14_forward_caller.loft.  The fix is pass-stable
+// ref_return promotion for the forward-callee shape (F1 family).
+#[test]
+fn pass2_arity_growth_forward_caller() {
+    code!(
+        "struct S { v: integer not null }
+fn use_pick(json: text) -> S { pick(json) }
+fn pick(json: text) -> S {
+  if json == \"\" { return mk(71006); }
+  result = mk(71007);
+  if json == \"bad\" { return mk(71008); }
+  result
+}
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn run() -> integer {
+    use_pick(\"\").v + use_pick(\"x\").v + use_pick(\"bad\").v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(71006 + 71007 + 71008));
+}
+
+// The 3-LEVEL forward chain — same class, one level deeper: `outer`'s
+// single tail call to `use_pick` materializes one work ref PER hidden
+// buffer of the callee, so buffer need CASCADES through forward-call
+// chains and no pass-1 syntactic site count can bound it (a per-site
+// pre-provision fix was tried 2026-06-12 and reverted: it fixed the
+// 2-level cell and moved the crash here).  The class fix is a
+// between-pass buffer-count fixpoint (the typedef-resolution slot runs
+// after all pass-1 signatures + bodies exist) — or caller-local backing
+// for the non-chained work refs.  Repro:
+// /tmp/p_followups/p15_three_level.loft.
+#[test]
+fn pass2_arity_growth_forward_chain() {
+    code!(
+        "struct S { v: integer not null }
+fn outer(json: text) -> S { use_pick(json) }
+fn use_pick(json: text) -> S { pick(json) }
+fn pick(json: text) -> S {
+  if json == \"\" { return mk(71006); }
+  result = mk(71007);
+  if json == \"bad\" { return mk(71008); }
+  result
+}
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn run() -> integer {
+    outer(\"\").v + outer(\"x\").v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(71006 + 71007));
+}
+
+// SELF-RECURSION cell (design-round probe, 2026-06-12): a multi-site fn
+// whose tail return calls ITSELF makes the per-site buffer recurrence
+// self-referential — buffers(f) = 2 + buffers(f) has NO finite fixpoint,
+// so each parse pass adds more hidden attrs and codegen halts ("Too few
+// parameters on n_count_down (got 5, need 7)").  No forward reference
+// involved: this cell FALSIFIES the between-pass fixpoint design (it
+// cannot terminate here); only the one-buffer-per-fn family covers it.
+// Repro: /tmp/p_followups/casc_recursive.loft.
+#[test]
+fn pass2_arity_growth_self_recursive() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn count_down(n: integer) -> S {
+  if n <= 0 { return mk(91000); }
+  if n == 99 { return mk(91099); }
+  count_down(n - 1)
+}
+fn run() -> integer { count_down(3).v }"
+    )
+    .expr("run()")
+    .result(Value::Int(91000));
+}
+
+// MUTUAL-RECURSION cell (design-round probe, 2026-06-12): two multi-site
+// fns tail-calling each other — a cycle always contains a forward edge,
+// so this crashes like the forward chain ("Too few parameters on
+// n_odd_pick (got 3, need 5)") and no parse ORDER can fix it.  Repro:
+// /tmp/p_followups/casc_mutual.loft.
+#[test]
+fn pass2_arity_growth_mutual_recursion() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn even_pick(n: integer) -> S {
+  if n <= 0 { return mk(92000); }
+  odd_pick(n - 1)
+}
+fn odd_pick(n: integer) -> S {
+  if n <= 0 { return mk(92001); }
+  even_pick(n - 1)
+}
+fn run() -> integer { even_pick(4).v }"
+    )
+    .expr("run()")
+    .result(Value::Int(92000));
+}
+
+// #355 — the VECTOR arm of the one-buffer return binding: a forward
+// caller of a multi-return-site vector fn silently returned the WRONG
+// element (per-site buffer growth mis-wired the forward call).  Mid-body
+// vector returns now chain/copy into the one buffer like Reference
+// returns (RetSite::MidReturn never renames a site local — the 01b
+// hazard); the wrapper leg guards the #120 dep-recovery mirror.
+#[test]
+fn one_buffer_vector_forward_caller() {
+    code!(
+        "fn use_pickv(json: text) -> vector<integer> { pickv(json) }
+fn pickv(json: text) -> vector<integer> {
+  if json == \"\" { return mkv(1); }
+  result = mkv(2);
+  if json == \"bad\" { return mkv(3); }
+  result
+}
+fn mkv(n: integer) -> vector<integer> { v: vector<integer> = []; v += [n]; v }
+fn run() -> integer {
+    use_pickv(\"\")[0] + use_pickv(\"x\")[0] + use_pickv(\"bad\")[0]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
+}
+
+// #356 — a mid-body `return f(g(x))` (argument lifting decomposes the
+// bare call) returned the null sentinel on native: scopes' `returned_var`
+// saw no Var in the lifted tail, so the epilogue emitted `Return(Null)`.
+// The site's value now gets the canonical `{ buf = call(...); buf }`
+// shape on every pass (including the pass-2 re-find of a pass-1-promoted
+// work ref by name).
+#[test]
+fn mid_body_nested_call_return_value() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn wrap(x: S) -> S { s = S { v: x.v + 7 }; s }
+fn nested(json: text) -> S {
+  if json == \"n\" { return wrap(mk(94000)); }
+  mk(94100)
+}
+fn run() -> integer { nested(\"n\").v + nested(\"x\").v }"
+    )
+    .expr("run()")
+    .result(Value::Int(94007 + 94100));
+}

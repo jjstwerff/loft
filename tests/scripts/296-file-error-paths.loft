@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// F11-1 — reading a file that cannot be opened must not crash: the
+// runtime warns on stderr and the read yields null, identically on both
+// backends.  Was: the interpreter set the file ref BEFORE the open, so a
+// failed open left a dangling index into files[] — the next line panicked
+// with index-out-of-bounds (the read-path sibling of the fixed write_file
+// create case).
+
+fn main() {
+  f = file("missing_f11_zq9_distinctive.bin");
+  v = f#read(4) as i32;
+  assert(v == null, "read on an unopenable file yields null, got {v}");
+  // A repeat read behaves the same: the failed open must not have
+  // half-registered a handle.
+  w = f#read(8) as integer;
+  assert(w == null, "repeat read stays null, got {w}");
+}

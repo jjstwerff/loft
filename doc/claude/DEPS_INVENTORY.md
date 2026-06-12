@@ -46,6 +46,7 @@ Every OTHER place that lets the two spaces touch is listed under
 | `dep == [var]` (self-dep) on a keyed local | frame space | @P302 OWNERSHIP marker — "owns its store; `s = []` re-inits in place" | read `generation/dispatch.rs:558`, `generation/dispatch.rs:555` |
 | `vec![vr]` on a hidden-buffer arg type | frame space | the work-ref carries ITSELF as dep so the `dep.is_empty()` owned-gate skips it | written `parser/mod.rs::add_defaults` (4183/4199/4224), read `scopes.rs:1636` region |
 | `deps.is_empty()` | both | OWNED (no borrow) — the most load-bearing convention in the codebase | everywhere (`is_heap_owned`, `owned_ref` in codegen, …) |
+| `CALLEE_FRAME_BIT` (0x8000) on a def-space entry | def space, value = frame var | step 5: a CALLEE-INTERNAL frame-var note (the closure work var a returned fn-ref carries) — skipped by callers, decoded inside the defining fn | written `Deps::callee_frame1` (sole site: `parser/vectors.rs` lambda propagation); decoded `Deps::entries` / `DepEntry::decode` (scopes' declared-return + fn-ref reads, `check_ref_leaks`) |
 
 Note the SAME `u16::MAX` value means two different things (pointer field
 vs closure share-sentinel) in two spaces — they never collide today only
@@ -74,18 +75,15 @@ share-marker is deliberately NOT writable through this path.  ✅ uniform.
 
 ### Crossing sites (the #306 class — each is a manual space bridge)
 
-1. **`scopes.rs:1614–1646` (`dep_has_var`)** — translates attr indices to
-   frame vars through `def.attributes[a].name`, with a fallback `a == v`
-   for out-of-range entries.  **Step-3 bisect finding (2026-06-11): the
-   fallback is LIVE, not a fossil** — the BLOCK-RESULT type's deps
-   (`tp.depend()`) are MIXED-space by contract: entries below the attr
-   count are attribute indices, entries above are FRAME var numbers (a
-   factory's returned fn-ref carries its closure work var this way).
-   Removing the arm freed closure records early — `26-closures`' two
-   `make_adder` results silently shared one record.  The positional
-   disambiguation (in-range = attr, out-of-range = frame) is the current
-   contract; a future step makes block-result types carry properly
-   tagged/split deps instead.
+1. **`scopes.rs` (`get_free_vars`' declared-return read — the old
+   `dep_has_var`)** — RETIRED in step 5 (2026-06-12): the read decodes
+   per entry (`Deps::entries`: attr index → name-mapped frame var;
+   tagged callee-frame note → direct compare); the positional fallback
+   is deleted.  The BLOCK-RESULT (`tp`) dep read is dropped entirely —
+   corpus-probed as never deciding alone — with a debug `tp_alone`
+   sentinel guarding the claim.  (History: the step-3 bisect showed the
+   fallback was load-bearing for factories — `26-closures`' two
+   `make_adder` results shared one record without it.)
 2. **`scopes.rs:2379–2391` (`check_ref_leaks`)** — pools
    `ret_type.depend()` (def space) and `function.tp(ret_var).depend()`
    (frame space) into ONE `HashSet<u16>` matched against frame var
@@ -161,5 +159,43 @@ wide to combine with other work.
       "fossil" turned out load-bearing (see crossing sites) — kept.
 - [x] Step 4 — release + debug full-suite runs green (space asserts live
       in debug).
-- [ ] Step 5 (future) — split block-result mixed-space deps into tagged
-      halves so the positional contract in `dep_has_var` can retire.
+- [x] Step 5 (2026-06-12) — the positional contract is RETIRED.  What the
+      probes showed (debug-tag instrumentation over scripts + docs +
+      examples + tools + lib corpora): (a) the in-range attr mapping is
+      LOAD-BEARING (77+ non-identity mappings — params are not frame-
+      numbered by attr position); (b) no single list ever mixes spaces —
+      the mixing is per-PROVENANCE (`def.returned` of a closure factory
+      carries the work var, written by `parser/vectors.rs`'s lambda
+      propagation; everything else is uniform); (c) the debug-only space
+      tag does NOT survive the IR codec (293 `Unknown` tags from cache
+      round-trips), so the cure had to be a VALUE tag.  The fix:
+      `Deps::CALLEE_FRAME_BIT` (0x8000) marks a callee-internal frame-var
+      note inside a def-space list — written by `Deps::callee_frame1`
+      (sole writer: the vectors.rs lambda propagation), decoded by
+      `Deps::entries()` / `DepEntry::decode` (no def has 0x8000 attrs; the
+      constructor rejects var 0x7FFF so `u16::MAX` markers stay
+      unambiguous; the bit survives codecs and the build-signature-pinned
+      cache makes stale untagged bundles a clean miss).  Readers updated:
+      `get_free_vars`' declared-return decode (the old `dep_has_var`
+      closure — per-entry match, positional arm deleted), the fn-ref
+      `in_ret` check (raw `contains` never matched the tagged value — the
+      explicit-`return adder;` cell has an empty block-result list and
+      relied on it), and `check_ref_leaks` (pools the decoded frame var
+      instead of silently dropping it — this was the false-leak report on
+      `___clos_1`).  The BLOCK-RESULT dep read in `get_free_vars` is
+      DROPPED: the corpus probes showed it never decides alone (the
+      declared-return + returned-var checks subsume it); a debug
+      `tp_alone` sentinel screams if a live case ever appears.
+      Regression: `tests/scripts/297-closure-factory-explicit-return.loft`
+      (both backends).  Residuals found en route, NOT step-5 scope:
+      armed-lib-debug builds (`profile.dev.package.loft`
+      debug-assertions=true) are globally red at baseline
+      (`check_ref_leaks` false positives on plain `File` locals, then a
+      freed-store use inside `ir_store::write_definition`) — the override
+      that ships them off is load-bearing; and the @PLAN59 growth assert
+      tripped on `n_map_from_json` / `n_glb_pos_min` (lib fns) in armed
+      builds — FIXED 2026-06-12: the assert's claim was too broad
+      (pass-1 multi-return-site growth is sound and pass-stable; only
+      PASS-2 growth is dangerous, and the assert now guards exactly
+      that).  See STABILITY_HOTSPOTS § H1 retired note;
+      `tests/scripts/298-multi-return-site-ref-buffer.loft`.

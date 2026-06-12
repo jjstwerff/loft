@@ -80,6 +80,14 @@ test_runner_cmd() {
   fi
 }
 
+# Sweep the disk-backed fixture scratch before a full run: tests write
+# fixtures (and their .loft/cache native binaries) under target/test-tmp —
+# per-run artifacts that otherwise accumulate run over run.  Owned by THIS
+# repo's tests only, so the sweep can be unconditional.
+sweep_test_tmp() {
+  rm -rf "$(dirname "$0")/../target/test-tmp" 2>/dev/null || true
+}
+
 # Run all rebuilds in parallel.  Each cargo invocation has fixed
 # startup overhead (~0.05–0.7 s on a no-op rebuild); doing them in
 # parallel collapses the serial 1.5–2 s wall-clock to whatever the
@@ -195,7 +203,12 @@ summarise() {
   local log="$1" out="$2"
   {
     echo "=== Test binaries that reported FAILED ==="
-    grep -a -E "^test .* FAILED$" "$log" || echo "(none)"
+    # Both runner formats: cargo test ("test ... FAILED") and nextest
+    # ("        FAIL [   0.040s] (2256/2332) loft::wrap stack_trace_script"
+    # + the closing "Summary [...] N failed") — the summary previously
+    # missed every nextest failure and reported a failing run as clean.
+    grep -a -E "^test .* FAILED$|^[[:space:]]*FAIL \[|failed;|[0-9]+ failed" "$log" \
+      | grep -av " 0 failed" || echo "(none)"
     echo
     echo "=== Test stdout blocks for FAILED tests ==="
     grep -a -B1 -A10 "^---- " "$log" || echo "(none)"
@@ -248,7 +261,7 @@ if [[ "${1:-}" == "--peek" ]]; then
     running="yes (pid $(cat "$PID_FILE"))"
   fi
   echo "=== in-flight peek (log: $LOG, $(wc -l < "$LOG") lines, running=$running) ==="
-  failures=$(grep -a -E "^test .* FAILED$" "$LOG" || true)
+  failures=$(grep -a -E "^test .* FAILED$|^[[:space:]]*FAIL \[" "$LOG" || true)
   segfaults=$(grep -a "signal:" "$LOG" || true)
   if [[ -z "$failures" && -z "$segfaults" ]]; then
     echo "no failures yet"
@@ -320,7 +333,7 @@ if [[ "${1:-}" == "--bg" ]]; then
   # `|| true` after the runner so summarise still fires when tests
   # fail (cargo's non-zero exit would otherwise short-circuit `set -e`
   # in the subshell, leaving /tmp/loft_problems.txt unwritten).
-  RUNNER="$(test_runner_cmd)"
+  RUNNER="$(sweep_test_tmp; test_runner_cmd)"
   echo "test runner: $RUNNER"
   (
     start_ns=$(date +%s%N)
@@ -345,7 +358,7 @@ OUT="${2:-$OUT_DEFAULT}"
 find tests/ -name '*.loftc' -delete 2>/dev/null || true
 find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
 rebuild_native_cdylibs
-RUNNER="$(test_runner_cmd)"
+RUNNER="$(sweep_test_tmp; test_runner_cmd)"
 echo "test runner: $RUNNER"
 fg_start_ns=$(date +%s%N)
 # `|| true` so test failures don't short-circuit `set -e` and skip

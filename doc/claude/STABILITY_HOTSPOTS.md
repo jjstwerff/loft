@@ -5,6 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # STABILITY_HOTSPOTS.md — the structures that will keep manufacturing bugs
 
+> Open H-items are ORDERED in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) —
+> the single tracking view across all stability docs.  This file stays the
+> canonical home for each hotspot's invariant, evidence, and mitigation design.
+
 Companion to [STABILITY_METHOD.md](STABILITY_METHOD.md) (the three-pass
 method) and [STABILITY_PASS2.md](STABILITY_PASS2.md) (the executed
 relocation pass).  Where those documents look at *routines*, this one looks
@@ -91,10 +95,31 @@ always.
    wrappers changes shape, so `make rebuild-native-cdylibs` artifacts and
    the registry's `verified` libraries need a re-verify pass.
 
+**Status (2026-06-11, end of day): PHASE 1 SHIPPED** — every
+body-carrying plain fn returning Reference / Vector / struct-Enum
+carries its hidden `__retbuf` from signature parse; `ref_return` binds
+promoted locals by role swap; arity can no longer grow behind a parsed
+caller (debug-asserted; lambdas keep in-place growth — no earlier
+callers can exist).  The dispatcher census that gated it is complete:
+plain calls, par lanes (+ runtime witness-free), entry invocations
+(REPL capture), and the cdylib shared bridge (runtime type-name ids)
+all speak the uniform ABI.  Full matrix green —
+[plans/59-return-abi](plans/59-return-abi/README.md) records the three
+rounds, every probe, and the phase-2 cleanups.  Originally: plan opened —
+[plans/59-return-abi](plans/59-return-abi/README.md) (@PLAN59).  Phase 0
+SHIPPED: the H1 census probe caught a LIVE #339 sibling (vector-literal
+tails promote late too; 7-line caller-first repro panicked on main) — the
+retrofit now covers all three heap-buffer kinds, regression in
+`tests/scripts/295`.  Census results validate the one-buffer design
+(ls ≤ 1 in 104/104 promotions); claims C1–C5 probed/read, C6–C8 (argument
+order ↔ attr order coupling, buffer-vs-return-value consumption,
+null-init suppression) are the named pre-implementation probes for
+phase 1's own window.
+
 **Until then** (standing rule, loft-write skill): a thin wrapper around a
 struct-returning fn is safe ONLY if the wide impl is defined before it in
-the file; #339's retro-patch covers the rest but new shapes (fn-refs to
-late-promoted fns, generics) should be probed before relying on them.
+the file; the widened retro-patch covers the rest but new shapes (fn-refs
+to late-promoted fns, generics) should be probed before relying on them.
 
 ---
 
@@ -129,12 +154,22 @@ every creation site states its meaning (`none` / `frame` / `attrs` /
 `as_attr_indices`, debug-tag-checked, zero release cost),
 `resolve_deps`/`ref_return` are typed as THE converters, and contaminated
 reads scream in debug.  The step-3 bisect upgraded the inventory: the
-`dep_has_var` "fossil" is LIVE — block-result deps are mixed-space by
+`dep_has_var` "fossil" was LIVE — block-result deps were mixed-space by
 contract (in-range = attr index, out-of-range = frame var; removing the
-arm made `26-closures`' factory results share one record).  Remaining
-(step 5, future): split block-result mixed-space deps into tagged halves
-so the positional contract can retire.  Gates: release suite 2292/2292,
-debug-mode suite (asserts armed) green.
+arm made `26-closures`' factory results share one record).
+Step 5 DONE (2026-06-12): the positional contract is RETIRED — the
+callee-frame note a closure factory stores in `def.returned` is an
+in-band TAGGED value (`Deps::CALLEE_FRAME_BIT`; sole writer
+`Deps::callee_frame1` at the vectors.rs lambda propagation; decoded by
+`Deps::entries`), chosen over the debug-only tag because VALUES survive
+the IR codec (cache round-trips erase the debug tag — corpus-probed).
+The block-result dep read in `get_free_vars` is deleted (probed across
+five corpora: never decides alone; a debug sentinel guards the claim);
+`check_ref_leaks` pools the decoded note instead of dropping it (its
+false `___clos_1` leak report is gone).  Regression:
+`tests/scripts/297-closure-factory-explicit-return.loft`.  Full record +
+residuals found en route (armed-lib-debug baseline redness; @PLAN59
+growth assert on two lib fns): DEPS_INVENTORY § Status.
 
 ---
 
@@ -309,4 +344,30 @@ mechanically.  Not started; should precede any new `par` feature work.
 
 ## Retired
 
-(none yet)
+### H1 — Analysis-dependent function arity (RETIRED 2026-06-11)
+
+Phase 1 (the unconditional `__retbuf` ABI + the dispatcher census:
+plain calls, par lanes with witness-free, entry invocations, the
+cdylib shared bridge with runtime type-name ids) and phase 2 (deleted:
+`retrofit_callers_hidden_args`, the `grew_in_pass2` plumbing, the
+`__rref_` recursive-self counter dance; documented: the two-pass
+contract at the `first_pass` flag, the calling convention in
+COMPILER.md § Function calling convention) — all landed on `bugs325`.
+Arity is a pure function of the declaration AFTER pass 1: armed builds
+showed the original "never grows" assert firing on the
+multi-return-site shape (a fn whose return sites are materialized work
+refs — forward-referenced callee / generated `.parse` — finds the one
+`__retbuf` consumed by its first site and grows a hidden attr per
+later site; seen on `moros_map::map_from_json` and graphics'
+`glb_pos_min`).  PASS-1 growth there is sound — pass 2 re-parses every
+caller against the final arity and re-finds the grown attrs by name,
+so arity is pass-stable — and the assert now guards exactly the
+dangerous clause: pass-2 growth on a plain fn (2026-06-12).  An
+opt-out (leaving site 2+ un-promoted) was tried and REVERTED: the
+cdylib emission of un-promoted materialized returns dereferences the
+null-sentinel buffer (`map_export_glb` chain, store 65535) — recorded
+in the ref_return comment.  Regression:
+`tests/scripts/298-multi-return-site-ref-buffer.loft`.  H5's load
+mostly dissolved with H1 (the contract is now documented + the assert
+enforces its hardest clause).  Full history:
+[plans/59-return-abi](plans/59-return-abi/README.md).

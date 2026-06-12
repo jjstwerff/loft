@@ -90,6 +90,12 @@ impl LexResult {
 /// KEYWORDS that are parsed when a line starts with a token.
 pub struct Lexer {
     lines: Box<dyn Iterator<Item = IoResult<String>>>,
+    /// In-memory sources by name (`parse_string` registers them): `switch`
+    /// serves these before trying the filesystem, so a `use` that halts and
+    /// later RESUMES the current file by name works for virtual sources
+    /// (REPL snippets, probes, live-reload's "<live-reload>") — names like
+    /// `<probe>` are not openable paths on any platform.
+    virtual_files: std::collections::HashMap<String, String>,
     iter: Peekable<IntoIter<char>>,
     peek: LexResult,
     /// Keep the scanned items in memory when a Link is created to return when reverted to this link.
@@ -212,6 +218,7 @@ fn oct_parse(val: &str) -> Option<u64> {
 impl Default for Lexer {
     fn default() -> Self {
         let mut result = Lexer {
+            virtual_files: std::collections::HashMap::new(),
             lines: Box::new(Vec::new().into_iter()),
             peek: LexResult {
                 has: LexItem::None,
@@ -251,6 +258,7 @@ impl Lexer {
     #[allow(unused)]
     fn new(lines: impl Iterator<Item = IoResult<String>> + 'static, filename: &str) -> Lexer {
         let mut result = Lexer {
+            virtual_files: std::collections::HashMap::new(),
             lines: Box::new(lines),
             peek: LexResult {
                 has: LexItem::None,
@@ -1126,6 +1134,8 @@ impl Lexer {
     }
 
     pub fn parse_string(&mut self, string: &str, filename: &str) {
+        self.virtual_files
+            .insert(filename.to_string(), string.to_string());
         let mut v = Vec::new();
         for l in string.split('\n') {
             v.push(Ok(String::from(l)));
@@ -1135,6 +1145,15 @@ impl Lexer {
     }
 
     pub fn switch(&mut self, filename: &str) {
+        // An in-memory source registered by `parse_string` re-serves from
+        // memory — its name is not an openable path.
+        if let Some(content) = self.virtual_files.get(filename) {
+            let v: Vec<IoResult<String>> =
+                content.split('\n').map(|l| Ok(String::from(l))).collect();
+            self.lines = Box::new(v.into_iter());
+            self.restart(filename);
+            return;
+        }
         // try VIRT_FS first (WASM has no real filesystem for library files).
         #[cfg(feature = "wasm")]
         if let Some(content) = crate::wasm::virt_fs_get(filename) {

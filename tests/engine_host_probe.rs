@@ -14,9 +14,20 @@ use loft::compile;
 use loft::parser::Parser;
 use loft::state::State;
 
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 #[test]
 fn persistent_state_repeated_dispatch() {
-    let outp = std::env::temp_dir().join(format!("eh_probe_out_{}.txt", std::process::id()));
+    let outp = test_tmp().join(format!("eh_probe_out_{}.txt", std::process::id()));
     let src = format!(
         r#"
 fn on_call(args: vector<text>) {{
@@ -30,7 +41,7 @@ fn on_call(args: vector<text>) {{
         // platform's filesystem API.
         outp.to_string_lossy().replace('\\', "/")
     );
-    let tmp = std::env::temp_dir().join(format!("eh_probe_{}.loft", std::process::id()));
+    let tmp = test_tmp().join(format!("eh_probe_{}.loft", std::process::id()));
     std::fs::write(&tmp, &src).unwrap();
 
     let mut parser = Parser::new();

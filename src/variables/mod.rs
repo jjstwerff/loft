@@ -206,10 +206,6 @@ pub struct Function {
     variables: Vec<Variable>,
     work_text: u16,
     work_ref: u16,
-    // Separate counter for work-refs allocated by `add_defaults` for recursive
-    // self-calls on second pass.  Uses `__rref_N` names so it does not consume
-    // `__ref_N` slots that the outer function's return-value work-ref needs.
-    work_rref: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
     // `vector_db` only runs on the second pass (first_pass guard), so it cannot
     // use the shared `work_ref` counter: that would shift the counter relative to
@@ -268,7 +264,6 @@ impl Function {
             loops: Vec::new(),
             work_text: 0,
             work_ref: 0,
-            work_rref: 0,
             work_vdb: 0,
             variables: Vec::new(),
             work_texts: BTreeSet::new(),
@@ -395,7 +390,6 @@ impl Function {
         }
         self.work_text = 0;
         self.work_ref = 0;
-        self.work_rref = 0;
         self.work_vdb = 0;
         self.work_texts.clear();
         self.work_refs.clear();
@@ -425,7 +419,6 @@ impl Function {
             variables: other.variables.clone(),
             work_text: 0,
             work_ref: 0,
-            work_rref: 0,
             work_vdb: 0,
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
@@ -1204,6 +1197,15 @@ impl Function {
         self.variables[var_nr as usize].stack_allocated = true;
     }
 
+    /// @PLAN59 (H1): drop a var from the argument set — used to retire the
+    /// signature-time `__retbuf` placeholder when `ref_return` promotes a
+    /// real local into the buffer role (the promoted local takes the
+    /// placeholder's attribute; `arguments()` then yields the promoted var
+    /// in the same last position by number order).
+    pub fn retire_argument(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].argument = false;
+    }
+
     pub fn is_argument(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }
@@ -1234,6 +1236,16 @@ impl Function {
     /// and codegen panics with "Incorrect var __ncc_N[65535]".
     pub fn register_work_ref(&mut self, var_nr: u16) {
         self.work_refs.insert(var_nr);
+    }
+
+    /// Remove a work-ref from the preamble registry after the one-buffer
+    /// binding substituted it out of the IR (`ref_return`'s chain leg).
+    /// Without this the orphan still gets a `Set(v, Null)` preamble and a
+    /// scope-exit free; the presence of FREES then flips the tail-`If`
+    /// emission into the discarded-statement + `Return(Null)` shape that
+    /// returns the null sentinel on native (the @P378 trap).
+    pub fn unregister_work_ref(&mut self, var_nr: u16) {
+        self.work_refs.remove(&var_nr);
     }
 
     pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
@@ -1403,14 +1415,6 @@ impl Function {
     /// return-value work-ref continues to receive the same `__ref_N` name it
     /// got on the first pass — allowing `ref_return` to find the name match
     /// and reuse the existing attribute instead of adding a new one.
-    pub fn work_refs_recursive(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
-        let n = format!("__rref_{}", self.work_rref + 1);
-        self.work_rref += 1;
-        let v = self.add_variable(&n, tp, lexer);
-        self.work_refs.insert(v);
-        v
-    }
-
     /// Work-ref for `vector_db()` — uses a separate `__vdb_N` counter/namespace.
     /// `vector_db` only runs on the second pass (it is guarded by `!first_pass`),
     /// so it must NOT share the `work_ref` / `__ref_N` counter with `add_defaults`.

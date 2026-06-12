@@ -3494,9 +3494,30 @@ impl State {
         });
         // If fn main declares a vector<text> parameter, push argv before the return address.
         let attrs = &data.def(d_nr).attributes();
-        if attrs.len() == 1 && matches!(attrs[0].typedef, Type::Vector(_, _)) {
+        if attrs.len() == 1 && !attrs[0].hidden && matches!(attrs[0].typedef, Type::Vector(_, _)) {
             let args_vec = self.database.text_vector(argv);
             self.put_stack(args_vec);
+        }
+        // @PLAN59: the entry fn may carry hidden heap return-buffer attrs
+        // (ref_return promotion / the signature-time `__retbuf`).  Push one
+        // NULL-SENTINEL dest per hidden heap attr so the entry frame layout
+        // matches its argument vars — a promoted body `OpDatabase`s the slot
+        // (alloc-from-sentinel), an unwritten buffer stays a no-op sentinel.
+        // (The REPL's capture wrapper `fn replmain_N() -> P { … }` is the
+        // canonical caller of a heap-returning entry fn.)
+        for a in *attrs {
+            if a.hidden
+                && matches!(
+                    a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+            {
+                self.put_stack(crate::keys::DbRef {
+                    store_nr: u16::MAX,
+                    rec: 0,
+                    pos: 8,
+                });
+            }
         }
         self.put_stack(u32::MAX);
         #[cfg(debug_assertions)]
@@ -3898,9 +3919,15 @@ impl State {
                 break;
             }
         }
-        // Program finished — clean up.
+        // Loop finished — pop the synthetic frame (the entry frame for the
+        // frame-yield drivers, `reenter`'s push for a re-entered call).
+        // `parallel_ctx` is NOT cleared here: its lifetime is the PROGRAM's
+        // (who wired it unwires it — `execute_argv` / the frame-yield
+        // drivers).  Clearing on every loop completion tore down the
+        // standing ctx the live-dispatch host wired, so the SECOND call of
+        // a flipped fn using `par_*` panicked in `n_parallel_*`'s expect
+        // (probe: a flipped `par_fold` killed the kernel on ping 2).
         self.call_stack.pop();
-        self.database.parallel_ctx = None;
         false
     }
 
@@ -3986,8 +4013,9 @@ impl State {
                 watch_fired = true;
             }
         }
+        // Same contract as `resume`: pop the synthetic frame only —
+        // `parallel_ctx` is program-scoped and unwired by its wirer.
         self.call_stack.pop();
-        self.database.parallel_ctx = None;
         false
     }
 

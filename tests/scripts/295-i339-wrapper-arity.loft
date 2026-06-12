@@ -57,3 +57,23 @@ fn test_direct_call_still_works() {
   assert(len(z.items) == 2 && z.tag == 5, "direct: got len {len(z.items)} tag {z.tag}");
   assert(z.items[1] == 11, "direct items: got {z.items[1]}");
 }
+
+// H1 census follow-up (2026-06-11): the SAME late-growth panic fired for
+// VECTOR returns — a vector-literal tail promotes in pass 2 only, so a
+// caller defined ABOVE the fn hit 'Too few parameters on n_<fn> (got 0,
+// need 1)'.  The retrofit now covers all three heap-buffer kinds.
+fn use_vector_literal_fn() -> integer {
+  v = colours295();
+  len(v)
+}
+
+pub fn colours295() -> vector<text> {
+  ["red", "green", "blue"]
+}
+
+fn test_vector_literal_caller_first() {
+  n = use_vector_literal_fn();
+  assert(n == 3, "vector caller-first: got {n}");
+  c = colours295();
+  assert(c[1] == "green", "direct: got {c[1]}");
+}

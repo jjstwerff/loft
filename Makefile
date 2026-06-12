@@ -1145,6 +1145,14 @@ ci:
 	#                       repeated PR-212 cycles where ignored drift
 	#                       surfaced as downstream test failures)
 	#   4. Test       job → cargo build --all-targets,
+	#                       cargo build --release --target wasm32-wasip2/
+	#                         wasm32-unknown-unknown --lib (added
+	#                         2026-06-12: the wasm targets are a separate
+	#                         COMPILE GATE — a cfg'd fn whose call sites
+	#                         aren't cfg'd breaks them while every native
+	#                         gate stays green, hidden behind stale rlibs
+	#                         until something rebuilds one; bit twice in
+	#                         the @PLN18 arc.  ~seconds when warm),
 	#                       cargo build --no-default-features
 	#                         (to an isolated --target-dir: this strips
 	#                          `native-extensions` from libloft.rlib, and
@@ -1167,6 +1175,8 @@ ci:
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
+	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random >> result.txt 2>&1 && \
+	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
 	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \

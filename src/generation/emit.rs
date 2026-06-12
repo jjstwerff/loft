@@ -1131,9 +1131,12 @@ impl Output<'_> {
         // form) or `bool` (a literal/comparison — expression form), which don't
         // unify.  Wrap both arms `((arm) as u8)` so the if-expression is uniformly
         // `u8`; the consumer (predicate / store / operand) coerces from there.
-        let bool_unify = !b_true
-            && !b_false
-            && !matches!(false_v, Value::Null)
+        // #354: Block arms join the wrap (`{(({…block…}) as u8)}` is valid
+        // Rust) — a boolean-typed ncc Block then-arm casts itself to u8 while
+        // a literal `false` else-arm stayed `bool` (E0308).  A statement-if is
+        // unaffected: its arm blocks are void-typed, so `infer_type` is not
+        // Boolean and the gate stays closed.
+        let bool_unify = !matches!(false_v, Value::Null)
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Boolean));
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
@@ -1142,22 +1145,22 @@ impl Output<'_> {
         // the block in `({…}).to_string()` inside an outer `{ … }`.
         if text_string_unify {
             write!(w, " {{(")?;
+        } else if bool_unify {
+            write!(w, " {{((")?;
         } else if b_true {
             write!(w, " ")?;
         } else if text_unify {
             write!(w, " {{&*(")?;
-        } else if bool_unify {
-            write!(w, " {{((")?;
         } else {
             write!(w, " {{")?;
         }
-        self.indent += u32::from(!b_true || text_string_unify);
+        self.indent += u32::from(!b_true || text_string_unify || bool_unify);
         // save/restore fn_ref_context — Call arguments inside the branch
         // must NOT inherit it (OpDatabase int args would be misinterpreted).
         let saved_ctx = self.fn_ref_context;
         self.output_code_inner(w, true_v)?;
         self.fn_ref_context = saved_ctx;
-        self.indent -= u32::from(!b_true || text_string_unify);
+        self.indent -= u32::from(!b_true || text_string_unify || bool_unify);
         if text_string_unify {
             write!(w, ").to_string()}} else ")?;
         } else if text_unify {
@@ -1178,7 +1181,7 @@ impl Output<'_> {
         } else if !b_false {
             write!(w, "{{")?;
         }
-        self.indent += u32::from(!b_false || text_string_unify);
+        self.indent += u32::from(!b_false || text_string_unify || bool_unify);
         // When the else branch is Null and the true branch returns a value,
         // emit a typed null sentinel instead of () to match the true branch type.
         if matches!(false_v, Value::Null)
@@ -1197,7 +1200,7 @@ impl Output<'_> {
         } else if !b_false {
             write!(w, "}}")?;
         }
-        self.indent -= u32::from(!b_false || text_string_unify);
+        self.indent -= u32::from(!b_false || text_string_unify || bool_unify);
         Ok(())
     }
 

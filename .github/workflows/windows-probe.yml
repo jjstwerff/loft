@@ -1,0 +1,37 @@
+# @PLN18 / WINDOWS.md — the FOCUSED Windows probe loop (user-directed
+# 2026-06-11): platform debugging iterates here — small targeted probes on
+# windows-latest, fast turnaround, NOT a PR gate.  Trigger: any push to the
+# `windows-probe` branch, or manual dispatch.  Delete-or-keep freely; the
+# canonical findings land in doc/claude/WINDOWS.md.
+name: windows-probe
+
+on:
+  push:
+    branches: [windows-probe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  probe:
+    name: Windows kernel probes
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: winprobe-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Run the probes
+        run: cargo test --release --test windows_probe -- --nocapture

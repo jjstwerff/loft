@@ -12,6 +12,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -24,7 +35,7 @@ fn vm_deadline(secs: u64) -> Instant {
 fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
     // Tag-keyed: the two tests run in parallel in one process, so a pid-only name would
     // collide and one's cleanup would delete the other's file mid-`launch`.
-    let p = std::env::temp_dir().join(format!("loft_serve_{tag}_{}.loft", std::process::id()));
+    let p = test_tmp().join(format!("loft_serve_{tag}_{}.loft", std::process::id()));
     std::fs::write(&p, src).expect("write temp program");
     p
 }
@@ -501,7 +512,7 @@ fn serve_ws_run_suite_runs_package_tests() {
     // walk up from the served file to the nearest loft.toml, put the manifest's src/ on the
     // import path, and run every tests/*.loft.  Each testResult carries its `file`; the
     // summary carries the file count.  A start point with no loft.toml upward is refused.
-    let root = std::env::temp_dir().join(format!("loft_suitepkg_{}", std::process::id()));
+    let root = test_tmp().join(format!("loft_suitepkg_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("tests")).unwrap();

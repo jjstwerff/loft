@@ -1450,15 +1450,29 @@ fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: Queue
         };
         // Per-stitch extras (computed unconditionally; cost is a
         // few attribute reads, not heap allocations).
+        // @PLAN59: classify worker attrs by TYPE, not name prefix.  The
+        // old prefix heuristic ('__'-named ⇒ text buffer, user-named
+        // hidden ⇒ heap dest) misclassified wrapper-promoted dests (named
+        // `__ref_1`, Reference/Vector-typed) as text buffers — a live
+        // frame-underflow panic for par workers calling wrapper-promoted
+        // fns ('No elements left on the stack 8 < 12').
         let n_hidden_text = def
             .attributes
             .iter()
-            .filter(|a| a.name.starts_with("__"))
+            .filter(|a| crate::native_lib::is_text_work_buffer(&a.typedef))
             .count();
         let n_hidden_dests = def
             .attributes
             .iter()
-            .filter(|a| a.hidden && !a.name.starts_with("__"))
+            .filter(|a| {
+                a.hidden
+                    && matches!(
+                        a.typedef,
+                        crate::data::Type::Reference(_, _)
+                            | crate::data::Type::Vector(_, _)
+                            | crate::data::Type::Enum(_, true, _)
+                    )
+            })
             .count();
         let ret_type = def.returned.clone();
         let primitive_input_size = match input_kind_for_first_arg(def) {

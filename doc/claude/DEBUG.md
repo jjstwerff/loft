@@ -263,6 +263,42 @@ their platform-native linkers.
 
 ---
 
+## Boundary-matrix runner (`scripts/probe-matrix`)
+
+The mechanics for CLAUDE.md § "Before fixing a non-trivial bug" — runs a
+directory of probe cells uniformly and enforces the matrix-validity rules
+as hard errors, so a matrix cannot silently measure nothing.
+
+```bash
+scripts/probe-matrix init /tmp/p_followups/mybug   # scaffold (template + control cell)
+# … copy the template per cell, vary ONE dimension each, hand-write @EXPECT …
+scripts/probe-matrix /tmp/p_followups/mybug                          # interp, fast iteration
+scripts/probe-matrix /tmp/p_followups/mybug --backend both           # final verify (native pays rustc per cell)
+scripts/probe-matrix /tmp/p_followups/mybug \
+    --baseline .claude/worktrees/prechange/target/release/loft       # A/B classification
+```
+
+Each cell is a plain `.loft` program with header annotations:
+
+| Annotation | Meaning |
+|---|---|
+| `// @EXPECT: <line>` | expected stdout line (repeat per line, exact match) — **mandatory**; hand-compute it BEFORE the first run, "two binaries agree" is not a pass |
+| `// @EXPECT_LEAK` | a `stores not freed` warning is the expected outcome (red-documenting cells) |
+| `// @CONTROL` | deliberately wrong expectation; the run errors unless this cell FAILS (proves the harness detects failure) |
+
+The runner FAILS on: any non-control cell mismatch / crash / unexpected
+leak, any cell with no stdout (**vacuous** — a parse error reads as silence,
+not as green), any cell missing `@EXPECT`, and a missing or *passing*
+control cell.  With `--baseline`, failing cells are labelled
+`=> REGRESSION` (baseline passes) or `=> PRE-EXISTING` (baseline fails too)
+— keep a main-tip worktree built for this (`git worktree add` +
+`cargo build --release --bin loft` inside it).  Leak detection: interp
+reads the exit warning; native runs under `LOFT_NATIVE_LEAK_CHECK=1`.
+
+Graduate the cells that earn guarantees into `tests/scripts/` when the fix
+lands (protocol step 7) — e.g. `302-vector-buffer-delivery.loft` /
+`303-ref-reassign-free.loft` are graduated matrices.
+
 ## Introspection CLI (`--introspect`)
 
 `loft --introspect <file>` packages the dump primitives behind one
@@ -655,6 +691,8 @@ Listed in ROI order (highest leverage first).
 | ~~`loft --dump-ir <fn>`~~ | ~~S-M~~ Shipped 2026-05-13 as `LOFT_LOG=ir:<fn_name>` | 02d-iii.e, 02d-vi (used `LOFT_LOG=full` to infer IR shape from bytecode; direct IR dump would be 5× faster to read) | Implemented as an `ir_only` LogConfig preset (phases.ir=true, phases.bytecode=false, phases.execution=false, show_functions filter).  New `compile::show_ir_only(&Data)` helper avoids the `&mut Data` requirement of `show_code`.  Wired into `execute_log_impl` so the IR dump fires before silent execution under `cargo run --interpret` (not just `--dump`).  Substring match on fn names. |
 | ~~`LOFT_LOG=slots:<fn>`~~ | ~~M~~ Shipped 2026-05-13 | 02d-v ("Incorrect var b[65535] versus 60" — slot was unallocated because no `Set/v_set` IR marked the var as defined; not visible in any current dump) | Post-allocation summary in `assign_slots` (src/variables/slots.rs:29).  For each var: ASSIGN with slot+size+type, or SKIP with explanation (is_argument, zero-size, no first_def, !is_defined, or unknown).  Substring fn-name match.  Shipped much faster than estimated — the M effort assumed deep instrumentation; a single post-allocation pass turned out to be sufficient. |
 | ~~`loft --dump-captures <fn>`~~ | ~~M~~ Shipped 2026-05-13 as `LOFT_LOG=captures:<fn_name>` | 02d-iii.e (5 separate `eprintln!` cycles to inspect closure-record attribute types across passes) | Implemented as a free function `compile::show_captures_summary(writer, &Data)` self-gated on `captures_trace_target()`.  Two-pass: parent fns matching the filter that have non-empty `scalars_to_box`, then ALL lambdas with `closure_record != MAX` (since `__lambda_N` synthetic names don't match user filters).  Per attribute, prints the storage encoding inferred from the type (12B share-by-DbRef auto-Reference, 12B owned Reference, inline Integer/Text/Float/etc.).  Wired into `execute_log_impl` so it fires under `cargo run --interpret`. |
+| ~~`scripts/probe-matrix`~~ — boundary-matrix cell runner | ~~S~~ Shipped 2026-06-12 | 2026-06-12 vector-ABI session (the 93-vsort leak): the 18-cell matrix was built by hand-written bash heredocs; the FIRST version was vacuous (all 24 cells parse errors read as "clean") and no cell had a hand-computed expected value, so HEAD/main agreeing on `acc=39` (true value 12) passed as green | See § "Boundary-matrix runner" below.  The three validity rules are HARD ERRORS: missing `@EXPECT`, a no-output (vacuous) cell, and a missing-or-passing `@CONTROL` cell each make the run red.  `--baseline <binary>` classifies every failure as `REGRESSION` vs `PRE-EXISTING` automatically — the A/B-worktree pattern that made the session's regression attribution take seconds.  Dogfooded on the session's real cells (tuple-loop + #360 self-arg). |
+| Moment-of-urge matrix hook (settings.json) | XS | Every "rushed fix without a matrix" episode — the #354 session's three cascading non-matrix fixes (hoist-everything leak, `let _ =` break, `callee_forwards` fragility); static doc text + memory entries were loaded and still lost to momentum | The only trigger the harness GUARANTEES: a PostToolUse hook on Bash sets a session flag when output matches `FAIL\|SIGSEGV\|panicked\|leaked\|assertion failed`; a PreToolUse hook on Edit/Write touching `src/**/*.rs` injects one line while the flag is set — "test failure seen this session: does a probe matrix with expected values exist?". Fires exactly at the urge-to-fix moment, where doc-reading has already decayed. No classifier, no blocking — a reminder injection only. Implement via the `update-config` skill. |
 | Dep-graph / lifetime visualizer | L (~1 week) | Mostly leak-guard territory; would help when leaks DO surface | **Deferred** as of 2026-05-13.  The other 6 tools shipped this sprint each addressed a specific recurring pain point with measurable hours saved; the dep-graph addresses a category of bugs that `tests/leak.rs` (24 guards) already catches.  It would pay off only for the rare lifetime bug that doesn't leak (e.g., dep-chain ordering producing wrong output but balanced free counts).  Reactivate when such a bug concretely surfaces.  The `Vec<u16>` deps are overloaded (heap-owned / borrow / auto-Reference sentinel / mixed), parallel mechanisms (`work_text` / `inline_ref_vars` / closure_var_map) need to be merged, time-varying deps need snapshots, and graph rendering at scale needs DOT/graphviz — high complexity per debug-bug-saved. |
 
 **Why DEBUG.md and not a plan**: each row is independent

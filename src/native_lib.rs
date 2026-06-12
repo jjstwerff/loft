@@ -57,7 +57,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
         for a in def
             .attributes()
             .iter()
-            .filter(|a| !a.hidden && !a.name.starts_with("__"))
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef))
         {
             collect_type_defs(data, &a.typedef, &mut types);
         }
@@ -78,7 +78,7 @@ pub fn generate_interface(data: &Data, export_set: &HashSet<u32>) -> String {
         let params: Vec<String> = def
             .attributes()
             .iter()
-            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef) && !a.name.starts_with("__"))
+            .filter(|a| !a.hidden && !is_text_work_buffer(&a.typedef))
             .map(|a| format!("{}: {}", a.name, a.typedef.name(data)))
             .collect();
         let ret = def.returned();
@@ -448,7 +448,13 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
                 // (`null_named` + `OpDatabase(<type_id>)`): a no-body `#native`
                 // decl caller forwards no slot (`{slot} >= n`), and a null
                 // incoming ref means no usable record arrived.
-                let tid = hidden_dest_type_id(data, &a.typedef);
+                let tname = hidden_dest_type_name(data, &a.typedef).unwrap_or_else(|| {
+                    panic!(
+                        "shared bridge for {}: hidden dest '{}' has no shared-store type name",
+                        def.name(),
+                        a.name
+                    )
+                });
                 let _ = writeln!(
                     body,
                     "    let mut {var}: DbRef = if {slot} < n {{ a[{slot}].dbref }} else {{ DbRef {{ store_nr: 0, rec: 0, pos: 0 }} }};"
@@ -456,9 +462,20 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
                 let _ = writeln!(body, "    if {var}.rec == 0 && {var}.pos == 0 {{");
                 let _ = writeln!(
                     body,
+                    "        let _tid{slot} = unsafe {{ (&*cell.get()) }}.name({tname:?});"
+                );
+                let _ = writeln!(
+                    body,
+                    "        assert!(_tid{slot} != u16::MAX, \"shared bridge: type {tname} not registered in the caller store\");"
+                );
+                let _ = writeln!(
+                    body,
                     "        {var} = unsafe {{ (&mut *cell.get()).null_named(\"__shared_dest\") }};"
                 );
-                let _ = writeln!(body, "        {var} = OpDatabase(cell, {var}, {tid}i32);");
+                let _ = writeln!(
+                    body,
+                    "        {var} = OpDatabase(cell, {var}, i32::from(_tid{slot}));"
+                );
                 let _ = writeln!(body, "    }}");
                 slot += 1;
                 let _ = write!(fwd, ", {var}");
@@ -506,13 +523,16 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
 /// `main_vector<elm>` schema name (the same key `--native`'s `output_alloc_heap`
 /// uses).  Other aggregates (struct `reference`, data-`enum`) need their own
 /// type id and are not yet handled (the gate excludes them).
-fn hidden_dest_type_id(data: &Data, t: &Type) -> u16 {
+/// The SHARED-STORE type NAME for a hidden destination attr — resolved at
+/// BRIDGE RUNTIME via `Stores::name` in the caller's store, because the
+/// library's compile-time type IDS live in a different id space than the
+/// caller's (@PLAN59: a lib-side constant id produced `claim(size=0)` /
+/// "Incomplete record" aborts once struct dests became universal).
+fn hidden_dest_type_name(data: &Data, t: &Type) -> Option<String> {
     match t {
-        Type::Vector(elm, _) => {
-            let elm_name = elm.name(data);
-            data.name_type(&format!("main_vector<{elm_name}>"), 0)
-        }
-        _ => u16::MAX,
+        Type::Vector(elm, _) => Some(format!("main_vector<{}>", elm.name(data))),
+        Type::Reference(td, _) | Type::Enum(td, true, _) => Some(data.def(*td).name().to_string()),
+        _ => None,
     }
 }
 
@@ -781,6 +801,13 @@ pub fn build_shared_cdylib(
     out_dir: &std::path::Path,
     stem: &str,
 ) -> Result<std::path::PathBuf, String> {
+    // Same pre-check as `auto_build_native` / the driver's native path: a
+    // live rustc differing from loft's build rustc cannot link the
+    // SVH-locked rlib below (E0514) — fail with the reason instead of a
+    // compiler spew (callers fall back to interpreting the library).
+    if let Some(reason) = crate::cache::rustc_mismatch() {
+        return Err(format!("{reason} — rebuild loft to restore native"));
+    }
     let (rlib, deps) = find_loft_rlib().ok_or("libloft.rlib not found for this build")?;
     let src = generate_shared_cdylib_lib_rs(data, stores, export_set);
     std::fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;

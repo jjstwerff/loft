@@ -546,9 +546,9 @@ impl Stores {
                     // Normalise to forward slashes so loft paths are consistent on
                     // all platforms (Windows returns backslash-separated paths).
                     res.insert(name.replace('\\', "/"), entry);
-                } else {
-                    return false;
                 }
+                // A non-UTF-8 name degrades that ENTRY (skipped), never the
+                // listing: aborting here returned a silently truncated vector.
             }
             for (name, entry) in res {
                 let elm = vector::vector_append(&vector, 33, &mut self.allocations);
@@ -561,9 +561,11 @@ impl Stores {
                 store.set_long(elm.rec, elm.pos + 16, i64::MIN);
                 vector::vector_finish(&vector, &mut self.allocations);
                 let store = self.store_mut(result);
-                if !fill_file(&entry.path(), store, &elm) {
-                    return false;
-                }
+                // An unstat-able entry (e.g. a dangling symlink) is already a
+                // well-formed `NotExists` element by `fill_file`'s own error
+                // path; keep listing — a mid-loop abort silently dropped every
+                // entry sorting after it.
+                fill_file(&entry.path(), store, &elm);
             }
         }
         true

@@ -111,12 +111,42 @@ pub fn tmpfs_min_free_bytes() -> u64 {
     mb.saturating_mul(1024 * 1024)
 }
 
-/// Delete this checkout's leftover native-compile artefacts from `dir` to
-/// reclaim space, returning the bytes freed.  Only removes files matching
-/// loft's own `loft_native_*` / `loft_test_native_*` naming — never another
-/// program's temp files.  Those files ARE the binary cache, so this is called
-/// only when a path is already space-constrained; the next run recompiles.
+/// The process id embedded in a `loft_native_<pid>.rs` /
+/// `loft_native_bin_<pid>` / `loft_test_native_<pid>*` scratch name — the
+/// trailing digit run.  `None` when the name carries no parseable pid.
+fn scratch_owner_pid(name: &str) -> Option<u32> {
+    let stem = name.split('.').next().unwrap_or(name);
+    stem.rsplit('_').next()?.parse().ok()
+}
+
+/// Whether `pid` is a live process — `Some(true/false)` on Linux (procfs),
+/// `None` (unknown) elsewhere.
+fn pid_alive(pid: u32) -> Option<bool> {
+    if cfg!(target_os = "linux") {
+        Some(std::path::Path::new(&format!("/proc/{pid}")).exists())
+    } else {
+        None
+    }
+}
+
+/// Delete loft's leftover native-compile artefacts from `dir` to reclaim
+/// space, returning the bytes freed.  Only removes files matching loft's own
+/// `loft_native_*` / `loft_test_native_*` naming — never another program's
+/// temp files — and only files that are provably STALE:
+///
+/// - a file whose embedded pid is THIS process or a still-running one is
+///   skipped — the original sweep deleted the `.rs` the current compile had
+///   just emitted (its own pid matched the prefix), so under CI disk
+///   pressure every space-constrained compile destroyed itself ("couldn't
+///   read loft_native_<pid>.rs") and could equally race a parallel test's
+///   in-flight file;
+/// - when liveness is unknowable (no pid in the name, or no procfs), only
+///   files older than an hour are deleted.
+///
+/// Those files ARE the binary cache, so this is called only when a path is
+/// already space-constrained; the next run recompiles.
 pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
+    let own_pid = std::process::id();
     let mut freed = 0u64;
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
@@ -124,11 +154,35 @@ pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with("loft_native_") || name.starts_with("loft_test_native_") {
-            let len = entry.metadata().map_or(0, |m| m.len());
-            if std::fs::remove_file(entry.path()).is_ok() {
-                freed = freed.saturating_add(len);
+        if !(name.starts_with("loft_native_") || name.starts_with("loft_test_native_")) {
+            continue;
+        }
+        let pid = scratch_owner_pid(&name);
+        let proven_stale = match pid {
+            Some(p) if p == own_pid => false,
+            Some(p) => pid_alive(p) == Some(false),
+            None => false,
+        };
+        if !proven_stale {
+            // Liveness unknown (foreign pid without procfs, or no pid in the
+            // name) — fall back to age: anything under an hour old may be an
+            // in-flight emission of a parallel process.
+            if pid.is_some_and(|p| p == own_pid || pid_alive(p) == Some(true)) {
+                continue;
             }
+            let old_enough = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > 3600);
+            if !old_enough {
+                continue;
+            }
+        }
+        let len = entry.metadata().map_or(0, |m| m.len());
+        if std::fs::remove_file(entry.path()).is_ok() {
+            freed = freed.saturating_add(len);
         }
     }
     freed
@@ -194,4 +248,33 @@ pub fn native_worker_count(
         _ => usize::MAX,
     };
     cpu_max.min(job_count).min(mem_cap).max(1)
+}
+
+#[cfg(test)]
+mod reclaim_tests {
+    use super::*;
+
+    #[test]
+    fn reclaim_spares_live_and_fresh_files() {
+        let dir = std::env::temp_dir().join(format!("loft_reclaim_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = dir.join(format!("loft_native_{}.rs", std::process::id()));
+        // u32::MAX-1 — no real pid (Linux pid_max caps far below); provably dead.
+        let dead = dir.join("loft_native_4294967294.rs");
+        let fresh_no_pid = dir.join("loft_native_bin_notapid");
+        std::fs::write(&own, "live").unwrap();
+        std::fs::write(&dead, "stale").unwrap();
+        std::fs::write(&fresh_no_pid, "fresh").unwrap();
+        let freed = reclaim_native_scratch(&dir);
+        assert!(own.exists(), "own-pid file must survive the reclaim");
+        assert!(
+            fresh_no_pid.exists(),
+            "a fresh file without a parseable pid must survive (age floor)"
+        );
+        if cfg!(target_os = "linux") {
+            assert!(!dead.exists(), "dead-pid file must be reclaimed");
+            assert_eq!(freed, 5);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -735,7 +735,17 @@ impl Stores {
     ///
     /// Reuses a free slot if one is available below `max`; otherwise
     /// pushes a new slot at the end.
-    pub fn adopt_store(&mut self, store: Store) -> u16 {
+    pub fn adopt_store(&mut self, mut store: Store) -> u16 {
+        // Registration makes the store LIVE in both homes of that fact:
+        // the slot's free **bit** (cleared below) and the store's own
+        // `free` **flag** — `Store::new`/`Store::open` construct with
+        // `free: true` and document that the database layer clears it on
+        // registration.  This site forgot the flag half: release runs key
+        // on the bitmap and never noticed, while every armed-build
+        // `validate()` call on an adopted store (the bundle writer's
+        // first push) died on "Using a freed store" (the @P317
+        // bitmap-vs-flag dual invariant, F3 in the sweep catalog).
+        store.free = false;
         // Inline the free-slot scan rather than calling allocation.rs's
         // private `find_free_slot` — keeping mod.rs from depending on
         // that private helper avoids cross-file plumbing for one
@@ -1071,9 +1081,11 @@ impl Stores {
     /// program-supplied path through.  Absolute paths and the cwd-relative
     /// default pass through unchanged; under `program_relative` a *relative*
     /// path re-homes against `source_dir` — the program's own directory (the
-    /// source dir under `--interpret`, the executable's dir under `--native`),
-    /// so "program + assets" is a portable bundle that runs from any cwd.
-    /// Empty `source_dir` (no anchor) falls back to cwd, never to a wrong file.
+    /// source dir under `--interpret` and under driver-mode native, where the
+    /// driver hands it down via `LOFT_SOURCE_DIR`; the executable's dir for a
+    /// standalone native bundle), so "program + assets" is a portable bundle
+    /// that runs from any cwd.  Empty `source_dir` (no anchor) falls back to
+    /// cwd, never to a wrong file.
     #[must_use]
     pub fn resolve_path(&self, raw: &str) -> String {
         if !self.program_relative || self.source_dir.is_empty() {

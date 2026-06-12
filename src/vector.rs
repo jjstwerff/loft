@@ -314,6 +314,11 @@ pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
 }
 
 pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
+    if db.rec == 0 || db.pos == 0 {
+        // Unallocated (null) vector ref — nothing to clear.  The hidden
+        // return buffer arrives like this on a fn's first delivery.
+        return;
+    }
     let store = keys::mut_store(db, stores);
     let v_rec = store.get_u32_raw(db.rec, db.pos);
     if v_rec != 0 {

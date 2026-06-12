@@ -399,7 +399,12 @@ impl Store {
             ptr,
             claims: HashSet::new(),
             size,
-            free: true,
+            // An opened FILE-BACKED store is in use by definition (it
+            // carries real data and `open` itself validates it below,
+            // before any `adopt_store` registration could clear the
+            // flag) — unlike `Store::new`, whose blank store stays
+            // `free` until the database layer registers it.
+            free: false,
             read_only: false,
             free_protected: false,
             free_root: 0,
@@ -1780,6 +1785,26 @@ impl Store {
         } else {
             false
         }
+    }
+
+    /// Word count of a live record, read from its size header (fld 0).
+    /// The header word doubles as DATA for hash bucket records: a
+    /// bucket's `room` IS its record size (`hash.rs::add` claims `room`
+    /// words), so this is the one legitimate fld-0 read — `valid()`'s
+    /// data-field gate (`fld >= 4`) correctly rejects it via the
+    /// ordinary accessors.
+    #[must_use]
+    pub fn record_words(&self, rec: u32) -> u32 {
+        debug_assert!(
+            self.read_only || self.claims.contains(&rec),
+            "Unknown record {rec}"
+        );
+        let size: i32 = *self.addr(rec, 0);
+        debug_assert!(
+            size > 0,
+            "Freed record {rec} (size={size}) read as a record header"
+        );
+        size as u32
     }
 
     /// 4-byte unsigned raw read — for internal collection headers

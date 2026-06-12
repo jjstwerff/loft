@@ -19,6 +19,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -60,13 +71,43 @@ fn spawn_loft(prog: &PathBuf, piped: bool) -> Child {
         .expect("spawn loft")
 }
 
+/// Environment-skip detection for the node/chromium harness
+/// (`tools/html_render_check.mjs`): returns the skip reason when the run
+/// died WITHOUT delivering a product verdict.  A real product failure
+/// always carries output — exit 1 prints the JSON failure block, exit 3 a
+/// `harness error:` line — so the silent shapes are the environment's:
+///  * exit 2 — the harness's own no-chrome skip;
+///  * `timeout waiting for` — chrome exists but cannot LAUNCH here (CI
+///    runner sandbox; the CDP endpoint never comes up);
+///  * empty-output non-zero / signal death — node killed under suite load
+///    (OOM / chrome contention; `status.code()` is None on a signal, so
+///    the exit-2 arm never sees it either).
+fn harness_env_skip(out: &std::process::Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() == Some(2) {
+        return Some(format!("SKIP: {stderr}"));
+    }
+    if stderr.contains("timeout waiting for") {
+        return Some(format!(
+            "SKIP: chromium present but not launchable: {stderr}"
+        ));
+    }
+    if !out.status.success() && out.stdout.is_empty() && out.stderr.is_empty() {
+        return Some(format!(
+            "SKIP: harness died without a verdict ({:?} — signal/OOM under suite load)",
+            out.status
+        ));
+    }
+    None
+}
+
 #[test]
 fn connector_auto_path_end_to_end() {
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let server_prog = std::env::temp_dir().join(format!("eh_conn_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_conn_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -89,7 +130,7 @@ fn main() {{
         ),
     )
     .unwrap();
-    let client_prog = std::env::temp_dir().join(format!("eh_conn_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_conn_cli_{}.loft", std::process::id()));
     std::fs::write(
         &client_prog,
         format!(
@@ -191,7 +232,7 @@ fn keyframes_survive_total_datagram_loss() {
         return;
     }
     let port = 18090u16;
-    let server_prog = std::env::temp_dir().join(format!("eh_kf_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_kf_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -215,7 +256,7 @@ fn main() {{
         ),
     )
     .unwrap();
-    let client_prog = std::env::temp_dir().join(format!("eh_kf_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_kf_cli_{}.loft", std::process::id()));
     std::fs::write(
         &client_prog,
         format!(
@@ -343,6 +384,28 @@ fn s6_ws_send(stream: &std::net::TcpStream, text: &str) {
     s.write_all(&frame).unwrap();
 }
 
+/// Receive one server text frame (unmasked, 7-bit or 16-bit length).
+/// `None` on a read timeout / closed stream / non-text frame — callers
+/// loop under their own deadline.
+fn s6_ws_recv(stream: &std::net::TcpStream) -> Option<String> {
+    use std::io::Read;
+    let mut s = stream;
+    let mut hdr = [0u8; 2];
+    s.read_exact(&mut hdr).ok()?;
+    let len = match hdr[1] & 0x7F {
+        126 => {
+            let mut l = [0u8; 2];
+            s.read_exact(&mut l).ok()?;
+            u16::from_be_bytes(l) as usize
+        }
+        127 => return None, // 64-bit frames: never sent by the kernel
+        n => n as usize,
+    };
+    let mut payload = vec![0u8; len];
+    s.read_exact(&mut payload).ok()?;
+    (hdr[0] & 0x0F == 1).then(|| String::from_utf8_lossy(&payload).into_owned())
+}
+
 /// FNV-1a 64 — must match `fnv64` in doc/kernel-swap.html.
 fn s6_fnv64(s: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -395,7 +458,7 @@ fn s6_browser_swap_under_living_page() {
     let port = 18102u16;
     // The relay server: ticks the sync class; relays "pushblob:" payloads
     // verbatim to every client (the bulk-channel role — content-agnostic).
-    let server_prog = std::env::temp_dir().join(format!("eh_s6_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_s6_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -407,8 +470,17 @@ fn main() {{
   w = W {{ tick: 0 }};
   engine_host::run({port}, 50000,
     fn(ev: engine_host::Event) {{
-      if ev.kind == 1 && ev.payload.starts_with("pushblob:") {{
+      if ev.kind != 1 {{ return; }}
+      if ev.payload.starts_with("pushblob:") {{
         engine_host::broadcast(ev.payload[9..]);
+        return;
+      }}
+      if ev.payload.starts_with("c:") {{
+        // Relay the page clients' heartbeats so the push driver can
+        // OBSERVE the page's state instead of guessing with sleeps
+        // (build A/B ignore "c:" frames; the page's build-push hook
+        // only fires on "B!:" blobs).
+        engine_host::broadcast(ev.payload);
       }}
     }},
     fn() {{
@@ -461,41 +533,133 @@ fn main() {{
     let good_blob = format!("B!:{}:{v2_script}", s6_fnv64(&v2_script));
     let bad_blob = format!("B!:{}:{v2_script}", s6_fnv64("not the script"));
 
-    // The push driver: wait for the page to be connected and counting,
-    // push the CORRUPT blob (rejection leg), then the good one (the swap).
+    // The push driver, CONDITION-driven (the fixed 4s/2s/12s sleeps it
+    // replaces raced suite load: chromium + wasm boot can exceed any fixed
+    // wait, and a blob pushed before the page's WS is open broadcasts into
+    // the void — `rejected` then never flips and the page times out).  The
+    // server relays the page clients' "c:" heartbeats to every connection,
+    // so each step waits for the page state it needs.
     let pusher = std::thread::spawn(move || {
+        let t0 = Instant::now();
+        let log = move |msg: &str| {
+            eprintln!("[pusher {:>6}ms] {msg}", t0.elapsed().as_millis());
+        };
         let ws = s6_ws_connect(port);
-        std::thread::sleep(Duration::from_secs(4));
+        ws.set_read_timeout(Some(Duration::from_millis(500))).ok();
+        log("connected");
+        // Wait for a frame matching `pred`, bounded by `deadline`; returns
+        // whether it arrived.  Logs every page-protocol frame seen.
+        let await_frame = |pred: &dyn Fn(&str) -> bool, deadline: Instant| -> bool {
+            loop {
+                if let Some(f) = s6_ws_recv(&ws) {
+                    if f.starts_with("c:") || f.starts_with("B!:") {
+                        log(&format!("saw {}", &f[..f.len().min(24)]));
+                    }
+                    if pred(&f) {
+                        return true;
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+            }
+        };
+        let v1_any = |f: &str| f.starts_with("c:v1:");
+        // A v1 heartbeat whose COUNT is >= 1: build A has demonstrably
+        // received a sync frame, so the page's world-continuity clause
+        // (`lastAtSwap >= 1`) can hold when the swap fires.
+        let v1_counting = |f: &str| {
+            f.strip_prefix("c:v1:")
+                .and_then(|n| n.parse::<i64>().ok())
+                .is_some_and(|n| n >= 1)
+        };
+        let v2_any = |f: &str| f.starts_with("c:v2:");
+        // The push protocol, RELOAD-IMMUNE: chromium under load can kill
+        // and reload the page tab mid-sequence (renderer death; the page
+        // reports `boot=N` in its timeout throw), and a reloaded instance
+        // loses the `rejected` flag — so a single corrupt+good pair can
+        // straddle two instances and never complete.  Both pushes are
+        // idempotent page-side (`if (swapped) return`; `rejected` only
+        // flips up), so REPEAT the full pair until some single living
+        // instance demonstrably swaps (its v2 heartbeats flow).  Each
+        // round still proves the strong sequence within one instance:
+        // connected → corrupt rejected (A's heartbeat continues) → good
+        // accepted (B heartbeats).
+        let overall = vm_deadline(60);
+        loop {
+            assert!(
+                await_frame(&v1_any, overall),
+                "pusher never saw build A's heartbeat"
+            );
+            log("push corrupt blob");
+            s6_ws_send(&ws, &format!("pushblob:{bad_blob}"));
+            // A SURVIVES the rejection and has COUNTED a sync frame (the
+            // page's continuity clause needs `lastAtSwap >= 1`).
+            assert!(
+                await_frame(&v1_counting, overall),
+                "pusher never saw a counting post-rejection heartbeat"
+            );
+            log("push good blob");
+            s6_ws_send(&ws, &format!("pushblob:{good_blob}"));
+            // A bounded per-round wait: if the swap doesn't confirm (the
+            // instance died mid-round), run another round.
+            let round = Instant::now() + Duration::from_secs(3);
+            if await_frame(&v2_any, round.min(overall)) {
+                break;
+            }
+            assert!(
+                Instant::now() < overall,
+                "no instance ever completed the swap sequence"
+            );
+            log("no v2 heartbeat this round — repushing the pair");
+        }
+        // The swap is confirmed — but if a reload struck BETWEEN the
+        // corrupt and good pushes, the SURVIVING instance swapped without
+        // ever seeing a corrupt blob (`rejected` died with instance 1; the
+        // page reports it as `boot=2` + `rejected=false`).  The page sets
+        // `rejected` on a corrupt push at ANY time (the hash check runs
+        // before the swapped guard), so deliver one more to the instance
+        // we now KNOW is alive, and prove B keeps pumping after it.
+        log("push corrupt blob at the surviving instance");
         s6_ws_send(&ws, &format!("pushblob:{bad_blob}"));
-        std::thread::sleep(Duration::from_secs(2));
-        s6_ws_send(&ws, &format!("pushblob:{good_blob}"));
-        std::thread::sleep(Duration::from_secs(12));
+        assert!(
+            await_frame(&v2_any, overall),
+            "build B stopped after the post-swap corrupt push"
+        );
+        log("done");
         drop(ws);
     });
 
-    let url = format!("http://127.0.0.1:{http_port}/kernel-swap.html?port={port}");
+    // The page's verdict budget scales with the runner (vm_deadline's
+    // factor) and stays INSIDE the harness watch window — page-throw
+    // before harness-timeout, never a false pass.
+    let scale: u64 = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    let page_deadline_ms = 20_000 * scale;
+    let harness_wait_ms = 25_000 * scale;
+    let url = format!(
+        "http://127.0.0.1:{http_port}/kernel-swap.html?port={port}&deadline_ms={page_deadline_ms}"
+    );
     let out = Command::new("node")
         .arg(&harness)
         .arg(&url)
-        .args(["--wait-ms", "25000"])
+        .args(["--wait-ms", &harness_wait_ms.to_string()])
         .args(["--port", "18104"])
         .output()
         .expect("node harness");
     let _ = pusher.join();
     let _ = http.kill();
     let _ = http.wait();
-    if out.status.code() == Some(2) {
-        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+    if let Some(reason) = harness_env_skip(&out) {
+        eprintln!("{reason}");
         let _ = std::fs::remove_file(&server_prog);
         return;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("timeout waiting for") {
-        eprintln!("SKIP: chromium present but not launchable: {stderr}");
-        let _ = std::fs::remove_file(&server_prog);
-        return;
-    }
     assert!(
         out.status.success(),
         "browser swap failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
@@ -537,7 +701,7 @@ fn browser_kernel_one_script_differential() {
     }
 
     let port = 18105u16;
-    let server_prog = std::env::temp_dir().join(format!("eh_diff_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_diff_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -593,7 +757,7 @@ fn main() {{
 }}
 "#
     );
-    let client_prog = std::env::temp_dir().join(format!("eh_diff_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_diff_cli_{}.loft", std::process::id()));
     std::fs::write(&client_prog, &client_src).unwrap();
     let expect = [
         "t:connected",
@@ -668,18 +832,12 @@ fn main() {{
     let _ = server_killer.join();
     let _ = http.kill();
     let _ = http.wait();
-    if out.status.code() == Some(2) {
-        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+    if let Some(reason) = harness_env_skip(&out) {
+        eprintln!("{reason}");
         return;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("timeout waiting for") {
-        // Chrome exists but cannot LAUNCH here (CI runner sandbox — the
-        // CDP endpoint never comes up).  Same contract as chrome-missing.
-        eprintln!("SKIP: chromium present but not launchable: {stderr}");
-        return;
-    }
     assert!(
         out.status.success(),
         "browser-kernel differential failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"

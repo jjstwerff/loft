@@ -677,6 +677,113 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
 
 /// Return the Rust literal for the "null" default of a loft type, used when a function
 /// body is empty (an explicit stub) but the declared return type is non-void.
+/// #354: locals whose first WRITE sits inside a nested block while a later
+/// use occurs OUTSIDE that block's subtree.  loft locals are FUNCTION-scoped
+/// frame slots (the interpreter's stack), but the emitter writes `let` at
+/// the first assignment — Rust then scopes the variable to that block, and
+/// a sibling-block use fails E0425 ("variables lost across block-split
+/// boundaries": `intown = …` inside one `if depth == 0 { }`, read in a later
+/// one).  These variables get a typed default declaration in the function
+/// prologue instead.
+fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
+    use std::collections::{HashMap, HashSet};
+    fn walk(
+        node: &Value,
+        path: &mut Vec<u32>,
+        next_id: &mut u32,
+        first_set: &mut HashMap<u16, Vec<u32>>,
+        hoist: &mut HashSet<u16>,
+    ) {
+        // A use (read or re-write) outside the first write's block subtree
+        // means the `let` position cannot cover it.
+        fn check_use(
+            v: u16,
+            path: &[u32],
+            first_set: &HashMap<u16, Vec<u32>>,
+            hoist: &mut HashSet<u16>,
+        ) {
+            if let Some(p) = first_set.get(&v)
+                && !path.starts_with(p)
+            {
+                hoist.insert(v);
+            }
+        }
+        // Enter a child node that the emitter wraps in its own `{ … }`.
+        macro_rules! scoped {
+            ($child:expr) => {{
+                *next_id += 1;
+                path.push(*next_id);
+                walk($child, path, next_id, first_set, hoist);
+                path.pop();
+            }};
+        }
+        match node {
+            Value::Set(v, rhs) => {
+                walk(rhs, path, next_id, first_set, hoist);
+                if first_set.contains_key(v) {
+                    check_use(*v, path, first_set, hoist);
+                } else {
+                    first_set.insert(*v, path.clone());
+                }
+            }
+            Value::TuplePut(v, _, rhs) => {
+                walk(rhs, path, next_id, first_set, hoist);
+                check_use(*v, path, first_set, hoist);
+            }
+            Value::Var(v) => check_use(*v, path, first_set, hoist),
+            Value::Block(bl) | Value::Loop(bl) => {
+                *next_id += 1;
+                path.push(*next_id);
+                for op in &bl.operators {
+                    walk(op, path, next_id, first_set, hoist);
+                }
+                path.pop();
+            }
+            Value::If(c, t, f) => {
+                walk(c, path, next_id, first_set, hoist);
+                scoped!(t);
+                scoped!(f);
+            }
+            Value::Iter(_, a, b, c) => {
+                scoped!(a);
+                scoped!(b);
+                scoped!(c);
+            }
+            Value::Insert(ops) => {
+                *next_id += 1;
+                path.push(*next_id);
+                for op in ops {
+                    walk(op, path, next_id, first_set, hoist);
+                }
+                path.pop();
+            }
+            Value::Call(_, args)
+            | Value::CallRef(_, args)
+            | Value::Tuple(args)
+            | Value::Parallel(args) => {
+                for a in args {
+                    walk(a, path, next_id, first_set, hoist);
+                }
+            }
+            Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+                walk(x, path, next_id, first_set, hoist);
+            }
+            Value::Span(b) => walk(&b.1, path, next_id, first_set, hoist),
+            Value::ParFor(b) => {
+                walk(&b.input, path, next_id, first_set, hoist);
+                scoped!(&b.worker);
+            }
+            _ => {}
+        }
+    }
+    let mut first_set = HashMap::new();
+    let mut hoist = HashSet::new();
+    let mut path = Vec::new();
+    let mut next_id = 0u32;
+    walk(code, &mut path, &mut next_id, &mut first_set, &mut hoist);
+    hoist
+}
+
 pub(super) fn default_native_value(tp: &Type) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),
@@ -2537,6 +2644,48 @@ extern crate loft;"
                     self.declared.insert(v);
                     self.predeclared.insert(v);
                 }
+            }
+            // #354: hoist block-crossing locals into the prologue — loft
+            // locals are function-scoped frame slots, so a `let` at the
+            // first write inside a nested block loses the variable for
+            // sibling-block uses (E0425).  Same declared/predeclared
+            // mechanics as the `__vdb` prologue above.
+            // #354: hoist ONLY plain SCALAR locals (integer / float / single
+            // / boolean / character / non-struct enum).  Those are the
+            // block-split E0425 cases (`intown`, `nhouse`, `tsize`, `ax`,
+            // `cwx` …) and a scalar prologue default is a pure value — no
+            // store, no ownership.  Heap locals (DbRef / Text / Vector …)
+            // are deliberately EXCLUDED: their `let` carries store/free
+            // ownership the `__vdb` prologue + scope analysis already place,
+            // and hoisting them re-init'd a fresh store per call that the
+            // matched free no longer covered (a store leak — crawler's
+            // hex/sim libs exhausted the 65535-store table).
+            for v in collect_scope_hoists(def.code()) {
+                if self.declared.contains(&v) || vars.is_argument(v) || v >= vars.count() {
+                    continue;
+                }
+                let tp = vars.tp(v);
+                let is_scalar = matches!(
+                    tp,
+                    Type::Integer(_)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                        | Type::Enum(_, false, _)
+                );
+                if !is_scalar {
+                    continue;
+                }
+                let tp_str = rust_type(tp, &Context::Variable);
+                use std::fmt::Write as _;
+                let _ = write!(
+                    vdb_prologue,
+                    "\n  let mut var_{}: {tp_str} = {};",
+                    sanitize(vars.name(v)),
+                    default_native_value(tp),
+                );
+                self.declared.insert(v);
             }
         }
         // Determine the user-visible loft name for the shadow call stack.
