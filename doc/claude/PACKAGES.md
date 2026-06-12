@@ -491,6 +491,54 @@ state.execute_argv("main", ...)              # run
 If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
 runs `cargo build --release` automatically via `auto_build_native()`.
 
+### Agent discovery — generated API stubs (design)
+
+Installed packages live outside the consumer project
+(`~/.loft/registry/<name>-<version>/`, `~/.loft/lib/<name>/`).  Coding
+agents explore the project tree, so a dependency's API is invisible to
+them: `loft.toml` names the package, but no file in the project shows
+what it exports.  Agents then guess signatures or re-implement what the
+library already provides.
+
+**Design — materialize each dependency's public surface inside the
+project as a generated stub file:**
+
+- Every command that writes or updates the lockfile (`loft install`,
+  `loft update`, `loft pin`) also writes `.loft/api/<name>.api` — one
+  stub per resolved dependency.
+- A stub holds: a header (generated-file marker, package name, resolved
+  version, path to the installed source), then per source file the
+  `// --- Section ---` headers, doc-comment lines, and `pub` signatures
+  with bodies stripped.
+- Stubs are **committed**, not gitignored: they are small text files,
+  they make API changes visible in PRs, and they keep the surface
+  readable in checkouts where `~/.loft` is not populated (CI, cloud
+  agents).
+- Staleness rides the lockfile: stubs regenerate on the same commands
+  that rewrite `loft.lock`, and the header records the version, so a
+  header/lock mismatch means "re-run `loft update`".
+
+**The extractor already exists.**  `parse_pkg_api` + `strip_pub_body`
+(`src/documentation.rs:1122`–`1194`) scan a package's `src/*.loft` and
+return exactly (signature, doc-lines) pairs grouped by section header;
+`loft doc` (PKG.8) drives them today to produce the package HTML docs.
+The stub generator is the same walk with a plain-text emitter instead
+of the HTML renderer, plus the lockfile-command hook.
+
+Known limits of the text-scan extractor, acceptable for the first cut:
+`pub struct` / `pub enum` stubs keep only the declaration line (no
+fields or variants), and a `pub fn` signature wrapped across lines
+truncates at the first line.  The fix for both is a parser-based walk —
+`Data` already records `pub_visible` per definition
+(`src/data.rs:2149`) and full types — and that walker is the same one
+[API_SURFACE.md](API_SURFACE.md)'s `api-lint` needs: build it once,
+share it.
+
+Companion work: the loft-write skill's Imports section documents only
+`use` syntax; it should name `.loft/api/`, the physical install paths,
+and the discovery commands (`loft search` / `info` / `list-installed`)
+so agents know where to look before the stubs exist in older projects.
+
 ---
 
 ## Auto-marshalling dispatch (interpreter, legacy path)
@@ -1211,6 +1259,7 @@ etc.).  The items below are remaining infrastructure work.
 | **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry; detailed draft in [PKG_REGISTRY.md](PKG_REGISTRY.md) | Open — designed, scheduled.  File-based MVP scopes to ~1 week (no server).  Migration to a real server later is a drop-in replacement at the same URL — see [PKG_REGISTRY.md § The invariant](PKG_REGISTRY.md#the-invariant--end-user-experience-is-identical-to-a-real-server). |
 | **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
 | **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
+| **PKG.STUB** — generated in-project API stubs (`.loft/api/<name>.api`) for agent discovery | — | § Agent discovery — generated API stubs | Open — S/M.  The extractor exists (`parse_pkg_api`, `src/documentation.rs:1122`); remaining: plain-text emitter, hook into the lockfile-writing commands, loft-write skill update.  Parser-walk upgrade shared with [API_SURFACE.md](API_SURFACE.md) `api-lint`. |
 
 Suggested order:
 1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
