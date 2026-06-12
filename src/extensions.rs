@@ -2368,6 +2368,20 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         return Some(p);
     }
 
+    // An artifact EXISTS here but its fingerprint names another loft build —
+    // cargo cannot be trusted to rebuild it, and the post-build stamp would
+    // launder it as fresh (see `cache::clear_stale_native_target`).  Only
+    // the REDIRECTED root (`~/.loft/build-cache/…`) is cleared: it is
+    // private to this resolution path (every consumer arrives through the
+    // build lock above), whereas an in-tree `native/target` is shared with
+    // direct-path consumers — the tests/lib fixture loaders read the `.so`
+    // path without the lock, so a wipe there races them (suite-caught) —
+    // and in-tree crates remain the documented dev workflow
+    // (`make rebuild-native-cdylibs` / the stub-panic rebuild hint).
+    if use_redirected_target {
+        crate::cache::clear_stale_native_target(&target_root, &lib_name, &rlib_name, fp);
+    }
+
     // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo
     // writes outside the install dir.
     let mut cmd = std::process::Command::new("cargo");

@@ -234,6 +234,44 @@ trace dumper on reference-field programs.
   encoding itself is a pass-3 dedup candidate (pick one encoding at write
   time).
 
+### F9-2 — registry native build-cache laundered stale cdylibs on a loft upgrade (2026-06-12, FIXED)
+
+- **Invariant**: a cached native artifact is served only when the loft
+  build that produced it is the one running (the `loft_build_fingerprint`
+  rlib-content seam — @PLN11 Arc N / N0).
+- **Homes today**: the fingerprint sidecar (the cheap gate) vs cargo's own
+  fingerprinting underneath (the assumed authority).  The gap: cargo is
+  structurally BLIND to a loft upgrade — the package crate's sources and
+  the captured RUSTFLAGS can be byte-identical while the generated ABI
+  changed — so the fp-mismatch-triggered `cargo build` no-ops, and
+  `auto_build_native`'s success arm then stamped the NEW fingerprint over
+  the UNREBUILT artifact: laundered as fresh forever (the store-65535
+  sentinel-deref class at some later date).
+- **Probe**: a REAL rlib change (temporary const in lib.rs) → the
+  native-auto path rebuilt correctly; `~/.loft/build-cache/graphics-0.1.0`
+  did NOT rebuild and its sidecar was re-stamped with the new fp.  (An
+  earlier sidecar-corruption probe was unfaithful — cargo's no-op is
+  CORRECT when the rlib genuinely didn't change.)
+- **Fix (the chokepoint)**: `cache::clear_stale_native_target` — an
+  existing artifact whose sidecar NAMES ANOTHER loft build clears the
+  target before the build, so cargo cannot no-op over it.  Two
+  suite-caught narrowings shaped the final scope: (1) an ABSENT sidecar
+  does NOT clear — unknown provenance is commonly a legitimate hand-built
+  artifact (the documented `cargo build` workflow; the tests/lib fixture
+  cdylibs — the first cut wiped those and broke `native_loader`); (2) the
+  clear applies only to the REDIRECTED root (`~/.loft/build-cache/…`),
+  which is private to the locked resolution path — an in-tree
+  `native/target` is shared with direct-path consumers (the fixture
+  loaders read the `.so` without the lock; the second cut raced them
+  mid-suite), and in-tree crates remain the documented dev workflow
+  (`make rebuild-native-cdylibs` / the stub-panic hint).  `fp == 0` keeps
+  the existence-only fallback.  Unit-tested
+  (`cache::tests::clear_stale_native_target_clears_only_mismatched_artifacts`);
+  e2e probed with two real rlib flips + a post-narrowing sidecar flip.
+- **Residual boundary (by design)**: a SHIPPED prebuilt
+  (`<pkg>/native/<libname>`) wins unconditionally in `resolve_native_lib`
+  — that is the package author's pinned-artifact promise, not a cache.
+
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 
 Family probe corpus: `/tmp/p_followups/f11_*.loft` (+ `f11_ws.py`); issue

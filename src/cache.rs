@@ -399,6 +399,48 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     }
 }
 
+/// @PLN11 Arc N / N0 — clear a native build target whose existing artifact
+/// was produced by ANOTHER loft build (fingerprint mismatch), so the
+/// follow-up `cargo build` cannot no-op over it.  cargo is structurally
+/// blind to a loft upgrade here: the package crate's sources and the
+/// captured RUSTFLAGS can be byte-identical across loft builds while the
+/// generated ABI changed — and the post-build stamp would then launder the
+/// stale artifact with the NEW fingerprint (probed 2026-06-12 on
+/// graphics-0.1.0: a real loft rebuild left the cdylib at the old ABI —
+/// the store-65535 sentinel-deref class).  Returns whether it cleared.
+/// Clears ONLY on a present-and-mismatched sidecar (proof of another loft
+/// build); an absent sidecar is unknown provenance — commonly a legitimate
+/// hand-built artifact — and keeps the build-and-stamp path.  `fp == 0`
+/// (nothing to fingerprint) never clears, matching
+/// [`native_artifact_fingerprint_matches`]' existence-only fallback.
+pub fn clear_stale_native_target(
+    target_root: &std::path::Path,
+    lib_name: &str,
+    rlib_name: &str,
+    fp: u64,
+) -> bool {
+    if fp == 0 {
+        return false;
+    }
+    let release_dir = target_root.join("release");
+    let artifact_present =
+        release_dir.join(lib_name).exists() || release_dir.join(rlib_name).exists();
+    // Clear only on a PRESENT-and-mismatched sidecar — proof the artifact
+    // was stamped by another loft build.  An ABSENT sidecar is unknown
+    // provenance and commonly a legitimate HAND-BUILT artifact (`cargo
+    // build` in the library's `native/` dir — the documented workflow; the
+    // `tests/lib` fixture cdylibs are exactly this) — deleting those breaks
+    // the dev loop, so they keep the pre-existing build-and-stamp path.
+    let stamped = std::fs::read_to_string(release_dir.join(".loft-build-fp"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    if artifact_present && stamped.is_some_and(|s| s != fp) {
+        let _ = std::fs::remove_dir_all(target_root);
+        return true;
+    }
+    false
+}
+
 /// @PLN11 Arc N / N3 (Step 4) — path of a library's *last-run source-hash* sidecar.
 /// Dev-interpret-on-edit compares this run's source hash against the one recorded
 /// here to decide "still being edited (changed since last run → interpret)" vs
@@ -743,6 +785,72 @@ mod tests {
         assert!(!cache_decision(false, false, true));
         // 4. plain installed invocation → default on.
         assert!(cache_decision(false, false, false));
+    }
+
+    #[test]
+    fn clear_stale_native_target_clears_only_mismatched_artifacts() {
+        let root = std::env::temp_dir().join(format!("loft_stale_clear_{}", std::process::id()));
+        let release = root.join("release");
+        let setup = |sidecar: Option<&str>| {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&release).unwrap();
+            std::fs::write(release.join("libprobe.so"), b"so").unwrap();
+            if let Some(s) = sidecar {
+                std::fs::write(release.join(".loft-build-fp"), s).unwrap();
+            }
+        };
+        // 1. Mismatched sidecar → cleared (the laundering hazard: cargo can
+        //    no-op over a stale artifact, then the stamp would bless it).
+        setup(Some("999"));
+        assert!(clear_stale_native_target(
+            &root,
+            "libprobe.so",
+            "libprobe.rlib",
+            7
+        ));
+        assert!(!release.exists(), "stale target must be removed");
+        // 2. Matching sidecar → kept.
+        setup(Some("7"));
+        assert!(!clear_stale_native_target(
+            &root,
+            "libprobe.so",
+            "libprobe.rlib",
+            7
+        ));
+        assert!(release.join("libprobe.so").exists(), "fresh artifact kept");
+        // 3. Missing sidecar = unknown provenance, commonly a legitimate
+        //    HAND-BUILT artifact (the documented `cargo build` workflow;
+        //    the tests/lib fixture cdylibs) → NOT cleared, keeps the
+        //    pre-existing build-and-stamp path.
+        setup(None);
+        assert!(!clear_stale_native_target(
+            &root,
+            "libprobe.so",
+            "libprobe.rlib",
+            7
+        ));
+        assert!(
+            release.join("libprobe.so").exists(),
+            "hand-built artifact kept"
+        );
+        // 4. No artifact at all → nothing to clear (first build).
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&release).unwrap();
+        assert!(!clear_stale_native_target(
+            &root,
+            "libprobe.so",
+            "libprobe.rlib",
+            7
+        ));
+        // 5. fp == 0 (nothing to fingerprint) → existence-only fallback, never clears.
+        setup(Some("999"));
+        assert!(!clear_stale_native_target(
+            &root,
+            "libprobe.so",
+            "libprobe.rlib",
+            0
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
