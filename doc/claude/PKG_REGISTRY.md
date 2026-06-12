@@ -878,6 +878,38 @@ ECOSYSTEM bootstrap:
    Phase 4.
 4. R10.5 key-rotation drill before any real compromise.
 
+### Coverage check — the registry must not drift behind the repos
+
+`scripts/check_registry_coverage.sh` (loft repo) compares every
+`loft-lang/loft-libs-*` library's `loft.toml` version against the
+published `index.json` and warns on **missing** (no entry at all) and
+**stale** (repo version newer than the newest published one) libraries.
+It runs per-PR as the advisory CI job "library registry coverage"; run
+it locally with `--strict` (exit 1 on findings) as a pre-publish gate.
+The fix for any finding is the publish flow in
+[REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).  Libraries still inside the
+loft repo's `lib/` are out of scope — they are unextracted by design
+(PKG.EXTRACT).
+
+### Maintainer fast-path — one run, one OK, one signature
+
+`scripts/registry_maintain.sh` turns the findings into a single
+sitting.  One run gathers the combined worklist — **own libs** to
+publish (the coverage findings), **foreign submission PRs** on
+`loft-lang/registry` with their validation-CI verdict, and **foreign
+upstream drift** (an author's repo ahead of the registry,
+informational).  After one confirmation it merges the green PRs,
+re-filters the worklist against the post-merge index (a PR may have
+covered a finding), then for each remaining own lib runs
+`loft package` → creates the tag + GitHub release when absent →
+`loft publish` → merges the emitted entry into `index.json`.  The
+maintainer signs once (`loft-keygen sign`; key via `--key` /
+`LOFT_REGISTRY_KEY`) and the script commits, pushes, and re-runs the
+coverage check to confirm a clean state.  Without a key it stops after
+staging and prints the two remaining commands — the signature never
+moves off the maintainer's hardware (§ Why laptop signing, not CI).
+`--dry-run` shows the worklist and changes nothing.
+
 ---
 
 ## What this does NOT cover

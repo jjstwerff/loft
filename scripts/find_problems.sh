@@ -5,14 +5,21 @@
 # One-pass-find-all-problems workflow (see doc/claude/TESTING.md).
 #
 # Default mode: runs `cargo test --release --no-fail-fast` in the
-# background, tees the raw log to /tmp/loft_test.log (or $1), and
+# background, tees the raw log to /tmp/loft_test.<id>.log (or $1), and
 # lets you get on with other work.  The summary writes to
 # /tmp/loft_problems.txt (or $2) when the run finishes.  Avoids the
 # fix-one-rerun-see-next loop that pays the compile + test-startup
 # cost on every iteration.
 #
+# `<id>` is a per-checkout tag derived from the repo root, so two
+# working trees (e.g. sibling agent checkouts) can run this script
+# concurrently without sharing pid/log/summary files — a shared pid
+# file let one tree's --wait consume the other's run.  The summary
+# keeps the documented stable path PLUS the per-checkout copy; every
+# mode prints the exact paths it used.
+#
 # Peek mode (no compile): `./scripts/find_problems.sh --peek` inspects
-# the in-flight log (/tmp/loft_test.log) and prints any failures
+# the in-flight log and prints any failures
 # discovered so far.  Shows last script run before a SIGSEGV so
 # wrap-suite crashes point at the specific .loft file that blew up.
 #
@@ -38,9 +45,12 @@ set -euo pipefail
 # Cache clean/release rebuilds with sccache when present (no-op otherwise).
 source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 
-LOG_DEFAULT=/tmp/loft_test.log
-OUT_DEFAULT=/tmp/loft_problems.txt
-PID_FILE=/tmp/loft_test.pid
+# Per-checkout tag: stable for a given working tree, distinct across trees.
+REPO_TAG=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd | cksum | cut -d' ' -f1)
+LOG_DEFAULT=/tmp/loft_test.$REPO_TAG.log
+OUT_DEFAULT=/tmp/loft_problems.$REPO_TAG.txt
+OUT_STABLE=/tmp/loft_problems.txt
+PID_FILE=/tmp/loft_test.$REPO_TAG.pid
 
 # Refresh every derived artefact that the test suite depends on before
 # running it.  There are three classes of stale artefact, each of which
@@ -64,7 +74,7 @@ PID_FILE=/tmp/loft_test.pid
 # stream live to stderr so a slow `--bg` start is visible.  Format:
 #   `  cdylib lib/server/native       3.4s`  (always >= 0.1s precision)
 # A `=== Wall-clock timing summary ===` block prints at run/wait end.
-TIMINGS_FILE=/tmp/loft_timings.txt
+TIMINGS_FILE=/tmp/loft_timings.$REPO_TAG.txt
 
 # Pick the test runner.  cargo-nextest parallelises at the test level
 # (cargo-test only at the binary level), giving 2-3x faster wall-clock
@@ -114,7 +124,7 @@ rebuild_one() {
 rebuild_native_cdylibs() {
   local repo_root
   repo_root=$(cd "$(dirname "$0")/.." && pwd)
-  local log=/tmp/loft_cdylib.log
+  local log=/tmp/loft_cdylib.$REPO_TAG.log
   : > "$log"
   : > "$TIMINGS_FILE"
   local any_src_cdylib=0
@@ -200,6 +210,17 @@ rebuild_native_cdylibs() {
 # Extract a compact failure summary from the raw log.
 # $1: log path, $2: output path
 summarise() {
+  local log="$1" out="$2"
+  do_summarise "$log" "$out"
+  # Keep the documented stable path readable too (last writer wins when
+  # several checkouts run concurrently; the per-checkout file is the
+  # authoritative one and every mode prints its exact path).
+  if [[ "$out" != "$OUT_STABLE" ]]; then
+    cp -f "$out" "$OUT_STABLE" 2>/dev/null || true
+  fi
+}
+
+do_summarise() {
   local log="$1" out="$2"
   {
     echo "=== Test binaries that reported FAILED ==="
@@ -345,7 +366,10 @@ if [[ "${1:-}" == "--bg" ]]; then
       >> "$TIMINGS_FILE"
     summarise "$LOG" "$OUT"
     rm -f "$PID_FILE"
-  ) &
+  ) > /dev/null 2>&1 &
+  # ^ stdio detached: the subshell writes only to files, but an inherited
+  #   stdout keeps a caller's pipe (`--bg | tail`) open until the whole
+  #   suite ends — silently serialising the "background" run.
   echo "$!" > "$PID_FILE"
   echo "background run started (pid $!), log: $LOG, summary on finish: $OUT"
   echo "use --peek to inspect in flight, --wait to block until done"

@@ -296,6 +296,21 @@ jobs:
         # LIBRARY_AUTHORING.md § 5d.
         run: scripts/sync-fixtures.sh --check
 
+  registry-coverage:
+    name: library registry coverage (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Warn for org libraries missing from / newer than the registry
+        # Advisory (not a required check): compares every loft-lang/loft-libs-*
+        # library's loft.toml version against the published registry index.
+        # Missing/stale entries surface as warning annotations, never block —
+        # the fix is publishing (doc/claude/REGISTRY_SUBMIT.md), which happens
+        # in the registry repo, not here.  Network trouble is a skip, not a red.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/check_registry_coverage.sh
+
   comment-quality:
     name: comment quality vs baseline (ubuntu, advisory)
     runs-on: ubuntu-latest

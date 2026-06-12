@@ -491,6 +491,52 @@ state.execute_argv("main", ...)              # run
 If a cdylib is not found but `native/Cargo.toml` exists, the interpreter
 runs `cargo build --release` automatically via `auto_build_native()`.
 
+### Agent discovery — generated API stubs (shipped)
+
+Installed packages live outside the consumer project
+(`~/.loft/registry/<name>-<version>/`, `~/.loft/lib/<name>/`).  Coding
+agents explore the project tree, so a dependency's API is invisible to
+them: `loft.toml` names the package, but no file in the project shows
+what it exports.  Agents then guess signatures or re-implement what the
+library already provides.
+
+**Shipped — the dependency surface is materialized inside the project
+and queryable from the shell:**
+
+- Every command that writes or updates a lockfile (`loft install`,
+  `loft update`, `loft pin`) also writes `.loft/api/<name>.api` — one
+  stub per locked dependency (`write_api_stubs`, `src/main.rs`).  A
+  stub holds a header (package name, resolved version, source path,
+  `use <name>;` line), then per source file the `// --- Section ---`
+  headers, doc-comment lines, and `pub` signatures with bodies
+  stripped.
+- **`loft api`** lists every library reachable from the cwd (project
+  deps, installed registry packages, user libraries) with source
+  paths; **`loft api <name>`** prints one library's public surface
+  (newest installed version; also accepts a package path).
+- The emitter is [`render_pkg_api_text`] in `src/documentation.rs` —
+  the plain-text sibling of `generate_pkg_docs`, sharing
+  `parse_pkg_api` + `strip_pub_body`.  Regression tests:
+  `tests/api_discovery.rs`.
+- Stubs are **committed**, not gitignored: small text files, API
+  changes visible in PRs, and the surface stays readable in checkouts
+  where `~/.loft` is not populated (CI, cloud agents).
+- Staleness rides the lockfile: stubs regenerate on the same commands
+  that rewrite `loft.lock`, and the header records the version, so a
+  header/lock mismatch means "re-run `loft update`".
+- The loft-write skill's Imports section walks agents through the
+  discovery order: in-project stubs → `loft api` → `loft search` /
+  `loft info`.
+
+Known limits of the text-scan extractor, acceptable for the first cut:
+`pub struct` / `pub enum` stubs keep only the declaration line (no
+fields or variants), and a `pub fn` signature wrapped across lines
+truncates at the first line.  The fix for both is a parser-based walk —
+`Data` already records `pub_visible` per definition
+(`src/data.rs:2149`) and full types — and that walker is the same one
+[API_SURFACE.md](API_SURFACE.md)'s `api-lint` needs: build it once,
+share it.
+
 ---
 
 ## Auto-marshalling dispatch (interpreter, legacy path)
@@ -1211,6 +1257,7 @@ etc.).  The items below are remaining infrastructure work.
 | **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry; detailed draft in [PKG_REGISTRY.md](PKG_REGISTRY.md) | Open — designed, scheduled.  File-based MVP scopes to ~1 week (no server).  Migration to a real server later is a drop-in replacement at the same URL — see [PKG_REGISTRY.md § The invariant](PKG_REGISTRY.md#the-invariant--end-user-experience-is-identical-to-a-real-server). |
 | **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
 | **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
+| **PKG.STUB** — generated in-project API stubs (`.loft/api/<name>.api`) + `loft api` for agent discovery | — | § Agent discovery — generated API stubs | SHIPPED (stubs on install/update/pin, `loft api [name]`, loft-write skill section, `tests/api_discovery.rs`).  Remaining: parser-walk upgrade (struct fields / multi-line signatures) shared with [API_SURFACE.md](API_SURFACE.md) `api-lint`. |
 
 Suggested order:
 1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
