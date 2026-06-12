@@ -1,6 +1,6 @@
 ---
 name: loft-debug
-description: Operational companion for running a loft bug down on this box — LOFT_LOG presets, dump files, find_problems flow, the native-backend env gotchas that cause FALSE failures, and the operational-safety rules for builds/processes. Routes to the matrix-first protocol (CLAUDE.md) for the METHOD; this is the MECHANICS. Apply when reproducing, investigating, or verifying a loft crash, wrong-result, or codegen bug.
+description: Operational companion for running a loft bug down on this box — LOFT_LOG presets, dump files, find_problems flow, the live-debugger RPC surface (loft debug --rpc — scripted breakpoint/eval/setValue sessions), the native-backend env gotchas that cause FALSE failures, and the operational-safety rules for builds/processes. Routes to the matrix-first protocol (CLAUDE.md) for the METHOD; this is the MECHANICS. Apply when reproducing, investigating, or verifying a loft crash, wrong-result, or codegen bug — and whenever about to sprinkle println/probe prints into a loft program (the debugger session replaces them).
 user-invocable: false
 ---
 
@@ -24,6 +24,10 @@ irreversible moves not to make.
 
 ## Running a bug down — mechanics
 
+- **First, one tracker probe**: `gh issue list --search "<symptom keywords>"` —
+  a bug worth fixing is often already filed (consumers file fast: #342/#343
+  landed minutes before their fixes were built blind). An existing row hands
+  you scope + workaround for free, and the fix commit must claim it (below).
 - Single file, interpreter: `cargo run --bin loft -- --interpret file.loft`
 - Native: `cargo run --bin loft -- --native file.loft`
 - ⚠ **The default backend on this box is `--native`.** For the SEEING loop ALWAYS pass
@@ -42,6 +46,63 @@ irreversible moves not to make.
   investigate (CLAUDE.md § Debugging policy) — read the dump and reason.
 - **Full suite, detached**: `./scripts/find_problems.sh --bg` → `--peek` mid-run /
   `--wait` to block; structured summary on finish in `/tmp/loft_problems.txt`.
+
+## The agent debug surface — `loft debug <file> --rpc` (drive a live session, don't println)
+
+The @PLN16 debugger speaks NDJSON over stdio (the contract:
+`doc/claude/plans/16-debugger/PROTOCOL.md`). One `printf` pipes a whole scripted
+session — breakpoint → inspect the live frame → eval → edit → resume. Patterns
+below verified hands-on against this tree and a real multi-module consumer
+(crawler's Sim). ⚠ Version boundary: an installed binary OLDER than the rpc
+fixes (commit `9de72ada`) sends NO `verified` field on setBreakpoints and
+ignores string-form `"log"` (array only) — when driving `/usr/local/bin/loft`,
+prefer `target/*/loft` from this tree if the response lacks `verified`.
+
+```sh
+printf '%s\n' \
+  '{"id":1,"req":"launch","file":"/abs/path/prog.loft"}' \
+  '{"id":2,"req":"setBreakpoints","file":"/abs/path/prog.loft","breakpoints":[{"line":3,"condition":"n == 2"}]}' \
+  '{"id":3,"req":"run"}' \
+  '{"id":4,"req":"eval","expr":"a + n"}' \
+  '{"id":5,"req":"setValue","target":"a","value":"100"}' \
+  '{"id":6,"req":"stepOver"}' \
+  '{"id":7,"req":"continue"}' \
+  '{"id":8,"req":"disconnect"}' \
+| loft debug /abs/path/prog.loft --rpc
+```
+
+- **Order matters: `launch` LOADS but does not run; `run` starts execution.** Set
+  breakpoints between them. (`continue` before `run` just emits `terminated`.)
+- **`setBreakpoints` matches files by BASENAME** (relative or absolute both work,
+  including a `use`d module's file while launching the consumer; two same-named
+  files in one program can't be told apart). The response carries
+  `breakpoints:[{line, verified}]` — **check `verified`**: `false` means the
+  breakpoint can never fire (no breakable code on that line, or a file the
+  program doesn't use); don't wait on a stop that never comes.
+- **Multi-lib programs**: append the usual lib flags —
+  `loft debug src/x.loft --rpc --lib ../pkg/ …`.
+- **`stopped` carries the whole frame**: function, line, and every live local —
+  a full crawler `Sim` struct renders inline (vectors elided `…`); one event =
+  the variables panel, drill down with `eval`.
+- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`), and
+  the frame holds only the locals **live ON that line**. An out-of-scope name
+  returns `value:null`, not an error — don't misread null as "the field is
+  empty".
+- **`setValue` edits the live run** (scalar / text / enum / struct field /
+  nested path / vector element; a whole heap local is rejected by design) —
+  execution resumes WITH the edit: probe a hypothesis by injecting the suspect
+  value instead of rebuilding.
+- **Conditional breakpoints** (`"condition":"p.x == 9"`) filter by frame; a
+  tracepoint (`"log":"expr"` or `"log":["e1","e2"]`, `"stop":false`) streams
+  `output{category:"trace"}` lines (`expr = value`) without pausing — structured
+  trace beats sprinkled printlns. Log entries are EXPRESSIONS, not format strings.
+- **Conditions and trace exprs obey the same liveness rule** — a name not
+  read/written on that line evaluates null/`?`, so a condition on it silently
+  never matches. Anchor breakpoints on a line that uses the variables you test.
+- Program stdout arrives as `output` events on the SAME pipe, never interleaved
+  with protocol — parse line-by-line as JSON, switch on `event`/`id`.
+- The interactive twin is `loft debug <file>` (the `(dbg)` prompt) — same engine,
+  for a human; agents always prefer `--rpc`.
 
 ## Native-backend env gotchas — these fake FAILURES; rule them out before believing a native failure
 
@@ -82,6 +143,15 @@ serially before believing them.
 
 ## After the fix — routes
 
+- **Re-probe the tracker with what you NOW know** (the fixed mechanism names
+  better keywords than the filed symptom did), and put `Fixes #N` in the fix
+  commit (or PR body) for every row your fix closes. The trailer drives the
+  whole lifecycle — `fixed-pending-merge` on push, auto-close + label-strip on
+  merge; never hand-label. Add the substantive comment: fixing commit,
+  regression test, what verification actually found. When a PR opens, copy
+  every `Fixes #N` into the PR BODY too — merges squash, and a merge-time
+  edit of the squash message would otherwise kill the trailer (issue stays
+  open, label goes stale).
 - Found a *sibling* bug while debugging? Default is **FIX** it (cheapest bug you'll
   ever fix), not file it — `CLAUDE.md` § Bug-filing policy. File only if it blocks the
   task or is too big to fix now.

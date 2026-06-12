@@ -9,6 +9,72 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### engine_host: `run_local` — the standalone windowed host (#343) (2026-06-12)
+
+A windowed program with no server could not run on the @PLN18 kernel: `run`
+(listener) never returns and has no frame yield; `run_client` bails without a
+connection.  `run_local(tick_interval_us, on_event, on_tick)` is the connector
+loop with **no transport** — drift-free ticks (one tick = one frame for a GL
+host), the per-turn frame yield, the loop's own idle backoff (kills the
+consumer's busy-spin), swap machinery (08-S5 `LOFT_SWAP_READY` included) and
+the debug control endpoint, all without a peer.
+
+Mechanics: `ClientKernel.conn` became `Option<TcpStream>` (the two `Some`
+sites — frame read, masked write — are behavior-identical; `None` reads
+nothing and `send` reports false).  `kernel_local(tick_interval_us)` landed on
+all three calling conventions: bytecode native, browser (`ws:-1`, guarded
+pump/send), and the `--native` typed twin (`CODEGEN_RUNTIME_FNS`).  The loft
+side factors `run_client`'s body into one shared `client_loop`; `run_local` is
+local boot + the same loop (no third copy).  Going online later means swapping
+`run_local` for `run_client` — handlers never change.  Regression (both
+backends): `tests/engine_host_kernel.rs::run_local_ticks_and_stops_without_a_server`.
+Driven by the crawler consumer (#343); design note: plan-18 ENGINE_HOST.md
+§ Update 2026-06-12.
+
+### engine_host: `post`, listener `stop()`, listener frame yield (the crawler K2 trio) (2026-06-12)
+
+The three flow-back asks from the crawler consumer's K2 (observer slice):
+
+- **`post(msg) -> boolean`** — enqueue a LOCAL event on the running kernel
+  (any role): window input becomes an ordinary events-class message with
+  `cid: -1` (local origin).  The connector loop previously hardcoded `cid: 0`
+  when constructing events (the server was the only source); the new
+  `kernel_client_event_cid` accessor carries the real origin.  Registered on
+  all three calling conventions; surface fns with a `#native "sym"` alias
+  register their DEF name in `CODEGEN_RUNTIME_FNS` (`n_post`, like `n_send`).
+- **Listener `stop()`** — `Kernel.alive` + `kernel_stop`/`kernel_alive`;
+  `run` loops on `kernel_alive()` and returns after a handler calls
+  `engine_host::stop()` (the windowed listener's window-close exit, mirror of
+  `client_stop`).
+- **`kernel_frame()`** — the per-turn yield in `run`'s loop (no-op native,
+  frame-yield browser; twin of `kernel_client_frame`), so a windowed
+  LISTENER frames correctly.
+
+Regression (both roles × both backends):
+`tests/engine_host_kernel.rs::post_and_stop_in_both_roles`.
+
+### rpc debugger: `verified` flag on setBreakpoints + string-form tracepoint log (#342) (2026-06-12)
+
+Two silent-failure footguns in `loft debug --rpc`, found while verifying the
+loft-debug skill against the implementation:
+
+- `setBreakpoints` answered `{ok:true}` with no per-breakpoint feedback, so a
+  breakpoint that can never fire (no breakable code on the line, or a file the
+  program doesn't use — matching is by **basename**) just never stopped.  The
+  response now carries the PROTOCOL.md-documented `breakpoints:[{line,
+  verified}]`, resolved eagerly via `breakable_lines_in_file`.
+- A tracepoint's `"log"` given as a plain string was silently ignored (only
+  the array form worked).  A string is now sugar for a one-element array;
+  entries are expressions rendered `expr = value`.
+
+PROTOCOL.md's request table is corrected to match the implementation: `launch`
+LOADS only; the previously undocumented `run` request starts execution (set
+breakpoints between them).  Liveness note for clients: conditions and trace
+expressions see only the locals live ON that line — an out-of-scope name
+evaluates null and a condition on it silently never matches.  Regressions:
+`tests/rpc.rs::rpc_set_breakpoints_reports_verified`,
+`rpc_tracepoint_log_accepts_plain_string`.
+
 ### Multiple materialised par loops no longer corrupt each other (#282) (2026-06-06)
 
 Several **materialised** par loops (range / `iterator<T>` / text inputs) in one

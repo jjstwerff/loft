@@ -303,6 +303,15 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_connect", crate::engine_host::n_kernel_connect),
     #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_local", crate::engine_host::n_kernel_local),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_post", crate::engine_host::n_kernel_post),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_alive", crate::engine_host::n_kernel_alive),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("n_kernel_stop", crate::engine_host::n_kernel_stop),
+    ("n_kernel_frame", crate::engine_host::n_kernel_frame),
+    #[cfg(not(target_arch = "wasm32"))]
     (
         "n_kernel_client_pump",
         crate::engine_host::n_kernel_client_pump,
@@ -326,6 +335,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     (
         "n_kernel_client_event_kind",
         crate::engine_host::n_kernel_client_event_kind,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_cid",
+        crate::engine_host::n_kernel_client_event_cid,
     ),
     #[cfg(not(target_arch = "wasm32"))]
     (
@@ -627,6 +641,15 @@ pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
         crate::engine_host::browser::n_kernel_connect,
     ),
     (
+        "n_kernel_local",
+        crate::engine_host::browser::n_kernel_local,
+    ),
+    ("n_kernel_post", crate::engine_host::browser::n_kernel_post),
+    (
+        "n_kernel_frame",
+        crate::engine_host::browser::n_kernel_frame,
+    ),
+    (
         "n_kernel_client_pump",
         crate::engine_host::browser::n_kernel_client_pump,
     ),
@@ -645,6 +668,10 @@ pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
     (
         "n_kernel_client_event_kind",
         crate::engine_host::browser::n_kernel_client_event_kind,
+    ),
+    (
+        "n_kernel_client_event_cid",
+        crate::engine_host::browser::n_kernel_client_event_cid,
     ),
     (
         "n_kernel_client_event_payload_dest",

@@ -1696,3 +1696,133 @@ fn main() {{
     );
     let _ = std::fs::remove_file(&prog);
 }
+
+/// `run_local` — the standalone windowed-host entry: the SAME client loop
+/// with NO transport.  The program must tick (drift-free clock), exit via
+/// `client_stop()` from inside `on_tick`, and `client_send` must honestly
+/// report false (there is no peer).  Both backends: the native leg proves
+/// the `n_kernel_local` typed twin + registration.
+#[test]
+fn run_local_ticks_and_stops_without_a_server() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let fixture = r#"use engine_host;
+
+fn main() {
+    frames = 0;
+    engine_host::run_local(1000,
+        fn(ev: engine_host::Event) { println("ev kind={ev.kind}"); },
+        fn() {
+            frames += 1;
+            if frames >= 5 {
+                engine_host::client_stop();
+            }
+        });
+    sent = engine_host::client_send("1:hello");
+    println("done frames={frames} sent={sent}");
+}
+"#;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for interpret in [true, false] {
+        let prog =
+            std::env::temp_dir().join(format!("eh_local_{}_{interpret}.loft", std::process::id()));
+        std::fs::write(&prog, fixture).unwrap();
+        let mut cmd = Command::new(loft_bin());
+        cmd.env("LOFT_OFFLINE", "1");
+        if interpret {
+            cmd.arg("--interpret");
+        }
+        let out = cmd
+            .arg("--no-warnings")
+            .arg("--lib")
+            .arg(root.join("lib"))
+            .arg(&prog)
+            .current_dir(&root)
+            .output()
+            .expect("run local kernel");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("done frames=5 sent=false"),
+            "interpret={interpret}: expected 5 ticks then a clean stop, got:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_file(&prog);
+    }
+}
+
+/// The K2 flow-back trio: `post` (a local event reaches `on_event` with
+/// `cid: -1` — window input as the events class), the listener's `stop()`
+/// (`run` returns — the windowed listener's window-close exit), and the
+/// listener loop's per-turn `kernel_frame()` riding every turn (a no-op on
+/// native; exercised by the loop completing).  One self-stopping program per
+/// role, both backends.
+#[test]
+fn post_and_stop_in_both_roles() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    // `head`: the boot call up to the tick arg (run_local takes no port;
+    // run listens).  `exit`: client_stop leaves the connector loop, stop
+    // the listener loop.
+    let shape = |head: &str, exit: &str| {
+        format!(
+            r#"use engine_host;
+
+fn main() {{
+    frames = 0;
+    got = "";
+    engine_host::{head},
+        fn(ev: engine_host::Event) {{
+            got = "{{got}}[{{ev.cid}}:{{ev.kind}}:{{ev.payload}}]";
+        }},
+        fn() {{
+            frames += 1;
+            if frames == 2 {{
+                engine_host::post("K:input");
+            }}
+            if frames >= 4 {{
+                engine_host::{exit}();
+            }}
+        }});
+    println("done frames={{frames}} got={{got}}");
+}}
+"#
+        )
+    };
+    let local = shape("run_local(1000", "client_stop");
+    let listener = shape("run(18099, 1000", "stop");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (tag, src) in [("local", &local), ("listener", &listener)] {
+        for interpret in [true, false] {
+            let prog = std::env::temp_dir().join(format!(
+                "eh_post_{tag}_{}_{interpret}.loft",
+                std::process::id()
+            ));
+            std::fs::write(&prog, src).unwrap();
+            let mut cmd = Command::new(loft_bin());
+            cmd.env("LOFT_OFFLINE", "1");
+            if interpret {
+                cmd.arg("--interpret");
+            }
+            let out = cmd
+                .arg("--no-warnings")
+                .arg("--lib")
+                .arg(root.join("lib"))
+                .arg(&prog)
+                .current_dir(&root)
+                .output()
+                .expect("run kernel role");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                stdout.contains("done frames=4 got=[-1:1:K:input]"),
+                "{tag} interpret={interpret}: post must arrive with local origin, \
+                 then the loop must stop, got:\n{stdout}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let _ = std::fs::remove_file(&prog);
+        }
+    }
+}

@@ -234,6 +234,10 @@ struct Kernel {
     tick_interval_us: i64,
     last_tick_us: i64,
     warned_oversize: bool,
+    /// False once `kernel_stop()` ran — a windowed listener's exit: `run`
+    /// returns at the top of its next turn (mirror of the connector's
+    /// `client_stop`).
+    alive: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -536,6 +540,7 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                     tick_interval_us: tick_us.max(1),
                     last_tick_us: 0,
                     warned_oversize: false,
+                    alive: true,
                 });
             });
             // @PLN18 08-S5 — the swap-resume handshake: when this process was
@@ -933,6 +938,53 @@ pub fn n_kernel_clients(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, n);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_alive() -> boolean` — `run`'s loop condition; false after
+/// `kernel_stop()` (the windowed listener's window-close exit).
+pub fn n_kernel_alive(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_kernel(|k| k.alive).unwrap_or(false);
+    stores.put(stack, v);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_stop()` — mark the listener done so `run` returns at the top of
+/// its next turn (mirror of the connector's `client_stop`).
+pub fn n_kernel_stop(_stores: &mut Stores, _stack: &mut DbRef) {
+    let _ = with_kernel(|k| k.alive = false);
+}
+
+/// `kernel_frame()` — the per-turn yield point in `run`'s loop: a no-op on
+/// native (the loop owns its thread), a frame-yield in the browser.  The
+/// listener twin of `kernel_client_frame`, so a windowed LISTENER frames too.
+pub fn n_kernel_frame(_stores: &mut Stores, _stack: &mut DbRef) {}
+
+/// The local-event enqueue shared by both calling conventions: window input
+/// (or any script-side source) becomes an ordinary events-class message —
+/// `cid: -1` marks local origin, handlers treat keys and remote messages
+/// identically (and K4-style intent shipping serializes the SAME stream).
+/// Posts to the active role's queue: connector/local first, else listener.
+/// False = no kernel is booted.
+#[cfg(not(target_arch = "wasm32"))]
+fn post_impl(msg: &str) -> bool {
+    let ev = |payload: String| Event {
+        cid: -1,
+        kind: 1,
+        payload,
+    };
+    if with_client(|c| c.events.push_back(ev(msg.to_string()))).is_some() {
+        return true;
+    }
+    with_kernel(|k| k.events.push_back(ev(msg.to_string()))).is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `post(msg) -> boolean` — see [`post_impl`].
+pub fn n_kernel_post(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    let ok = post_impl(&msg);
+    stores.put(stack, ok);
+}
+
 // ── 05a — the state-sync UDP channel ────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1076,7 +1128,10 @@ const KEEPALIVE_INTERVAL_US: i64 = 500_000;
 
 #[cfg(not(target_arch = "wasm32"))]
 struct ClientKernel {
-    conn: TcpStream,
+    /// `None` = a local (transportless) client kernel: the same loop drives a
+    /// windowed host with no server — ticks, swap machinery, and the debug
+    /// control endpoint all work; sends report false, the pump reads nothing.
+    conn: Option<TcpStream>,
     udp: Option<UdpSocket>,
     /// From the 101 head; "" = the server offered no UDP (everything WS).
     cookie: String,
@@ -1160,6 +1215,53 @@ pub fn n_kernel_connect(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// `kernel_local(tick_interval_us) -> boolean` — boot the client kernel with
+/// NO transport: a standalone windowed host gets the same loop (drift-free
+/// ticks, swap machinery, debug control endpoint, frame yield) without a
+/// server.  `client_send` reports false; the event queue only ever holds
+/// what a future local source enqueues.
+pub fn n_kernel_local(stores: &mut Stores, stack: &mut DbRef) {
+    let tick_us = *stores.get::<i64>(stack);
+    local_init(tick_us);
+    stores.put(stack, true);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn local_init(tick_us: i64) {
+    CLIENT.with(|c| {
+        *c.borrow_mut() = Some(ClientKernel {
+            conn: None,
+            udp: None,
+            cookie: String::new(),
+            udp_bound: false,
+            last_hello_us: i64::MIN / 2,
+            last_keepalive_us: 0,
+            out_seq: 0,
+            slots: Vec::new(),
+            last_sync: (-1, String::new()),
+            // No peer, so no kind-0 connect event — the queue starts empty.
+            events: VecDeque::new(),
+            last: Event {
+                cid: -1,
+                kind: -1,
+                payload: String::new(),
+            },
+            start: Instant::now(),
+            tick_interval_us: tick_us.max(1),
+            last_tick_us: 0,
+            alive: true,
+            ctl_listener: bind_ctl_listener(),
+            ctl_conns: Vec::new(),
+        });
+        // The swap-resume handshake (08-S5): a local kernel's "serving" is
+        // simply BOOTED — same signal as the connector's connected.
+        if let Ok(ready) = std::env::var("LOFT_SWAP_READY") {
+            let _ = std::fs::write(&ready, b"connected");
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
     use std::net::ToSocketAddrs;
     let addr = (host, port).to_socket_addrs().ok()?.next()?;
@@ -1223,7 +1325,7 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
     };
     CLIENT.with(|c| {
         *c.borrow_mut() = Some(ClientKernel {
-            conn,
+            conn: Some(conn),
             udp,
             cookie,
             udp_bound: false,
@@ -1343,7 +1445,8 @@ fn pump_client(c: &mut ClientKernel) -> i64 {
         // datagram seq space: they conflate (the tick reads the newest, and
         // an in-flight older datagram becomes stale), never queue.
         while c.alive {
-            match read_frame(&mut c.conn) {
+            let Some(conn) = c.conn.as_mut() else { break };
+            match read_frame(conn) {
                 FrameRead::None => break,
                 FrameRead::Text(payload) => {
                     if let Some(rest) = payload.strip_prefix("S:")
@@ -1474,6 +1577,15 @@ pub fn n_kernel_client_event_kind(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// `kernel_client_event_cid() -> integer` — the last event's origin: `0` =
+/// the server, `-1` = a local `post` (window input).  Connector events were
+/// all server-origin before `post` existed; the cid keeps them apart.
+pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.last.cid).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Destination-passing text return — see `n_kernel_event_payload_dest`.
 pub fn n_kernel_client_event_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
@@ -1557,7 +1669,10 @@ fn client_send_impl(c: &mut ClientKernel, msg: &str, sync: bool) -> bool {
         }
         return udp.send(dgram.as_bytes()).is_ok();
     }
-    if write_frame_masked(&mut c.conn, 0x1, msg.as_bytes()).is_err() {
+    let Some(conn) = c.conn.as_mut() else {
+        return false; // local kernel: there is no peer to send to
+    };
+    if write_frame_masked(conn, 0x1, msg.as_bytes()).is_err() {
         c.alive = false;
         c.udp_bound = false;
         c.events.push_back(Event {
@@ -2054,6 +2169,57 @@ pub mod browser {
         stores.put(stack, false);
     }
 
+    /// `post(msg) -> boolean` — the local-event enqueue in the browser:
+    /// touch/key input becomes an events-class message on the client queue
+    /// (`cid: -1` = local origin).  False = no client kernel is booted.
+    pub fn n_kernel_post(stores: &mut Stores, stack: &mut DbRef) {
+        let msg = stores.get::<Str>(stack).str().to_owned();
+        let ok = with_client(|c| {
+            c.events.push_back(Event {
+                cid: -1,
+                kind: 1,
+                payload: msg.clone(),
+            });
+        })
+        .is_some();
+        stores.put(stack, ok);
+    }
+
+    /// The listener loop's per-turn yield — same browser contract as
+    /// `n_kernel_client_frame` (a browser listener doesn't exist today, but
+    /// the shared lib source calls it; honest yield either way).
+    pub fn n_kernel_frame(stores: &mut Stores, _stack: &mut DbRef) {
+        stores.frame_yield = true;
+    }
+
+    /// `kernel_local(tick_interval_us) -> boolean` — the transportless client
+    /// kernel in the browser: a windowed (canvas) host with no server.  No
+    /// WebSocket (`ws: -1`, guarded in pump/send); `opened` so nothing waits
+    /// on a handshake that never comes.
+    pub fn n_kernel_local(stores: &mut Stores, stack: &mut DbRef) {
+        let tick_us = *stores.get::<i64>(stack);
+        CLIENT.with(|c| {
+            *c.borrow_mut() = Some(BrowserClient {
+                ws: -1,
+                alive: true,
+                opened: true,
+                outbox: Vec::new(),
+                events: VecDeque::new(),
+                last: Event {
+                    cid: -1,
+                    kind: -1,
+                    payload: String::new(),
+                },
+                slots: Vec::new(),
+                last_sync: (-1, String::new()),
+                out_seq: 0,
+                tick_interval_us: tick_us.max(1),
+                last_tick_us: 0,
+            });
+        });
+        stores.put(stack, true);
+    }
+
     /// `kernel_connect(host, port, tick_interval_us) -> boolean` — open the
     /// browser WebSocket (async; the pump completes the handshake contract).
     pub fn n_kernel_connect(stores: &mut Stores, stack: &mut DbRef) {
@@ -2104,7 +2270,7 @@ pub mod browser {
                     let _ = host_ws_send(c.ws, &msg, false);
                 }
             }
-            while c.alive && host_ws_recv(c.ws) == 1 {
+            while c.alive && c.ws >= 0 && host_ws_recv(c.ws) == 1 {
                 let payload = host_ws_last_message();
                 // Keyframes ride `S:`-framed reliable frames for BOUND peers
                 // only — a browser is never bound, but parse defensively.
@@ -2159,6 +2325,12 @@ pub mod browser {
         stores.put(stack, v);
     }
 
+    /// Origin of the last event: `0` = the server, `-1` = a local `post`.
+    pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
+        let v = with_client(|c| c.last.cid).unwrap_or(-1);
+        stores.put(stack, v);
+    }
+
     pub fn n_kernel_client_event_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
         let dest = *stores.get::<DbRef>(stack);
         let v = with_client(|c| c.last.payload.clone()).unwrap_or_default();
@@ -2204,6 +2376,9 @@ pub mod browser {
             }
             if sync {
                 c.out_seq += 1;
+            }
+            if c.ws < 0 {
+                return false; // local kernel: there is no peer to send to
             }
             if !c.opened {
                 c.outbox.push(msg.clone());
@@ -2408,6 +2583,20 @@ pub mod typed {
     pub fn n_kernel_connect(_cell: &UnsafeCell<Stores>, host: &str, port: i64, tick_us: i64) -> u8 {
         u8::from(client_connect(host, port as u16, tick_us).is_some())
     }
+    pub fn n_kernel_local(_cell: &UnsafeCell<Stores>, tick_us: i64) -> u8 {
+        local_init(tick_us);
+        1
+    }
+    pub fn n_post(_cell: &UnsafeCell<Stores>, msg: &str) -> u8 {
+        u8::from(post_impl(msg))
+    }
+    pub fn n_kernel_alive(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_kernel(|k| k.alive).unwrap_or(false))
+    }
+    pub fn n_kernel_stop(_cell: &UnsafeCell<Stores>) {
+        let _ = with_kernel(|k| k.alive = false);
+    }
+    pub fn n_kernel_frame(_cell: &UnsafeCell<Stores>) {}
     pub fn n_kernel_client_pump(_cell: &UnsafeCell<Stores>) -> i64 {
         with_client(pump_client).unwrap_or(0)
     }
@@ -2415,6 +2604,9 @@ pub mod typed {
         let _ = super::with_client(|c| c.alive = false);
     }
 
+    pub fn n_kernel_client_event_cid(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(|c| c.last.cid).unwrap_or(-1)
+    }
     pub fn n_kernel_client_alive(_cell: &UnsafeCell<Stores>) -> u8 {
         u8::from(with_client(|c| c.alive).unwrap_or(false))
     }
