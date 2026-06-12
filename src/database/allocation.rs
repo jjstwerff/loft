@@ -497,7 +497,8 @@ impl Stores {
     }
 
     pub fn clear(&mut self, db: &DbRef) {
-        let store = &mut self.allocations[db.store_nr as usize];
+        let slot = db.store_nr;
+        let store = &mut self.allocations[slot as usize];
         // Clear any stale lock before reinitialising — OpDatabase may
         // reinitialise a store that was previously locked by a const
         // parameter in a prior function call within the same loop iteration.
@@ -505,7 +506,26 @@ impl Stores {
         if !store.pinned {
             store.unlock();
         }
+        // OpDatabase may adopt a store its variable freed at the end of the
+        // previous loop iteration (the slot still holds the stale DbRef).
+        // Adoption IS ownership: mark the store in use and unlink it from
+        // the free bitmap, or `find_free_slot` hands the SAME slot to the
+        // next fresh allocation — two owners, and the second's writes wipe
+        // the first's record (#348: a File record clobbered by a sibling
+        // call's result vector).
+        store.free = false;
         store.init();
+        self.clear_free_bit(slot);
+        // free_named's top-slot trim may have dropped `max` BELOW this slot
+        // (the stale frame ref outlives the watermark).  Restore it, or
+        // find_free_slot returns `max` == this very slot and the fresh-alloc
+        // path `init()`s the just-adopted live store.
+        if slot >= self.max {
+            self.max = slot + 1;
+            if self.max > self.peak {
+                self.peak = self.max;
+            }
+        }
     }
 
     #[must_use]

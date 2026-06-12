@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Sequential `.lines()` calls in a LOOP must each see their own file (#348).
+// Mechanism (store lifecycle; the file is the trigger shape): freeing the top
+// store slots at a loop-iteration end trims the allocator watermark while a
+// stale frame slot still names the freed store; the next iteration's
+// OpDatabase ADOPTS that store (clear + claim), and before the fix the adopt
+// left it on the free bitmap and below the watermark — so the next fresh
+// allocation handed the SAME store to a second owner, whose writes wiped the
+// first's record (the File record clobbered by the result vector: every
+// `.lines()` after the first returned empty).
+
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
+#cwd
+fn cleanup() { delete("test_loft_348_a.txt"); delete("test_loft_348_b.txt"); }
+
+fn main() {
+  cleanup();
+  fa = file("test_loft_348_a.txt");
+  fa.write("l1\nl2\n");
+  fb = file("test_loft_348_b.txt");
+  fb.write("m1\nm2\nm3\n");
+
+  // Straight-line calls (worked even pre-fix; pins the easy half).
+  sa = file("test_loft_348_a.txt").lines();
+  sb = file("test_loft_348_b.txt").lines();
+  assert(len(sa) == 2, "straight-line first: {len(sa)}");
+  assert(len(sb) == 3, "straight-line second: {len(sb)}");
+
+  // The loop shape — iterations 2+ returned EMPTY before the fix, including
+  // re-reading the FIRST file.
+  counts = [];
+  for p in ["test_loft_348_a.txt", "test_loft_348_b.txt", "test_loft_348_a.txt"] {
+    ls = file(p).lines();
+    counts += [len(ls)];
+  }
+  assert(counts[0] == 2, "loop iteration 1: {counts[0]}");
+  assert(counts[1] == 3, "loop iteration 2 must see its own file (#348): {counts[1]}");
+  assert(counts[2] == 2, "loop iteration 3 (first file again): {counts[2]}");
+
+  cleanup();
+}
