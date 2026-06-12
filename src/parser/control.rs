@@ -733,12 +733,21 @@ impl Parser {
     /// otherwise (mixed shapes, no work-refs, or branches already
     /// share a var).
     pub(crate) fn unify_if_branches_work_refs(&mut self, tail: &mut Value) -> Option<u16> {
+        let trace = std::env::var("LOFT_TRACE_UNIFY").is_ok();
         let if_value = tail.unspan_mut();
         let Value::If(_, true_branch, false_branch) = if_value else {
+            if trace {
+                eprintln!("[unify] not an If tail");
+            }
             return None;
         };
-        let shared = Self::find_branch_terminal_var(true_branch)?;
-        let other = Self::find_branch_terminal_var(false_branch)?;
+        let shared = Self::find_branch_terminal_var(true_branch);
+        let other = Self::find_branch_terminal_var(false_branch);
+        if trace {
+            eprintln!("[unify] terminals: true={shared:?} false={other:?}");
+        }
+        let shared = shared?;
+        let other = other?;
         // P236: only unify when both branches' terminal vars are
         // parser-internal work-refs (`__ref_N` / `__rref_N`).
         // Renaming user-named parameters (e.g.,
@@ -3330,6 +3339,73 @@ impl Parser {
         );
     }
 
+    /// The work-ref that carries a return site's VALUE: for a tail call,
+    /// the `Var` in the callee's hidden heap-buffer argument slot; for a
+    /// plain `Var` tail, the var itself.  Only this ref may bind to the
+    /// fn's ONE return buffer — an INNER call's ref (`return wrap(mk(x))`
+    /// has two) must stay a plain local, or the outer call's destination
+    /// would alias its own argument (the callee's buffer clear then frees
+    /// the record the argument still views).
+    fn site_value_ref(&self, tail: &Value) -> Option<u16> {
+        match tail.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Return(inner) => self.site_value_ref(inner),
+            Value::Block(bl) => bl.operators.last().and_then(|t| self.site_value_ref(t)),
+            Value::Call(d, args) => {
+                let def = self.data.def(*d);
+                let i = def.attributes().iter().position(|a| {
+                    a.hidden
+                        && matches!(
+                            &a.typedef,
+                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                        )
+                })?;
+                match args.get(i).map(Value::unspan) {
+                    Some(Value::Var(v)) => Some(*v),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite a chained return site whose tail is a bare `call(..., w)`
+    /// into the canonical NRVO pair `{ w = call(..., w); w }`.  A bare
+    /// call tail only delivers its value via eval-stack-top — interp reads
+    /// it, but scopes' `returned_var` sees no `Var`, so the fn epilogue
+    /// emits `Return(Null)` and native returns the null sentinel.  The
+    /// `Set` is a same-store self-assign at runtime (the call already
+    /// wrote into `w`'s buffer — the @P377 no-op shape every consumer
+    /// understands); a plain `{ call; w }` block would instead make the
+    /// call a DISCARD whose result the witness machinery frees.
+    fn chain_site_set_shape(td: u32, tail: &mut Value, w: u16) {
+        match tail {
+            Value::Span(b) => Self::chain_site_set_shape(td, &mut b.1, w),
+            Value::Return(inner) => Self::chain_site_set_shape(td, inner, w),
+            // Argument lifting wraps the site call in `Insert([lifts…,
+            // call])`; descend to the call so its value still surfaces.
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    Self::chain_site_set_shape(td, last, w);
+                }
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    Self::chain_site_set_shape(td, last, w);
+                }
+            }
+            Value::Call(_, _) => {
+                let call = std::mem::replace(tail, Value::Null);
+                *tail = crate::data::v_block(
+                    vec![crate::data::v_set(w, call), Value::Var(w)],
+                    Type::Reference(td, Deps::frame1(w)),
+                    "one_buffer_chain",
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// The fn's ONE hidden return buffer: the first hidden heap-typed
     /// attribute of the current context, as `(attr index, bound var)`.
     /// After the first promotion the attr carries the promoted local's
@@ -3464,6 +3540,12 @@ impl Parser {
                     }
                 }
             }
+            // The ref carrying THE SITE'S VALUE (a tail call's buffer arg /
+            // a plain Var tail).  Only this ref may bind to the fn's one
+            // return buffer; an INNER call's work ref (`return wrap(mk(x))`
+            // carries two) must stay a plain local — binding both would
+            // alias the outer call's destination with its own argument.
+            let site_value = body.last().and_then(|t| self.site_value_ref(t));
             for (e_idx, v) in expanded.iter().enumerate() {
                 let transitive = e_idx >= direct_count;
                 // A reassigned returned local must NOT be NRVO-promoted (see above).
@@ -3480,6 +3562,13 @@ impl Parser {
                 }
                 if transitive {
                     continue; // merge-only for transitively-reached vars (see above)
+                }
+                let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
+                // An inner work ref that is not the site's value stays a
+                // plain local: the outer call deep-copies its record into
+                // the destination before scope exit frees it.
+                if is_work_ref && site_value.is_some() && site_value != Some(*v) {
+                    continue;
                 }
                 // @PLAN59 / H1: bind the promoted local to the
                 // signature-time `__retbuf` buffer instead of GROWING the
@@ -3536,6 +3625,16 @@ impl Parser {
                     if chainable {
                         for op in body.iter_mut() {
                             Self::substitute_work_ref(op, *v, buf_var);
+                        }
+                        // The substituted-out ref must not get a null-init
+                        // preamble or a scope-exit free (see
+                        // `unregister_work_ref`).
+                        self.vars.unregister_work_ref(*v);
+                        // A bare-call site tail needs its value made
+                        // explicit (see `chain_site_set_shape`).
+                        if let (Type::Reference(td, _), Some(tail)) = (&ret, body.last_mut()) {
+                            let td = *td;
+                            Self::chain_site_set_shape(td, tail, buf_var);
                         }
                     } else if let (Type::Reference(td, _), Some(tail)) = (&ret, body.last_mut()) {
                         let td = *td;

@@ -396,16 +396,35 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
     when the site's value aliases the buffer's current contents.
     Recursion becomes trivial (self-call passes own buffer); the
     fn-ref type unifies; the pass-2 growth assert becomes a true
-    invariant.  Named pre-build claims to probe in the implementation
-    window: (C-a) codegen order of the dest-buffer clear vs call-arg
-    evaluation when an arg views the buffer's current record
-    (`casc_argview.loft` — works today on distinct buffers, plus a
-    sibling store-leak warning); (C-b) the rename-binding currently
-    couples ONE var name to the buffer attr — sites 2+ need role-based
-    binding; (C-c) the cdylib emission path that killed the reverted
-    un-promoted-site attempt (`lib/moros_render` `map_export_glb` is
-    the regression); (C-d) the argview leak must not widen.  Size M;
-    validation = the 6-cell matrix × both backends + cdylib suites.
+    invariant.
+  **BUILT 2026-06-12 for `Type::Reference` returns** (branch
+  windows-probe): `ref_return`'s growth branch now binds later sites
+  to the one buffer — a site's OUTERMOST work ref (its tail call's
+  buffer arg, `site_value_ref`) substitutes to the buffer var across
+  the body (`unregister_work_ref` keeps the orphan out of the preamble
+  /free sets — a leftover free flips the tail-`If` emission into the
+  @P378 `Return(Null)` trap) and gets the canonical
+  `{ buf = call(...); buf }` value shape (`chain_site_set_shape` — a
+  bare `{call; var}` block would make the call a witness-freed
+  DISCARD); inner refs stay plain locals (binding both aliases the
+  outer call's dest with its own argument — the C-a hazard,
+  `casc_nested.loft`); named locals read by sibling sites deep-copy
+  via `materialize_return_into`.  All four crash cells fixed +
+  un-ignored (`tests/issues.rs::pass2_arity_growth_*`); 10-cell
+  matrix interp + native green; armed corpus at the 4 pre-existing
+  singletons; full suite green incl. the moros glb chain.
+  **Found en route (pre-existing, filed)**: #355 — the Vector arm
+  still grows per-site, and a forward caller of a multi-site VECTOR
+  fn silently returns the WRONG element (both backends); the
+  one-buffer binding must extend to the Vector/struct-Enum arms.
+  #356 — mid-body `return f(g(x))` (lifted args) returns the null
+  sentinel on native (interp masks via eval-stack-top; the scopes
+  `Return(Null)` fall-through needs to learn buffer-valued tails).
+  Also: fn-refs to struct-returning fns cannot be CALLED at all
+  (pre-existing compile error "expects 2 arguments, got 1" — the
+  CallRef path never fills hidden buffer args; surfaced by the
+  fn-ref-type probe).  Lambdas keep in-place growth (sound — no
+  earlier callers).
 
 Remaining armed-corpus failures (5 files, no env crutch; the corpus =
 tests/scripts + tests/docs + examples on the armed interp binary —

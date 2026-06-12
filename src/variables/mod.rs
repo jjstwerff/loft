@@ -1238,6 +1238,16 @@ impl Function {
         self.work_refs.insert(var_nr);
     }
 
+    /// Remove a work-ref from the preamble registry after the one-buffer
+    /// binding substituted it out of the IR (`ref_return`'s chain leg).
+    /// Without this the orphan still gets a `Set(v, Null)` preamble and a
+    /// scope-exit free; the presence of FREES then flips the tail-`If`
+    /// emission into the discarded-statement + `Return(Null)` shape that
+    /// returns the null sentinel on native (the @P378 trap).
+    pub fn unregister_work_ref(&mut self, var_nr: u16) {
+        self.work_refs.remove(&var_nr);
+    }
+
     pub fn mark_caller_hidden_buf(&mut self, var_nr: u16) {
         if (var_nr as usize) < self.variables.len() {
             self.variables[var_nr as usize].caller_hidden_buf = true;
