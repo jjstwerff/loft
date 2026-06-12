@@ -3919,9 +3919,15 @@ impl State {
                 break;
             }
         }
-        // Program finished — clean up.
+        // Loop finished — pop the synthetic frame (the entry frame for the
+        // frame-yield drivers, `reenter`'s push for a re-entered call).
+        // `parallel_ctx` is NOT cleared here: its lifetime is the PROGRAM's
+        // (who wired it unwires it — `execute_argv` / the frame-yield
+        // drivers).  Clearing on every loop completion tore down the
+        // standing ctx the live-dispatch host wired, so the SECOND call of
+        // a flipped fn using `par_*` panicked in `n_parallel_*`'s expect
+        // (probe: a flipped `par_fold` killed the kernel on ping 2).
         self.call_stack.pop();
-        self.database.parallel_ctx = None;
         false
     }
 
@@ -4007,8 +4013,9 @@ impl State {
                 watch_fired = true;
             }
         }
+        // Same contract as `resume`: pop the synthetic frame only —
+        // `parallel_ctx` is program-scoped and unwired by its wirer.
         self.call_stack.pop();
-        self.database.parallel_ctx = None;
         false
     }
 

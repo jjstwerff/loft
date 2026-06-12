@@ -1910,3 +1910,77 @@ fn main() {
     );
     let _ = std::fs::remove_file(&prog);
 }
+
+/// F11-3 regression — `parallel_ctx` is program-scoped: a re-entered
+/// dispatch's completion must NOT tear it down.  Before the fix,
+/// `State::resume()` cleared the ctx the live-dispatch host wired at boot,
+/// so the SECOND call of a flipped fn using `par_*` panicked in
+/// `n_parallel_*`'s expect ("called outside State::execute()") and the
+/// kernel died.  Three pings — each runs `par_fold` inside the flipped fn.
+#[test]
+fn s2_flipped_fn_with_par_survives_repeat_dispatch() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 18121u16;
+    let prog = test_tmp().join(format!("eh_f11par_{port}_{}.loft", std::process::id()));
+    std::fs::write(
+        &prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn add_two(a: integer, b: integer) -> integer {{ a + b }}
+fn bump_events(w: W) -> integer {{
+  items: vector<integer> = [10, 20, 30, 40];
+  s = par_fold(items, 0, add_two, 2);
+  w.events = w.events + 1;
+  w.events * 1000 + s
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = bump_events(w);
+      engine_host::send(ev.cid, "got:{{ev.payload}}#{{n}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1")
+        .env("LOFT_LIVE_RELOAD", "1")
+        .env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_FLIP_FNS", "bump_events");
+    cmd.process_group(0);
+    let child = cmd
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let ws = ws_connect(port);
+    for i in 1..=3i64 {
+        ws_send(&ws, "p");
+        let r = ws_recv(&ws);
+        // events*1000 + par sum (10+20+30+40): 1100, 2100, 3100.
+        assert_eq!(
+            r,
+            format!("got:p#{}", i * 1000 + 100),
+            "dispatch {i} (par_fold inside the flipped fn) must keep working"
+        );
+    }
+    let _ = std::fs::remove_file(&prog);
+}

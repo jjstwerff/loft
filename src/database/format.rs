@@ -643,12 +643,15 @@ impl Stores {
     /// `#rust"Stores::source_dir_native()"` template).
     ///
     /// #255 / @PLN9 Phase 1: under `--native` the program's "own directory" is
-    /// the **executable's directory** (the interpreter uses the source file's
-    /// dir; a compiled binary has no source tree, so the binary's location is
-    /// the program-relative anchor).  This mirrors `current_exe()` use in
-    /// `native_utils::loft_lib_dir_for`.  Returns "" only when `current_exe()`
-    /// is unavailable (e.g. some sandboxed wasm hosts) — callers treat empty as
-    /// "no anchor, fall back to cwd".
+    /// the **executable's directory** for a standalone bundle (a compiled
+    /// binary has no source tree, so the binary's location is the
+    /// program-relative anchor) — but in DRIVER mode the executable is a
+    /// generated artifact in the cache/tmp dir, so the driver hands the real
+    /// program dir down via `LOFT_SOURCE_DIR`, which wins when set.  This
+    /// mirrors `current_exe()` use in `native_utils::loft_lib_dir_for`.
+    /// Returns "" only when `current_exe()` is unavailable (e.g. some
+    /// sandboxed wasm hosts) — callers treat empty as "no anchor, fall back
+    /// to cwd".
     #[must_use]
     pub fn source_dir_native() -> String {
         // #255 / @PLN9 Phase 1w: under wasm there is no executable path
@@ -667,12 +670,22 @@ impl Stores {
                 .unwrap_or_default();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        std::env::current_exe()
-            .ok()
-            .as_deref()
-            .and_then(std::path::Path::parent)
-            .map(|d| d.to_string_lossy().into_owned())
-            .unwrap_or_default()
+        {
+            // Driver mode: the executable is a generated artifact in the
+            // cache/tmp dir — ITS dir is never where the program's assets
+            // live.  The driver hands the real program dir down at spawn
+            // (`LOFT_SOURCE_DIR`); a standalone bundle runs without the env
+            // and keeps the executable-dir anchor.
+            if let Ok(d) = std::env::var("LOFT_SOURCE_DIR") {
+                return d;
+            }
+            std::env::current_exe()
+                .ok()
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        }
     }
 }
 

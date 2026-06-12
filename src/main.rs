@@ -5566,6 +5566,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         // explicit user-set values win.
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(&user_args);
+        // The artifact anchors relative paths at its OWN dir (the
+        // standalone-bundle rule) — in driver mode that is the cache/tmp
+        // dir, not the program's.  Hand the source anchor down so file I/O
+        // matches the interpreter; an explicit user value wins.
+        if std::env::var("LOFT_SOURCE_DIR").is_err()
+            && let Some(dir) = std::path::Path::new(&abs_file).parent()
+        {
+            cmd.env("LOFT_SOURCE_DIR", dir);
+        }
         if std::env::var("LOFT_LIVE_SRC").is_err() {
             cmd.env("LOFT_LIVE_SRC", &abs_file);
         }
@@ -5745,6 +5754,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         while state.database.frame_yield {
             state.resume();
         }
+        // The program is over HERE in the frame-yield case — unwire the
+        // parallel ctx at its program-scope owner (`resume` deliberately
+        // does not: it also serves per-call re-entry, where the standing
+        // ctx must survive).
+        state.database.parallel_ctx = None;
     }
     // Plan-07 phase 4 — render typed runtime errors through the
     // phase-2 pretty renderer.  `panic("msg")`, failed `assert`, and

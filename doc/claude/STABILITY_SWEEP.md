@@ -62,7 +62,7 @@ gets probed wherever its homes can drift apart.
 | F8 | **Deps as liveness vs deps as ownership vs deps as markers** | what `Type::*(…, deps)` means | borrow liveness (scopes); ownership negation (dep-empty = owned); the `u16::MAX` share marker (#328/closure records); `@P302` self-dep = ownership marker for keyed locals; attribute-index deps in returned types (`dep_has_var` resolves attr-index vs var-nr with a FALLBACK comparing raw numbers) | ▶ view-dep basic cell held (`f8a.loft`); #328's self-dep strip is a documented instance of meaning-collision; DEFERRED: crafted attr-index/var-nr collision (needs IR-level var numbering control) — pass-2 should split the four meanings into distinct fields |
 | F9 | **The startup/stdlib caches vs live state** | cached parse must equal fresh parse | `startup_cache.rs` manifest (sources, sig); `cache.rs` keys; `ir_store`/`ir_read` round-trip; REPL `rollback_to` | ▶ first cells probed, HELD: #328 marker-dep types and #313 split fn-fields round-trip warm≡cold (`/tmp/claude/sweep/f9*.loft`, 2026-06-11); REPL rollback + lib-path axes todo |
 | F10 | **Text ownership** | who frees a String buffer | `free_text` / `OpFreeText`; work-text result buffers; `skip_free` texts; text-returning-fn cell exemption (02d-vii) | ▶ struct-field text churn held leak-free (`f10.loft`); plan-53 historical; DEFERRED: par text buffers, text in returned structs |
-| F11 | **Error-path state** | a fallible operation either completes its state transition or leaves observable state unchanged — no half-transition survives the error exit | every mutate-then-fallible pair: file/connection tables vs the open/upgrade that validates them; allocate-then-fail in store paths; cache/manifest writes vs the validation that blesses them; registration tables (defs, todo_files, flip table, breakpoints) vs the resolve/load that makes the entry real | ✅ swept (2026-06-12): **F11-1..4** (see log) — interp read-path dangling file ref (the archetype's unfixed sibling), `files()` listing truncation, reenter completion clearing the standing `parallel_ctx` (kernel death), driver-mode native path anchor at the artifact dir. Six agent claims refuted (held). Archetype (FIXED): `database/io.rs:664` write_file |
+| F11 | **Error-path state** | a fallible operation either completes its state transition or leaves observable state unchanged — no half-transition survives the error exit | every mutate-then-fallible pair: file/connection tables vs the open/upgrade that validates them; allocate-then-fail in store paths; cache/manifest writes vs the validation that blesses them; registration tables (defs, todo_files, flip table, breakpoints) vs the resolve/load that makes the entry real | ✅ swept + ALL FOUR FIXED (2026-06-12): **F11-1..4** (see log; each entry carries its fix site + regression) — interp read-path dangling file ref, `files()` listing truncation, reenter completion clearing the standing `parallel_ctx`, driver-mode native path anchor. Six agent claims refuted (held). Archetype: `database/io.rs:664` write_file |
 
 ## Module work list (every file; sweep top-down by risk)
 
@@ -256,6 +256,12 @@ drafts pending user go-ahead in `/tmp/p_followups/f11_issues.md`.
   existing-file read fine.  Workaround verified BOTH backends: guard on
   `f.format != Format.NotExists` (`f11_read_wa.loft`).
 - **Severity / labels**: sev:high (panic on a recoverable fault), wa:clean.
+- **Status**: FIXED 2026-06-12 (branch windows-probe) at the natural home —
+  the interp read mirrors native (`match` on the open; Err → warn + return;
+  the two later index sites hardened to `get_mut`).  Output is now
+  byte-identical across backends.  Regression:
+  `tests/scripts/296-file-error-paths.loft` (both backends via wrap/native
+  runners).
 
 ### F11-2 — `files()` silently truncates a directory listing at the first unstat-able entry
 
@@ -275,6 +281,11 @@ drafts pending user go-ahead in `/tmp/p_followups/f11_issues.md`.
   Non-UTF-8 names hit a second, earlier `return false` (unprobed cell).
 - **Severity / labels**: sev:medium (silent wrong data), wa:none (no
   loft-level way to recover the dropped tail).
+- **Status**: FIXED 2026-06-12 (branch windows-probe) at the natural home —
+  both mid-loop aborts became per-entry degradation (`fill_file`'s
+  `NotExists` element stands; a non-UTF-8 name skips that entry only).
+  Probe cells now 3/3/3 (dangle mid/first/last).  Regression:
+  `tests/error_path_state.rs::f11_2_listing_survives_a_dangling_symlink`.
 
 ### F11-3 — reenter completion clears the standing `parallel_ctx`: par in a live-flipped fn kills the kernel on call 2
 
@@ -298,6 +309,14 @@ drafts pending user go-ahead in `/tmp/p_followups/f11_issues.md`.
 - **Severity / labels**: sev:high (engine death in the live-edit loop),
   wa:partial (keep `par_*` out of flipped fns — flipped-without-par and
   par-without-flip are both suite-covered).
+- **Status**: FIXED 2026-06-12 (branch windows-probe) at the natural home —
+  `resume()`/`debug_step()` no longer clear `parallel_ctx` (their exits
+  serve per-call re-entry too); the wirers unwire at program scope
+  (`execute_argv`'s existing clear; the frame-yield driver loop in main.rs
+  clears after the final resume; the wasm session drop is its teardown).
+  Probe: 4/4 pings with `par_fold` in the flipped fn, zero panics.
+  Regression:
+  `tests/engine_host_kernel.rs::s2_flipped_fn_with_par_survives_repeat_dispatch`.
 
 ### F11-4 — driver-mode native anchors relative paths at the artifact dir: file I/O silently lands in /tmp
 
@@ -322,6 +341,15 @@ drafts pending user go-ahead in `/tmp/p_followups/f11_issues.md`.
   dir restores parity (2/2 ≡ 2/2).
 - **Severity / labels**: sev:high (silent data loss), wa:clean.  Also an
   F4-parity instance (one fact, two derivations).
+- **Status**: FIXED 2026-06-12 (branch windows-probe) at the natural home —
+  the driver hands the program dir down at spawn (`LOFT_SOURCE_DIR`,
+  explicit-user-wins, the LOFT_LIVE_* pattern); `source_dir_native()`
+  honours it and keeps the executable-dir anchor for standalone bundles
+  (no env).  One chokepoint covers both consumers (the generated `main`
+  and the `source_dir()` builtin); `resolve_path`'s doc claim updated.
+  Regression:
+  `tests/error_path_state.rs::f11_4_driver_mode_anchors_at_the_program_dir`
+  (asserts the parity invariant, backend-independent).
 
 ### F11 held / refuted cells (2026-06-12)
 

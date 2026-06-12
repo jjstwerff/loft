@@ -1071,9 +1071,11 @@ impl Stores {
     /// program-supplied path through.  Absolute paths and the cwd-relative
     /// default pass through unchanged; under `program_relative` a *relative*
     /// path re-homes against `source_dir` — the program's own directory (the
-    /// source dir under `--interpret`, the executable's dir under `--native`),
-    /// so "program + assets" is a portable bundle that runs from any cwd.
-    /// Empty `source_dir` (no anchor) falls back to cwd, never to a wrong file.
+    /// source dir under `--interpret` and under driver-mode native, where the
+    /// driver hands it down via `LOFT_SOURCE_DIR`; the executable's dir for a
+    /// standalone native bundle), so "program + assets" is a portable bundle
+    /// that runs from any cwd.  Empty `source_dir` (no anchor) falls back to
+    /// cwd, never to a wrong file.
     #[must_use]
     pub fn resolve_path(&self, raw: &str) -> String {
         if !self.program_relative || self.source_dir.is_empty() {
