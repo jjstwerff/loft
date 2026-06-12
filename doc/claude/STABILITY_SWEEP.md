@@ -5,6 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # STABILITY_SWEEP.md — the brittleness hunt work list
 
+> Open items from this catalog are ORDERED in
+> [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — the single tracking view
+> across all stability docs.  This file stays the canonical home for the
+> findings themselves.
+
 A systematic sweep of the whole body of code for **invariants implemented in
 more than one way** — the disease class behind #313 (layout decided in three
 places), #314 (capture shape frozen before the decision was final), #323

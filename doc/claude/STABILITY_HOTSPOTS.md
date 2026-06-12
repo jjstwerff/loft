@@ -5,6 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # STABILITY_HOTSPOTS.md — the structures that will keep manufacturing bugs
 
+> Open H-items are ORDERED in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) —
+> the single tracking view across all stability docs.  This file stays the
+> canonical home for each hotspot's invariant, evidence, and mitigation design.
+
 Companion to [STABILITY_METHOD.md](STABILITY_METHOD.md) (the three-pass
 method) and [STABILITY_PASS2.md](STABILITY_PASS2.md) (the executed
 relocation pass).  Where those documents look at *routines*, this one looks

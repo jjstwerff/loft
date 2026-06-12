@@ -5,6 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # STABILITY_PASS2.md — relocations: every routine moves to its data structure
 
+> The DEFERRED rows below are ORDERED in
+> [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — the single tracking view
+> across all stability docs (the privacy-pass rows fold into its #9, the
+> codec row into #7).
+
 Pass 2 of [STABILITY_METHOD.md](STABILITY_METHOD.md), started 2026-06-11 in
 the post-release low-churn window.  Scope set by the user:
 
