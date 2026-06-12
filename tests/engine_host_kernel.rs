@@ -1826,3 +1826,76 @@ fn main() {{
         }
     }
 }
+
+/// @PLN18 08-S5, LOCAL role (#352) — the build swap completes for a
+/// `run_local` (windowed, transportless) program: the snapshot/ready
+/// protocol is file-based, so "serving" for a local kernel is BOOTED
+/// (`local_init` touches the ready file).  The whole cycle in one run:
+/// rebuild → swap_start → the new incarnation restores the world
+/// (`RESUMED`) → the old loop exits with `swap_retired() == true` → the
+/// resumed process runs on and exits by itself.
+#[test]
+fn s5_local_swap_hands_over() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let _hygiene = S5Hygiene("eh_s5local");
+    let fixture = r#"use engine_host;
+
+struct World { ticks: integer, gen: integer }
+
+fn main() {
+    w = World { ticks: 0, gen: 1 };
+    resumed = engine_host::swap_world(w);
+    if resumed {
+        println("RESUMED ticks={w.ticks}");
+        w.gen += 1;
+    }
+    started = false;
+    swapped = false;
+    engine_host::run_local(20000,
+        fn(ev: engine_host::Event) {},
+        fn() {
+            w.ticks += 1;
+            if w.ticks == 5 && !started && w.gen == 1 {
+                started = engine_host::rebuild_start();
+            }
+            if started && !swapped && engine_host::rebuild_status() == 2 {
+                swapped = engine_host::swap_start(engine_host::rebuild_artifact());
+            }
+            if w.ticks >= 100 {
+                engine_host::client_stop();
+            }
+        });
+    println("exited gen={w.gen} retired={engine_host::swap_retired()}");
+}
+"#;
+    let prog = std::env::temp_dir().join(format!("eh_s5local_{}.loft", std::process::id()));
+    std::fs::write(&prog, fixture).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(loft_bin())
+        .env("LOFT_OFFLINE", "1")
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .output()
+        .expect("run local swap cycle");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("RESUMED"),
+        "the new incarnation must restore the world (#352).\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("exited gen=1 retired=true"),
+        "the OLD local loop must observe the handover (#352).\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("exited gen=2 retired=false"),
+        "the resumed incarnation must run on and exit by itself.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&prog);
+}

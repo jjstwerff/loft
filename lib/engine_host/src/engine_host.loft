@@ -83,10 +83,13 @@ pub fn rebuild_artifact() -> text {
 }
 
 // @PLN18 08-S5 — the live build swap.  Name your world record ONCE before
-// run(): it becomes the snapshot root for swaps, and when this process is
-// booted AS a swap target the previous build's world is restored INTO it
-// (in place — every alias sees it) before serving starts.  Returns true
-// iff a restore happened (a resumed boot).
+// run()/run_client()/run_local(): it becomes the snapshot root for swaps,
+// and when this process is booted AS a swap target the previous build's
+// world is restored INTO it (in place — every alias sees it) before
+// serving starts.  Returns true iff a restore happened (a resumed boot).
+// ALL THREE roles swap: the ready/snapshot protocol is file-based, so a
+// LOCAL kernel's "serving" is simply BOOTED (#352;
+// tests/engine_host_kernel.rs::s5_local_swap_hands_over).
 pub fn swap_world(w: reference) -> boolean;
 #native
 
