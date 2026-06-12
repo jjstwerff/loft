@@ -24,6 +24,10 @@ irreversible moves not to make.
 
 ## Running a bug down — mechanics
 
+- **First, one tracker probe**: `gh issue list --search "<symptom keywords>"` —
+  a bug worth fixing is often already filed (consumers file fast: #342/#343
+  landed minutes before their fixes were built blind). An existing row hands
+  you scope + workaround for free, and the fix commit must claim it (below).
 - Single file, interpreter: `cargo run --bin loft -- --interpret file.loft`
 - Native: `cargo run --bin loft -- --native file.loft`
 - ⚠ **The default backend on this box is `--native`.** For the SEEING loop ALWAYS pass
@@ -139,6 +143,12 @@ serially before believing them.
 
 ## After the fix — routes
 
+- **Re-probe the tracker with what you NOW know** (the fixed mechanism names
+  better keywords than the filed symptom did), and put `Fixes #N` in the fix
+  commit (or PR body) for every row your fix closes. The trailer drives the
+  whole lifecycle — `fixed-pending-merge` on push, auto-close + label-strip on
+  merge; never hand-label. Add the substantive comment: fixing commit,
+  regression test, what verification actually found.
 - Found a *sibling* bug while debugging? Default is **FIX** it (cheapest bug you'll
   ever fix), not file it — `CLAUDE.md` § Bug-filing policy. File only if it blocks the
   task or is too big to fix now.
