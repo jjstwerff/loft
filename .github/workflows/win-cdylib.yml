@@ -12,13 +12,11 @@
 # job populates, so the build is incremental.
 name: Win cdylib (manual)
 
+# Build-and-test only — the token never writes anywhere.
+permissions:
+  contents: read
+
 on:
-  # Runs on every push to this iteration branch so the lean Windows pass gives
-  # fast feedback on the cdylib link fix — without invoking the full 3-OS PR
-  # matrix.  Remove the `push:` block (leaving `workflow_dispatch`) once the fix
-  # is confirmed and the work has merged.
-  push:
-    branches: [scripting]
   workflow_dispatch:
     inputs:
       filter:
@@ -59,9 +57,10 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      # On push events `inputs.filter` is empty; fall back to the default subset.
-      # `shell: bash` — Windows runners default to PowerShell, where `$FILTER`
-      # is not an env-var reference, so nextest would get an empty `-E ""`.
+      # The `||` fallback guards an empty `inputs.filter` (e.g. an API dispatch
+      # that omits inputs).  `shell: bash` — Windows runners default to
+      # PowerShell, where `$FILTER` is not an env-var reference, so nextest
+      # would get an empty `-E ""`.
       - name: Run cdylib / native subset
         shell: bash
         env:
