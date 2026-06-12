@@ -271,6 +271,22 @@ trace dumper on reference-field programs.
 - **Residual boundary (by design)**: a SHIPPED prebuilt
   (`<pkg>/native/<libname>`) wins unconditionally in `resolve_native_lib`
   — that is the package author's pinned-artifact promise, not a cache.
+- **The E0514 sibling, diagnosed + guarded (2026-06-12)**: which rustc a
+  spawned build resolves is CWD-dependent under rustup (the repo's
+  toolchain pin vs the default elsewhere).  Two build families differ:
+  a PACKAGE native crate depends on loft-ffi (the C-ABI contract) and
+  never the loft rlib — any rustc builds it correctly, cargo re-builds on
+  toolchain flips, NO guard (a first cut guarded it and wrongly blocked
+  valid /tmp builds) — while `build_shared_cdylib` (the auto-shared
+  cdylib for in-repo libs) links the SVH-locked rlib DIRECTLY and is
+  doomed under a mismatch (this was the E0514's true source, surfacing
+  through main.rs' "could not compile native (…); interpreting it").
+  Fix: `cache::rustc_mismatch()` (the memoised stamp-vs-live check,
+  hoisted out of main.rs' native path into one home) consulted by
+  `build_shared_cdylib` — a one-line reason + interp fallback instead of
+  a compiler spew.  Flap-probed: 1.96-cwd builds the FFI crate ✓, refuses
+  the rlib-linking cdylibs with the reason ✓; 1.95-cwd builds everything
+  natively ✓; back to 1.96-cwd serves caches silently ✓.
 - **The class's MILD symptom, diagnosed (2026-06-12)**: the
   `1 stores not freed: Scene×1` warning on `map_export_glb` runs was NOT
   a source bug — it reproduces exactly and only with a CROSS-BUILD

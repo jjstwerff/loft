@@ -2368,6 +2368,13 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         return Some(p);
     }
 
+    // NO rustc-version guard here, deliberately: a package's native crate
+    // depends on loft-ffi (the C-ABI contract) — never the SVH-locked loft
+    // rlib — so ANY rustc builds it correctly (cargo itself rebuilds when
+    // the resolved toolchain flips between invocation cwds).  The guard
+    // belongs only to builds that link the rlib (`build_shared_cdylib`,
+    // the driver's program-native path).
+
     // An artifact EXISTS here but its fingerprint names another loft build —
     // cargo cannot be trusted to rebuild it, and the post-build stamp would
     // launder it as fresh (see `cache::clear_stale_native_target`).  Only

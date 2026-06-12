@@ -801,6 +801,13 @@ pub fn build_shared_cdylib(
     out_dir: &std::path::Path,
     stem: &str,
 ) -> Result<std::path::PathBuf, String> {
+    // Same pre-check as `auto_build_native` / the driver's native path: a
+    // live rustc differing from loft's build rustc cannot link the
+    // SVH-locked rlib below (E0514) — fail with the reason instead of a
+    // compiler spew (callers fall back to interpreting the library).
+    if let Some(reason) = crate::cache::rustc_mismatch() {
+        return Err(format!("{reason} — rebuild loft to restore native"));
+    }
     let (rlib, deps) = find_loft_rlib().ok_or("libloft.rlib not found for this build")?;
     let src = generate_shared_cdylib_lib_rs(data, stores, export_set);
     std::fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;

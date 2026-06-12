@@ -399,6 +399,45 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     }
 }
 
+/// The rustc this loft was BUILT with (the `LOFT_BUILD_RUSTC` stamp from
+/// build.rs) vs the one a plain `rustc` resolves RIGHT NOW — which depends
+/// on PATH and rustup's cwd-sensitive toolchain overrides, so it can
+/// differ between two invocations of the same loft binary (the repo's
+/// `rust-toolchain.toml` pin vs the rustup default in `/tmp`).  Every
+/// build that links the SVH-locked `libloft.rlib` is DOOMED under a
+/// mismatch (rustc E0514, "compiled by an incompatible version") — so
+/// build paths ask this BEFORE spawning, and skip to the interpreter with
+/// a one-line reason instead of spewing a compiler error and leaving a
+/// half-written target.  `None` = proceed (matching, or no stamp to
+/// compare); `Some(reason)` = mismatch / no usable rustc.  Memoised: the
+/// answer cannot change within a process.
+#[must_use]
+pub fn rustc_mismatch() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static REASON: OnceLock<Option<String>> = OnceLock::new();
+    REASON
+        .get_or_init(|| {
+            let stamp = option_env!("LOFT_BUILD_RUSTC").unwrap_or("");
+            if stamp.is_empty() {
+                return None;
+            }
+            let live = std::process::Command::new("rustc")
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            match live {
+                Some(v) if v == stamp => None,
+                Some(v) => Some(format!(
+                    "rustc changed since this loft was built ({stamp} → {v})"
+                )),
+                None => Some("rustc not found".to_string()),
+            }
+        })
+        .as_deref()
+}
+
 /// @PLN11 Arc N / N0 — clear a native build target whose existing artifact
 /// was produced by ANOTHER loft build (fingerprint mismatch), so the
 /// follow-up `cargo build` cannot no-op over it.  cargo is structurally
