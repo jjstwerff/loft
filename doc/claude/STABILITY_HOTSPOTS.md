@@ -349,7 +349,21 @@ cdylib shared bridge with runtime type-name ids) and phase 2 (deleted:
 `__rref_` recursive-self counter dance; documented: the two-pass
 contract at the `first_pass` flag, the calling convention in
 COMPILER.md § Function calling convention) — all landed on `bugs325`.
-Arity is a pure function of the declaration; pass-2 growth is
-debug-asserted impossible for plain fns.  H5's load mostly dissolved
-with it (the contract is now documented + the growth assert enforces
-its hardest clause).  Full history: [plans/59-return-abi](plans/59-return-abi/README.md).
+Arity is a pure function of the declaration AFTER pass 1: armed builds
+showed the original "never grows" assert firing on the
+multi-return-site shape (a fn whose return sites are materialized work
+refs — forward-referenced callee / generated `.parse` — finds the one
+`__retbuf` consumed by its first site and grows a hidden attr per
+later site; seen on `moros_map::map_from_json` and graphics'
+`glb_pos_min`).  PASS-1 growth there is sound — pass 2 re-parses every
+caller against the final arity and re-finds the grown attrs by name,
+so arity is pass-stable — and the assert now guards exactly the
+dangerous clause: pass-2 growth on a plain fn (2026-06-12).  An
+opt-out (leaving site 2+ un-promoted) was tried and REVERTED: the
+cdylib emission of un-promoted materialized returns dereferences the
+null-sentinel buffer (`map_export_glb` chain, store 65535) — recorded
+in the ref_return comment.  Regression:
+`tests/scripts/298-multi-return-site-ref-buffer.loft`.  H5's load
+mostly dissolved with H1 (the contract is now documented + the assert
+enforces its hardest clause).  Full history:
+[plans/59-return-abi](plans/59-return-abi/README.md).

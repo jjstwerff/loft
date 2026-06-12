@@ -3467,14 +3467,28 @@ impl Parser {
                     dep.push(buf_attr as u16);
                     continue;
                 }
-                // Legacy in-place growth — reachable only for defs parsed
-                // outside `parse_function`'s buffer insertion (lambdas:
-                // defined at their literal site, so no earlier caller can
-                // exist; growth is harmless there).
+                // @PLAN59 phase 1 provisions ONE signature-time buffer, but
+                // ref_return promotes the work ref of EVERY return site —
+                // `return f();` materializes a per-site `__ref_N` when `f`
+                // is a forward reference or a generated method (`.parse`),
+                // so a second such site finds `__retbuf` consumed (renamed
+                // by the first) and grows a hidden attr here.  PASS-1
+                // growth is sound for plain fns: pass 2 re-parses every
+                // caller against the final arity, and pass 2 itself
+                // re-finds the grown attr by its `__ref_N` name (the
+                // "already attributes" branch above), so arity is
+                // pass-stable.  (An opt-out — leaving site 2+ un-promoted
+                // — was tried 2026-06-12 and reverted: the cdylib emission
+                // of un-promoted materialized returns dereferences the
+                // null-sentinel buffer; lib/moros_render's `map_export_glb`
+                // chain crashed with store 65535.)  What must NEVER happen
+                // is PASS-2 growth on a plain fn — callers compiled in
+                // pass 2 before the growth would hold a short arg list.
                 debug_assert!(
-                    self.data.def(self.context).name().contains("__lambda")
+                    self.first_pass
+                        || self.data.def(self.context).name().contains("__lambda")
                         || self.data.def_type(self.context) != crate::data::DefType::Function,
-                    "@PLAN59: arity grew post-signature on plain fn '{}'",
+                    "@PLAN59: arity grew in PASS 2 on plain fn '{}'",
                     self.data.def(self.context).name()
                 );
                 let a = self

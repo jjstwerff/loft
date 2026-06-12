@@ -193,5 +193,9 @@ wide to combine with other work.
       (`check_ref_leaks` false positives on plain `File` locals, then a
       freed-store use inside `ir_store::write_definition`) — the override
       that ships them off is load-bearing; and the @PLAN59 growth assert
-      trips on `n_map_from_json` / `n_glb_pos_min` (lib fns) in armed
-      builds.
+      tripped on `n_map_from_json` / `n_glb_pos_min` (lib fns) in armed
+      builds — FIXED 2026-06-12: the assert's claim was too broad
+      (pass-1 multi-return-site growth is sound and pass-stable; only
+      PASS-2 growth is dangerous, and the assert now guards exactly
+      that).  See STABILITY_HOTSPOTS § H1 retired note;
+      `tests/scripts/298-multi-return-site-ref-buffer.loft`.
