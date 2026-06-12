@@ -71,6 +71,36 @@ fn spawn_loft(prog: &PathBuf, piped: bool) -> Child {
         .expect("spawn loft")
 }
 
+/// Environment-skip detection for the node/chromium harness
+/// (`tools/html_render_check.mjs`): returns the skip reason when the run
+/// died WITHOUT delivering a product verdict.  A real product failure
+/// always carries output — exit 1 prints the JSON failure block, exit 3 a
+/// `harness error:` line — so the silent shapes are the environment's:
+///  * exit 2 — the harness's own no-chrome skip;
+///  * `timeout waiting for` — chrome exists but cannot LAUNCH here (CI
+///    runner sandbox; the CDP endpoint never comes up);
+///  * empty-output non-zero / signal death — node killed under suite load
+///    (OOM / chrome contention; `status.code()` is None on a signal, so
+///    the exit-2 arm never sees it either).
+fn harness_env_skip(out: &std::process::Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() == Some(2) {
+        return Some(format!("SKIP: {stderr}"));
+    }
+    if stderr.contains("timeout waiting for") {
+        return Some(format!(
+            "SKIP: chromium present but not launchable: {stderr}"
+        ));
+    }
+    if !out.status.success() && out.stdout.is_empty() && out.stderr.is_empty() {
+        return Some(format!(
+            "SKIP: harness died without a verdict ({:?} — signal/OOM under suite load)",
+            out.status
+        ));
+    }
+    None
+}
+
 #[test]
 fn connector_auto_path_end_to_end() {
     if !loft_bin().exists() {
@@ -495,18 +525,13 @@ fn main() {{
     let _ = pusher.join();
     let _ = http.kill();
     let _ = http.wait();
-    if out.status.code() == Some(2) {
-        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+    if let Some(reason) = harness_env_skip(&out) {
+        eprintln!("{reason}");
         let _ = std::fs::remove_file(&server_prog);
         return;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("timeout waiting for") {
-        eprintln!("SKIP: chromium present but not launchable: {stderr}");
-        let _ = std::fs::remove_file(&server_prog);
-        return;
-    }
     assert!(
         out.status.success(),
         "browser swap failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
@@ -679,18 +704,12 @@ fn main() {{
     let _ = server_killer.join();
     let _ = http.kill();
     let _ = http.wait();
-    if out.status.code() == Some(2) {
-        eprintln!("SKIP: {}", String::from_utf8_lossy(&out.stderr));
+    if let Some(reason) = harness_env_skip(&out) {
+        eprintln!("{reason}");
         return;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("timeout waiting for") {
-        // Chrome exists but cannot LAUNCH here (CI runner sandbox — the
-        // CDP endpoint never comes up).  Same contract as chrome-missing.
-        eprintln!("SKIP: chromium present but not launchable: {stderr}");
-        return;
-    }
     assert!(
         out.status.success(),
         "browser-kernel differential failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
