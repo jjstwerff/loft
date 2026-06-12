@@ -14879,7 +14879,6 @@ fn main() {
 // /tmp/p_followups/p14_forward_caller.loft.  The fix is pass-stable
 // ref_return promotion for the forward-callee shape (F1 family).
 #[test]
-#[ignore = "stability-sweep: pass-2 arity growth crashes forward callers of multi-return-site fns"]
 fn pass2_arity_growth_forward_caller() {
     code!(
         "struct S { v: integer not null }
@@ -14910,7 +14909,6 @@ fn run() -> integer {
 // for the non-chained work refs.  Repro:
 // /tmp/p_followups/p15_three_level.loft.
 #[test]
-#[ignore = "stability-sweep: pass-2 arity growth — the forward-chain cascade (see pass2_arity_growth_forward_caller)"]
 fn pass2_arity_growth_forward_chain() {
     code!(
         "struct S { v: integer not null }
@@ -14940,7 +14938,6 @@ fn run() -> integer {
 // cannot terminate here); only the one-buffer-per-fn family covers it.
 // Repro: /tmp/p_followups/casc_recursive.loft.
 #[test]
-#[ignore = "stability-sweep: pass-2 arity growth — self-recursive multi-site fn (divergent buffer recurrence)"]
 fn pass2_arity_growth_self_recursive() {
     code!(
         "struct S { v: integer not null }
@@ -14962,7 +14959,6 @@ fn run() -> integer { count_down(3).v }"
 // n_odd_pick (got 3, need 5)") and no parse ORDER can fix it.  Repro:
 // /tmp/p_followups/casc_mutual.loft.
 #[test]
-#[ignore = "stability-sweep: pass-2 arity growth — mutual recursion (a cycle always has a forward edge)"]
 fn pass2_arity_growth_mutual_recursion() {
     code!(
         "struct S { v: integer not null }

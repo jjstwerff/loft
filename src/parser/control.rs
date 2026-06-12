@@ -3298,11 +3298,23 @@ impl Parser {
     /// the caller-provided buffer (no extra allocation in the adopt case).
     /// Returns the work-ref var so the caller passes `[w]` to `ref_return`.
     fn materialize_view_return(&mut self, td: u32, tail: &mut Value) -> u16 {
-        if let Value::Return(inner) = tail {
-            return self.materialize_view_return(td, inner);
-        }
         let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
+        self.materialize_return_into(td, tail, w);
+        w
+    }
+
+    /// Rewrite a return-site value so it lands in `w` (an existing DbRef
+    /// var) as an owned copy: `{ w = null; OpDatabase(w, kt);
+    /// OpCopyRecord(<orig>, w, kt); w }`.  Used with a fresh work-ref by
+    /// `materialize_view_return` (#306 views) and with the fn's ONE return
+    /// buffer by `ref_return`'s copy leg (a named local another return
+    /// site can read must not alias the buffer, so it is copied at the
+    /// return instead).
+    fn materialize_return_into(&mut self, td: u32, tail: &mut Value, w: u16) {
+        if let Value::Return(inner) = tail {
+            return self.materialize_return_into(td, inner, w);
+        }
         let kt = self.data.def(td).known_type();
         let copy_d = self.data.def_nr("OpCopyRecord");
         let orig = std::mem::replace(tail, Value::Null);
@@ -3316,10 +3328,32 @@ impl Parser {
             Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
-        w
     }
 
-    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &[Value]) {
+    /// The fn's ONE hidden return buffer: the first hidden heap-typed
+    /// attribute of the current context, as `(attr index, bound var)`.
+    /// After the first promotion the attr carries the promoted local's
+    /// name (the attr↔var coupling is by name), so the var is looked up
+    /// through the attr's CURRENT name.  Returns None when the context
+    /// has no hidden heap attr or its var is not in this fn's table.
+    fn return_buffer(&self) -> Option<(u16, u16)> {
+        let def = self.data.def(self.context);
+        let (a_idx, a) = def.attributes().iter().enumerate().find(|(_, a)| {
+            a.hidden
+                && matches!(
+                    &a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+        })?;
+        let v = self.vars.var(&a.name);
+        if v == u16::MAX {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        Some((a_idx as u16, v))
+    }
+
+    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value]) {
         // Plan-57: a returned local that gets a fresh vector literal more than once
         // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
         // the buffer (`OpNewRecord(z, …)`), so the second literal appends rather than
@@ -3467,23 +3501,60 @@ impl Parser {
                     dep.push(buf_attr as u16);
                     continue;
                 }
-                // @PLAN59 phase 1 provisions ONE signature-time buffer, but
-                // ref_return promotes the work ref of EVERY return site —
-                // `return f();` materializes a per-site `__ref_N` when `f`
-                // is a forward reference or a generated method (`.parse`),
-                // so a second such site finds `__retbuf` consumed (renamed
-                // by the first) and grows a hidden attr here.  PASS-1
-                // growth is sound for plain fns: pass 2 re-parses every
-                // caller against the final arity, and pass 2 itself
-                // re-finds the grown attr by its `__ref_N` name (the
-                // "already attributes" branch above), so arity is
-                // pass-stable.  (An opt-out — leaving site 2+ un-promoted
-                // — was tried 2026-06-12 and reverted: the cdylib emission
-                // of un-promoted materialized returns dereferences the
-                // null-sentinel buffer; lib/moros_render's `map_export_glb`
-                // chain crashed with store 65535.)  What must NEVER happen
-                // is PASS-2 growth on a plain fn — callers compiled in
-                // pass 2 before the growth would hold a short arg list.
+                // ONE-BUFFER invariant (stability roadmap #1): a plain fn's
+                // arity is FIXED at signature parse — never grow it here.
+                // Growth crashes forward callers (a caller parsed earlier
+                // holds a short arg list), diverges on recursion
+                // (buffers(f) = k + buffers(f) has no finite fixpoint), and
+                // leaks the buffer count into the user-facing fn TYPE (two
+                // fns with the same declared signature could not share a
+                // fn-ref variable).  Instead the site BINDS to the one
+                // existing buffer:
+                //   - a parser-minted work ref (`__ref_N` — referenced only
+                //     at its own return site) is SUBSTITUTED by the buffer
+                //     var, so the site's call writes directly into the
+                //     caller's buffer (return paths are mutually exclusive,
+                //     so sharing one buffer is sound);
+                //   - a named local (readable by sibling return sites —
+                //     substitution could alias the buffer into another
+                //     site's argument list) keeps its own store and is
+                //     deep-copied into the buffer at the return.
+                // Lambdas keep in-place growth: they are defined at their
+                // literal site and invoked via CallRef, so no earlier
+                // caller can hold a short arg list.
+                let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
+                    && self.data.def_type(self.context) == crate::data::DefType::Function;
+                if is_plain_fn
+                    && matches!(&ret, Type::Reference(_, _))
+                    && let Some((buf_attr, buf_var)) = self.return_buffer()
+                    && buf_var != *v
+                {
+                    let chainable = {
+                        let nm = self.vars.name(*v);
+                        nm.starts_with("__ref_") || nm.starts_with("__rref_")
+                    };
+                    if chainable {
+                        for op in body.iter_mut() {
+                            Self::substitute_work_ref(op, *v, buf_var);
+                        }
+                    } else if let (Type::Reference(td, _), Some(tail)) = (&ret, body.last_mut()) {
+                        let td = *td;
+                        self.materialize_return_into(td, tail, buf_var);
+                    } else {
+                        // No body tail to rewrite (defensive) — keep the
+                        // local unpromoted; the return-copy path handles it.
+                    }
+                    if !dep.contains(&buf_attr) {
+                        dep.push(buf_attr);
+                    }
+                    continue;
+                }
+                // Vector / struct-Enum returns and lambdas still grow.
+                // PASS-1 growth is sound (pass 2 re-parses every caller
+                // against the final arity and re-finds the grown attr by
+                // name); PASS-2 growth on a plain fn must never happen —
+                // callers compiled in pass 2 before the growth would hold
+                // a short arg list.
                 debug_assert!(
                     self.first_pass
                         || self.data.def(self.context).name().contains("__lambda")
@@ -3620,27 +3691,32 @@ impl Parser {
             // reference globals/locals which ref_return would promote to hidden
             // ref args, breaking callers (see 01b for full analysis).
             if self.data.def_type(self.context) != DefType::Generic {
-                // Explicit `return <expr>;`: the body (with any reassignments) is not
-                // available here, so pass an empty body — the reassignment guard does
-                // not apply (explicit return already copies the value at the return,
-                // and the Vector arm is skipped above anyway).
+                // Explicit `return <expr>;`: the full body is not available
+                // here, so pass the return expression itself as a one-element
+                // body — `ref_return`'s one-buffer binding substitutes /
+                // copy-rewrites inside it (the reassignment guard does not
+                // apply: explicit return already copies the value, and the
+                // Vector arm is skipped above anyway).
                 if let Type::Reference(td, ls) = &t {
                     if ls.is_empty() {
                         let extra = Self::collect_hidden_ref_args(&v, &self.data);
                         if !extra.is_empty() {
-                            self.ref_return(&extra, &[]);
+                            let ls_own = extra.clone();
+                            self.ref_return(&ls_own, std::slice::from_mut(&mut v));
                         }
                     } else if self.return_views_local(ls) {
                         // #306: mid-body `return <view of a local>` — copy it
                         // into an owned work-ref before it escapes (mirrors
                         // block_result's tail handling).
                         let w = self.materialize_view_return(*td, &mut v);
-                        self.ref_return(&[w], &[]);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v));
                     } else {
-                        self.ref_return(ls, &[]);
+                        let ls_own: Vec<u16> = ls.to_vec();
+                        self.ref_return(&ls_own, std::slice::from_mut(&mut v));
                     }
                 } else if let Type::Enum(_, true, ls) = &t {
-                    self.ref_return(ls, &[]);
+                    let ls_own: Vec<u16> = ls.to_vec();
+                    self.ref_return(&ls_own, std::slice::from_mut(&mut v));
                 }
             }
             if let Type::Text(ls) = &t {
