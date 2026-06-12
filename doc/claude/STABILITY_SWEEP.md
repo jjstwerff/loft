@@ -271,6 +271,18 @@ trace dumper on reference-field programs.
 - **Residual boundary (by design)**: a SHIPPED prebuilt
   (`<pkg>/native/<libname>`) wins unconditionally in `resolve_native_lib`
   — that is the package author's pinned-artifact promise, not a cache.
+- **The class's MILD symptom, diagnosed (2026-06-12)**: the
+  `1 stores not freed: Scene×1` warning on `map_export_glb` runs was NOT
+  a source bug — it reproduces exactly and only with a CROSS-BUILD
+  loft↔cdylib pair (probed both ways: 5 consistent-pair cells × 0 leaks;
+  an old binary against new-build cdylibs leaks Scene×1 on demand).  The
+  ABI mismatch corrupts store-ownership accounting instead of crashing —
+  the gentle face of the store-65535 class.  An earlier "pre-existing on
+  main" conclusion was itself a cross-pair measurement (a baseline
+  worktree binary run against current-build cdylibs).  The cache fix
+  above closes the only user-reachable route; deliberate cross-pairs
+  (worktree experiments, hand-built mismatches) remain possible and now
+  diagnosable by this signature.
 
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 
