@@ -210,9 +210,21 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
    collision-resistant values at every index/position — weak probes (small values, only `[0]`, no
    length check) hide cases. SEE on the interpreter (strides/types surface in seconds); `--native`
    pays a rustc compile per probe — that cost belongs at the final verify (step 7).
+   **Validate the matrix itself before trusting any cell** (both rules from the 2026-06-12
+   vector-ABI session, where a 24-cell matrix was vacuous — every cell a parse error read as
+   "clean"):
+   - **Hand-compute each cell's EXPECTED value before running it.** A cell without an expected
+     value can only detect crashes, never wrong results — and "two binaries agree" is NOT a pass
+     (HEAD and main both printed `acc=39` where the true value was 12: agreement on shared
+     corruption).
+   - **Prove the harness can fail**: a cell that produces no output is vacuous, not clean — check
+     the probe's own output appears; keep one deliberately-broken control cell red.
 3. **Map pass/fail; find the real boundary.** Expect the filed/assumed scope to be wrong — it
    usually is (#263 was *any runtime fn-ref value*; #262 was *every context*; cluster III was three
    different mechanisms).
+   When a cell's mechanism resists two reading passes, STOP theorizing and instrument — one
+   `eprintln` behind an env flag (e.g. `LOFT_TRACE_VADD`) settles in one run what code-reading
+   debates for thirty minutes (the rec_tp=20 stride bug fell to three prints).
 4. **The matrix is how you SEE the root** — the shared mechanism behind a family of "different"
    symptoms is visible in the matrix and invisible in any one repro. "Can't see the root yet" =
    "the matrix isn't finished," NEVER license to patch the one case in hand.

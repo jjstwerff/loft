@@ -8,6 +8,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Branch: `windows-probe`.  Date: 2026-06-12.  Context being cleared; this is the
 full state so the next session resumes cleanly.
 
+> **STATUS UPDATE (later the same evening): step 0 is DONE.**  `loft_suite`
+> and the full suite are green (2332/2332) — the 93-vsort leak class is fixed
+> at the invariant ("a buffer-bound vector fn delivers at every return site;
+> delivery replaces the buffer's content"), commit `stability: vector
+> one-buffer ABI delivers at every site`, regression
+> `tests/scripts/302-vector-buffer-delivery.loft`.  The same matrix flushed
+> out and fixed two pre-existing main bugs: loop-consumption buffer
+> accumulation (silent wrong results, both backends) and nested
+> `vector<vector<T>>` `+=` row corruption (`vector_add` stride).
+> **Still open from this handoff:** (1) the `sweep`/`hexn` TUPLE
+> witness-pair-in-loop leak below — a Reference-return sibling of the fixed
+> vector class, untouched by the vector fix, still the prerequisite for
+> landing #354 against the crawler (`cavetest`); needs its own matrix per
+> § "Why I did NOT fix it this session".  (2) the cavetest/crawler verify.
+> (3) merge + rebase on #357.  The worktrees below are still in place.
+
 ## The user's queue (in order)
 
 1. **#354** — native codegen errors (E0425 block-scope loss + E0308 bool/discard)
