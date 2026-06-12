@@ -188,35 +188,6 @@ pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
     freed
 }
 
-#[cfg(test)]
-mod reclaim_tests {
-    use super::*;
-
-    #[test]
-    fn reclaim_spares_live_and_fresh_files() {
-        let dir = std::env::temp_dir().join(format!("loft_reclaim_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let own = dir.join(format!("loft_native_{}.rs", std::process::id()));
-        // u32::MAX-1 — no real pid (Linux pid_max caps far below); provably dead.
-        let dead = dir.join("loft_native_4294967294.rs");
-        let fresh_no_pid = dir.join("loft_native_bin_notapid");
-        std::fs::write(&own, "live").unwrap();
-        std::fs::write(&dead, "stale").unwrap();
-        std::fs::write(&fresh_no_pid, "fresh").unwrap();
-        let freed = reclaim_native_scratch(&dir);
-        assert!(own.exists(), "own-pid file must survive the reclaim");
-        assert!(
-            fresh_no_pid.exists(),
-            "a fresh file without a parseable pid must survive (age floor)"
-        );
-        if cfg!(target_os = "linux") {
-            assert!(!dead.exists(), "dead-pid file must be reclaimed");
-            assert_eq!(freed, 5);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 /// Preflight check for a single native compile writing into `scratch`.
 /// Returns `true` when there is enough headroom to proceed.  When space is
 /// below [`tmpfs_min_free_bytes`], first reclaims loft's own stale artefacts
@@ -277,4 +248,33 @@ pub fn native_worker_count(
         _ => usize::MAX,
     };
     cpu_max.min(job_count).min(mem_cap).max(1)
+}
+
+#[cfg(test)]
+mod reclaim_tests {
+    use super::*;
+
+    #[test]
+    fn reclaim_spares_live_and_fresh_files() {
+        let dir = std::env::temp_dir().join(format!("loft_reclaim_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = dir.join(format!("loft_native_{}.rs", std::process::id()));
+        // u32::MAX-1 — no real pid (Linux pid_max caps far below); provably dead.
+        let dead = dir.join("loft_native_4294967294.rs");
+        let fresh_no_pid = dir.join("loft_native_bin_notapid");
+        std::fs::write(&own, "live").unwrap();
+        std::fs::write(&dead, "stale").unwrap();
+        std::fs::write(&fresh_no_pid, "fresh").unwrap();
+        let freed = reclaim_native_scratch(&dir);
+        assert!(own.exists(), "own-pid file must survive the reclaim");
+        assert!(
+            fresh_no_pid.exists(),
+            "a fresh file without a parseable pid must survive (age floor)"
+        );
+        if cfg!(target_os = "linux") {
+            assert!(!dead.exists(), "dead-pid file must be reclaimed");
+            assert_eq!(freed, 5);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
