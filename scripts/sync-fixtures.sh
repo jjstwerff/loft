@@ -85,7 +85,14 @@ EOF
 #   Doc-only divergence (a single README link per package; no source/test
 #   logic differs).  When the chunk repos ship tags carrying the new org
 #   URL, drop these lines and bump PINNED_REFS instead.
+#
+# - imaging/native/Cargo.toml — builds against the IN-REPO loft-ffi crates
+#   via [patch.crates-io] (plan-25 F3: generate_register_from_loft_with_bridges
+#   is not yet in the published loft-ffi-build 0.2.0; the Cargo.toml's own
+#   comment carries the story).  The next loft-ffi-build publish lifts the
+#   patch — drop this line then.
 LOCAL_PATCHES=$(cat <<'EOF'
+imaging/native/Cargo.toml
 hex_world/tests/hex_world.loft
 hex_world/README.md
 hex_world/src/hex_world.loft
