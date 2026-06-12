@@ -1084,7 +1084,19 @@ impl Parser {
     /// (zeroes) the appended elements.  `single` (a distinct base type) is
     /// unaffected either way; this only matters for narrow integer aliases.
     pub(crate) fn append_elem_tp(&mut self, content: &Type) -> i32 {
+        // A NESTED element (`content` is itself a vector) stores 16-byte
+        // inline vector headers whose record type is the inner vector's own
+        // database type — `vector_of(content)` already IS that element type
+        // (the same `known` the proven `vv += [inner]` build path passes to
+        // `record_new`, see @PLAN58 cluster IV in vectors.rs).  Unwrapping
+        // it once more with `.content()` lands on the SCALAR type one level
+        // down (`integer` → 0), so `vector_add` strides 8 over 16-byte rows
+        // and never deep-copies the sub-vector claims — nested `a += b`
+        // silently corrupted every row.
         let vec_tp = self.vector_of(content);
+        if matches!(content, Type::Vector(_, _)) {
+            return i32::from(vec_tp);
+        }
         i32::from(self.database.content(vec_tp))
     }
 

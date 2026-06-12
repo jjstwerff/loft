@@ -3,6 +3,13 @@
 //! Structure allocation, initialization, field get/set, parsing operations.
 
 use crate::database::{Field, Parts, Stores};
+
+/// `LOFT_TRACE_VADD=1` — trace `vector_add` stride resolution (read once;
+/// `vector_add` is runtime-hot, a per-call `env::var` lookup is not).
+fn vadd_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LOFT_TRACE_VADD").is_ok())
+}
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::vector;
@@ -268,6 +275,19 @@ impl Stores {
     }
 
     pub fn vector_add(&mut self, db: &DbRef, o_db: &DbRef, known: u16) {
+        // `LOFT_TRACE_VADD=1` prints one line per vector concat/append-copy
+        // with the resolved stride — the instrument that settled the nested
+        // `a += b` stride bug (rows strode by the 4-byte field-slot size
+        // instead of the read path's clamped content size).
+        if vadd_trace_enabled() {
+            eprintln!(
+                "[vadd] db={db:?} o_db={o_db:?} known={} size={} linked={} parts={:?}",
+                known,
+                self.size(known),
+                self.is_linked(known),
+                self.types.get(known as usize).map(|t| t.parts.clone())
+            );
+        }
         let o_length = vector::length_vector(o_db, &self.allocations);
         if o_length == 0 {
             // The other vector has no data
@@ -291,7 +311,19 @@ impl Stores {
         // reallocate the vector and invalidate `o_rec`.  Reading it after the resize would
         // reference freed memory, silently producing corrupt data.
         let o_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
-        let size = u32::from(self.size(known));
+        // Element stride.  For VECTOR-typed rows (`vector<vector<T>>`), the
+        // row is a small record holding the inner vector's u32 handle, and
+        // its stride is what the READ path computes (`fields.rs`
+        // `elm_size`): the inner content's size clamped to >= 4 (the
+        // @PLAN58 boolean-handle clamp) — `size(known)` itself is the
+        // 4-byte struct-FIELD slot size, which under-strides 8/16-byte
+        // rows and made nested `a += b` read garbage handles (SIGSEGV) or
+        // shallow-copy rows.  Scalar/struct rows keep `size(known)`.
+        let size = if matches!(self.types[known as usize].parts, Parts::Vector(_)) {
+            u32::from(self.size(self.content(known))).max(4)
+        } else {
+            u32::from(self.size(known))
+        };
         // If source and destination share the same backing vector record, copy source elements
         // to a local buffer first so the resize cannot invalidate the source pointer.
         let same_vec = db.store_nr == o_db.store_nr && o_rec != 0 && {

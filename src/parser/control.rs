@@ -3481,20 +3481,87 @@ impl Parser {
 
     /// Vector counterpart of [`materialize_return_into`]: copy a return
     /// site's vector value into the fn's one buffer by element append —
-    /// `{ OpAppendVector(w, <orig>, rec_tp); w }` — the same shape the
-    /// explicit-return vector copy has always used.
+    /// `{ OpClearVector(w); OpAppendVector(w, <orig>, rec_tp); w }` — the
+    /// same element copy the explicit-return vector path has always used.
+    /// The clear makes delivery REPLACE the buffer's content: a caller
+    /// that re-passes the same buffer (a call inside a loop reuses the
+    /// fn-scoped `__ref_N`) must see exactly this invocation's result,
+    /// not an accumulation of every iteration's appends.
     fn materialize_vector_return_into(&mut self, elm: &Type, tail: &mut Value, w: u16) {
         if let Value::Return(inner) = tail {
             return self.materialize_vector_return_into(elm, inner, w);
         }
         let rec_tp = self.append_elem_tp(elm);
         let orig = std::mem::replace(tail, Value::Null);
+        let clear = self.cl("OpClearVector", &[Value::Var(w)]);
         let append = self.cl("OpAppendVector", &[Value::Var(w), orig, Value::Int(rec_tp)]);
         *tail = crate::data::v_block(
-            vec![append, Value::Var(w)],
+            vec![clear, append, Value::Var(w)],
             Type::Vector(Box::new(elm.clone()), Deps::frame1(w)),
             "one_buffer_vec_copy",
         );
+    }
+
+    /// Rewrite every mid-body `return <named local vector>` of a
+    /// buffer-bound fn into the delivering shape
+    /// `Insert([OpClearVector(buf), OpAppendVector(buf, <local>, rec_tp),
+    /// Return(buf)])` — the same element copy + replace semantics as
+    /// [`materialize_vector_return_into`].  Sites already delivering
+    /// (their innermost return value is the buffer var, whether from the
+    /// chain shape or the legacy `__ref_1` injection) are left alone, so
+    /// the walk is idempotent across parse passes.  Only bare `Var`
+    /// values are rewritten: call-chain sites deliver through the callee,
+    /// and every other shape keeps its existing behaviour.
+    fn deliver_mid_vector_returns(&mut self, elm: &Type, body: &mut [Value], buf_var: u16) {
+        for op in body.iter_mut() {
+            self.deliver_mid_vector_walk(elm, op, buf_var);
+        }
+    }
+
+    fn deliver_mid_vector_walk(&mut self, elm: &Type, op: &mut Value, buf_var: u16) {
+        match op {
+            Value::Return(inner) => {
+                if let Value::Var(v) = inner.unspan()
+                    && *v != buf_var
+                    && matches!(self.vars.tp(*v), Type::Vector(_, _))
+                {
+                    let local = *v;
+                    let rec_tp = self.append_elem_tp(elm);
+                    let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+                    let append = self.cl(
+                        "OpAppendVector",
+                        &[Value::Var(buf_var), Value::Var(local), Value::Int(rec_tp)],
+                    );
+                    *op = Value::Insert(vec![
+                        clear,
+                        append,
+                        Value::Return(Box::new(Value::Var(buf_var))),
+                    ]);
+                }
+            }
+            Value::Span(b) => self.deliver_mid_vector_walk(elm, &mut b.1, buf_var),
+            Value::Insert(ops) | Value::Parallel(ops) => {
+                for o in ops {
+                    self.deliver_mid_vector_walk(elm, o, buf_var);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for o in &mut bl.operators {
+                    self.deliver_mid_vector_walk(elm, o, buf_var);
+                }
+            }
+            Value::If(c, t, e) => {
+                self.deliver_mid_vector_walk(elm, c, buf_var);
+                self.deliver_mid_vector_walk(elm, t, buf_var);
+                self.deliver_mid_vector_walk(elm, e, buf_var);
+            }
+            Value::Iter(_, c, n, e) => {
+                self.deliver_mid_vector_walk(elm, c, buf_var);
+                self.deliver_mid_vector_walk(elm, n, buf_var);
+                self.deliver_mid_vector_walk(elm, e, buf_var);
+            }
+            _ => {}
+        }
     }
 
     /// The fn's ONE hidden return buffer: the first hidden heap-typed
@@ -3637,14 +3704,32 @@ impl Parser {
             // carries two) must stay a plain local — binding both would
             // alias the outer call's destination with its own argument.
             let site_value = body.last().and_then(|t| self.site_value_ref(t));
+            let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
+                && self.data.def_type(self.context) == crate::data::DefType::Function;
             for (e_idx, v) in expanded.iter().enumerate() {
                 let transitive = e_idx >= direct_count;
-                // A reassigned returned local must NOT be NRVO-promoted (see above).
-                if reassign_count(body, *v, newrecord_nr) >= 2 {
-                    continue;
-                }
                 let n = self.vars.name(*v);
                 let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
+                // A reassigned returned local must NOT be NRVO-promoted (see
+                // above) — but a NAMED local at a vector fn's body tail still
+                // DELIVERS: it falls through to the one-buffer branch below,
+                // whose named-local leg copies the final value into the
+                // buffer at the return (reassignment is irrelevant to a
+                // single copy-at-exit).  Skipping it entirely leaves the fn
+                // value-returning while callers — who can only consult the
+                // signature (a forward caller parses before this body) —
+                // assume buffer delivery and free the buffer alone: the
+                // returned store leaks (#355 fallout, the 93-vsort suite
+                // leak).
+                let reassigned = reassign_count(body, *v, newrecord_nr) >= 2;
+                if reassigned
+                    && !(!is_work_ref
+                        && is_plain_fn
+                        && site == RetSite::BlockTail
+                        && matches!(&ret, Type::Vector(_, _)))
+                {
+                    continue;
+                }
                 // skip related variables that are already attributes
                 if let Some(a) = self.data.def(self.context).attr_names.get(n) {
                     let a = *a as u16;
@@ -3692,6 +3777,7 @@ impl Parser {
                 // later candidate must copy instead.
                 let bound_already = self.return_buffer().is_some_and(|(a, _)| dep.contains(&a));
                 let allow_rename = !(bound_already
+                    || reassigned
                     || (site == RetSite::MidReturn && matches!(&ret, Type::Vector(_, _))));
                 if allow_rename
                     && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
@@ -3741,8 +3827,6 @@ impl Parser {
                 // Lambdas keep in-place growth: they are defined at their
                 // literal site and invoked via CallRef, so no earlier
                 // caller can hold a short arg list.
-                let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
-                    && self.data.def_type(self.context) == crate::data::DefType::Function;
                 if is_plain_fn
                     && matches!(&ret, Type::Reference(_, _) | Type::Vector(_, _))
                     && let Some((buf_attr, buf_var)) = self.return_buffer()
@@ -3808,6 +3892,34 @@ impl Parser {
                 // earlier caller can hold a short arg list — the #339
                 // retro-patch this branch once needed is deleted
                 // (@PLAN59 phase 2).
+            }
+            // A buffer-bound vector fn must deliver at EVERY return site —
+            // callers (a forward caller in particular) can only consult the
+            // signature, so they free the buffer alone and read the value
+            // from it.  Mid-body `return <named local>` sites parsed BEFORE
+            // the tail's promotion ran could not know the fn would bind
+            // (vsort's base case: the legacy `__ref_1` injection missed its
+            // `__ref_3`-named buffer and the leaf vectors leaked, #355
+            // fallout) — rewrite them here, where the binding decision is
+            // final and the full body is in hand.
+            if site == RetSite::BlockTail
+                && let Type::Vector(elm, _) = &ret
+                && let Some((buf_attr, buf_var)) = self.return_buffer()
+                && dep.contains(&buf_attr)
+            {
+                let elm = (**elm).clone();
+                self.deliver_mid_vector_returns(&elm, body, buf_var);
+                // Clear the buffer ON ENTRY: a caller's loop re-passes the
+                // same fn-scoped buffer every iteration, and the NRVO
+                // literal build (unlike the copy/injection sites) appends
+                // without resetting — without this, each iteration's
+                // result piles on top of the previous one (silent wrong
+                // results, not just leaks).
+                if let Some(first) = body.first_mut() {
+                    let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+                    let old = std::mem::replace(first, Value::Null);
+                    *first = Value::Insert(vec![clear, old]);
+                }
             }
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
@@ -4013,11 +4125,17 @@ impl Parser {
                         // @P314 — narrow-aware element type (see `append_elem_tp`).
                         let elm = (**elm_tp).clone();
                         let rec_tp = self.append_elem_tp(&elm);
+                        // Clear first: delivery REPLACES the buffer content
+                        // (a caller's loop reuses the same fn-scoped buffer;
+                        // without the clear each iteration's elements pile
+                        // on top of the previous ones).
+                        let clear = self.cl("OpClearVector", &[Value::Var(ref1_var)]);
                         let append = self.cl(
                             "OpAppendVector",
                             &[Value::Var(ref1_var), v, Value::Int(rec_tp)],
                         );
                         *val = Value::Insert(vec![
+                            clear,
                             append,
                             Value::Return(Box::new(Value::Var(ref1_var))),
                         ]);
