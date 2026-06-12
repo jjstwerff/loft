@@ -21,7 +21,12 @@ pass and read the captured failures once.
 ```
 
 `--bg` starts the test runner in a detached subshell and writes
-the raw log to `/tmp/loft_test.log`.  `--peek` tails the live log
+the raw log to `/tmp/loft_test.<id>.log`, where `<id>` is a
+per-checkout tag derived from the repo root — so sibling working
+trees (e.g. two agents) can run the script concurrently without
+sharing pid/log files.  The summary lands at the per-checkout
+`/tmp/loft_problems.<id>.txt` AND is copied to the stable
+`/tmp/loft_problems.txt`; every mode prints the exact paths.  `--peek` tails the live log
 and pulls out any `FAILED` markers, inline panics, and SIGSEGV
 context (last ~15 lines before each crash).  `--wait` blocks on
 the background pid and then produces the final summary.
@@ -52,7 +57,7 @@ step is wired into `make test`, `make quick`, `make ci`, and
 rebuilds run in parallel under `rebuild_native_cdylibs`; total
 wall-clock is the slowest single step rather than the sum.  Each
 step's timing prints to stderr live and accumulates in
-`/tmp/loft_timings.txt`.  At the end of `--wait` (and the
+`/tmp/loft_timings.<id>.txt`.  At the end of `--wait` (and the
 foreground path) the script prints a `=== Wall-clock timing
 summary ===` block so a regressing step is named, not just "the
 suite is slow."  Format:
@@ -973,8 +978,8 @@ helper `scripts/find_problems.sh` wraps this:
 
 ```bash
 ./scripts/find_problems.sh
-# → /tmp/loft_test.log   raw test output
-# → /tmp/loft_problems.txt   compact failure summary
+# → /tmp/loft_test.<id>.log   raw test output (per-checkout tag)
+# → /tmp/loft_problems.txt    compact failure summary (stable copy)
 ```
 
 **Peek while a run is in flight.**  `tee` writes the log live,
@@ -982,7 +987,7 @@ so you can inspect failures before the whole suite finishes:
 
 ```bash
 ./scripts/find_problems.sh --peek
-# reads /tmp/loft_test.log, prints any FAILED markers found so far
+# reads the per-checkout live log, prints any FAILED markers found so far
 # plus their stdout blocks; shows the current tail if none yet
 ```
 
