@@ -618,6 +618,7 @@ fn package_info(name: &str) {
 /// the places a consumer's `use` would be served from: an explicit path,
 /// project-local `lib/<name>/`, user `~/.loft/lib/<name>/`, then the newest
 /// installed registry copy.
+#[cfg(feature = "registry")]
 fn api_resolve_pkg_dir(name: &str) -> Option<std::path::PathBuf> {
     if name.contains('/') || name == "." {
         let direct = std::path::PathBuf::from(name);
@@ -642,6 +643,7 @@ fn api_resolve_pkg_dir(name: &str) -> Option<std::path::PathBuf> {
 
 /// `~/.loft/` honouring `LOFT_HOME` (the same base `registry_index::cache_dir`
 /// resolves against).
+#[cfg(feature = "registry")]
 fn loft_home() -> std::path::PathBuf {
     std::env::var_os("LOFT_HOME")
         .map(std::path::PathBuf::from)
@@ -651,6 +653,7 @@ fn loft_home() -> std::path::PathBuf {
 }
 
 /// Order-comparable version key; non-numeric parts sort as 0.
+#[cfg(feature = "registry")]
 fn numeric_version(v: &str) -> Vec<u32> {
     v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
@@ -662,6 +665,7 @@ fn numeric_version(v: &str) -> Vec<u32> {
 ///   each with the directory its source lives in.
 /// - `loft api <name>` (or a package path) prints that library's public API
 ///   surface: `pub` signatures + doc comments, bodies stripped.
+#[cfg(feature = "registry")]
 fn api_command(target: Option<&str>) {
     if let Some(name) = target {
         let Some(dir) = api_resolve_pkg_dir(name) else {
@@ -729,6 +733,7 @@ fn api_command(target: Option<&str>) {
 /// agents exploring the project tree see the dependency APIs without leaving
 /// it.  Best-effort: a missing install or unreadable package skips silently —
 /// the stub layer must never break an install.
+#[cfg(feature = "registry")]
 fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
     let Ok(Some(lock)) = loft::lockfile::read_lockfile(lock_path) else {
         return;
@@ -3786,9 +3791,17 @@ fn main() {
         } else if a == "api" {
             // PKG.STUB — agent-facing discovery: list reachable libraries, or
             // print one library's public surface.
-            let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
-            api_command(target.as_deref());
-            return;
+            #[cfg(feature = "registry")]
+            {
+                let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
+                api_command(target.as_deref());
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!("loft api: this binary was built without the `registry` feature.");
+                std::process::exit(1);
+            }
         } else if a == "bundle" {
             // @PLAN12 Phase 6.11 — offline bundle export/import.
             #[cfg(feature = "registry")]
