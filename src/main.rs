@@ -175,6 +175,10 @@ fn print_help() {
     println!("  list-installed                list every registry package installed locally");
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
+    println!("  api [name]                    discover library APIs without leaving the shell:");
+    println!("                                api        — list libraries reachable from here");
+    println!("                                api <name> — print its public API surface");
+    println!("                                (pub signatures + doc comments, bodies stripped)");
     println!("  audit                         check every installed package against the");
     println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
     println!("                                2 if any high, 3 if any security_critical");
@@ -610,6 +614,152 @@ fn package_info(name: &str) {
     }
 }
 
+/// PKG.STUB — resolve a library name to a readable package directory, trying
+/// the places a consumer's `use` would be served from: an explicit path,
+/// project-local `lib/<name>/`, user `~/.loft/lib/<name>/`, then the newest
+/// installed registry copy.
+fn api_resolve_pkg_dir(name: &str) -> Option<std::path::PathBuf> {
+    if name.contains('/') || name == "." {
+        let direct = std::path::PathBuf::from(name);
+        return direct.join("loft.toml").exists().then_some(direct);
+    }
+    let project = std::path::PathBuf::from("lib").join(name);
+    if project.join("loft.toml").exists() {
+        return Some(project);
+    }
+    let user = loft_home().join("lib").join(name);
+    if user.join("loft.toml").exists() {
+        return Some(user);
+    }
+    let mut hits: Vec<(Vec<u32>, std::path::PathBuf)> = loft::registry_index::installed_packages()
+        .into_iter()
+        .filter(|(n, _, _)| n == name)
+        .map(|(_, v, p)| (numeric_version(&v), p))
+        .collect();
+    hits.sort();
+    hits.pop().map(|(_, p)| p)
+}
+
+/// `~/.loft/` honouring `LOFT_HOME` (the same base `registry_index::cache_dir`
+/// resolves against).
+fn loft_home() -> std::path::PathBuf {
+    std::env::var_os("LOFT_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".loft")
+}
+
+/// Order-comparable version key; non-numeric parts sort as 0.
+fn numeric_version(v: &str) -> Vec<u32> {
+    v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// PKG.STUB — `loft api`: agent-facing library discovery.
+///
+/// - `loft api` lists every library discoverable from the cwd — project
+///   dependencies (`loft.toml`), installed registry packages, user libraries —
+///   each with the directory its source lives in.
+/// - `loft api <name>` (or a package path) prints that library's public API
+///   surface: `pub` signatures + doc comments, bodies stripped.
+fn api_command(target: Option<&str>) {
+    if let Some(name) = target {
+        let Some(dir) = api_resolve_pkg_dir(name) else {
+            eprintln!(
+                "loft api: no library `{name}` found (project lib/, ~/.loft/lib, installed registry packages)."
+            );
+            eprintln!(
+                "  `loft api` lists what is discoverable; `loft search {name}` queries the registry."
+            );
+            std::process::exit(1);
+        };
+        match loft::documentation::render_pkg_api_text(&dir) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("loft api: cannot read {}: {e}", dir.display());
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // No name: one listing of everything reachable from here.
+    let manifest_path = std::path::Path::new("loft.toml");
+    if manifest_path.exists() {
+        let manifest = loft::manifest::read_manifest("loft.toml").unwrap_or_default();
+        println!("== project dependencies (loft.toml) ==");
+        if manifest.dependencies.is_empty() {
+            println!("  (none)");
+        }
+        for (name, _constraint) in &manifest.dependencies {
+            match api_resolve_pkg_dir(name) {
+                Some(dir) => println!("  {name}  {}", dir.display()),
+                None => println!("  {name}  NOT INSTALLED — run `loft install`"),
+            }
+        }
+    }
+    let installed = loft::registry_index::installed_packages();
+    println!("== installed registry packages ==");
+    if installed.is_empty() {
+        println!("  (none)");
+    }
+    for (name, version, path) in installed {
+        println!("  {name} {version}  {}", path.display());
+    }
+    let user_lib = loft_home().join("lib");
+    if let Ok(read) = std::fs::read_dir(&user_lib) {
+        println!("== user libraries ({}) ==", user_lib.display());
+        for ent in read.filter_map(Result::ok) {
+            if ent.path().join("loft.toml").exists() {
+                println!(
+                    "  {}  {}",
+                    ent.file_name().to_string_lossy(),
+                    ent.path().display()
+                );
+            }
+        }
+    }
+    println!();
+    println!("`loft api <name>` prints a library's public API (signatures + doc comments).");
+}
+
+/// PKG.STUB — write `.loft/api/<name>.api` stubs (the public surface of every
+/// locked dependency) under `project_dir`.  Called by the lockfile-writing
+/// commands, so stub freshness rides the same trigger as `loft.lock` itself:
+/// agents exploring the project tree see the dependency APIs without leaving
+/// it.  Best-effort: a missing install or unreadable package skips silently —
+/// the stub layer must never break an install.
+fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
+    let Ok(Some(lock)) = loft::lockfile::read_lockfile(lock_path) else {
+        return;
+    };
+    if lock.packages.is_empty() {
+        return;
+    }
+    let api_dir = project_dir.join(".loft").join("api");
+    if std::fs::create_dir_all(&api_dir).is_err() {
+        return;
+    }
+    let mut written = 0u32;
+    for p in &lock.packages {
+        let dir = loft::registry_index::extract_dir(&p.name, &p.version);
+        if !dir.join("loft.toml").exists() {
+            continue;
+        }
+        if let Ok(text) = loft::documentation::render_pkg_api_text(&dir) {
+            if std::fs::write(api_dir.join(format!("{}.api", p.name)), text).is_ok() {
+                written += 1;
+            }
+        }
+    }
+    if written > 0 {
+        println!(
+            "wrote {written} API stub(s) to {} (agent-readable; commit them)",
+            api_dir.display()
+        );
+    }
+}
+
 /// @PLAN12 Phase 6.6 — `loft list-installed` enumerates packages
 /// in `~/.loft/registry/` and annotates each with its sha256 +
 /// size + index status (active / yanked / orphan-from-index).
@@ -629,47 +779,7 @@ fn list_installed() {
         return;
     }
 
-    // Collect `<pkg>-<ver>/` dirs.  Format is `<name>-<semver>/` where
-    // semver may contain dots and dashes (prerelease tags), so split
-    // on the LAST dash followed by a digit — but the names we ship
-    // don't contain dashes today, so split on the first dash works.
-    // Robust version: find the last segment that starts with a digit.
-    let mut entries: Vec<(String, String, PathBuf)> = Vec::new();
-    let read = match std::fs::read_dir(&cache) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("loft list-installed: cannot read {}: {e}", cache.display());
-            std::process::exit(1);
-        }
-    };
-    for ent in read.filter_map(Result::ok) {
-        let path = ent.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let dirname = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-        // Last `-<digit>` boundary splits name from version.
-        let mut split: Option<usize> = None;
-        let bytes = dirname.as_bytes();
-        let mut i = 1;
-        while i < bytes.len() {
-            if bytes[i - 1] == b'-' && bytes[i].is_ascii_digit() {
-                split = Some(i - 1);
-                break;
-            }
-            i += 1;
-        }
-        let Some(at) = split else { continue };
-        let (name, rest) = dirname.split_at(at);
-        let version = rest.trim_start_matches('-').to_string();
-        if name.is_empty() || version.is_empty() {
-            continue;
-        }
-        entries.push((name.to_string(), version, path));
-    }
+    let entries: Vec<(String, String, PathBuf)> = registry_index::installed_packages();
 
     if entries.is_empty() {
         println!(
@@ -678,9 +788,6 @@ fn list_installed() {
         );
         return;
     }
-
-    // Sort by name then version (lex order is good enough for display).
-    entries.sort();
 
     // Try to load the cached index so we can show sha256 + size +
     // status.  If the index isn't cached (cold loft binary), skip
@@ -2159,6 +2266,12 @@ fn pin_script(script: &str) {
         }
     }
     println!("{} library(ies) pinned", pinned.len());
+    // PKG.STUB — stubs ride the sidecar lockfile, landing next to the script.
+    let script_dir = script_path.parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    );
+    write_api_stubs(&sidecar, &script_dir);
     // Keep registry_index in the symbol table so the cfg above
     // doesn't drop the import.
     let _ = registry_index::cache_dir();
@@ -3628,6 +3741,10 @@ fn main() {
                 #[cfg(feature = "registry")]
                 {
                     install_from_registry_with_opts(&positional, &install_opts);
+                    // PKG.STUB — refresh the in-project API stubs alongside
+                    // the lockfile this install just wrote.
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    write_api_stubs(&cwd.join("loft.lock"), &cwd);
                 }
                 #[cfg(not(feature = "registry"))]
                 {
@@ -3666,6 +3783,12 @@ fn main() {
                 eprintln!("loft info: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
+        } else if a == "api" {
+            // PKG.STUB — agent-facing discovery: list reachable libraries, or
+            // print one library's public surface.
+            let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
+            api_command(target.as_deref());
+            return;
         } else if a == "bundle" {
             // @PLAN12 Phase 6.11 — offline bundle export/import.
             #[cfg(feature = "registry")]
@@ -3754,6 +3877,12 @@ fn main() {
                 }
                 update_opts.target = target;
                 let code = update_packages(&update_opts);
+                // PKG.STUB — a real update rewrote the lockfile; refresh the
+                // in-project API stubs with it.
+                if code == 0 && !update_opts.dry_run && !update_opts.check_only {
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    write_api_stubs(&cwd.join("loft.lock"), &cwd);
+                }
                 std::process::exit(code);
             }
             #[cfg(not(feature = "registry"))]

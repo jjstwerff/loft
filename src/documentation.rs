@@ -1219,6 +1219,75 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Plain-text public API surface of a package — the agent-readable sibling of
+/// [`generate_pkg_docs`]: the same `pub`-signature + doc-comment extraction,
+/// emitted as one greppable text instead of HTML.  This is what `loft api`
+/// prints and what the generated `.loft/api/<name>.api` stubs contain.
+///
+/// # Errors
+///
+/// Propagates directory-read errors on `src/`; a package without `src/*.loft`
+/// files yields a header-only surface, not an error.
+pub fn render_pkg_api_text(pkg_dir: &std::path::Path) -> std::io::Result<String> {
+    use std::fmt::Write as _;
+
+    let manifest_path = pkg_dir.join("loft.toml");
+    let manifest = if manifest_path.exists() {
+        crate::manifest::read_manifest(&manifest_path.to_string_lossy()).unwrap_or_default()
+    } else {
+        crate::manifest::Manifest::default()
+    };
+    let pkg_name = manifest.name.unwrap_or_else(|| {
+        pkg_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
+    let version = manifest.version.unwrap_or_else(|| "0.0.0".to_string());
+
+    let mut out = String::new();
+    let _ = writeln!(out, "# {pkg_name} {version} — public API surface");
+    let _ = writeln!(out, "# generated from {}", pkg_dir.display());
+    let _ = writeln!(out, "# use it with: use {pkg_name};");
+
+    let src_dir = pkg_dir.join("src");
+    let mut files: Vec<std::path::PathBuf> = match std::fs::read_dir(&src_dir) {
+        Ok(read) => read
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("loft"))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    files.sort();
+    for file in files {
+        let content = std::fs::read_to_string(&file)?;
+        let sections = parse_pkg_api(&content);
+        if sections.iter().all(|s| s.items.is_empty()) {
+            continue;
+        }
+        let fname = file.file_name().unwrap_or_default().to_string_lossy();
+        let _ = writeln!(out, "\n## src/{fname}");
+        for section in sections {
+            if section.items.is_empty() {
+                continue;
+            }
+            if section.name != "General" {
+                let _ = writeln!(out, "\n// --- {} ---", section.name);
+            }
+            for (sig, doc_lines) in &section.items {
+                let _ = writeln!(out);
+                for line in doc_lines {
+                    let _ = writeln!(out, "// {line}");
+                }
+                let _ = writeln!(out, "{sig}");
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Generate documentation for a package directory.
 ///
 /// Expects the standard package layout:

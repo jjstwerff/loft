@@ -495,6 +495,37 @@ pub fn extract_dir(pkg: &str, version: &str) -> PathBuf {
     cache_dir().join(format!("{pkg}-{version}"))
 }
 
+/// Every installed package in the cache: `(name, version, dir)`, sorted by
+/// name then version.  Inverts the `extract_dir` naming: a dir splits at the
+/// last `-<digit>` boundary, so package names may contain dashes but a
+/// version always starts with a digit.
+#[must_use]
+pub fn installed_packages() -> Vec<(String, String, PathBuf)> {
+    let mut entries = Vec::new();
+    let Ok(read) = std::fs::read_dir(cache_dir()) else {
+        return entries;
+    };
+    for ent in read.filter_map(Result::ok) {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(dirname) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let bytes = dirname.as_bytes();
+        let split = (1..bytes.len()).find(|&i| bytes[i - 1] == b'-' && bytes[i].is_ascii_digit());
+        let Some(at) = split else { continue };
+        let (name, rest) = dirname.split_at(at - 1);
+        let version = rest.trim_start_matches('-').to_string();
+        if !name.is_empty() && !version.is_empty() {
+            entries.push((name.to_string(), version, path));
+        }
+    }
+    entries.sort();
+    entries
+}
+
 /// Build the Tier-1 lazy-load `method -> package` map from a parsed catalog.
 ///
 /// Each version's `triggers` are `"name:receiver"` strings; the map keys on the

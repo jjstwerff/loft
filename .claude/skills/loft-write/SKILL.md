@@ -156,10 +156,30 @@ allowed inside a fn body.
 ## Imports
 
 ```loft
-use arguments;    // searches lib/, current dir, LOFT_LIB env var
+use arguments;    // resolved via lockfile -> loft.toml deps -> lib/ -> ~/.loft -> LOFT_LIB
 ```
 
 **`use` declarations must appear before any other declarations in the file.**
+
+### Finding a library's API (do this BEFORE writing `use` calls)
+
+Libraries live OUTSIDE the project (`~/.loft/registry/<name>-<version>/`,
+`~/.loft/lib/<name>/`), so the project tree alone does not show what they
+export.  Discovery surface, nearest first:
+
+1. **`.loft/api/<name>.api`** in the project — generated public-API stubs
+   (signatures + doc comments) for every locked dependency.  Written by
+   `loft install` / `loft update` / `loft pin`; read these first.
+2. **`loft api`** — list every library reachable from the cwd (project deps,
+   installed registry packages, user libraries) with their source paths.
+3. **`loft api <name>`** — print one library's full public surface.
+4. **`loft search <query>`** / **`loft info <name>`** — query the registry
+   for libraries not installed yet; `loft install <name>` fetches one and
+   refreshes the stubs.
+
+Never guess a library function's signature: check the stub or `loft api`
+output, and read the real source at the path they name when you need the
+implementation.
 
 ---
 
