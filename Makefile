@@ -1245,12 +1245,15 @@ ship:
 # Clippy / Doc-hygiene jobs run, nothing else.  A local pass here removes the
 # failure modes that cost a full remote round each ("3-4 runs to get a PR
 # green"): fmt drift, a clippy lint the narrower local variants miss
-# (`--all-features` is what the CI job adds), a doc-drift ref.  Use before
-# every push; `make ship` remains the full pre-push gate with tests.
+# (`--all-features` is what the CI job adds), a doc-drift ref, and the
+# repo-shape guard tests (ship recipe, doc links — seconds to run, and a
+# Makefile/doc edit that trips one costs a whole matrix round remotely).
+# Use before every push; `make ship` remains the full pre-push gate with tests.
 gate:
 	cargo fmt --all -- --check && \
 	cargo clippy --all-targets --all-features -- -D warnings && \
-	scripts/check_doc_drift.sh -q
+	scripts/check_doc_drift.sh -q && \
+	cargo nextest run --release --test doc_hygiene
 
 run-tests: rebuild-native-cdylibs
 	cargo test --release > result.txt 2>&1

@@ -56,11 +56,13 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      # `library_suite` needs the lib/* native fixture prep this lean job
+      # `doc_hygiene` carries the cheap repo-shape guard tests (ship recipe, doc
+      # links) that otherwise only surface in the PR matrix.  `library_suite`
+      # needs the lib/* native fixture prep this lean job
       # omits (same exclusion as the stack_align guard job, same rationale).
       - name: Quick suite (wrap + issues)
         run: >
-          cargo nextest run --profile ci --test wrap --test issues
+          cargo nextest run --profile ci --test wrap --test issues --test doc_hygiene
           -E 'not test(library_suite)'
 
       - name: Surface flaky tests (passed only on retry)
