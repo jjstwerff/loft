@@ -203,7 +203,12 @@ summarise() {
   local log="$1" out="$2"
   {
     echo "=== Test binaries that reported FAILED ==="
-    grep -a -E "^test .* FAILED$" "$log" || echo "(none)"
+    # Both runner formats: cargo test ("test ... FAILED") and nextest
+    # ("        FAIL [   0.040s] (2256/2332) loft::wrap stack_trace_script"
+    # + the closing "Summary [...] N failed") — the summary previously
+    # missed every nextest failure and reported a failing run as clean.
+    grep -a -E "^test .* FAILED$|^[[:space:]]*FAIL \[|failed;|[0-9]+ failed" "$log" \
+      | grep -av " 0 failed" || echo "(none)"
     echo
     echo "=== Test stdout blocks for FAILED tests ==="
     grep -a -B1 -A10 "^---- " "$log" || echo "(none)"
@@ -256,7 +261,7 @@ if [[ "${1:-}" == "--peek" ]]; then
     running="yes (pid $(cat "$PID_FILE"))"
   fi
   echo "=== in-flight peek (log: $LOG, $(wc -l < "$LOG") lines, running=$running) ==="
-  failures=$(grep -a -E "^test .* FAILED$" "$LOG" || true)
+  failures=$(grep -a -E "^test .* FAILED$|^[[:space:]]*FAIL \[" "$LOG" || true)
   segfaults=$(grep -a "signal:" "$LOG" || true)
   if [[ -z "$failures" && -z "$segfaults" ]]; then
     echo "no failures yet"

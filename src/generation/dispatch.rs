@@ -316,13 +316,41 @@ impl Output<'_> {
         // A #260-predeclared `__vdb` counts as FIRST here (consume the entry):
         // its prologue `let` bound only the sentinel, so this Set still emits
         // the named-store `null_named` + `OpDatabase` pair.
+        // #354: the `_` discard loop var shares ONE table entry across all
+        // the fn's loops, so a later loop whose iter-value type differs from
+        // the table type (an integer range after a float range gives an i64
+        // value into the f64 `var__`) fails E0308.  `_` is a discard, so
+        // emit a fresh shadowing `let` typed from THIS loop's own iter
+        // value.  Restricted to a SCALAR table type AND scalar iter value:
+        // a collection `for _ in <vec>` binds a DbRef view whose OpFreeRef
+        // (emitted by scope analysis against the table type) must keep
+        // seeing a DbRef — re-typing it scalar there orphaned the store (a
+        // leak, crawler's hex/sim libs).
+        fn is_scalar(t: &Type) -> bool {
+            matches!(
+                t,
+                Type::Integer(_)
+                    | Type::Float
+                    | Type::Single
+                    | Type::Boolean
+                    | Type::Character
+                    | Type::Enum(_, false, _)
+            )
+        }
+        let discard_loop_var = variables.name(var) == "_"
+            && is_scalar(variables.tp(var))
+            && matches!(to.unspan(), Value::Block(bl) if is_scalar(&bl.result));
         let first_assign = !self.declared.contains(&var) || self.predeclared.remove(&var);
-        if self.declared.contains(&var) {
+        if self.declared.contains(&var) && !discard_loop_var {
             write!(w, "var_{name} = ")?;
         } else {
             self.declared.insert(var);
-            let var_tp = variables.tp(var);
-            let tp_str = rust_type(var_tp, &Context::Variable);
+            let var_tp = if discard_loop_var && let Value::Block(bl) = to.unspan() {
+                bl.result.clone()
+            } else {
+                variables.tp(var).clone()
+            };
+            let tp_str = rust_type(&var_tp, &Context::Variable);
             write!(w, "let mut var_{name}: {tp_str} = ")?;
         }
         if matches!(to, Value::Null) && rust_type(variables.tp(var), &Context::Variable) == "DbRef"

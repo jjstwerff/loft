@@ -671,11 +671,27 @@ impl Parser {
                     // Issue #120 mirror (see the Reference arm below): when
                     // filter_hidden stripped the deps, recover the tail
                     // call's work refs so the site still binds to the one
-                    // buffer (a bare wrapper `fn f() -> vector { g() }`
-                    // otherwise frees the value and returns null).
+                    // buffer.  ONLY when the callee actually returns VIA
+                    // that buffer (its returned deps are non-empty): a
+                    // wrapper of a buffer-IGNORING callee (`fn f() -> vector
+                    // { stack_trace() }` — the native call returns its own
+                    // store and never writes the passed buffer) must stay
+                    // unpromoted, or chaining a grand-caller's buffer
+                    // through it orphans that buffer (#355 follow-up leak,
+                    // 55-stack-trace).
                     let last = &l[l.len() - 1];
                     let extra = Self::collect_hidden_ref_args(last, &self.data);
-                    if !extra.is_empty() {
+                    // Chain the wrapper into its callee's buffer — UNLESS the
+                    // callee forwards a foreign store and never writes that
+                    // buffer (`fn f() -> vector { stack_trace() }`): chaining
+                    // a grand-caller's buffer through such a forwarder
+                    // orphans it (#355 follow-up leak, 55-stack-trace).  The
+                    // forwarder test reads the callee's BODY shape, which is
+                    // pass-stable (unlike its `returned` deps, recomputed
+                    // only when the callee itself re-parses).
+                    let callee_forwards = matches!(last.unspan(), Value::Call(d, _)
+                        if self.callee_forwards_foreign_store(*d));
+                    if !extra.is_empty() && !callee_forwards {
                         self.ref_return(&extra, l, RetSite::BlockTail);
                         self.nrvo_collapse_tail_set(l, &extra);
                     }
@@ -760,21 +776,12 @@ impl Parser {
     /// otherwise (mixed shapes, no work-refs, or branches already
     /// share a var).
     pub(crate) fn unify_if_branches_work_refs(&mut self, tail: &mut Value) -> Option<u16> {
-        let trace = std::env::var("LOFT_TRACE_UNIFY").is_ok();
         let if_value = tail.unspan_mut();
         let Value::If(_, true_branch, false_branch) = if_value else {
-            if trace {
-                eprintln!("[unify] not an If tail");
-            }
             return None;
         };
-        let shared = Self::find_branch_terminal_var(true_branch);
-        let other = Self::find_branch_terminal_var(false_branch);
-        if trace {
-            eprintln!("[unify] terminals: true={shared:?} false={other:?}");
-        }
-        let shared = shared?;
-        let other = other?;
+        let shared = Self::find_branch_terminal_var(true_branch)?;
+        let other = Self::find_branch_terminal_var(false_branch)?;
         // P236: only unify when both branches' terminal vars are
         // parser-internal work-refs (`__ref_N` / `__rref_N`).
         // Renaming user-named parameters (e.g.,
@@ -3250,6 +3257,37 @@ impl Parser {
     /// to recover deps that `filter_hidden` stripped from the return type.
     /// Issue #120: without this, the work-ref stays a local and gets freed
     /// before the caller reads the return value.
+    /// True iff the callee returns a FOREIGN store it never writes into the
+    /// hidden return buffer it was handed — `fn f() -> vector { g() }` where
+    /// `g`'s result is delivered by `g` itself (a native builtin, or another
+    /// forwarder), not built into `f`'s buffer.  Read off the callee's BODY
+    /// (the tail is a `Call` whose own callee exposes no hidden heap buffer
+    /// arg for `f`'s value), which is pass-stable.  A callee whose body is
+    /// not parsed yet (forward ref, `code == Null`) is assumed to CONSUME —
+    /// the common multi-site wrapper case #355 needs.
+    fn callee_forwards_foreign_store(&self, d_nr: u32) -> bool {
+        let def = self.data.def(d_nr);
+        if *def.code() == Value::Null {
+            return false; // unparsed / native stub — assume it consumes.
+        }
+        fn tail_forwards(node: &Value, data: &crate::data::Data) -> bool {
+            match node.unspan() {
+                Value::Call(d, _) => {
+                    Parser::collect_hidden_ref_args(node, data).is_empty()
+                        && matches!(
+                            data.def(*d).returned(),
+                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                        )
+                }
+                Value::Block(bl) => bl.operators.last().is_some_and(|o| tail_forwards(o, data)),
+                Value::Insert(ops) => ops.last().is_some_and(|o| tail_forwards(o, data)),
+                Value::Return(inner) => tail_forwards(inner, data),
+                _ => false,
+            }
+        }
+        tail_forwards(def.code(), &self.data)
+    }
+
     fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
         match val {
             Value::Call(d_nr, args) => {
