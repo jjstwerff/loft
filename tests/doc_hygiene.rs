@@ -473,7 +473,11 @@ fn ship_target_chains_all_required_gates() {
         .expect("Makefile must define a `ship:` target — see QUALITY.md Tier 4 #12");
     let required: &[&str] = &[
         "cargo fmt --all -- --check",
-        "cargo clippy --release --all-targets -- -D warnings",
+        // CI's exact Clippy line (ci.yml `clippy` job) — `ship` mirrors it
+        // verbatim so a local pass can never diverge from the remote gate
+        // (the narrower `--release --all-targets` variant passed locally
+        // while CI failed on `--all-features`, costing a full CI round).
+        "cargo clippy --all-targets --all-features -- -D warnings",
         "cargo clippy --no-default-features --all-targets -- -D warnings",
         "cargo test --release",
     ];

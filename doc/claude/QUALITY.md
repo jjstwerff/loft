@@ -2484,8 +2484,12 @@ session-of-the-week background bite.
     invariants chained with `&&` so the first failure aborts and a
     subsequent `git push` never runs:
     1. `cargo fmt --all -- --check` — formatting.
-    2. `cargo clippy --release --all-targets -- -D warnings` — default
-       features clippy.
+    2. `cargo clippy --all-targets --all-features -- -D warnings` —
+       CI's exact Clippy invocation (2026-06-13: was
+       `--release --all-targets`; a local pass with the narrower
+       variant + a remote fail cost a full CI round, so `ship`
+       mirrors the CI job verbatim now — `make gate` runs the same
+       lint without the test suite for fast pre-push iteration).
     3. `cargo clippy --no-default-features --all-targets -- -D warnings`
        — the `--no-default-features` ratchet from #4 (previously easy
        to forget).
