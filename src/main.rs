@@ -4265,8 +4265,14 @@ fn main() {
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
     // here so codegen reads bodies straight from it (no read_data body rebuild).
     let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
-    let program_warm = program_cache_on
-        && loft::startup_cache::warm_load_program(&mut p, &abs_file, &mut warm_store);
+    // #358 — a warm hit returns the def-table index where user definitions
+    // start; the cold path derives it from the post-stdlib def count below.
+    let warm_user_start = if program_cache_on {
+        loft::startup_cache::warm_load_program(&mut p, &abs_file, &mut warm_store)
+    } else {
+        None
+    };
+    let program_warm = warm_user_start.is_some();
     if !program_warm {
         // When building a program cache, parse `default/` fresh so every stdlib
         // file lands in the program's drift manifest; otherwise use the D2b
@@ -4292,7 +4298,10 @@ fn main() {
             }
         }
     }
-    let start_def = p.data.definitions();
+    // #358 — on a warm load the def table already holds stdlib + user defs, so
+    // `definitions()` would put `start_def` PAST the user fns and the no-`main`
+    // test-fn fallback would silently execute nothing; use the persisted boundary.
+    let start_def = warm_user_start.unwrap_or_else(|| p.data.definitions());
     if std::env::var("LOFT_TIMING").is_ok() {
         eprintln!(
             "LOFT_TIMING parse_default={:.2}ms ({start_def} defs)",
@@ -4460,7 +4469,7 @@ fn main() {
     // the interpreted image would pin it, so the "rebuild once editing settles" check
     // would never run on a warm load.
     if program_cache_on && !program_warm && !has_auto_native && !any_dev_interpret {
-        loft::startup_cache::save_program(&p, &abs_file);
+        loft::startup_cache::save_program(&p, &abs_file, start_def);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
     // write the parsed `Data` as the startup-cache JSON snapshot and exit.

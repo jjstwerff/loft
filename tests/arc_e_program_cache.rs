@@ -89,6 +89,47 @@ fn program_cache_cold_warm_then_drift() {
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
 
+/// #358 — a no-`main` script (the zero-param test-fn fallback) must execute on
+/// WARM cache loads too.  The fallback iterates `start_def..definitions()`, and
+/// a warm load restores stdlib + user defs in one table before `start_def` is
+/// taken — pre-fix the range was empty, so the first run worked and every later
+/// run was a silent no-op (exit 0, no output).  The fix persists the boundary
+/// as a `udef` manifest line and replays it on warm loads.
+#[test]
+fn no_main_script_executes_on_warm_load() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_358_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "fn check_me() {\n    println(\"hello from check_me\");\n}\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_358_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    // Cold run parses, executes the fallback, and writes the bundle.
+    let (ok_cold, out_cold) = run(&script, Some(&cache_dir));
+    assert!(ok_cold, "cold run failed: {out_cold}");
+    assert!(
+        out_cold.contains("hello from check_me"),
+        "cold output: {out_cold}"
+    );
+
+    // Warm runs must produce the same output — pre-fix they were silent no-ops.
+    for nth in ["first", "second"] {
+        let (ok_warm, out_warm) = run(&script, Some(&cache_dir));
+        assert!(ok_warm, "{nth} warm run failed: {out_warm}");
+        assert_eq!(
+            out_cold, out_warm,
+            "{nth} warm run of a no-main script must execute the test-fn fallback (#358)"
+        );
+    }
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
 /// @PLN11 G2/M6 — the manifest's build-signature line invalidates a stale
 /// bundle on a (simulated) binary upgrade.  Without it, a bundle written by an
 /// older build would be warm-loaded by a newer one whose store layout/codegen
