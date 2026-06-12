@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# probe-matrix — run a directory of boundary-matrix probe cells with the
+# validity rules from CLAUDE.md § matrix-first baked in as HARD ERRORS:
+#
+#   1. every cell declares its EXPECTED output in-file (`// @EXPECT: <line>`)
+#      BEFORE running — an expectation-free cell can only detect crashes,
+#      never wrong results ("two binaries agree" is not a pass);
+#   2. a cell that produces no output is VACUOUS, not clean (the 2026-06-12
+#      vector-ABI session read 24 parse-error cells as green);
+#   3. the matrix must contain one `// @CONTROL` cell whose expectation is
+#      deliberately wrong — the run fails unless the control cell FAILS,
+#      proving the harness can detect failure.
+#
+# Usage:
+#   scripts/probe-matrix init <dir>             scaffold a new probe dir
+#   scripts/probe-matrix <dir> [options]        run all cells in <dir>
+#
+# Options:
+#   --bin <path>        loft binary under test   (default: target/release/loft)
+#   --baseline <path>   reference binary (e.g. a main worktree build); its
+#                       column classifies failures: work-fails + baseline-passes
+#                       = REGRESSION, both-fail = PRE-EXISTING
+#   --backend <b>       interp | native | both   (default: interp — native pays
+#                       a rustc compile per cell; use `both` for final verify)
+#   --filter <substr>   only run cells whose filename contains <substr>
+#
+# Cell header annotations (loft comments, anywhere in the file):
+#   // @EXPECT: <line>     expected stdout line (repeat per line, in order)
+#   // @EXPECT_LEAK        a store-leak warning is the EXPECTED outcome
+#   // @CONTROL            this cell must FAIL (wrong expectation on purpose)
+#
+# A cell FAILS when its stdout differs from the @EXPECT lines, when a leak
+# warning appears without @EXPECT_LEAK (or is absent with it), or when the
+# run crashes/panics.  Exit is non-zero on any non-control failure, any
+# passing control cell, any vacuous cell, or a missing control cell.
+
+set -u
+
+die() { echo "probe-matrix: $*" >&2; exit 2; }
+
+# ---------------------------------------------------------------- scaffold
+if [ "${1:-}" = "init" ]; then
+    dir="${2:-}"
+    [ -n "$dir" ] || die "init needs a target directory"
+    mkdir -p "$dir"
+    cat > "$dir/cell_example.loft" <<'EOF'
+// One probe cell: vary ONE dimension vs its sibling cells (composition
+// axes: type-kind / construction-path / context / access / depth / null /
+// backend).  Hand-compute the expected output BEFORE the first run.
+// @EXPECT: example x=3
+fn main() {
+  x = 1 + 2;
+  println("example x={x}");
+}
+EOF
+    cat > "$dir/control_must_fail.loft" <<'EOF'
+// @CONTROL — this cell's expectation is deliberately wrong; the runner
+// errors unless this cell FAILS.  It proves the harness detects failure
+// (a matrix whose cells are all parse errors would otherwise read green).
+// @EXPECT: control x=999
+fn main() {
+  x = 1 + 2;
+  println("control x={x}");
+}
+EOF
+    echo "scaffolded $dir (cell_example.loft + control_must_fail.loft)"
+    echo "next: copy cell_example per matrix cell, vary ONE dimension each,"
+    echo "      write each @EXPECT by hand, then: scripts/probe-matrix $dir"
+    exit 0
+fi
+
+# ---------------------------------------------------------------- options
+dir="${1:-}"
+[ -n "$dir" ] && [ -d "$dir" ] || die "usage: probe-matrix <dir> | probe-matrix init <dir>"
+shift
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+bin="$repo_root/target/release/loft"
+baseline=""
+backend="interp"
+filter=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --bin)      bin="$2"; shift 2 ;;
+        --baseline) baseline="$2"; shift 2 ;;
+        --backend)  backend="$2"; shift 2 ;;
+        --filter)   filter="$2"; shift 2 ;;
+        *) die "unknown option $1" ;;
+    esac
+done
+[ -x "$bin" ] || die "binary not executable: $bin (build with: cargo build --release --bin loft)"
+[ -z "$baseline" ] || [ -x "$baseline" ] || die "baseline not executable: $baseline"
+case "$backend" in interp|native|both) ;; *) die "--backend must be interp|native|both" ;; esac
+
+# ------------------------------------------------------------- run one cell
+# run_cell <binary> <backend-flag> <file> ; sets g_status (PASS/FAIL/VACUOUS)
+# and g_reason
+run_cell() {
+    local b="$1" flag="$2" f="$3"
+    local out err
+    out="$(mktemp)"; err="$(mktemp)"
+    if [ "$flag" = "--native" ]; then
+        LOFT_NATIVE_LEAK_CHECK=1 timeout 300 "$b" --native --no-warnings "$f" >"$out" 2>"$err"
+    else
+        timeout 120 "$b" --interpret --no-warnings "$f" >"$out" 2>"$err"
+    fi
+    local rc=$?
+    local expected leak_expected
+    expected="$(grep -oP '^// @EXPECT: \K.*' "$f")"
+    grep -q '^// @EXPECT_LEAK' "$f" && leak_expected=1 || leak_expected=0
+
+    g_status="PASS"; g_reason=""
+    if grep -qE 'loft crash|panicked at|store table exhausted' "$out" "$err"; then
+        g_status="FAIL"; g_reason="crash: $(grep -hoE '(loft crash.*|panicked at[^,]*|store table exhausted)' "$out" "$err" | head -1)"
+    elif [ ! -s "$out" ] && [ ! -s "$err" ] && [ $rc -ne 0 ]; then
+        g_status="FAIL"; g_reason="exit $rc with no output"
+    elif [ ! -s "$out" ]; then
+        # rule 2: no stdout at all — the probe measured nothing
+        g_status="VACUOUS"; g_reason="no stdout (parse error or printless probe): $(head -c 120 "$err" | tr '\n' ' ')"
+    else
+        local actual
+        actual="$(sed 's/[[:space:]]*$//' "$out")"
+        if [ "$actual" != "$expected" ]; then
+            g_status="FAIL"; g_reason="stdout != @EXPECT (got: $(echo "$actual" | head -1 | head -c 80))"
+        fi
+        local leaked=0
+        grep -q 'stores not freed' "$out" "$err" && leaked=1
+        if [ $leaked -ne $leak_expected ] && [ "$g_status" = "PASS" ]; then
+            if [ $leaked -eq 1 ]; then
+                g_status="FAIL"; g_reason="$(grep -ho 'Warning: .*stores not freed.*' "$out" "$err" | head -1)"
+            else
+                g_status="FAIL"; g_reason="@EXPECT_LEAK set but no leak warning appeared"
+            fi
+        fi
+    fi
+    rm -f "$out" "$err"
+}
+
+# ---------------------------------------------------------------- main loop
+backends="interp"
+[ "$backend" = "native" ] && backends="native"
+[ "$backend" = "both" ] && backends="interp native"
+
+fail=0 control_seen=0 control_failed=0 vacuous=0 missing_expect=0
+printf '%-34s %-7s %-22s %s\n' "CELL" "BACKEND" "WORK" "${baseline:+BASELINE}"
+for f in "$dir"/*.loft; do
+    [ -e "$f" ] || die "no .loft cells in $dir"
+    name="$(basename "$f")"
+    [ -z "$filter" ] || case "$name" in *"$filter"*) ;; *) continue ;; esac
+    is_control=0
+    grep -q '^// @CONTROL' "$f" && { is_control=1; control_seen=1; }
+    if ! grep -q '^// @EXPECT: ' "$f"; then
+        # rule 1: hand-computed expectation is mandatory
+        printf '%-34s %-7s %-22s\n' "$name" "-" "NO-EXPECT (rule 1)"
+        missing_expect=1
+        continue
+    fi
+    for be in $backends; do
+        flag="--interpret"; [ "$be" = "native" ] && flag="--native"
+        run_cell "$bin" "$flag" "$f"
+        w_status="$g_status"; w_reason="$g_reason"
+        b_col=""
+        if [ -n "$baseline" ]; then
+            run_cell "$baseline" "$flag" "$f"
+            b_col="$g_status"
+            if [ "$w_status" = "FAIL" ] && [ $is_control -eq 0 ]; then
+                [ "$b_col" = "PASS" ] && b_col="PASS => REGRESSION" || b_col="$b_col => PRE-EXISTING"
+            fi
+        fi
+        printf '%-34s %-7s %-22s %s\n' "$name" "$be" "$w_status${is_control:+}" "$b_col"
+        [ -n "$w_reason" ] && printf '    %s\n' "$w_reason"
+        if [ $is_control -eq 1 ]; then
+            [ "$w_status" = "FAIL" ] && control_failed=1
+            [ "$w_status" = "PASS" ] && { echo "    ^ CONTROL CELL PASSED — the harness cannot detect failure (rule 3)"; fail=1; }
+        else
+            [ "$w_status" = "FAIL" ] && fail=1
+            [ "$w_status" = "VACUOUS" ] && vacuous=1
+        fi
+    done
+done
+
+echo
+if [ $control_seen -eq 0 ]; then
+    echo "probe-matrix: NO @CONTROL cell (rule 3) — add one with a deliberately wrong @EXPECT"
+    fail=1
+elif [ $control_failed -eq 0 ]; then
+    echo "probe-matrix: the @CONTROL cell did not run red — harness validity unproven (rule 3)"
+    fail=1
+fi
+[ $vacuous -eq 1 ] && { echo "probe-matrix: VACUOUS cells present (rule 2) — a no-output probe measures nothing"; fail=1; }
+[ $missing_expect -eq 1 ] && { echo "probe-matrix: cells without @EXPECT (rule 1) — hand-compute before running"; fail=1; }
+[ $fail -eq 0 ] && echo "matrix green (controls red, no vacuous cells)" || echo "matrix NOT green"
+exit $fail

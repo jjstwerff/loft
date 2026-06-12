@@ -203,8 +203,11 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
 1. **Don't fix on the first read.** A coherent (especially elegant one-line) explanation is a
    *hypothesis* — real bugs are complex-variant; the clean story is usually the part you haven't
    looked at yet.
-2. **Build the matrix** in throwaway `/tmp` probes, on `--interpret` only. Vary ONE dimension per
-   probe along the **composition axes**
+2. **Build the matrix** in throwaway `/tmp` probes, on `--interpret` only — use
+   **`scripts/probe-matrix`** (`init` scaffolds; the runner enforces every rule below as a hard
+   error and `--baseline <main-worktree-binary>` auto-classifies REGRESSION vs PRE-EXISTING; usage:
+   [DEBUG.md § Boundary-matrix runner](doc/claude/DEBUG.md#boundary-matrix-runner-scriptsprobe-matrix)).
+   Vary ONE dimension per probe along the **composition axes**
    ([plans/README § composition axes](doc/claude/plans/README.md#the-composition-axes--the-dimensions-a-matrix-varies)):
    type-kind / construction-path / context / access / depth / null / backend. Distinctive
    collision-resistant values at every index/position — weak probes (small values, only `[0]`, no
