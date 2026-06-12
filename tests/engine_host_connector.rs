@@ -384,6 +384,28 @@ fn s6_ws_send(stream: &std::net::TcpStream, text: &str) {
     s.write_all(&frame).unwrap();
 }
 
+/// Receive one server text frame (unmasked, 7-bit or 16-bit length).
+/// `None` on a read timeout / closed stream / non-text frame — callers
+/// loop under their own deadline.
+fn s6_ws_recv(stream: &std::net::TcpStream) -> Option<String> {
+    use std::io::Read;
+    let mut s = stream;
+    let mut hdr = [0u8; 2];
+    s.read_exact(&mut hdr).ok()?;
+    let len = match hdr[1] & 0x7F {
+        126 => {
+            let mut l = [0u8; 2];
+            s.read_exact(&mut l).ok()?;
+            u16::from_be_bytes(l) as usize
+        }
+        127 => return None, // 64-bit frames: never sent by the kernel
+        n => n as usize,
+    };
+    let mut payload = vec![0u8; len];
+    s.read_exact(&mut payload).ok()?;
+    (hdr[0] & 0x0F == 1).then(|| String::from_utf8_lossy(&payload).into_owned())
+}
+
 /// FNV-1a 64 — must match `fnv64` in doc/kernel-swap.html.
 fn s6_fnv64(s: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -448,8 +470,17 @@ fn main() {{
   w = W {{ tick: 0 }};
   engine_host::run({port}, 50000,
     fn(ev: engine_host::Event) {{
-      if ev.kind == 1 && ev.payload.starts_with("pushblob:") {{
+      if ev.kind != 1 {{ return; }}
+      if ev.payload.starts_with("pushblob:") {{
         engine_host::broadcast(ev.payload[9..]);
+        return;
+      }}
+      if ev.payload.starts_with("c:") {{
+        // Relay the page clients' heartbeats so the push driver can
+        // OBSERVE the page's state instead of guessing with sleeps
+        // (build A/B ignore "c:" frames; the page's build-push hook
+        // only fires on "B!:" blobs).
+        engine_host::broadcast(ev.payload);
       }}
     }},
     fn() {{
@@ -502,23 +533,120 @@ fn main() {{
     let good_blob = format!("B!:{}:{v2_script}", s6_fnv64(&v2_script));
     let bad_blob = format!("B!:{}:{v2_script}", s6_fnv64("not the script"));
 
-    // The push driver: wait for the page to be connected and counting,
-    // push the CORRUPT blob (rejection leg), then the good one (the swap).
+    // The push driver, CONDITION-driven (the fixed 4s/2s/12s sleeps it
+    // replaces raced suite load: chromium + wasm boot can exceed any fixed
+    // wait, and a blob pushed before the page's WS is open broadcasts into
+    // the void — `rejected` then never flips and the page times out).  The
+    // server relays the page clients' "c:" heartbeats to every connection,
+    // so each step waits for the page state it needs.
     let pusher = std::thread::spawn(move || {
+        let t0 = Instant::now();
+        let log = move |msg: &str| {
+            eprintln!("[pusher {:>6}ms] {msg}", t0.elapsed().as_millis());
+        };
         let ws = s6_ws_connect(port);
-        std::thread::sleep(Duration::from_secs(4));
+        ws.set_read_timeout(Some(Duration::from_millis(500))).ok();
+        log("connected");
+        // Wait for a frame matching `pred`, bounded by `deadline`; returns
+        // whether it arrived.  Logs every page-protocol frame seen.
+        let await_frame = |pred: &dyn Fn(&str) -> bool, deadline: Instant| -> bool {
+            loop {
+                if let Some(f) = s6_ws_recv(&ws) {
+                    if f.starts_with("c:") || f.starts_with("B!:") {
+                        log(&format!("saw {}", &f[..f.len().min(24)]));
+                    }
+                    if pred(&f) {
+                        return true;
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+            }
+        };
+        let v1_any = |f: &str| f.starts_with("c:v1:");
+        // A v1 heartbeat whose COUNT is >= 1: build A has demonstrably
+        // received a sync frame, so the page's world-continuity clause
+        // (`lastAtSwap >= 1`) can hold when the swap fires.
+        let v1_counting = |f: &str| {
+            f.strip_prefix("c:v1:")
+                .and_then(|n| n.parse::<i64>().ok())
+                .is_some_and(|n| n >= 1)
+        };
+        let v2_any = |f: &str| f.starts_with("c:v2:");
+        // The push protocol, RELOAD-IMMUNE: chromium under load can kill
+        // and reload the page tab mid-sequence (renderer death; the page
+        // reports `boot=N` in its timeout throw), and a reloaded instance
+        // loses the `rejected` flag — so a single corrupt+good pair can
+        // straddle two instances and never complete.  Both pushes are
+        // idempotent page-side (`if (swapped) return`; `rejected` only
+        // flips up), so REPEAT the full pair until some single living
+        // instance demonstrably swaps (its v2 heartbeats flow).  Each
+        // round still proves the strong sequence within one instance:
+        // connected → corrupt rejected (A's heartbeat continues) → good
+        // accepted (B heartbeats).
+        let overall = vm_deadline(60);
+        loop {
+            assert!(
+                await_frame(&v1_any, overall),
+                "pusher never saw build A's heartbeat"
+            );
+            log("push corrupt blob");
+            s6_ws_send(&ws, &format!("pushblob:{bad_blob}"));
+            // A SURVIVES the rejection and has COUNTED a sync frame (the
+            // page's continuity clause needs `lastAtSwap >= 1`).
+            assert!(
+                await_frame(&v1_counting, overall),
+                "pusher never saw a counting post-rejection heartbeat"
+            );
+            log("push good blob");
+            s6_ws_send(&ws, &format!("pushblob:{good_blob}"));
+            // A bounded per-round wait: if the swap doesn't confirm (the
+            // instance died mid-round), run another round.
+            let round = Instant::now() + Duration::from_secs(3);
+            if await_frame(&v2_any, round.min(overall)) {
+                break;
+            }
+            assert!(
+                Instant::now() < overall,
+                "no instance ever completed the swap sequence"
+            );
+            log("no v2 heartbeat this round — repushing the pair");
+        }
+        // The swap is confirmed — but if a reload struck BETWEEN the
+        // corrupt and good pushes, the SURVIVING instance swapped without
+        // ever seeing a corrupt blob (`rejected` died with instance 1; the
+        // page reports it as `boot=2` + `rejected=false`).  The page sets
+        // `rejected` on a corrupt push at ANY time (the hash check runs
+        // before the swapped guard), so deliver one more to the instance
+        // we now KNOW is alive, and prove B keeps pumping after it.
+        log("push corrupt blob at the surviving instance");
         s6_ws_send(&ws, &format!("pushblob:{bad_blob}"));
-        std::thread::sleep(Duration::from_secs(2));
-        s6_ws_send(&ws, &format!("pushblob:{good_blob}"));
-        std::thread::sleep(Duration::from_secs(12));
+        assert!(
+            await_frame(&v2_any, overall),
+            "build B stopped after the post-swap corrupt push"
+        );
+        log("done");
         drop(ws);
     });
 
-    let url = format!("http://127.0.0.1:{http_port}/kernel-swap.html?port={port}");
+    // The page's verdict budget scales with the runner (vm_deadline's
+    // factor) and stays INSIDE the harness watch window — page-throw
+    // before harness-timeout, never a false pass.
+    let scale: u64 = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    let page_deadline_ms = 20_000 * scale;
+    let harness_wait_ms = 25_000 * scale;
+    let url = format!(
+        "http://127.0.0.1:{http_port}/kernel-swap.html?port={port}&deadline_ms={page_deadline_ms}"
+    );
     let out = Command::new("node")
         .arg(&harness)
         .arg(&url)
-        .args(["--wait-ms", "25000"])
+        .args(["--wait-ms", &harness_wait_ms.to_string()])
         .args(["--port", "18104"])
         .output()
         .expect("node harness");

@@ -18,6 +18,10 @@ import { createHost } from './loft-rt.js';
 const { host } = createHost();
 globalThis.loftHost = host;
 const port = new URLSearchParams(location.search).get('port') || '18095';
+// Verdict budget — overridable so a loaded CI runner can scale it (the
+// caller keeps it INSIDE its own watch window: page-throw before
+// harness-timeout, never a false pass).
+const deadlineMs = parseInt(new URLSearchParams(location.search).get('deadline_ms') || '20000', 10);
 
 // ONE template, marker substituted — build A locally; build B arrives over
 // the wire (the test pushes the same template with marker v2).
@@ -56,8 +60,16 @@ host.onSend = (msg) => {
 let rejected = false;
 let swapped = false;
 let lastAtSwap = -1;
+// Forensics for the timeout throw: every push the page actually saw, and
+// which BOOT of this tab we are (sessionStorage survives reloads — a
+// second boot means the tab loaded the page twice and the first
+// instance's state, including a consumed push, is gone).
+const pushLog = [];
+const bootNo = (parseInt(sessionStorage.getItem('s6boots') || '0', 10) + 1);
+sessionStorage.setItem('s6boots', String(bootNo));
 
 host.onBuildPush = (blob) => {
+  pushLog.push(blob.slice(0, 20));
   const m = blob.match(/^B!:([0-9a-f]{16}):([\s\S]*)$/);
   if (!m || fnv64(m[2]) !== m[1]) {
     rejected = true; // corrupt push: refuse, keep serving build A
@@ -84,7 +96,7 @@ if (!result.ok || !result.running) {
 
 // The deadline sits INSIDE the harness's --wait-ms window: an unmet
 // verdict THROWS while the harness is still watching (no false-pass).
-const deadline = Date.now() + 20000;
+const deadline = Date.now() + deadlineMs;
 for (;;) {
   await new Promise(r => setTimeout(r, 5));
   const fr = JSON.parse(resume_frame());
@@ -107,7 +119,7 @@ for (;;) {
     break;
   }
   if (Date.now() > deadline) {
-    throw new Error(`SWAP-FAIL timeout: rejected=${rejected} swapped=${swapped} v1=${sends.v1.length} v2=${sends.v2.length}`);
+    throw new Error(`SWAP-FAIL timeout: rejected=${rejected} swapped=${swapped} v1=${sends.v1.length} v2=${sends.v2.length} pushes=${JSON.stringify(pushLog)} boot=${bootNo}`);
   }
 }
 </script></body></html>
