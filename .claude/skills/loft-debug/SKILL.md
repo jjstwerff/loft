@@ -65,13 +65,14 @@ printf '%s\n' \
 ```
 
 - **Order matters: `launch` LOADS but does not run; `run` starts execution.** Set
-  breakpoints between them. (`continue` before `run` just emits `terminated` —
-  PROTOCOL.md's table implies launch runs; the implementation splits it.)
-- **`setBreakpoints` file paths must be ABSOLUTE.** A relative path answers
-  `{ok:true}` and silently never fires (the documented `verified` flag is not
-  in the response yet). This is the #1 agent footgun — use `$(pwd)/src/x.loft`.
+  breakpoints between them. (`continue` before `run` just emits `terminated`.)
+- **`setBreakpoints` matches files by BASENAME** (relative or absolute both work;
+  two same-named files in one program can't be told apart). The response carries
+  `breakpoints:[{line, verified}]` — **check `verified`**: `false` means the
+  breakpoint can never fire (no breakable code on that line, or a file the
+  program doesn't use); don't wait on a stop that never comes.
 - **Cross-module breakpoints work** (break in a `use`d module's file while
-  launching the consumer) — absolute path again.
+  launching the consumer).
 - **Multi-lib programs**: append the usual lib flags —
   `loft debug src/x.loft --rpc --lib ../pkg/ …`.
 - **`stopped` carries the whole frame**: function, line, and every live local —
@@ -85,8 +86,12 @@ printf '%s\n' \
   execution resumes WITH the edit: probe a hypothesis by injecting the suspect
   value instead of rebuilding.
 - **Conditional breakpoints** (`"condition":"p.x == 9"`) filter by frame; a
-  tracepoint (`"log":"…","stop":false`) streams `output{category:"trace"}`
-  without pausing — structured trace beats sprinkled printlns.
+  tracepoint (`"log":"expr"` or `"log":["e1","e2"]`, `"stop":false`) streams
+  `output{category:"trace"}` lines (`expr = value`) without pausing — structured
+  trace beats sprinkled printlns. Log entries are EXPRESSIONS, not format strings.
+- **Conditions and trace exprs see only the locals live ON that line** — a name
+  not read/written nearby evaluates null/`?`, so a condition on it silently never
+  matches. Anchor breakpoints on a line that uses the variables you test.
 - Program stdout arrives as `output` events on the SAME pipe, never interleaved
   with protocol — parse line-by-line as JSON, switch on `event`/`id`.
 - The interactive twin is `loft debug <file>` (the `(dbg)` prompt) — same engine,

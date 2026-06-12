@@ -260,8 +260,8 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
             None => out.push(resp_err(id, "no game is running")),
         },
         "setBreakpoints" => {
-            set_breakpoints(session, &parsed);
-            out.push(resp_ok(id, ""));
+            let bps = set_breakpoints(session, &parsed);
+            out.push(resp_ok(id, &bps));
         }
         "setWatch" => {
             let ok = session.add_watchpoint(text(&parsed, "expr").unwrap_or(""));
@@ -328,12 +328,18 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
 
 /// `setBreakpoints { file, breakpoints: [{ line, condition?, log?, stop? }] }` — replace
 /// the session's breakpoints with the request's (v1: replaces all; single-file debug).
-fn set_breakpoints(session: &mut ReplSession, parsed: &Parsed) {
+/// Returns the response extra: `"breakpoints":[{line, verified}, …]` where `verified`
+/// says the line carries breakable code in the loaded program — `false` means this
+/// breakpoint can never fire (wrong file or no code on that line), so the client
+/// hears about it now instead of waiting forever.
+fn set_breakpoints(session: &mut ReplSession, parsed: &Parsed) -> String {
     session.clear_breakpoints();
     let file = text(parsed, "file").unwrap_or("");
     let Some(Parsed::Array(bps)) = field(parsed, "breakpoints") else {
-        return;
+        return "\"breakpoints\":[]".to_string();
     };
+    let breakable = session.breakable_lines_in_file(file);
+    let mut items: Vec<String> = Vec::new();
     for bp in bps {
         let Some(line) = num(bp, "line") else {
             continue;
@@ -342,11 +348,16 @@ fn set_breakpoints(session: &mut ReplSession, parsed: &Parsed) {
         let stop = bp_bool(bp, "stop").unwrap_or(true);
         let actions: Vec<String> = match field(bp, "log") {
             Some(Parsed::Array(a)) => a.iter().filter_map(as_str).map(str::to_string).collect(),
+            Some(Parsed::Str(s)) => vec![s.clone()],
             _ => Vec::new(),
         };
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         session.add_file_breakpoint_rich(file, line as u32, condition, actions, stop);
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let verified = breakable.contains(&(line as u32));
+        items.push(format!("{{\"line\":{line},\"verified\":{verified}}}"));
     }
+    format!("\"breakpoints\":[{}]", items.join(","))
 }
 
 /// After a run/continue/step, emit the program output + tracepoints + the stop verdict.

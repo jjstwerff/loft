@@ -199,6 +199,70 @@ fn rpc_eval_bare_vector_live() {
     let _ = std::fs::remove_file(&path);
 }
 
+// `setBreakpoints` answers with a per-breakpoint `verified` flag: `true` for a line
+// carrying breakable code, `false` for a line that can never fire (no code on it, or
+// a file the program doesn't use) — so a client sees a dead breakpoint immediately
+// instead of waiting on a stop that never comes.
+#[test]
+fn rpc_set_breakpoints_reports_verified() {
+    let path = tmp_program("verif", "fn main() {\n  a = 1;\n  print(\"a={a}\")\n}\n");
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":2}},{{\"line\":99}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"setBreakpoints\",\"file\":\"/no/such/dir/other.loft\",\"breakpoints\":[{\"line\":2}]}".to_string(),
+        "{\"id\":4,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains(
+            "\"id\":2,\"ok\":true,\"breakpoints\":[{\"line\":2,\"verified\":true},{\"line\":99,\"verified\":false}]"
+        ),
+        "live line verified, dead line not: {out}"
+    );
+    assert!(
+        out.contains("\"id\":3,\"ok\":true,\"breakpoints\":[{\"line\":2,\"verified\":false}]"),
+        "unknown file never verifies: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// A tracepoint's `log` accepts a single expression as a plain string (sugar for a
+// one-element array): `stop:false` + `log:"a"` streams `output{category:"trace"}`
+// lines without pausing.
+#[test]
+fn rpc_tracepoint_log_accepts_plain_string() {
+    let path = tmp_program(
+        "tracestr",
+        "fn main() {\n  a = 10;\n  for n in 0..3 {\n    a += n;\n    print(\"n={n}\")\n  }\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":5,\"log\":\"n\",\"stop\":false}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"category\":\"trace\",\"text\":\"n = 0\""),
+        "first trace line: {out}"
+    );
+    assert!(
+        out.contains("\"category\":\"trace\",\"text\":\"n = 2\""),
+        "last trace line: {out}"
+    );
+    // The run never pauses: no stopped event, normal termination.
+    assert!(!out.contains("\"event\":\"stopped\""), "no pause: {out}");
+    assert!(
+        out.contains("\"event\":\"terminated\""),
+        "terminated: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // @PLN16 M5e slice 2 — `compile` checks a file (no run, no load) and emits a structured
 // `diagnostics` event with errors AND warnings (the compiler-console feed).
 #[test]

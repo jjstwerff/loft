@@ -80,7 +80,8 @@ Each maps 1:1 to an engine method — the right column is the invariant made con
 
 | `req` | args | engine method | response |
 |---|---|---|---|
-| `launch` | `file`, `entry?` (default `main`), `args?`, `stopOnEntry?` | `load_program` + run | `{ok}`, then a `stopped` / `terminated` event |
+| `launch` | `file` | `load_program` — **loads only, does not run** (set breakpoints before `run`) | `{ok}` |
+| `run` | `entry?` (default `main`) | `eval_observe("<entry>()")` — starts execution | `{ok}`, then a `stopped` / `terminated` event |
 | `setBreakpoints` | `file`, `breakpoints:[{line, condition?, log?, stop?}]` | `set_breakpoint_file_line` (+ condition = **E**; `log` + `stop:false` = **tracepoint**) | `{ok, breakpoints:[{line, verified}]}` |
 | `setWatch` | `expr` | `add_watchpoint` | `{ok, id}` |
 | `clearWatch` | `id?` (all if absent) | `clear_watchpoints` | `{ok}` |
