@@ -18,6 +18,24 @@ invariants, internal phase numbers)?  See
 and a "learn loft in 30 minutes" walkthrough so new users can get from
 zero to a running demo without reading the reference.
 
+### Windowed games without a server — `engine_host::run_local`
+
+The games kernel gains a third way to run, next to the server (`run`) and the
+network client (`run_client`): `run_local(tick_interval_us, on_event, on_tick)`
+drives a **local windowed game** — steady ticks (one tick = one frame), the
+kernel resting the CPU when nothing happens, and live build swaps — with no
+server and no socket.  Close the window, call `client_stop()`, and the loop
+returns.  When your game goes online later, you swap that one line for
+`run_client` and keep your handlers exactly as they are.
+
+### The debugger now tells you when a breakpoint can't work
+
+Setting a breakpoint over `loft debug --rpc` answers with `verified` per
+breakpoint: `false` means that line can never fire (no code on it, or a file
+your program doesn't use) — so you find out immediately instead of waiting on
+a stop that never comes.  Tracepoints also got friendlier: `"log": "expr"`
+now works as a single expression (before, only the `["expr"]` array form did).
+
 ### An interactive prompt — `loft repl`
 
 Run `loft` with no file (or `loft repl`) to get an interactive prompt where you
