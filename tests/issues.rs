@@ -14854,7 +14854,15 @@ fn main() {
     )
     .unwrap();
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let out = std::process::Command::new(root.join("target/release/loft"))
+    let bin = root.join("target/release/loft");
+    if !bin.exists() {
+        // Sanitizer CI jobs (ASan gate, stack_align sweep) run the test
+        // binaries without building the release CLI — skip like the
+        // engine_host_kernel spawning tests do instead of dying NotFound.
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let out = std::process::Command::new(bin)
         .args(["--interpret", "--no-warnings"])
         .arg(&path)
         .current_dir(&root)
