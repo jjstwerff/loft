@@ -863,6 +863,44 @@ impl Parser {
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
+    /// Session-scope snippet parse (#350, live-reload): like
+    /// [`parse_str`](Self::parse_str) but KEEPS the session's import scoping —
+    /// `use_names` and the applied imports survive, and both passes run under
+    /// `source` (the def-source of the fn being replaced) — so the snippet
+    /// resolves the same library names its original file did.  `parse_str`'s
+    /// `data.reset()` exists for whole-program loads, where each pass re-runs
+    /// the `use` statements and re-registers scoping in order; a snippet has
+    /// no `use` lines, so the reset left it with no library scope at all
+    /// ("Unknown library" on every lib-qualified name).  No library loading
+    /// happens here: every `use` the program needs already ran at install.
+    pub fn parse_snippet(&mut self, text: &str, filename: &str, source: u16) {
+        self.lexer = Lexer::default();
+        self.first_pass = true;
+        self.default = false;
+        self.vars.logging = false;
+        self.lexer.parse_string(text, filename);
+        self.deferred_unknown.clear();
+        self.lambda_counter = 0;
+        self.fn_lambdas.clear();
+        self.data.source = source;
+        self.parse_file();
+        self.resolve_deferred_unknowns();
+        let lvl = self.lexer.diagnostics().level();
+        if lvl == Level::Error || lvl == Level::Fatal {
+            self.diagnostics.fill(self.lexer.diagnostics());
+            return;
+        }
+        self.deferred_unknown.clear();
+        self.lambda_counter = 0;
+        self.fn_lambdas.clear();
+        self.lexer.parse_string(text, filename);
+        self.first_pass = false;
+        self.data.source = source;
+        self.parse_file();
+        self.resolve_deferred_unknowns();
+        self.diagnostics.fill(self.lexer.diagnostics());
+    }
+
     /// @PLN12 phase 02 — does `input` end mid-construct, so a REPL should read
     /// more lines before trying to parse it?
     ///

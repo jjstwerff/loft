@@ -247,3 +247,95 @@ fn reload_installs_from_foreign_cwd_with_warnings() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #350 + #351 — a live edit lands in a MODULE file (not the entry), and the
+/// reloaded body resolves the same names its file could: a lib-qualified call
+/// (`engine_host::clients()` — the shadow snippet parse keeps the session's
+/// import scoping) and a cross-file user fn (the emitted call targets the
+/// RUNNING state's code positions; the shadow itself never generates code).
+#[test]
+fn live_reload_module_file_with_lib_and_cross_file_calls() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("eh_reload_libs_{}", std::process::id()));
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let module = src.join("viewmod.loft");
+    std::fs::write(
+        &module,
+        "pub fn view_msg(n: integer) -> text {\n    \"view {n}\"\n}\n",
+    )
+    .unwrap();
+    let main = src.join("main.loft");
+    std::fs::write(
+        &main,
+        r#"use viewmod;
+use engine_host;
+
+pub fn double(n: integer) -> integer {
+    n * 2
+}
+
+fn main() {
+    frames = 0;
+    engine_host::run_local(50000,
+        fn(ev: engine_host::Event) {},
+        fn() {
+            frames += 1;
+            println(view_msg(frames));
+            if frames >= 600 {
+                engine_host::client_stop();
+            }
+        });
+}
+"#,
+    )
+    .unwrap();
+    let out_path = dir.join("stdout.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let child = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&main)
+        .current_dir(&root)
+        .env("LOFT_LIVE_RELOAD", "1")
+        .env("LOFT_OFFLINE", "1")
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn local game");
+    let _guard = Guard(Some(child));
+
+    let await_marker = |marker: &str| -> bool {
+        let deadline = vm_deadline(20);
+        while Instant::now() < deadline {
+            if std::fs::read_to_string(&out_path)
+                .unwrap_or_default()
+                .contains(marker)
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    assert!(await_marker("view "), "baseline body must run first");
+
+    // The MODULE edit: lib-qualified + cross-file calls in the new body.
+    std::fs::write(
+        &module,
+        "pub fn view_msg(n: integer) -> text {\n    \"VIEW c={engine_host::clients()} d={double(n)}\"\n}\n",
+    )
+    .unwrap();
+    assert!(
+        await_marker("VIEW c=0 d="),
+        "module edit must land live with lib + cross-file calls resolved (#350/#351); got:\n{}",
+        std::fs::read_to_string(&out_path).unwrap_or_default()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

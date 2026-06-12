@@ -45,13 +45,23 @@ use crate::state::State;
 /// more often than this; the disk read is the real cost).
 const CHECK_EVERY: Duration = Duration::from_millis(200);
 
+/// One watched source file of the running program (#351: the watch covers
+/// every parsed file, not only the entry — a live edit lands in modules and
+/// bundle libraries too).
+struct WatchedFile {
+    path: String,
+    last_content: String,
+    /// The def-source id this file's fns parsed under — reload looks the
+    /// edited fn up source-aware, so two libraries may share a fn name.
+    source: u16,
+}
+
 pub struct ReloadHost {
     /// The shadow session: same program, same pipeline, parity-checked
     /// def space.  Its `Data` is where reload parses land; the RUNNING
     /// state's bytecode is where their code is generated.
     session: crate::repl::ReplSession,
-    path: String,
-    last_content: String,
+    files: Vec<WatchedFile>,
     last_check: Instant,
     version: u32,
 }
@@ -133,16 +143,56 @@ pub fn install(path: &str, stdlib_dir: &str, lib_dirs: &[String], running: &crat
             return;
         }
     }
+    // #351 — the watch set: every file the program parsed (entry, modules,
+    // `--lib` packages, bundles), except the stdlib and synthetic sources.
+    // Pair each file with its def-source id for source-aware fn lookup.
+    let stdlib_prefix = std::path::Path::new(stdlib_dir).canonicalize().map_or_else(
+        |_| stdlib_dir.to_string(),
+        |p| p.to_string_lossy().into_owned(),
+    );
+    let mut files: Vec<WatchedFile> = vec![WatchedFile {
+        path: path.to_string(),
+        last_content: content,
+        source: 0,
+    }];
+    for d in 0..shadow.definitions() {
+        let def = shadow.def(d);
+        let f = &def.position.file;
+        if f.is_empty() || f.starts_with('<') || f == path {
+            continue;
+        }
+        let canon = std::path::Path::new(f)
+            .canonicalize()
+            .map_or_else(|_| f.clone(), |p| p.to_string_lossy().into_owned());
+        if canon.starts_with(&stdlib_prefix) {
+            continue;
+        }
+        if files.iter().any(|w| w.path == *f) {
+            continue;
+        }
+        let Ok(c) = std::fs::read_to_string(f) else {
+            continue; // unreadable (virtual / moved) — not watchable
+        };
+        files.push(WatchedFile {
+            path: f.clone(),
+            last_content: c,
+            source: def.source,
+        });
+    }
+    let module_count = files.len() - 1;
     HOST.with(|h| {
         *h.borrow_mut() = Some(ReloadHost {
             session,
-            path: path.to_string(),
-            last_content: content,
+            files,
             last_check: Instant::now(),
             version: 0,
         });
     });
-    eprintln!("live-reload: watching {path}");
+    if module_count > 0 {
+        eprintln!("live-reload: watching {path} (+{module_count} module/library files)");
+    } else {
+        eprintln!("live-reload: watching {path}");
+    }
 }
 
 /// The execute-loop hook: throttled file check; on change, reload every
@@ -158,24 +208,27 @@ pub fn poll(state: &mut State) -> bool {
             return false;
         }
         host.last_check = Instant::now();
-        let Ok(content) = std::fs::read_to_string(&host.path) else {
-            return false; // transient (editor mid-save); next poll retries
-        };
-        if content == host.last_content {
-            return false;
-        }
-        let old_fns = fn_blocks(&host.last_content);
-        let new_fns = fn_blocks(&content);
-        host.last_content = content;
         let mut grew = false;
-        for (name, new_src) in &new_fns {
-            let Some(old_src) = old_fns.get(name) else {
-                continue; // brand-new fn: nothing calls it yet — next full run picks it up
+        for i in 0..host.files.len() {
+            let Ok(content) = std::fs::read_to_string(&host.files[i].path) else {
+                continue; // transient (editor mid-save); next poll retries
             };
-            if old_src == new_src {
+            if content == host.files[i].last_content {
                 continue;
             }
-            grew |= reload_fn(host, state, name, new_src);
+            let old_fns = fn_blocks(&host.files[i].last_content);
+            let new_fns = fn_blocks(&content);
+            host.files[i].last_content = content;
+            let source = host.files[i].source;
+            for (name, new_src) in &new_fns {
+                let Some(old_src) = old_fns.get(name) else {
+                    continue; // brand-new fn: nothing calls it yet — next full run picks it up
+                };
+                if old_src == new_src {
+                    continue;
+                }
+                grew |= reload_fn(host, state, name, new_src, source);
+            }
         }
         grew
     })
@@ -211,11 +264,33 @@ fn fn_blocks(src: &str) -> std::collections::HashMap<String, String> {
 /// Parse one changed fn under a temp name in the shadow session, generate
 /// its bytecode into the running state (append-only), and patch the
 /// original def's dispatch targets.  Returns `true` when code was appended.
-fn reload_fn(host: &mut ReloadHost, state: &mut State, name: &str, new_src: &str) -> bool {
+fn reload_fn(
+    host: &mut ReloadHost,
+    state: &mut State,
+    name: &str,
+    new_src: &str,
+    source: u16,
+) -> bool {
     host.version += 1;
     let v = host.version;
     let data = &host.session.parser.data;
-    let orig = data.def_nr(&format!("n_{name}"));
+    // Source-aware lookup first (#351): two libraries may define the same fn
+    // name; the edited FILE pins which one this is.  Entry-file fns parse
+    // under source 0, where the global lookup is the same thing.
+    let want = format!("n_{name}");
+    let mut orig = u32::MAX;
+    for d in 0..data.definitions() {
+        if data.def_type(d) == crate::data::DefType::Function
+            && data.def(d).source == source
+            && data.def(d).name == want
+        {
+            orig = d;
+            break;
+        }
+    }
+    if orig == u32::MAX {
+        orig = data.def_nr(&want);
+    }
     if orig == u32::MAX {
         eprintln!("live-reload: '{name}' is not a known fn; skipped");
         return false;
@@ -232,10 +307,14 @@ fn reload_fn(host: &mut ReloadHost, state: &mut State, name: &str, new_src: &str
         eprintln!("live-reload: cannot rewrite '{name}'; skipped");
         return false;
     };
+    // Parse under the ORIGINAL fn's source id with the session's import
+    // scoping intact (#350) — the snippet then resolves the same library
+    // names (qualified and imported) its file did.
+    let orig_source = host.session.parser.data.def(orig).source;
     let parser = &mut host.session.parser;
     let pre_defs = parser.data.definitions();
     let pre_diag = parser.diagnostics.entries().len();
-    parser.parse_str(&rewritten, "<live-reload>", false);
+    parser.parse_snippet(&rewritten, "<live-reload>", orig_source);
     let produced = &parser.diagnostics.entries()[pre_diag..];
     if produced
         .iter()
@@ -269,6 +348,16 @@ fn reload_fn(host: &mut ReloadHost, state: &mut State, name: &str, new_src: &str
         parser.data.rollback_to(pre_defs);
         eprintln!("live-reload: '{name}' changed its signature; restart to apply");
         return false;
+    }
+
+    // The shadow session only PARSES — it never generates bytecode, so its
+    // defs carry no code positions.  A call emitted from the new body embeds
+    // the callee's `code_position` (codegen's OpCall `to` operand), so sync
+    // every def's position from the RUNNING state first (the def spaces are
+    // parity-checked equal at install; without this, a reloaded fn calling
+    // ANY user fn jumped to position 0 and crashed).
+    for d in 0..pre_defs.min(state.fn_positions.len() as u32) {
+        parser.data.definitions[d as usize].code_position = state.fn_positions[d as usize];
     }
 
     // Generate the new body (and any lambdas it contains) at the END of the
