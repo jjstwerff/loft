@@ -369,14 +369,19 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   `p15_three_level.loft`.  This is the named next focused item, now
   with its design question stated.
 
-Remaining armed-corpus failures (12 files, now WITHOUT any env crutch):
-**`store.rs:1640` "Freed record accessed" ×7 — ALL keyed-collection
-scripts** (`119-keyed-local-reassign`, `120-keyed-return-assign`,
-`126-keyed-field-clear`, …): the @P302 family; possibly a REAL latent
-use-after-free in the keyed reassign path that release reads silently —
-the named next sub-item.  Plus four singletons (`vector.rs:331`,
-`codegen.rs:2560`, `codegen.rs:1871`, `compile.rs:306`) and the pass-2
-growth shape itself.  File list: `/tmp/claude/sweep/refleak3.log`.
+Remaining armed-corpus failures (12 files, no env crutch; the corpus =
+tests/scripts + tests/docs + examples on the armed interp binary —
+rebuild it with
+`cargo --config 'profile.dev.package.loft.debug-assertions=true' build --bin loft`):
+
+| Site | Files | Read |
+|---|---|---|
+| `store.rs:1640` "Freed record accessed" | `119-keyed-local-reassign`, `120-keyed-return-assign`, `126-keyed-field-clear`, `128-struct-keyed-field-init`, `22c-par-sources`, `22-threading`, `292-pln17-three-state-boolean` | the @P302 keyed family + two par files; possibly a REAL latent use-after-free release reads silently — **the named next sub-item** |
+| `vector.rs:331` | `132-vector-elemset-inline-literal-uaf` | the file's own name says UAF — likely the documented shape's armed twin |
+| `codegen.rs:1871` | `166-p390-self-slice-assign` | singleton |
+| `codegen.rs:2560` | `examples/collections.loft` | singleton |
+| `compile.rs:306` | `75-native-stub` | the native-stub panic is that test's SUBJECT — likely expected-fail by design |
+| `control.rs:3487` (pass-2 growth) | `298-multi-return-site-ref-buffer` | the mapped arity-cascade class (see THE FIND above) |
 
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 
