@@ -343,14 +343,27 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
 - **THE FIND — pass-2 arity growth is a LIVE release crash**: the
   restored channel's first catch.  A forward CALLER of a
   multi-return-site fn halts codegen with "Too few parameters on n_pick
-  (got 2, need 4)" on BOTH backends: `ref_return`'s growth re-fires in
-  pass 2 under DIFFERENT work-ref names (pass 2 sees the forward callee
-  parsed, so the per-site work refs differ), and the caller parsed
-  earlier in pass 2 keeps the short arg list.  F1 (two-pass
-  determinism) × @PLAN59.  Demonstrating test:
-  `tests/issues.rs::pass2_arity_growth_forward_caller` (`#[ignore]`);
-  repro `/tmp/p_followups/p14_forward_caller.loft`.  The fix —
-  pass-stable ref_return promotion — is the next focused item.
+  (got 2, need 4)" on BOTH backends.  CORRECTED mechanism (the rr
+  traces): for a FORWARD callee the site's type is Unknown in pass 1,
+  so `ref_return` never runs there at all — ALL growth happens
+  pass-2-first, and a caller parsed earlier in pass 2 keeps the
+  signature arity.  F1 (two-pass determinism) × @PLAN59.
+  **A per-site pre-provision fix was tried and REVERTED (2026-06-12)**:
+  counting syntactic return sites in pass 1 and pre-adding
+  `__retbuf2…N` fixed the 2-level cell — but the matrix's next cell
+  showed buffer need CASCADES: a caller's single tail call materializes
+  one work ref PER hidden buffer of its callee (`use_pick`'s one site
+  → ls of three `__ref_N`), so no pass-1 syntactic count can bound a
+  forward CHAIN (the 3-level cell crashed one level up).  The class
+  fix needs a BETWEEN-PASS buffer-count fixpoint (the
+  typedef-resolution slot runs after every pass-1 signature + body
+  exists; resolve counts in dependency order) — or caller-LOCAL backing
+  for the non-chained work refs so only one buffer ever promotes.
+  Demonstrating tests (`#[ignore]`):
+  `tests/issues.rs::pass2_arity_growth_forward_caller` +
+  `…_forward_chain`; repros `/tmp/p_followups/p14_forward_caller.loft`,
+  `p15_three_level.loft`.  This is the named next focused item, now
+  with its design question stated.
 
 Remaining armed-corpus failures (12 files): `store.rs:1640` ×7 + four
 singletons (`vector.rs:331`, `codegen.rs:2560`, `codegen.rs:1871`,

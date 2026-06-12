@@ -14898,3 +14898,35 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(71006 + 71007 + 71008));
 }
+
+// The 3-LEVEL forward chain — same class, one level deeper: `outer`'s
+// single tail call to `use_pick` materializes one work ref PER hidden
+// buffer of the callee, so buffer need CASCADES through forward-call
+// chains and no pass-1 syntactic site count can bound it (a per-site
+// pre-provision fix was tried 2026-06-12 and reverted: it fixed the
+// 2-level cell and moved the crash here).  The class fix is a
+// between-pass buffer-count fixpoint (the typedef-resolution slot runs
+// after all pass-1 signatures + bodies exist) — or caller-local backing
+// for the non-chained work refs.  Repro:
+// /tmp/p_followups/p15_three_level.loft.
+#[test]
+#[ignore = "stability-sweep: pass-2 arity growth — the forward-chain cascade (see pass2_arity_growth_forward_caller)"]
+fn pass2_arity_growth_forward_chain() {
+    code!(
+        "struct S { v: integer not null }
+fn outer(json: text) -> S { use_pick(json) }
+fn use_pick(json: text) -> S { pick(json) }
+fn pick(json: text) -> S {
+  if json == \"\" { return mk(71006); }
+  result = mk(71007);
+  if json == \"bad\" { return mk(71008); }
+  result
+}
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn run() -> integer {
+    outer(\"\").v + outer(\"x\").v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(71006 + 71007));
+}
