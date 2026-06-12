@@ -43,6 +43,55 @@ irreversible moves not to make.
 - **Full suite, detached**: `./scripts/find_problems.sh --bg` → `--peek` mid-run /
   `--wait` to block; structured summary on finish in `/tmp/loft_problems.txt`.
 
+## The agent debug surface — `loft debug <file> --rpc` (drive a live session, don't println)
+
+The @PLN16 debugger speaks NDJSON over stdio (the contract:
+`doc/claude/plans/16-debugger/PROTOCOL.md`). One `printf` pipes a whole scripted
+session — breakpoint → inspect the live frame → eval → edit → resume. Patterns
+below verified hands-on 2026-06-12 against an installed 0.8.5 and a real
+multi-module consumer (crawler's Sim).
+
+```sh
+printf '%s\n' \
+  '{"id":1,"req":"launch","file":"/abs/path/prog.loft"}' \
+  '{"id":2,"req":"setBreakpoints","file":"/abs/path/prog.loft","breakpoints":[{"line":3,"condition":"n == 2"}]}' \
+  '{"id":3,"req":"run"}' \
+  '{"id":4,"req":"eval","expr":"a + n"}' \
+  '{"id":5,"req":"setValue","target":"a","value":"100"}' \
+  '{"id":6,"req":"stepOver"}' \
+  '{"id":7,"req":"continue"}' \
+  '{"id":8,"req":"disconnect"}' \
+| loft debug /abs/path/prog.loft --rpc
+```
+
+- **Order matters: `launch` LOADS but does not run; `run` starts execution.** Set
+  breakpoints between them. (`continue` before `run` just emits `terminated` —
+  PROTOCOL.md's table implies launch runs; the implementation splits it.)
+- **`setBreakpoints` file paths must be ABSOLUTE.** A relative path answers
+  `{ok:true}` and silently never fires (the documented `verified` flag is not
+  in the response yet). This is the #1 agent footgun — use `$(pwd)/src/x.loft`.
+- **Cross-module breakpoints work** (break in a `use`d module's file while
+  launching the consumer) — absolute path again.
+- **Multi-lib programs**: append the usual lib flags —
+  `loft debug src/x.loft --rpc --lib ../pkg/ …`.
+- **`stopped` carries the whole frame**: function, line, and every live local —
+  a full crawler `Sim` struct renders inline (vectors elided `…`); one event =
+  the variables panel, drill down with `eval`.
+- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`);
+  an out-of-scope name returns `value:null`, not an error — don't misread null
+  as "the field is empty".
+- **`setValue` edits the live run** (scalar / text / enum / struct field /
+  nested path / vector element; a whole heap local is rejected by design) —
+  execution resumes WITH the edit: probe a hypothesis by injecting the suspect
+  value instead of rebuilding.
+- **Conditional breakpoints** (`"condition":"p.x == 9"`) filter by frame; a
+  tracepoint (`"log":"…","stop":false`) streams `output{category:"trace"}`
+  without pausing — structured trace beats sprinkled printlns.
+- Program stdout arrives as `output` events on the SAME pipe, never interleaved
+  with protocol — parse line-by-line as JSON, switch on `event`/`id`.
+- The interactive twin is `loft debug <file>` (the `(dbg)` prompt) — same engine,
+  for a human; agents always prefer `--rpc`.
+
 ## Native-backend env gotchas — these fake FAILURES; rule them out before believing a native failure
 
 1. **Default is `--native`** — see above; pass `--interpret` for the seeing loop.
