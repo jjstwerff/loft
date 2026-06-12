@@ -13,6 +13,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > The loop/queue/wire design is [ENGINE_HOST.md](ENGINE_HOST.md) Part 2 + the
 > host-boundary principle; this file records the **dispatch mechanics** that the
 > kernel build rests on, probed before building.
+> **2026-06-12 — the third role landed:** `run_local` (the standalone windowed
+> host — the connector loop with no transport; ENGINE_HOST.md § Update
+> 2026-06-12), driven by the crawler consumer's gap report
+> [#343](https://github.com/loft-lang/loft/issues/343).
 
 ## Entry probes (2026-06-10)
 
