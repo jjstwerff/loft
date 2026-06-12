@@ -959,16 +959,24 @@ fn n1_native_pipeline_trivial_program() {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    let loft_rlib = std::fs::read_dir(&deps_dir).ok().and_then(|mut it| {
-        it.find(|e| {
-            e.as_ref().is_ok_and(|e| {
+    // Pick the NEWEST libloft rlib: a CI cache restore (restore-keys) can
+    // leave stale rlibs from older builds — or another toolchain — beside the
+    // fresh one, and a find-first pick then feeds rustc mismatched crate
+    // metadata (a wall of misleading E0432 "unresolved import" noise in the
+    // nightly toolchain-matrix logs).
+    let loft_rlib = std::fs::read_dir(&deps_dir).ok().and_then(|it| {
+        it.flatten()
+            .filter(|e| {
                 let n = e.file_name();
                 let s = n.to_string_lossy();
                 s.starts_with("libloft") && s.ends_with(".rlib")
             })
-        })
-        .and_then(|e| e.ok())
-        .map(|e| e.path())
+            .max_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            })
+            .map(|e| e.path())
     });
     let binary = std::env::temp_dir().join("loft_n1_test_bin");
     let mut rustc_args = vec![
