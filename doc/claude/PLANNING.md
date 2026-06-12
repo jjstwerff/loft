@@ -2355,7 +2355,7 @@ In `output_call`, when emitting a call from a pure context to a pure callee, emi
 
 ## H — HTTP / Web Services
 
-Full design rationale and approach comparison: [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md).
+Full design rationale and approach comparison: [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md).
 
 The `#json` annotation is the key enabler: it synthesises `to_json` and `from_json` for a
 struct, making `Type.from_json` a first-class callable fn-ref that composes with `map` and
@@ -2366,7 +2366,7 @@ gated behind an `http` Cargo feature.
 ---
 
 ### H1  `#json` annotation — parser and `to_json` synthesis
-**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phase 1
+**Sources:** [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md) § Approach B, Phase 1
 **Description:** Extend the annotation parser to accept `#json` (no value) before a struct
 declaration.  For every annotated struct, the compiler synthesises a `to_json` method that
 reuses the existing `:j` JSON format flag.  No new Rust dependencies are needed.
@@ -2411,7 +2411,7 @@ variants and dedicated read/write helpers — see
 [STDLIB.md § JSON](STDLIB.md)).  The original design is preserved
 below as a historical record; do not implement.
 
-**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B; CODE.md § Dependencies
+**Sources:** [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md) § Approach B; CODE.md § Dependencies
 **Description:** Add a new stdlib module `default/06_web.loft` with JSON field-extraction
 functions.  Functions extract a single typed value from a JSON object body supplied as
 a `text` string.  No `serde_json` dependency — the existing parsing primitives in
@@ -2506,7 +2506,7 @@ calling any `json_*` function raises a compile-time error:
 ---
 
 ### H3  `from_json` codegen — scalar struct fields
-**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phase 2
+**Sources:** [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md) § Approach B, Phase 2
 **Description:** For each `#json`-annotated struct whose fields are all primitive types
 (`text`, `integer`, `long`, `float`, `single`, `boolean`, `character`), the compiler
 synthesises a `from_json(body: text) -> T` function.  The result is a normal callable
@@ -2548,7 +2548,7 @@ Verify that `Type.from_json` resolves as a callable fn-ref with type
 ---
 
 ### H4  HTTP client stdlib and `HttpResponse`
-**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, stdlib additions; PROBLEMS #55
+**Sources:** [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md) § Approach B, stdlib additions; PROBLEMS #55
 **Description:** Add blocking HTTP functions to `default/06_web.loft` backed by `ureq`.
 All functions return `HttpResponse` — a plain struct — so there is no thread-local status
 state and the API is parallel-safe (see PROBLEMS #55).
@@ -2637,7 +2637,7 @@ body is non-empty (the common case).  Callers who need a different content type 
 ---
 
 ### H5  Nested/array/enum `from_json` and integration tests
-**Sources:** [WEB_SERVICES.md](lib_plans/future/06-web-services/HTTP_CLIENT.md) § Approach B, Phases 3–4
+**Sources:** [WEB_SERVICES.md](lib_plans/19-web-services/HTTP_CLIENT.md) § Approach B, Phases 3–4
 **Description:** Extend the H3 `from_json` synthesiser to handle nested `#json` structs,
 `vector<T>` array fields, and plain enum fields.  Add an integration test suite that calls
 real HTTP endpoints and verifies the full round-trip.

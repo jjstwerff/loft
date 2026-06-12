@@ -120,6 +120,6 @@ struct-round-trip use case is fully served by what's shipped.
 - [README.md](README.md) — overview of the web-services library plan
 - [HTTP_CLIENT.md](HTTP_CLIENT.md) — HTTP client design (the
   primary downstream consumer of JSON)
-- [../../../STDLIB.md](../../../STDLIB.md) — stdlib reference for `Type.parse` /
+- [../../STDLIB.md](../../STDLIB.md) — stdlib reference for `Type.parse` /
   `:j` format flag
-- [../../../LOFT.md](../../../LOFT.md) — language reference
+- [../../LOFT.md](../../LOFT.md) — language reference

@@ -3,7 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Web Services — client-side library
+# Web Services — client-side library (@PLN19)
+
+**Tracker: [loft-lang/plans#19](https://github.com/loft-lang/plans/issues/19)** —
+lifecycle state lives on the issue, not in this path.
 
 Long-term plan for a **fully functioning client-side web
 services library** in loft.  Server-side HTTP / WebSocket /
@@ -17,7 +20,7 @@ single concern:
 
 | Sub-plan | File | Status |
 |---|---|---|
-| JSON serialization + deserialization | [JSON.md](JSON.md) | **Shipped** — `Type.parse()` + `:j` format flag work today |
+| JSON serialization + deserialization | [JSON.md](JSON.md) | **Shipped** — `Type.parse()` + `:j` format flag work today; re-verified hands-on 2026-06-12 against a real ~100-field GitHub API payload (unknown-field tolerance, nested structs, JSON `null` → loft null caught with `??`, `:j` round-trip, dynamic `json_parse` navigation with safe `JNull` on missing fields) |
 | HTTP client (verbs + headers) | [HTTP_CLIENT.md](HTTP_CLIENT.md) | **Planned** — locked-in design; deferred to 1.1+ per ROADMAP H4 |
 | Future expansions | (this file, see below) | Sketched only — no scheduled work |
 
@@ -25,6 +28,16 @@ The JSON layer is reference documentation for capabilities
 already in production; the HTTP layer is the primary planned
 work; the future-expansions section sketches what else a
 "fully functioning" library would cover.
+
+The 2026-06-12 "loft as a web-service reader" evaluation
+sharpened the priority: loft is **parse-strong, fetch-missing**.
+There is no way to perform an HTTP request from loft (and no
+subprocess primitive to shell out to `curl` —
+[`15-process`](../future/15-process/README.md)), so the only
+workflow today is a bash wrapper fetching into a file that loft
+parses.  Ship-order step 1 (`http_get` + friends) is the single
+highest-leverage unlock; per the dogfood loop a small real
+consumer (e.g. a GitHub-API CLI tool) should drive it.
 
 ## Scope
 
@@ -46,7 +59,7 @@ or otherwise), and acts on them.  Common shapes:
   promotion).
 - Game-client multiplayer protocol — see
   `GAME_CLIENT_LIB.md` and the EVENT_LOOP plan
-  ([../../plans/future/23-event-loop/](../../../plans/future/23-event-loop/)).
+  ([../../plans/future/23-event-loop/](../../plans/future/23-event-loop/)).
 - WASM HTTP fetch in the browser — currently routed through
   the host's `fetch()` via the W1.x bridge; would inherit
   this design's `HttpResponse` shape but uses a different
@@ -184,10 +197,10 @@ first real consumer actually needs.
 
 - [JSON.md](JSON.md) — currently-shipped JSON capabilities
 - [HTTP_CLIENT.md](HTTP_CLIENT.md) — HTTP client design
-- [../../../STDLIB.md](../../../STDLIB.md) — stdlib reference
-- [../../../LOFT.md](../../../LOFT.md) — language reference
-- [../../../PLANNING.md](../../../PLANNING.md) — H-tier items in the backlog
-- [../../../ROADMAP.md](../../../ROADMAP.md) — milestone placement
-- `../../../WEB_SERVER_LIB.md` (still at doc root) —
+- [../../STDLIB.md](../../STDLIB.md) — stdlib reference
+- [../../LOFT.md](../../LOFT.md) — language reference
+- [../../PLANNING.md](../../PLANNING.md) — H-tier items in the backlog
+- [../../ROADMAP.md](../../ROADMAP.md) — milestone placement
+- `../../WEB_SERVER_LIB.md` (still at doc root) —
   server-side counterpart; covers HTTP server, WebSockets,
   TLS, ACME, auth, RBAC.

@@ -158,7 +158,7 @@ longer needed**.  `Type.parse()` replaces all of them.
 The first consumer-driven enhancement — **response headers + a cookie-jar
 session + base64 helpers** (which unblocked native Garmin login A2 in the
 training port) — shipped via @PLAN23 (closure record at
-[`../../finished/23-http-session-auth/`](../../finished/23-http-session-auth/)).
+[`../finished/23-http-session-auth/`](../finished/23-http-session-auth/)).
 The deferred TLS/JA3 impersonation E1 stays conditional (only revisit if
 Garmin's WAF later blocks the plain-TLS credential POST).
 
@@ -167,5 +167,5 @@ Garmin's WAF later blocks the plain-TLS credential POST).
 - [README.md](README.md) — overview of the web-services library plan
 - [JSON.md](JSON.md) — currently-shipped JSON capabilities (the
   serialization layer this client builds on)
-- [../../../PLANNING.md](../../../PLANNING.md) — H-tier items in the backlog
-- [../../../ROADMAP.md](../../../ROADMAP.md) — milestone placement (H4 → 1.1+)
+- [../../PLANNING.md](../../PLANNING.md) — H-tier items in the backlog
+- [../../ROADMAP.md](../../ROADMAP.md) — milestone placement (H4 → 1.1+)
