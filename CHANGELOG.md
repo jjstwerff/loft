@@ -28,6 +28,15 @@ server and no socket.  Close the window, call `client_stop()`, and the loop
 returns.  When your game goes online later, you swap that one line for
 `run_client` and keep your handlers exactly as they are.
 
+### Window input as game events — `engine_host::post`
+
+Post a local event from anywhere in your game — `engine_host::post("K:left")`
+— and it arrives in your `on_event` handler like any network message
+(`ev.cid == -1` tells you it came from this machine).  Key presses stop
+slipping between frames, and your handlers no longer care whether input is
+local or remote.  Servers with a window got their exit too: call
+`engine_host::stop()` and `run` returns when the window closes.
+
 ### The debugger now tells you when a breakpoint can't work
 
 Setting a breakpoint over `loft debug --rpc` answers with `verified` per

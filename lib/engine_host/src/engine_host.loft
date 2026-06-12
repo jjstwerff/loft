@@ -115,6 +115,29 @@ fn kernel_idle(max_us: integer);
 pub fn clients() -> integer;
 #native "n_kernel_clients"
 
+// Enqueue a LOCAL event on the running kernel (any role): window input — or
+// any script-side source — becomes an ordinary events-class message, so
+// handlers treat keys and remote messages identically (`ev.cid == -1` marks
+// local origin).  Sub-tick input stops being lost to polling: post edges as
+// you see them; the next drain delivers them in order.  False = no kernel.
+pub fn post(msg: text) -> boolean;
+#native "n_kernel_post"
+
+fn kernel_alive() -> boolean;
+#native
+
+fn kernel_stop();
+#native
+
+// Leave the listener loop from inside a handler — the windowed LISTENER's
+// exit (mirror of client_stop): run() returns at the top of its next turn.
+pub fn stop() {
+  kernel_stop()
+}
+
+fn kernel_frame();
+#native
+
 // ── 05a — the state-sync UDP channel (events + bulk stay on WS) ─────────────
 //
 // The kernel binds a UDP socket on the SAME port as the WS listener, and the
@@ -205,9 +228,10 @@ pub fn sync_payload() -> text {
 }
 
 // The kernel loop: pump → budgeted event drain → tick when due → idle.
-// Never returns.  `on_event` and `on_tick` are the user's meaning; their
-// captures (the world) live in the caller's frame, which stays alive because
-// this fn never returns.
+// Returns only via `stop()` (the windowed listener's window-close exit) or a
+// completed build swap; a headless server simply never calls stop.  `on_event`
+// and `on_tick` are the user's meaning; their captures (the world) live in the
+// caller's frame, which stays alive for the loop's lifetime.
 pub fn run(port: integer, tick_interval_us: integer,
            on_event: fn(Event), on_tick: fn()) {
   ok = kernel_listen(port, tick_interval_us);
@@ -216,7 +240,7 @@ pub fn run(port: integer, tick_interval_us: integer,
     return;
   }
   println("engine_host: listening on ws://0.0.0.0:{port}/ (tick every {tick_interval_us} us)");
-  while true {
+  while kernel_alive() {
     // @PLN18 08-S5 — the swap step: 0 = serve normally, 1 = FROZEN (a new
     // build is booting; mechanics stay alive, meaning waits), 2 = handed
     // over (the new build serves; this process retires).
@@ -262,6 +286,10 @@ pub fn run(port: integer, tick_interval_us: integer,
     if work == 0 {
       kernel_idle(2000);
     }
+    // The per-turn yield point (twin of run_client's kernel_client_frame):
+    // a no-op on native; in a browser it hands the tab back — so a windowed
+    // LISTENER (draw in on_tick, observers connected) frames correctly.
+    kernel_frame();
   }
 }
 
@@ -289,6 +317,9 @@ fn kernel_client_next_event() -> boolean;
 #native
 
 fn kernel_client_event_kind() -> integer;
+#native
+
+fn kernel_client_event_cid() -> integer;
 #native
 
 fn kernel_client_event_payload() -> text;
@@ -406,7 +437,8 @@ fn client_loop(on_event: fn(Event), on_tick: fn()) {
       more = kernel_client_next_event();
       if !more { break; }
       ev = Event {
-        cid:     0,
+        // 0 = the server; -1 = a local post() (window input).
+        cid:     kernel_client_event_cid(),
         kind:    kernel_client_event_kind(),
         payload: kernel_client_event_payload(),
       };

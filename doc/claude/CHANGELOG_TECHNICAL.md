@@ -31,6 +31,28 @@ backends): `tests/engine_host_kernel.rs::run_local_ticks_and_stops_without_a_ser
 Driven by the crawler consumer (#343); design note: plan-18 ENGINE_HOST.md
 § Update 2026-06-12.
 
+### engine_host: `post`, listener `stop()`, listener frame yield (the crawler K2 trio) (2026-06-12)
+
+The three flow-back asks from the crawler consumer's K2 (observer slice):
+
+- **`post(msg) -> boolean`** — enqueue a LOCAL event on the running kernel
+  (any role): window input becomes an ordinary events-class message with
+  `cid: -1` (local origin).  The connector loop previously hardcoded `cid: 0`
+  when constructing events (the server was the only source); the new
+  `kernel_client_event_cid` accessor carries the real origin.  Registered on
+  all three calling conventions; surface fns with a `#native "sym"` alias
+  register their DEF name in `CODEGEN_RUNTIME_FNS` (`n_post`, like `n_send`).
+- **Listener `stop()`** — `Kernel.alive` + `kernel_stop`/`kernel_alive`;
+  `run` loops on `kernel_alive()` and returns after a handler calls
+  `engine_host::stop()` (the windowed listener's window-close exit, mirror of
+  `client_stop`).
+- **`kernel_frame()`** — the per-turn yield in `run`'s loop (no-op native,
+  frame-yield browser; twin of `kernel_client_frame`), so a windowed
+  LISTENER frames correctly.
+
+Regression (both roles × both backends):
+`tests/engine_host_kernel.rs::post_and_stop_in_both_roles`.
+
 ### rpc debugger: `verified` flag on setBreakpoints + string-form tracepoint log (#342) (2026-06-12)
 
 Two silent-failure footguns in `loft debug --rpc`, found while verifying the

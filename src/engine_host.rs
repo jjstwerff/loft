@@ -234,6 +234,10 @@ struct Kernel {
     tick_interval_us: i64,
     last_tick_us: i64,
     warned_oversize: bool,
+    /// False once `kernel_stop()` ran — a windowed listener's exit: `run`
+    /// returns at the top of its next turn (mirror of the connector's
+    /// `client_stop`).
+    alive: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -536,6 +540,7 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                     tick_interval_us: tick_us.max(1),
                     last_tick_us: 0,
                     warned_oversize: false,
+                    alive: true,
                 });
             });
             // @PLN18 08-S5 — the swap-resume handshake: when this process was
@@ -931,6 +936,53 @@ pub fn n_kernel_idle(stores: &mut Stores, stack: &mut DbRef) {
 pub fn n_kernel_clients(stores: &mut Stores, stack: &mut DbRef) {
     let n = with_kernel(|k| k.conns.iter().filter(|c| c.is_some()).count() as i64).unwrap_or(0);
     stores.put(stack, n);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_alive() -> boolean` — `run`'s loop condition; false after
+/// `kernel_stop()` (the windowed listener's window-close exit).
+pub fn n_kernel_alive(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_kernel(|k| k.alive).unwrap_or(false);
+    stores.put(stack, v);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_stop()` — mark the listener done so `run` returns at the top of
+/// its next turn (mirror of the connector's `client_stop`).
+pub fn n_kernel_stop(_stores: &mut Stores, _stack: &mut DbRef) {
+    let _ = with_kernel(|k| k.alive = false);
+}
+
+/// `kernel_frame()` — the per-turn yield point in `run`'s loop: a no-op on
+/// native (the loop owns its thread), a frame-yield in the browser.  The
+/// listener twin of `kernel_client_frame`, so a windowed LISTENER frames too.
+pub fn n_kernel_frame(_stores: &mut Stores, _stack: &mut DbRef) {}
+
+/// The local-event enqueue shared by both calling conventions: window input
+/// (or any script-side source) becomes an ordinary events-class message —
+/// `cid: -1` marks local origin, handlers treat keys and remote messages
+/// identically (and K4-style intent shipping serializes the SAME stream).
+/// Posts to the active role's queue: connector/local first, else listener.
+/// False = no kernel is booted.
+#[cfg(not(target_arch = "wasm32"))]
+fn post_impl(msg: &str) -> bool {
+    let ev = |payload: String| Event {
+        cid: -1,
+        kind: 1,
+        payload,
+    };
+    if with_client(|c| c.events.push_back(ev(msg.to_string()))).is_some() {
+        return true;
+    }
+    with_kernel(|k| k.events.push_back(ev(msg.to_string()))).is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `post(msg) -> boolean` — see [`post_impl`].
+pub fn n_kernel_post(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    let ok = post_impl(&msg);
+    stores.put(stack, ok);
 }
 
 // ── 05a — the state-sync UDP channel ────────────────────────────────────────
@@ -1525,6 +1577,15 @@ pub fn n_kernel_client_event_kind(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// `kernel_client_event_cid() -> integer` — the last event's origin: `0` =
+/// the server, `-1` = a local `post` (window input).  Connector events were
+/// all server-origin before `post` existed; the cid keeps them apart.
+pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.last.cid).unwrap_or(-1);
+    stores.put(stack, v);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Destination-passing text return — see `n_kernel_event_payload_dest`.
 pub fn n_kernel_client_event_payload_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
@@ -2108,6 +2169,29 @@ pub mod browser {
         stores.put(stack, false);
     }
 
+    /// `post(msg) -> boolean` — the local-event enqueue in the browser:
+    /// touch/key input becomes an events-class message on the client queue
+    /// (`cid: -1` = local origin).  False = no client kernel is booted.
+    pub fn n_kernel_post(stores: &mut Stores, stack: &mut DbRef) {
+        let msg = stores.get::<Str>(stack).str().to_owned();
+        let ok = with_client(|c| {
+            c.events.push_back(Event {
+                cid: -1,
+                kind: 1,
+                payload: msg.clone(),
+            });
+        })
+        .is_some();
+        stores.put(stack, ok);
+    }
+
+    /// The listener loop's per-turn yield — same browser contract as
+    /// `n_kernel_client_frame` (a browser listener doesn't exist today, but
+    /// the shared lib source calls it; honest yield either way).
+    pub fn n_kernel_frame(stores: &mut Stores, _stack: &mut DbRef) {
+        stores.frame_yield = true;
+    }
+
     /// `kernel_local(tick_interval_us) -> boolean` — the transportless client
     /// kernel in the browser: a windowed (canvas) host with no server.  No
     /// WebSocket (`ws: -1`, guarded in pump/send); `opened` so nothing waits
@@ -2238,6 +2322,12 @@ pub mod browser {
 
     pub fn n_kernel_client_event_kind(stores: &mut Stores, stack: &mut DbRef) {
         let v = with_client(|c| c.last.kind).unwrap_or(-1);
+        stores.put(stack, v);
+    }
+
+    /// Origin of the last event: `0` = the server, `-1` = a local `post`.
+    pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
+        let v = with_client(|c| c.last.cid).unwrap_or(-1);
         stores.put(stack, v);
     }
 
@@ -2497,6 +2587,16 @@ pub mod typed {
         local_init(tick_us);
         1
     }
+    pub fn n_post(_cell: &UnsafeCell<Stores>, msg: &str) -> u8 {
+        u8::from(post_impl(msg))
+    }
+    pub fn n_kernel_alive(_cell: &UnsafeCell<Stores>) -> u8 {
+        u8::from(with_kernel(|k| k.alive).unwrap_or(false))
+    }
+    pub fn n_kernel_stop(_cell: &UnsafeCell<Stores>) {
+        let _ = with_kernel(|k| k.alive = false);
+    }
+    pub fn n_kernel_frame(_cell: &UnsafeCell<Stores>) {}
     pub fn n_kernel_client_pump(_cell: &UnsafeCell<Stores>) -> i64 {
         with_client(pump_client).unwrap_or(0)
     }
@@ -2504,6 +2604,9 @@ pub mod typed {
         let _ = super::with_client(|c| c.alive = false);
     }
 
+    pub fn n_kernel_client_event_cid(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(|c| c.last.cid).unwrap_or(-1)
+    }
     pub fn n_kernel_client_alive(_cell: &UnsafeCell<Stores>) -> u8 {
         u8::from(with_client(|c| c.alive).unwrap_or(false))
     }

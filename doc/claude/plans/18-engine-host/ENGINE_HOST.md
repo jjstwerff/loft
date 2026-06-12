@@ -340,6 +340,17 @@ the handlers never change.  Regression:
 `tests/engine_host_kernel.rs::run_local_ticks_and_stops_without_a_server`
 (both backends).
 
+**Update (2026-06-12, later): the crawler K2 trio.**  `post(msg)` enqueues a
+local event on whichever role runs — window input becomes an ordinary
+events-class message (`cid: -1` marks local origin; the connector loop now
+reads the real cid via `kernel_client_event_cid` instead of hardcoding the
+server's 0), so handlers treat keys and remote messages identically and
+intent-shipping (K4) serializes the stream that already exists.  The listener
+gained its exit (`stop()`; `run` loops on `kernel_alive()`) and the per-turn
+`kernel_frame()` yield — a windowed LISTENER (draw in `on_tick`, observers
+connected) now works on both native and browser contracts.  Regression:
+`tests/engine_host_kernel.rs::post_and_stop_in_both_roles`.
+
 Compounding payoffs: **loopback testing** (server + client kernels in one process
 over an in-memory channel — the whole protocol tested without sockets; also
 single-player for free), **the IDE host converges** (`--serve`'s hand-rolled WS loop
