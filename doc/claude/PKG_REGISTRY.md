@@ -878,6 +878,19 @@ ECOSYSTEM bootstrap:
    Phase 4.
 4. R10.5 key-rotation drill before any real compromise.
 
+### Coverage check — the registry must not drift behind the repos
+
+`scripts/check_registry_coverage.sh` (loft repo) compares every
+`loft-lang/loft-libs-*` library's `loft.toml` version against the
+published `index.json` and warns on **missing** (no entry at all) and
+**stale** (repo version newer than the newest published one) libraries.
+It runs per-PR as the advisory CI job "library registry coverage"; run
+it locally with `--strict` (exit 1 on findings) as a pre-publish gate.
+The fix for any finding is the publish flow in
+[REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).  Libraries still inside the
+loft repo's `lib/` are out of scope — they are unextracted by design
+(PKG.EXTRACT).
+
 ---
 
 ## What this does NOT cover
