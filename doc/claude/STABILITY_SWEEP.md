@@ -335,11 +335,15 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   16 B call result into a 12 B DbRef slot in `t_4File_lines`).  Taught
   the text case; demoted the rest to a warning with
   `LOFT_WIDTH_ASSERT=1` escalation until a per-op width table exists.
-- **`check_ref_leaks` is uniformly stale on the retbuf shape**: the
-  corpus sweep tripped it ~130× (work refs + ref-returning call-result
-  vars) with ZERO runtime leaks — the static "every owned ref var has
-  an OpFreeRef" model predates the @PLAN59/plan-57 ownership designs.
-  Realignment still open; `LOFT_REF_LEAK_WARN=1` is the workaround.
+- **`check_ref_leaks` was uniformly stale on the retbuf shape** — FIXED
+  2026-06-12: the runtime trace showed the "missing" frees were
+  `OpFreeRefIfDistinct` (the witness-pair conditional release of a
+  ref-returning call's work ref) — the gate's `freed` collector matched
+  only plain `OpFreeRef`.  It now counts the whole frees-arg-0 family
+  (`OpFreeRef` / `OpFreeRefTag` / `OpFreeRefIfDistinct`); all ~130
+  corpus false positives gone, no `LOFT_REF_LEAK_WARN` crutch needed
+  (the env stays as a deliberate escape hatch for chasing runtime bugs
+  past a known leak shape).
 - **THE FIND — pass-2 arity growth is a LIVE release crash**: the
   restored channel's first catch.  A forward CALLER of a
   multi-return-site fn halts codegen with "Too few parameters on n_pick
@@ -365,10 +369,14 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   `p15_three_level.loft`.  This is the named next focused item, now
   with its design question stated.
 
-Remaining armed-corpus failures (12 files): `store.rs:1640` ×7 + four
-singletons (`vector.rs:331`, `codegen.rs:2560`, `codegen.rs:1871`,
-`compile.rs:306`) + the pass-2 growth itself — enumerated in
-`/tmp/claude/sweep/refleak2.log`.
+Remaining armed-corpus failures (12 files, now WITHOUT any env crutch):
+**`store.rs:1640` "Freed record accessed" ×7 — ALL keyed-collection
+scripts** (`119-keyed-local-reassign`, `120-keyed-return-assign`,
+`126-keyed-field-clear`, …): the @P302 family; possibly a REAL latent
+use-after-free in the keyed reassign path that release reads silently —
+the named next sub-item.  Plus four singletons (`vector.rs:331`,
+`codegen.rs:2560`, `codegen.rs:1871`, `compile.rs:306`) and the pass-2
+growth shape itself.  File list: `/tmp/claude/sweep/refleak3.log`.
 
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 

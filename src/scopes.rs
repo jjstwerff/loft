@@ -2316,10 +2316,10 @@ fn returned_var(expr: &Value) -> u16 {
 /// Recursively collect every variable freed by `OpFreeRef` in `ir`.
 /// Used by `check_ref_leaks` to verify no Reference variable is leaked.
 #[cfg(debug_assertions)]
-fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
+fn collect_freed_vars(ir: &Value, free_ops: &[u32], result: &mut HashSet<u16>) {
     ir.walk(&mut |n| {
         if let Value::Call(d_nr, args) = n
-            && *d_nr == free_ref_nr
+            && free_ops.contains(d_nr)
             && let Some(Value::Var(v)) = args.first().map(Value::unspan)
         {
             result.insert(*v);
@@ -2366,7 +2366,7 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
     // false positives would misfire on valid patterns, so keep the
     // criteria narrow.
     let mut freed: HashSet<u16> = HashSet::new();
-    collect_freed_vars(ir, free_text_nr, &mut freed);
+    collect_freed_vars(ir, &[free_text_nr], &mut freed);
     if freed.is_empty() {
         return;
     }
@@ -2398,9 +2398,19 @@ fn check_ref_leaks(
     ret_type: &Type,
     var_scope: &BTreeMap<u16, u16>,
 ) {
-    let free_ref_nr = data.def_nr("OpFreeRef");
+    // Every op that FREES its first argument counts as that var's free
+    // site: the plain scope-exit free, the @P317 tag-checked free, and
+    // the witness-pair conditional free (`OpFreeRefIfDistinct` — how a
+    // ref-returning call's work ref is released when it doesn't alias
+    // the assigned var; the armed-corpus sweep's ~130 "no OpFreeRef"
+    // false positives were all this shape).
+    let free_ops = [
+        data.def_nr("OpFreeRef"),
+        data.def_nr("OpFreeRefTag"),
+        data.def_nr("OpFreeRefIfDistinct"),
+    ];
     let mut freed: HashSet<u16> = HashSet::new();
-    collect_freed_vars(ir, free_ref_nr, &mut freed);
+    collect_freed_vars(ir, &free_ops, &mut freed);
 
     // H2: `ret_type` deps are ATTRIBUTE indices — translate each to its
     // frame var through the attribute name before pooling with the
