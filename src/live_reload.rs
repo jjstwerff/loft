@@ -85,10 +85,25 @@ pub fn install(path: &str, stdlib_dir: &str, lib_dirs: &[String], running: &crat
     match session.load_program(path) {
         Ok(Ok(())) => {}
         Ok(Err(diags)) => {
+            // The parse gate is errors-only (warnings never disqualify —
+            // parity with the main session, #347), and the refusal must be
+            // diagnosable: a bare count hid WHICH shadow-only errors fired
+            // and sent the consumer chasing their warnings.
+            let errors: Vec<_> = diags
+                .iter()
+                .filter(|e| e.level >= crate::diagnostics::Level::Error)
+                .collect();
             eprintln!(
-                "live-reload: shadow parse reported {} diagnostic(s); reload disabled",
+                "live-reload: shadow parse failed with {} error(s) ({} diagnostics total); reload disabled",
+                errors.len(),
                 diags.len()
             );
+            for e in errors.iter().take(3) {
+                eprintln!("live-reload:   {}", e.to_string_compact());
+            }
+            if errors.len() > 3 {
+                eprintln!("live-reload:   … {} more", errors.len() - 3);
+            }
             return;
         }
         Err(e) => {

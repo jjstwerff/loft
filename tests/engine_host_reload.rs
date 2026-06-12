@@ -207,3 +207,43 @@ fn live_reload_swaps_a_running_fn() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #346/#347 — the reload host must install from ANY cwd (the shadow session
+/// inherits the resolved stdlib instead of opening a relative `default`), and
+/// a program whose only diagnostics are WARNINGS must still get a watcher
+/// (the shadow gate is errors-only, parity with the main session).
+#[test]
+fn reload_installs_from_foreign_cwd_with_warnings() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    // `v[i]` with no defensive check is the canonical standing warning.
+    let prog_src = "fn main() {\n  v = [1, 2, 3];\n  i = 1;\n  if v[i] != null {\n    println(\"x\");\n  }\n}\n";
+    let dir = std::env::temp_dir().join(format!("eh_reload_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        !dir.join("default").exists(),
+        "probe cwd must not contain a stdlib dir"
+    );
+    let prog = dir.join("warny.loft");
+    std::fs::write(&prog, prog_src).unwrap();
+    let out = Command::new(loft_bin())
+        .env("LOFT_LIVE_RELOAD", "1")
+        .env("LOFT_OFFLINE", "1")
+        .args(["--interpret"])
+        .arg(&prog)
+        .current_dir(&dir) // the foreign cwd: no default/, no lib/
+        .output()
+        .expect("run under reload");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("live-reload: watching"),
+        "reload must install from a foreign cwd despite warnings, stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("reload disabled"),
+        "warnings alone must never disable reload, stderr:\n{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

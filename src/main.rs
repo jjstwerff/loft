@@ -5724,9 +5724,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         }
     } else {
         // @PLN18 phase 02 — tier-0 live reload (opt-in): watch the program
-        // file and hot-swap edited fns into the running State.
+        // file and hot-swap edited fns into the running State.  The shadow
+        // session inherits the RESOLVED stdlib dir — a relative "default"
+        // only exists when the cwd happens to be a loft checkout (#346).
         if std::env::var_os("LOFT_LIVE_RELOAD").is_some() {
-            loft::live_reload::install(&abs_file, "default", &p.lib_dirs, &p.data);
+            loft::live_reload::install(&abs_file, &default_str, &p.lib_dirs, &p.data);
         }
         state.execute_argv("main", &p.data, &user_args);
         // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
