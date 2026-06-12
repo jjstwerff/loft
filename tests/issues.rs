@@ -14976,3 +14976,50 @@ fn run() -> integer { even_pick(4).v }"
     .expr("run()")
     .result(Value::Int(92000));
 }
+
+// #355 — the VECTOR arm of the one-buffer return binding: a forward
+// caller of a multi-return-site vector fn silently returned the WRONG
+// element (per-site buffer growth mis-wired the forward call).  Mid-body
+// vector returns now chain/copy into the one buffer like Reference
+// returns (RetSite::MidReturn never renames a site local — the 01b
+// hazard); the wrapper leg guards the #120 dep-recovery mirror.
+#[test]
+fn one_buffer_vector_forward_caller() {
+    code!(
+        "fn use_pickv(json: text) -> vector<integer> { pickv(json) }
+fn pickv(json: text) -> vector<integer> {
+  if json == \"\" { return mkv(1); }
+  result = mkv(2);
+  if json == \"bad\" { return mkv(3); }
+  result
+}
+fn mkv(n: integer) -> vector<integer> { v: vector<integer> = []; v += [n]; v }
+fn run() -> integer {
+    use_pickv(\"\")[0] + use_pickv(\"x\")[0] + use_pickv(\"bad\")[0]
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
+}
+
+// #356 — a mid-body `return f(g(x))` (argument lifting decomposes the
+// bare call) returned the null sentinel on native: scopes' `returned_var`
+// saw no Var in the lifted tail, so the epilogue emitted `Return(Null)`.
+// The site's value now gets the canonical `{ buf = call(...); buf }`
+// shape on every pass (including the pass-2 re-find of a pass-1-promoted
+// work ref by name).
+#[test]
+fn mid_body_nested_call_return_value() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn wrap(x: S) -> S { s = S { v: x.v + 7 }; s }
+fn nested(json: text) -> S {
+  if json == \"n\" { return wrap(mk(94000)); }
+  mk(94100)
+}
+fn run() -> integer { nested(\"n\").v + nested(\"x\").v }"
+    )
+    .expr("run()")
+    .result(Value::Int(94007 + 94100));
+}
