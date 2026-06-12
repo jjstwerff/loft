@@ -399,7 +399,12 @@ impl Store {
             ptr,
             claims: HashSet::new(),
             size,
-            free: true,
+            // An opened FILE-BACKED store is in use by definition (it
+            // carries real data and `open` itself validates it below,
+            // before any `adopt_store` registration could clear the
+            // flag) — unlike `Store::new`, whose blank store stays
+            // `free` until the database layer registers it.
+            free: false,
             read_only: false,
             free_protected: false,
             free_root: 0,

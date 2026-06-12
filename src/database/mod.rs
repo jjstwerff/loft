@@ -735,7 +735,17 @@ impl Stores {
     ///
     /// Reuses a free slot if one is available below `max`; otherwise
     /// pushes a new slot at the end.
-    pub fn adopt_store(&mut self, store: Store) -> u16 {
+    pub fn adopt_store(&mut self, mut store: Store) -> u16 {
+        // Registration makes the store LIVE in both homes of that fact:
+        // the slot's free **bit** (cleared below) and the store's own
+        // `free` **flag** — `Store::new`/`Store::open` construct with
+        // `free: true` and document that the database layer clears it on
+        // registration.  This site forgot the flag half: release runs key
+        // on the bitmap and never noticed, while every armed-build
+        // `validate()` call on an adopted store (the bundle writer's
+        // first push) died on "Using a freed store" (the @P317
+        // bitmap-vs-flag dual invariant, F3 in the sweep catalog).
+        store.free = false;
         // Inline the free-slot scan rather than calling allocation.rs's
         // private `find_free_slot` — keeping mod.rs from depending on
         // that private helper avoids cross-file plumbing for one

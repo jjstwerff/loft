@@ -14867,3 +14867,34 @@ fn main() {
         "par over wrapper-promoted callee regressed: stdout={stdout:?} stderr={stderr:?}"
     );
 }
+
+// ── @PLAN59 pass-2 arity growth — forward CALLER of a multi-return-site fn ──
+// Found 2026-06-12 by the restored armed-assert channel: `ref_return`'s
+// pass-1 growth re-fires in PASS 2 under different work-ref names (pass 2
+// sees the forward callee already parsed, so the per-site work refs differ
+// from pass 1's), and a caller parsed earlier in pass 2 holds a short arg
+// list — codegen halts with "Too few parameters on n_pick (got 2, need 4)"
+// on BOTH backends.  The armed assert "@PLAN59: arity grew in PASS 2 on
+// plain fn" (parser/control.rs ref_return) flags exactly this.  Repro:
+// /tmp/p_followups/p14_forward_caller.loft.  The fix is pass-stable
+// ref_return promotion for the forward-callee shape (F1 family).
+#[test]
+#[ignore = "stability-sweep: pass-2 arity growth crashes forward callers of multi-return-site fns"]
+fn pass2_arity_growth_forward_caller() {
+    code!(
+        "struct S { v: integer not null }
+fn use_pick(json: text) -> S { pick(json) }
+fn pick(json: text) -> S {
+  if json == \"\" { return mk(71006); }
+  result = mk(71007);
+  if json == \"bad\" { return mk(71008); }
+  result
+}
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn run() -> integer {
+    use_pick(\"\").v + use_pick(\"x\").v + use_pick(\"bad\").v
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(71006 + 71007 + 71008));
+}

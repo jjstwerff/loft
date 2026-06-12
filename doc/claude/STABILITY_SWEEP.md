@@ -300,6 +300,63 @@ trace dumper on reference-field programs.
   (worktree experiments, hand-built mismatches) remain possible and now
   diagnosable by this signature.
 
+### The armed-channel restoration (2026-06-12) — four stale duals fixed, one LIVE release bug found
+
+The armed-lib-debug channel (`profile.dev.package.loft`
+debug-assertions=true) was globally red — worse than dead, it misled
+(this session twice nearly drew conclusions from a silently-unarmed
+binary).  Peeling the onion, 279/291 corpus files failing → **12**:
+
+- **adopt_store half-cleared the @P317 bitmap-vs-flag dual** (F3 family):
+  it cleared the slot's free *bit* but never the store's own `free`
+  *flag*, so every armed `validate()` on an adopted bundle store died
+  ("Using a freed store" in `ir_store::write_definition`).  Fixed at the
+  registration site; release keys on the bitmap and never noticed.
+  Callers audited: codec-only (workers adopt via separate plumbing).
+- **`Store::open` constructed file stores as `free: true`** then
+  self-validated → the warm-load twin of the same dual.  An opened
+  file-backed store is in use by definition — flag cleared at
+  construction.
+- **The claims-vs-headers dual** (the store.rs row's other entry): a
+  reopened file store has live headers but an EMPTY in-memory `claims`
+  set, so armed `Store::valid` rejected every warm-load read.
+  `read_only` is the check's designed exemption (worker stores) — the
+  three ir_read loaders now route through one `adopt_read_surface`
+  helper that sets it (also guarding the cached artifact against
+  mutation).
+- **I7 enforced a deleted allocator's invariant**: state/codegen's
+  `validate_slots` call still passed scope-aware=V1 after @PLAN53 made
+  the scope-blind V2 the ONLY allocator — false-positives on
+  legitimately zone-2-placed small vars (`_reduce_acc_N`).  Both call
+  sites now agree (skip I7).
+- **The set_var width assert's model is incomplete** (pushed ==
+  Variable-slot width fails for compensating put-op families: fn-ref —
+  already noted in its own comment — Str→String text conversion, and a
+  16 B call result into a 12 B DbRef slot in `t_4File_lines`).  Taught
+  the text case; demoted the rest to a warning with
+  `LOFT_WIDTH_ASSERT=1` escalation until a per-op width table exists.
+- **`check_ref_leaks` is uniformly stale on the retbuf shape**: the
+  corpus sweep tripped it ~130× (work refs + ref-returning call-result
+  vars) with ZERO runtime leaks — the static "every owned ref var has
+  an OpFreeRef" model predates the @PLAN59/plan-57 ownership designs.
+  Realignment still open; `LOFT_REF_LEAK_WARN=1` is the workaround.
+- **THE FIND — pass-2 arity growth is a LIVE release crash**: the
+  restored channel's first catch.  A forward CALLER of a
+  multi-return-site fn halts codegen with "Too few parameters on n_pick
+  (got 2, need 4)" on BOTH backends: `ref_return`'s growth re-fires in
+  pass 2 under DIFFERENT work-ref names (pass 2 sees the forward callee
+  parsed, so the per-site work refs differ), and the caller parsed
+  earlier in pass 2 keeps the short arg list.  F1 (two-pass
+  determinism) × @PLAN59.  Demonstrating test:
+  `tests/issues.rs::pass2_arity_growth_forward_caller` (`#[ignore]`);
+  repro `/tmp/p_followups/p14_forward_caller.loft`.  The fix —
+  pass-stable ref_return promotion — is the next focused item.
+
+Remaining armed-corpus failures (12 files): `store.rs:1640` ×7 + four
+singletons (`vector.rs:331`, `codegen.rs:2560`, `codegen.rs:1871`,
+`compile.rs:306`) + the pass-2 growth itself — enumerated in
+`/tmp/claude/sweep/refleak2.log`.
+
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 
 Family probe corpus: `/tmp/p_followups/f11_*.loft` (+ `f11_ws.py`); issue

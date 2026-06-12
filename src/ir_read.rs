@@ -445,6 +445,22 @@ pub fn ir_roundtrip_check(data: &Data) -> Result<(), crate::ir_schema::DataDiff>
     crate::ir_schema::compare_data(data, &loaded)
 }
 
+/// Open an IR store/bundle file as a READ surface and adopt it into
+/// `stores`.  A reopened file store has live headers on disk but an EMPTY
+/// in-memory `claims` set (claims are allocation-time artifacts), so the
+/// armed `Store::valid` record check would reject every read —
+/// `read_only` is its designed exemption for record-walking without
+/// claims (mirrors worker stores), and also guards the cached artifact
+/// against accidental mutation.  The ONE home for this discipline; all
+/// three loaders (`open_data`, `open_bundle`, `open_bundle_into`) route
+/// through it.
+#[cfg(feature = "mmap")]
+fn adopt_read_surface(path: &str, stores: &mut Stores) -> u16 {
+    let mut fstore = crate::store::Store::open(path);
+    fstore.read_only = true;
+    stores.adopt_store(fstore)
+}
+
 /// Load a native [`Data`] from a file-backed IR store written by
 /// [`crate::ir_store::save_data`] (@PLN11 arc D): mmap the file
 /// (`Store::open`) and rebuild the native `Data` from the well-known root
@@ -462,9 +478,8 @@ pub fn open_data(path: &str) -> std::io::Result<Data> {
             format!("IR store not found: {path}"),
         ));
     }
-    let fstore = crate::store::Store::open(path);
     let mut stores = Stores::new();
-    let nr = stores.adopt_store(fstore);
+    let nr = adopt_read_surface(path, &mut stores);
     let root = DbRef {
         store_nr: nr,
         rec: ds::IR_ROOT_REC,
@@ -492,9 +507,8 @@ pub fn open_bundle(path: &str) -> std::io::Result<(Data, Vec<SchemaType>)> {
             format!("IR bundle missing or not a valid store: {path}"),
         ));
     }
-    let fstore = crate::store::Store::open(path);
     let mut stores = Stores::new();
-    let nr = stores.adopt_store(fstore);
+    let nr = adopt_read_surface(path, &mut stores);
     let root = DbRef {
         store_nr: nr,
         rec: ds::IR_ROOT_REC,
@@ -527,9 +541,8 @@ pub fn open_program_store(path: &str) -> std::io::Result<(Stores, DbRef, Data, V
             format!("IR bundle missing or not a valid store: {path}"),
         ));
     }
-    let fstore = crate::store::Store::open(path);
     let mut stores = Stores::new();
-    let nr = stores.adopt_store(fstore);
+    let nr = adopt_read_surface(path, &mut stores);
     let root = DbRef {
         store_nr: nr,
         rec: ds::IR_ROOT_REC,
