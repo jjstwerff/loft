@@ -47,9 +47,12 @@ irreversible moves not to make.
 
 The @PLN16 debugger speaks NDJSON over stdio (the contract:
 `doc/claude/plans/16-debugger/PROTOCOL.md`). One `printf` pipes a whole scripted
-session — breakpoint → inspect the live frame → eval → edit → resume. Patterns
-below verified hands-on 2026-06-12 against an installed 0.8.5 and a real
-multi-module consumer (crawler's Sim).
+session — breakpoint → inspect the live frame → eval → edit — resume. Patterns
+below verified hands-on against this tree and a real multi-module consumer
+(crawler's Sim). ⚠ Version boundary: an installed binary OLDER than the rpc
+fixes (commit `9de72ada`) sends NO `verified` field on setBreakpoints and
+ignores string-form `"log"` (array only) — when driving `/usr/local/bin/loft`,
+prefer `target/*/loft` from this tree if the response lacks `verified`.
 
 ```sh
 printf '%s\n' \
