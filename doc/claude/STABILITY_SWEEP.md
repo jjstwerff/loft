@@ -371,8 +371,41 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   Demonstrating tests (`#[ignore]`):
   `tests/issues.rs::pass2_arity_growth_forward_caller` +
   `…_forward_chain`; repros `/tmp/p_followups/p14_forward_caller.loft`,
-  `p15_three_level.loft`.  This is the named next focused item, now
-  with its design question stated.
+  `p15_three_level.loft`.
+  **DESIGN ROUND (2026-06-12) — the stated question is RESOLVED by
+  probes; the fixpoint candidate is FALSIFIED:**
+  - **Self-recursion diverges**: a multi-site fn whose tail calls
+    ITSELF gives `buffers(f) = 2 + buffers(f)` — no finite fixpoint
+    exists, every pass adds attrs, codegen halts ("got 5, need 7").
+    No forward reference involved.  A between-pass fixpoint CANNOT
+    terminate here, so it is unsound for the class, not merely
+    incomplete (`casc_recursive.loft`,
+    `tests/issues.rs::pass2_arity_growth_self_recursive`).
+  - **Mutual recursion crashes** the same way — a call cycle always
+    contains a forward edge, so no resolution ORDER fixes it
+    (`casc_mutual.loft`, `…_mutual_recursion`).
+  - **The per-site ABI leaks into the user-facing fn TYPE**: two fns
+    with the identical declared signature `(text) -> S` cannot share a
+    fn-ref variable — `fn(text, S) -> S` vs `fn(text, S, S, S) -> S`
+    (compile error, `casc_fnref.loft`).  Hidden machinery visible at
+    the language surface (Goal F); any multi-buffer design keeps this.
+  - **Surviving design — ONE buffer per fn** (H1's own invariant made
+    exact): *a heap-returning fn's arity is signature+1, fixed at
+    declaration; every return path delivers its value in THE
+    `__retbuf`* — chaining the site's call into it when safe, copying
+    when the site's value aliases the buffer's current contents.
+    Recursion becomes trivial (self-call passes own buffer); the
+    fn-ref type unifies; the pass-2 growth assert becomes a true
+    invariant.  Named pre-build claims to probe in the implementation
+    window: (C-a) codegen order of the dest-buffer clear vs call-arg
+    evaluation when an arg views the buffer's current record
+    (`casc_argview.loft` — works today on distinct buffers, plus a
+    sibling store-leak warning); (C-b) the rename-binding currently
+    couples ONE var name to the buffer attr — sites 2+ need role-based
+    binding; (C-c) the cdylib emission path that killed the reverted
+    un-promoted-site attempt (`lib/moros_render` `map_export_glb` is
+    the regression); (C-d) the argview leak must not widen.  Size M;
+    validation = the 6-cell matrix × both backends + cdylib suites.
 
 Remaining armed-corpus failures (5 files, no env crutch; the corpus =
 tests/scripts + tests/docs + examples on the armed interp binary —

@@ -14930,3 +14930,53 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(71006 + 71007));
 }
+
+// SELF-RECURSION cell (design-round probe, 2026-06-12): a multi-site fn
+// whose tail return calls ITSELF makes the per-site buffer recurrence
+// self-referential — buffers(f) = 2 + buffers(f) has NO finite fixpoint,
+// so each parse pass adds more hidden attrs and codegen halts ("Too few
+// parameters on n_count_down (got 5, need 7)").  No forward reference
+// involved: this cell FALSIFIES the between-pass fixpoint design (it
+// cannot terminate here); only the one-buffer-per-fn family covers it.
+// Repro: /tmp/p_followups/casc_recursive.loft.
+#[test]
+#[ignore = "stability-sweep: pass-2 arity growth — self-recursive multi-site fn (divergent buffer recurrence)"]
+fn pass2_arity_growth_self_recursive() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn count_down(n: integer) -> S {
+  if n <= 0 { return mk(91000); }
+  if n == 99 { return mk(91099); }
+  count_down(n - 1)
+}
+fn run() -> integer { count_down(3).v }"
+    )
+    .expr("run()")
+    .result(Value::Int(91000));
+}
+
+// MUTUAL-RECURSION cell (design-round probe, 2026-06-12): two multi-site
+// fns tail-calling each other — a cycle always contains a forward edge,
+// so this crashes like the forward chain ("Too few parameters on
+// n_odd_pick (got 3, need 5)") and no parse ORDER can fix it.  Repro:
+// /tmp/p_followups/casc_mutual.loft.
+#[test]
+#[ignore = "stability-sweep: pass-2 arity growth — mutual recursion (a cycle always has a forward edge)"]
+fn pass2_arity_growth_mutual_recursion() {
+    code!(
+        "struct S { v: integer not null }
+fn mk(n: integer) -> S { s = S { v: n }; s }
+fn even_pick(n: integer) -> S {
+  if n <= 0 { return mk(92000); }
+  odd_pick(n - 1)
+}
+fn odd_pick(n: integer) -> S {
+  if n <= 0 { return mk(92001); }
+  even_pick(n - 1)
+}
+fn run() -> integer { even_pick(4).v }"
+    )
+    .expr("run()")
+    .result(Value::Int(92000));
+}
