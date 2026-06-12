@@ -279,13 +279,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i32) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
-    let size = stores.size(db_tp);
+    // B2-runtime parity with the bytecode VM (`state/io.rs::database`): an
+    // EnumValue record must be large enough for the parent enum's LARGEST
+    // variant, and `Stores::claim` takes WORDS — word 0 holds the size header
+    // + type tag, the payload's `size` BYTES start at byte 8.
+    let size = stores.enum_parent_size(db_tp);
     if db.store_nr == u16::MAX {
         // Null sentinel (no real store yet) — allocate a fresh one.
         db = stores.null();
     }
     stores.clear(&db);
-    let r = stores.claim(&db, u32::from(size));
+    let r = stores.claim(&db, 1 + u32::from(size).div_ceil(8));
     // P259 commit 3 — record the type allocated into this store so
     // free_named can recognise closure-record stores at free time
     // (cascade-free walks `__closure_*` records' DbRef fields).

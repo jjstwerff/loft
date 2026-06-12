@@ -611,7 +611,10 @@ pub fn run_parallel_text(
     // thread accumulation is gone — replaced by N store slots.
     let batches = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
         let row_count = end - start;
-        let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
+        // The s_pos array record needs 4 bytes for the record-size header
+        // (fld 0..4) plus 4 bytes per row; writes start at fld 4 — writing
+        // from fld 0 would overwrite the record's own header word.
+        let array_words = (4 + row_count * 4).div_ceil(8) as u32;
         let slot = ws.add_output_slot(array_words);
         let mut state = prog.new_state(ws);
         let array_rec = state.database.allocations[slot.store_nr as usize].claim(array_words);
@@ -641,7 +644,7 @@ pub fn run_parallel_text(
             let s = state.execute_at_text(fn_pos, arg, &extras, n_hidden_text);
             let slot_store = &mut state.database.allocations[slot.store_nr as usize];
             let s_pos = slot_store.set_str(&s);
-            slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
+            slot_store.set_u32_raw(array_rec, 4 + (local_idx as u32) * 4, s_pos);
         }
         (start, row_count, slot.store_nr, array_rec, state.database)
     });
@@ -649,7 +652,7 @@ pub fn run_parallel_text(
     for (start, count, slot_nr, array_rec, worker_db) in batches {
         let slot_store = &worker_db.allocations[slot_nr as usize];
         for local_idx in 0..count {
-            let s_pos = slot_store.get_u32_raw(array_rec, (local_idx as u32) * 4);
+            let s_pos = slot_store.get_u32_raw(array_rec, 4 + (local_idx as u32) * 4);
             results[start + local_idx] = slot_store.get_str(s_pos).to_string();
         }
     }

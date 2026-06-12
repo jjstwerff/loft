@@ -826,7 +826,12 @@ impl State {
             *self.mut_var::<DbRef>(var) = db;
         }
         self.database.clear(&db);
-        let r = self.database.claim(&db, u32::from(size));
+        // The record layout is: word 0 = size header (4 B) + type tag (4 B),
+        // payload from byte 8.  `Stores::claim` takes WORDS, so the payload's
+        // `size` BYTES need `1 + ceil(size / 8)` words — passing `size` raw
+        // under-claims for 1-byte payloads (a single-boolean struct/closure
+        // record got zero payload bytes and wrote into the next word).
+        let r = self.database.claim(&db, 1 + u32::from(size).div_ceil(8));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
         // P259 commit 3 — record the type allocated into this store so
         // free_named can recognise closure-record stores at free time

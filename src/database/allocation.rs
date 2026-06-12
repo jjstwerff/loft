@@ -1225,7 +1225,7 @@ impl Stores {
         // Bucket record layout (per `src/hash.rs::add`): offset 0 = room (record
         // size in words), offset 4 = length, offset 8.. = (room - 1) * 2 bucket
         // slots (u32 rec-nrs).  Walk every source slot and re-insert each entry.
-        let room = self.store(rec).get_u32_raw(cur, 0);
+        let room = self.store(rec).record_words(cur);
         let elms = (room - 1) * 2;
         for i in 0..elms {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
@@ -1756,7 +1756,7 @@ impl Stores {
                 // Matches `copy_claims_hash_body`'s @P290 fix; surfaced by
                 // @P295 (keyed-local reassignment calls `remove_claims` on a
                 // hash via `OpReplaceKeyed`).
-                let length = (self.store(rec).get_u32_raw(cur, 0) - 1) * 2;
+                let length = (self.store(rec).record_words(cur) - 1) * 2;
                 for i in 0..length {
                     let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
                     if elm == 0 {
@@ -2037,7 +2037,7 @@ mod p318_hash_deepcopy {
             stores.set_keyed(&src_h, &v, hash_tp, false);
         }
         let cur = stores.store(&src_h).get_u32_raw(src_h.rec, src_h.pos);
-        let room = stores.store(&src_h).get_u32_raw(cur, 0);
+        let room = stores.store(&src_h).record_words(cur);
         assert!(room >= 3, "source room {room} too small to over-size");
 
         // --- destination Holder + an engineered over-size free block ---

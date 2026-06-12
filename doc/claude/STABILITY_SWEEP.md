@@ -369,19 +369,54 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   `p15_three_level.loft`.  This is the named next focused item, now
   with its design question stated.
 
-Remaining armed-corpus failures (12 files, no env crutch; the corpus =
+Remaining armed-corpus failures (5 files, no env crutch; the corpus =
 tests/scripts + tests/docs + examples on the armed interp binary —
 rebuild it with
 `cargo --config 'profile.dev.package.loft.debug-assertions=true' build --bin loft`):
 
 | Site | Files | Read |
 |---|---|---|
-| `store.rs:1640` "Freed record accessed" | `119-keyed-local-reassign`, `120-keyed-return-assign`, `126-keyed-field-clear`, `128-struct-keyed-field-init`, `22c-par-sources`, `22-threading`, `292-pln17-three-state-boolean` | the @P302 keyed family + two par files; possibly a REAL latent use-after-free release reads silently — **the named next sub-item** |
 | `vector.rs:331` | `132-vector-elemset-inline-literal-uaf` | the file's own name says UAF — likely the documented shape's armed twin |
 | `codegen.rs:1871` | `166-p390-self-slice-assign` | singleton |
 | `codegen.rs:2560` | `examples/collections.loft` | singleton |
 | `compile.rs:306` | `75-native-stub` | the native-stub panic is that test's SUBJECT — likely expected-fail by design |
 | `control.rs:3487` (pass-2 growth) | `298-multi-return-site-ref-buffer` | the mapped arity-cascade class (see THE FIND above) |
+
+**The `store.rs:1640` row (7 files) is RESOLVED 2026-06-12** — the
+"keyed armed UAF" was not a use-after-free; the one assert site hid
+THREE distinct mechanisms, two of them real out-of-record writes
+silent in release:
+
+- **A — header-as-`room` read via the wrong accessor** (the 4 keyed
+  files): a hash bucket's `room` IS its record-size header
+  (`hash.rs::add` claims `room` words), but `copy_claims_hash_body` /
+  `remove_claims` read it through `get_u32_raw(cur, 0)`, whose
+  `valid()` gate rightly rejects data reads below fld 4.  Fixed by a
+  dedicated `Store::record_words(rec)` accessor (claims + liveness
+  asserts kept, fld-0 allowed) now used by every room read in
+  `hash.rs` + `allocation.rs` — the dual-use invariant has one named
+  home.
+- **B — parallel s_pos array stomped its own record header**
+  (`22-threading`, `22c-par-sources`): `run_parallel_text`'s
+  per-worker result array claimed `ceil(rows*4/8)` words and wrote
+  from fld 0 — index 0 landed on the record's size header.  Fixed:
+  claim `ceil((4+rows*4)/8)` words, read/write at `4 + idx*4`.
+- **C — OpDatabase under-claims 1-byte payloads — a REAL release
+  out-of-record write** (`292-pln17-three-state-boolean`):
+  `Stores::claim` takes WORDS; both OpDatabase twins passed the type
+  size in BYTES.  Probe matrix: size ≤ 1 byte (a one-boolean struct, a
+  closure capturing one boolean) claimed 1 word total = header + type
+  tag, ZERO payload bytes — every field write landed one byte past the
+  record (silent in release); size ≥ 2 over-allocated ~8× and masked
+  the class.  Fixed at both twins with the exact formula
+  `1 + ceil(size/8)` (`state/io.rs::database`,
+  `codegen_runtime::OpDatabase`); the native twin also gained the
+  interp's B2 `enum_parent_size` (it used the variant's own size — a
+  latent F4 divergence for unit enum variants).  Guard:
+  `tests/scripts/299-single-byte-record.loft` (cross-mode).
+
+Full release suite + armed corpus green after; the armed corpus is
+down 12 → 5 files with no new sites.
 
 ### F11 sweep day (2026-06-12) — error-path state: four breaks, six refuted claims
 

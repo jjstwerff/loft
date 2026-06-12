@@ -1787,6 +1787,26 @@ impl Store {
         }
     }
 
+    /// Word count of a live record, read from its size header (fld 0).
+    /// The header word doubles as DATA for hash bucket records: a
+    /// bucket's `room` IS its record size (`hash.rs::add` claims `room`
+    /// words), so this is the one legitimate fld-0 read — `valid()`'s
+    /// data-field gate (`fld >= 4`) correctly rejects it via the
+    /// ordinary accessors.
+    #[must_use]
+    pub fn record_words(&self, rec: u32) -> u32 {
+        debug_assert!(
+            self.read_only || self.claims.contains(&rec),
+            "Unknown record {rec}"
+        );
+        let size: i32 = *self.addr(rec, 0);
+        debug_assert!(
+            size > 0,
+            "Freed record {rec} (size={size}) read as a record header"
+        );
+        size as u32
+    }
+
     /// 4-byte unsigned raw read — for internal collection headers
     /// (vector `[rec:u32][len:u32]`, hash buckets, tree node ptrs,
     /// string-record lengths).  NOT for user `integer` fields.
