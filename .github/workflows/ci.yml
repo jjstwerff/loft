@@ -262,6 +262,38 @@ jobs:
   # suites are run — the guard cannot see the separate binaries that native /
   # wasm / html tests spawn, so running those here would add cost without
   # coverage.
+  # Branch protection's required checks are pinned to the PRE-shard job
+  # names ("Test (macos-latest)" / "Test (windows-latest)").  These two
+  # aggregate gates report under exactly those names so the sharded matrix
+  # satisfies the existing protection without a settings change; once the
+  # required-checks list is updated to the shard names, both can be
+  # deleted.  `if: always()` + an explicit result test — a plain `needs`
+  # dependent would be SKIPPED when a shard fails, and skipped satisfies
+  # required checks, which would make protection vacuous.  `skipped` is
+  # accepted deliberately: that is the docs-only path (the `changes` job
+  # skipped the matrix on purpose).
+  test-macos-gate:
+    name: Test (macos-latest)
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the sharded matrix to have passed
+        run: |
+          r="${{ needs.test.result }}"
+          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
+
+  test-windows-gate:
+    name: Test (windows-latest)
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the sharded matrix to have passed
+        run: |
+          r="${{ needs.test.result }}"
+          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
+
   guard:
     name: stack_align_guard sweep (ubuntu)
     needs: changes
