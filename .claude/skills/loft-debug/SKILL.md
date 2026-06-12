@@ -1,6 +1,6 @@
 ---
 name: loft-debug
-description: Operational companion for running a loft bug down on this box — LOFT_LOG presets, dump files, find_problems flow, the native-backend env gotchas that cause FALSE failures, and the operational-safety rules for builds/processes. Routes to the matrix-first protocol (CLAUDE.md) for the METHOD; this is the MECHANICS. Apply when reproducing, investigating, or verifying a loft crash, wrong-result, or codegen bug.
+description: Operational companion for running a loft bug down on this box — LOFT_LOG presets, dump files, find_problems flow, the live-debugger RPC surface (loft debug --rpc — scripted breakpoint/eval/setValue sessions), the native-backend env gotchas that cause FALSE failures, and the operational-safety rules for builds/processes. Routes to the matrix-first protocol (CLAUDE.md) for the METHOD; this is the MECHANICS. Apply when reproducing, investigating, or verifying a loft crash, wrong-result, or codegen bug — and whenever about to sprinkle println/probe prints into a loft program (the debugger session replaces them).
 user-invocable: false
 ---
 
@@ -47,7 +47,7 @@ irreversible moves not to make.
 
 The @PLN16 debugger speaks NDJSON over stdio (the contract:
 `doc/claude/plans/16-debugger/PROTOCOL.md`). One `printf` pipes a whole scripted
-session — breakpoint → inspect the live frame → eval → edit — resume. Patterns
+session — breakpoint → inspect the live frame → eval → edit → resume. Patterns
 below verified hands-on against this tree and a real multi-module consumer
 (crawler's Sim). ⚠ Version boundary: an installed binary OLDER than the rpc
 fixes (commit `9de72ada`) sends NO `verified` field on setBreakpoints and
@@ -69,21 +69,21 @@ printf '%s\n' \
 
 - **Order matters: `launch` LOADS but does not run; `run` starts execution.** Set
   breakpoints between them. (`continue` before `run` just emits `terminated`.)
-- **`setBreakpoints` matches files by BASENAME** (relative or absolute both work;
-  two same-named files in one program can't be told apart). The response carries
+- **`setBreakpoints` matches files by BASENAME** (relative or absolute both work,
+  including a `use`d module's file while launching the consumer; two same-named
+  files in one program can't be told apart). The response carries
   `breakpoints:[{line, verified}]` — **check `verified`**: `false` means the
   breakpoint can never fire (no breakable code on that line, or a file the
   program doesn't use); don't wait on a stop that never comes.
-- **Cross-module breakpoints work** (break in a `use`d module's file while
-  launching the consumer).
 - **Multi-lib programs**: append the usual lib flags —
   `loft debug src/x.loft --rpc --lib ../pkg/ …`.
 - **`stopped` carries the whole frame**: function, line, and every live local —
   a full crawler `Sim` struct renders inline (vectors elided `…`); one event =
   the variables panel, drill down with `eval`.
-- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`);
-  an out-of-scope name returns `value:null`, not an error — don't misread null
-  as "the field is empty".
+- **`eval` runs against the paused frame** (`s.php`, `n * 100`, `len(v)`), and
+  the frame holds only the locals **live ON that line**. An out-of-scope name
+  returns `value:null`, not an error — don't misread null as "the field is
+  empty".
 - **`setValue` edits the live run** (scalar / text / enum / struct field /
   nested path / vector element; a whole heap local is rejected by design) —
   execution resumes WITH the edit: probe a hypothesis by injecting the suspect
@@ -92,9 +92,9 @@ printf '%s\n' \
   tracepoint (`"log":"expr"` or `"log":["e1","e2"]`, `"stop":false`) streams
   `output{category:"trace"}` lines (`expr = value`) without pausing — structured
   trace beats sprinkled printlns. Log entries are EXPRESSIONS, not format strings.
-- **Conditions and trace exprs see only the locals live ON that line** — a name
-  not read/written nearby evaluates null/`?`, so a condition on it silently never
-  matches. Anchor breakpoints on a line that uses the variables you test.
+- **Conditions and trace exprs obey the same liveness rule** — a name not
+  read/written on that line evaluates null/`?`, so a condition on it silently
+  never matches. Anchor breakpoints on a line that uses the variables you test.
 - Program stdout arrives as `output` events on the SAME pipe, never interleaved
   with protocol — parse line-by-line as JSON, switch on `event`/`id`.
 - The interactive twin is `loft debug <file>` (the `(dbg)` prompt) — same engine,
