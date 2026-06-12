@@ -19,6 +19,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -66,7 +77,7 @@ fn connector_auto_path_end_to_end() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let server_prog = std::env::temp_dir().join(format!("eh_conn_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_conn_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -89,7 +100,7 @@ fn main() {{
         ),
     )
     .unwrap();
-    let client_prog = std::env::temp_dir().join(format!("eh_conn_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_conn_cli_{}.loft", std::process::id()));
     std::fs::write(
         &client_prog,
         format!(
@@ -191,7 +202,7 @@ fn keyframes_survive_total_datagram_loss() {
         return;
     }
     let port = 18090u16;
-    let server_prog = std::env::temp_dir().join(format!("eh_kf_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_kf_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -215,7 +226,7 @@ fn main() {{
         ),
     )
     .unwrap();
-    let client_prog = std::env::temp_dir().join(format!("eh_kf_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_kf_cli_{}.loft", std::process::id()));
     std::fs::write(
         &client_prog,
         format!(
@@ -395,7 +406,7 @@ fn s6_browser_swap_under_living_page() {
     let port = 18102u16;
     // The relay server: ticks the sync class; relays "pushblob:" payloads
     // verbatim to every client (the bulk-channel role — content-agnostic).
-    let server_prog = std::env::temp_dir().join(format!("eh_s6_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_s6_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -537,7 +548,7 @@ fn browser_kernel_one_script_differential() {
     }
 
     let port = 18105u16;
-    let server_prog = std::env::temp_dir().join(format!("eh_diff_srv_{}.loft", std::process::id()));
+    let server_prog = test_tmp().join(format!("eh_diff_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
         format!(
@@ -593,7 +604,7 @@ fn main() {{
 }}
 "#
     );
-    let client_prog = std::env::temp_dir().join(format!("eh_diff_cli_{}.loft", std::process::id()));
+    let client_prog = test_tmp().join(format!("eh_diff_cli_{}.loft", std::process::id()));
     std::fs::write(&client_prog, &client_src).unwrap();
     let expect = [
         "t:connected",

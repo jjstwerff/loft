@@ -20,6 +20,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -146,7 +157,7 @@ fn live_reload_swaps_a_running_fn() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("eh_reload_{}", std::process::id()));
+    let dir = test_tmp().join(format!("eh_reload_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let prog = dir.join("srv.loft");
     let sig = "p: text, n: integer";

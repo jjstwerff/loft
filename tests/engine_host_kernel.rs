@@ -25,6 +25,17 @@ use std::time::{Duration, Instant};
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
+/// Disk-backed scratch for test fixtures.  `std::env::temp_dir()` is a
+/// RAM-backed tmpfs on dev boxes (small quota, shared across sessions), and
+/// loft's cache-next-to-source rule would put every `--native` fixture's
+/// binary cache there too — the disk-quota stall class.  `target/` lives on
+/// disk and is cleaned with the build tree.
+fn test_tmp() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn vm_deadline(secs: u64) -> Instant {
     let scale = if std::env::var_os("CI").is_some() {
         3
@@ -251,10 +262,10 @@ fn run_s3_scenario(port: u16, interpret: bool) -> S2Run {
         };
     }
     let decl_v0 = "fn bump_events(w: W) -> integer";
-    let prog = std::env::temp_dir().join(format!("eh_s3_{port}_{}.loft", std::process::id()));
+    let prog = test_tmp().join(format!("eh_s3_{port}_{}.loft", std::process::id()));
     std::fs::write(&prog, s3_fixture(port, decl_v0, "w.events = w.events + 1;")).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s3_{port}_{}.err", std::process::id()));
+    let err_path = test_tmp().join(format!("eh_s3_{port}_{}.err", std::process::id()));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -421,7 +432,7 @@ fn s5_native_swap_under_running_world() {
     // A test-OWNED always-fails binary: /bin/false varies across platforms
     // and runners (macOS CI refused it — forensics pending); a temp script
     // is deterministic everywhere this unix-only suite runs.
-    let bad_bin = std::env::temp_dir().join(format!("eh_s5_false_{port}.sh"));
+    let bad_bin = test_tmp().join(format!("eh_s5_false_{port}.sh"));
     std::fs::write(&bad_bin, "#!/bin/sh\nexit 1\n").unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
@@ -471,10 +482,10 @@ fn main() {{
 "#
         )
     };
-    let prog = std::env::temp_dir().join(format!("eh_s5_{port}.loft"));
+    let prog = test_tmp().join(format!("eh_s5_{port}.loft"));
     std::fs::write(&prog, fixture("v1")).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s5_{port}.err"));
+    let err_path = test_tmp().join(format!("eh_s5_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -659,7 +670,7 @@ fn s5_client_swap_under_running_world() {
     let _hygiene = S5Hygiene(STEM);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let srv_prog = std::env::temp_dir().join(format!("eh_s5c_srv_{port}.loft"));
+    let srv_prog = test_tmp().join(format!("eh_s5c_srv_{port}.loft"));
     std::fs::write(
         &srv_prog,
         format!(
@@ -691,7 +702,7 @@ fn main() {{
         .expect("spawn server");
     let _sguard = Guard(Some(server));
 
-    let cli_prog = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.loft"));
+    let cli_prog = test_tmp().join(format!("eh_s5c_cli_{port}.loft"));
     std::fs::write(
         &cli_prog,
         format!(
@@ -714,8 +725,8 @@ fn main() {{
         ),
     )
     .unwrap();
-    let out_path = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.out"));
-    let err_path = std::env::temp_dir().join(format!("eh_s5c_cli_{port}.err"));
+    let out_path = test_tmp().join(format!("eh_s5c_cli_{port}.out"));
+    let err_path = test_tmp().join(format!("eh_s5c_cli_{port}.err"));
     let mut ccmd = Command::new(loft_bin());
     ccmd.env("LOFT_LIVE_FLIP", "1")
         .env("LOFT_DEBUG_CONTROL", "1");
@@ -848,7 +859,7 @@ fn s7_client_debug_over_its_own_endpoint() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // A minimal kernel server for the client to ride against.
-    let srv_prog = std::env::temp_dir().join(format!("eh_s7c_srv_{port}.loft"));
+    let srv_prog = test_tmp().join(format!("eh_s7c_srv_{port}.loft"));
     std::fs::write(
         &srv_prog,
         format!(
@@ -881,7 +892,7 @@ fn main() {{
     let _sguard = Guard(Some(server));
 
     // The COMPILED debuggable client: tick_step is the breakpoint target.
-    let cli_prog = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.loft"));
+    let cli_prog = test_tmp().join(format!("eh_s7c_cli_{port}.loft"));
     std::fs::write(
         &cli_prog,
         format!(
@@ -906,8 +917,8 @@ fn main() {{
         ),
     )
     .unwrap();
-    let out_path = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.out"));
-    let err_path = std::env::temp_dir().join(format!("eh_s7c_cli_{port}.err"));
+    let out_path = test_tmp().join(format!("eh_s7c_cli_{port}.out"));
+    let err_path = test_tmp().join(format!("eh_s7c_cli_{port}.err"));
     let mut ccmd = Command::new(loft_bin());
     ccmd.env("LOFT_LIVE_FLIP", "1")
         .env("LOFT_DEBUG_CONTROL", "1")
@@ -1044,10 +1055,10 @@ fn main() {{
 }}
 "#
     );
-    let prog = std::env::temp_dir().join(format!("eh_s8_{port}.loft"));
+    let prog = test_tmp().join(format!("eh_s8_{port}.loft"));
     std::fs::write(&prog, &fixture).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s8_{port}.err"));
+    let err_path = test_tmp().join(format!("eh_s8_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -1211,10 +1222,10 @@ fn main() {{
 "#
         )
     };
-    let prog = std::env::temp_dir().join(format!("eh_s7_{port}.loft"));
+    let prog = test_tmp().join(format!("eh_s7_{port}.loft"));
     std::fs::write(&prog, fixture(1)).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s7_{port}.err"));
+    let err_path = test_tmp().join(format!("eh_s7_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -1392,10 +1403,10 @@ fn main() {{
 "#
         )
     };
-    let prog = std::env::temp_dir().join(format!("eh_s4_{port}.loft"));
+    let prog = test_tmp().join(format!("eh_s4_{port}.loft"));
     std::fs::write(&prog, fixture(1)).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s4_{port}.err"));
+    let err_path = test_tmp().join(format!("eh_s4_{port}.err"));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -1544,7 +1555,7 @@ fn run_s2_scenario(port: u16, interpret: bool) -> S2Run {
             stderr: String::new(),
         };
     }
-    let prog = std::env::temp_dir().join(format!("eh_s2_{port}_{}.loft", std::process::id()));
+    let prog = test_tmp().join(format!("eh_s2_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,
         format!(
@@ -1580,7 +1591,7 @@ fn main() {{
     )
     .unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let err_path = std::env::temp_dir().join(format!("eh_s2_{port}_{}.err", std::process::id()));
+    let err_path = test_tmp().join(format!("eh_s2_{port}_{}.err", std::process::id()));
     let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(loft_bin());
     cmd.env("LOFT_OFFLINE", "1"); // hermetic fixtures
@@ -1635,7 +1646,7 @@ fn run_kernel_scenario(port: u16, interpret: bool) {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let prog = std::env::temp_dir().join(format!("eh_kernel_{port}_{}.loft", std::process::id()));
+    let prog = test_tmp().join(format!("eh_kernel_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,
         format!(
