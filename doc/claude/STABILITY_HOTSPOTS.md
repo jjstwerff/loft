@@ -150,12 +150,22 @@ every creation site states its meaning (`none` / `frame` / `attrs` /
 `as_attr_indices`, debug-tag-checked, zero release cost),
 `resolve_deps`/`ref_return` are typed as THE converters, and contaminated
 reads scream in debug.  The step-3 bisect upgraded the inventory: the
-`dep_has_var` "fossil" is LIVE — block-result deps are mixed-space by
+`dep_has_var` "fossil" was LIVE — block-result deps were mixed-space by
 contract (in-range = attr index, out-of-range = frame var; removing the
-arm made `26-closures`' factory results share one record).  Remaining
-(step 5, future): split block-result mixed-space deps into tagged halves
-so the positional contract can retire.  Gates: release suite 2292/2292,
-debug-mode suite (asserts armed) green.
+arm made `26-closures`' factory results share one record).
+Step 5 DONE (2026-06-12): the positional contract is RETIRED — the
+callee-frame note a closure factory stores in `def.returned` is an
+in-band TAGGED value (`Deps::CALLEE_FRAME_BIT`; sole writer
+`Deps::callee_frame1` at the vectors.rs lambda propagation; decoded by
+`Deps::entries`), chosen over the debug-only tag because VALUES survive
+the IR codec (cache round-trips erase the debug tag — corpus-probed).
+The block-result dep read in `get_free_vars` is deleted (probed across
+five corpora: never decides alone; a debug sentinel guards the claim);
+`check_ref_leaks` pools the decoded note instead of dropping it (its
+false `___clos_1` leak report is gone).  Regression:
+`tests/scripts/297-closure-factory-explicit-return.loft`.  Full record +
+residuals found en route (armed-lib-debug baseline redness; @PLAN59
+growth assert on two lib fns): DEPS_INVENTORY § Status.
 
 ---
 

@@ -774,6 +774,38 @@ pub enum DepSpace {
     Attr,
 }
 
+/// A decoded def-space dep entry (H2 step 5,
+/// [DEPS_INVENTORY](../doc/claude/DEPS_INVENTORY.md)): an attribute index,
+/// or a callee-internal FRAME-var note tagged in-band with
+/// [`Deps::CALLEE_FRAME_BIT`].  Being a VALUE tag (not a debug-only field)
+/// it survives the IR codecs and the startup cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepEntry {
+    /// Callee attribute index — "the result borrows from parameter N".
+    Attr(u16),
+    /// Callee frame var — "the result carries this callee-LOCAL's store"
+    /// (the closure work var of a returned fn-ref).  Meaningless to
+    /// callers (`resolve_deps` skips it); read only inside the defining
+    /// function (`scopes` keeps the local alive through the return).
+    CalleeFrame(u16),
+}
+
+impl DepEntry {
+    /// Decode one raw def-space dep value.  THE single decoder — used by
+    /// [`Deps::entries`] and by readers that only have flattened values
+    /// (e.g. tuple-union deps from [`Type::depend`]).  The `u16::MAX`
+    /// markers decode as `Attr(u16::MAX)` (their readers check
+    /// [`Deps::is_pointer_marker`] before iterating).
+    #[must_use]
+    pub fn decode(raw: u16) -> DepEntry {
+        if raw != u16::MAX && raw & Deps::CALLEE_FRAME_BIT != 0 {
+            DepEntry::CalleeFrame(raw & !Deps::CALLEE_FRAME_BIT)
+        } else {
+            DepEntry::Attr(raw)
+        }
+    }
+}
+
 /// H2 ([STABILITY_HOTSPOTS](../doc/claude/STABILITY_HOTSPOTS.md) /
 /// [DEPS_INVENTORY](../doc/claude/DEPS_INVENTORY.md)): the dependency list
 /// carried by heap-backed `Type` variants.  An entry is an index into one
@@ -910,6 +942,46 @@ impl Deps {
     #[must_use]
     pub fn share_sentinel() -> Deps {
         Self::frame(vec![u16::MAX])
+    }
+
+    /// In-band per-entry tag (H2 step 5): marks a callee-internal
+    /// FRAME-var note inside a def-space list.  No definition has 0x8000
+    /// attributes, so a tagged value can never read as a real attr index;
+    /// the constructor rejects var 0x7FFF so the `u16::MAX`
+    /// pointer/share markers stay unambiguous.
+    const CALLEE_FRAME_BIT: u16 = 0x8000;
+
+    /// One callee-internal frame-var note for a def-space list — the
+    /// closure-factory shape: a returned fn-ref carries its closure work
+    /// var so the defining function's scope analysis keeps the record
+    /// alive through the return (the ONLY writer is the lambda
+    /// propagation in `parser/vectors.rs`).  Decode with [`Deps::entries`].
+    ///
+    /// # Panics
+    /// When `v >= 0x7FFF` — the tagged value would collide with the
+    /// `u16::MAX` pointer/share markers (no real frame ever holds 32 767
+    /// variables).
+    #[must_use]
+    pub fn callee_frame1(v: u16) -> Deps {
+        assert!(
+            v < Self::CALLEE_FRAME_BIT - 1,
+            "callee-frame dep var {v} would collide with the u16::MAX markers"
+        );
+        let items = vec![Self::CALLEE_FRAME_BIT | v];
+        #[cfg(debug_assertions)]
+        {
+            deps_new!(items, DepSpace::Attr)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            deps_new!(items, ())
+        }
+    }
+
+    /// Decode a DEF-space list per entry — attr indices vs tagged
+    /// callee-frame notes (see [`DepEntry::decode`]).
+    pub fn entries(&self) -> impl Iterator<Item = DepEntry> + '_ {
+        self.items.iter().map(|&it| DepEntry::decode(it))
     }
 
     /// Unclassified — codec round-trips, tests, plumbing that merely
@@ -1195,6 +1267,27 @@ impl Type {
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
             _ => self.clone(),
+        }
+    }
+
+    #[must_use]
+    /// The dependency list AS TAGGED (`Deps`) — `None` for dep-less
+    /// variants; recurses through `RefVar`.  A `Tuple` has no single list
+    /// (its deps are the union of its elements'); use [`Type::depend`]
+    /// for the flattened, tag-erased union.
+    pub fn deps_ref(&self) -> Option<&Deps> {
+        match self {
+            Type::Text(dep)
+            | Type::Reference(_, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Enum(_, _, dep)
+            | Type::Vector(_, dep)
+            | Type::Function(_, _, dep) => Some(dep),
+            Type::RefVar(tp) => tp.deps_ref(),
+            _ => None,
         }
     }
 

@@ -1607,41 +1607,48 @@ impl Scopes {
             | Type::Index(_, _, dep)
             | Type::Spacial(_, _, dep) = function.tp(v)
             {
-                // check both the block result type (tp) and the function's
-                // declared return type.  When a closure escapes via implicit return,
-                // the block result type may lack the dep that was propagated to the
-                // function's declared return type (vectors.rs:704-711).
-                // tp.depend() and returned.depend() contain attribute
-                // indices (parameter positions), not variable numbers.  Resolve
-                // each attribute index to its actual variable number before
-                // comparing, to avoid false matches when a local var_nr happens
-                // to equal an unrelated attribute index.
+                // H2 step 5 (DEPS_INVENTORY): the declared return type's
+                // dep list is DEF-space — attr indices from `ref_return`,
+                // plus tagged callee-frame notes (a returned fn-ref's
+                // closure work var, `Deps::callee_frame1`).  Decode per
+                // entry; the historical positional guess (in-range = attr
+                // index, out-of-range = frame var) is retired.
                 let def = data.def(self.d_nr);
-                let dep_has_var = |deps: &Vec<u16>| -> bool {
-                    deps.iter().any(|&a| {
-                        let a_idx = a as usize;
-                        if a_idx < def.attributes.len() {
-                            function.var(&def.attributes[a_idx].name) == v
-                        } else {
-                            // NOT a fossil (H2 bisect 2026-06-11): block-result
-                            // types reach here with MIXED-space deps — entries
-                            // below the attr count are attribute indices,
-                            // entries above are FRAME var numbers (e.g. the
-                            // closure work var a factory's returned fn-ref
-                            // depends on).  Removing this arm freed closure
-                            // records early (26-closures: two make_adder
-                            // results shared one record).  The positional
-                            // disambiguation IS the current contract —
-                            // documented in DEPS_INVENTORY § crossing sites.
-                            a == v
+                let ret_borrows_v = def.returned.deps_ref().is_some_and(|deps| {
+                    deps.entries().any(|e| match e {
+                        crate::data::DepEntry::Attr(a) => {
+                            (a as usize) < def.attributes.len()
+                                && function.var(&def.attributes[a as usize].name) == v
                         }
+                        crate::data::DepEntry::CalleeFrame(w) => w == v,
                     })
-                };
-                let tp_deps = tp.depend().clone();
-                let ret_deps = data.def(self.d_nr).returned.depend().clone();
-                let in_ret = dep_has_var(&tp_deps)
-                    || dep_has_var(&ret_deps)
+                });
+                let in_ret = ret_borrows_v
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
+                // H2 step-5 sentinel: the BLOCK-RESULT type's deps were
+                // read here for years under the positional guess; the
+                // 2026-06-12 corpus probes (scripts, docs, examples,
+                // tools, libs) show that read never decides alone — the
+                // declared-return and returned-var checks subsume it.
+                // Scream if a live case ever appears; re-add the read
+                // WITH a typed decode then (DEPS_INVENTORY § step 5).
+                #[cfg(debug_assertions)]
+                {
+                    let tp_alone = !in_ret
+                        && tp.depend().iter().any(|&a| {
+                            if (a as usize) < def.attributes.len() {
+                                function.var(&def.attributes[a as usize].name) == v
+                            } else {
+                                a == v
+                            }
+                        });
+                    debug_assert!(
+                        !tp_alone,
+                        "H2 step-5 sentinel: the block-result dep read would have \
+                         decided alone for var {v} in '{}'",
+                        def.name()
+                    );
+                }
                 // Work-refs (`__ref_N` / `__rref_N`) carry their own var
                 // in the dep list (`src/parser/mod.rs:1924-1928`) so the
                 // standard `dep.is_empty()` gate skips them.  But work-
@@ -1752,8 +1759,17 @@ impl Scopes {
                 // fn-ref variables OWN their closure store. The dep list
                 // tracks captured variables, not store borrowing. Always
                 // emit OpFreeRef unless the fn-ref is the return value.
-                let in_ret =
-                    tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
+                // H2 step 5: the declared return's closure-work-var note is
+                // a TAGGED callee-frame entry — decode it (a raw `contains`
+                // never matches the tagged value, and an explicit
+                // `return adder;` reaches here with an empty block-result
+                // dep list, so the closure record would be freed under the
+                // escaping fn-ref).
+                let ret_carries = data.def(self.d_nr).returned.deps_ref().is_some_and(|d| {
+                    d.entries()
+                        .any(|e| matches!(e, crate::data::DepEntry::CalleeFrame(w) if w == v))
+                });
+                let in_ret = tp.depend().contains(&v) || ret_carries;
                 let emit = !in_ret && !function.is_skip_free(v);
                 if emit {
                     if scope_debug {
@@ -2393,12 +2409,23 @@ fn check_ref_leaks(
     // leak report).
     let fn_def_nr = data.def_nr(fn_name);
     let mut ret_deps: HashSet<u16> = HashSet::new();
-    for a in ret_type.depend() {
-        let a_idx = a as usize;
-        if fn_def_nr != u32::MAX && a_idx < data.def(fn_def_nr).attributes().len() {
-            let av = function.var(&data.def(fn_def_nr).attributes()[a_idx].name);
-            if av != u16::MAX {
-                ret_deps.insert(av);
+    for raw in ret_type.depend() {
+        match crate::data::DepEntry::decode(raw) {
+            crate::data::DepEntry::Attr(a) => {
+                let a_idx = a as usize;
+                if fn_def_nr != u32::MAX && a_idx < data.def(fn_def_nr).attributes().len() {
+                    let av = function.var(&data.def(fn_def_nr).attributes()[a_idx].name);
+                    if av != u16::MAX {
+                        ret_deps.insert(av);
+                    }
+                }
+            }
+            // H2 step 5: a tagged callee-frame note IS a frame var — pool
+            // it directly (the untagged value was silently dropped by the
+            // attr-range guard before, so a returned closure's work var
+            // could surface as a false leak report).
+            crate::data::DepEntry::CalleeFrame(w) => {
+                ret_deps.insert(w);
             }
         }
     }

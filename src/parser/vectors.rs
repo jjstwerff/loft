@@ -972,8 +972,12 @@ impl Parser {
             //    text-returning lambdas crash because the work buffer is missing.
             if let Type::Function(params, _, _) = self.data.def(self.context).returned() {
                 let params = params.clone();
+                // H2 step 5: `w` is a FRAME var stored in the DEF-space home
+                // (`Definition.returned`) — write it as a tagged
+                // callee-frame note so readers decode the space instead of
+                // guessing by attr-range position (`Deps::entries`).
                 self.data.definitions[self.context as usize].returned =
-                    Type::Function(params, Box::new(ret_tp), Deps::frame1(w));
+                    Type::Function(params, Box::new(ret_tp), Deps::callee_frame1(w));
             }
             // record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
