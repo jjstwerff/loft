@@ -17,12 +17,27 @@ full state so the next session resumes cleanly.
 > out and fixed two pre-existing main bugs: loop-consumption buffer
 > accumulation (silent wrong results, both backends) and nested
 > `vector<vector<T>>` `+=` row corruption (`vector_add` stride).
-> **Still open from this handoff:** (1) the `sweep`/`hexn` TUPLE
-> witness-pair-in-loop leak below — a Reference-return sibling of the fixed
-> vector class, untouched by the vector fix, still the prerequisite for
-> landing #354 against the crawler (`cavetest`); needs its own matrix per
-> § "Why I did NOT fix it this session".  (2) the cavetest/crawler verify.
-> (3) merge + rebase on #357.  The worktrees below are still in place.
+> **Still open from this handoff:** (1) ~~the `sweep`/`hexn` TUPLE
+> witness-pair-in-loop leak~~ **FIXED later the same evening** — the matrix
+> showed it was NOT the witness-pair placement (the IR is identical between
+> leaking and clean shapes) but the NATIVE backend's plain `var = call(...)`
+> reassignment never freeing the previous store (interp pre-frees at the
+> same chokepoint), plus the deep-copy branch's `is_borrowed_view`
+> misreading the hidden-buffer dep marker as a borrow.  Both fixed in
+> `generation/dispatch.rs` (stash + post-free-if-distinct wrap around
+> `output_set`; hidden-attr-aware borrow test); regression
+> `tests/scripts/303-ref-reassign-free.loft`.  (2) ~~cavetest~~ **VERIFIED:
+> `=== CAVE OK ===`** with the crawler libs compiling native, and the 80k
+> `sweep` repro completes without store exhaustion.  (3) merge + rebase on
+> #357 — in flight.  A sibling INTERP wrong-value bug surfaced by the same
+> matrix (`s = grow(s)` in a loop reads null) is **#360 — also FIXED in
+> session** (`fixed-pending-merge`): the s1 hidden-position tightening +
+> the slot re-init moved inside OpCopyRecord's destination argument (so
+> the RHS call evaluates against v's old store first) + the plain
+> pass-through kept for the `rhs-reads-v ∧ borrowed-view` composition
+> (`g = id_g(g)`, guarded by tests/scripts/291).  Regression:
+> `tests/scripts/303-ref-reassign-free.loft`.
+> The worktrees below are still in place.
 
 ## The user's queue (in order)
 

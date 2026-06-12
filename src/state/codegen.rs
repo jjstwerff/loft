@@ -1548,14 +1548,27 @@ impl State {
             // `nrvo_collapse_tail_set`).  In that shape, the Call writes
             // its result INTO v's existing store, so freeing v's old
             // content here destroys what the Call is about to write into.
-            // Detection: any arg of the RHS Call is `Var(v)`.  Bails for
-            // every other shape (struct-literal RHS, non-S1 calls,
-            // non-tail patterns) — those keep the load-bearing pre-Set
-            // FreeRef intact, so `tests/scripts/130-gridmesh-crystal-equiv.loft`
-            // and the broader moros_* suite stay green.
-            let s1_substituted = if let Value::Call(_, args) = value.unspan() {
-                args.iter()
-                    .any(|a| matches!(a.unspan(), Value::Var(av) if *av == v))
+            // Detection (#360): an arg of the RHS Call is `Var(v)` AT A
+            // HIDDEN parameter position — only the hidden buffer arg is
+            // what `nrvo_collapse_tail_set` substitutes.  A VISIBLE
+            // `Var(v)` argument (`s = grow(s)` passing s as plain data) is
+            // NOT the S1 shape: classifying it as S1 skipped both the
+            // pre-Set free and the deep-copy, so `s` adopted the call-site
+            // buffer store and the next iteration's callee `OpDatabase`
+            // wiped it while `x` still pointed there — every later
+            // iteration read null.  Pairs with the evaluate-call-first
+            // re-init order in the deep-copy emission below (the interp
+            // half of @P290).  Bails for every other shape
+            // (struct-literal RHS, non-S1 calls, non-tail patterns) —
+            // those keep the load-bearing pre-Set FreeRef intact, so
+            // `tests/scripts/130-gridmesh-crystal-equiv.loft` and the
+            // broader moros_* suite stay green.
+            let s1_substituted = if let Value::Call(fn_nr, args) = value.unspan() {
+                let attrs = stack.data.def(*fn_nr).attributes();
+                args.iter().enumerate().any(|(i, a)| {
+                    matches!(a.unspan(), Value::Var(av) if *av == v)
+                        && attrs.get(i).is_some_and(|at| at.hidden)
+                })
             } else {
                 false
             };
@@ -1627,6 +1640,23 @@ impl State {
                         !a.hidden
                             && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
                     })
+                    // #360 follow-up: when the RHS call READS v AND the
+                    // callee returns a BORROWED view (its returned dep names
+                    // a VISIBLE param, e.g. `fn id_g(g: G) -> G { return g }`),
+                    // the call's result may BE v's own store — any dst
+                    // re-init/copy here would wipe the source in place
+                    // (tests/scripts/291's hash round-trip).  Keep the plain
+                    // pointer pass-through for that composition: PutRef binds
+                    // the returned DbRef and the stash's FreeRefIfDistinct
+                    // no-ops on the same store, exactly the (correct)
+                    // behaviour the over-broad S1 match used to produce.
+                    && !(stash_old_for_post_free && {
+                        let def = stack.data.def(*fn_nr);
+                        def.returned().depend().iter().any(|&a| {
+                            (a as usize) >= def.attributes().len()
+                                || !def.attributes()[a as usize].hidden
+                        })
+                    })
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
@@ -1646,12 +1676,19 @@ impl State {
                         self.code_add(bump);
                         stack.position += bump;
                     }
-                    let slot_offset = stack.var_pos(v);
-                    stack.add_op("OpInitRef", self);
-                    self.code_add(slot_offset);
-                    stack.add_op("OpDatabase", self);
-                    self.code_add(slot_offset);
-                    self.code_add(tp_nr);
+                    // #360: when the RHS call READS `v` (stash_old_for_post_free),
+                    // the slot re-init is emitted AFTER the call evaluates —
+                    // see the copy emission below — so the call's arguments
+                    // still see v's old store.  For every other shape the
+                    // re-init stays here, before the copy sequence.
+                    if !stash_old_for_post_free {
+                        let slot_offset = stack.var_pos(v);
+                        stack.add_op("OpInitRef", self);
+                        self.code_add(slot_offset);
+                        stack.add_op("OpDatabase", self);
+                        self.code_add(slot_offset);
+                        self.code_add(tp_nr);
+                    }
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
                     // @PLAN51 Cluster II Step 2 — require at least one
                     // VISIBLE-arg dep for is_borrowed_view.  Hidden-only
@@ -1687,10 +1724,26 @@ impl State {
                     } else {
                         i32::from(tp_nr) | 0x8000
                     };
-                    let copy_val = Value::Call(
-                        copy_nr,
-                        vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
-                    );
+                    // #360: the DESTINATION argument carries the slot re-init.
+                    // `Call` lowers its arguments left-to-right, so the RHS
+                    // call (the SOURCE) is fully evaluated — reading v's OLD
+                    // store — before this Insert runs `OpDatabase(v, tp)`,
+                    // which reuses-or-allocates v's record in place
+                    // (`state/io.rs::database`: null → fresh store, live →
+                    // clear + reclaim).  The old raw `OpInitRef + OpDatabase`
+                    // prologue ran BEFORE the source evaluated, so a
+                    // self-referencing call (`s = grow(s)`) read the freshly
+                    // wiped store and every assignment yielded null.
+                    let database_nr = stack.data.def_nr("OpDatabase");
+                    let dst_reinit = Value::Insert(vec![
+                        Value::Call(
+                            database_nr,
+                            vec![Value::Var(v), Value::Int(i32::from(tp_nr))],
+                        ),
+                        Value::Var(v),
+                    ]);
+                    let copy_val =
+                        Value::Call(copy_nr, vec![value.clone(), dst_reinit, Value::Int(tp_val)]);
                     // bracket the call + deep-copy with n_set_store_lock
                     // on every Ref/Vector/Enum arg (like gen_set_first_ref_call_copy
                     // already does for first-assignments).  Without this, when the
