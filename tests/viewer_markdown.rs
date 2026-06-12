@@ -107,7 +107,11 @@ impl ViewerGuard {
     }
 
     fn wait_listening(&self, port: u16) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        // Generous: first run on a cold CI runner resolves registry deps and
+        // compiles their native crates (the rustls chain alone takes minutes
+        // under load) before the listener opens.  A hung viewer still fails —
+        // just slowly, which an advisory smoke can afford.
+        let deadline = Instant::now() + Duration::from_secs(240);
         while Instant::now() < deadline {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 return true;
@@ -167,7 +171,7 @@ fn markdown_renderer_pins_high_impact_features() {
     let port = 8765u16;
     if !viewer.wait_listening(port) {
         panic!(
-            "viewer did not start listening on {port} within 15s\n{}",
+            "viewer did not start listening on {port} within 240s\n{}",
             viewer.diagnose()
         );
     }
@@ -178,7 +182,10 @@ fn markdown_renderer_pins_high_impact_features() {
     // that startup race instead of racing a single 200ms sleep.
     let md_path = "/file/tests/fixtures/md_features_test.md";
     let body = {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        // Same load allowance as wait_listening: a viewer that just opened its
+        // listener on a starved runner can still be seconds-to-minutes from
+        // serving its first rendered page.
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut b = http_get(md_path, port);
         while !b.contains("<h1 id=") && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(200));
@@ -193,7 +200,7 @@ fn markdown_renderer_pins_high_impact_features() {
     // below then only fire on a *real* rendering regression, with a non-empty body.
     if !body.contains("<h1 id=") {
         panic!(
-            "viewer never served the rendered page within 15s.\n{}\nbody so far: {body:.300}",
+            "viewer never served the rendered page within 60s.\n{}\nbody so far: {body:.300}",
             viewer.diagnose()
         );
     }
