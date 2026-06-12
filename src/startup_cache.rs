@@ -105,6 +105,11 @@ struct ManifestState {
     /// the parse registered (#310 — re-resolved at warm load so a cached run
     /// dlopens the same libraries, with cold-equal freshness checks).
     native_lib_regs: Vec<(String, String)>,
+    /// Def-table index where USER definitions start (the stdlib def count when
+    /// the user-file parse began).  A warm load restores stdlib + user defs in
+    /// one table, so without this boundary the no-`main` test-fn fallback sees
+    /// an empty user range and silently runs nothing (#358).
+    user_def_start: Option<u32>,
 }
 
 /// On a valid match, returns the parse-time [`ManifestState`] persisted in the
@@ -132,6 +137,14 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         program_relative = rest != "0";
         next = lines.next();
     }
+    // Optional `udef <n>` header (#358): where user defs start.  Like `prel`,
+    // absent only in pre-fix manifests, which the build-signature bump already
+    // invalidates — so the `None` fallback is never actually read.
+    let mut user_def_start = None;
+    if let Some(rest) = next.and_then(|l| l.strip_prefix("udef ")) {
+        user_def_start = rest.parse::<u32>().ok();
+        next = lines.next();
+    }
     // Optional `nlib <stem> <pkg_dir>` headers (#310): one per `[library]
     // native` registration the parse performed.  A stem is a Rust crate stem
     // (no spaces), so the remainder after the second space is the package dir
@@ -157,23 +170,25 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
     any.then_some(ManifestState {
         program_relative,
         native_lib_regs,
+        user_def_start,
     })
 }
 
 /// Whole-program warm load: if a valid bundle exists for `script_abspath` and
 /// every source it was built from is unchanged, load the entire `Data` + type
-/// schema into `p` and return `true` (the caller then skips **all** parsing).
+/// schema into `p` and return `Some(user_def_start)` — the def-table index
+/// where user definitions begin (the caller then skips **all** parsing and
+/// uses the boundary for the no-`main` test-fn fallback, #358).  `None` is a
+/// cache miss: fall back to a cold parse.
 #[cfg(feature = "mmap")]
 #[must_use]
 pub fn warm_load_program(
     p: &mut Parser,
     script_abspath: &str,
     store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
-) -> bool {
+) -> Option<u32> {
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
-    let Some(state) = manifest_state(&manifest) else {
-        return false;
-    };
+    let state = manifest_state(&manifest)?;
     // #310 — re-resolve the parse-time `[library] native` registrations the
     // warm load skips, BEFORE committing to the bundle: each cdylib gets the
     // same prebuilt-or-auto-build freshness check a cold parse runs (a loft
@@ -181,9 +196,7 @@ pub fn warm_load_program(
     // whole thing as a cache miss and let the cold path report it.
     let mut native_libs = Vec::new();
     for (stem, pkg_dir) in &state.native_lib_regs {
-        let Some(path) = crate::extensions::resolve_native_lib(pkg_dir, stem) else {
-            return false;
-        };
+        let path = crate::extensions::resolve_native_lib(pkg_dir, stem)?;
         if !native_libs.contains(&path) {
             native_libs.push(path);
         }
@@ -215,20 +228,21 @@ pub fn warm_load_program(
             Err(_) => false,
         }
     };
-    if loaded {
-        // @PLN11 — restore the parse-time `#cwd` path-resolution mode the warm
-        // load skipped.  Without it a cached `#cwd` program resolves relative
-        // paths program-relative instead of cwd-relative, silently reading the
-        // wrong base (e.g. the indexer scanning nothing).  `source_dir` needs no
-        // such restore — main.rs sets it every run from the script path.
-        p.database.program_relative = state.program_relative;
-        // #310 — restore the native-cdylib registrations: without these,
-        // `extensions::load_all` gets an empty list on warm runs and every
-        // `#native` call hits the "native function not loaded" stub.
-        p.pending_native_libs = native_libs;
-        p.native_lib_regs = state.native_lib_regs;
+    if !loaded {
+        return None;
     }
-    loaded
+    // @PLN11 — restore the parse-time `#cwd` path-resolution mode the warm
+    // load skipped.  Without it a cached `#cwd` program resolves relative
+    // paths program-relative instead of cwd-relative, silently reading the
+    // wrong base (e.g. the indexer scanning nothing).  `source_dir` needs no
+    // such restore — main.rs sets it every run from the script path.
+    p.database.program_relative = state.program_relative;
+    // #310 — restore the native-cdylib registrations: without these,
+    // `extensions::load_all` gets an empty list on warm runs and every
+    // `#native` call hits the "native function not loaded" stub.
+    p.pending_native_libs = native_libs;
+    p.native_lib_regs = state.native_lib_regs;
+    Some(state.user_def_start.unwrap_or_else(|| p.data.definitions()))
 }
 
 /// Cold path: after the full parse, write the whole-program bundle + its drift
@@ -236,7 +250,7 @@ pub fn warm_load_program(
 /// hash).  The bundle is published first, then the manifest atomically — so a
 /// manifest is only ever present alongside a complete bundle.
 #[cfg(feature = "mmap")]
-pub fn save_program(p: &Parser, script_abspath: &str) {
+pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     use std::fmt::Write as _;
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath);
 
@@ -250,6 +264,9 @@ pub fn save_program(p: &Parser, script_abspath: &str) {
     // @PLN11 — persist the parse-time path-resolution mode (the `#cwd` directive's
     // resolved effect) so a warm load (which skips parsing) can restore it.
     let _ = writeln!(lines, "prel {}", u8::from(p.database.program_relative));
+    // #358 — persist where user defs start so a warm load (which skips parsing)
+    // can run the no-`main` test-fn fallback over exactly the user functions.
+    let _ = writeln!(lines, "udef {user_def_start}");
     // #310 — persist each `[library] native` registration so a warm load can
     // re-resolve (and freshness-check) the cdylibs the parse registered.
     for (stem, pkg_dir) in &p.native_lib_regs {
@@ -289,8 +306,8 @@ pub fn warm_load_program(
     _p: &mut Parser,
     _script_abspath: &str,
     _store_out: &mut Option<(crate::database::Stores, crate::keys::DbRef)>,
-) -> bool {
-    false
+) -> Option<u32> {
+    None
 }
 #[cfg(not(feature = "mmap"))]
-pub fn save_program(_p: &Parser, _script_abspath: &str) {}
+pub fn save_program(_p: &Parser, _script_abspath: &str, _user_def_start: u32) {}
