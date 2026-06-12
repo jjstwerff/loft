@@ -148,7 +148,10 @@ serially before believing them.
   commit (or PR body) for every row your fix closes. The trailer drives the
   whole lifecycle — `fixed-pending-merge` on push, auto-close + label-strip on
   merge; never hand-label. Add the substantive comment: fixing commit,
-  regression test, what verification actually found.
+  regression test, what verification actually found. When a PR opens, copy
+  every `Fixes #N` into the PR BODY too — merges squash, and a merge-time
+  edit of the squash message would otherwise kill the trailer (issue stays
+  open, label goes stale).
 - Found a *sibling* bug while debugging? Default is **FIX** it (cheapest bug you'll
   ever fix), not file it — `CLAUDE.md` § Bug-filing policy. File only if it blocks the
   task or is too big to fix now.
