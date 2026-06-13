@@ -175,8 +175,13 @@ a wasm *rlib* and a native *cdylib* validate differently, so sharing was net-neg
 
    **Probe:** drop a locally-built `librandom.so` + a matching `.loft-build-fp` into `~/.loft/registry/random-0.1.0/prebuilt/<triple>/`; a `use random` run LOADS it (no `cdylib miss` in the ledger, no `cargo build`). Corrupt the sidecar → it falls through and rebuilds.
 
-### Phase 2 — Manifest schema: `runtime-libs` / `build-deps` · S
+### Phase 2 — Manifest schema: `runtime-libs` / `build-deps` · S — **SHIPPED 2026-06-13**
 **Goal:** packages declare the two dep sets validation + diagnostics need.
+**Landed:** `manifest.rs` gains `runtime_libs` / `build_deps: Vec<String>` parsed from
+`[native] runtime-libs` / `build-deps` (comma-list via `split_list`); unit test
+`parses_native_runtime_and_build_deps` ✓; PACKAGES.md `prebuilt/` sketch corrected to the
+cdylib + `.loft-build-fp` sidecar. Consumer wiring (store in `Data`, read in validation)
+moves to Phase 3, where it's used.
 1. **Struct** (`manifest.rs:36-46`) — add `runtime_libs: Vec<String>`, `build_deps: Vec<String>`; init `Vec::new()` in `default()` (`manifest.rs:79`).
 2. **Parse** (`manifest.rs:90-125`, before the `_ => {}` catch-all) — a flat comma-list is least-friction for the hand-rolled scanner: `("native","runtime-libs") => manifest.runtime_libs = value.split(',').map(trim).collect()`, same for `build-deps`. Example `runtime-libs = "libGL.so.1, libasound.so.2"`.
 3. **Consume** (`parser/mod.rs::apply_manifest_side_effects`, ~5907) — store both on the native-package record in `Data` (keyed by stem) so Phase 3 reads `runtime_libs` for the hint.
