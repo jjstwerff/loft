@@ -1,0 +1,84 @@
+name: Branch gates
+
+# Long-lived branches used to get ZERO CI exposure until their first PR —
+# windows-probe carried a latent gate failure through 41 commits and every
+# problem surfaced at once at PR time, each discovery costing a full
+# ~30-minute matrix round.  This lean push gate runs the highest-value
+# detectors (the wrap suite with its store-leak gate, plus the issues
+# regression corpus) on every non-main push so a PR opens against a branch
+# whose core gates are already known green.
+#
+# Deliberately small: one ubuntu job, no native lib fixtures, no OS matrix.
+# The full matrix still runs on the PR.
+
+on:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branch-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
+
+jobs:
+  quick-suite:
+    name: quick suite (wrap + issues, ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-branchgate-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-branchgate-cargo-
+            ubuntu-guard-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # `doc_hygiene` carries the cheap repo-shape guard tests (ship recipe, doc
+      # links) that otherwise only surface in the PR matrix.  `library_suite`
+      # needs the lib/* native fixture prep this lean job
+      # omits (same exclusion as the stack_align guard job, same rationale).
+      - name: Quick suite (wrap + issues)
+        run: >
+          cargo nextest run --profile ci --test wrap --test issues --test doc_hygiene
+          -E 'not test(library_suite)'
+
+      - name: Surface flaky tests (passed only on retry)
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import pathlib
+          import xml.etree.ElementTree as ET
+          p = pathlib.Path("target/nextest/junit.xml")
+          if not p.exists():
+              raise SystemExit(0)
+          root = ET.fromstring(p.read_text())
+          for tc in root.iter("testcase"):
+              if any(c.tag in ("flakyFailure", "rerunFailure") for c in tc):
+                  name = f"{tc.get('classname', '?')}::{tc.get('name', '?')}"
+                  print(f"::warning title=Flaky test (passed only on retry)::{name} — "
+                        "a retried pass can mask a real intermittent bug; treat as a finding")
+          EOF

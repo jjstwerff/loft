@@ -187,12 +187,33 @@ jobs:
       # byte-compare a regeneration to the committed copy and are toolchain-
       # sensitive by construction (a build-hygiene check ci.yml runs on stable),
       # so they would red-flag the matrix on a non-runtime concern.
+      # `--skip library_suite`: same exclusion (and rationale) as ci.yml's
+      # stack_align guard job — it builds the lib/* NATIVE suites
+      # (graphics/moros_*/input FFI), whose build scripts need the GL/ALSA
+      # system packages this lean job does not install.  Every nightly from
+      # early June 2026 was red on `pkg_config::Error` in
+      # `build_script_build` for exactly this, drowning the real
+      # toolchain-churn signal the matrix exists to catch.
       - name: Test (ubuntu, ${{ matrix.toolchain }})
         run: >
           cargo +${{ matrix.toolchain }} test --release --no-fail-fast
           --lib --test issues --test wrap --test strings --test frame_vars
           -- --skip fill_rs_up_to_date --skip n9_generated_fill_matches_src
-          --skip native_rs_functions_up_to_date
+          --skip native_rs_functions_up_to_date --skip library_suite
+
+      # The toolchain matrix compiles GENERATED Rust in the OS temp dir; when
+      # a leg fails, that generated source is the diagnosis and is otherwise
+      # lost with the runner.
+      - name: Upload generated sources on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-native-src-${{ matrix.toolchain }}
+          path: |
+            /tmp/loft_native_*.rs
+            /tmp/loft_*_test.rs
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Doc-index hygiene (plan-37) — the authoritative DAILY catch.  The per-PR
   # `index-hygiene` job in ci.yml is advisory (non-blocking), so a broken
@@ -220,3 +241,17 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
+
+      # This leg failed intermittently (June 2026) with `crate::rpc`
+      # unrewritten in a generated `/tmp/loft_native_<pid>.rs` — a shape that
+      # does not reproduce locally and whose failing artefact was lost with
+      # the runner every time.  Preserve it so the next occurrence is
+      # diagnosable instead of folklore.
+      - name: Upload generated sources on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: index-hygiene-generated-src
+          path: /tmp/loft_native_*.rs
+          if-no-files-found: ignore
+          retention-days: 14

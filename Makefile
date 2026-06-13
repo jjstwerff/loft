@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -1236,10 +1236,24 @@ doc-check-quiet:
 # doesn't happen.
 ship:
 	cargo fmt --all -- --check && \
-	cargo clippy --release --all-targets -- -D warnings && \
+	cargo clippy --all-targets --all-features -- -D warnings && \
 	cargo clippy --no-default-features --all-targets -- -D warnings && \
 	scripts/check_doc_drift.sh && \
 	cargo test --release
+
+# The cheap CI gates ONLY (~2-3 min warm): exactly the commands the Format /
+# Clippy / Doc-hygiene jobs run, nothing else.  A local pass here removes the
+# failure modes that cost a full remote round each ("3-4 runs to get a PR
+# green"): fmt drift, a clippy lint the narrower local variants miss
+# (`--all-features` is what the CI job adds), a doc-drift ref, and the
+# repo-shape guard tests (ship recipe, doc links — seconds to run, and a
+# Makefile/doc edit that trips one costs a whole matrix round remotely).
+# Use before every push; `make ship` remains the full pre-push gate with tests.
+gate:
+	cargo fmt --all -- --check && \
+	cargo clippy --all-targets --all-features -- -D warnings && \
+	scripts/check_doc_drift.sh -q && \
+	cargo nextest run --release --test doc_hygiene
 
 run-tests: rebuild-native-cdylibs
 	cargo test --release > result.txt 2>&1
