@@ -2314,6 +2314,18 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
 /// manifest paths and the warm startup-cache load (#310) all derive from it,
 /// so a cached run re-checks cdylib freshness exactly like a cold parse.
 pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
+    // @PLN21 Phase 3 — a missing DECLARED runtime system lib is terminal:
+    // neither a prebuilt nor a source build can load it (both link the same lib,
+    // decision C3).  Check FIRST and emit an actionable hint, rather than loading
+    // a doomed prebuilt or spending ~90s on a build that cannot load.
+    if let Some(lib) = first_missing_runtime_lib(pkg_dir) {
+        eprintln!(
+            "loft: native library '{stem}' needs the system library '{lib}', which is not \
+             installed — install it with your OS package manager (building from source would \
+             link the same library and fail identically)."
+        );
+        return None;
+    }
     let filename = platform_lib_name(stem);
     // @PLN21 Phase 1 — a precompiled cdylib shipped for THIS host triple wins
     // over a source build (the "no rustc to use a library" path).  A cdylib
@@ -2338,6 +2350,24 @@ pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
         return Some(prebuilt);
     }
     auto_build_native(pkg_dir, stem)
+}
+
+/// @PLN21 Phase 3 — the first `[native] runtime-libs` entry the dynamic linker
+/// can't find, if any.  `dlopen` IS the authoritative presence check: a declared
+/// lib that loads is present; one that fails is missing, so the package's cdylib
+/// (prebuilt OR freshly built) could not load.  Empty `runtime-libs` (a
+/// libc-only package) → no check, no cost.
+#[cfg(feature = "native-extensions")]
+fn first_missing_runtime_lib(pkg_dir: &str) -> Option<String> {
+    crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))?
+        .runtime_libs
+        .into_iter()
+        .find(|lib| unsafe { libloading::Library::new(lib) }.is_err())
+}
+
+#[cfg(not(feature = "native-extensions"))]
+fn first_missing_runtime_lib(_pkg_dir: &str) -> Option<String> {
+    None
 }
 
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
@@ -2542,7 +2572,42 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
                 .exists()
                 .then(|| built_path.to_string_lossy().to_string())
         }
-        _ => None,
+        // @PLN21 Phase 3 — the build RAN but failed (cargo's error is on the
+        // inherited stderr).  The usual cause is a missing build dependency, so
+        // name the package's declared `build-deps` rather than leaving the user
+        // to parse a raw rustc/linker/pkg-config error.
+        Ok(_) => {
+            eprintln!(
+                "loft: building native library '{stem}' from source failed (cargo error above).{}",
+                build_deps_hint(pkg_dir)
+            );
+            None
+        }
+        // cargo itself could not start — typically no Rust toolchain installed.
+        Err(e) => {
+            eprintln!(
+                "loft: cannot build native library '{stem}': {e} — building a library with no \
+                 prebuilt for this host needs a Rust toolchain (rustc + cargo)."
+            );
+            None
+        }
+    }
+}
+
+/// @PLN21 Phase 3 — a trailing hint naming the package's declared `[native]
+/// build-deps` (the system dev packages its cdylib needs to compile), for a
+/// failed source build.  Empty when none are declared.
+fn build_deps_hint(pkg_dir: &str) -> String {
+    let deps = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+        .map(|m| m.build_deps)
+        .unwrap_or_default();
+    if deps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " This package needs these dev packages to build: {}.",
+            deps.join(", ")
+        )
     }
 }
 
@@ -2681,7 +2746,43 @@ pub mod native_call {
 // actionable guidance.  Pure string-in/string-out, so unit-testable.
 #[cfg(all(test, feature = "native-extensions"))]
 mod dlopen_diag_tests {
-    use super::dlopen_diagnostic;
+    use super::{build_deps_hint, dlopen_diagnostic, first_missing_runtime_lib};
+
+    fn temp_pkg(name: &str, toml: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("loft_p21_{name}_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("loft.toml"), toml).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_declared_runtime_lib_is_detected() {
+        let dir = temp_pkg(
+            "rtlib",
+            "[native]\ncrate = \"x\"\nruntime-libs = \"libnot-real-pln21.so.99\"\n",
+        );
+        assert_eq!(
+            first_missing_runtime_lib(dir.to_str().unwrap()).as_deref(),
+            Some("libnot-real-pln21.so.99")
+        );
+        // none declared → no check, no false positive.
+        let dir2 = temp_pkg("nort", "[native]\ncrate = \"x\"\n");
+        assert!(first_missing_runtime_lib(dir2.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn build_deps_hint_names_declared_deps() {
+        let dir = temp_pkg(
+            "bdeps",
+            "[native]\ncrate = \"x\"\nbuild-deps = \"libgl-dev, libasound2-dev\"\n",
+        );
+        let h = build_deps_hint(dir.to_str().unwrap());
+        assert!(
+            h.contains("libgl-dev") && h.contains("libasound2-dev"),
+            "{h}"
+        );
+        assert!(build_deps_hint(temp_pkg("nobd", "[native]\n").to_str().unwrap()).is_empty());
+    }
 
     #[test]
     fn missing_system_lib_names_it_and_says_install() {

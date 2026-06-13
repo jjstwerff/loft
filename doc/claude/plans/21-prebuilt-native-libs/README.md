@@ -189,16 +189,24 @@ moves to Phase 3, where it's used.
 
    **Probe:** unit test on `read_manifest` — `[native] runtime-libs = "a.so, b.so"` → `vec!["a.so","b.so"]`.
 
-### Phase 3 — Validation + diagnostics (the dlopen-failure path) · M — **PARTIAL 2026-06-13**
+### Phase 3 — Validation + diagnostics (the dlopen-failure path) · M — **SHIPPED 2026-06-13**
 **Goal:** a load failure becomes an actionable message, and build-vs-error is decided correctly (C3).
-**Landed (diagnostics core):** `extensions::dlopen_diagnostic` classifies the linker
-error at the load site — missing system lib (names it + "install it; building won't help"),
-glibc-too-old, undefined-symbol/ABI — replacing the raw `eprintln`. Unit-tested
-(`dlopen_diag_tests`, 3 cells).
-**Remaining:** (a) the trial-`dlopen` *inside* `resolve_native_lib` so a missing runtime
-lib is decided BEFORE a wasted ~90s source build (C3); (b) the manifest `runtime-libs`
-cross-ref for an OS-package install hint (needs the `Data` consumer wiring deferred from
-Phase 2); (c) `auto_build_native` failure → `build-deps` diagnostics.
+**Landed (all three):**
+- **Diagnostics** — `extensions::dlopen_diagnostic` classifies the load-site error: missing
+  system lib (names it + "install it; building won't help"), glibc-too-old,
+  undefined-symbol/ABI — replacing the raw `eprintln`.
+- **Proactive C3 check** — `first_missing_runtime_lib` reads the manifest's `runtime-libs`
+  and `dlopen`s each at the TOP of `resolve_native_lib`; a missing one emits the install
+  hint and returns `None` BEFORE loading a doomed prebuilt or spending ~90s on a build that
+  can't load. (Read the manifest directly from `pkg_dir/loft.toml` — no `Data` wiring
+  needed.) Empty `runtime-libs` → no check, no cost.
+- **Build-deps diagnostics** — `auto_build_native`'s failure arm splits into "cargo ran but
+  failed" (names the declared `build-deps`) vs "cargo couldn't start" (no toolchain).
+
+Unit-tested (`dlopen_diag_tests`, **5 cells**: classifier ×3, missing-runtime-lib detect,
+build-deps hint); `n0_fingerprint` regression ✓; `fmt`/`clippy` clean. The trial-`dlopen`
+of an *un*declared-dep prebuilt is covered by the existing load-site diagnostic, so the
+declared-libs proactive check + the load-site classifier together close C3.
 1. **Trial-load in resolve** — when Phase 1 finds an fp-valid prebuilt, `libloading::Library::new` it *there* (cheap). Classify `Err`:
    - missing-lib (`cannot open shared object file`) → **terminal**: extract the lib name, cross-ref the manifest `runtime-libs`, emit *"`<pkg>` needs `<lib>` at runtime — install it"*, return `None`-with-diagnostic, **do not build** (C3).
    - `version 'GLIBC_x' not found` → message + fall to source build (a local build targets the host glibc).
