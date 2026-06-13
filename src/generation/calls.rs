@@ -97,177 +97,7 @@ impl Output<'_> {
                 write!(w, ", ")?;
             }
             first_arg = false;
-            if let Some(vr) = self.create_stack_var(v) {
-                let name = sanitize(self.data.def(self.def_nr).variables().name(vr));
-                write!(w, "&mut var_{name}")?;
-            // OpCreateStack wrapping an addressable expression
-            // (e.g. v[i] as & param).  Emit a temporary + &mut so the
-            // callee can write through the DbRef into the store.
-            } else if let Value::Call(d_nr, args) = v.unspan()
-                && self.data.def(*d_nr).name() == "OpCreateStack"
-                && args.len() == 1
-                && !matches!(&args[0], Value::Var(_))
-            {
-                let expr = self.generate_expr_buf(&args[0])?;
-                write!(w, "&mut ({expr})")?;
-            } else if idx < def_fn.attributes().len()
-                && matches!(def_fn.attributes()[idx].typedef, Type::RefVar(_))
-                && let Value::Var(nr) = v
-                && matches!(
-                    self.data.def(self.def_nr).variables().tp(*nr),
-                    Type::RefVar(_)
-                )
-            {
-                // forwarding a & parameter to another & parameter.
-                let caller_vars = self.data.def(self.def_nr).variables();
-                let name = sanitize(caller_vars.name(*nr));
-                if caller_vars.is_argument(*nr) {
-                    // An argument RefVar is already &mut DbRef — pass it
-                    // directly instead of dereferencing with *var_name.
-                    write!(w, "var_{name}")?;
-                } else {
-                    // A local RefVar alias (#257) is a plain `DbRef` — borrow
-                    // it so the callee gets the &mut DbRef it expects.
-                    write!(w, "&mut var_{name}")?;
-                }
-            } else if matches!(v.unspan(), Value::Null)
-                && idx < def_fn.attributes().len()
-                && !matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _))
-            {
-                // #307 — a `Value::Null` argument (a parser-filled default for
-                // an omitted parameter, or an explicit `null`) renders as `()`
-                // through `output_code_inner`, which rustc rejects at any typed
-                // parameter (E0308: expected `&str`, found `()` on
-                // `render("a", "b")`).  Emit the parameter-typed null sentinel
-                // instead — the same repair the interpreter call paths apply
-                // via `emit_typed_null`.  Fn-ref params keep the generic path
-                // (their two-part (d_nr, closure) form is handled below).
-                Self::write_typed_null(w, &def_fn.attributes()[idx].typedef)?;
-            } else {
-                // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
-                let param_is_fnref = idx < def_fn.attributes().len()
-                    && matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _));
-                let param_is_routine = idx < def_fn.attributes().len()
-                    && matches!(def_fn.attributes()[idx].typedef, Type::Routine(_));
-                if param_is_fnref && matches!(v, Value::Int(_)) {
-                    let mut buf = Vec::new();
-                    self.output_code_inner(&mut buf, v)?;
-                    let s = String::from_utf8(buf).unwrap();
-                    write!(
-                        w,
-                        "({s} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
-                } else if param_is_routine && matches!(v, Value::Int(_)) {
-                    let mut buf = Vec::new();
-                    self.output_code_inner(&mut buf, v)?;
-                    let s = String::from_utf8(buf).unwrap();
-                    write!(w, "{s} as u32")?;
-                } else {
-                    // B7-native: text-returning user fn calls produce `Str`,
-                    // but callees expect `&str`.  Wrap with `&*` to deref.
-                    // P262: must unspan() before matching — the parser
-                    // wraps inline call expressions in Value::Span (for
-                    // source-position tracking), and the bare matches!
-                    // pattern does not see through Span.  Without this,
-                    // the consuming-call argument site emitted the raw
-                    // `Str`-returning call expression with no deref,
-                    // tripping rustc E0308 ("expected `&str`, found `Str`").
-                    let v_unspanned = v.unspan();
-                    // @P299 — a text-returning fn-ref call (`CallRef`) lowers to
-                    // a `match` block whose arms yield owned `String` (the
-                    // candidate results are unified via `.to_string()`).  A
-                    // callee param of `&str` needs the same `&*` deref as a
-                    // direct text-returning `Call`.  Without this, a text
-                    // closure called through a struct field DIRECTLY as an
-                    // argument (`print(g.fmt(7))`) trips rustc E0308
-                    // (`expected &str, found String`) — binding the result to a
-                    // local first sidesteps it, which is why it surfaced late.
-                    // The CallRef is usually wrapped in a work-buffer `Block`
-                    // (P227's `cref_work_buf` materialisation), so walk Block
-                    // tails to find the text-returning fn-ref call.
-                    let arg_is_text_callref = {
-                        let mut probe = v_unspanned;
-                        loop {
-                            match probe {
-                                Value::CallRef(vr, _) => {
-                                    break matches!(
-                                        self.data.def(self.def_nr).variables().tp(*vr),
-                                        Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
-                                    );
-                                }
-                                Value::Block(b) => match b.operators.last() {
-                                    Some(op) => probe = op.unspan(),
-                                    None => break false,
-                                },
-                                _ => break false,
-                            }
-                        }
-                    };
-                    // @P304 — fire for ANY non-`Op` text-returning call, USER
-                    // or NATIVE.  A native (`#rust`) text fn returns owned
-                    // `String` (e.g. `store_memory()` → `stores.memory_report()`),
-                    // so it needs the `&*` deref into `&str` just like a user
-                    // fn's `Str` return — the old `rust.is_empty()` clause wrongly
-                    // excluded native fns (E0308 `expected &str, found String`).
-                    // `&*` is safe for all text shapes (`String`/`Str`/`&str` are
-                    // `Deref<Target=str>`).  `Op*` runtime helpers stay excluded.
-                    // @P386: a text-result `Value::Block` argument whose body
-                    // contains the `__ncc_*` skip_free pattern emits its tail
-                    // as `_ret.to_string()` (owned `String`, see
-                    // `output_block`'s @P321e/@P323 materialisation at
-                    // emit.rs:~1466).  Direct-call `&str` params then trip
-                    // rustc E0308 ("expected `&str`, found `String`").  Wrap
-                    // with `&*` (which derefs both `String` and `Str` to
-                    // `&str`).  Same idea as the existing CallRef detection
-                    // above, just applied at the Block level.
-                    let arg_is_text_block_string = matches!(v_unspanned, Value::Block(b)
-                        if matches!(b.result, Type::Text(_))
-                            && self.block_contains_ncc_skip_free(b));
-                    let needs_deref = idx < def_fn.attributes().len()
-                        && matches!(def_fn.attributes()[idx].typedef, Type::Text(_))
-                        && (arg_is_text_callref
-                            || arg_is_text_block_string
-                            || matches!(v_unspanned, Value::Call(d, _) if
-                                matches!(self.data.def(*d).returned(), Type::Text(_))
-                                && !self.data.def(*d).name().starts_with("Op")));
-                    // Post-2c: Op* runtime helpers (defined in
-                    // `src/codegen_runtime.rs`) keep hand-written i32 params
-                    // for tp-numbers / field offsets / flag enums.  When the
-                    // loft param is a narrow Integer (u8/u16/i8/i16), those
-                    // Op* signatures take `i32`.  Emit any descendant
-                    // Value::Int as `_i32` instead of the post-2c `_i64`
-                    // default so the literal lands at the expected width.
-                    // User-defined fns have their Rust signatures generated
-                    // from `rust_type`, which widens narrow Integer to i64
-                    // in Context::Argument — so this narrow-match only
-                    // applies to Op-prefixed runtime calls.
-                    let param_is_narrow = def_fn.name().starts_with("Op")
-                        && idx < def_fn.attributes().len()
-                        && narrow_int_cast(&def_fn.attributes()[idx].typedef).is_some();
-                    // @PLN17: a boolean param's storage form is u8 (null-capable);
-                    // a `bool` literal / comparison arg must coerce.  `((arg) as u8)`
-                    // is idempotent for a u8 arg, 0/1 for a bool.
-                    let param_is_boolean = idx < def_fn.attributes().len()
-                        && matches!(def_fn.attributes()[idx].typedef, Type::Boolean);
-                    if needs_deref {
-                        write!(w, "&*(")?;
-                    }
-                    if param_is_boolean {
-                        write!(w, "((")?;
-                    }
-                    if param_is_narrow {
-                        self.emit_i32_slot(w, v)?;
-                    } else {
-                        self.output_code_inner(w, v)?;
-                    }
-                    if param_is_boolean {
-                        write!(w, ") as u8)")?;
-                    }
-                    if needs_deref {
-                        write!(w, ")")?;
-                    }
-                }
-            }
+            self.emit_call_arg(w, def_fn, idx, v)?;
         }
         write!(w, ")")?;
         if is_generator {
@@ -280,6 +110,199 @@ impl Output<'_> {
             // Post-2c: widen to i64 (the default Integer width).
             // @PLN17: boolean's expression form is u8/bool, never i64 — no widening.
             write!(w, " as i64")?;
+        }
+        Ok(())
+    }
+
+    /// Emit ONE call argument (no leading separator) — the argument at
+    /// position `idx` in `def_fn`'s parameter list, given source value `v`.
+    ///
+    /// This is the single source of truth for argument emission, shared by
+    /// the normal call path ([`Self::user_fn_call_body`]) and the ABI-B
+    /// deep-copy call path (`output_set_inner` in `dispatch.rs`).  Keeping
+    /// it in one place is load-bearing: when the two paths drifted, a
+    /// boolean literal arg on the ABI-B path emitted Rust `true`/`false`
+    /// against a `u8` parameter and tripped rustc E0308 (issue #366).  All
+    /// per-parameter coercions (boolean→`u8`, narrow-int, text deref,
+    /// typed-null, fn-ref / routine wrapping, `&`-param forwarding) live
+    /// here so both paths apply them identically.
+    pub(super) fn emit_call_arg(
+        &mut self,
+        w: &mut dyn Write,
+        def_fn: &Definition,
+        idx: usize,
+        v: &Value,
+    ) -> std::io::Result<()> {
+        if let Some(vr) = self.create_stack_var(v) {
+            let name = sanitize(self.data.def(self.def_nr).variables().name(vr));
+            write!(w, "&mut var_{name}")?;
+        // OpCreateStack wrapping an addressable expression
+        // (e.g. v[i] as & param).  Emit a temporary + &mut so the
+        // callee can write through the DbRef into the store.
+        } else if let Value::Call(d_nr, args) = v.unspan()
+            && self.data.def(*d_nr).name() == "OpCreateStack"
+            && args.len() == 1
+            && !matches!(&args[0], Value::Var(_))
+        {
+            let expr = self.generate_expr_buf(&args[0])?;
+            write!(w, "&mut ({expr})")?;
+        } else if idx < def_fn.attributes().len()
+            && matches!(def_fn.attributes()[idx].typedef, Type::RefVar(_))
+            && let Value::Var(nr) = v
+            && matches!(
+                self.data.def(self.def_nr).variables().tp(*nr),
+                Type::RefVar(_)
+            )
+        {
+            // forwarding a & parameter to another & parameter.
+            let caller_vars = self.data.def(self.def_nr).variables();
+            let name = sanitize(caller_vars.name(*nr));
+            if caller_vars.is_argument(*nr) {
+                // An argument RefVar is already &mut DbRef — pass it
+                // directly instead of dereferencing with *var_name.
+                write!(w, "var_{name}")?;
+            } else {
+                // A local RefVar alias (#257) is a plain `DbRef` — borrow
+                // it so the callee gets the &mut DbRef it expects.
+                write!(w, "&mut var_{name}")?;
+            }
+        } else if matches!(v.unspan(), Value::Null)
+            && idx < def_fn.attributes().len()
+            && !matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _))
+        {
+            // #307 — a `Value::Null` argument (a parser-filled default for
+            // an omitted parameter, or an explicit `null`) renders as `()`
+            // through `output_code_inner`, which rustc rejects at any typed
+            // parameter (E0308: expected `&str`, found `()` on
+            // `render("a", "b")`).  Emit the parameter-typed null sentinel
+            // instead — the same repair the interpreter call paths apply
+            // via `emit_typed_null`.  Fn-ref params keep the generic path
+            // (their two-part (d_nr, closure) form is handled below).
+            Self::write_typed_null(w, &def_fn.attributes()[idx].typedef)?;
+        } else {
+            // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
+            let param_is_fnref = idx < def_fn.attributes().len()
+                && matches!(def_fn.attributes()[idx].typedef, Type::Function(_, _, _));
+            let param_is_routine = idx < def_fn.attributes().len()
+                && matches!(def_fn.attributes()[idx].typedef, Type::Routine(_));
+            if param_is_fnref && matches!(v, Value::Int(_)) {
+                let mut buf = Vec::new();
+                self.output_code_inner(&mut buf, v)?;
+                let s = String::from_utf8(buf).unwrap();
+                write!(
+                    w,
+                    "({s} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
+                )?;
+            } else if param_is_routine && matches!(v, Value::Int(_)) {
+                let mut buf = Vec::new();
+                self.output_code_inner(&mut buf, v)?;
+                let s = String::from_utf8(buf).unwrap();
+                write!(w, "{s} as u32")?;
+            } else {
+                // B7-native: text-returning user fn calls produce `Str`,
+                // but callees expect `&str`.  Wrap with `&*` to deref.
+                // P262: must unspan() before matching — the parser
+                // wraps inline call expressions in Value::Span (for
+                // source-position tracking), and the bare matches!
+                // pattern does not see through Span.  Without this,
+                // the consuming-call argument site emitted the raw
+                // `Str`-returning call expression with no deref,
+                // tripping rustc E0308 ("expected `&str`, found `Str`").
+                let v_unspanned = v.unspan();
+                // @P299 — a text-returning fn-ref call (`CallRef`) lowers to
+                // a `match` block whose arms yield owned `String` (the
+                // candidate results are unified via `.to_string()`).  A
+                // callee param of `&str` needs the same `&*` deref as a
+                // direct text-returning `Call`.  Without this, a text
+                // closure called through a struct field DIRECTLY as an
+                // argument (`print(g.fmt(7))`) trips rustc E0308
+                // (`expected &str, found String`) — binding the result to a
+                // local first sidesteps it, which is why it surfaced late.
+                // The CallRef is usually wrapped in a work-buffer `Block`
+                // (P227's `cref_work_buf` materialisation), so walk Block
+                // tails to find the text-returning fn-ref call.
+                let arg_is_text_callref = {
+                    let mut probe = v_unspanned;
+                    loop {
+                        match probe {
+                            Value::CallRef(vr, _) => {
+                                break matches!(
+                                    self.data.def(self.def_nr).variables().tp(*vr),
+                                    Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
+                                );
+                            }
+                            Value::Block(b) => match b.operators.last() {
+                                Some(op) => probe = op.unspan(),
+                                None => break false,
+                            },
+                            _ => break false,
+                        }
+                    }
+                };
+                // @P304 — fire for ANY non-`Op` text-returning call, USER
+                // or NATIVE.  A native (`#rust`) text fn returns owned
+                // `String` (e.g. `store_memory()` → `stores.memory_report()`),
+                // so it needs the `&*` deref into `&str` just like a user
+                // fn's `Str` return — the old `rust.is_empty()` clause wrongly
+                // excluded native fns (E0308 `expected &str, found String`).
+                // `&*` is safe for all text shapes (`String`/`Str`/`&str` are
+                // `Deref<Target=str>`).  `Op*` runtime helpers stay excluded.
+                // @P386: a text-result `Value::Block` argument whose body
+                // contains the `__ncc_*` skip_free pattern emits its tail
+                // as `_ret.to_string()` (owned `String`, see
+                // `output_block`'s @P321e/@P323 materialisation at
+                // emit.rs:~1466).  Direct-call `&str` params then trip
+                // rustc E0308 ("expected `&str`, found `String`").  Wrap
+                // with `&*` (which derefs both `String` and `Str` to
+                // `&str`).  Same idea as the existing CallRef detection
+                // above, just applied at the Block level.
+                let arg_is_text_block_string = matches!(v_unspanned, Value::Block(b)
+                        if matches!(b.result, Type::Text(_))
+                            && self.block_contains_ncc_skip_free(b));
+                let needs_deref = idx < def_fn.attributes().len()
+                    && matches!(def_fn.attributes()[idx].typedef, Type::Text(_))
+                    && (arg_is_text_callref
+                        || arg_is_text_block_string
+                        || matches!(v_unspanned, Value::Call(d, _) if
+                                matches!(self.data.def(*d).returned(), Type::Text(_))
+                                && !self.data.def(*d).name().starts_with("Op")));
+                // Post-2c: Op* runtime helpers (defined in
+                // `src/codegen_runtime.rs`) keep hand-written i32 params
+                // for tp-numbers / field offsets / flag enums.  When the
+                // loft param is a narrow Integer (u8/u16/i8/i16), those
+                // Op* signatures take `i32`.  Emit any descendant
+                // Value::Int as `_i32` instead of the post-2c `_i64`
+                // default so the literal lands at the expected width.
+                // User-defined fns have their Rust signatures generated
+                // from `rust_type`, which widens narrow Integer to i64
+                // in Context::Argument — so this narrow-match only
+                // applies to Op-prefixed runtime calls.
+                let param_is_narrow = def_fn.name().starts_with("Op")
+                    && idx < def_fn.attributes().len()
+                    && narrow_int_cast(&def_fn.attributes()[idx].typedef).is_some();
+                // @PLN17: a boolean param's storage form is u8 (null-capable);
+                // a `bool` literal / comparison arg must coerce.  `((arg) as u8)`
+                // is idempotent for a u8 arg, 0/1 for a bool.
+                let param_is_boolean = idx < def_fn.attributes().len()
+                    && matches!(def_fn.attributes()[idx].typedef, Type::Boolean);
+                if needs_deref {
+                    write!(w, "&*(")?;
+                }
+                if param_is_boolean {
+                    write!(w, "((")?;
+                }
+                if param_is_narrow {
+                    self.emit_i32_slot(w, v)?;
+                } else {
+                    self.output_code_inner(w, v)?;
+                }
+                if param_is_boolean {
+                    write!(w, ") as u8)")?;
+                }
+                if needs_deref {
+                    write!(w, ")")?;
+                }
+            }
         }
         Ok(())
     }
