@@ -328,24 +328,17 @@ impl Output<'_> {
         vals: &[Value],
     ) -> std::io::Result<()> {
         let mut res = def_fn.rust().to_string();
-        // @P361 — a `#rust` body that names a loft-internal *pub module* must
-        // qualify it `loft::…` in generated code (native + wasm both `use
-        // loft::…` and link loft as an extern crate), NOT `crate::…` — the
-        // latter resolves to loft itself only in the interpreter's native
-        // registry (`create.rs`, where crate == loft).  `crate::store::Store`
-        // (store_durable_check / _seal) is the one such body that reaches
-        // native emission verbatim — without the rewrite rustc errors E0463
-        // "can't find `store` in the crate root".  Host-import intrinsics
-        // (`crate::loft_host_print`, `crate::wasm`) are the generated cdylib's
-        // OWN items, so they correctly stay `crate::` and are left untouched.
-        res = res.replace("crate::store::", "loft::store::");
-        // Same @P361 rewrite for the `print` capture hook: `OpPrint`'s native branch
-        // calls `crate::rpc::print_or_capture` (the interpreter's debug-output sink).
-        // In a generated native binary `crate::` is the binary's own root (no `rpc`
-        // module), so qualify it `loft::` — loft is linked as an extern crate and the
-        // fn is `pub`.  At native runtime no debug sink is active, so it returns false
-        // and the `print!` runs unchanged.
-        res = res.replace("crate::rpc::", "loft::rpc::");
+        // @P361 — a `#rust` body that names the loft-internal pub modules
+        // `crate::rpc::` / `crate::store::` must qualify them `loft::…` in
+        // generated code (in a generated binary `crate::` is the binary's own
+        // root, with no `rpc`/`store` module; `crate::` resolves to loft only
+        // in the interpreter's native registry where crate == loft).  That
+        // rewrite is NO LONGER done here per-call-site: it missed an emission
+        // path (the nightly index-hygiene leg's intermittent `error[E0433]:
+        // cannot find rpc in crate`).  It now runs ONCE over the complete
+        // assembled source at every native-emission entry — see
+        // `scrub_generated_crate_refs` in `mod.rs`.  Host-import intrinsics
+        // (`crate::loft_host_print`, `crate::wasm`) stay `crate::` there too.
         // @P321b — `OpSetText` with a NULL value must store the null pointer
         // (offset 0), matching the interpreter (which reads it back as null).
         // The generic template does `@val.to_string()` + `set_str`, which
