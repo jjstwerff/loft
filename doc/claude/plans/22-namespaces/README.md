@@ -96,7 +96,37 @@ sites, so de-globalizing mostly *promotes the fallback to primary*.
 
 **Matrix:** two-enums-sharing-a-variant × {match, typed local, `==`, fn arg, `is`,
 `Enum::V`, `lib::V`} × both backends; the C53 tests (`tests/lib/match_lib_enum_main.loft`)
-stay green; probes `g2` (the panic) and `g3` (`enum E`) flip to passing.
+stay green; probe `g2` (the panic) flips to passing. (`g3` `enum E` is the
+prelude-shadow case → **Phase 2**, not Phase 1.)
+
+**Build spike (2026-06-13) — scope VALIDATED; de-globalize is necessary but NOT
+sufficient.** A throwaway spike (the `variant_of` chokepoint + de-globalizing
+`add_def` for `EnumValue` + the second-pass re-resolve `definitions.rs:220` →
+`variant_of`) confirmed the easy half: the `Dual definition of Red` panic is gone,
+two enums share `Red`, and the stdlib still loads. Loud-omission then pinpointed
+the residual (exactly as the brittleness argument predicted):
+
+- **Value-position bare variants** (`f(Red)`, `l: Light = Red`, `l == Red`) fail
+  with `Unknown variable 'Red'`. They resolve through `parse_var`'s `parent_tp`
+  context branch (`objects.rs:301`), which (a) checks `Type::Enum` while the
+  typed-declaration path threads `Type::Reference(enum)` (`objects.rs:1673`) — so
+  it misses — and (b) is never populated with the expected enum at the
+  comparison-RHS and call-arg sites.
+- The match / `is` paths already carry the enum (the C53 `children_of` fallback),
+  so they are fine.
+
+So Phase 1's true cost = de-globalize + `variant_of` (small) **plus threading the
+expected enum to the value-position resolver**: normalize `Reference(enum)`↔`Enum`
+at `objects.rs:301`, and set `parent_tp` at the `==` / arg / `return` / field-init
+sites. This is a design-protocol step-6 ESSENTIAL divergence (a real domain axis:
+value-position variant resolution genuinely needs expected-type plumbing — the
+original "resolution already has the context" claim held only for match).
+
+**Build order next session:** (1) `variant_of` + de-globalize + `definitions.rs:220`;
+(2) `objects.rs:301` Reference-enum normalization; (3) thread `parent_tp` at the
+value-position sites, leaning on loud-omission to find any missed one; (4) verify
+the matrix + C53 + `loft_suite`/`native_scripts` both backends. Spike matrix:
+two enums sharing `Red` across match / arg / typed-local / `==` / `Enum::V`.
 
 ### Phase 2 — prelude shadowing (S–M)
 
