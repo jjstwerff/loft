@@ -819,6 +819,20 @@ pub(crate) fn run_tests(
                                 "    let cell = std::cell::UnsafeCell::new(Stores::new());"
                             )
                             .unwrap();
+                            // #255: anchor file I/O at the TEST file's directory
+                            // (handed down by the runner via LOFT_SOURCE_DIR) so
+                            // `file()` / `source_dir()` resolve against the test's
+                            // assets — matching the interpreter and the standalone
+                            // `--native` main.  A fresh `Stores::new()` otherwise
+                            // has an empty `source_dir` anchor → resolve_path falls
+                            // back to passthrough (the process cwd / scratch dir),
+                            // so a relative `file("asset")` missed under --native
+                            // while passing under the interpreter.
+                            writeln!(
+                                buf,
+                                "    {{ let s: &mut Stores = unsafe {{ &mut *cell.get() }}; s.source_dir = Stores::source_dir_native(); s.program_relative = true; }}"
+                            )
+                            .unwrap();
                             writeln!(buf, "    init(&cell);").unwrap();
                             for (_, name) in &native_fns {
                                 writeln!(buf, "    n_{name}(&cell);").unwrap();
@@ -995,11 +1009,25 @@ pub(crate) fn run_tests(
                         };
 
                         if compile_ok {
-                            // Run the compiled binary.
-                            let run_ok = std::process::Command::new(&binary)
-                                .status()
-                                .map(|s| s.success())
-                                .unwrap_or(false);
+                            // Run the compiled binary.  Hand down the source
+                            // anchor — the TEST file's OWN directory — so
+                            // `source_dir()` and program-relative file I/O
+                            // resolve against the test's assets, not the scratch
+                            // dir where the generated binary lives.  Without this
+                            // `source_dir_native()` falls back to the executable's
+                            // dir (the loft scratch/tmp), so a relative
+                            // `file("asset")` or `source_dir()` misses under
+                            // `--native` while passing under the interpreter
+                            // (which anchors at the test file's dir).  Mirrors the
+                            // standalone `--native` run path in main.rs; an
+                            // explicit user `LOFT_SOURCE_DIR` wins.
+                            let mut run_cmd = std::process::Command::new(&binary);
+                            if std::env::var("LOFT_SOURCE_DIR").is_err()
+                                && let Some(dir) = std::path::Path::new(&abs_file).parent()
+                            {
+                                run_cmd.env("LOFT_SOURCE_DIR", dir);
+                            }
+                            let run_ok = run_cmd.status().map(|s| s.success()).unwrap_or(false);
                             if run_ok {
                                 for (_, fn_name) in &native_fns {
                                     file_result.tests.push((fn_name.clone(), true, None));
