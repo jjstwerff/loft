@@ -170,6 +170,37 @@ into a wrong result, not a loud error). The `var_tp` attempt was reverted (not i
 the patch); the helper idea may still seed step 3, but with the *correct*
 per-site type, not `var_tp`.
 
+**BUILD-ORDER CORRECTION (2026-06-13, 3rd probe) — de-globalize LAST, not first.**
+The `p_decl` "wrong value" was a symptom of a bigger problem: de-globalization
+regresses **qualified `Enum::Variant` too**. `Light::Red == Light::Red` is `true`
+on clean `main` but **`false` under steps 1+2** — the qualified path
+(`parse_var`'s `::` branch → `parse_constant_value`) *also* relied on the global
+`def_nr(variant)`. So de-globalize-FIRST makes the tree red until EVERY
+variant-resolution path is rewired at once — it cannot land incrementally (each
+"continue" surfaced another broken path: bare value, then qualified, …).
+
+**The right order is CHOKEPOINT-FIRST.** Refactor every variant-resolution path
+to route through `variant_of(context_enum, name)` *while variants stay globally
+keyed* — each refactor is then non-breaking (variant_of finds the same variant)
+and independently landable on a green tree. De-globalize is the **final flip**.
+Paths and where each gets its enum context:
+- **match arm** — the subject type (the `children_of` fallback already exists).
+- **`Enum::Variant` qualified** — the qualifier `name` IS the enum; rewire the
+  `::` path so when the qualifier resolves to an enum, the variant is
+  `variant_of(qualifier_enum, nm)` (not a global/source lookup).
+- **`is`** — the subject type.
+- **bare value-position** (arg / decl / `return` / `==`-RHS) — the *expected*
+  type, which is NOT threaded today (the per-site work; do these incrementally
+  too, each landable while still global).
+
+**Revised build order:** (1) `variant_of` + `definitions.rs:220` [in the patch,
+non-breaking]; (2) route match / qualified / `is` through `variant_of` [land each];
+(3) thread the expected enum at the bare-value sites [per-site, land each]; (4)
+de-globalize `add_def` [the flip — now safe, all paths already route through the
+chokepoint]; (5) verify matrix + C53 + suites both backends. The step-1+2 patch's
+de-globalize half moves to step 4; its `variant_of` + `definitions.rs:220` halves
+stay at step 1.
+
 ### Phase 2 — prelude shadowing (S–M)
 
 A user definition in the user source **shadows** a wildcard-imported / stdlib
