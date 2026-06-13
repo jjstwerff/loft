@@ -65,6 +65,44 @@ The one consequence to honour: the distributed artifact is the **cdylib** (`.so`
 `.dylib`), **not the rlib** (the PACKAGES.md format sketch showing `libgraphics.rlib` is
 a trap — an rlib *is* SVH-locked to its rustc, E0514).
 
+### The boundary of this claim — it holds for HAND-WRITTEN native, NOT auto-compiled (corrected 2026-06-13)
+
+The `nm -D` evidence above is from **hand-written** native libs (`libloft_random.so`,
+`libloft_graphics_native.so`) — and for them the claim is sound: they link **only** loft-ffi's
+clean `#[repr(C)]` surface (`LoftRef`/`LoftValue`/`LoftStr` + the callback table; loft-ffi has
+**zero** `use loft::`/`extern crate loft`), so a hand-written prebuilt is genuinely loft-ffi-
+versioned and rustc-independent. Ship those keyed on `loft_ffi_fp`.
+
+The **auto-compiled** native libs (the @PLN11/Phase-4b path: `glb`, `mesh3d`, `shapes`) are a
+**different ABI contract** and the universal framing does NOT cover them — verified by reading a
+generated cdylib's own source (`native-auto/loft_auto_<lib>.rs`):
+
+- It begins `extern crate loft; use loft::database::Stores; use loft::keys::DbRef; use
+  loft::ops; use loft::codegen_runtime::*;` — i.e. it **statically embeds all of `libloft.rlib`**
+  (12.7 MB vs 435 KB for the loft-ffi-linked hand-written lib; the "zero undefined loft symbols"
+  reading is because the rlib is linked *in*, not absent).
+- It operates on the host's **`Stores`/`Store`/`DbRef`** by shared-memory pointer (the N9/C71
+  shared-store model). Those are `#[derive(...)]` with **no `#[repr(C)]`** (keys.rs:202,
+  database/mod.rs:209, store.rs:128) → **repr(Rust)** layout, which rustc may reorder and does not
+  guarantee stable across versions. Even `LibArg.dbref` (a repr(Rust) `DbRef` inside a repr(C)
+  `LibArg`) carries a rustc-determined inner layout.
+
+So an auto-compiled cdylib is valid **only for a byte-identical loft build** (same source **and**
+rustc). Its real compatibility key is **`loft_build_fingerprint`** (the `libloft.rlib` content
+hash — which folds in both), and the local cache already gates on exactly that
+(`native_lib.rs:970`). `build-native` now reports `loft_build_fp` + the rustc string for this
+branch (NOT `loft_ffi_fp`), so a publish/consume path cannot mislabel it as widely portable.
+
+**Consequence for distribution.** A pure-loft library is **already toolchain-free by
+interpretation** — "no rustc to *use* it" is met without any prebuilt; native is a *host-matched
+optimization*. A cross-machine auto-native prebuilt is therefore (a) unsound on `loft_ffi_fp`,
+and (b) near-useless even on `loft_build_fp` (every loft point-release or rustc bump invalidates
+it). So @PLN21's prebuilt **distribution** should be scoped to **hand-written** native libs;
+`build-native`'s auto branch is best understood as a *loft-release-CI* tool (loft ships per-
+version auto-native cdylibs gated on `loft_build_fp` + triple), not a library-author registry
+artifact. The producer workflow + the (still-unbuilt) consumer `fetch_prebuilt` should likewise
+target hand-written libs only.
+
 ## Significance — a source-language-agnostic native surface
 
 Because the artifact is keyed on the **C ABI** (loft-ffi) + `dlopen` + a *versioned*
@@ -319,11 +357,21 @@ registry fallback; the registry-install layout (`shapes-0.2.0` ≠ name `shapes`
 lib_dirs and falls through to the registry as before. Regression matrix (all pass): registry
 auto-native (glb), hand-written (random → `loft_random`), fresh checkout (shapes → built).
 
+**The bigger correction (toolchain-stability eval, 2026-06-13):** an auto-native cdylib
+`extern crate loft`s — it embeds libloft and shares repr(Rust) `Stores`/`DbRef`, so it is
+loft-build + rustc-locked, **not** loft-ffi-versioned. See [§ The boundary of this
+claim](#the-boundary-of-this-claim--it-holds-for-hand-written-native-not-auto-compiled-corrected-2026-06-13).
+`build-native`'s auto branch now reports **`loft_build_fp` + `rustc:`** (not `loft_ffi_fp`), so
+it can't be mislabeled. The recommendation: scope @PLN21's prebuilt **distribution** to
+hand-written libs; the gaps below only matter if auto-native distribution is later pursued as a
+loft-release-CI artifact.
+
 **Two gaps remain for a true ship-and-consume of an AUTO-native prebuilt** (both belong to the
 publish/consume glue, not the producer):
 1. **No consumer fetch path.** `install.rs::fetch_prebuilt` only handles hand-written libs — it
    `return false`s when `[library] native` is absent, so an auto-native prebuilt is never
-   downloaded/placed. Phase 1's `resolve_native_lib` likewise keys off the manifest stem.
+   downloaded/placed. Phase 1's `resolve_native_lib` likewise keys off the manifest stem. (A
+   consumer must gate on `loft_build_fp`, not `loft_ffi_fp` — see the correction above.)
 2. **Layout-dependent cdylib identity.** `auto_cdylib_stem` derives from the *directory*
    basename, so the producer (checkout dir `shapes`) builds `libloft_auto_shapes.so` while a
    consumer (installed `shapes-0.2.0`) looks for `libloft_auto_shapes_0_2_0.so`. The fix is a

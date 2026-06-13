@@ -4156,17 +4156,31 @@ fn main() {
                 let manifest =
                     loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy());
                 let pkg_str = pkg_path.to_string_lossy().to_string();
-                let report = |cdylib: String, stem: String| {
-                    // Machine-readable so a publish script can capture it.
+                // Machine-readable so a publish script can capture it.  The KEY
+                // line differs by native model, because the two cdylibs have
+                // different ABI contracts (see the auto-native branch below):
+                //   • hand-written links loft-ffi's `#[repr(C)]` surface → valid for
+                //     ANY loft on the same loft-ffi → `loft_ffi_fp`;
+                //   • auto-compiled `extern crate loft` (statically embeds libloft,
+                //     shares repr(Rust) `Stores`/`DbRef` by memory) → valid only for a
+                //     byte-identical loft build → `loft_build_fp` + the rustc it used.
+                let report = |cdylib: String, stem: String, keys: &[String]| {
                     println!("cdylib: {cdylib}");
                     println!("stem: {stem}");
                     println!("triple: {}", loft::cache::host_triple());
-                    println!("loft_ffi_fp: {}", loft::cache::loft_ffi_fingerprint());
+                    for k in keys {
+                        println!("{k}");
+                    }
                 };
                 if let Some(stem) = manifest.as_ref().and_then(|m| m.native.clone()) {
-                    // Hand-written `native/` crate.
+                    // Hand-written `native/` crate — links the loft-ffi C ABI, so the
+                    // wide loft-ffi key is the correct compatibility gate.
+                    let keys = [format!(
+                        "loft_ffi_fp: {}",
+                        loft::cache::loft_ffi_fingerprint()
+                    )];
                     match loft::extensions::auto_build_native(&pkg_str, &stem) {
-                        Some(cdylib) => report(cdylib, stem),
+                        Some(cdylib) => report(cdylib, stem, &keys),
                         None => {
                             eprintln!(
                                 "loft build-native: building `{stem}` failed (see the cargo error above)"
@@ -4216,9 +4230,27 @@ fn main() {
                         &pkg_str,
                     ) {
                         Ok(Some(so)) => {
+                            // This cdylib `extern crate loft`s — it statically embeds
+                            // libloft and operates on the host's repr(Rust)
+                            // `Stores`/`DbRef` by shared memory, so it is valid ONLY
+                            // for a byte-identical loft build (the `loft_build_fp` rlib
+                            // hash, which already folds in source + rustc).  Reporting
+                            // `loft_ffi_fp` here would mislabel it as widely portable —
+                            // a corruption-shaped trap for any consumer that gated on
+                            // it.  rustc is named too, for human/diagnostic clarity.
                             report(
                                 so.to_string_lossy().to_string(),
                                 loft::native_lib::auto_cdylib_stem(&pkg_str),
+                                &[
+                                    format!(
+                                        "loft_build_fp: {}",
+                                        loft::cache::loft_build_fingerprint()
+                                    ),
+                                    format!(
+                                        "rustc: {}",
+                                        option_env!("LOFT_BUILD_RUSTC").unwrap_or("unknown")
+                                    ),
+                                ],
                             );
                         }
                         Ok(None) => {
