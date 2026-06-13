@@ -19,6 +19,7 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
 - [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields)
+- [34. Definitions Share One Flat Namespace — Enum Variants Collide by Bare Name](#34-definitions-share-one-flat-namespace--enum-variants-collide-by-bare-name)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -232,6 +233,34 @@ genuinely open, so a `Plan` marker is used here instead.  The
 `doc_hygiene::inconsistencies_status_blocks_listed_as_resolved`
 test scans for the resolved marker; the open-status `Plan`
 form intentionally falls outside its match.)
+
+---
+
+## 34. Definitions Share One Flat Namespace — Enum Variants Collide by Bare Name
+
+**Severity: Medium**
+
+`Data::add_def` keys every definition by `(name, source)` (`src/data.rs:3001`),
+so enum variants live in one flat per-source namespace. Consequences:
+
+- **Two enums cannot share a variant name** — `enum A { Red }` + `enum B { Red }`
+  *panics* at parse time: `Dual definition of Red` (`src/data.rs:3003`).
+- **A user type collides with stdlib names** — `enum E { … }` is rejected because
+  `E` is the stdlib Euler constant ("pick a different name").
+
+Resolution is *already* context-aware — a bare variant resolves against the
+contextual enum in match arms / typed locals / comparisons / fn args, and
+`Enum::Variant` / `lib::Variant` qualify — but **definition is flat**, so both the
+qualified path (`parse_constant_value`) and the bare value-position paths
+ultimately depend on the global bare key. (Verified: de-globalizing variants flips
+`Light::Red == Light::Red` from `true` to `false`, because the qualified path also
+reads the global key.)
+
+**Status / fix:** being fixed by
+[@PLN22](plans/22-namespaces/README.md) — variants become `(enum, variant)`-keyed
+(members of their enum), resolved through one `variant_of(enum, name)` chokepoint,
+with `use … as …` aliasing + a shadowable prelude for the top-level cases. Phase 1
+(variant scoping) design + chokepoint-first build order validated; build pending.
 
 ---
 
