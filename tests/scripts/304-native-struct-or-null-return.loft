@@ -31,6 +31,14 @@ fn nested(c: boolean, d: boolean, rel: text) -> S {
   if c { tag = "{rel}"; if d { r = S { x: 7 }; r } else { null } } else { null }
 }
 
+// A struct-returning `match … { … => null }` lowers to nested ifs of the form
+// `if subj==X { null } else { <value> }` — the `null` arm landed in the THEN
+// branch and emitted `()`, so the arm failed to unify with the value arm
+// (rustc E0308 `()` vs `DbRef`).  A Null then-branch now emits the typed null
+// sentinel symmetrically to a Null else-branch.
+fn m_expr(c: boolean) -> S { match c { true => S { x: 55 }, false => null } }
+fn m_block(c: boolean) -> S { match c { true => { r = S { x: 66 }; r }, false => null } }
+
 fn test_struct_branch_returns_value() {
   s = make(true, "abc");
   assert(s != null, "struct branch must not return null");
@@ -47,4 +55,13 @@ fn test_nested_if_returns_value() {
   assert(v != null && v.x == 7, "nested taken branch x=7");
   z = nested(true, false, "p");
   assert(z == null, "nested inner-null branch is null");
+}
+
+fn test_match_struct_or_null() {
+  e = m_expr(true);
+  assert(e != null && e.x == 55, "match expr arm x=55");
+  b = m_block(true);
+  assert(b != null && b.x == 66, "match block arm x=66");
+  n = m_expr(false);
+  assert(n == null, "match null arm is null");
 }

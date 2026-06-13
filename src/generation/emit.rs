@@ -1158,7 +1158,19 @@ impl Output<'_> {
         // save/restore fn_ref_context — Call arguments inside the branch
         // must NOT inherit it (OpDatabase int args would be misinterpreted).
         let saved_ctx = self.fn_ref_context;
-        self.output_code_inner(w, true_v)?;
+        // Symmetric to the else-Null handling below: a Null in the THEN branch
+        // must emit the typed null sentinel, not `()`.  This is the match-arm
+        // lowering `if subj==X { null } else { <value> }` — a struct-returning
+        // `match … { … => null }` put the `null` in the then-branch, so it
+        // emitted `()` and the arm failed to unify with the value-producing else
+        // (rustc E0308 `()` vs `DbRef`, breaking the whole --native compile).
+        if matches!(true_v, Value::Null)
+            && let Some(tp) = self.infer_type(IrNode::Native(false_v))
+        {
+            Self::write_typed_null(w, &tp)?;
+        } else {
+            self.output_code_inner(w, true_v)?;
+        }
         self.fn_ref_context = saved_ctx;
         self.indent -= u32::from(!b_true || text_string_unify || bool_unify);
         if text_string_unify {
