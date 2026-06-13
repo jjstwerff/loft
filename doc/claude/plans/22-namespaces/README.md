@@ -139,6 +139,12 @@ init), after which the context branch resolves the variant. A focused
 session-sized parser change; do NOT interleave with other work (it leaves the
 tree red until step 3 lands). Both spikes reverted; `2026-07` clean.
 
+**Resume artifact:** steps 1–2 are pre-built in
+[`phase1-step1-2.patch`](phase1-step1-2.patch) (verified `git apply --check`
+clean). To resume: `git apply doc/claude/plans/22-namespaces/phase1-step1-2.patch`,
+then do step 3 (thread the expected enum into `parse_var` at the value-position
+sites) — so the step-1+2 implementation isn't re-derived.
+
 ### Phase 2 — prelude shadowing (S–M)
 
 A user definition in the user source **shadows** a wildcard-imported / stdlib

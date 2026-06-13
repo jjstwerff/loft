@@ -1,0 +1,95 @@
+diff --git a/src/data.rs b/src/data.rs
+index 1ab317d0..0ebd4bc1 100644
+--- a/src/data.rs
++++ b/src/data.rs
+@@ -3000,13 +3000,21 @@ impl Data {
+     */
+     pub fn add_def(&mut self, name: &str, position: &Position, def_type: DefType) -> u32 {
+         let rec = self.definitions();
+-        assert!(
+-            !self
+-                .def_names
+-                .contains_key(&(name.to_string(), self.source)),
+-            "Dual definition of {name} at {position}"
+-        );
+-        self.def_names.insert((name.to_string(), self.source), rec);
++        // @PLN22 Phase 1 — an enum variant is keyed by `(enum, variant)` (resolved
++        // via `variant_of` / `children_of`), NOT by a bare `(name, source)` global
++        // key.  Skipping the global insert lets two enums share a variant name and
++        // removes the `Dual definition` panic; the def is still created and reached
++        // through its parent enum.  Every OTHER def kind keeps the global key + the
++        // dual-definition guard.
++        if def_type != DefType::EnumValue {
++            assert!(
++                !self
++                    .def_names
++                    .contains_key(&(name.to_string(), self.source)),
++                "Dual definition of {name} at {position}"
++            );
++            self.def_names.insert((name.to_string(), self.source), rec);
++        }
+         let new_def = Definition {
+             name: name.to_string(),
+             source: self.source,
+@@ -4053,6 +4061,22 @@ impl Data {
+             .map(|(i, _)| i as u32)
+     }
+ 
++    /// @PLN22 Phase 1 — resolve a variant by name within ONE enum's members
++    /// (the `(enum, variant)` scope key).  The single chokepoint every variant
++    /// resolution routes through, replacing the bare global `def_nr(name)` +
++    /// `parent == e_nr` dance — so two enums may share a variant name and a
++    /// variant is never found without a contextual enum.  Returns `u32::MAX`
++    /// when `name` is not a variant of `enum_nr`.
++    #[must_use]
++    pub fn variant_of(&self, enum_nr: u32, name: &str) -> u32 {
++        if enum_nr == u32::MAX {
++            return u32::MAX;
++        }
++        self.children_of(enum_nr)
++            .find(|&c| self.def_type(c) == DefType::EnumValue && self.def(c).name() == name)
++            .unwrap_or(u32::MAX)
++    }
++
+     /// # Panics
+     /// When no definition on that number is found.
+     pub fn def_mut(&mut self, dnr: u32) -> &mut Definition {
+diff --git a/src/parser/definitions.rs b/src/parser/definitions.rs
+index 7550c404..24b7ea86 100644
+--- a/src/parser/definitions.rs
++++ b/src/parser/definitions.rs
+@@ -217,7 +217,10 @@ impl Parser {
+                 self.data.definitions[v as usize].parent = d_nr;
+                 v
+             } else {
+-                self.data.def_nr(&value_name)
++                // @PLN22 Phase 1 — variants are no longer globally keyed, so the
++                // second-pass re-resolve goes through the enum (d_nr) we are
++                // parsing, not the bare global `def_nr`.
++                self.data.variant_of(d_nr, &value_name)
+             };
+             if self.lexer.has_token("{") {
+                 if self.first_pass {
+diff --git a/src/parser/objects.rs b/src/parser/objects.rs
+index 03742e36..d783677c 100644
+--- a/src/parser/objects.rs
++++ b/src/parser/objects.rs
+@@ -303,6 +303,18 @@ impl Parser {
+         {
+             *code = self.data.attr_value(*enr, *a_nr);
+             t = parent_tp.clone();
++        // @PLN22 Phase 1 — the typed-declaration path threads the expected enum as
++        // `Type::Reference(enum)`, not `Type::Enum`; accept it too so a bare variant
++        // resolves against the declared enum once variants are no longer globally
++        // keyed.  NOTE (2nd spike): insufficient on its own — `parent_tp` is not set
++        // at the typed-local-decl / ==-RHS / call-arg sites; step 3 threads it there.
++        } else if let Type::Reference(enr, _) = parent_tp
++            && self.data.def_type(*enr) == DefType::Enum
++            && let Some(a_nr) = self.data.def(*enr).attr_names.get(name)
++        {
++            let a_nr = *a_nr;
++            *code = self.data.attr_value(*enr, a_nr);
++            t = self.data.def(*enr).returned().clone();
+         } else {
+             // try resolving as a bare function reference.
+             // On the first pass, only do this when the identifier is NOT followed
