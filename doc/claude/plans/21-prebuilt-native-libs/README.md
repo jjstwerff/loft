@@ -7,10 +7,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**PLANNED (2026-06-13).** The enabling invariant was *proven* this session by the
-cdylib re-key work ([CHANGELOG_TECHNICAL] / `cache::loft_ffi_fingerprint`): a registry
-cdylib is **loft-ffi-versioned, not loft-versioned, and rustc-independent**. That makes
-shipping a prebuilt binary *sound* — this plan turns the proof into distribution.
+**LOFT-SIDE SHIPPED (2026-06-13) — Phases 1–6 implemented, tested, pushed.** The whole
+in-loft pipeline is done: produce (`loft build-native`) → install (host-matching prebuilt
+fetch) → load (`prebuilt/<triple>/`, fp-gated) → validate (proactive `runtime-libs` check)
+→ diagnose (humane load/build errors) → surface (`loft install` "Native:" block) → and the
+source-build fallback is reproducible (`--locked` when a `native/Cargo.lock` is shipped).
+**Remaining is registry/CI integration only** — the producer *publish glue* (artifacts →
+release assets → `index.json binaries`), the submit-CI gates (Phase 5/6), and one
+end-to-end workflow run + a manylinux glibc baseline — each needs the live registry to
+exercise, not local code.
+
+The enabling invariant was *proven* this session by the cdylib re-key work
+([CHANGELOG_TECHNICAL] / `cache::loft_ffi_fingerprint`): a registry cdylib is
+**loft-ffi-versioned, not loft-versioned, and rustc-independent**. That makes shipping a
+prebuilt binary *sound* — this plan turns the proof into distribution.
 
 Tracked as [`@PLN21`](https://github.com/loft-lang/plans/issues/21) (loft-lang/plans) —
 the cross-ecosystem id (it touches the registry every library publishes through).
@@ -263,12 +273,21 @@ validates each `binaries` entry's `sha256` + `loft_ffi_fp` and requires `runtime
 declared when a prebuilt's `objdump -p` NEEDED list has a non-`libc` entry — needs the
 registry submit pipeline, like Phase 4's publish glue.
 
-### Phase 6 — Build determinism (the fallback's reliability) · M
+### Phase 6 — Build determinism (the fallback's reliability) · M — **SHIPPED 2026-06-13**
 **Goal:** the source-build fallback is reproducible across machines.
-1. **Pin the native crate's deps** — the `@P388` comment notes `--locked` is unavailable because Cargo.lock is gitignored + deps drift. Resolve: **commit `native/Cargo.lock` in the published tarball** (a registry package pins) and have `auto_build_native` pass `--locked` when a lock is present.
-2. This makes the reproducible-build submit gate (REGISTRY_SUBMIT gate 3) deterministic for the native crate.
-
-   **Probe:** build a package's cdylib from two checkouts → identical dep resolution; the reproducible gate passes.
+**Landed:** `auto_build_native` passes `--locked` to the `cargo build` **when the package
+ships a `native/Cargo.lock`** — cargo then uses the pinned resolution and refuses to drift,
+so two machines produce the same cdylib bytes. The `@P388` note that `--locked` was
+unavailable applied to the loft repo's *own* gitignored locks; a published registry package
+commits its native lock (the packaging convention this enables). Matrix-verified on a /tmp
+copy of `random`: **(A)** a freshly-generated lock → `build-native` succeeds (`--locked`
+doesn't break a valid build); **(B)** a stale lock (a dep added to `Cargo.toml` after the
+lock) → `cargo: cannot update the lock file … because --locked was passed` → the build
+fails, proving `--locked` is in effect (and the Phase 3 build-failure diagnostic fires on
+top). `fmt`/`clippy` clean.
+**Remaining (convention + gate, not loft code):** package authors commit `native/Cargo.lock`
+in the tarball, and the reproducible-build submit gate (REGISTRY_SUBMIT gate 3) gains the
+deterministic native-build check — registry-side, like the Phase 4/5 infra tails.
 
 ## Order & critical path
 

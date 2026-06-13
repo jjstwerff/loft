@@ -2537,6 +2537,16 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         .arg(&cargo_toml)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
+    // @PLN21 Phase 6 — when the package SHIPS a `native/Cargo.lock`, build
+    // `--locked` so the source build is REPRODUCIBLE: cargo uses the pinned
+    // resolution instead of re-resolving (and refuses to silently update it), so
+    // two machines produce the same cdylib bytes — making the reproducible-build
+    // submit gate deterministic.  The `@P388` note that `--locked` was
+    // unavailable applied to the loft repo's own gitignored locks; a published
+    // registry package commits its native lock for exactly this.
+    if cargo_toml.with_file_name("Cargo.lock").exists() {
+        cmd.arg("--locked");
+    }
     // #274 — build the package crate with the SAME RUSTFLAGS loft's own rlibs
     // used (captured at loft build time), so a shared transitive dep like
     // `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and the
