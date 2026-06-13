@@ -11,7 +11,8 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Open — design draft, no implementation.**  An earlier draft framed this as
+**Phase 1 design round done (2026-06-13); build pending. Phases 2–4 drafted.**
+An earlier draft framed this as
 "loft has a single flat namespace / `match North` resolves by global lookup."
 **That was wrong** — validated against the current tree (probes, 2026-06-13).
 loft's *resolution* is already scope- and context-aware; the residual problem is
@@ -59,20 +60,43 @@ resolution that already works.
 
 ### Phase 1 — enum-scoped variant definitions (M; the core fix)
 
-Make a variant a **member of its enum**, the way struct fields are already
-members (`Definition.attr_names`, `data.rs:2991`) — not a top-level
-`(name, source)` entry in `def_names`.
+**Design round DONE** (design-protocol steps 1–4, 2026-06-13); build pending.
 
-- Fixes the `Dual definition of Red` panic; two enums may share a variant name.
-- Resolution already has the contextual enum in the working cases (match
-  subject, typed local, comparison, arg) — extend it to look the variant up
-  **under that enum's members** instead of via the global `def_nr`.
-- `Enum::Variant` / `lib::Variant` qualification (already parsed) resolves the
-  same member path. Bare-without-context stays an error (demand qualification).
-- **Risk to retire first**: enumerate every site that finds a variant via
-  `def_nr(name)` + a `parent==e_nr` check (`control.rs:1411/1734/2987`,
-  `objects.rs:287`) — these become enum-member lookups. Matrix the four resolution
-  contexts × {bare, `Enum::V`, `lib::V`} × two-enums-sharing-a-name, both backends.
+**Invariant:** a variant is identified by `(enum, variant_name)` and found *only*
+via its enum's member index — never a bare global `def_nr`. Two variants collide
+iff their `(enum, name)` paths are equal.
+
+**Probed and confirmed — the mechanism already half-exists.** Resolution already
+routes through the enum's members in both places that matter: the value path uses
+`def(enr).attr_names.get(name)` (`objects.rs:301`), and the match path falls back
+to `children_of(e_nr).find(name)` (`control.rs:1414`, the C53 fix). The variant
+*def* legitimately coexists for its substructure (struct-enum fields, discriminant,
+codegen) — so this is NOT "variants stop being defs"; it's "variants stop being
+**globally keyed**." The collision is one redundant thing: `add_def(variant, …,
+EnumValue)` (`definitions.rs:216`) *also* inserts the bare `(name, source)` key
+into `def_names` — that key is what panics and what every site tries *first*.
+
+**The fix (3 moves):**
+1. **Chokepoint** — `Data::variant_of(enum, name) -> Option<def_nr>`, unifying the
+   two existing enum-member lookups (`attr_names.get` + `children_of.find`). Every
+   resolution site consults it with the contextual enum.
+2. **De-globalize** — `add_def` for `EnumValue` stops inserting the bare
+   `(name, source)` key (the def still exists, reachable via the enum). Panic gone;
+   two enums share `Red`.
+3. Drop the `def_nr(name)`-first try for variants at the resolution sites
+   (`control.rs:1411/1451/1536/1548/2987/3017/3028`, `objects.rs:290`,
+   `fields.rs:491`); `Enum::V` / `lib::V` resolve the same member path; a
+   no-context bare variant stays an error (demand qualification).
+
+**Brittleness (step 2): low by construction.** N ≈ 9 sites, but **omission is
+loud, not silent** — once variants aren't globally registered, a missed site gets
+`def_nr(variant)==MAX` and fails to resolve (a hard error a test catches), never a
+silently-wrong variant. The C53 `children_of` fallback already exists at the main
+sites, so de-globalizing mostly *promotes the fallback to primary*.
+
+**Matrix:** two-enums-sharing-a-variant × {match, typed local, `==`, fn arg, `is`,
+`Enum::V`, `lib::V`} × both backends; the C53 tests (`tests/lib/match_lib_enum_main.loft`)
+stay green; probes `g2` (the panic) and `g3` (`enum E`) flip to passing.
 
 ### Phase 2 — prelude shadowing (S–M)
 
