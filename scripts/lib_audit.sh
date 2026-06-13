@@ -151,11 +151,15 @@ classify_branch() {  # repo clone def br -> "VERDICT|detail"
 run_tests() {  # mode("interpret"|"native") pkgdir -> "VERDICT|note"
   local mode="$1" pkg="$2" out code
   out=$(cd "$pkg" && "$LOFT" "--$mode" test 2>&1); code=$?
-  if [ "$mode" = native ] && echo "$out" | grep -qiE 'rustc.*not found|can.t find crate|libloft\.rlib|LNK1181|linker .* not found'; then
-    echo "SKIP-ENV|toolchain"; return
-  fi
   if [ "$code" -ne 0 ]; then
-    echo "FAIL|$(echo "$out" | grep -m1 -iE 'error|fail|panic' | sed 's/^ *//' | cut -c1-70)"; return
+    # SKIP-ENV ONLY for a genuinely-absent toolchain — never for a real compile
+    # error.  The markers are narrow on purpose: 'can'\''t find crate FOR' is the
+    # E0463 toolchain phrasing, not 'in crate X' (a normal E0425), so a library
+    # build-script error stays a FAIL and keeps gating (it must not hide here).
+    if echo "$out" | grep -qiE "rustc.*command not found|can't find crate for|error: linker|LNK1181|libloft\.rlib"; then
+      echo "SKIP-ENV|toolchain absent"; return
+    fi
+    echo "FAIL|$(echo "$out" | grep -m1 -iE 'error\[|error:|panic|fail' | sed 's/^ *//' | cut -c1-70)"; return
   fi
   if echo "$out" | grep -qiE 'no test|0 (tests|passed)|nothing to run'; then echo "EMPTY|no tests ran"; return; fi
   # DEGRADED: exit-0 native run that warned about a dependency dropping to interp.
@@ -218,7 +222,8 @@ for repo in $REPOS; do
     if [ "$RUN_NATIVE" = 1 ] && [ "$NATIVE_ENV_OK" = 1 ]; then
       IFS='|' read -r nv nnote <<<"$(run_tests native "$p")"
     elif [ "$RUN_NATIVE" = 1 ]; then nv="SKIP-ENV"; fi
-    ROWS+=("$repo/$name|interp $iv|native $nv|${inote}${nnote}")
+    note="$inote"; [ -n "$nnote" ] && [ "$nnote" != "$inote" ] && note="${note:+$note; }$nnote"
+    ROWS+=("$repo/$name|interp $iv|native $nv|$note")
     case "$iv" in FAIL) gate "loft-libs-$repo/$name [interpret]: FAIL — $inote" ;; esac
     case "$nv" in
       FAIL)     gate "loft-libs-$repo/$name [native]: FAIL — $nnote" ;;
