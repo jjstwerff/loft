@@ -446,6 +446,20 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     }
 }
 
+/// The fingerprint a native artifact dir was stamped with, if any — the
+/// visibility companion to [`native_artifact_fingerprint_matches`] (which only
+/// returns a bool).  Extends the loud-fallback theme: when a cached cdylib is
+/// rejected and rebuilt, the caller can SHOW the stamped-vs-current fp so the
+/// cause is legible (a flipped `libloft.rlib` hash vs an absent sidecar) — the
+/// data we need before deciding whether to re-key the cdylib gate on the stable
+/// published `loft-ffi` version instead of the rlib hash.
+#[must_use]
+pub fn native_artifact_stamped_fp(profile_dir: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(fp_sidecar(profile_dir))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
 /// The rustc this loft was BUILT with (the `LOFT_BUILD_RUSTC` stamp from
 /// build.rs) vs the one a plain `rustc` resolves RIGHT NOW — which depends
 /// on PATH and rustup's cwd-sensitive toolchain overrides, so it can

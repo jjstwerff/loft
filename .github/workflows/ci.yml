@@ -368,9 +368,27 @@ jobs:
             done
             echo
             echo "**build-lock:** longest acquired wait ${maxwait}s · ${stuck} process(es) killed/stuck while waiting (never acquired)"
+            # Wasted rebuilds — the cdylib-cache headline cost.  A `cdylibstale`
+            # event = a cached cdylib REJECTED on a fingerprint mismatch and
+            # rebuilt (vs a genuine cold miss).  The event name is
+            # `<pkg>|stamped=<fp>|cur=<fp>`; sum the `cdylib miss` seconds of the
+            # rejected packages = time reclaimable by re-keying the gate on the
+            # stable published loft-ffi version instead of the libloft.rlib hash.
+            # A `cur=` that changes between two runs of the SAME commit would mean
+            # a second, non-reproducible-build instability on top of the
+            # per-commit flip.
+            stalen=$(echo "$all" | awk -F'\t' '$1=="cdylibstale"' | wc -l)
+            wasted=$(echo "$all" | awk -F'\t' '
+              $1=="cdylibstale"{split($2,a,"|"); stale[a[1]]=1}
+              $1=="cdylib"&&$3=="miss"{secs[$2]+=$4}
+              END{w=0; for(p in stale) w+=secs[p]; printf "%.1f", w}')
+            echo
+            echo "**stale cdylib rebuilds:** ${stalen} cached-but-fingerprint-rejected = ${wasted}s wasted"
+            echo "$all" | awk -F'\t' '$1=="cdylibstale"{print "  - "$2}' | sort -u
           } >> "$GITHUB_STEP_SUMMARY"
           echo "===== loft timing (cdylib) ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
           echo "===== loft timing (build-lock) ====="; echo "$all" | awk -F'\t' '$1=="lockwait"||$1=="lockheld"' | sort | uniq -c
+          echo "===== loft timing (stale cdylib rebuilds, with fp) ====="; echo "$all" | awk -F'\t' '$1=="cdylibstale"{print $2}' | sort | uniq -c
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so

@@ -2340,6 +2340,38 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         return Some(p);
     }
 
+    // Visibility (building on loft2's loud-fallback commit): distinguish a COLD
+    // miss (nothing cached) from a STALE REJECTION — the cdylib + rlib EXIST but
+    // their stamped fingerprint != THIS build's fp, so they are rebuilt.  Across
+    // CI runs that is the dominant cost: every loft source commit flips
+    // `loft_build_fingerprint` (the libloft.rlib content hash), rejecting cdylibs
+    // that actually only depend on the stable published loft-ffi ABI.  Log the
+    // stamped-vs-current fp (so two runs reveal whether the rlib hash flipped on
+    // an IDENTICAL commit — a second, non-reproducible-build instability — or
+    // only across commits) and record a `cdylibstale` event the CI timing step
+    // sums into wasted-rebuild seconds.  Pure diagnostics — no gate change yet.
+    'scan: for root in &search_roots {
+        for profile in ["release", "debug"] {
+            let dir = root.join(profile);
+            if dir.join(&lib_name).exists() && dir.join(&rlib_name).exists() {
+                let stamped = crate::cache::native_artifact_stamped_fp(&dir)
+                    .map_or_else(|| "none".to_string(), |s| s.to_string());
+                eprintln!(
+                    "loft: note — cdylib {stem} rebuilt: cached artifact rejected \
+                     (stamped fp={stamped} != current fp={fp}). On CI this is the \
+                     per-commit rlib-hash flip; the cdylib links the published loft-ffi ABI, \
+                     not libloft.rlib."
+                );
+                // Encode stamped|cur into the ledger name so the fp values
+                // survive on a PASSING run (nextest hides the eprintln above);
+                // the CI step strips the suffix for the per-package join.
+                let tagged = format!("{stem}|stamped={stamped}|cur={fp}");
+                crate::platform::timing_record("cdylibstale", &tagged, false, None);
+                break 'scan;
+            }
+        }
+    }
+
     // @P388: serialise on-demand native builds ACROSS PROCESSES.  Parallel test
     // binaries (nextest runs one process per test) and parallel end-user `loft`
     // invocations otherwise each run an unlocked `cargo build` that re-resolves
