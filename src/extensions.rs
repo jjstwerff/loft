@@ -2370,7 +2370,12 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         let lock_t = std::time::Instant::now();
         crate::platform::timing_record("lockwait", stem, false, None);
         let _ = f.lock();
-        crate::platform::timing_record("lockheld", stem, false, Some(lock_t.elapsed().as_secs_f64()));
+        crate::platform::timing_record(
+            "lockheld",
+            stem,
+            false,
+            Some(lock_t.elapsed().as_secs_f64()),
+        );
     }
     // Re-check under the lock: a process we waited on may have just produced the
     // artifact, in which case we must NOT rebuild.

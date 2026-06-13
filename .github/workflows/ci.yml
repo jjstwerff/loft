@@ -20,6 +20,14 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Harden crate downloads against the transient crates.io HTTP/2 flake
+  # ("[16] Error in the HTTP2 framing layer" → "download of <crate> failed"),
+  # which red-flagged the Browser `make gallery` wasm-pack build (a cold
+  # rustyline/unicode-width fetch).  Disabling HTTP/2 multiplexing forces the
+  # reliable HTTP/1.1 path; the retry count covers brief blips.  Worth a few
+  # seconds on cold fetches to stop a network blip from costing a PR re-run.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
   # BUILD2: keep loft's native-test binary cache inside target/ so
   # actions/cache (which persists ~/.cargo + target/) carries it across runs.
   # The in-run binary cache is keyed on the rlib's CONTENT hash (mtime-stable
