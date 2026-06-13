@@ -2530,41 +2530,57 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         crate::cache::clear_stale_native_target(&target_root, &lib_name, &rlib_name, fp);
     }
 
-    // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo
-    // writes outside the install dir.
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.args(["build", "--release", "--manifest-path"])
-        .arg(&cargo_toml)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-    // @PLN21 Phase 6 — when the package SHIPS a `native/Cargo.lock`, build
-    // `--locked` so the source build is REPRODUCIBLE: cargo uses the pinned
-    // resolution instead of re-resolving (and refuses to silently update it), so
-    // two machines produce the same cdylib bytes — making the reproducible-build
-    // submit gate deterministic.  The `@P388` note that `--locked` was
-    // unavailable applied to the loft repo's own gitignored locks; a published
-    // registry package commits its native lock for exactly this.
-    if cargo_toml.with_file_name("Cargo.lock").exists() {
-        cmd.arg("--locked");
-    }
-    // #274 — build the package crate with the SAME RUSTFLAGS loft's own rlibs
-    // used (captured at loft build time), so a shared transitive dep like
-    // `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and the
-    // package's plain copy share a `StableCrateId` but differ in SVH and rustc
-    // aborts at the generated program's link step.  Force it (overriding any
-    // ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so cargo doesn't see
-    // both forms at once.
-    cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
-        .env_remove("CARGO_ENCODED_RUSTFLAGS");
-    if use_redirected_target {
-        if let Some(parent) = target_root.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo writes outside
+    // the install dir.  Factored into a closure so a `--locked` failure can
+    // retry without it (below) — the two invocations differ only in that flag.
+    let make_cmd = |locked: bool| {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.args(["build", "--release", "--manifest-path"])
+            .arg(&cargo_toml)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        if locked {
+            cmd.arg("--locked");
         }
-        cmd.env("CARGO_TARGET_DIR", &target_root);
-    }
+        // #274 — build the package crate with the SAME RUSTFLAGS loft's own
+        // rlibs used (captured at loft build time), so a shared transitive dep
+        // like `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and
+        // the package's plain copy share a `StableCrateId` but differ in SVH and
+        // rustc aborts at the generated program's link step.  Force it
+        // (overriding any ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so
+        // cargo doesn't see both forms at once.
+        cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
+            .env_remove("CARGO_ENCODED_RUSTFLAGS");
+        if use_redirected_target {
+            if let Some(parent) = target_root.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            cmd.env("CARGO_TARGET_DIR", &target_root);
+        }
+        cmd
+    };
     let built_path = target_root.join("release").join(&lib_name);
     let build_start = std::time::Instant::now();
-    let status = cmd.status();
+    // @PLN21 Phase 6 — prefer `--locked` when the package SHIPS a
+    // `native/Cargo.lock`: cargo then uses the pinned resolution (reproducible —
+    // two machines produce the same cdylib bytes).  But a shipped lock can be
+    // platform-INCOMPLETE: one generated on Linux lacks a crate's `cfg(windows)`
+    // deps (e.g. `windows-targets`), so `cargo build --locked` on Windows must
+    // update the lock and refuses ("cannot update the lock file … because
+    // --locked was passed").  A FALLBACK source build must never hard-fail on
+    // that (Goal F), so on a locked failure we retry WITHOUT --locked, warning
+    // it is non-reproducible — reproducibility is best-effort here; the
+    // submit-time gate is where a complete lock is enforced.
+    let has_lock = cargo_toml.with_file_name("Cargo.lock").exists();
+    let mut status = make_cmd(has_lock).status();
+    if has_lock && matches!(&status, Ok(s) if !s.success()) {
+        eprintln!(
+            "loft: '--locked' build of '{stem}' failed — its Cargo.lock can't be \
+             satisfied as-is on this host (often a platform-specific dep missing \
+             from the shipped lock); retrying without --locked (non-reproducible)."
+        );
+        status = make_cmd(false).status();
+    }
     crate::platform::timing_record(
         "cdylib",
         stem,
