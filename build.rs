@@ -55,10 +55,41 @@ fn main() {
         .unwrap_or_default();
     println!("cargo:rustc-env=LOFT_BUILD_RUSTC={rustc_version}");
 
+    // Fingerprint loft-ffi's SOURCE — the stable cache key for REGISTRY cdylibs
+    // (`extensions::auto_build_native`).  A registry cdylib links loft-ffi (the
+    // C-ABI), NEVER libloft.rlib — verified: the cdylib has zero loft undefined
+    // symbols, only system NEEDED libs.  So its validity depends on loft-ffi,
+    // not the interpreter.  Hashing loft-ffi's SOURCE (not a compiled artifact)
+    // gives a key identical across debug/release/test profiles, so the shared
+    // ~/.loft/build-cache is reused across every loft build in a job instead of
+    // cross-invalidating on the libloft.rlib hash (which differs per profile);
+    // it still flips on any real loft-ffi change (ABI or impl, even
+    // un-version-bumped).  FNV-1a/64 over the sorted `loft-ffi/src/*.rs` bytes.
+    let mut ffi_fp: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut ffi_files: Vec<std::path::PathBuf> = std::fs::read_dir("loft-ffi/src")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    ffi_files.sort();
+    for f in &ffi_files {
+        if let Ok(bytes) = std::fs::read(f) {
+            for b in &bytes {
+                ffi_fp ^= u64::from(*b);
+                ffi_fp = ffi_fp.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    println!("cargo:rustc-env=LOFT_FFI_FINGERPRINT={ffi_fp}");
+
     // Only re-run when the git HEAD changes or build.rs itself changes.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
     println!("cargo:rerun-if-changed=build.rs");
+    // …and when loft-ffi's source changes, so LOFT_FFI_FINGERPRINT stays accurate.
+    println!("cargo:rerun-if-changed=loft-ffi/src");
     // …and when the build flags change, so LOFT_BUILD_RUSTFLAGS stays accurate.
     println!("cargo:rerun-if-env-changed=RUSTFLAGS");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");

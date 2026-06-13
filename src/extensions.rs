@@ -2313,12 +2313,14 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
-    // @PLN11 Arc N / N0 — reuse a cached artifact only if it was built by THIS
-    // loft build (its fingerprint sidecar matches).  A loft rebuild flips the
-    // fingerprint, so a stale package rlib / cdylib is rebuilt instead of being
-    // silently linked against a changed loft ABI — the automatic replacement for
-    // `make rebuild-native-cdylibs`.
-    let fp = crate::cache::loft_build_fingerprint();
+    // Reuse a cached cdylib when it was built against the same loft-ffi ABI.
+    // A registry cdylib links loft-ffi (the C-ABI), NEVER libloft.rlib (verified:
+    // zero loft undefined symbols), so its validity is keyed on loft-ffi's source
+    // hash — NOT `loft_build_fingerprint` (the libloft.rlib hash, which differs
+    // per build profile and so cross-invalidated this shared cache on every CI
+    // run).  This key is identical across debug/release/test, so all loft builds
+    // in a job share the cache; it still flips on a real loft-ffi change.
+    let fp = crate::cache::loft_ffi_fingerprint();
     let find_existing = || {
         for root in &search_roots {
             for profile in ["release", "debug"] {
@@ -2358,9 +2360,9 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
                     .map_or_else(|| "none".to_string(), |s| s.to_string());
                 eprintln!(
                     "loft: note — cdylib {stem} rebuilt: cached artifact rejected \
-                     (stamped fp={stamped} != current fp={fp}). On CI this is the \
-                     per-commit rlib-hash flip; the cdylib links the published loft-ffi ABI, \
-                     not libloft.rlib."
+                     (stamped loft-ffi fp={stamped} != current fp={fp}) — loft-ffi's source \
+                     changed since it was built. (Keyed on loft-ffi, not libloft.rlib, so a \
+                     plain interpreter change no longer triggers this.)"
                 );
                 // Encode stamped|cur into the ledger name so the fp values
                 // survive on a PASSING run (nextest hides the eprintln above);

@@ -416,6 +416,28 @@ fn warn_if_uplifted_rlib_stale() {
     }
 }
 
+/// Fingerprint for REGISTRY-cdylib cache validity (`extensions::auto_build_native`).
+///
+/// Distinct from [`loft_build_fingerprint`] (the `libloft.rlib` content hash):
+/// a registry cdylib links **loft-ffi** (the C-ABI), never `libloft.rlib` —
+/// verified by inspection (the cdylib has zero loft undefined symbols; its only
+/// NEEDED libs are system ones).  So its staleness depends on loft-ffi, not the
+/// interpreter.  This returns the build-time hash of loft-ffi's **source**
+/// (stamped by `build.rs` into `LOFT_FFI_FINGERPRINT`): identical across
+/// debug/release/test profiles, so the shared `~/.loft/build-cache` is reused
+/// across every loft build in a CI job instead of cross-invalidating on the
+/// per-profile rlib hash — yet it still flips on any real loft-ffi change (ABI
+/// or impl, even an un-version-bumped dev edit).  Falls back to
+/// [`loft_build_fingerprint`] (the old rlib-hash gate) when the stamp is absent
+/// or 0, so it is never *less* safe than before.
+#[must_use]
+pub fn loft_ffi_fingerprint() -> u64 {
+    option_env!("LOFT_FFI_FINGERPRINT")
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&h| h != 0)
+        .unwrap_or_else(loft_build_fingerprint)
+}
+
 /// @PLN11 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
 fn fp_sidecar(profile_dir: &std::path::Path) -> std::path::PathBuf {
     profile_dir.join(".loft-build-fp")
