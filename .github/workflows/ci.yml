@@ -134,17 +134,24 @@ jobs:
       # first (its own fixture set), then any same-OS, then any.  A run that
       # rebuilds fixtures now persists them, so a re-run / the merge-to-main
       # run / a follow-up non-rlib push restores them WARM.
-      # `~/.loft/{build-cache,registry}` holds the installed registry packages
-      # and their built NATIVE cdylibs (graphics, glb, mesh3d, …).  These were
-      # NOT in any cache path, so every run rebuilt them from scratch — graphics
-      # alone is ~90s of cargo build (winit/glutin/image/…), and there are
-      # several.  They link the PUBLISHED `loft-ffi` (not the local rlib), so
-      # they are stable across loft source changes — caching them is safe and
-      # they stay warm until a package version bumps (loft's own build-cache
-      # keying rebuilds a changed package even from a restored cache).  This is
-      # the actual native-phase bottleneck (a fixture rustc link is ~0.3s;
-      # measured — combining fixtures would save <90s, the cdylib builds are
-      # minutes).
+      # `~/.loft/build-cache` holds the built NATIVE cdylibs (graphics, glb,
+      # mesh3d, …) — the actual native-phase bottleneck (graphics alone is
+      # ~80-90s of cargo build, and on the cold suite run graphics rebuilds
+      # several times before the cache populates).  They link the PUBLISHED
+      # `loft-ffi` (not the local rlib), so they are stable across loft source
+      # changes — caching them is safe and they stay warm until a package
+      # version bumps (loft's own build-cache keying rebuilds a changed package
+      # even from a restored cache).  (A fixture rustc link is ~0.3s measured,
+      # so combining fixtures would save <90s — the cdylib builds are the
+      # minutes.)
+      #
+      # `~/.loft/registry` (the EXTRACTED package sources) is deliberately NOT
+      # cached: on Windows, restoring that dir leaves files in place and loft's
+      # tar unpack then fails to overwrite them through the `\\?\` verbatim path
+      # (`failed to unpack …web-0.1.1\README.md` → `use server` won't resolve →
+      # the multiplayer server never starts).  Re-extracting from scratch each
+      # run works on every OS and costs only the small-tarball unpack — the
+      # build-cache above is where the real time is.
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
@@ -152,7 +159,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.loft/build-cache
-            ~/.loft/registry
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-j${{ strategy.job-index }}-${{ github.run_id }}
           restore-keys: |

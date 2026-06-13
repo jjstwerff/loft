@@ -68,7 +68,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.loft/build-cache
-            ~/.loft/registry
             target
           key: probe-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
