@@ -2313,12 +2313,14 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     if use_redirected_target {
         search_roots.push(in_tree_target.clone());
     }
-    // @PLN11 Arc N / N0 — reuse a cached artifact only if it was built by THIS
-    // loft build (its fingerprint sidecar matches).  A loft rebuild flips the
-    // fingerprint, so a stale package rlib / cdylib is rebuilt instead of being
-    // silently linked against a changed loft ABI — the automatic replacement for
-    // `make rebuild-native-cdylibs`.
-    let fp = crate::cache::loft_build_fingerprint();
+    // Reuse a cached cdylib when it was built against the same loft-ffi ABI.
+    // A registry cdylib links loft-ffi (the C-ABI), NEVER libloft.rlib (verified:
+    // zero loft undefined symbols), so its validity is keyed on loft-ffi's source
+    // hash — NOT `loft_build_fingerprint` (the libloft.rlib hash, which differs
+    // per build profile and so cross-invalidated this shared cache on every CI
+    // run).  This key is identical across debug/release/test, so all loft builds
+    // in a job share the cache; it still flips on a real loft-ffi change.
+    let fp = crate::cache::loft_ffi_fingerprint();
     let find_existing = || {
         for root in &search_roots {
             for profile in ["release", "debug"] {
@@ -2336,7 +2338,40 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         None
     };
     if let Some(p) = find_existing() {
+        crate::platform::timing_record("cdylib", stem, true, None);
         return Some(p);
+    }
+
+    // Visibility (building on loft2's loud-fallback commit): distinguish a COLD
+    // miss (nothing cached) from a STALE REJECTION — the cdylib + rlib EXIST but
+    // their stamped fingerprint != THIS build's fp, so they are rebuilt.  Across
+    // CI runs that is the dominant cost: every loft source commit flips
+    // `loft_build_fingerprint` (the libloft.rlib content hash), rejecting cdylibs
+    // that actually only depend on the stable published loft-ffi ABI.  Log the
+    // stamped-vs-current fp (so two runs reveal whether the rlib hash flipped on
+    // an IDENTICAL commit — a second, non-reproducible-build instability — or
+    // only across commits) and record a `cdylibstale` event the CI timing step
+    // sums into wasted-rebuild seconds.  Pure diagnostics — no gate change yet.
+    'scan: for root in &search_roots {
+        for profile in ["release", "debug"] {
+            let dir = root.join(profile);
+            if dir.join(&lib_name).exists() && dir.join(&rlib_name).exists() {
+                let stamped = crate::cache::native_artifact_stamped_fp(&dir)
+                    .map_or_else(|| "none".to_string(), |s| s.to_string());
+                eprintln!(
+                    "loft: note — cdylib {stem} rebuilt: cached artifact rejected \
+                     (stamped loft-ffi fp={stamped} != current fp={fp}) — loft-ffi's source \
+                     changed since it was built. (Keyed on loft-ffi, not libloft.rlib, so a \
+                     plain interpreter change no longer triggers this.)"
+                );
+                // Encode stamped|cur into the ledger name so the fp values
+                // survive on a PASSING run (nextest hides the eprintln above);
+                // the CI step strips the suffix for the per-package join.
+                let tagged = format!("{stem}|stamped={stamped}|cur={fp}");
+                crate::platform::timing_record("cdylibstale", &tagged, false, None);
+                break 'scan;
+            }
+        }
     }
 
     // @P388: serialise on-demand native builds ACROSS PROCESSES.  Parallel test
@@ -2360,7 +2395,21 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         .open(std::env::temp_dir().join("loft-native-build.lock"))
         .ok();
     if let Some(f) = &_build_lock {
+        // Reveal cross-process contention on this ONE global lock (the prime
+        // suspect for the CI 600s multiplayer hang): record `lockwait` BEFORE
+        // blocking (so it lands in the ledger even if this process is killed
+        // while still waiting), then `lockheld` with the wait duration once
+        // acquired.  A `lockwait` with no matching `lockheld` for a package =
+        // a process stuck behind another's long cold build.
+        let lock_t = std::time::Instant::now();
+        crate::platform::timing_record("lockwait", stem, false, None);
         let _ = f.lock();
+        crate::platform::timing_record(
+            "lockheld",
+            stem,
+            false,
+            Some(lock_t.elapsed().as_secs_f64()),
+        );
     }
     // Re-check under the lock: a process we waited on may have just produced the
     // artifact, in which case we must NOT rebuild.
@@ -2412,7 +2461,14 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         cmd.env("CARGO_TARGET_DIR", &target_root);
     }
     let built_path = target_root.join("release").join(&lib_name);
+    let build_start = std::time::Instant::now();
     let status = cmd.status();
+    crate::platform::timing_record(
+        "cdylib",
+        stem,
+        false,
+        Some(build_start.elapsed().as_secs_f64()),
+    );
     match status {
         Ok(s) if s.success() => {
             // @PLN11 Arc N / N0 — stamp the build fingerprint on ANY successful

@@ -1,0 +1,205 @@
+name: CI probe (timing)
+
+# A lean, MEASUREMENT-only run — NOT a gate, never runs on a PR.  It answers
+# "what is taking time in CI?" and "is the cache working?" in ~one ubuntu job
+# instead of the full ~25-minute 3-OS matrix.
+#
+# Each expensive phase is its own step (GitHub times each), AND every phase
+# also records its own wall-clock + a sub-metric into a shared ledger that the
+# final "Timing report" step renders as ONE table in the job summary — so the
+# breakdown is readable without clicking through the step list.  A
+# `cargo --timings` HTML report (per-crate compile times) is uploaded as an
+# artifact for the build phase.
+#
+# Cache uses a PRIVATE `probe-*` namespace, so a cold→warm A/B is reproducible
+# in isolation: run 1 is cold (populates the cache); a re-run / follow-up push
+# restores warm.  The per-phase delta between the two is the cache's value —
+# watch the cdylibs phase collapse (restored from ~/.loft) on the warm run.
+#
+# Trigger:
+#   git push origin <branch>:ci-probe        # push trigger
+#   gh workflow run ci-probe.yml --ref main  # once it is on the default branch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci-probe]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
+  LOFT_SKIP_LEDGER: ${{ github.workspace }}/target/loft-skip-ledger
+  # Per-phase timing ledger (TSV: phase \t seconds \t sub-metric), drained by
+  # the final report step.
+  PROBE_LEDGER: ${{ github.workspace }}/_probe_timings.tsv
+  # loft's OWN per-event native-compile ledger (Timing object → one TSV row per
+  # cdylib build / fixture rustc: kind \t name \t hit|miss \t secs).  Outside
+  # `target/` so it is fresh each run (not cache-restored).  Inherited by the
+  # spawned loft child processes, so it captures the cdylib builds the
+  # phase-level timing can't see inside.
+  LOFT_TIMING_LEDGER: ${{ github.workspace }}/_loft_timing
+
+jobs:
+  probe:
+    name: probe (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold + ALSA + headless GL
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
+
+      # Private `probe-*` cache namespace — same PATHS + run_id-keyed structure
+      # as the main test job (so it measures the real persistence + ~/.loft
+      # behaviour), isolated so a cold→warm A/B is reproducible.
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.loft/build-cache
+            target
+          key: probe-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            probe-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            probe-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # Snapshot the cache state BEFORE any work — sizes + binary counts reveal
+      # whether the cache restored populated (warm) or empty (cold).
+      - name: Pre-run cache snapshot
+        run: |
+          : > "$PROBE_LEDGER"
+          hit='${{ steps.cache.outputs.cache-hit }}'
+          loft_sz=$(du -sm ~/.loft/build-cache 2>/dev/null | cut -f1 || echo 0)
+          nat_sz=$(du -sm "$LOFT_TMPDIR" 2>/dev/null | cut -f1 || echo 0)
+          nat_n=$(find "$LOFT_TMPDIR" -type f 2>/dev/null | wc -l || echo 0)
+          tgt_sz=$(du -sm target 2>/dev/null | cut -f1 || echo 0)
+          {
+            echo "## CI probe — timing & cache report"
+            echo ""
+            echo "**Cache restore:** \`${hit:-false (cold run)}\`"
+            echo ""
+            echo "| Pre-run state | value |"
+            echo "|---|---|"
+            echo "| ~/.loft/build-cache | ${loft_sz} MB |"
+            echo "| native-fixture cache | ${nat_sz} MB, ${nat_n} files |"
+            echo "| target/ | ${tgt_sz} MB |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- timed phases ------------------------------------------------------
+      # Each phase: record start, run (tee to a log for sub-metrics), record
+      # duration + a phase-specific metric into the ledger.
+
+      - name: 'PHASE build'
+        run: |
+          s=$(date +%s)
+          cargo build --release --lib --bin loft --timings 2>&1 | tee /tmp/p_build.log
+          d=$(( $(date +%s) - s ))
+          # slowest 3 crates from the cargo --timings text, if present.
+          slow=$(grep -oE "Compiling [a-z0-9_-]+ v[0-9.]+" /tmp/p_build.log | tail -3 | tr '\n' ';' || true)
+          printf 'build\t%s\t%s\n' "$d" "rebuilt: ${slow:-cache no-op}" >> "$PROBE_LEDGER"
+
+      - name: 'PHASE cdylibs (native_library_suite → ~/.loft builds)'
+        run: |
+          s=$(date +%s)
+          cargo nextest run --profile ci --test native -E 'test(native_library_suite)' 2>&1 | tee /tmp/p_cdylib.log || true
+          d=$(( $(date +%s) - s ))
+          # which registry/lib cdylibs actually compiled this run (vs restored).
+          built=$(grep -cE "Compiling loft-[a-z]+-native|Finished .* in [0-9]" /tmp/p_cdylib.log || echo 0)
+          pkgs=$(grep -oE "Compiling loft-[a-z]+-native" /tmp/p_cdylib.log | sort -u | sed 's/Compiling //' | tr '\n' ';' || true)
+          printf 'cdylibs\t%s\t%s\n' "$d" "built ${built} (${pkgs:-none → all restored})" >> "$PROBE_LEDGER"
+
+      - name: 'PHASE fixtures (native_scripts → per-fixture rustc)'
+        run: |
+          s=$(date +%s)
+          cargo nextest run --profile ci --test native -E 'test(native_scripts)' 2>&1 | tee /tmp/p_fix.log || true
+          d=$(( $(date +%s) - s ))
+          tests=$(grep -oE "[0-9]+ tests run" /tmp/p_fix.log | tail -1 || echo "?")
+          printf 'fixtures\t%s\t%s\n' "$d" "${tests}" >> "$PROBE_LEDGER"
+
+      - name: 'PHASE interp (wrap loft_suite)'
+        run: |
+          s=$(date +%s)
+          cargo nextest run --profile ci --test wrap loft_suite 2>&1 | tee /tmp/p_interp.log || true
+          d=$(( $(date +%s) - s ))
+          tests=$(grep -oE "[0-9]+ tests run.*" /tmp/p_interp.log | tail -1 || echo "?")
+          printf 'interp\t%s\t%s\n' "$d" "${tests}" >> "$PROBE_LEDGER"
+
+      # --- consolidated report ----------------------------------------------
+      - name: Timing report
+        if: always()
+        run: |
+          loft_sz=$(du -sm ~/.loft/build-cache 2>/dev/null | cut -f1 || echo 0)
+          nat_n=$(find "$LOFT_TMPDIR" -type f 2>/dev/null | wc -l || echo 0)
+          {
+            echo ""
+            echo "### Per-phase wall-clock"
+            echo ""
+            echo "| Phase | Duration | Detail |"
+            echo "|---|---:|---|"
+            total=0
+            while IFS=$'\t' read -r phase secs detail; do
+              [ -z "$phase" ] && continue
+              total=$(( total + secs ))
+              printf '| %s | %dm%02ds | %s |\n' "$phase" $(( secs / 60 )) $(( secs % 60 )) "$detail"
+            done < "$PROBE_LEDGER"
+            printf '| **total** | **%dm%02ds** | |\n' $(( total / 60 )) $(( total % 60 ))
+            echo ""
+            echo "**Post-run:** ~/.loft/build-cache ${loft_sz} MB · native-fixture cache ${nat_n} files"
+            echo ""
+            echo "_Re-run to get WARM numbers: cdylibs should collapse (restored), build → near-no-op._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== probe timing ====="; cat "$PROBE_LEDGER"
+
+      # Aggregate loft's OWN per-event ledger (the Timing object) — the inside
+      # view: which cdylibs built (miss) vs restored (hit), per-package seconds,
+      # and the fixture rustc total.  This is what the phase-level timing can't
+      # see, because the work runs in spawned loft child processes.
+      - name: loft internal timing (cdylib hit/miss, per-package secs)
+        if: always()
+        run: |
+          dir="$LOFT_TIMING_LEDGER"
+          if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "no loft timing ledger (LOFT_TIMING_LEDGER unset or no native compiles)"; exit 0
+          fi
+          all=$(cat "$dir"/*.tsv)
+          {
+            echo ""
+            echo "### loft internal native-compile timing"
+            echo ""
+            echo "| cdylib | builds (miss) | restored (hit) | build secs |"
+            echo "|---|---:|---:|---:|"
+            for pkg in $(echo "$all" | awk -F'\t' '$1=="cdylib"{print $2}' | sort -u); do
+              miss=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="miss"' | wc -l)
+              hit=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="hit"' | wc -l)
+              secs=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p{s+=$4} END{printf "%.1f", s}')
+              printf '| %s | %s | %s | %s |\n' "$pkg" "$miss" "$hit" "$secs"
+            done
+            fixn=$(echo "$all" | awk -F'\t' '$1=="fixture"' | wc -l)
+            fixs=$(echo "$all" | awk -F'\t' '$1=="fixture"{s+=$4} END{printf "%.1f", s}')
+            echo ""
+            echo "**fixtures:** ${fixn} compiled, ${fixs}s total rustc"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== loft timing ledger ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
+
+      - name: Upload cargo --timings (per-crate compile breakdown)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings
+          path: target/cargo-timings/cargo-timing*.html
+          if-no-files-found: ignore
+          retention-days: 14

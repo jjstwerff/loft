@@ -64,6 +64,16 @@ html-wasm-serial = { max-threads = 1 }
 # at a time; everything else stays fully parallel.  Subsumes the old
 # `multiplayer-v2-serial`.  (The markdown viewer smoke test runs in its own
 # isolated advisory job instead — see ci.yml.)
+#
+# multiplayer_v5 is deliberately NOT in this group — it stays fully parallel.
+# It had the same exposure (its `use web` triggers a COLD loft_web cdylib build
+# ~23s via a spawned `cargo build` grandchild; under heavy build-lock contention
+# that could blow the 60s listen cap, the harness kills the loft child, the
+# grandchild survives holding the stdout pipe, and the drain blocked to the 600s
+# TMT — probe data, ci-probe.yml v5-alone/v5-vs-native, 2026-06-13).  Fixed at
+# the root instead: drain_with_timeout bounds its wait (JOIN_CAP), so a held-open
+# pipe is a ~45s fail-and-retry, not a 600s hang — keeping v5 parallel without
+# paying the serial cost.
 heavy-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]

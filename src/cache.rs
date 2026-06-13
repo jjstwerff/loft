@@ -360,13 +360,82 @@ pub fn loft_build_fingerprint() -> u64 {
     use std::sync::OnceLock;
     static FP: OnceLock<u64> = OnceLock::new();
     *FP.get_or_init(|| {
-        loft_rlib_path()
+        warn_if_uplifted_rlib_stale();
+        let fp = loft_rlib_path()
             .or_else(|| std::env::current_exe().ok())
             .and_then(|p| file_hash(&p.to_string_lossy()))
             .map_or(0, |h| {
                 u64::from_le_bytes(h[..8].try_into().unwrap_or([0; 8]))
-            })
+            });
+        if fp == 0 {
+            // The `fp == 0` path makes `native_artifact_fingerprint_matches`
+            // "match anything" — i.e. silently reuse whatever artifact is on
+            // disk regardless of the loft build that produced it.  That is the
+            // stale-link footgun; never let it pass unannounced.
+            eprintln!(
+                "loft: warning — cannot fingerprint this loft build (no readable \
+                 libloft.rlib or executable); native artifacts cannot be staleness-checked \
+                 and are reused as-is. If results look stale, clear ~/.loft/build-cache and \
+                 the package native-auto/ dirs."
+            );
+        }
+        fp
     })
+}
+
+/// Loud staleness signal for the dev `target/<profile>/` layout: the uplifted
+/// bare `libloft.rlib` is refreshed only by an explicit `cargo build --lib`, so
+/// after a `--bin` rebuild it lags the `deps/libloft.rlib` loft actually links
+/// (deps-first, #304).  The fingerprint paths route around it, but the bare copy
+/// is a trap for anything that reads it directly (a hand-rolled `rustc --extern`,
+/// a script, future code).  Warn once when the bare copy is older than deps — a
+/// cheap, definitive signal that the visible-but-unused rlib is stale.  Both
+/// absent (installed / prebuilt loft) → no bare-vs-deps split, nothing to warn.
+fn warn_if_uplifted_rlib_stale() {
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+    else {
+        return;
+    };
+    let deps = exe_dir.join("deps").join("libloft.rlib");
+    let bare = exe_dir.join("libloft.rlib");
+    let (Ok(deps_t), Ok(bare_t)) = (
+        std::fs::metadata(&deps).and_then(|m| m.modified()),
+        std::fs::metadata(&bare).and_then(|m| m.modified()),
+    ) else {
+        return;
+    };
+    if bare_t < deps_t {
+        eprintln!(
+            "loft: warning — {} is STALE (older than deps/libloft.rlib, which loft links). \
+             loft routes around it (deps-first), but tools reading the bare path get an \
+             outdated rlib. Run `cargo build --lib` to refresh it, or delete it.",
+            bare.display()
+        );
+    }
+}
+
+/// Fingerprint for REGISTRY-cdylib cache validity (`extensions::auto_build_native`).
+///
+/// Distinct from [`loft_build_fingerprint`] (the `libloft.rlib` content hash):
+/// a registry cdylib links **loft-ffi** (the C-ABI), never `libloft.rlib` —
+/// verified by inspection (the cdylib has zero loft undefined symbols; its only
+/// NEEDED libs are system ones).  So its staleness depends on loft-ffi, not the
+/// interpreter.  This returns the build-time hash of loft-ffi's **source**
+/// (stamped by `build.rs` into `LOFT_FFI_FINGERPRINT`): identical across
+/// debug/release/test profiles, so the shared `~/.loft/build-cache` is reused
+/// across every loft build in a CI job instead of cross-invalidating on the
+/// per-profile rlib hash — yet it still flips on any real loft-ffi change (ABI
+/// or impl, even an un-version-bumped dev edit).  Falls back to
+/// [`loft_build_fingerprint`] (the old rlib-hash gate) when the stamp is absent
+/// or 0, so it is never *less* safe than before.
+#[must_use]
+pub fn loft_ffi_fingerprint() -> u64 {
+    option_env!("LOFT_FFI_FINGERPRINT")
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&h| h != 0)
+        .unwrap_or_else(loft_build_fingerprint)
 }
 
 /// @PLN11 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
@@ -397,6 +466,20 @@ pub fn write_native_artifact_fingerprint(profile_dir: &std::path::Path, fp: u64)
     if fp != 0 {
         let _ = std::fs::write(fp_sidecar(profile_dir), fp.to_string());
     }
+}
+
+/// The fingerprint a native artifact dir was stamped with, if any — the
+/// visibility companion to [`native_artifact_fingerprint_matches`] (which only
+/// returns a bool).  Extends the loud-fallback theme: when a cached cdylib is
+/// rejected and rebuilt, the caller can SHOW the stamped-vs-current fp so the
+/// cause is legible (a flipped `libloft.rlib` hash vs an absent sidecar) — the
+/// data we need before deciding whether to re-key the cdylib gate on the stable
+/// published `loft-ffi` version instead of the rlib hash.
+#[must_use]
+pub fn native_artifact_stamped_fp(profile_dir: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(fp_sidecar(profile_dir))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// The rustc this loft was BUILT with (the `LOFT_BUILD_RUSTC` stamp from

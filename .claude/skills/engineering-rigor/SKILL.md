@@ -2,21 +2,23 @@
 name: engineering-rigor
 description: >-
   The shared discipline for any non-trivial change — fixing a bug OR
-  designing/refactoring a load-bearing algorithm. A coherent explanation is a
-  hypothesis, not a conclusion; acting on the first one ships fragility you
-  couldn't see. Before acting, build the instrument that makes the whole CLASS
-  visible (a boundary matrix for a bug, falsification probes for a design, a usage
-  sentinel for any "which code actually runs?" question), find the ONE invariant,
-  enforce it at the chokepoint (no narrower, no wider), and verify against what you
-  wrote down. USE THIS whenever you are about to fix a
-  non-trivial bug (especially a crash, silent corruption, or wrong result),
-  design or refactor a load-bearing algorithm (core representation, runtime,
-  memory, codegen, a public contract or data format), whenever a change feels
-  fragile or "longer than expected for what it does", or when you keep reaching for
-  an approximation in an exact-invariant domain (geometry, caching, hashing,
-  round-trips) and can't pin the construction that's exactly right — even when
-  nobody asked for rigor and the first fix looks obvious. Routes to the matrix-first
-  debug protocol and Design Protocol 1; does not replace them.
+  designing/refactoring a load-bearing algorithm. USE THIS when about to fix a
+  non-trivial bug (crash, silent corruption, wrong result), design or refactor a
+  load-bearing algorithm (core representation, runtime, memory, codegen, a public
+  contract or data format), when a change feels fragile or "longer than expected
+  for what it does", or when reaching for an approximation in an exact-invariant
+  domain (geometry, caching, hashing, round-trips) and can't pin the exact
+  construction — ESPECIALLY when a fix already looks obvious (that's the cue, not
+  the exception). It is a SPEED tool, not a brake: a coherent explanation is a
+  hypothesis, not a conclusion, and the fastest route to a fix that sticks is the
+  cheapest probe that could prove your idea wrong (a timing, a grep of a count, one
+  --emit-and-look — seconds). So the moment you can state a cause or a fix, that
+  fluency is the cue to GATHER first, not act — which also lets you fix the SOURCE
+  and delete the whole class, not just this instance. Then build the instrument
+  that makes the CLASS visible (boundary matrix, falsification probe, usage
+  sentinel), find the ONE invariant, enforce it at the chokepoint (no narrower, no
+  wider), verify against what you wrote down. Routes to the matrix-first protocol
+  and Design Protocol 1.
 user-invocable: true
 ---
 
@@ -37,6 +39,34 @@ nothing for a sight gap). The cure is **better eyes**: build the instrument that
 makes the whole class visible, then act on what it shows. The instrument is the
 organ of sight; the rest of this skill is how to build it and what to do once you
 can see.
+
+## This gets you to a fix FAST — the cheap probe is the accelerator, not the brake
+
+Read this as a **speed tool.** The fastest route to a fix that's actually right is
+**the cheapest thing that could prove your idea wrong** — a single timing, a `grep`
+of a count, one `--emit`-and-look, a cold/warm run. *Seconds.* Reach for it like a
+cherry: it's right there, it's cheap, and it hands you **certainty** — which is what
+lets you fix once and move on.
+
+A guessed fix only *feels* faster. A story you can describe but haven't probed is a
+hypothesis you've mistaken for a conclusion, and the wrong ones cost the real time —
+the rework, the redone PR, the CI round, the spent trust. **The 30-second probe is
+the fast lane precisely because being wrong is the slow one.**
+
+And the **bigger cherry:** because the instrument shows you the *class*, you fix the
+**source** — the chokepoint the whole family flows through — not the instance. You
+don't fix *this* bug; you **delete the category**, so the siblings and the future
+runs that would have hit the same root never come back. A guessed instance-fix
+leaves the source intact and the siblings keep arriving. Two prizes for a few
+seconds of looking: a fix that sticks, and a class of bugs that stops happening.
+
+> **You can state a fix → that's the cue to grab the cheapest thing that could kill
+> it.** Run that first; reaching for the probe *is* reaching for the fix.
+
+This first cheap probe is the always-on move, not the heavier build-the-instrument
+work below. Skipping it is the most common way rigor fails in practice — not a
+botched step, but never reaching for the instrument because a fix was already in
+hand.
 
 ## Two modes, one shape
 
@@ -216,12 +246,19 @@ alarm did its job by making you check.
 
 ## Keep it light — the procedure must not consume the judgment it serves
 
-The *tell* is free and always on. The full build-the-instrument procedure is the
-expensive part, and it fires **only when the tell trips on something
-load-bearing** — never reflexively per function. An ever-on checklist is friction
-and burns the very attention the essential-vs-accidental judgment needs. Writing
-the prediction / matrix down is a load *reducer*: it moves the prior onto the page
-so working memory is free for the building and the judgment.
+There are **two layers, and only the second is expensive.** The always-on layer is
+free and reflexive: the *tell* (this is longer than I expected) **and the cheap
+disproving probe** (you can state a fix → grab the seconds-long thing that could
+kill it). Both fire constantly, cost almost nothing, and are the accelerator
+above — reach for them every time. The *full* build-the-instrument procedure (a
+complete boundary matrix; a falsification suite; a usage sentinel with a positive
+control) is the expensive part, and it fires **only when the cheap layer says the
+thing is load-bearing** — never reflexively per function. An ever-on full
+checklist is friction that burns the very attention the essential-vs-accidental
+judgment needs. Writing the prediction / matrix down is a load *reducer*: it moves
+the prior onto the page so working memory is free for the building and the
+judgment. So: **the cheap probe is never skipped; the full matrix is never
+reflexive.**
 
 ## Which mode am I in? (and they compose)
 

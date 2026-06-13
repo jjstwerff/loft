@@ -385,6 +385,34 @@ pub fn duplicate_fn_names(data: &Data) -> HashSet<String> {
     dups
 }
 
+/// Final invariant scrub over a COMPLETE generated native source: rewrite the
+/// loft-internal module references `crate::rpc::` / `crate::store::` to
+/// `loft::…`.  In the interpreter's own crate `crate == loft`, so a `#rust`
+/// template can write `crate::rpc::print_or_capture` / `crate::store::Store`;
+/// but in a GENERATED binary `crate::` is the binary's own root (no `rpc` /
+/// `store` module), so they must be `loft::…` (loft is linked as an extern
+/// crate; both fns are `pub`).  The host-import intrinsics
+/// `crate::loft_host_print` / `crate::wasm::…` are the generated cdylib's OWN
+/// items and correctly stay `crate::` — only the two specific module paths are
+/// rewritten.
+///
+/// This is the CHOKEPOINT: every native-emission entry scrubs its full output
+/// here, so it cannot matter which template/inlining path produced a
+/// `crate::rpc::` reference.  A per-call-site rewrite in
+/// `substitute_template_body` missed an emission path and produced an
+/// intermittent `error[E0433]: cannot find rpc in crate` in the nightly
+/// index-hygiene leg — enforcing the invariant once, over the assembled
+/// source, is robust where the per-site rewrite was not.
+fn scrub_generated_crate_refs(src: &[u8]) -> Vec<u8> {
+    let s = String::from_utf8_lossy(src);
+    if !s.contains("crate::rpc::") && !s.contains("crate::store::") {
+        return src.to_vec();
+    }
+    s.replace("crate::rpc::", "loft::rpc::")
+        .replace("crate::store::", "loft::store::")
+        .into_bytes()
+}
+
 /// The Rust identifier emitted for function `def`.  Unique names keep their
 /// bare ident (stable existing output); a name in `dups` gets a short content
 /// hash of its defining FILE appended — two same-named fns can only come from
@@ -1170,6 +1198,20 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
+        // Buffer then scrub (see `scrub_generated_crate_refs`): the full
+        // program source passes the `crate::rpc::`/`crate::store::` invariant
+        // exactly once, regardless of which template path emitted it.
+        let mut buf: Vec<u8> = Vec::new();
+        self.output_native_emit(&mut buf, from, till)?;
+        w.write_all(&scrub_generated_crate_refs(&buf))
+    }
+
+    fn output_native_emit(
+        &mut self,
+        w: &mut dyn Write,
+        from: u32,
+        till: u32,
+    ) -> std::io::Result<()> {
         self.dup_fn_names = duplicate_fn_names(self.data);
         // P269 — populate reachability from `n_main` so the unimplemented-
         // native check (`output_function`'s `todo!()`-emit branches) can
@@ -1264,7 +1306,10 @@ extern crate loft;"
         till: u32,
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
-        self.emit_native_reachable_body(w, till, entry_defs)?;
+        // Buffer then scrub the assembled source (see
+        // `scrub_generated_crate_refs`), then write to the real `w`.
+        let mut buf: Vec<u8> = Vec::new();
+        self.emit_native_reachable_body(&mut buf, till, entry_defs)?;
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name() == "n_main") {
             if self.wasm_browser {
@@ -1272,7 +1317,7 @@ extern crate loft;"
                 // doesn't have an argv, so user_args stays empty —
                 // arguments() returns [].
                 writeln!(
-                    w,
+                    buf,
                     "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             } else {
@@ -1282,10 +1327,10 @@ extern crate loft;"
                 // src/main.rs does for the interpreter path
                 // (state.database.user_args.clone_from(&user_args)).
                 // @PLAN37 phase 10.3 fix.
-                self.emit_native_main(w)?;
+                self.emit_native_main(&mut buf)?;
             }
         }
-        Ok(())
+        w.write_all(&scrub_generated_crate_refs(&buf))
     }
 
     /// @PLN11 Arc N — emit the reachable native program as a **library** cdylib:
@@ -1303,7 +1348,11 @@ extern crate loft;"
         till: u32,
         entry_defs: &[u32],
     ) -> std::io::Result<()> {
-        self.emit_native_reachable_body(w, till, entry_defs)
+        // Buffer then scrub the assembled source — see
+        // `scrub_generated_crate_refs`.
+        let mut buf: Vec<u8> = Vec::new();
+        self.emit_native_reachable_body(&mut buf, till, entry_defs)?;
+        w.write_all(&scrub_generated_crate_refs(&buf))
     }
 
     /// Shared prelude of [`Self::output_native_reachable`] /
@@ -3443,5 +3492,33 @@ mod p310_vector_elem_tests {
         // Non-integer element types unchanged.
         assert_eq!(Output::vector_elem_rust_type(&Type::Single), "f32");
         assert_eq!(Output::vector_elem_rust_type(&Type::Float), "f64");
+    }
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::scrub_generated_crate_refs;
+
+    #[test]
+    fn rewrites_internal_module_refs_but_not_host_intrinsics() {
+        let src = b"if !crate::rpc::print_or_capture(v) { print!(); }\n\
+                    crate::store::Store::seal(s);\n\
+                    crate::loft_host_print(p, l);\n\
+                    crate::wasm::output_push(v);";
+        let out = String::from_utf8(scrub_generated_crate_refs(src)).unwrap();
+        // The two loft-internal modules are rewritten to `loft::`.
+        assert!(out.contains("loft::rpc::print_or_capture"));
+        assert!(out.contains("loft::store::Store::seal"));
+        assert!(!out.contains("crate::rpc::"));
+        assert!(!out.contains("crate::store::"));
+        // Host-import intrinsics (the generated cdylib's OWN items) stay `crate::`.
+        assert!(out.contains("crate::loft_host_print"));
+        assert!(out.contains("crate::wasm::output_push"));
+    }
+
+    #[test]
+    fn clean_source_is_unchanged() {
+        let src = b"fn n_main(cell: &Cell) { loft::rpc::ok(); }";
+        assert_eq!(scrub_generated_crate_refs(src), src.to_vec());
     }
 }

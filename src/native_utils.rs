@@ -226,7 +226,10 @@ pub(crate) fn native_cache_key(
     if let Some(ld) = lib_dir {
         let rlib = ld.join("libloft.rlib");
         key ^= fnv64(rlib.to_string_lossy().as_bytes());
-        fold_file_content(&mut key, &rlib);
+        // The main rlib MUST exist when `lib_dir` is Some (`loft_lib_dir` only
+        // returns a dir that has it) — `expected: true` so a missing one (a
+        // broken resolution) is loud, not a silent 0.
+        fold_file_content(&mut key, &rlib, true);
     }
     // @P341: also fold each native PACKAGE rlib's path + content, so rebuilding
     // a library's `#native` crate (`lib/<pkg>/native/...`) invalidates the
@@ -241,7 +244,9 @@ pub(crate) fn native_cache_key(
                 .join("release")
                 .join(&rlib_name);
             key ^= fnv64(rlib.to_string_lossy().as_bytes());
-            fold_file_content(&mut key, &rlib);
+            // A package rlib may legitimately be not-yet-built → `expected:
+            // false` (no warning; folds 0, the existing behaviour).
+            fold_file_content(&mut key, &rlib, false);
         }
     }
     key
@@ -259,7 +264,7 @@ pub(crate) fn native_cache_key(
 /// hit, while still invalidating when the binary actually changes (different
 /// bytes → different hash).  Results are memoised per path so a 14MB rlib is
 /// hashed once per process, not once per fixture.
-fn fold_file_content(key: &mut u64, path: &std::path::Path) {
+fn fold_file_content(key: &mut u64, path: &std::path::Path, expected: bool) {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> = OnceLock::new();
@@ -269,9 +274,27 @@ fn fold_file_content(key: &mut u64, path: &std::path::Path) {
         if let Some(&h) = guard.get(path) {
             h
         } else {
-            // Missing file hashes to 0 (matches the old no-op-on-missing
-            // behaviour: a not-yet-built rlib contributes nothing).
-            let h = std::fs::read(path).map(|b| fnv64(&b)).unwrap_or(0);
+            let h = match std::fs::read(path) {
+                Ok(b) => fnv64(&b),
+                // A missing file folds to 0 (a not-yet-built PACKAGE rlib
+                // legitimately contributes nothing).  But when the caller
+                // declared it SHOULD exist (the main `libloft.rlib` this binary
+                // links), missing means the cache key cannot reflect the loft
+                // build it links → a stale binary may be reused.  Say so loudly;
+                // the 0 is memoised, so this fires at most once per path.
+                Err(_) => {
+                    if expected {
+                        eprintln!(
+                            "loft: warning — fingerprint input {} is missing; native \
+                             staleness detection is degraded (a stale binary may be reused). \
+                             Rebuild loft, or clear ~/.loft/build-cache + the package \
+                             native-auto/ dirs.",
+                            path.display()
+                        );
+                    }
+                    0
+                }
+            };
             guard.insert(path.to_path_buf(), h);
             h
         }

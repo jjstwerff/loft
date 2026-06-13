@@ -1059,7 +1059,7 @@ fn native_library_suite() -> std::io::Result<()> {
     files.sort();
     let mut failures: Vec<String> = Vec::new();
     let mut ran = 0;
-    let mut env_skipped = 0;
+    let mut env_skips: Vec<(String, String)> = Vec::new();
     for entry in files {
         if native_lib_test_skipped(&entry) {
             println!("skip {entry:?} (LIB_*_NATIVE_SKIP — @P321)");
@@ -1088,9 +1088,19 @@ fn native_library_suite() -> std::io::Result<()> {
         // code: 1181" — the raw "LNK1181" symbol from cc's separate
         // stderr may not survive the capture.  Match both forms.
         if combined.contains("LNK1181") || combined.contains("link.exe` failed: exit code: 1181") {
+            // Capture the actual linker error lines, not just the generic
+            // label — without this the skip is a SILENT green (nextest hides
+            // a passing test's stdout), so a regression of G2's fix would
+            // look identical to a clean pass.  The detail is surfaced by the
+            // CI "Surface environmental test skips" step via the ledger below.
+            let detail: Vec<&str> = combined
+                .lines()
+                .filter(|l| l.contains("1181") || l.contains("LNK") || l.contains("link.exe"))
+                .take(3)
+                .collect();
             println!("skip {entry:?} (Windows windows-targets LNK1181 — environmental)");
+            env_skips.push((format!("{entry:?}"), detail.join(" | ")));
             ran -= 1;
-            env_skipped += 1;
             continue;
         }
         // `loft test` exits 0 even on a caught crash; detect failure by markers.
@@ -1112,12 +1122,41 @@ fn native_library_suite() -> std::io::Result<()> {
             failures.join("\n  ")
         )));
     }
-    if env_skipped > 0 {
+    if !env_skips.is_empty() {
+        record_env_skips("native_library_suite", "LNK1181", &env_skips);
         println!(
-            "native_library_suite: {ran} passed, {env_skipped} skipped (environmental — LNK1181)"
+            "native_library_suite: {ran} passed, {} skipped (environmental — LNK1181)",
+            env_skips.len()
         );
     } else {
         println!("native_library_suite: {ran} native library tests passed");
     }
     Ok(())
+}
+
+/// Record environmental skips (tests that PASSED-by-skipping for a
+/// toolchain/OS reason, not a code reason) to a side-channel ledger so they
+/// survive nextest's success-output suppression.  Without this a green run
+/// hides reduced coverage — a regression of the underlying fix (e.g. G2's
+/// Windows native link) would look identical to a clean pass.  A CI step
+/// (`Surface environmental test skips`) drains the ledger into annotations +
+/// a job summary.  No-op unless `LOFT_SKIP_LEDGER` (a directory) is set, so
+/// local runs are unaffected.  One file per test process (pid-named) avoids
+/// cross-process write races.
+fn record_env_skips(suite: &str, reason: &str, skips: &[(String, String)]) {
+    let Ok(dir) = std::env::var("LOFT_SKIP_LEDGER") else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = std::path::Path::new(&dir).join(format!("{suite}-{}.tsv", std::process::id()));
+    let body: String = skips
+        .iter()
+        .map(|(entry, detail)| {
+            let clean = |s: &str| s.replace(['\t', '\n'], " ");
+            format!("{suite}\t{reason}\t{}\t{}\n", clean(entry), clean(detail))
+        })
+        .collect();
+    let _ = std::fs::write(path, body);
 }

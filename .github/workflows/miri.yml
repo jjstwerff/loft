@@ -239,6 +239,15 @@ jobs:
           restore-keys: ubuntu-hygiene-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
+      # `make index` runs `target/release/loft --native-release` (it exits 1
+      # with "host loft binary missing" otherwise), and that native compile
+      # links `target/release/libloft.rlib` — so build BOTH the binary and the
+      # canonical lib.  This job previously relied on a CACHED binary and so
+      # failed `make index` whenever the cache missed cold (a latent bug the
+      # run_id cache-key change exposed, NOT the rpc-ghost); building it
+      # explicitly makes the leg cache-independent.
+      - name: Build host loft binary + lib (required by `make index`)
+        run: cargo build --release --lib --bin loft
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
 

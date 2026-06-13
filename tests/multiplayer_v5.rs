@@ -99,13 +99,19 @@ fn await_stdout_marker(
 }
 
 fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i32>) {
+    // Phase timing — prints to stderr (hidden by nextest on PASS, SHOWN on a
+    // failure).  Every wait here is now BOUNDED (wait-loop `timeout`, then the
+    // JOIN_CAP drain below), so this can no longer produce a 600s TMT; the
+    // `[v5-timing]` lines still name which phase ran long when a test fails.
+    let t0 = Instant::now();
     let mut stdout_text = String::new();
     let stdout = child.stdout.take().expect("child stdout was piped");
-    let reader_handle = thread::spawn(move || {
+    let (txt_tx, txt_rx) = mpsc::channel::<String>();
+    thread::spawn(move || {
         let mut buf = String::new();
         let mut br = BufReader::new(stdout);
         let _ = br.read_to_string(&mut buf);
-        buf
+        let _ = txt_tx.send(buf); // receiver may be gone if we capped out — harmless
     });
 
     let deadline = Instant::now() + timeout;
@@ -117,13 +123,51 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
         }
         thread::sleep(Duration::from_millis(50));
     }
+    eprintln!(
+        "[v5-timing] drain: wait-loop done +{:?} exit={exit_status:?}",
+        t0.elapsed()
+    );
     if exit_status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
+        eprintln!("[v5-timing] drain: child killed +{:?}", t0.elapsed());
     }
-    if let Ok(s) = reader_handle.join() {
-        stdout_text = s;
+    // Bound the drain.  A killed child can orphan a `cargo build` /
+    // cdylib-compile grandchild that keeps the stdout pipe OPEN, so the reader's
+    // `read_to_string()` never sees EOF — a plain join would block to the 600s
+    // terminate-after.  Wait at most JOIN_CAP for the text: log WHY at JOIN_WARN
+    // (naming the held-pipe mechanism, cross-ref the build-lock ledger), and at
+    // the cap return whatever arrived instead of hanging.  The orphaned build is
+    // HARMLESS — it finishes in the background and warms the cdylib cache for the
+    // retry; only BLOCKING on it was the bug.  This keeps multiplayer_v5 fully
+    // parallel (no serial group) while turning a 600s TMT into a fast
+    // fail-and-retry.  On the normal path the child has already EOF'd, so the
+    // text is waiting and the first recv returns instantly.
+    let killed = exit_status.is_none();
+    const JOIN_WARN: Duration = Duration::from_secs(15);
+    const JOIN_CAP: Duration = Duration::from_secs(45);
+    match txt_rx.recv_timeout(JOIN_WARN) {
+        Ok(s) => stdout_text = s,
+        Err(mpsc::RecvTimeoutError::Disconnected) => {} // reader died without sending
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!(
+                "[v5-timing] drain: reader blocked >{JOIN_WARN:?} +{:?} (child_killed={killed}) — a \
+                 cargo/cdylib grandchild holds the stdout pipe open; waiting up to {JOIN_CAP:?} then \
+                 returning partial output (the orphaned build warms the cache for the retry, \
+                 cross-ref the build-lock ledger)",
+                t0.elapsed()
+            );
+            match txt_rx.recv_timeout(JOIN_CAP - JOIN_WARN) {
+                Ok(s) => stdout_text = s,
+                Err(_) => eprintln!(
+                    "[v5-timing] drain: reader CAPPED at {JOIN_CAP:?} +{:?} — returning partial \
+                     output instead of blocking to the 600s TMT",
+                    t0.elapsed()
+                ),
+            }
+        }
     }
+    eprintln!("[v5-timing] drain: reader done +{:?}", t0.elapsed());
     (stdout_text, exit_status)
 }
 
@@ -231,8 +275,10 @@ impl ServerGuard {
 impl Drop for ServerGuard {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
+            let t = Instant::now();
             let _ = c.kill();
             let _ = c.wait();
+            eprintln!("[v5-timing] server drop: kill+wait +{:?}", t.elapsed());
         }
     }
 }
@@ -274,8 +320,14 @@ fn spawn_client_with_args(
 /// Convenience: spawn server + wait for its "listening port=N"
 /// marker, panic with a useful diagnostic if it doesn't appear.
 fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
+    let t = Instant::now();
     let mut s = ServerGuard::spawn(script, port);
-    if !s.wait_listening() {
+    let ok = s.wait_listening();
+    eprintln!(
+        "[v5-timing] {label} server spawn+listen +{:?} ok={ok}",
+        t.elapsed()
+    );
+    if !ok {
         let diag = s.diagnose_listen_failure();
         panic!("{label} server failed to start within 60s{diag}");
     }

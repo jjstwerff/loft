@@ -13,7 +13,7 @@ name: Branch gates
 
 on:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, ci-probe]
 
 permissions:
   contents: read

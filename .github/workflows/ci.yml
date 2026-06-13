@@ -20,12 +20,34 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Harden crate downloads against the transient crates.io HTTP/2 flake
+  # ("[16] Error in the HTTP2 framing layer" → "download of <crate> failed"),
+  # which red-flagged the Browser `make gallery` wasm-pack build (a cold
+  # rustyline/unicode-width fetch).  Disabling HTTP/2 multiplexing forces the
+  # reliable HTTP/1.1 path; the retry count covers brief blips.  Worth a few
+  # seconds on cold fetches to stop a network blip from costing a PR re-run.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
   # BUILD2: keep loft's native-test binary cache inside target/ so
   # actions/cache (which persists ~/.cargo + target/) carries it across runs.
   # The in-run binary cache is keyed on the rlib's CONTENT hash (mtime-stable
   # across the per-run `cargo build --release --lib` no-op rebuild), so warm
   # runs skip the ~565s of native recompiles instead of redoing them.
   LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
+  # Side-channel ledger directory for environmental test skips (tests that
+  # passed-by-skipping for a toolchain/OS reason — e.g. Windows LNK1181).
+  # nextest hides a passing test's stdout, so a skip is otherwise an
+  # invisible green; the "Surface environmental test skips" step drains this
+  # into annotations + a job summary so reduced coverage is never silent.
+  LOFT_SKIP_LEDGER: ${{ github.workspace }}/target/loft-skip-ledger
+  # Side-channel ledger for loft's OWN native-compile timing (the Timing
+  # object): one TSV row per cdylib build / fixture rustc — kind, name,
+  # hit|miss, seconds.  Inherited by the spawned loft children, so the
+  # "loft internal timing" step can report WHERE the native phase spent
+  # time (which cdylibs built vs restored, per-package seconds) on every PR
+  # run — the inside view the per-step timing can't see.  Outside the cached
+  # native dir so it is reset cleanly each run.
+  LOFT_TIMING_LEDGER: ${{ github.workspace }}/target/loft-timing-ledger
 
 jobs:
   # Classify the diff so docs-only changes skip the heavy jobs entirely
@@ -61,27 +83,21 @@ jobs:
           fi
 
   test:
-    name: Test (${{ matrix.os }}${{ matrix.partition && format(', shard {0}', matrix.partition) || '' }})
+    name: Test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # Windows (and to a lesser degree macOS) is the wall-clock long pole of
-      # every PR (~22m vs ubuntu's ~6m).  Two nextest shards roughly halve the
-      # test phase on those runners; ubuntu stays whole (sharding it would only
-      # burn a second cache restore for a job that is not the critical path).
+      # Unsharded.  Hash-partitioning was measured to NOT help: it balances by
+      # test COUNT not duration and can't split a single slow test, so the few
+      # slow integration tests (multiplayer/html, ~120s+) piled into one shard
+      # (macOS shard1 6m vs shard2 20m) — the wall-clock stayed at the slow
+      # shard while runner-minutes doubled.  The real long pole is those slow
+      # tests (attack them directly + the heavy-serial groups); the build
+      # prefix is the cdylib-fingerprint problem, not a sharding one.
       matrix:
-        include:
-          - os: ubuntu-latest
-          - os: macos-latest
-            partition: 1/2
-          - os: macos-latest
-            partition: 2/2
-          - os: windows-latest
-            partition: 1/2
-          - os: windows-latest
-            partition: 2/2
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v5
@@ -104,15 +120,52 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
+      # The native-fixture binary cache lives in `target/loft-native-cache`
+      # (keyed INSIDE loft on the libloft.rlib content hash — see
+      # native_utils::native_cache_key).  Its persistence was broken: the
+      # actions/cache key was Cargo.lock-only, so a PR that changed lib SOURCE
+      # (not Cargo.lock) rebuilt every fixture (rlib bytes changed → loft
+      # correctly invalidated) but then could NOT save — the Cargo.lock key
+      # already existed, and actions/cache skips save on an existing key.  The
+      # rebuilt-and-validated binaries were discarded, so the NEXT run
+      # restored the stale cache and rebuilt again (~15m, every run).
+      #
+      # Fix: a unique save key per job per run (run_id + job-index — the two
+      # shards of one OS would otherwise collide on the same key).  Save now
+      # always happens; restore falls back through prefix keys — same OS+shard
+      # first (its own fixture set), then any same-OS, then any.  A run that
+      # rebuilds fixtures now persists them, so a re-run / the merge-to-main
+      # run / a follow-up non-rlib push restores them WARM.
+      # `~/.loft/build-cache` holds the built NATIVE cdylibs (graphics, glb,
+      # mesh3d, …) — the actual native-phase bottleneck (graphics alone is
+      # ~80-90s of cargo build, and on the cold suite run graphics rebuilds
+      # several times before the cache populates).  They link the PUBLISHED
+      # `loft-ffi` (not the local rlib), so they are stable across loft source
+      # changes — caching them is safe and they stay warm until a package
+      # version bumps (loft's own build-cache keying rebuilds a changed package
+      # even from a restored cache).  (A fixture rustc link is ~0.3s measured,
+      # so combining fixtures would save <90s — the cdylib builds are the
+      # minutes.)
+      #
+      # `~/.loft/registry` (the EXTRACTED package sources) is deliberately NOT
+      # cached: on Windows, restoring that dir leaves files in place and loft's
+      # tar unpack then fails to overwrite them through the `\\?\` verbatim path
+      # (`failed to unpack …web-0.1.1\README.md` → `use server` won't resolve →
+      # the multiplayer server never starts).  Re-extracting from scratch each
+      # run works on every OS and costs only the small-tarball unpack — the
+      # build-cache above is where the real time is.
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.loft/build-cache
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
 
       - name: Build
         run: cargo build --all-targets
@@ -198,6 +251,12 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # Clear the ledgers restored from the cached target/ so the surface +
+      # timing steps report only THIS run.
+      - name: Reset ledgers
+        shell: bash
+        run: rm -rf "$LOFT_SKIP_LEDGER" "$LOFT_TIMING_LEDGER"
+
       - name: Test
         # `index_hygiene` and `viewer_markdown` are extracted to their own advisory
         # ubuntu jobs (and the nightly): both are platform-independent — a whole-repo
@@ -209,7 +268,6 @@ jobs:
         shell: bash
         run: >
           cargo nextest run --profile ci
-          ${{ matrix.partition && format('--partition hash:{0}', matrix.partition) || '' }}
           -E 'not binary(index_hygiene) and not binary(viewer_markdown)'
 
       # A test that passed only on retry (`retries = 1` in the ci profile) is
@@ -234,6 +292,103 @@ jobs:
                   print(f"::warning title=Flaky test (passed only on retry)::{name} — "
                         "a retried pass can mask a real intermittent bug; treat as a finding")
           EOF
+
+      # Drain the environmental-skip ledger (written by tests that
+      # passed-by-skipping for a toolchain/OS reason) into annotations + a job
+      # summary, so a green run never hides reduced coverage.  Does NOT fail
+      # the job — these skips are known-environmental (e.g. Windows LNK1181);
+      # the point is visibility, not blocking.  A regression that makes MORE
+      # tests skip then shows up as new annotations.
+      - name: Surface environmental test skips
+        if: always()
+        shell: bash
+        run: |
+          dir="$LOFT_SKIP_LEDGER"
+          [ -d "$dir" ] || { echo "no environmental skips this run"; exit 0; }
+          n=0
+          {
+            echo "### Environmental test skips (green, but coverage was reduced)"
+            echo
+            echo "| Suite | Reason | Test | Detail |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in "$dir"/*.tsv; do
+            [ -e "$f" ] || continue
+            while IFS=$'\t' read -r suite reason test detail; do
+              [ -z "$suite" ] && continue
+              n=$((n + 1))
+              echo "::warning title=Environmental skip ($reason)::$suite: $test — $detail"
+              echo "| $suite | $reason | $test | ${detail} |" >> "$GITHUB_STEP_SUMMARY"
+            done < "$f"
+          done
+          echo "$n environmental skip(s) surfaced (annotations + job summary)."
+
+      # loft's OWN per-event native-compile timing (the Timing object): the
+      # inside view of where the native phase spent time on THIS run — which
+      # cdylibs built (miss) vs restored (hit), per-package seconds, and the
+      # fixture rustc total.  Statistics on every PR run, not just the manual
+      # ci-probe.  Never fails the job — pure reporting.
+      - name: loft internal native-compile timing
+        if: always()
+        shell: bash
+        run: |
+          dir="$LOFT_TIMING_LEDGER"
+          if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "no loft timing ledger this run"; exit 0
+          fi
+          all=$(cat "$dir"/*.tsv)
+          {
+            echo "### loft internal native-compile timing (${{ matrix.os }})"
+            echo
+            echo "| cdylib | builds (miss) | restored (hit) | build secs |"
+            echo "|---|---:|---:|---:|"
+            for pkg in $(echo "$all" | awk -F'\t' '$1=="cdylib"{print $2}' | sort -u); do
+              miss=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="miss"' | wc -l)
+              hit=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="hit"' | wc -l)
+              secs=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p{s+=$4} END{printf "%.1f", s}')
+              printf '| %s | %s | %s | %s |\n' "$pkg" "$miss" "$hit" "$secs"
+            done
+            fixn=$(echo "$all" | awk -F'\t' '$1=="fixture"' | wc -l)
+            fixs=$(echo "$all" | awk -F'\t' '$1=="fixture"{s+=$4} END{printf "%.1f", s}')
+            echo
+            echo "**fixtures:** ${fixn} compiled, ${fixs}s total rustc"
+            # Build-lock contention — the prime suspect for a multiplayer TMT.
+            # Each ledger file is one pid (timing-<pid>.tsv), so a file with
+            # more `lockwait` rows than `lockheld` = a process that blocked on
+            # the global build-lock and was KILLED before acquiring it (or is
+            # still stuck): the exact shape of a 600s hang behind another
+            # process's cold build.  `longest acquired wait` shows how bad the
+            # contention got for the builds that DID get through.
+            maxwait=$(echo "$all" | awk -F'\t' '$1=="lockheld"{if($4>m)m=$4} END{printf "%.1f", m+0}')
+            stuck=0
+            for f in "$dir"/*.tsv; do
+              lw=$(awk -F'\t' '$1=="lockwait"' "$f" | wc -l)
+              lh=$(awk -F'\t' '$1=="lockheld"' "$f" | wc -l)
+              [ "$lw" -gt "$lh" ] && stuck=$(( stuck + 1 ))
+            done
+            echo
+            echo "**build-lock:** longest acquired wait ${maxwait}s · ${stuck} process(es) killed/stuck while waiting (never acquired)"
+            # Wasted rebuilds — the cdylib-cache headline cost.  A `cdylibstale`
+            # event = a cached cdylib REJECTED on a fingerprint mismatch and
+            # rebuilt (vs a genuine cold miss).  The event name is
+            # `<pkg>|stamped=<fp>|cur=<fp>`; sum the `cdylib miss` seconds of the
+            # rejected packages = time reclaimable by re-keying the gate on the
+            # stable published loft-ffi version instead of the libloft.rlib hash.
+            # A `cur=` that changes between two runs of the SAME commit would mean
+            # a second, non-reproducible-build instability on top of the
+            # per-commit flip.
+            stalen=$(echo "$all" | awk -F'\t' '$1=="cdylibstale"' | wc -l)
+            wasted=$(echo "$all" | awk -F'\t' '
+              $1=="cdylibstale"{split($2,a,"|"); stale[a[1]]=1}
+              $1=="cdylib"&&$3=="miss"{secs[$2]+=$4}
+              END{w=0; for(p in stale) w+=secs[p]; printf "%.1f", w}')
+            echo
+            echo "**stale cdylib rebuilds:** ${stalen} cached-but-fingerprint-rejected = ${wasted}s wasted"
+            echo "$all" | awk -F'\t' '$1=="cdylibstale"{print "  - "$2}' | sort -u
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== loft timing (cdylib) ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
+          echo "===== loft timing (build-lock) ====="; echo "$all" | awk -F'\t' '$1=="lockwait"||$1=="lockheld"' | sort | uniq -c
+          echo "===== loft timing (stale cdylib rebuilds, with fp) ====="; echo "$all" | awk -F'\t' '$1=="cdylibstale"{print $2}' | sort | uniq -c
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so
@@ -262,38 +417,6 @@ jobs:
   # suites are run — the guard cannot see the separate binaries that native /
   # wasm / html tests spawn, so running those here would add cost without
   # coverage.
-  # Branch protection's required checks are pinned to the PRE-shard job
-  # names ("Test (macos-latest)" / "Test (windows-latest)").  These two
-  # aggregate gates report under exactly those names so the sharded matrix
-  # satisfies the existing protection without a settings change; once the
-  # required-checks list is updated to the shard names, both can be
-  # deleted.  `if: always()` + an explicit result test — a plain `needs`
-  # dependent would be SKIPPED when a shard fails, and skipped satisfies
-  # required checks, which would make protection vacuous.  `skipped` is
-  # accepted deliberately: that is the docs-only path (the `changes` job
-  # skipped the matrix on purpose).
-  test-macos-gate:
-    name: Test (macos-latest)
-    needs: [test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the sharded matrix to have passed
-        run: |
-          r="${{ needs.test.result }}"
-          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
-
-  test-windows-gate:
-    name: Test (windows-latest)
-    needs: [test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the sharded matrix to have passed
-        run: |
-          r="${{ needs.test.result }}"
-          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
-
   guard:
     name: stack_align_guard sweep (ubuntu)
     needs: changes
@@ -312,8 +435,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-guard-cargo-
+          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-guard-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # Exclude `wrap::library_suite`: it builds/runs the lib/* NATIVE suites
@@ -350,8 +475,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-hygiene-cargo-
+          key: ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-hygiene-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Build host loft binary (required by `make index`)
@@ -388,8 +515,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-viewer-cargo-
+          key: ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-viewer-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # The viewer test spawns `target/release/loft`; build it or the test skips.
@@ -473,8 +602,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-asan-pr-cargo-
+          key: ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-asan-pr-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # nextest (not `cargo test`): it does NOT build doctests, which under
@@ -525,7 +656,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-cargo-clippy-
 
       - name: Clippy (deny warnings)
         run: cargo clippy -- -D warnings
@@ -590,7 +724,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-cargo-gallery-
 
       # Instantiate the committed doc/pkg/{loft.js, loft_bg.wasm} pair
       # exactly as the browser would.  A drifted pair fails here with
