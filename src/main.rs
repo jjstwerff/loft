@@ -4149,30 +4149,84 @@ fn main() {
                 } else {
                     std::env::current_dir().unwrap_or_default()
                 };
-                let stem =
-                    loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy())
-                        .and_then(|m| m.native);
-                let Some(stem) = stem else {
-                    eprintln!(
-                        "loft build-native: {} has no `[library] native` stem — not a native package",
-                        pkg_path.display()
-                    );
-                    std::process::exit(1);
+                let manifest =
+                    loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy());
+                let pkg_str = pkg_path.to_string_lossy().to_string();
+                let report = |cdylib: String, stem: String| {
+                    // Machine-readable so a publish script can capture it.
+                    println!("cdylib: {cdylib}");
+                    println!("stem: {stem}");
+                    println!("triple: {}", loft::cache::host_triple());
+                    println!("loft_ffi_fp: {}", loft::cache::loft_ffi_fingerprint());
                 };
-                match loft::extensions::auto_build_native(&pkg_path.to_string_lossy(), &stem) {
-                    Some(cdylib) => {
-                        // Machine-readable so a publish script can capture it.
-                        println!("cdylib: {cdylib}");
-                        println!("stem: {stem}");
-                        println!("triple: {}", loft::cache::host_triple());
-                        println!("loft_ffi_fp: {}", loft::cache::loft_ffi_fingerprint());
+                if let Some(stem) = manifest.as_ref().and_then(|m| m.native.clone()) {
+                    // Hand-written `native/` crate.
+                    match loft::extensions::auto_build_native(&pkg_str, &stem) {
+                        Some(cdylib) => report(cdylib, stem),
+                        None => {
+                            eprintln!(
+                                "loft build-native: building `{stem}` failed (see the cargo error above)"
+                            );
+                            std::process::exit(1);
+                        }
                     }
-                    None => {
+                } else if let Some(name) = manifest.and_then(|m| m.name) {
+                    // @PLN21 Phase 4b — AUTO-COMPILED native (the default
+                    // "libraries compile, scripts interpret" path): parse the
+                    // library the `use`-resolution way, then build its auto-native
+                    // cdylib (`loft_auto_<dir>`, exporting `loft_shared_<fn>`
+                    // wrappers) FROM the loft source — so a pure-loft compute
+                    // library also ships a toolchain-free prebuilt.
+                    let mut p = parser::Parser::new();
+                    let default_dir = format!("{}/default", project_dir());
+                    let _ = p.parse_dir(&default_dir, true, false);
+                    let tmp = std::env::temp_dir()
+                        .join(format!("loft_build_native_{}.loft", std::process::id()));
+                    let _ = std::fs::write(&tmp, format!("use {name};\n"));
+                    p.parse(&tmp.to_string_lossy(), false);
+                    let _ = std::fs::remove_file(&tmp);
+                    // Slot/scope analysis the cdylib codegen depends on — the run
+                    // path runs this before its auto-native build (main.rs), and
+                    // without it codegen emits undeclared locals (e.g. `var_me`).
+                    scopes::check(&mut p.data);
+                    let export = loft::native_lib::library_export_set(&p.data, &pkg_str);
+                    if export.is_empty() {
                         eprintln!(
-                            "loft build-native: building `{stem}` failed (see the cargo error above)"
+                            "loft build-native: `{name}` has no native-compilable public functions"
                         );
                         std::process::exit(1);
                     }
+                    match loft::native_lib::cached_or_build_shared_cdylib(
+                        &p.data,
+                        &p.database,
+                        &export,
+                        &pkg_str,
+                    ) {
+                        Ok(Some(so)) => {
+                            report(
+                                so.to_string_lossy().to_string(),
+                                loft::native_lib::auto_cdylib_stem(&pkg_str),
+                            );
+                        }
+                        Ok(None) => {
+                            eprintln!(
+                                "loft build-native: `{name}` is being edited (dev-interpret); no cdylib produced"
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "loft build-native: auto-native build of `{name}` failed: {e}"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "loft build-native: {} is not a loft package (no [package] name)",
+                        pkg_path.display()
+                    );
+                    std::process::exit(1);
                 }
                 return;
             }

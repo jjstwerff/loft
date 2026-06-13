@@ -277,6 +277,35 @@ sha256, loft_ffi_fp}` index entries. Untestable locally — scoped, not yet buil
 
    **Probe:** a test index entry with a `binaries` slot + matching fp → `loft install` downloads + sidecars it → a later `use` loads without building.
 
+### Phase 4b — Producer covers AUTO-COMPILED native too · S — **SHIPPED 2026-06-13**
+**Gap found** by running `build-native` over the whole local registry: it built the four
+hand-written-native libs (graphics / random / server / web) but **skipped the pure-loft
+compute libs** (glb / gridmesh / mesh3d / shapes). Those are not "interpreted-only" — loft
+auto-compiles a library's pure-loft API to a `loft_auto_<dir>` cdylib (exporting
+`loft_shared_<fn>` wrappers) by **default** ("libraries compile, scripts interpret";
+`parser/mod.rs:5922`, via `native_lib::cached_or_build_shared_cdylib`). `build-native` only
+drove the *hand-written* `native/`-crate path (`auto_build_native`), so the auto-compiled libs
+never got a prebuilt — they'd compile from source on first use (needs rustc), losing the
+toolchain-free win exactly for the compute-heavy libraries that most want it.
+**Landed:** `build-native` gains a second branch — when `manifest.native` is absent but
+`[package] name` is present, it parses the library the `use`-resolution way (`use <name>;`
+over the stdlib), runs `scopes::check`, computes `native_lib::library_export_set`, and calls
+`native_lib::cached_or_build_shared_cdylib` to emit the `loft_auto_<dir>` cdylib + fp — then
+reports `cdylib:`/`stem:`/`triple:`/`loft_ffi_fp:` exactly like the hand-written branch, so the
+producer workflow ships it as a `prebuilt/<triple>/` the same way. A dir with no `[package]
+name` now gets a clean "not a loft package" error instead of the old "no native stem".
+**The load-bearing finding:** the codegen reads slot/scope assignments, so the minimal parse
+setup **must run `scopes::check(&mut p.data)` before the build** — without it the generated
+Rust references undeclared locals (`var_me`, the method receiver) and rustc rejects it. The
+run path does this at `main.rs` just before its own auto-native loop; the `build-native` branch
+mirrors it. (Caught exactly as the matrix-first method predicts: the first build *failed*
+cleanly with `cannot find value var_me`, pointing straight at missing pre-codegen analysis.)
+**Verified (cold builds, both arms):** `loft build-native` on glb/mesh3d/shapes (mesh3d/shapes
+had no `native-auto` at all → true cold rustc compile) each produced a valid
+`libloft_auto_<lib>.so`; the regenerated `.rs` now *declares* `var_me` (`let mut var_me: f32`);
+the hand-written `random` arm still reports `loft_random`; `/tmp` → clean non-package error.
+`fmt`/`clippy` clean.
+
 ### Phase 5 — Registry surfacing · S — **SURFACING DONE 2026-06-13**
 **Goal:** the runtime requirement + available prebuilts are visible.
 **Landed (the `loft install` surfacing):** `InstallReport` gains a `surface: Vec<String>`;
