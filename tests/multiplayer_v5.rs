@@ -100,19 +100,18 @@ fn await_stdout_marker(
 
 fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i32>) {
     // Phase timing — prints to stderr (hidden by nextest on PASS, SHOWN on a
-    // TMT/timeout failure).  The harness's own waits cap at ~90s, so a 600s
-    // TMT means the time is in a phase BELOW; the last `[v5-timing]` line in a
-    // killed test's output names which one (e.g. a `reader.join()` that blocks
-    // because the killed child left a `cargo build` grandchild holding the
-    // stdout pipe open).
+    // failure).  Every wait here is now BOUNDED (wait-loop `timeout`, then the
+    // JOIN_CAP drain below), so this can no longer produce a 600s TMT; the
+    // `[v5-timing]` lines still name which phase ran long when a test fails.
     let t0 = Instant::now();
     let mut stdout_text = String::new();
     let stdout = child.stdout.take().expect("child stdout was piped");
-    let reader_handle = thread::spawn(move || {
+    let (txt_tx, txt_rx) = mpsc::channel::<String>();
+    thread::spawn(move || {
         let mut buf = String::new();
         let mut br = BufReader::new(stdout);
         let _ = br.read_to_string(&mut buf);
-        buf
+        let _ = txt_tx.send(buf); // receiver may be gone if we capped out — harmless
     });
 
     let deadline = Instant::now() + timeout;
@@ -133,38 +132,42 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
         let _ = child.wait();
         eprintln!("[v5-timing] drain: child killed +{:?}", t0.elapsed());
     }
-    // The `reader_handle.join()` below is the prime suspect for a 600s TMT: a
-    // killed loft child can orphan a `cargo build` / cdylib-compile grandchild
-    // that keeps the stdout pipe OPEN, so `read_to_string()` never returns and
-    // the join blocks forever.  A watchdog thread reports *why* — it fires at
-    // ~15s and ~30s into a stuck join (well before any TMT), naming the held-
-    // pipe mechanism and pointing at the build-lock ledger for an in-flight
-    // native build.  It logs nothing on the normal fast path (the join signals
-    // it within milliseconds), and is pure diagnostics — the join itself is
-    // unchanged.
-    let (done_tx, done_rx) = mpsc::channel::<()>();
+    // Bound the drain.  A killed child can orphan a `cargo build` /
+    // cdylib-compile grandchild that keeps the stdout pipe OPEN, so the reader's
+    // `read_to_string()` never sees EOF — a plain join would block to the 600s
+    // terminate-after.  Wait at most JOIN_CAP for the text: log WHY at JOIN_WARN
+    // (naming the held-pipe mechanism, cross-ref the build-lock ledger), and at
+    // the cap return whatever arrived instead of hanging.  The orphaned build is
+    // HARMLESS — it finishes in the background and warms the cdylib cache for the
+    // retry; only BLOCKING on it was the bug.  This keeps multiplayer_v5 fully
+    // parallel (no serial group) while turning a 600s TMT into a fast
+    // fail-and-retry.  On the normal path the child has already EOF'd, so the
+    // text is waiting and the first recv returns instantly.
     let killed = exit_status.is_none();
-    let watchdog = thread::spawn(move || {
-        for wait in [Duration::from_secs(15); 2] {
-            match done_rx.recv_timeout(wait) {
-                Err(mpsc::RecvTimeoutError::Timeout) => eprintln!(
-                    "[v5-timing] drain: reader STILL blocked +{:?} (child_killed={killed}) — a \
-                     cargo/cdylib grandchild likely holds the stdout pipe open; read_to_string() \
-                     cannot return until that pipe closes (cross-ref the build-lock ledger for an \
-                     in-flight native build)",
+    const JOIN_WARN: Duration = Duration::from_secs(15);
+    const JOIN_CAP: Duration = Duration::from_secs(45);
+    match txt_rx.recv_timeout(JOIN_WARN) {
+        Ok(s) => stdout_text = s,
+        Err(mpsc::RecvTimeoutError::Disconnected) => {} // reader died without sending
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!(
+                "[v5-timing] drain: reader blocked >{JOIN_WARN:?} +{:?} (child_killed={killed}) — a \
+                 cargo/cdylib grandchild holds the stdout pipe open; waiting up to {JOIN_CAP:?} then \
+                 returning partial output (the orphaned build warms the cache for the retry, \
+                 cross-ref the build-lock ledger)",
+                t0.elapsed()
+            );
+            match txt_rx.recv_timeout(JOIN_CAP - JOIN_WARN) {
+                Ok(s) => stdout_text = s,
+                Err(_) => eprintln!(
+                    "[v5-timing] drain: reader CAPPED at {JOIN_CAP:?} +{:?} — returning partial \
+                     output instead of blocking to the 600s TMT",
                     t0.elapsed()
                 ),
-                _ => return, // join finished (signalled) or sender dropped
             }
         }
-    });
-    let joined = reader_handle.join();
-    let _ = done_tx.send(()); // wake the watchdog so it exits promptly
-    let _ = watchdog.join();
-    if let Ok(s) = joined {
-        stdout_text = s;
     }
-    eprintln!("[v5-timing] drain: reader joined +{:?}", t0.elapsed());
+    eprintln!("[v5-timing] drain: reader done +{:?}", t0.elapsed());
     (stdout_text, exit_status)
 }
 

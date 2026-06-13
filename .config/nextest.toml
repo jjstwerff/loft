@@ -65,15 +65,15 @@ html-wasm-serial = { max-threads = 1 }
 # `multiplayer-v2-serial`.  (The markdown viewer smoke test runs in its own
 # isolated advisory job instead — see ci.yml.)
 #
-# multiplayer_v5 belongs here for a sharper reason than v2/v3: its `use web`
-# triggers a COLD cdylib build (loft_web ~23s, a spawned `cargo build`
-# grandchild) the first time it runs.  Under the full suite's build-lock
-# contention that build + lock-wait can exceed the harness's 60s listen cap;
-# the harness then kills the loft child, the `cargo build` grandchild SURVIVES
-# holding the child's stdout pipe, and the drain-thread's `read_to_string`
-# never sees EOF — a 600s terminate-after TMT.  Serialised, v5's cold build
-# stays uncontended (~23s < 60s), so it never reaches that kill.  (Probe data:
-# the repurposed ci-probe.yml v5-alone/v5-vs-native run, 2026-06-13.)
+# multiplayer_v5 is deliberately NOT in this group — it stays fully parallel.
+# It had the same exposure (its `use web` triggers a COLD loft_web cdylib build
+# ~23s via a spawned `cargo build` grandchild; under heavy build-lock contention
+# that could blow the 60s listen cap, the harness kills the loft child, the
+# grandchild survives holding the stdout pipe, and the drain blocked to the 600s
+# TMT — probe data, ci-probe.yml v5-alone/v5-vs-native, 2026-06-13).  Fixed at
+# the root instead: drain_with_timeout bounds its wait (JOIN_CAP), so a held-open
+# pipe is a ~45s fail-and-retry, not a 600s hang — keeping v5 parallel without
+# paying the serial cost.
 heavy-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
@@ -81,7 +81,7 @@ filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.default.overrides]]
-filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(multiplayer_v5)'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
 test-group = 'heavy-serial'
 
 [[profile.ci.overrides]]
@@ -89,5 +89,5 @@ filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.ci.overrides]]
-filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(multiplayer_v5)'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
 test-group = 'heavy-serial'
