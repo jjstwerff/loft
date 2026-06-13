@@ -208,8 +208,22 @@ Phase 2); (c) `auto_build_native` failure → `build-deps` diagnostics.
 
    **Probe:** a prebuilt whose `runtime-libs` names an absent lib → loft emits the hint and spends **no** time building (timed).
 
-### Phase 4 — CI build matrix + publish (produce the binaries) · M
+### Phase 4 — CI build matrix + publish (produce the binaries) · M — **CONSUMER-SIDE DONE 2026-06-13**
 **Goal:** each native library ships per-triple, fp-stamped cdylibs in the registry.
+**Landed (install-side — the testable Rust half):** `BinaryEntry` gains `loft_ffi_fp:
+Option<u64>` (parsed from the index, stored as a string for u64 precision);
+`install::fetch_prebuilt` runs after extraction — when `Version.binaries[host_triple]`
+exists AND its `loft_ffi_fp == loft_ffi_fingerprint()`, it downloads the cdylib into
+`prebuilt/<triple>/lib<stem>.<ext>` (stem from the package manifest's `[library] native`),
+verifies the sha256, and writes the `.loft-build-fp` sidecar — exactly where Phase 1 looks.
+Best-effort: any miss (no entry / fp mismatch / offline / download or hash failure)
+silently leaves the source path. `fmt`/`clippy` clean; install + registry_index suites pass
+(no regression). This closes the install→load loop with Phase 1.
+**Remaining (producer-side — infra, needs a real registry + CI to validate):** the
+per-triple CI build matrix (mirror `release.yml`; linux on an old-glibc/manylinux base;
+`auto_build_native` emits the cdylib + fp), and the `registry_maintain.sh` publish step
+that uploads each cdylib as a release asset and writes the `binaries[<triple>] = {url,
+sha256, loft_ffi_fp}` index entries. Untestable locally — scoped, not yet built.
 1. **Per-triple build workflow** — mirror `release.yml`'s matrix (`x86_64`/`aarch64` × linux/macos/windows). Linux in an **old-glibc (manylinux-style) container**; macOS sets an old `MACOSX_DEPLOYMENT_TARGET`. Each job builds the package's `native/` crate via a loft carrying the target loft-ffi → `auto_build_native` emits `lib<stem>.<ext>` + `.loft-build-fp` (fp is free).
 2. **Publish** — extend `scripts/registry_maintain.sh`: upload each cdylib as a release asset; add `binaries["<triple>"] = {url, sha256}` to the version (slot exists, `registry_index.rs`) + a new `loft_ffi_fp` on `BinaryEntry` for pre-download validation.
 3. **`loft install`** (`install.rs:87`) — when `Version.binaries[host_triple]` exists AND `loft_ffi_fp == loft_ffi_fingerprint()` → download the cdylib into `~/.loft/registry/<pkg>-<ver>/prebuilt/<triple>/` + write the `.loft-build-fp` sidecar (so Phase 1 finds it); else the source path.

@@ -62,6 +62,55 @@ pub struct InstallReport {
     pub skipped_cached: Vec<(String, String)>,
 }
 
+/// @PLN21 Phase 4 — opportunistically fetch a prebuilt cdylib for THIS host so
+/// the package runs with NO Rust toolchain.  Best-effort: any miss (no entry for
+/// the host triple, an fp built against a different loft-ffi, offline, or a
+/// download/hash failure) silently leaves only the source, which
+/// `auto_build_native` compiles on first use.  On success the cdylib lands at
+/// `prebuilt/<triple>/lib<stem>.<ext>` + a `.loft-build-fp` sidecar — exactly
+/// where `extensions::resolve_native_lib` looks first (Phase 1).
+fn fetch_prebuilt(r: &ResolvedPackage, opts: &InstallOptions) {
+    if opts.offline {
+        return;
+    }
+    let triple = crate::cache::host_triple();
+    let Some(bin) = r.version.binaries.get(&triple) else {
+        return;
+    };
+    // Only a binary built against THIS loft's loft-ffi ABI is compatible.
+    if bin.loft_ffi_fp != Some(crate::cache::loft_ffi_fingerprint()) {
+        return;
+    }
+    let pkg_dir = registry_index::extract_dir(&r.name, &r.version.semver);
+    // The cdylib stem is the package manifest's `[library] native` field.
+    let Some(stem) = crate::manifest::read_manifest(&pkg_dir.join("loft.toml").to_string_lossy())
+        .and_then(|m| m.native)
+    else {
+        return;
+    };
+    let dir = pkg_dir.join("prebuilt").join(&triple);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let filename = if cfg!(target_os = "macos") {
+        format!("lib{stem}.dylib")
+    } else if cfg!(windows) {
+        format!("{stem}.dll")
+    } else {
+        format!("lib{stem}.so")
+    };
+    let dest = dir.join(&filename);
+    let Ok(bytes) = registry_index::download_tarball(&bin.url, &dest) else {
+        return;
+    };
+    if registry_index::verify_sha256(&bytes, &bin.sha256).is_err() {
+        let _ = std::fs::remove_file(&dest);
+        return;
+    }
+    // Stamp the sidecar so Phase 1's fp-gated resolve accepts the binary.
+    crate::cache::write_native_artifact_fingerprint(&dir, crate::cache::loft_ffi_fingerprint());
+}
+
 /// Install a single named package (with optional version
 /// constraint).  Drives steps 1-6 of the flow above.
 ///
@@ -111,6 +160,9 @@ pub fn install_one(
         // Tarball is consumed — remove it to save space.  The
         // extracted dir is the canonical install.
         let _ = std::fs::remove_file(&tarball_path);
+        // @PLN21 Phase 4 — best-effort: grab a host-matching prebuilt cdylib so
+        // first use needs no toolchain (silently no-ops when none applies).
+        fetch_prebuilt(r, opts);
         report
             .installed
             .push((r.name.clone(), r.version.semver.clone()));

@@ -85,6 +85,13 @@ pub struct Version {
 pub struct BinaryEntry {
     pub url: String,
     pub sha256: String,
+    /// @PLN21 Phase 4 — the `loft-ffi` fingerprint (`cache::loft_ffi_fingerprint`)
+    /// this prebuilt cdylib was built against.  `loft install` downloads the
+    /// binary only when it equals the host loft's fp (a cdylib built against a
+    /// different loft-ffi ABI is incompatible) — pre-validation BEFORE the
+    /// download.  Stored as a string in the index to avoid u64 JSON precision
+    /// loss.  `None` (absent) → skip the prebuilt, fall to source build.
+    pub loft_ffi_fp: Option<u64>,
 }
 
 // ── Parsing ───────────────────────────────────────────────────────
@@ -285,15 +292,25 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                     if let Parsed::Object(bfields) = bval {
                         let mut burl: Option<String> = None;
                         let mut bsha: Option<String> = None;
+                        let mut bfp: Option<u64> = None;
                         for (bk, _, bv) in bfields {
                             match (bk.as_str(), bv) {
                                 ("url", Parsed::Str(s)) => burl = Some(s.clone()),
                                 ("sha256", Parsed::Str(s)) => bsha = Some(s.clone()),
+                                // @PLN21 — fp stored as a string (u64 precision).
+                                ("loft_ffi_fp", Parsed::Str(s)) => bfp = s.parse().ok(),
                                 _ => {}
                             }
                         }
                         if let (Some(u), Some(s)) = (burl, bsha) {
-                            binaries.insert(triple.clone(), BinaryEntry { url: u, sha256: s });
+                            binaries.insert(
+                                triple.clone(),
+                                BinaryEntry {
+                                    url: u,
+                                    sha256: s,
+                                    loft_ffi_fp: bfp,
+                                },
+                            );
                         }
                     }
                 }
