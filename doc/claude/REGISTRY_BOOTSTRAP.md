@@ -328,34 +328,32 @@ Per PKG_REGISTRY.md § Publishing flow.
 
 **Maintainer side** (after CI passes):
 
-6. Review the PR.  Confirm the tarball URL / sha256 / size match
-   the package's GitHub release.  Note that `pr-validate.yml`
-   already enforced these, but a human eyeball is the trust root.
-7. Check out the PR branch locally:
+6. **Merge the package PR** on GitHub once you're happy (CI's
+   `pr-validate.yml` already checked sha256/size; your eyeball on the
+   release is the human trust root).
+
+7. **Review + sign + publish the signature in one command —
+   `scripts/registry-sign.sh`:**
 
    ```sh
-   gh pr checkout <PR-number>
+   scripts/registry-sign.sh
    ```
 
-8. Sign the new `index.json` with `loft-keygen sign`:
+   It clones the merged registry, shows the `index.json` diff and — for
+   every added/changed version — the LIBRARY RELEASE it points at (repo
+   + tag + notes), **downloads each tarball to confirm its sha256
+   matches**, then on your `y` signs `index.json`, commits
+   `index.json.sig`, pushes, and deletes the temp clone.  It REFUSES to
+   sign on any sha256 mismatch, invalid JSON, or a "no" — *don't sign
+   what you haven't looked at.*
+
+   Flags: `--pr N` (preview/sign a PR before merging), `--notes` (full
+   release bodies), `--no-push` (commit locally only), `--key` /
+   `--registry-dir`.  The underlying primitive, if ever needed directly:
 
    ```sh
-   loft-keygen sign \
-       --in  index.json \
-       --key ~/.loft/trust-root/registry-signing-key.bin \
-       --out index.json.sig
-   ```
-
-   Output: `signed index.json (N bytes) -> index.json.sig
-   (64-byte Ed25519 signature)`.
-
-9. Commit + push the signature, then merge:
-
-   ```sh
-   git add index.json.sig
-   git commit -m "sign: regenerate index.json.sig"
-   git push
-   gh pr merge --squash --auto
+   loft-keygen sign --in index.json \
+       --key ~/.loft/trust-root/registry-signing-key.bin --out index.json.sig
    ```
 
 Now `loft install crypto` works for everyone.

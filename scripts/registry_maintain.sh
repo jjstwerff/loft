@@ -21,6 +21,10 @@
 # PKG_REGISTRY.md § Why laptop signing).  Without a key file the script stops
 # after staging the commit and prints the two remaining commands.
 #
+# To review-then-sign a SINGLE registry PR (shows the diff + each library
+# release + notes, re-checks every tarball sha256, then signs/commits/pushes),
+# use `scripts/registry-sign.sh --pr <N>` instead — the per-PR signing path.
+#
 #   --dry-run        gather + print the worklist, change nothing
 #   --yes            skip the confirmation prompt
 #   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY)
