@@ -37,8 +37,11 @@ impl Timing {
             .as_ref()
     }
 
-    /// Record a native-compile event.  `kind` is `"cdylib"` or `"fixture"`;
-    /// `secs` is the compile wall-clock on a cache MISS (`None` on a hit).
+    /// Record a native-compile event.  `kind` is `"cdylib"` or `"fixture"`
+    /// (compiles), or `"lockwait"` / `"lockheld"` (the global build-lock — a
+    /// `lockwait` with no matching `lockheld` is a process stuck behind
+    /// another's build); `secs` is the wall-clock on a cache MISS / the lock
+    /// wait duration (`None` on a hit or a lock-wait START).
     ///
     /// Two channels, because the expensive native work runs in SPAWNED loft
     /// processes whose stderr a test harness CAPTURES (visible only on

@@ -344,8 +344,25 @@ jobs:
             fixs=$(echo "$all" | awk -F'\t' '$1=="fixture"{s+=$4} END{printf "%.1f", s}')
             echo
             echo "**fixtures:** ${fixn} compiled, ${fixs}s total rustc"
+            # Build-lock contention — the prime suspect for a multiplayer TMT.
+            # Each ledger file is one pid (timing-<pid>.tsv), so a file with
+            # more `lockwait` rows than `lockheld` = a process that blocked on
+            # the global build-lock and was KILLED before acquiring it (or is
+            # still stuck): the exact shape of a 600s hang behind another
+            # process's cold build.  `longest acquired wait` shows how bad the
+            # contention got for the builds that DID get through.
+            maxwait=$(echo "$all" | awk -F'\t' '$1=="lockheld"{if($4>m)m=$4} END{printf "%.1f", m+0}')
+            stuck=0
+            for f in "$dir"/*.tsv; do
+              lw=$(awk -F'\t' '$1=="lockwait"' "$f" | wc -l)
+              lh=$(awk -F'\t' '$1=="lockheld"' "$f" | wc -l)
+              [ "$lw" -gt "$lh" ] && stuck=$(( stuck + 1 ))
+            done
+            echo
+            echo "**build-lock:** longest acquired wait ${maxwait}s · ${stuck} process(es) killed/stuck while waiting (never acquired)"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "===== loft timing (cdylib) ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
+          echo "===== loft timing (build-lock) ====="; echo "$all" | awk -F'\t' '$1=="lockwait"||$1=="lockheld"' | sort | uniq -c
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so

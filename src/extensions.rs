@@ -2361,7 +2361,16 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         .open(std::env::temp_dir().join("loft-native-build.lock"))
         .ok();
     if let Some(f) = &_build_lock {
+        // Reveal cross-process contention on this ONE global lock (the prime
+        // suspect for the CI 600s multiplayer hang): record `lockwait` BEFORE
+        // blocking (so it lands in the ledger even if this process is killed
+        // while still waiting), then `lockheld` with the wait duration once
+        // acquired.  A `lockwait` with no matching `lockheld` for a package =
+        // a process stuck behind another's long cold build.
+        let lock_t = std::time::Instant::now();
+        crate::platform::timing_record("lockwait", stem, false, None);
         let _ = f.lock();
+        crate::platform::timing_record("lockheld", stem, false, Some(lock_t.elapsed().as_secs_f64()));
     }
     // Re-check under the lock: a process we waited on may have just produced the
     // artifact, in which case we must NOT rebuild.

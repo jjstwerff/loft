@@ -133,7 +133,35 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
         let _ = child.wait();
         eprintln!("[v5-timing] drain: child killed +{:?}", t0.elapsed());
     }
-    if let Ok(s) = reader_handle.join() {
+    // The `reader_handle.join()` below is the prime suspect for a 600s TMT: a
+    // killed loft child can orphan a `cargo build` / cdylib-compile grandchild
+    // that keeps the stdout pipe OPEN, so `read_to_string()` never returns and
+    // the join blocks forever.  A watchdog thread reports *why* — it fires at
+    // ~15s and ~30s into a stuck join (well before any TMT), naming the held-
+    // pipe mechanism and pointing at the build-lock ledger for an in-flight
+    // native build.  It logs nothing on the normal fast path (the join signals
+    // it within milliseconds), and is pure diagnostics — the join itself is
+    // unchanged.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let killed = exit_status.is_none();
+    let watchdog = thread::spawn(move || {
+        for wait in [Duration::from_secs(15); 2] {
+            match done_rx.recv_timeout(wait) {
+                Err(mpsc::RecvTimeoutError::Timeout) => eprintln!(
+                    "[v5-timing] drain: reader STILL blocked +{:?} (child_killed={killed}) — a \
+                     cargo/cdylib grandchild likely holds the stdout pipe open; read_to_string() \
+                     cannot return until that pipe closes (cross-ref the build-lock ledger for an \
+                     in-flight native build)",
+                    t0.elapsed()
+                ),
+                _ => return, // join finished (signalled) or sender dropped
+            }
+        }
+    });
+    let joined = reader_handle.join();
+    let _ = done_tx.send(()); // wake the watchdog so it exits promptly
+    let _ = watchdog.join();
+    if let Ok(s) = joined {
         stdout_text = s;
     }
     eprintln!("[v5-timing] drain: reader joined +{:?}", t0.elapsed());
