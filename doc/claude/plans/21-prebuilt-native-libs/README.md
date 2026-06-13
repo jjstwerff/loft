@@ -306,6 +306,39 @@ had no `native-auto` at all → true cold rustc compile) each produced a valid
 the hand-written `random` arm still reports `loft_random`; `/tmp` → clean non-package error.
 `fmt`/`clippy` clean.
 
+**Producer verified end-to-end against a real library repo (2026-06-13).** A faithful local
+replay of the producer workflow's build job (clone `loft-lang/loft-libs-graphics`, run
+`build-native` on the `shapes` subdir, sed-extract `cdylib:`/`triple:`/`loft_ffi_fp:`, checksum)
+caught a **real bug in the auto-native branch**: `use <name>` resolves a *same-named registry*
+package, not the handed checkout, so `library_export_set` (filtering defs by `pkg_str` prefix)
+saw none of them → "no native-compilable public functions" → the workflow `exit 1`s. The local
+unit tests passed only by coincidence (they pointed at `~/.loft/registry/<name>-<ver>`, exactly
+where `use <name>` resolves). **Fixed:** canonicalize the handed path and push its *parent* to
+`p.lib_dirs`, so `use <name>` resolves `<parent>/<name>` (and sibling monorepo deps) before the
+registry fallback; the registry-install layout (`shapes-0.2.0` ≠ name `shapes`) still misses
+lib_dirs and falls through to the registry as before. Regression matrix (all pass): registry
+auto-native (glb), hand-written (random → `loft_random`), fresh checkout (shapes → built).
+
+**Two gaps remain for a true ship-and-consume of an AUTO-native prebuilt** (both belong to the
+publish/consume glue, not the producer):
+1. **No consumer fetch path.** `install.rs::fetch_prebuilt` only handles hand-written libs — it
+   `return false`s when `[library] native` is absent, so an auto-native prebuilt is never
+   downloaded/placed. Phase 1's `resolve_native_lib` likewise keys off the manifest stem.
+2. **Layout-dependent cdylib identity.** `auto_cdylib_stem` derives from the *directory*
+   basename, so the producer (checkout dir `shapes`) builds `libloft_auto_shapes.so` while a
+   consumer (installed `shapes-0.2.0`) looks for `libloft_auto_shapes_0_2_0.so`. The fix is a
+   layout-independent identity (package name+version from `loft.toml`, the auto analog of the
+   hand-written `[library] native` stem) — touches the run-path cache filename, so verify both
+   "run from source checkout" and "run from registry install" find/build/load the same cdylib.
+
+**Producer GitHub-Actions run is still blocked** on `prebuild-native.yml` not being on loft's
+default branch (`workflow_dispatch` requires it there). The reusable `workflow_call` entry can
+be referenced `@<branch>` from a library repo's own CI without that, but its `Checkout loft`
+step pins the default branch — so until Phase 4b reaches `main`, a CI run would build a
+pure-loft lib with a loft that lacks the auto-native branch. Path to a real run: land the
+workflow + Phase 4b on `main`, then `gh workflow run prebuild-native.yml -f
+library_repo=loft-lang/loft-libs-graphics -f package_subdir=graphics`.
+
 ### Phase 5 — Registry surfacing · S — **SURFACING DONE 2026-06-13**
 **Goal:** the runtime requirement + available prebuilts are visible.
 **Landed (the `loft install` surfacing):** `InstallReport` gains a `surface: Vec<String>`;

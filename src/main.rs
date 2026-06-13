@@ -4149,6 +4149,10 @@ fn main() {
                 } else {
                     std::env::current_dir().unwrap_or_default()
                 };
+                // Canonicalize: the auto-native branch resolves the library via
+                // `use <name>` and filters its defs by `pkg_str` prefix, so the
+                // path the parser opens and `pkg_str` must be one form.
+                let pkg_path = std::fs::canonicalize(&pkg_path).unwrap_or(pkg_path);
                 let manifest =
                     loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy());
                 let pkg_str = pkg_path.to_string_lossy().to_string();
@@ -4178,6 +4182,15 @@ fn main() {
                     // wrappers) FROM the loft source — so a pure-loft compute
                     // library also ships a toolchain-free prebuilt.
                     let mut p = parser::Parser::new();
+                    // Resolve the library FROM the handed package path (a fresh
+                    // checkout, not necessarily registry-installed): its parent dir
+                    // lets `use <name>` resolve `<parent>/<name>` (and sibling deps)
+                    // BEFORE the registry fallback.  Without it `use <name>` finds a
+                    // same-named registry package and `library_export_set` (filtering
+                    // by `pkg_str` prefix) sees none of its defs.
+                    if let Some(parent) = pkg_path.parent() {
+                        p.lib_dirs.push(parent.to_string_lossy().to_string());
+                    }
                     let default_dir = format!("{}/default", project_dir());
                     let _ = p.parse_dir(&default_dir, true, false);
                     let tmp = std::env::temp_dir()
