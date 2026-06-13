@@ -83,6 +83,50 @@ pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 #[cfg(feature = "native-extensions")]
 static LOADED_LIBS: Mutex<Vec<(libloading::Library, bool)>> = Mutex::new(Vec::new());
 
+/// @PLN21 Phase 3 — turn a raw `dlopen`/`LoadLibrary` failure into an
+/// actionable message.  The dynamic linker IS the authoritative validator — its
+/// error text names exactly what is wrong — so we classify it rather than guess.
+/// A missing RUNTIME system lib is terminal: building from source links the same
+/// lib and fails identically (decision C3), so the user must install it, not
+/// rebuild.
+#[cfg(feature = "native-extensions")]
+fn dlopen_diagnostic(path: &str, err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    // Missing shared-object dependency: linux "cannot open shared object file";
+    // macOS "image not found"; windows "specified module could not be found".
+    if lower.contains("cannot open shared object file")
+        || lower.contains("image not found")
+        || lower.contains("specified module could not be found")
+    {
+        // linux names the missing lib before the first ':'
+        // ("libasound.so.2: cannot open shared object file …").
+        let named = err.split(':').next().unwrap_or("").trim();
+        let lib = if named.is_empty() || named == path {
+            "a system library"
+        } else {
+            named
+        };
+        return format!(
+            "loft: native library '{path}' needs {lib} at runtime, but it is not installed — \
+             this is a SYSTEM library; install it with your OS package manager (building from \
+             source would link the same library and fail identically)."
+        );
+    }
+    if lower.contains("glibc_") && lower.contains("not found") {
+        return format!(
+            "loft: native library '{path}' was built against a newer glibc than this system \
+             provides ({err}) — update the system, or build the library from source for this host."
+        );
+    }
+    if lower.contains("undefined symbol") {
+        return format!(
+            "loft: native library '{path}' has an ABI mismatch ({err}) — built against a \
+             different loft-ffi; it will be rebuilt from source."
+        );
+    }
+    format!("loft: cannot load native extension '{path}': {err}")
+}
+
 /// Load a single native extension shared library.
 ///
 /// If the library exports `loft_register_v1`, calls it to collect all symbols.
@@ -111,7 +155,7 @@ fn load_one(path: &str) {
     let lib = match unsafe { Library::new(path) } {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("loft: cannot load native extension '{path}': {e}");
+            eprintln!("{}", dlopen_diagnostic(path, &e.to_string()));
             return;
         }
     };
@@ -2270,12 +2314,60 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
 /// manifest paths and the warm startup-cache load (#310) all derive from it,
 /// so a cached run re-checks cdylib freshness exactly like a cold parse.
 pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
+    // @PLN21 Phase 3 — a missing DECLARED runtime system lib is terminal:
+    // neither a prebuilt nor a source build can load it (both link the same lib,
+    // decision C3).  Check FIRST and emit an actionable hint, rather than loading
+    // a doomed prebuilt or spending ~90s on a build that cannot load.
+    if let Some(lib) = first_missing_runtime_lib(pkg_dir) {
+        eprintln!(
+            "loft: native library '{stem}' needs the system library '{lib}', which is not \
+             installed — install it with your OS package manager (building from source would \
+             link the same library and fail identically)."
+        );
+        return None;
+    }
     let filename = platform_lib_name(stem);
+    // @PLN21 Phase 1 — a precompiled cdylib shipped for THIS host triple wins
+    // over a source build (the "no rustc to use a library" path).  A cdylib
+    // links loft-ffi (the C-ABI), not libloft, so it is valid for any loft on
+    // the same loft-ffi version — gated on the `.loft-build-fp` sidecar matching
+    // `loft_ffi_fingerprint()`, so a binary built against a different loft-ffi
+    // is skipped (never mis-loaded), falling through to a source build.
+    let triple_dir = format!("{pkg_dir}/prebuilt/{}", crate::cache::host_triple());
+    let triple_lib = format!("{triple_dir}/{filename}");
+    if std::path::Path::new(&triple_lib).exists()
+        && crate::cache::native_artifact_fingerprint_matches(
+            std::path::Path::new(&triple_dir),
+            crate::cache::loft_ffi_fingerprint(),
+        )
+    {
+        crate::platform::timing_record("prebuilt", stem, true, None);
+        return Some(triple_lib);
+    }
+    // Legacy platform-agnostic prebuilt (existence-only; kept for back-compat).
     let prebuilt = format!("{pkg_dir}/native/{filename}");
     if std::path::Path::new(&prebuilt).exists() {
         return Some(prebuilt);
     }
     auto_build_native(pkg_dir, stem)
+}
+
+/// @PLN21 Phase 3 — the first `[native] runtime-libs` entry the dynamic linker
+/// can't find, if any.  `dlopen` IS the authoritative presence check: a declared
+/// lib that loads is present; one that fails is missing, so the package's cdylib
+/// (prebuilt OR freshly built) could not load.  Empty `runtime-libs` (a
+/// libc-only package) → no check, no cost.
+#[cfg(feature = "native-extensions")]
+fn first_missing_runtime_lib(pkg_dir: &str) -> Option<String> {
+    crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))?
+        .runtime_libs
+        .into_iter()
+        .find(|lib| unsafe { libloading::Library::new(lib) }.is_err())
+}
+
+#[cfg(not(feature = "native-extensions"))]
+fn first_missing_runtime_lib(_pkg_dir: &str) -> Option<String> {
+    None
 }
 
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
@@ -2438,31 +2530,57 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         crate::cache::clear_stale_native_target(&target_root, &lib_name, &rlib_name, fp);
     }
 
-    // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo
-    // writes outside the install dir.
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.args(["build", "--release", "--manifest-path"])
-        .arg(&cargo_toml)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-    // #274 — build the package crate with the SAME RUSTFLAGS loft's own rlibs
-    // used (captured at loft build time), so a shared transitive dep like
-    // `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and the
-    // package's plain copy share a `StableCrateId` but differ in SVH and rustc
-    // aborts at the generated program's link step.  Force it (overriding any
-    // ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so cargo doesn't see
-    // both forms at once.
-    cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
-        .env_remove("CARGO_ENCODED_RUSTFLAGS");
-    if use_redirected_target {
-        if let Some(parent) = target_root.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    // Build.  When redirecting, pass `CARGO_TARGET_DIR` so cargo writes outside
+    // the install dir.  Factored into a closure so a `--locked` failure can
+    // retry without it (below) — the two invocations differ only in that flag.
+    let make_cmd = |locked: bool| {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.args(["build", "--release", "--manifest-path"])
+            .arg(&cargo_toml)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        if locked {
+            cmd.arg("--locked");
         }
-        cmd.env("CARGO_TARGET_DIR", &target_root);
-    }
+        // #274 — build the package crate with the SAME RUSTFLAGS loft's own
+        // rlibs used (captured at loft build time), so a shared transitive dep
+        // like `libloading` gets a matching SVH.  Otherwise loft's `-g` copy and
+        // the package's plain copy share a `StableCrateId` but differ in SVH and
+        // rustc aborts at the generated program's link step.  Force it
+        // (overriding any ambient value) and clear `CARGO_ENCODED_RUSTFLAGS` so
+        // cargo doesn't see both forms at once.
+        cmd.env("RUSTFLAGS", env!("LOFT_BUILD_RUSTFLAGS"))
+            .env_remove("CARGO_ENCODED_RUSTFLAGS");
+        if use_redirected_target {
+            if let Some(parent) = target_root.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            cmd.env("CARGO_TARGET_DIR", &target_root);
+        }
+        cmd
+    };
     let built_path = target_root.join("release").join(&lib_name);
     let build_start = std::time::Instant::now();
-    let status = cmd.status();
+    // @PLN21 Phase 6 — prefer `--locked` when the package SHIPS a
+    // `native/Cargo.lock`: cargo then uses the pinned resolution (reproducible —
+    // two machines produce the same cdylib bytes).  But a shipped lock can be
+    // platform-INCOMPLETE: one generated on Linux lacks a crate's `cfg(windows)`
+    // deps (e.g. `windows-targets`), so `cargo build --locked` on Windows must
+    // update the lock and refuses ("cannot update the lock file … because
+    // --locked was passed").  A FALLBACK source build must never hard-fail on
+    // that (Goal F), so on a locked failure we retry WITHOUT --locked, warning
+    // it is non-reproducible — reproducibility is best-effort here; the
+    // submit-time gate is where a complete lock is enforced.
+    let has_lock = cargo_toml.with_file_name("Cargo.lock").exists();
+    let mut status = make_cmd(has_lock).status();
+    if has_lock && matches!(&status, Ok(s) if !s.success()) {
+        eprintln!(
+            "loft: '--locked' build of '{stem}' failed — its Cargo.lock can't be \
+             satisfied as-is on this host (often a platform-specific dep missing \
+             from the shipped lock); retrying without --locked (non-reproducible)."
+        );
+        status = make_cmd(false).status();
+    }
     crate::platform::timing_record(
         "cdylib",
         stem,
@@ -2480,7 +2598,42 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
                 .exists()
                 .then(|| built_path.to_string_lossy().to_string())
         }
-        _ => None,
+        // @PLN21 Phase 3 — the build RAN but failed (cargo's error is on the
+        // inherited stderr).  The usual cause is a missing build dependency, so
+        // name the package's declared `build-deps` rather than leaving the user
+        // to parse a raw rustc/linker/pkg-config error.
+        Ok(_) => {
+            eprintln!(
+                "loft: building native library '{stem}' from source failed (cargo error above).{}",
+                build_deps_hint(pkg_dir)
+            );
+            None
+        }
+        // cargo itself could not start — typically no Rust toolchain installed.
+        Err(e) => {
+            eprintln!(
+                "loft: cannot build native library '{stem}': {e} — building a library with no \
+                 prebuilt for this host needs a Rust toolchain (rustc + cargo)."
+            );
+            None
+        }
+    }
+}
+
+/// @PLN21 Phase 3 — a trailing hint naming the package's declared `[native]
+/// build-deps` (the system dev packages its cdylib needs to compile), for a
+/// failed source build.  Empty when none are declared.
+fn build_deps_hint(pkg_dir: &str) -> String {
+    let deps = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+        .map(|m| m.build_deps)
+        .unwrap_or_default();
+    if deps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " This package needs these dev packages to build: {}.",
+            deps.join(", ")
+        )
     }
 }
 
@@ -2612,5 +2765,73 @@ pub mod native_call {
         fn drop(&mut self) {
             super::CURRENT_STORES.with(|c| c.set(std::ptr::null_mut()));
         }
+    }
+}
+
+// @PLN21 Phase 3 — the dlopen-failure classifier turns raw linker errors into
+// actionable guidance.  Pure string-in/string-out, so unit-testable.
+#[cfg(all(test, feature = "native-extensions"))]
+mod dlopen_diag_tests {
+    use super::{build_deps_hint, dlopen_diagnostic, first_missing_runtime_lib};
+
+    fn temp_pkg(name: &str, toml: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("loft_p21_{name}_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("loft.toml"), toml).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_declared_runtime_lib_is_detected() {
+        let dir = temp_pkg(
+            "rtlib",
+            "[native]\ncrate = \"x\"\nruntime-libs = \"libnot-real-pln21.so.99\"\n",
+        );
+        assert_eq!(
+            first_missing_runtime_lib(dir.to_str().unwrap()).as_deref(),
+            Some("libnot-real-pln21.so.99")
+        );
+        // none declared → no check, no false positive.
+        let dir2 = temp_pkg("nort", "[native]\ncrate = \"x\"\n");
+        assert!(first_missing_runtime_lib(dir2.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn build_deps_hint_names_declared_deps() {
+        let dir = temp_pkg(
+            "bdeps",
+            "[native]\ncrate = \"x\"\nbuild-deps = \"libgl-dev, libasound2-dev\"\n",
+        );
+        let h = build_deps_hint(dir.to_str().unwrap());
+        assert!(
+            h.contains("libgl-dev") && h.contains("libasound2-dev"),
+            "{h}"
+        );
+        assert!(build_deps_hint(temp_pkg("nobd", "[native]\n").to_str().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn missing_system_lib_names_it_and_says_install() {
+        let m = dlopen_diagnostic(
+            "/x/libgraphics.so",
+            "libasound.so.2: cannot open shared object file: No such file or directory",
+        );
+        assert!(m.contains("libasound.so.2"), "names the missing lib: {m}");
+        assert!(
+            m.contains("SYSTEM library") && m.contains("install"),
+            "actionable, not a raw linker error: {m}"
+        );
+    }
+
+    #[test]
+    fn glibc_too_old_is_flagged() {
+        let m = dlopen_diagnostic("/x/lib.so", "/x/lib.so: version `GLIBC_2.38' not found");
+        assert!(m.to_ascii_lowercase().contains("glibc"), "{m}");
+    }
+
+    #[test]
+    fn undefined_symbol_is_abi_mismatch() {
+        let m = dlopen_diagnostic("/x/lib.so", "undefined symbol: n_foo");
+        assert!(m.contains("ABI mismatch") || m.contains("loft-ffi"), "{m}");
     }
 }

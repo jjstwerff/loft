@@ -60,6 +60,81 @@ pub struct InstallOptions {
 pub struct InstallReport {
     pub installed: Vec<(String, String)>,
     pub skipped_cached: Vec<(String, String)>,
+    /// @PLN21 Phase 5 — per-package native surfacing lines (prebuilt
+    /// availability for this host + declared runtime libs), rendered by
+    /// `format_report` so a user sees whether `use <pkg>` needs a toolchain.
+    pub surface: Vec<String>,
+}
+
+/// @PLN21 Phase 4 — opportunistically fetch a prebuilt cdylib for THIS host so
+/// the package runs with NO Rust toolchain.  Best-effort: any miss (no entry for
+/// the host triple, an fp built against a different loft-ffi, offline, or a
+/// download/hash failure) silently leaves only the source, which
+/// `auto_build_native` compiles on first use.  On success the cdylib lands at
+/// `prebuilt/<triple>/lib<stem>.<ext>` + a `.loft-build-fp` sidecar — exactly
+/// where `extensions::resolve_native_lib` looks first (Phase 1).
+fn fetch_prebuilt(r: &ResolvedPackage, opts: &InstallOptions) -> bool {
+    if opts.offline {
+        return false;
+    }
+    let triple = crate::cache::host_triple();
+    let Some(bin) = r.version.binaries.get(&triple) else {
+        return false;
+    };
+    // Only a binary built against THIS loft's loft-ffi ABI is compatible.
+    if bin.loft_ffi_fp != Some(crate::cache::loft_ffi_fingerprint()) {
+        return false;
+    }
+    let pkg_dir = registry_index::extract_dir(&r.name, &r.version.semver);
+    // The cdylib stem is the package manifest's `[library] native` field.
+    let Some(stem) = crate::manifest::read_manifest(&pkg_dir.join("loft.toml").to_string_lossy())
+        .and_then(|m| m.native)
+    else {
+        return false;
+    };
+    let dir = pkg_dir.join("prebuilt").join(&triple);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let filename = if cfg!(target_os = "macos") {
+        format!("lib{stem}.dylib")
+    } else if cfg!(windows) {
+        format!("{stem}.dll")
+    } else {
+        format!("lib{stem}.so")
+    };
+    let dest = dir.join(&filename);
+    let Ok(bytes) = registry_index::download_tarball(&bin.url, &dest) else {
+        return false;
+    };
+    if registry_index::verify_sha256(&bytes, &bin.sha256).is_err() {
+        let _ = std::fs::remove_file(&dest);
+        return false;
+    }
+    // Stamp the sidecar so Phase 1's fp-gated resolve accepts the binary.
+    crate::cache::write_native_artifact_fingerprint(&dir, crate::cache::loft_ffi_fingerprint());
+    true
+}
+
+/// @PLN21 Phase 5 — the prebuilt-availability one-liner for a package: given the
+/// host triple, the triples that have a published binary, and whether one was
+/// just installed.  Pure (no IO) → unit-tested directly.
+fn prebuilt_status(host: &str, available: &[String], installed: bool) -> String {
+    if installed {
+        format!("prebuilt installed for {host} — no Rust toolchain needed")
+    } else if available.iter().any(|t| t == host) {
+        format!(
+            "a {host} prebuilt exists but was built against a different loft-ffi — \
+             builds from source on first use"
+        )
+    } else if available.is_empty() {
+        "no prebuilt published — builds from source on first use (needs rustc)".to_string()
+    } else {
+        format!(
+            "no prebuilt for {host} (available: {}) — builds from source on first use (needs rustc)",
+            available.join(", ")
+        )
+    }
 }
 
 /// Install a single named package (with optional version
@@ -86,6 +161,7 @@ pub fn install_one(
     let mut report = InstallReport {
         installed: Vec::new(),
         skipped_cached: Vec::new(),
+        surface: Vec::new(),
     };
 
     for r in &graph {
@@ -111,6 +187,27 @@ pub fn install_one(
         // Tarball is consumed — remove it to save space.  The
         // extracted dir is the canonical install.
         let _ = std::fs::remove_file(&tarball_path);
+        // @PLN21 Phase 4 — best-effort: grab a host-matching prebuilt cdylib so
+        // first use needs no toolchain (silently no-ops when none applies).
+        let got_prebuilt = fetch_prebuilt(r, opts);
+        // @PLN21 Phase 5 — surface whether `use <pkg>` needs a toolchain, plus
+        // any declared runtime system libs.
+        let host = crate::cache::host_triple();
+        let available: Vec<String> = r.version.binaries.keys().cloned().collect();
+        report.surface.push(format!(
+            "{} {}: {}",
+            r.name,
+            r.version.semver,
+            prebuilt_status(&host, &available, got_prebuilt)
+        ));
+        if let Some(m) = crate::manifest::read_manifest(&dir.join("loft.toml").to_string_lossy())
+            && !m.runtime_libs.is_empty()
+        {
+            report.surface.push(format!(
+                "  runtime libraries: {}",
+                m.runtime_libs.join(", ")
+            ));
+        }
         report
             .installed
             .push((r.name.clone(), r.version.semver.clone()));
@@ -365,6 +462,14 @@ pub fn format_report(report: &InstallReport) -> String {
             let _ = writeln!(out, "  {n} {v}");
         }
     }
+    // @PLN21 Phase 5 — per-package native surfacing (prebuilt availability +
+    // declared runtime libs), so a user sees whether `use <pkg>` needs a toolchain.
+    if !report.surface.is_empty() {
+        let _ = writeln!(out, "Native:");
+        for line in &report.surface {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
     let total = report.installed.len() + report.skipped_cached.len();
     let _ = writeln!(out, "{total} package(s) total");
     out
@@ -571,6 +676,7 @@ mod tests {
         let report = InstallReport {
             installed: vec![],
             skipped_cached: vec![],
+            surface: vec![],
         };
         let s = format_report(&report);
         assert!(s.starts_with("Nothing to do"));
@@ -581,6 +687,7 @@ mod tests {
         let report = InstallReport {
             installed: vec![("crypto".to_string(), "0.1.0".to_string())],
             skipped_cached: vec![("web".to_string(), "0.1.0".to_string())],
+            surface: vec![],
         };
         let s = format_report(&report);
         assert!(s.contains("Installed:"));
@@ -588,5 +695,18 @@ mod tests {
         assert!(s.contains("Already cached"));
         assert!(s.contains("web 0.1.0"));
         assert!(s.contains("2 package(s) total"));
+    }
+
+    // @PLN21 Phase 5 — the prebuilt-availability one-liner across its branches.
+    #[test]
+    fn prebuilt_status_branches() {
+        use super::prebuilt_status;
+        let host = "x86_64-unknown-linux-gnu";
+        assert!(prebuilt_status(host, &[], true).contains("no Rust toolchain needed"));
+        assert!(prebuilt_status(host, &[], false).contains("no prebuilt published"));
+        let other = vec!["aarch64-apple-darwin".to_string()];
+        assert!(prebuilt_status(host, &other, false).contains("available: aarch64-apple-darwin"));
+        let same = vec![host.to_string()];
+        assert!(prebuilt_status(host, &same, false).contains("different loft-ffi"));
     }
 }

@@ -216,6 +216,11 @@ fn print_help() {
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
     println!("                                prints sha256 + size + the registry index entry");
     println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
+    println!("  build-native [pkg-dir]        build the package's native cdylib for this host");
+    println!("                                + print its path, triple, and loft-ffi fp, so CI");
+    println!(
+        "                                can publish it as a prebuilt/<triple>/ binary (@PLN21)"
+    );
     println!("  search [query]                client-side search of the package registry");
     println!(
         "                                matches name / description / categories (case-insensitive)"
@@ -4128,6 +4133,152 @@ fn main() {
                 eprintln!(
                     "loft package: this binary was built without the `registry` feature; \
                      rebuild with default features."
+                );
+                std::process::exit(1);
+            }
+        } else if a == "build-native" {
+            // @PLN21 Phase 4 producer — build a package's native cdylib for THIS
+            // host and report the artifact + the loft-ffi fingerprint + the host
+            // triple, so CI can publish it as a `prebuilt/<triple>/` registry
+            // binary.  Runs NO program (a graphics lib needs no display) — just
+            // the cdylib + its fp, the two things `loft install` then needs.
+            #[cfg(feature = "registry")]
+            {
+                let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                    std::path::PathBuf::from(&argv[i])
+                } else {
+                    std::env::current_dir().unwrap_or_default()
+                };
+                // Canonicalize: the auto-native branch resolves the library via
+                // `use <name>` and filters its defs by `pkg_str` prefix, so the
+                // path the parser opens and `pkg_str` must be one form.
+                let pkg_path = std::fs::canonicalize(&pkg_path).unwrap_or(pkg_path);
+                let manifest =
+                    loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy());
+                let pkg_str = pkg_path.to_string_lossy().to_string();
+                // Machine-readable so a publish script can capture it.  The KEY
+                // line differs by native model, because the two cdylibs have
+                // different ABI contracts (see the auto-native branch below):
+                //   • hand-written links loft-ffi's `#[repr(C)]` surface → valid for
+                //     ANY loft on the same loft-ffi → `loft_ffi_fp`;
+                //   • auto-compiled `extern crate loft` (statically embeds libloft,
+                //     shares repr(Rust) `Stores`/`DbRef` by memory) → valid only for a
+                //     byte-identical loft build → `loft_build_fp` + the rustc it used.
+                let report = |cdylib: String, stem: String, keys: &[String]| {
+                    println!("cdylib: {cdylib}");
+                    println!("stem: {stem}");
+                    println!("triple: {}", loft::cache::host_triple());
+                    for k in keys {
+                        println!("{k}");
+                    }
+                };
+                if let Some(stem) = manifest.as_ref().and_then(|m| m.native.clone()) {
+                    // Hand-written `native/` crate — links the loft-ffi C ABI, so the
+                    // wide loft-ffi key is the correct compatibility gate.
+                    let keys = [format!(
+                        "loft_ffi_fp: {}",
+                        loft::cache::loft_ffi_fingerprint()
+                    )];
+                    match loft::extensions::auto_build_native(&pkg_str, &stem) {
+                        Some(cdylib) => report(cdylib, stem, &keys),
+                        None => {
+                            eprintln!(
+                                "loft build-native: building `{stem}` failed (see the cargo error above)"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                } else if let Some(name) = manifest.and_then(|m| m.name) {
+                    // @PLN21 Phase 4b — AUTO-COMPILED native (the default
+                    // "libraries compile, scripts interpret" path): parse the
+                    // library the `use`-resolution way, then build its auto-native
+                    // cdylib (`loft_auto_<dir>`, exporting `loft_shared_<fn>`
+                    // wrappers) FROM the loft source — so a pure-loft compute
+                    // library also ships a toolchain-free prebuilt.
+                    let mut p = parser::Parser::new();
+                    // Resolve the library FROM the handed package path (a fresh
+                    // checkout, not necessarily registry-installed): its parent dir
+                    // lets `use <name>` resolve `<parent>/<name>` (and sibling deps)
+                    // BEFORE the registry fallback.  Without it `use <name>` finds a
+                    // same-named registry package and `library_export_set` (filtering
+                    // by `pkg_str` prefix) sees none of its defs.
+                    if let Some(parent) = pkg_path.parent() {
+                        p.lib_dirs.push(parent.to_string_lossy().to_string());
+                    }
+                    let default_dir = format!("{}/default", project_dir());
+                    let _ = p.parse_dir(&default_dir, true, false);
+                    let tmp = std::env::temp_dir()
+                        .join(format!("loft_build_native_{}.loft", std::process::id()));
+                    let _ = std::fs::write(&tmp, format!("use {name};\n"));
+                    p.parse(&tmp.to_string_lossy(), false);
+                    let _ = std::fs::remove_file(&tmp);
+                    // Slot/scope analysis the cdylib codegen depends on — the run
+                    // path runs this before its auto-native build (main.rs), and
+                    // without it codegen emits undeclared locals (e.g. `var_me`).
+                    scopes::check(&mut p.data);
+                    let export = loft::native_lib::library_export_set(&p.data, &pkg_str);
+                    if export.is_empty() {
+                        eprintln!(
+                            "loft build-native: `{name}` has no native-compilable public functions"
+                        );
+                        std::process::exit(1);
+                    }
+                    match loft::native_lib::cached_or_build_shared_cdylib(
+                        &p.data,
+                        &p.database,
+                        &export,
+                        &pkg_str,
+                    ) {
+                        Ok(Some(so)) => {
+                            // This cdylib `extern crate loft`s — it statically embeds
+                            // libloft and operates on the host's repr(Rust)
+                            // `Stores`/`DbRef` by shared memory, so it is valid ONLY
+                            // for a byte-identical loft build (the `loft_build_fp` rlib
+                            // hash, which already folds in source + rustc).  Reporting
+                            // `loft_ffi_fp` here would mislabel it as widely portable —
+                            // a corruption-shaped trap for any consumer that gated on
+                            // it.  rustc is named too, for human/diagnostic clarity.
+                            report(
+                                so.to_string_lossy().to_string(),
+                                loft::native_lib::auto_cdylib_stem(&pkg_str),
+                                &[
+                                    format!(
+                                        "loft_build_fp: {}",
+                                        loft::cache::loft_build_fingerprint()
+                                    ),
+                                    format!(
+                                        "rustc: {}",
+                                        option_env!("LOFT_BUILD_RUSTC").unwrap_or("unknown")
+                                    ),
+                                ],
+                            );
+                        }
+                        Ok(None) => {
+                            eprintln!(
+                                "loft build-native: `{name}` is being edited (dev-interpret); no cdylib produced"
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "loft build-native: auto-native build of `{name}` failed: {e}"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "loft build-native: {} is not a loft package (no [package] name)",
+                        pkg_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft build-native: requires the `registry` feature; rebuild with default features."
                 );
                 std::process::exit(1);
             }

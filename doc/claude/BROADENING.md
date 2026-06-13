@@ -50,6 +50,30 @@ Four capabilities that give loft a defensible identity outside games:
    lower-friction.  The honest gap is binding **ergonomics, not library existence**.
    Mechanism: PACKAGES.md + § Native-library execution model below.
 
+   **The complementary route — the prebuilt cdylib (`@PLN21`) — is keyed on the *C
+   ABI*, and that broadens #4 from "Rust's ecosystem" to "*every native ecosystem,
+   via the C ABI*."**  A registry library's cdylib links the PUBLISHED, versioned
+   loft-ffi C-ABI (proven rustc-independent — `nm` shows zero loft symbols, only
+   system NEEDED libs), is validated by a *content* fingerprint of that ABI
+   (`cache::loft_ffi_fingerprint`, **not** a toolchain hash), and is `dlopen`'d.  So it
+   ships as a per-platform **prebuilt that needs no toolchain to *use*** — and its
+   native source can be **any language that emits a C-ABI `.so` implementing the loft-
+   ffi contract** (Rust ergonomically today via the macros; C / C++ / Zig directly once
+   a `loft-ffi.h` lands).  Where CPython / Node tie native extensions to *their own* ABI
+   **and** to a build of that runtime, loft's is the bare C ABI + a versioned
+   fingerprint — runtime-version- *and* source-language-independent.
+
+   This does **not** weaken the stability story, because **stability is being
+   *well-grounded*, not the source language.**  The "C's crash surface" point above is
+   about *un*grounded native code; a decades-hardened C library (sqlite, zlib, libpng)
+   is as stable as safe Rust — and a large share of Rust's "native" crates are precisely
+   Rust *wrapping those very C libraries*.  So the C-ABI prebuilt model just distributes
+   the stable native substrate (mature C, Rust-over-C, or pure Rust) uniformly and
+   toolchain-free; the reliability filter stays **well-grounded** (mature / tested /
+   maintained).  Memory-safe Rust is *one* route to grounding for new code; a hardened C
+   library is another.  The binary structure merges anything that speaks the contract;
+   what *earns* the guarantee is grounding, not language.
+
 Everything below flows from these.  Broadening loft is mostly about
 ecosystem work around them (chiefly #4 — binding the crates, incrementally on
 need), not language rework.

@@ -40,6 +40,18 @@ pub struct Manifest {
     /// compile + its warning) and the extraction-hygiene gate (the symbols
     /// are sanctioned in `src/**`).  One mark, every consumer.
     pub native_in_binary: bool,
+    /// @PLN21 Phase 2 — `[native] runtime-libs = "libGL.so.1, libasound.so.2"`:
+    /// the system shared libraries this package's cdylib needs at RUNTIME (its
+    /// `dlopen` NEEDED set beyond libc).  Turns a load failure into an actionable
+    /// install hint; a missing one of these can NOT be fixed by building from
+    /// source (the source cdylib links the same lib) — Phase 3 / decision C3.
+    pub runtime_libs: Vec<String>,
+    /// @PLN21 Phase 2 — `[native] build-deps = "libgl-dev, libasound2-dev"`:
+    /// the system DEV packages needed to BUILD the cdylib from source (the
+    /// fallback when no prebuilt matches).  Diagnoses a failed `auto_build_native`
+    /// ("install `<dev-lib>`").  Distinct from `runtime_libs` (the `-dev` headers
+    /// vs the runtime `.so`).
+    pub build_deps: Vec<String>,
     /// PKG.4: loft function name → Rust symbol path from `[native.functions]`.
     pub native_functions: Vec<(String, String)>,
     /// PKG.5: WASM-specific overrides from `[native.wasm]`.
@@ -101,6 +113,12 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 }
                 ("native", "crate") => manifest.native_crate = Some(value.to_string()),
                 ("native", "in_binary") => manifest.native_in_binary = value == "true",
+                ("native", "runtime-libs") => {
+                    manifest.runtime_libs = split_list(value);
+                }
+                ("native", "build-deps") => {
+                    manifest.build_deps = split_list(value);
+                }
                 ("native.functions", _) => {
                     manifest
                         .native_functions
@@ -126,6 +144,18 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
         }
     }
     Some(manifest)
+}
+
+/// @PLN21 Phase 2 — parse a comma-separated manifest value into a trimmed,
+/// non-empty list: `"libGL.so.1, libasound.so.2"` → `["libGL.so.1",
+/// "libasound.so.2"]`.  Backs `[native] runtime-libs` / `build-deps`.
+fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Check whether the `required` version constraint is satisfied by `current`.
@@ -234,6 +264,23 @@ mod tests {
         assert_eq!(m.name.as_deref(), Some("graphics"));
         assert_eq!(m.version.as_deref(), Some("0.2.1"));
         assert_eq!(m.loft_version.as_deref(), Some(">=0.8"));
+    }
+
+    // @PLN21 Phase 2 — `[native] runtime-libs` / `build-deps` parse into trimmed
+    // lists (with and without spaces), and are empty when absent.
+    #[test]
+    fn parses_native_runtime_and_build_deps() {
+        let p = write_temp(
+            "ndeps",
+            "[native]\ncrate = \"loft-graphics\"\nruntime-libs = \"libGL.so.1, libasound.so.2\"\nbuild-deps = \"libgl-dev,libasound2-dev\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.runtime_libs, vec!["libGL.so.1", "libasound.so.2"]);
+        assert_eq!(m.build_deps, vec!["libgl-dev", "libasound2-dev"]);
+
+        let p2 = write_temp("nodeps", "[native]\ncrate = \"loft-random\"\n");
+        let m2 = read_manifest(p2.to_str().unwrap()).unwrap();
+        assert!(m2.runtime_libs.is_empty() && m2.build_deps.is_empty());
     }
 
     #[test]

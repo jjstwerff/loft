@@ -84,6 +84,17 @@ fn main() {
     }
     println!("cargo:rustc-env=LOFT_FFI_FINGERPRINT={ffi_fp}");
 
+    // @PLN21 Phase 1 — the target triple this loft was built for (e.g.
+    // `x86_64-unknown-linux-gnu`).  cargo sets `TARGET` for build scripts; it is
+    // the *authoritative* host triple — `std::env::consts` only yields
+    // `<arch>-<os>-<family>` (`x86_64-linux-unix`), which loses the libc/abi a
+    // prebuilt cdylib's portability hinges on (gnu vs musl).  Names the
+    // `prebuilt/<triple>/` dir loft loads a precompiled cdylib from.
+    println!(
+        "cargo:rustc-env=LOFT_BUILD_TARGET={}",
+        std::env::var("TARGET").unwrap_or_default()
+    );
+
     // Re-run when anything that identifies this build changes: git HEAD / refs
     // (committed state), build.rs itself, the compiler source (`src/`) and stdlib
     // (`default/`), and loft-ffi's source.  Without src/ + default/, build.rs never

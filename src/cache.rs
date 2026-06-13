@@ -218,6 +218,19 @@ fn target_triple() -> String {
     )
 }
 
+/// @PLN21 Phase 1 — the FULL target triple this loft binary was built for
+/// (e.g. `x86_64-unknown-linux-gnu`), stamped by `build.rs` from cargo's
+/// `TARGET`.  Authoritative for selecting a `prebuilt/<triple>/` cdylib: unlike
+/// [`target_triple`] (the `env::consts` `<arch>-<os>-<family>` form) it captures
+/// the libc/abi a prebuilt's portability depends on (gnu vs musl).  Falls back
+/// to the `env::consts` form only if the stamp is somehow empty.
+#[must_use]
+pub fn host_triple() -> String {
+    option_env!("LOFT_BUILD_TARGET")
+        .filter(|t| !t.is_empty())
+        .map_or_else(target_triple, str::to_string)
+}
+
 /// Collect the `default/` stdlib sources as `(filename, content)` pairs,
 /// sorted by filename for a deterministic cache key.  Reads every `*.loft`
 /// file directly under `default_dir` (non-recursive — the stdlib is flat).

@@ -79,19 +79,28 @@ graphics/
 │   ├── src/
 │   │   └── lib.rs            # implements #[loft_fn] functions
 │   └── build.rs              # optional build script
-└── prebuilt/                 # optional: pre-compiled artifacts
-    ├── x86_64-linux/
-    │   └── libgraphics.rlib
-    ├── aarch64-macos/
-    │   └── libgraphics.rlib
+└── prebuilt/                 # optional: pre-compiled artifacts (@PLN21)
+    ├── x86_64-unknown-linux-gnu/
+    │   ├── libloft_graphics_native.so   # cdylib — dlopen'd, NOT linked
+    │   └── .loft-build-fp               # the loft-ffi fp it was built against
+    ├── aarch64-apple-darwin/
+    │   ├── libloft_graphics_native.dylib
+    │   └── .loft-build-fp
     └── wasm32-wasip2/
-        └── libgraphics.wasm
+        └── libgraphics.wasm             # wasm rlib (codegen-linked, not dlopen)
 ```
 
 **Rules:**
 - `src/` is mandatory — every package has at least one `.loft` file
 - `native/` is optional — only if the package has Rust-implemented functions
-- `prebuilt/` is optional — avoids requiring Rust toolchain on consumer machine
+- `prebuilt/` is optional — avoids requiring Rust toolchain on consumer machine.
+  The NATIVE prebuilt is the **cdylib** (`.so`/`.dylib`/`.dll`), NOT an `.rlib`: it is
+  `dlopen`'d over the loft-ffi C-ABI, so it is rustc-version-independent (an `.rlib` is
+  SVH-locked to its rustc — E0514). Each per-triple dir carries a `.loft-build-fp`
+  sidecar (the `loft-ffi` fingerprint it was built against); loft loads it only when
+  that matches `cache::loft_ffi_fingerprint()` (@PLN21 Phase 1).
+- `[native] runtime-libs` / `build-deps` (@PLN21 Phase 2) declare the package's system
+  shared libs (validation + install hint) and dev packages (source-build diagnostics).
 - The primary `.loft` file (`src/graphics.loft`) declares the public API
   including `#native` function signatures
 
