@@ -214,9 +214,15 @@ impl Output<'_> {
                 write!(w, ", ")?;
                 self.emit_call_arg(w, callee, idx, arg)?;
             }
+            // A null return (`_src` is the null sentinel, store_nr == u16::MAX)
+            // must NOT be deep-copied — `OpCopyRecord` would index
+            // `allocations[u16::MAX]` and panic.  Bind the sentinel straight into
+            // the destination (as the same-store alias arm does), so the variable
+            // reads as null.  Covers any heap-param callee returning struct-or-null
+            // (`fn f(s: S) -> Box { … null … }`), the ABI-B caller path.
             write!(
                 w,
-                "); if _src.store_nr == _dst.store_nr {{ var_{name} = _src; }} \
+                "); if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr {{ var_{name} = _src; }} \
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;
