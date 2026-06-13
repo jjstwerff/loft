@@ -1095,9 +1095,7 @@ fn native_library_suite() -> std::io::Result<()> {
             // CI "Surface environmental test skips" step via the ledger below.
             let detail: Vec<&str> = combined
                 .lines()
-                .filter(|l| {
-                    l.contains("1181") || l.contains("LNK") || l.contains("link.exe")
-                })
+                .filter(|l| l.contains("1181") || l.contains("LNK") || l.contains("link.exe"))
                 .take(3)
                 .collect();
             println!("skip {entry:?} (Windows windows-targets LNK1181 — environmental)");
