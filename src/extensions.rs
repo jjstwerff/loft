@@ -83,6 +83,50 @@ pub fn load_all(_state: &mut crate::state::State, _paths: Vec<String>) {}
 #[cfg(feature = "native-extensions")]
 static LOADED_LIBS: Mutex<Vec<(libloading::Library, bool)>> = Mutex::new(Vec::new());
 
+/// @PLN21 Phase 3 — turn a raw `dlopen`/`LoadLibrary` failure into an
+/// actionable message.  The dynamic linker IS the authoritative validator — its
+/// error text names exactly what is wrong — so we classify it rather than guess.
+/// A missing RUNTIME system lib is terminal: building from source links the same
+/// lib and fails identically (decision C3), so the user must install it, not
+/// rebuild.
+#[cfg(feature = "native-extensions")]
+fn dlopen_diagnostic(path: &str, err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    // Missing shared-object dependency: linux "cannot open shared object file";
+    // macOS "image not found"; windows "specified module could not be found".
+    if lower.contains("cannot open shared object file")
+        || lower.contains("image not found")
+        || lower.contains("specified module could not be found")
+    {
+        // linux names the missing lib before the first ':'
+        // ("libasound.so.2: cannot open shared object file …").
+        let named = err.split(':').next().unwrap_or("").trim();
+        let lib = if named.is_empty() || named == path {
+            "a system library"
+        } else {
+            named
+        };
+        return format!(
+            "loft: native library '{path}' needs {lib} at runtime, but it is not installed — \
+             this is a SYSTEM library; install it with your OS package manager (building from \
+             source would link the same library and fail identically)."
+        );
+    }
+    if lower.contains("glibc_") && lower.contains("not found") {
+        return format!(
+            "loft: native library '{path}' was built against a newer glibc than this system \
+             provides ({err}) — update the system, or build the library from source for this host."
+        );
+    }
+    if lower.contains("undefined symbol") {
+        return format!(
+            "loft: native library '{path}' has an ABI mismatch ({err}) — built against a \
+             different loft-ffi; it will be rebuilt from source."
+        );
+    }
+    format!("loft: cannot load native extension '{path}': {err}")
+}
+
 /// Load a single native extension shared library.
 ///
 /// If the library exports `loft_register_v1`, calls it to collect all symbols.
@@ -111,7 +155,7 @@ fn load_one(path: &str) {
     let lib = match unsafe { Library::new(path) } {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("loft: cannot load native extension '{path}': {e}");
+            eprintln!("{}", dlopen_diagnostic(path, &e.to_string()));
             return;
         }
     };
@@ -2630,5 +2674,37 @@ pub mod native_call {
         fn drop(&mut self) {
             super::CURRENT_STORES.with(|c| c.set(std::ptr::null_mut()));
         }
+    }
+}
+
+// @PLN21 Phase 3 — the dlopen-failure classifier turns raw linker errors into
+// actionable guidance.  Pure string-in/string-out, so unit-testable.
+#[cfg(all(test, feature = "native-extensions"))]
+mod dlopen_diag_tests {
+    use super::dlopen_diagnostic;
+
+    #[test]
+    fn missing_system_lib_names_it_and_says_install() {
+        let m = dlopen_diagnostic(
+            "/x/libgraphics.so",
+            "libasound.so.2: cannot open shared object file: No such file or directory",
+        );
+        assert!(m.contains("libasound.so.2"), "names the missing lib: {m}");
+        assert!(
+            m.contains("SYSTEM library") && m.contains("install"),
+            "actionable, not a raw linker error: {m}"
+        );
+    }
+
+    #[test]
+    fn glibc_too_old_is_flagged() {
+        let m = dlopen_diagnostic("/x/lib.so", "/x/lib.so: version `GLIBC_2.38' not found");
+        assert!(m.to_ascii_lowercase().contains("glibc"), "{m}");
+    }
+
+    #[test]
+    fn undefined_symbol_is_abi_mismatch() {
+        let m = dlopen_diagnostic("/x/lib.so", "undefined symbol: n_foo");
+        assert!(m.contains("ABI mismatch") || m.contains("loft-ffi"), "{m}");
     }
 }
