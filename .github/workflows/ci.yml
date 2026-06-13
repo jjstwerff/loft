@@ -26,6 +26,12 @@ env:
   # across the per-run `cargo build --release --lib` no-op rebuild), so warm
   # runs skip the ~565s of native recompiles instead of redoing them.
   LOFT_TMPDIR: ${{ github.workspace }}/target/loft-native-cache
+  # Side-channel ledger directory for environmental test skips (tests that
+  # passed-by-skipping for a toolchain/OS reason — e.g. Windows LNK1181).
+  # nextest hides a passing test's stdout, so a skip is otherwise an
+  # invisible green; the "Surface environmental test skips" step drains this
+  # into annotations + a job summary so reduced coverage is never silent.
+  LOFT_SKIP_LEDGER: ${{ github.workspace }}/target/loft-skip-ledger
 
 jobs:
   # Classify the diff so docs-only changes skip the heavy jobs entirely
@@ -104,15 +110,47 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
+      # The native-fixture binary cache lives in `target/loft-native-cache`
+      # (keyed INSIDE loft on the libloft.rlib content hash — see
+      # native_utils::native_cache_key).  Its persistence was broken: the
+      # actions/cache key was Cargo.lock-only, so a PR that changed lib SOURCE
+      # (not Cargo.lock) rebuilt every fixture (rlib bytes changed → loft
+      # correctly invalidated) but then could NOT save — the Cargo.lock key
+      # already existed, and actions/cache skips save on an existing key.  The
+      # rebuilt-and-validated binaries were discarded, so the NEXT run
+      # restored the stale cache and rebuilt again (~15m, every run).
+      #
+      # Fix: a unique save key per job per run (run_id + job-index — the two
+      # shards of one OS would otherwise collide on the same key).  Save now
+      # always happens; restore falls back through prefix keys — same OS+shard
+      # first (its own fixture set), then any same-OS, then any.  A run that
+      # rebuilds fixtures now persists them, so a re-run / the merge-to-main
+      # run / a follow-up non-rlib push restores them WARM.
+      # `~/.loft/{build-cache,registry}` holds the installed registry packages
+      # and their built NATIVE cdylibs (graphics, glb, mesh3d, …).  These were
+      # NOT in any cache path, so every run rebuilt them from scratch — graphics
+      # alone is ~90s of cargo build (winit/glutin/image/…), and there are
+      # several.  They link the PUBLISHED `loft-ffi` (not the local rlib), so
+      # they are stable across loft source changes — caching them is safe and
+      # they stay warm until a package version bumps (loft's own build-cache
+      # keying rebuilds a changed package even from a restored cache).  This is
+      # the actual native-phase bottleneck (a fixture rustc link is ~0.3s;
+      # measured — combining fixtures would save <90s, the cdylib builds are
+      # minutes).
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.loft/build-cache
+            ~/.loft/registry
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-j${{ strategy.job-index }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-j${{ strategy.job-index }}-
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
 
       - name: Build
         run: cargo build --all-targets
@@ -198,6 +236,12 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # Clear any skip ledger restored from the cached target/ so the surface
+      # step reports only THIS run's environmental skips.
+      - name: Reset skip ledger
+        shell: bash
+        run: rm -rf "$LOFT_SKIP_LEDGER"
+
       - name: Test
         # `index_hygiene` and `viewer_markdown` are extracted to their own advisory
         # ubuntu jobs (and the nightly): both are platform-independent — a whole-repo
@@ -234,6 +278,36 @@ jobs:
                   print(f"::warning title=Flaky test (passed only on retry)::{name} — "
                         "a retried pass can mask a real intermittent bug; treat as a finding")
           EOF
+
+      # Drain the environmental-skip ledger (written by tests that
+      # passed-by-skipping for a toolchain/OS reason) into annotations + a job
+      # summary, so a green run never hides reduced coverage.  Does NOT fail
+      # the job — these skips are known-environmental (e.g. Windows LNK1181);
+      # the point is visibility, not blocking.  A regression that makes MORE
+      # tests skip then shows up as new annotations.
+      - name: Surface environmental test skips
+        if: always()
+        shell: bash
+        run: |
+          dir="$LOFT_SKIP_LEDGER"
+          [ -d "$dir" ] || { echo "no environmental skips this run"; exit 0; }
+          n=0
+          {
+            echo "### Environmental test skips (green, but coverage was reduced)"
+            echo
+            echo "| Suite | Reason | Test | Detail |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in "$dir"/*.tsv; do
+            [ -e "$f" ] || continue
+            while IFS=$'\t' read -r suite reason test detail; do
+              [ -z "$suite" ] && continue
+              n=$((n + 1))
+              echo "::warning title=Environmental skip ($reason)::$suite: $test — $detail"
+              echo "| $suite | $reason | $test | ${detail} |" >> "$GITHUB_STEP_SUMMARY"
+            done < "$f"
+          done
+          echo "$n environmental skip(s) surfaced (annotations + job summary)."
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so
@@ -312,8 +386,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-guard-cargo-
+          key: ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-guard-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-guard-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # Exclude `wrap::library_suite`: it builds/runs the lib/* NATIVE suites
@@ -350,8 +426,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-hygiene-cargo-
+          key: ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-hygiene-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-hygiene-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Build host loft binary (required by `make index`)
@@ -388,8 +466,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-viewer-cargo-
+          key: ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-viewer-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-viewer-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # The viewer test spawns `target/release/loft`; build it or the test skips.
@@ -473,8 +553,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-asan-pr-cargo-
+          key: ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-asan-pr-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-asan-pr-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       # nextest (not `cargo test`): it does NOT build doctests, which under
@@ -525,7 +607,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-cargo-clippy-
 
       - name: Clippy (deny warnings)
         run: cargo clippy -- -D warnings
@@ -590,7 +675,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-cargo-gallery-
 
       # Instantiate the committed doc/pkg/{loft.js, loft_bg.wasm} pair
       # exactly as the browser would.  A drifted pair fails here with
