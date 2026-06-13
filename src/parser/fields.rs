@@ -484,11 +484,10 @@ impl Parser {
     pub(crate) fn find_poly_enum_field(&self, enum_d_nr: u32, field: &str) -> Option<(u32, usize)> {
         for a_nr in 0..self.data.attributes(enum_d_nr) {
             let a_name = self.data.attr_name(enum_d_nr, a_nr);
-            let variant_d_nr = self.data.def_nr(&a_name);
+            // @PLN22 Phase 1 — resolve the variant within its enum via the
+            // variant_of chokepoint, not the bare global def_nr.
+            let variant_d_nr = self.data.variant_of(enum_d_nr, &a_name);
             if variant_d_nr == u32::MAX {
-                continue;
-            }
-            if !matches!(self.data.def_type(variant_d_nr), DefType::EnumValue) {
                 continue;
             }
             let f = self.data.attr(variant_d_nr, field);

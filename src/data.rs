@@ -4069,6 +4069,24 @@ impl Data {
             .unwrap_or(u32::MAX)
     }
 
+    /// @PLN22 Phase 1 — resolve a variant by name across every enum defined in
+    /// `source` (a library-qualified `lib::Variant`).  Returns the FIRST match;
+    /// a library exposing two enums with the same variant name needs the
+    /// `lib::Enum::Variant` form to disambiguate (Phase 3 `as` aliasing).
+    /// `u32::MAX` when no enum in `source` has the variant.
+    #[must_use]
+    pub fn variant_in_source(&self, source: u16, name: &str) -> u32 {
+        for i in 0..self.definitions.len() as u32 {
+            if self.def(i).source == source && self.def_type(i) == DefType::Enum {
+                let v = self.variant_of(i, name);
+                if v != u32::MAX {
+                    return v;
+                }
+            }
+        }
+        u32::MAX
+    }
+
     /// # Panics
     /// When no definition on that number is found.
     pub fn def_mut(&mut self, dnr: u32) -> &mut Definition {

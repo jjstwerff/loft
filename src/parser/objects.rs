@@ -36,6 +36,20 @@ impl Parser {
         } else {
             name.to_string()
         };
+        // @PLN22 Phase 1 — for a qualified `Enum::Variant` (the qualifier is a
+        // local enum, not a library), the variant is resolved WITHIN that enum
+        // via the variant_of chokepoint inside parse_constant_value, so it keeps
+        // working once variants are no longer globally keyed (step 4).
+        let qualifier_enum = if qualified && source == u16::MAX {
+            let q = self.data.def_nr(name);
+            if q != u32::MAX && self.data.def_type(q) == DefType::Enum {
+                q
+            } else {
+                u32::MAX
+            }
+        } else {
+            u32::MAX
+        };
         // Tier-0 auto-`use`: a qualified `name::…` whose lowercase `name` is
         // neither a loaded library (`source` == MAX) nor a known definition is
         // an unknown library.  After the use-region's pre-scan, any *available*
@@ -92,7 +106,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let mut t = self.parse_constant_value(code, source, &nm, name_pos);
+        let mut t = self.parse_constant_value(code, source, &nm, name_pos, qualifier_enum);
         if t != Type::Null {
             return t;
         }
@@ -823,13 +837,27 @@ impl Parser {
         source: u16,
         name: &str,
         name_pos: &Position,
+        qualifier_enum: u32,
     ) -> Type {
         let mut t;
-        let d_nr = if source == u16::MAX {
+        let mut d_nr = if source == u16::MAX {
             self.data.def_nr(name)
         } else {
             self.data.source_nr(source, name)
         };
+        // @PLN22 Phase 1 — a qualified `Enum::Variant` resolves the variant
+        // WITHIN the qualifier enum via the variant_of chokepoint.  Non-breaking
+        // while variants are globally keyed (def_nr already found it); required
+        // once de-globalize lands (step 4), when def_nr no longer keys variants.
+        if d_nr == u32::MAX && qualifier_enum != u32::MAX {
+            d_nr = self.data.variant_of(qualifier_enum, name);
+        }
+        // @PLN22 Phase 1 — a library-qualified `lib::Variant` resolves across the
+        // enums of that source via the variant_in_source chokepoint.  Harmless for
+        // non-variant `lib::name` (no enum has the variant → MAX → falls through).
+        if d_nr == u32::MAX && source != u16::MAX {
+            d_nr = self.data.variant_in_source(source, name);
+        }
         if d_nr != u32::MAX {
             self.data.def_used(d_nr);
             t = self.data.def(d_nr).returned().clone();

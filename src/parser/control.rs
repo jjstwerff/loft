@@ -1402,21 +1402,16 @@ impl Parser {
                 break;
             }
 
-            // Look up the variant definition. C53: when the bare name is not
-            // visible in the current source (e.g. a library enum variant that
-            // was not wildcard-imported), fall back to searching the enum's
-            // children by name.
-            let mut variant_def_nr = self.data.def_nr(&pattern_name);
-            if (variant_def_nr == u32::MAX
-                || self.data.def_type(variant_def_nr) != DefType::EnumValue
-                || self.data.def(variant_def_nr).parent() != e_nr)
-                && e_nr != u32::MAX
-                && let Some(child) = self
-                    .data
-                    .children_of(e_nr)
-                    .find(|&c| self.data.def(c).name() == pattern_name)
-            {
-                variant_def_nr = child;
+            // @PLN22 Phase 1 — resolve the variant against the subject enum via
+            // the variant_of chokepoint (the (enum, variant) scope key), not the
+            // bare global def_nr.  This also subsumes the C53 fix (a library
+            // variant not wildcard-imported is still a child of its enum).  A
+            // plain-struct match's "pattern" is the struct TYPE itself (still
+            // globally keyed, never an EnumValue), so fall back to def_nr when
+            // variant_of finds nothing.
+            let mut variant_def_nr = self.data.variant_of(e_nr, &pattern_name);
+            if variant_def_nr == u32::MAX {
+                variant_def_nr = self.data.def_nr(&pattern_name);
             }
 
             // for plain struct match, the pattern name must match the struct type.
@@ -1531,18 +1526,10 @@ impl Parser {
                 } else {
                     first_or.clone()
                 };
-                let mut next_def_nr = self.data.def_nr(&next_name);
-                if (next_def_nr == u32::MAX
-                    || self.data.def_type(next_def_nr) != DefType::EnumValue
-                    || self.data.def(next_def_nr).parent() != e_nr)
-                    && e_nr != u32::MAX
-                    && let Some(child) = self
-                        .data
-                        .children_of(e_nr)
-                        .find(|&c| self.data.def(c).name() == next_name)
-                {
-                    next_def_nr = child;
-                }
+                // @PLN22 Phase 1 — or-pattern variant resolves against the
+                // subject enum via the variant_of chokepoint (or-patterns are
+                // plain-enum only, so no struct fallback is needed).
+                let next_def_nr = self.data.variant_of(e_nr, &next_name);
                 if !self.first_pass
                     && (next_def_nr == u32::MAX
                         || self.data.def_type(next_def_nr) != DefType::EnumValue
@@ -3012,19 +2999,10 @@ impl Parser {
                 return Type::Boolean;
             }
         };
-        let mut variant_def_nr = self.data.def_nr(variant_name);
-        if (variant_def_nr == u32::MAX
-            || self.data.def_type(variant_def_nr) != DefType::EnumValue
-            || self.data.def(variant_def_nr).parent() != e_nr)
-            && e_nr != u32::MAX
-        {
-            for child in self.data.children_of(e_nr) {
-                if self.data.def(child).name() == variant_name {
-                    variant_def_nr = child;
-                    break;
-                }
-            }
-        }
+        // @PLN22 Phase 1 — resolve the variant against the subject enum via the
+        // variant_of chokepoint (the (enum, variant) scope key), not the bare
+        // global def_nr.  `is` is always enum-typed here (see the match above).
+        let variant_def_nr = self.data.variant_of(e_nr, variant_name);
         if variant_def_nr == u32::MAX || self.data.def_type(variant_def_nr) != DefType::EnumValue {
             if !self.first_pass {
                 diagnostic!(
