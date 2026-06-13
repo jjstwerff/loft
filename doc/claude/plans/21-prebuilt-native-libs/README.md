@@ -216,8 +216,19 @@ declared-libs proactive check + the load-site classifier together close C3.
 
    **Probe:** a prebuilt whose `runtime-libs` names an absent lib → loft emits the hint and spends **no** time building (timed).
 
-### Phase 4 — CI build matrix + publish (produce the binaries) · M — **CONSUMER-SIDE DONE 2026-06-13**
+### Phase 4 — CI build matrix + publish (produce the binaries) · M — **PRODUCER PRIMITIVE + WORKFLOW SCAFFOLD 2026-06-13**
 **Goal:** each native library ships per-triple, fp-stamped cdylibs in the registry.
+**Landed (producer):** `loft build-native [pkg-dir]` (`main.rs`) compiles a package's native
+crate via `auto_build_native` — running **no program** (a graphics lib needs no display) —
+and prints the cdylib path, stem, host triple, and `loft_ffi_fp` (machine-readable for a
+publish script). Verified locally on `random` (builds `libloft_random.so`, reports the fp).
+`.github/workflows/prebuild-native.yml` (manual-`workflow_dispatch`, non-disturbing) mirrors
+`release.yml`'s matrix, checks out a library repo, runs `build-native` per target, and
+uploads each cdylib + emits its `binaries[<triple>]` index-entry JSON to the job summary.
+**Remaining (the two untestable-locally refinements, noted in the workflow):** (a) a real
+end-to-end CI run; (b) linux on an **old-glibc/manylinux** base for portability; (c) the
+**publish glue** — a final job / `registry_maintain.sh` turning the artifacts into release
+assets and writing the `binaries` entries into the package's `index.json`.
 **Landed (install-side — the testable Rust half):** `BinaryEntry` gains `loft_ffi_fp:
 Option<u64>` (parsed from the index, stored as a string for u64 precision);
 `install::fetch_prebuilt` runs after extraction — when `Version.binaries[host_triple]`

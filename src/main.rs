@@ -216,6 +216,11 @@ fn print_help() {
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
     println!("                                prints sha256 + size + the registry index entry");
     println!("                                (PKG.REG R1 — see doc/claude/PKG_REGISTRY.md)");
+    println!("  build-native [pkg-dir]        build the package's native cdylib for this host");
+    println!("                                + print its path, triple, and loft-ffi fp, so CI");
+    println!(
+        "                                can publish it as a prebuilt/<triple>/ binary (@PLN21)"
+    );
     println!("  search [query]                client-side search of the package registry");
     println!(
         "                                matches name / description / categories (case-insensitive)"
@@ -4128,6 +4133,53 @@ fn main() {
                 eprintln!(
                     "loft package: this binary was built without the `registry` feature; \
                      rebuild with default features."
+                );
+                std::process::exit(1);
+            }
+        } else if a == "build-native" {
+            // @PLN21 Phase 4 producer — build a package's native cdylib for THIS
+            // host and report the artifact + the loft-ffi fingerprint + the host
+            // triple, so CI can publish it as a `prebuilt/<triple>/` registry
+            // binary.  Runs NO program (a graphics lib needs no display) — just
+            // the cdylib + its fp, the two things `loft install` then needs.
+            #[cfg(feature = "registry")]
+            {
+                let pkg_path = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
+                    std::path::PathBuf::from(&argv[i])
+                } else {
+                    std::env::current_dir().unwrap_or_default()
+                };
+                let stem =
+                    loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy())
+                        .and_then(|m| m.native);
+                let Some(stem) = stem else {
+                    eprintln!(
+                        "loft build-native: {} has no `[library] native` stem — not a native package",
+                        pkg_path.display()
+                    );
+                    std::process::exit(1);
+                };
+                match loft::extensions::auto_build_native(&pkg_path.to_string_lossy(), &stem) {
+                    Some(cdylib) => {
+                        // Machine-readable so a publish script can capture it.
+                        println!("cdylib: {cdylib}");
+                        println!("stem: {stem}");
+                        println!("triple: {}", loft::cache::host_triple());
+                        println!("loft_ffi_fp: {}", loft::cache::loft_ffi_fingerprint());
+                    }
+                    None => {
+                        eprintln!(
+                            "loft build-native: building `{stem}` failed (see the cargo error above)"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            #[cfg(not(feature = "registry"))]
+            {
+                eprintln!(
+                    "loft build-native: requires the `registry` feature; rebuild with default features."
                 );
                 std::process::exit(1);
             }

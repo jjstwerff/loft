@@ -1,0 +1,111 @@
+# @PLN21 Phase 4 (producer) — build a library's native cdylib for every host
+# triple and upload each as an artifact, so they can be published as
+# `prebuilt/<triple>/` registry binaries (PACKAGES.md / PKG_REGISTRY.md).  A
+# cdylib links the PUBLISHED loft-ffi (the C-ABI), not libloft, so it is
+# rustc-independent and valid for any loft on the same loft-ffi version — keyed
+# by the `loft_ffi_fp` each build reports (`loft build-native`).
+#
+# Manually triggered, NEVER on push/PR, so it can't disturb the main matrix.
+#
+#   gh workflow run prebuild-native.yml \
+#     -f library_repo=loft-lang/loft-libs-graphics -f library_ref=v0.1.0
+#
+# STATUS: producer scaffold — validated locally only for the `loft build-native`
+# step (the artifact + fp it reports).  The CI orchestration here has NOT been
+# run end to end; two refinements remain before it is production-publish ready:
+#  - glibc baseline: linux should build in an OLD-glibc (manylinux) container so
+#    the cdylib runs on older systems; ubuntu-latest builds against a NEW glibc.
+#  - publish glue: a final job (or `scripts/registry_maintain.sh`) must turn the
+#    artifacts into release assets and write `binaries[<triple>] = {url, sha256,
+#    loft_ffi_fp}` into the package's index.json version entry.
+
+name: Prebuild native cdylibs (@PLN21)
+
+on:
+  workflow_dispatch:
+    inputs:
+      library_repo:
+        description: 'Library repo to build (e.g. loft-lang/loft-libs-graphics)'
+        required: true
+      library_ref:
+        description: 'Tag/branch of the library to build'
+        default: 'main'
+      package_subdir:
+        description: 'Package path within the repo (holds loft.toml + native/)'
+        default: '.'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: cdylib ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # Mirrors release.yml; native per-OS runner per target.  Add
+      # aarch64-unknown-linux-gnu via cross once the baseline below is sorted.
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: x86_64-apple-darwin, os: macos-14 }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+
+    steps:
+      - name: Checkout loft
+        uses: actions/checkout@v5
+
+      - name: Checkout library
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.library_repo }}
+          ref: ${{ inputs.library_ref }}
+          path: _library
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Native dev libs some packages need to compile (e.g. graphics → ALSA/GL).
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev libgl1-mesa-dev
+
+      - name: Build loft (host)
+        run: cargo build --release --bin loft
+
+      # `loft build-native` compiles the package's native crate (no program is
+      # run) and reports the cdylib path, the host triple, and the loft-ffi fp.
+      - name: Build the native cdylib + capture metadata
+        id: build
+        shell: bash
+        run: |
+          out=$(./target/release/loft build-native "_library/${{ inputs.package_subdir }}")
+          echo "$out"
+          cdylib=$(echo "$out" | sed -n 's/^cdylib: //p')
+          triple=$(echo "$out" | sed -n 's/^triple: //p')
+          fp=$(echo "$out"     | sed -n 's/^loft_ffi_fp: //p')
+          [ -n "$cdylib" ] && [ -f "$cdylib" ] || { echo "build-native produced no cdylib"; exit 1; }
+          asset="$(basename "$cdylib")"
+          cp "$cdylib" "$asset"
+          if command -v sha256sum >/dev/null; then sha=$(sha256sum "$asset" | cut -d' ' -f1);
+          else sha=$(shasum -a 256 "$asset" | cut -d' ' -f1); fi
+          echo "asset=$asset"   >> "$GITHUB_OUTPUT"
+          echo "triple=$triple" >> "$GITHUB_OUTPUT"
+          # The index entry a publish step writes into binaries[<triple>].
+          {
+            echo "### prebuilt: $triple"
+            echo '```json'
+            echo "\"$triple\": { \"url\": \"<release-asset-url>\", \"sha256\": \"$sha\", \"loft_ffi_fp\": \"$fp\" }"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload cdylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdylib-${{ steps.build.outputs.triple }}
+          path: ${{ steps.build.outputs.asset }}
+          if-no-files-found: error
