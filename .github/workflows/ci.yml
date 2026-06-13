@@ -75,27 +75,21 @@ jobs:
           fi
 
   test:
-    name: Test (${{ matrix.os }}${{ matrix.partition && format(', shard {0}', matrix.partition) || '' }})
+    name: Test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # Windows (and to a lesser degree macOS) is the wall-clock long pole of
-      # every PR (~22m vs ubuntu's ~6m).  Two nextest shards roughly halve the
-      # test phase on those runners; ubuntu stays whole (sharding it would only
-      # burn a second cache restore for a job that is not the critical path).
+      # Unsharded.  Hash-partitioning was measured to NOT help: it balances by
+      # test COUNT not duration and can't split a single slow test, so the few
+      # slow integration tests (multiplayer/html, ~120s+) piled into one shard
+      # (macOS shard1 6m vs shard2 20m) — the wall-clock stayed at the slow
+      # shard while runner-minutes doubled.  The real long pole is those slow
+      # tests (attack them directly + the heavy-serial groups); the build
+      # prefix is the cdylib-fingerprint problem, not a sharding one.
       matrix:
-        include:
-          - os: ubuntu-latest
-          - os: macos-latest
-            partition: 1/2
-          - os: macos-latest
-            partition: 2/2
-          - os: windows-latest
-            partition: 1/2
-          - os: windows-latest
-            partition: 2/2
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v5
@@ -160,9 +154,8 @@ jobs:
             ~/.cargo/git
             ~/.loft/build-cache
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-j${{ strategy.job-index }}-${{ github.run_id }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-j${{ strategy.job-index }}-
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
 
@@ -267,7 +260,6 @@ jobs:
         shell: bash
         run: >
           cargo nextest run --profile ci
-          ${{ matrix.partition && format('--partition hash:{0}', matrix.partition) || '' }}
           -E 'not binary(index_hygiene) and not binary(viewer_markdown)'
 
       # A test that passed only on retry (`retries = 1` in the ci profile) is
@@ -338,7 +330,7 @@ jobs:
           fi
           all=$(cat "$dir"/*.tsv)
           {
-            echo "### loft internal native-compile timing (${{ matrix.os }}${{ matrix.partition && format(' shard {0}', matrix.partition) || '' }})"
+            echo "### loft internal native-compile timing (${{ matrix.os }})"
             echo
             echo "| cdylib | builds (miss) | restored (hit) | build secs |"
             echo "|---|---:|---:|---:|"
@@ -382,38 +374,6 @@ jobs:
   # suites are run — the guard cannot see the separate binaries that native /
   # wasm / html tests spawn, so running those here would add cost without
   # coverage.
-  # Branch protection's required checks are pinned to the PRE-shard job
-  # names ("Test (macos-latest)" / "Test (windows-latest)").  These two
-  # aggregate gates report under exactly those names so the sharded matrix
-  # satisfies the existing protection without a settings change; once the
-  # required-checks list is updated to the shard names, both can be
-  # deleted.  `if: always()` + an explicit result test — a plain `needs`
-  # dependent would be SKIPPED when a shard fails, and skipped satisfies
-  # required checks, which would make protection vacuous.  `skipped` is
-  # accepted deliberately: that is the docs-only path (the `changes` job
-  # skipped the matrix on purpose).
-  test-macos-gate:
-    name: Test (macos-latest)
-    needs: [test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the sharded matrix to have passed
-        run: |
-          r="${{ needs.test.result }}"
-          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
-
-  test-windows-gate:
-    name: Test (windows-latest)
-    needs: [test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the sharded matrix to have passed
-        run: |
-          r="${{ needs.test.result }}"
-          [ "$r" = "success" ] || [ "$r" = "skipped" ] || { echo "matrix result: $r"; exit 1; }
-
   guard:
     name: stack_align_guard sweep (ubuntu)
     needs: changes
