@@ -1,27 +1,46 @@
-# @PLN21 Phase 4 (producer) — build a library's native cdylib for every host
-# triple and upload each as an artifact, so they can be published as
-# `prebuilt/<triple>/` registry binaries (PACKAGES.md / PKG_REGISTRY.md).  A
-# cdylib links the PUBLISHED loft-ffi (the C-ABI), not libloft, so it is
-# rustc-independent and valid for any loft on the same loft-ffi version — keyed
-# by the `loft_ffi_fp` each build reports (`loft build-native`).
+# @PLN21 Phase 4 (producer) — build a native loft LIBRARY's cdylib for every
+# host triple.  A cdylib links the PUBLISHED loft-ffi (the C-ABI), not libloft,
+# so it is rustc-independent and valid for any loft on the same loft-ffi version
+# (keyed by the `loft_ffi_fp` each build reports).
 #
-# Manually triggered, NEVER on push/PR, so it can't disturb the main matrix.
+# REUSABLE — a library's OWN CI calls this so prebuilts build automatically:
+#   • on a PR        → validation gate (does the cdylib build on every host?),
+#   • on a version tag → build + attach each cdylib to the GitHub release.
 #
-#   gh workflow run prebuild-native.yml \
-#     -f library_repo=loft-lang/loft-libs-graphics -f library_ref=v0.1.0
+#   # loft-lang/loft-libs-<x>/.github/workflows/prebuild.yml
+#   on:
+#     pull_request:
+#       paths: ['native/**', 'loft.toml']   # only when the native crate changes
+#     push:
+#       tags: ['v*']
+#   jobs:
+#     prebuild:
+#       uses: loft-lang/loft/.github/workflows/prebuild-native.yml@main
+#       with:
+#         publish: ${{ startsWith(github.ref, 'refs/tags/') }}
 #
-# STATUS: producer scaffold — validated locally only for the `loft build-native`
-# step (the artifact + fp it reports).  The CI orchestration here has NOT been
-# run end to end; two refinements remain before it is production-publish ready:
-#  - glibc baseline: linux should build in an OLD-glibc (manylinux) container so
-#    the cdylib runs on older systems; ubuntu-latest builds against a NEW glibc.
-#  - publish glue: a final job (or `scripts/registry_maintain.sh`) must turn the
-#    artifacts into release assets and write `binaries[<triple>] = {url, sha256,
-#    loft_ffi_fp}` into the package's index.json version entry.
+# Also runnable standalone (`workflow_dispatch`) against any library repo.
+#
+# STATUS: producer scaffold.  The per-target `loft build-native` step is
+# validated locally; the reusable/cross-repo CI orchestration has NOT been run
+# end to end.  The index PR (`binaries[<triple>] = {url, sha256, loft_ffi_fp}`)
+# is still the existing registry submit flow — each build prints its entry to the
+# job summary for the author to paste (or for `registry_maintain.sh` to collect).
+# Linux builds against ubuntu-latest's glibc; a manylinux base for older-system
+# portability is a follow-on.
 
 name: Prebuild native cdylibs (@PLN21)
 
 on:
+  workflow_call:
+    inputs:
+      package_subdir:
+        type: string
+        default: '.'
+      publish:
+        description: 'Attach the cdylibs to the release for this tag'
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       library_repo:
@@ -35,7 +54,7 @@ on:
         default: '.'
 
 permissions:
-  contents: read
+  contents: write # `publish` attaches release assets to the caller's release
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,7 +66,7 @@ jobs:
     strategy:
       fail-fast: false
       # Mirrors release.yml; native per-OS runner per target.  Add
-      # aarch64-unknown-linux-gnu via cross once the baseline below is sorted.
+      # aarch64-unknown-linux-gnu via cross once the glibc baseline is sorted.
       matrix:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
@@ -56,15 +75,21 @@ jobs:
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
 
     steps:
-      - name: Checkout loft
-        uses: actions/checkout@v5
-
+      # The library: the CALLING repo on `workflow_call`, or a named repo on
+      # `workflow_dispatch` (`inputs.library_repo` is unset for workflow_call, so
+      # it falls back to the caller's own repo + ref).
       - name: Checkout library
         uses: actions/checkout@v5
         with:
-          repository: ${{ inputs.library_repo }}
-          ref: ${{ inputs.library_ref }}
+          repository: ${{ inputs.library_repo || github.repository }}
+          ref: ${{ inputs.library_ref || github.ref }}
           path: _library
+
+      - name: Checkout loft
+        uses: actions/checkout@v5
+        with:
+          repository: loft-lang/loft
+          path: _loft
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -75,15 +100,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y mold libasound2-dev libgl1-mesa-dev
 
       - name: Build loft (host)
+        working-directory: _loft
         run: cargo build --release --bin loft
 
-      # `loft build-native` compiles the package's native crate (no program is
-      # run) and reports the cdylib path, the host triple, and the loft-ffi fp.
+      # `loft build-native` compiles the package's native crate (no program runs)
+      # and reports the cdylib path, host triple, and loft-ffi fp.
       - name: Build the native cdylib + capture metadata
         id: build
         shell: bash
         run: |
-          out=$(./target/release/loft build-native "_library/${{ inputs.package_subdir }}")
+          out=$(_loft/target/release/loft build-native "_library/${{ inputs.package_subdir }}")
           echo "$out"
           cdylib=$(echo "$out" | sed -n 's/^cdylib: //p')
           triple=$(echo "$out" | sed -n 's/^triple: //p')
@@ -109,3 +135,12 @@ jobs:
           name: cdylib-${{ steps.build.outputs.triple }}
           path: ${{ steps.build.outputs.asset }}
           if-no-files-found: error
+
+      # On a tag (publish=true) attach the cdylib to the GitHub release the
+      # author created in their submit flow; the index PR then points at it.
+      - name: Attach to release
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "${{ steps.build.outputs.asset }}" --clobber

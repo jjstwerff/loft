@@ -165,6 +165,32 @@ in gzip + tar headers).  The sha256 is stable across
 machines; the registry's gate-3 re-runs `loft package` from
 the tagged source to verify byte-for-byte equality.
 
+**Prebuilt cdylibs build automatically (@PLN21).**  A *native*
+library's own CI calls the reusable producer workflow so a
+consumer can `use` it with **no Rust toolchain** — and so a
+broken host build is caught before merge:
+
+```yaml
+# .github/workflows/prebuild.yml
+on:
+  pull_request:
+    paths: ['native/**', 'loft.toml']   # PR → validate it builds on every host
+  push:
+    tags: ['v*']                        # tag → build + attach to the release
+jobs:
+  prebuild:
+    uses: loft-lang/loft/.github/workflows/prebuild-native.yml@main
+    with:
+      publish: ${{ startsWith(github.ref, 'refs/tags/') }}
+```
+
+On a PR it builds the cdylib per host triple (a validation
+gate); on the tag it attaches each `lib<stem>.<ext>` to the
+release and prints the `binaries[<triple>]` entry (with its
+`loft_ffi_fp`) to paste into the registry PR below.  Prebuilts
+are optional and per-platform: ship the common targets, others
+fall back to a source build on first use.
+
 ### 4c. Emit the registry entry
 
 From the package dir:
