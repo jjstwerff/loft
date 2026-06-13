@@ -32,6 +32,14 @@ env:
   # invisible green; the "Surface environmental test skips" step drains this
   # into annotations + a job summary so reduced coverage is never silent.
   LOFT_SKIP_LEDGER: ${{ github.workspace }}/target/loft-skip-ledger
+  # Side-channel ledger for loft's OWN native-compile timing (the Timing
+  # object): one TSV row per cdylib build / fixture rustc — kind, name,
+  # hit|miss, seconds.  Inherited by the spawned loft children, so the
+  # "loft internal timing" step can report WHERE the native phase spent
+  # time (which cdylibs built vs restored, per-package seconds) on every PR
+  # run — the inside view the per-step timing can't see.  Outside the cached
+  # native dir so it is reset cleanly each run.
+  LOFT_TIMING_LEDGER: ${{ github.workspace }}/target/loft-timing-ledger
 
 jobs:
   # Classify the diff so docs-only changes skip the heavy jobs entirely
@@ -236,11 +244,11 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      # Clear any skip ledger restored from the cached target/ so the surface
-      # step reports only THIS run's environmental skips.
-      - name: Reset skip ledger
+      # Clear the ledgers restored from the cached target/ so the surface +
+      # timing steps report only THIS run.
+      - name: Reset ledgers
         shell: bash
-        run: rm -rf "$LOFT_SKIP_LEDGER"
+        run: rm -rf "$LOFT_SKIP_LEDGER" "$LOFT_TIMING_LEDGER"
 
       - name: Test
         # `index_hygiene` and `viewer_markdown` are extracted to their own advisory
@@ -308,6 +316,38 @@ jobs:
             done < "$f"
           done
           echo "$n environmental skip(s) surfaced (annotations + job summary)."
+
+      # loft's OWN per-event native-compile timing (the Timing object): the
+      # inside view of where the native phase spent time on THIS run — which
+      # cdylibs built (miss) vs restored (hit), per-package seconds, and the
+      # fixture rustc total.  Statistics on every PR run, not just the manual
+      # ci-probe.  Never fails the job — pure reporting.
+      - name: loft internal native-compile timing
+        if: always()
+        shell: bash
+        run: |
+          dir="$LOFT_TIMING_LEDGER"
+          if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "no loft timing ledger this run"; exit 0
+          fi
+          all=$(cat "$dir"/*.tsv)
+          {
+            echo "### loft internal native-compile timing (${{ matrix.os }}${{ matrix.partition && format(' shard {0}', matrix.partition) || '' }})"
+            echo
+            echo "| cdylib | builds (miss) | restored (hit) | build secs |"
+            echo "|---|---:|---:|---:|"
+            for pkg in $(echo "$all" | awk -F'\t' '$1=="cdylib"{print $2}' | sort -u); do
+              miss=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="miss"' | wc -l)
+              hit=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="hit"' | wc -l)
+              secs=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p{s+=$4} END{printf "%.1f", s}')
+              printf '| %s | %s | %s | %s |\n' "$pkg" "$miss" "$hit" "$secs"
+            done
+            fixn=$(echo "$all" | awk -F'\t' '$1=="fixture"' | wc -l)
+            fixs=$(echo "$all" | awk -F'\t' '$1=="fixture"{s+=$4} END{printf "%.1f", s}')
+            echo
+            echo "**fixtures:** ${fixn} compiled, ${fixs}s total rustc"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== loft timing (cdylib) ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
 
       # BUILD2: reap ABANDONED native-binary cache entries.  Each fixture keeps
       # a single fixed-named binary (overwritten on change, not duplicated), so
