@@ -45,18 +45,28 @@ final mandates it.
 - GitHub admin access to the `loft-lang` org.
 - `ed25519-dalek` 2.x via `cargo install` or a small standalone
   script — same crate the loft binary uses.
-- **For the final path only**: a clean, **offline-capable** machine
-  for the key generation step (the private key MUST NOT touch a
-  networked development laptop).  For the interim path, generating
-  on the trusted dev laptop is acceptable — `K_tmp` is single-host
-  by design.
+- **For the final path**: with the three-key topology (§ Step 1.5) you
+  do **not** need a dedicated air-gapped machine.  The two YubiKey keys
+  are generated **on-card** (§ Step 1b) — the private key is born in the
+  token's RNG and never touches a host, so an ordinary (even networked)
+  laptop can drive it.  `K_laptop` is a deliberately *revocable* software
+  key that lives on your encrypted dev laptop anyway.  The old "MUST be
+  air-gapped" rule was for the single-key model, where that one key was
+  irreplaceable; three independent, individually-revocable keys relax it
+  to "generate the hardware keys on-card; treat the laptop key as
+  revocable."  (Interim `K_tmp`: generate on the dev laptop — single-host
+  by design.)
 
 ---
 
-## Step 1 — Generate the trust-root keypair
+## Step 1 — Generate K_laptop (the software daily-signer)
 
-On an air-gapped or single-purpose machine (Linux or macOS — the
-keygen reads `/dev/urandom`):
+`K_laptop` is the key you sign with day-to-day.  In the three-key
+topology (§ Step 1.5) it lives on your encrypted dev laptop and is
+revocable, so generate it **right there** — no air-gapped machine
+needed; the high-assurance keys are the on-card YubiKey ones in
+Step 1b.  (Interim `K_tmp`: same command, same place.)  Linux or
+macOS — the keygen reads `/dev/urandom`:
 
 ```sh
 # Build the keygen from the loft repo (ships with the binary as of
@@ -83,25 +93,104 @@ The same invocation prints to stdout (for copy/paste):
 - The public key formatted as a Rust `[u8; 32]` literal — paste
   into `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (Step 2).
 
-### Step 1.5 — Store the private key for the long haul
+### Step 1b — Generate the two YubiKey keys on-card (final path)
+
+Step 1 produced **K_laptop**.  Now the two standby keys, generated
+**on the tokens** so their private halves never exist on any host —
+this is what removes the air-gap requirement, and why a lost YubiKey
+is *revoked, not recovered* (you can't extract an on-card key to back
+it up, and in this model you don't want to).
+
+Needs a YubiKey whose **PIV applet does Ed25519 — firmware 5.7+**.
+Check first (`ykman` = Yubico's CLI, `pip install yubikey-manager` or
+your package manager):
+
+```sh
+ykman info          # firmware version — needs 5.7.0 or newer
+ykman piv info      # PIV applet state
+```
+
+Generate on each token (PIV slot `9c` = "digital signature"),
+exporting ONLY the public key (confirm flags against your
+`ykman piv keys generate --help` — syntax shifts across versions):
+
+```sh
+# token A, then token B:
+ykman piv keys generate --algorithm ED25519 9c K_yubiA.pub
+ykman piv keys generate --algorithm ED25519 9c K_yubiB.pub
+```
+
+`ykman` writes the public key as **PEM**, but `loft-keygen format`
+wants the raw 64-char **hex** — for Ed25519 the raw 32 bytes are the
+DER SPKI's last 32 bytes, so convert then format:
+
+```sh
+openssl pkey -pubin -in K_yubiA.pub -outform DER | tail -c 32 \
+  | xxd -p -c 64 > K_yubiA.hex
+loft-keygen format --in K_yubiA.hex      # → the [u8; 32] literal for Step 2
+```
+
+Signing with an on-card key later is the external PKCS#11 /
+`yubico-piv-tool` step (§ Step 1.5 "in-place hardware signing"); loft
+`verify`s the raw 64-byte signature unchanged.
+
+**If a token is older than 5.7** (no PIV Ed25519): either use it as
+encrypted *backup storage* of a software key (`loft-keygen generate`
+→ import to the token), or pause here — the OpenPGP applet's Ed25519
+emits non-raw signatures loft won't accept as-is, so that route needs
+a small loft-side adaptation first.
+
+### Step 1.5 — Trust-root topology: three INDEPENDENT keys (final path)
 
 **Final path only.**  For the interim path (K_tmp single-laptop),
 skip to Step 2 — the daily working copy is the only copy by
 design, and the eventual rotation to K_real retires K_tmp anyway.
 
-Laptops fail every 2-5 years on average; the private key must
-outlive any single machine.  **Three independent copies, two
-physical locations, two media types** is the working rule
-(3-2-1 backup adapted for a 32-byte secret).
+`TRUSTED_PUBLIC_KEYS` is a *slice*: the client accepts a signature
+from **any** embedded key.  Use that to make a lost device a
+non-event — generate **three independent keypairs**, hold each on a
+different device, and embed all three public keys:
 
-Recommended layout:
-
-| Copy | Where | Purpose |
+| Key | Held on | Role |
 |---|---|---|
-| **1. Daily working copy** | `~/.loft/trust-root/registry-signing-key.bin` on your trusted laptop, chmod 600, inside FileVault/LUKS-encrypted home | The one you'll actually use day-to-day. |
-| **2. Hardware token A** | YubiKey 5 PIV slot, stored at your home/office | Primary recovery — if the laptop dies, re-import to a fresh machine in 10 minutes. |
-| **3. Hardware token B** | Second YubiKey, stored at a different physical location (parent's house, bank safe-deposit box) | Insurance against fire / theft / flood at copy #2's site. |
-| **4. (Optional) Paper / sealed offline copy** | base64 (44 ASCII chars) printed on paper, sealed in tamper-evident envelope, stored in fire-resistant safe at a third location | "What if both YubiKeys die simultaneously" insurance.  Paper outlasts USB sticks (5-10 yr rot). |
+| **K_laptop** | `~/.loft/trust-root/registry-signing-key.bin`, chmod 600, inside a FileVault/LUKS-encrypted home | Day-to-day signer (software, fast). |
+| **K_yubiA** | YubiKey A (PIV slot), kept at home/office | Standby — promote it if K_laptop is lost/compromised. |
+| **K_yubiB** | YubiKey B, kept at a *different* physical site | Standby — insurance against fire/theft at K_yubiA's site. |
+
+**Why three distinct keys instead of three copies of one?**  Because
+**revocation replaces recovery.**  Lose a YubiKey, or have the laptop
+compromised → drop just that key's public entry from
+`TRUSTED_PUBLIC_KEYS` in the next loft release; the other two keep
+signing — no rotation, no re-signing, no user-visible break (contrast
+[REGISTRY_RECOVERY.md Scenario C](REGISTRY_RECOVERY.md#scenario-c),
+the disruptive single-key rotation).  A lost independent key is
+*revoked, not recovered*, so you do **not** need a 3-2-1 backup of
+each one.  (Optional belt-and-suspenders: a sealed paper copy of
+**K_laptop only** — base64, 44 chars — so a plain disk failure doesn't
+force a YubiKey promotion.)
+
+**How a YubiKey key actually signs — know this before relying on it.**
+`loft-keygen` signs with a **software key file only** (`sign --key
+<file.bin>`); it has **no** YubiKey / PIV / PKCS#11 driver (its sole
+crypto dep is `ed25519-dalek`).  So K_yubiA/B reach a signature two
+ways:
+
+- **Backup storage (simplest).**  The PIV slot holds a *copy* of the
+  32-byte key; to sign you re-import it to a machine and
+  `loft-keygen sign`.  The token protects it at rest; signing is
+  software.  Fine for standby keys you touch rarely.
+- **In-place hardware signing (most secure, extra setup).**  The key
+  is generated *on* the token and never leaves it; you sign with an
+  **external** tool (`yubico-piv-tool` / a PKCS#11 module).  loft's
+  `verify` is generic Ed25519, so it accepts the raw 64-byte signature
+  against the embedded public key with **no loft-keygen change**.
+  Requires a YubiKey whose PIV applet supports Ed25519 (firmware
+  5.7+) — confirm your tokens first.
+
+Day to day you sign with **K_laptop**.  The YubiKey keys are there so
+that the day a key is lost or compromised, revocation is a one-line
+release change — which is exactly when the one-time re-import (or
+PKCS#11 setup) for a standby key is worth it.
 
 **Do NOT put the key in**:
 
@@ -125,26 +214,30 @@ multi-key rotation mechanism that keeps users from breaking.
 
 ---
 
-## Step 2 — Embed the public key in the loft binary
+## Step 2 — Embed the public keys in the loft binary
 
-Edit `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (this repo).  Add
-the new entry as a 32-byte literal:
+Edit `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (this repo).  For the
+three-key topology add **all three** public keys as 32-byte literals —
+the client trusts a signature from any of them:
 
 ```rust
 pub const TRUSTED_PUBLIC_KEYS: &[[u8; 32]] = &[
-    [
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-        // ...remaining 24 bytes from registry-signing-key.pub...
-    ],
+    // K_laptop
+    [ 0x01, 0x23, /* ...32 bytes from registry-signing-key.pub... */ ],
+    // K_yubiA
+    [ /* ...32 bytes from K_yubiA.pub... */ ],
+    // K_yubiB
+    [ /* ...32 bytes from K_yubiB.pub... */ ],
 ];
 ```
 
-(The `generate` command already printed the literal in its
-stdout; if you only have `registry-signing-key.pub` and need to
-re-emit, run `loft-keygen format --in registry-signing-key.pub`.)
+(`loft-keygen generate` printed K_laptop's literal on stdout; re-emit
+any `.pub` with `loft-keygen format --in <file>.pub`.)
 
-Open a PR in the loft repo, get review, merge.  The next loft
-minor release ships with the embedded key.
+Open a PR in the loft repo, get review, merge.  The next loft minor
+release ships with all three embedded keys.  **Revoking** a key later
+is the reverse: delete its entry, ship a release — the other two keep
+working.
 
 ---
 
