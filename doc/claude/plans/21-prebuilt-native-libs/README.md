@@ -65,6 +65,24 @@ The one consequence to honour: the distributed artifact is the **cdylib** (`.so`
 `.dylib`), **not the rlib** (the PACKAGES.md format sketch showing `libgraphics.rlib` is
 a trap — an rlib *is* SVH-locked to its rustc, E0514).
 
+## Significance — a source-language-agnostic native surface
+
+Because the artifact is keyed on the **C ABI** (loft-ffi) + `dlopen` + a *versioned*
+fingerprint — none of which know the source language — this is more than a Rust-ecosystem
+feature. A "loft library binary" is **any C-ABI `.so` implementing the loft-ffi contract**:
+Rust ergonomically today (the macros), C / C++ / Zig directly once a `loft-ffi.h` lands. It
+broadens the [BROADENING.md § differentiator #4](../../BROADENING.md) thesis from "inherits
+Rust's ecosystem" to "**inherits every native ecosystem, via the C ABI — toolchain-free**."
+Where CPython / Node bind native code through *their own* ABI + a runtime build, loft's is
+the bare C ABI + a content fingerprint: runtime-version- *and* language-independent.
+
+And it does **not** trade away the stability differentiator, because **stability is being
+*well-grounded*, not the source language**: a decades-hardened C library (sqlite, zlib,
+libpng) is as stable as safe Rust — and much of Rust's "native" surface is Rust *wrapping
+those very C libraries*. The prebuilt model just distributes the stable substrate (mature C,
+Rust-over-C, or pure Rust) uniformly; the filter stays *well-grounded*. The binary structure
+merges anything that speaks the contract; what *earns* the guarantee is grounding.
+
 ## What already exists (don't rebuild)
 
 - **The package format defines `prebuilt/<target-triple>/`** (PACKAGES.md:82, *"avoids
