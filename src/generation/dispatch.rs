@@ -199,19 +199,20 @@ impl Output<'_> {
             // PutRef path in `gen_set_first_ref_call_copy`).
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
+            let callee = self.data.def(*fn_nr);
             write!(
                 w,
                 "{{ let _dst = var_{name}; let _src = {}(cell",
-                self.data.def(*fn_nr).name()
+                callee.name()
             )?;
-            for arg in args {
+            // Emit each arg through the shared `emit_call_arg` helper so the
+            // ABI-B call applies the same per-parameter coercions (boolean→u8,
+            // narrow-int, text deref, typed-null, fn-ref) as the normal call
+            // path.  Re-deriving arg emission here is what dropped the
+            // boolean→u8 wrap and tripped rustc E0308 (issue #366).
+            for (idx, arg) in args.iter().enumerate() {
                 write!(w, ", ")?;
-                if let Some(vr) = self.create_stack_var(arg) {
-                    let sn = sanitize(variables.name(vr));
-                    write!(w, "&mut var_{sn}")?;
-                } else {
-                    self.output_code_inner(w, arg)?;
-                }
+                self.emit_call_arg(w, callee, idx, arg)?;
             }
             write!(
                 w,
@@ -351,13 +352,15 @@ impl Output<'_> {
                     write!(w, ", ")?;
                 }
                 first_arg = false;
+                // A store-mutating arg was hoisted to a typed temporary above;
+                // emit its name.  Every other arg goes through the shared
+                // `emit_call_arg` so this path applies the same per-parameter
+                // coercions (boolean→u8, …) as the normal + ABI-B call paths
+                // (issue #366 — keep all three call paths in lockstep).
                 if let Some(ref tmp) = hoisted[idx] {
                     write!(w, "{tmp}")?;
-                } else if let Some(vr) = self.create_stack_var(arg) {
-                    let sn = sanitize(variables.name(vr));
-                    write!(w, "&mut var_{sn}")?;
                 } else {
-                    self.output_code_inner(w, arg)?;
+                    self.emit_call_arg(w, def_fn, idx, arg)?;
                 }
             }
             write!(w, ")")?;
