@@ -123,10 +123,21 @@ value-position variant resolution genuinely needs expected-type plumbing — the
 original "resolution already has the context" claim held only for match).
 
 **Build order next session:** (1) `variant_of` + de-globalize + `definitions.rs:220`;
-(2) `objects.rs:301` Reference-enum normalization; (3) thread `parent_tp` at the
-value-position sites, leaning on loud-omission to find any missed one; (4) verify
-the matrix + C53 + `loft_suite`/`native_scripts` both backends. Spike matrix:
-two enums sharing `Red` across match / arg / typed-local / `==` / `Enum::V`.
+(2) `objects.rs:301` Reference-enum normalization; (3) thread the expected enum
+INTO `parse_var` at the value-position sites; (4) verify the matrix + C53 +
+`loft_suite`/`native_scripts` both backends. Spike matrix: two enums sharing
+`Red` across match / arg / typed-local / `==` / `Enum::V`.
+
+**Confirmed (2026-06-13, 2nd spike):** steps 1+2 *alone* break `loft_suite` —
+existing code resolves value-position bare variants — so **step 3 is mandatory,
+not feature-only**. And step 2 alone is insufficient: `parent_tp` is **not set to
+the expected enum** at the typed-local-declaration / `==`-RHS / call-arg sites
+(my Reference-enum branch never fired there), so step 3 is the **bulk** of Phase 1
+— locate and thread the expected type *into* `parse_var` at each value-position
+parser site (decl initializer, comparison RHS, call arg, `return`, struct-field
+init), after which the context branch resolves the variant. A focused
+session-sized parser change; do NOT interleave with other work (it leaves the
+tree red until step 3 lands). Both spikes reverted; `2026-07` clean.
 
 ### Phase 2 — prelude shadowing (S–M)
 
