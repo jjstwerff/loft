@@ -99,6 +99,13 @@ fn await_stdout_marker(
 }
 
 fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i32>) {
+    // Phase timing — prints to stderr (hidden by nextest on PASS, SHOWN on a
+    // TMT/timeout failure).  The harness's own waits cap at ~90s, so a 600s
+    // TMT means the time is in a phase BELOW; the last `[v5-timing]` line in a
+    // killed test's output names which one (e.g. a `reader.join()` that blocks
+    // because the killed child left a `cargo build` grandchild holding the
+    // stdout pipe open).
+    let t0 = Instant::now();
     let mut stdout_text = String::new();
     let stdout = child.stdout.take().expect("child stdout was piped");
     let reader_handle = thread::spawn(move || {
@@ -117,13 +124,19 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
         }
         thread::sleep(Duration::from_millis(50));
     }
+    eprintln!(
+        "[v5-timing] drain: wait-loop done +{:?} exit={exit_status:?}",
+        t0.elapsed()
+    );
     if exit_status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
+        eprintln!("[v5-timing] drain: child killed +{:?}", t0.elapsed());
     }
     if let Ok(s) = reader_handle.join() {
         stdout_text = s;
     }
+    eprintln!("[v5-timing] drain: reader joined +{:?}", t0.elapsed());
     (stdout_text, exit_status)
 }
 
@@ -231,8 +244,10 @@ impl ServerGuard {
 impl Drop for ServerGuard {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
+            let t = Instant::now();
             let _ = c.kill();
             let _ = c.wait();
+            eprintln!("[v5-timing] server drop: kill+wait +{:?}", t.elapsed());
         }
     }
 }
@@ -274,8 +289,14 @@ fn spawn_client_with_args(
 /// Convenience: spawn server + wait for its "listening port=N"
 /// marker, panic with a useful diagnostic if it doesn't appear.
 fn spawn_listening_server(script: &str, port: u16, label: &str) -> ServerGuard {
+    let t = Instant::now();
     let mut s = ServerGuard::spawn(script, port);
-    if !s.wait_listening() {
+    let ok = s.wait_listening();
+    eprintln!(
+        "[v5-timing] {label} server spawn+listen +{:?} ok={ok}",
+        t.elapsed()
+    );
+    if !ok {
         let diag = s.diagnose_listen_failure();
         panic!("{label} server failed to start within 60s{diag}");
     }
