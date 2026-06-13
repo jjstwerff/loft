@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression: a function returning a struct via `if { …; r } else { null }`
+// (a nullable heap return) whose struct branch holds a HEAP LOCAL to free must
+// return `r` — not null — under `--native`.
+//
+// Native codegen previously emitted the value-`if` as a DISCARDED statement and
+// the trailing `Return(Null)` returned the type's null sentinel, so the fn
+// always returned null.  Two coupled causes, both in src/generation:
+//   - `is_void_value` classified ANY `if … else { null }` as a void statement,
+//     even when the taken branch yields a value;
+//   - `detect_ref_tail_capture` only captured a `Call` tail, not a value-`if`,
+//     so the value wasn't preserved before the cleanup frees.
+// This surfaced as the imaging `png()` width=null bug (the `program_relative`
+// fix added the heap-text local that triggered the shape).  The minimal trigger
+// is the CONJUNCTION of (a heap local to free) AND (an `else { null }` branch);
+// a scalar local, or no null branch, was always fine.
+//
+// Matrix probe: /tmp/m.loft (2026-06-13 session).
+
+struct S { x: integer }
+
+// heap-text local + struct-or-null return — the failing shape
+fn make(c: boolean, rel: text) -> S {
+  if c { tag = "{rel}/suffix"; r = S { x: 42 }; r } else { null }
+}
+
+// nested if inside the heap-local branch
+fn nested(c: boolean, d: boolean, rel: text) -> S {
+  if c { tag = "{rel}"; if d { r = S { x: 7 }; r } else { null } } else { null }
+}
+
+fn test_struct_branch_returns_value() {
+  s = make(true, "abc");
+  assert(s != null, "struct branch must not return null");
+  assert(s.x == 42, "x=42, got {s.x}");
+}
+
+fn test_null_branch_returns_null() {
+  n = make(false, "abc");
+  assert(n == null, "false branch must return null");
+}
+
+fn test_nested_if_returns_value() {
+  v = nested(true, true, "p");
+  assert(v != null && v.x == 7, "nested taken branch x=7");
+  z = nested(true, false, "p");
+  assert(z == null, "nested inner-null branch is null");
+}
