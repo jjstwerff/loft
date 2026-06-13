@@ -2836,6 +2836,25 @@ impl Parser {
         result_type: &Type,
         mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)>,
     ) -> Value {
+        // A bare `null` arm value (`false => null`) parses to `Value::Null`, which
+        // lowers to NO push (Type::Void).  In a value-producing match the if-chain
+        // join then reads an unwritten, value-sized slot — interp stack underflow
+        // ("No elements left on the stack"), native a lost value.  Convert each
+        // bare-null arm to the result type's typed null sentinel, the same
+        // transform `parse_if` applies to a null branch (~line 1250) and the
+        // fallback gets just below.  `self.null` is a no-op (returns
+        // `Value::Null`) for Void/Unknown result types, so a statement-style
+        // match is untouched.  Compute the typed null once (it's the same for
+        // every arm — `result_type` is fixed), releasing the `&mut self` borrow
+        // before mutating `arms`.
+        if arms.iter().any(|a| matches!(a.1, Value::Null)) {
+            let typed_null = self.null(result_type);
+            for arm in &mut arms {
+                if matches!(arm.1, Value::Null) {
+                    arm.1 = typed_null.clone();
+                }
+            }
+        }
         let fallback = if has_wildcard {
             let (_, arm_code, _, _) = arms.pop().unwrap();
             arm_code

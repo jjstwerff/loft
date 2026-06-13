@@ -1483,6 +1483,19 @@ impl Output<'_> {
             if let Some((_, ret_idx)) = tail_capture
                 && vnr == ret_idx
             {
+                // When the placeholder return wraps a scope-exit free
+                // (`Return(OpFreeText(j))` — a struct-or-null arm holding a heap
+                // local; see `detect_ref_tail_capture`), run that free here, after
+                // the value was captured into __native_tail_ret and before the
+                // return.  Emitting `return <free>` would return the free's `()`
+                // (rustc E0069); emitting it as a statement keeps the cleanup.
+                if let Value::Return(inner) = v.unspan()
+                    && Self::free_op_var(inner.unspan(), self.data).is_some()
+                {
+                    self.indent(w)?;
+                    self.output_code_inner(w, inner.unspan())?;
+                    writeln!(w, ";")?;
+                }
                 self.indent(w)?;
                 writeln!(w, "return __native_tail_ret;")?;
                 continue;
