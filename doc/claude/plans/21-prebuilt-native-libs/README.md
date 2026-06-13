@@ -7,15 +7,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**LOFT-SIDE SHIPPED (2026-06-13) — Phases 1–6 implemented, tested, pushed.** The whole
-in-loft pipeline is done: produce (`loft build-native`) → install (host-matching prebuilt
-fetch) → load (`prebuilt/<triple>/`, fp-gated) → validate (proactive `runtime-libs` check)
-→ diagnose (humane load/build errors) → surface (`loft install` "Native:" block) → and the
-source-build fallback is reproducible (`--locked` when a `native/Cargo.lock` is shipped).
+**MERGED TO MAIN (2026-06-13 — PR [#370](https://github.com/loft-lang/loft/pull/370) →
+`9f43e769`).** Phases 1–6 + 4b are on the release branch. The whole in-loft pipeline is done:
+produce (`loft build-native` — hand-written AND auto-compiled libs, resolved from the handed
+package path) → install (host-matching prebuilt fetch) → load (`prebuilt/<triple>/`, fp-gated)
+→ validate (proactive `runtime-libs` check) → diagnose (humane load/build errors) → surface
+(`loft install` "Native:" block) → and a fallback source build that is reproducible
+(`--locked` when a `native/Cargo.lock` is shipped) yet safely retries without `--locked` when
+that lock is platform-incomplete (the Windows `cfg(windows)`-deps case that the merge's CI
+caught).
+
+**Scope correction (toolchain-stability eval, this work).** Prebuilt *distribution* is sound
+for **hand-written** native libs (they link loft-ffi's C ABI → loft-ffi-versioned,
+rustc-independent); **auto-compiled** libs `extern crate loft` and are loft-build + rustc-locked,
+so they are NOT distributable on `loft_ffi_fp` — `build-native` reports `loft_build_fp` + rustc
+for them, and a pure-loft lib is already toolchain-free by interpretation. See
+[§ The boundary of this claim](#the-boundary-of-this-claim--it-holds-for-hand-written-native-not-auto-compiled-corrected-2026-06-13).
+
 **Remaining is registry/CI integration only** — the producer *publish glue* (artifacts →
-release assets → `index.json binaries`), the submit-CI gates (Phase 5/6), and one
-end-to-end workflow run + a manylinux glibc baseline — each needs the live registry to
-exercise, not local code.
+release assets → `index.json binaries`), the submit-CI gates (Phase 5/6), one end-to-end
+workflow run (blocked on `prebuild-native.yml` reaching the default branch) + a manylinux glibc
+baseline, and — only if auto-native distribution is pursued — the consumer fetch path gated on
+`loft_build_fp`. Each needs the live registry to exercise, not local code.
 
 The enabling invariant was *proven* this session by the cdylib re-key work
 ([CHANGELOG_TECHNICAL] / `cache::loft_ffi_fingerprint`): a registry cdylib is
