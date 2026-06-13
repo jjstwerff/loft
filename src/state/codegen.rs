@@ -1689,7 +1689,6 @@ impl State {
                         self.code_add(slot_offset);
                         self.code_add(tp_nr);
                     }
-                    let copy_nr = stack.data.def_nr("OpCopyRecord");
                     // @PLAN51 Cluster II Step 2 — require at least one
                     // VISIBLE-arg dep for is_borrowed_view.  Hidden-only
                     // deps (ref_return-promoted buffer attrs) are either
@@ -1734,16 +1733,6 @@ impl State {
                     // prologue ran BEFORE the source evaluated, so a
                     // self-referencing call (`s = grow(s)`) read the freshly
                     // wiped store and every assignment yielded null.
-                    let database_nr = stack.data.def_nr("OpDatabase");
-                    let dst_reinit = Value::Insert(vec![
-                        Value::Call(
-                            database_nr,
-                            vec![Value::Var(v), Value::Int(i32::from(tp_nr))],
-                        ),
-                        Value::Var(v),
-                    ]);
-                    let copy_val =
-                        Value::Call(copy_nr, vec![value.clone(), dst_reinit, Value::Int(tp_val)]);
                     // bracket the call + deep-copy with n_set_store_lock
                     // on every Ref/Vector/Enum arg (like gen_set_first_ref_call_copy
                     // already does for first-assignments).  Without this, when the
@@ -1815,7 +1804,21 @@ impl State {
                         let prot = Value::Call(protect_fn, vec![Value::Var(*av)]);
                         self.generate(&prot, stack, false);
                     }
-                    self.generate(&copy_val, stack, false);
+                    // #360: evaluate the source call FIRST (reads v's OLD store, so
+                    // a self-ref `s = grow(s)` works), THEN OpDatabase re-inits v's
+                    // record in place, THEN OpCopyRefOrNull binds the result — a
+                    // null return frees the re-init'd record and sets the slot null
+                    // (so `v == null` holds), a value deep-copies into it (ABI-B
+                    // nullable-struct-return fix).  OpDatabase runs with src still
+                    // on the eval stack (its slot offset is taken there);
+                    // OpCopyRefOrNull's slot offset is taken after it pops src.
+                    self.generate(value, stack, false);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(stack.var_pos(v));
+                    self.code_add(tp_nr);
+                    stack.add_op("OpCopyRefOrNull", self);
+                    self.code_add(stack.var_pos(v));
+                    self.code_add(tp_val as u16);
                     for av in &ref_args {
                         let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
                         self.generate(&unprot, stack, false);
@@ -2411,7 +2414,6 @@ impl State {
             let prot = Value::Call(protect_fn, vec![Value::Var(*av)]);
             self.generate(&prot, stack, false);
         }
-        let copy_nr = stack.data.def_nr("OpCopyRecord");
         // @PLAN51 Cluster II Step 2 — require VISIBLE-arg dep for
         // is_borrowed_view; hidden-only deps are either canonical
         // (same-store no-op gate handles) or fresh S1 (0x8000
@@ -2445,11 +2447,17 @@ impl State {
         };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);
-        let copy_val = Value::Call(
-            copy_nr,
-            vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
-        );
-        self.generate(&copy_val, stack, false);
+        // Push the call result, then OpCopyRefOrNull binds it into v's slot: a
+        // null return (sentinel) frees the pre-allocated record and sets the slot
+        // null (so `v == null` holds); otherwise it deep-copies into that record
+        // exactly as OpCopyRecord would (ABI-B nullable-struct-return fix).
+        // `slot_offset` is v's slot (same one OpInitRef/OpDatabase used above);
+        // generate(value) pushes src and the opcode pops it, so the stack returns
+        // to that level and the slot offset stays valid.
+        self.generate(value, stack, false);
+        stack.add_op("OpCopyRefOrNull", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_with_free as u16);
         for av in &ref_args {
             let unprot = Value::Call(unprotect_fn, vec![Value::Var(*av)]);
             self.generate(&unprot, stack, false);

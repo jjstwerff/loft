@@ -1332,11 +1332,19 @@ impl State {
 
     pub fn copy_record(&mut self) {
         let raw_tp = self.code::<u16>();
+        let to = *self.get_stack::<DbRef>();
+        let data = *self.get_stack::<DbRef>();
+        self.do_copy_record(data, to, raw_tp);
+    }
+
+    /// Core of `OpCopyRecord` / `OpCopyRefOrNull`: deep-copy record `data` into
+    /// the already-allocated destination `to`.  `raw_tp`'s high bit (`0x8000`)
+    /// frees the source store after the copy (#120).  Factored so the nullable
+    /// struct-return ABI-B path (`copy_ref_or_null`) reuses the non-null branch.
+    fn do_copy_record(&mut self, data: DbRef, to: DbRef, raw_tp: u16) {
         // Issue #120: high bit of tp signals "free source store after copy".
         let free_source = raw_tp & 0x8000 != 0;
         let tp = raw_tp & 0x7FFF;
-        let to = *self.get_stack::<DbRef>();
-        let data = *self.get_stack::<DbRef>();
         // @PLAN51 Cluster II — true alias copy is a no-op.  When data
         // and to refer to the SAME slot (full DbRef equality), the
         // remove_claims + copy_block + copy_claims sequence would
@@ -1450,6 +1458,33 @@ impl State {
         {
             self.database.free(&data);
         }
+    }
+
+    /// `OpCopyRefOrNull` — the ABI-B caller path for `v = call()` where the
+    /// callee has a heap parameter and returns a struct-OR-null.  Pops the call
+    /// result `src`; the destination variable `pos` already holds a freshly
+    /// allocated record (emitted `OpDatabase` just before).  When `src` is the
+    /// null sentinel (`store_nr == u16::MAX`), a plain `OpCopyRecord` would index
+    /// `allocations[u16::MAX]` and panic — and even guarded it would leave the
+    /// pre-allocated record bound, so `v == null` (which tests `rec == 0`) would
+    /// read false.  So: free the pre-allocated record and bind the sentinel into
+    /// the slot, making `v` genuinely null.  Otherwise deep-copy as usual.
+    pub fn copy_ref_or_null(&mut self) {
+        let pos = self.code::<u16>();
+        let raw_tp = self.code::<u16>();
+        let src = *self.get_stack::<DbRef>();
+        if src.store_nr == u16::MAX {
+            // Null return: reclaim the pre-allocated destination record and bind
+            // the null sentinel so `v == null` holds.
+            let dst = *self.get_var::<DbRef>(pos);
+            if dst.store_nr != u16::MAX {
+                self.database.free(&dst);
+            }
+            *self.mut_var::<DbRef>(pos) = self.database.null();
+            return;
+        }
+        let dst = *self.get_var::<DbRef>(pos);
+        self.do_copy_record(src, dst, raw_tp);
     }
 
     /// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a

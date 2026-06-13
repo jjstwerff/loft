@@ -1158,7 +1158,19 @@ impl Output<'_> {
         // save/restore fn_ref_context — Call arguments inside the branch
         // must NOT inherit it (OpDatabase int args would be misinterpreted).
         let saved_ctx = self.fn_ref_context;
-        self.output_code_inner(w, true_v)?;
+        // Symmetric to the else-Null handling below: a Null in the THEN branch
+        // must emit the typed null sentinel, not `()`.  This is the match-arm
+        // lowering `if subj==X { null } else { <value> }` — a struct-returning
+        // `match … { … => null }` put the `null` in the then-branch, so it
+        // emitted `()` and the arm failed to unify with the value-producing else
+        // (rustc E0308 `()` vs `DbRef`, breaking the whole --native compile).
+        if matches!(true_v, Value::Null)
+            && let Some(tp) = self.infer_type(IrNode::Native(false_v))
+        {
+            Self::write_typed_null(w, &tp)?;
+        } else {
+            self.output_code_inner(w, true_v)?;
+        }
         self.fn_ref_context = saved_ctx;
         self.indent -= u32::from(!b_true || text_string_unify || bool_unify);
         if text_string_unify {
@@ -1471,6 +1483,19 @@ impl Output<'_> {
             if let Some((_, ret_idx)) = tail_capture
                 && vnr == ret_idx
             {
+                // When the placeholder return wraps a scope-exit free
+                // (`Return(OpFreeText(j))` — a struct-or-null arm holding a heap
+                // local; see `detect_ref_tail_capture`), run that free here, after
+                // the value was captured into __native_tail_ret and before the
+                // return.  Emitting `return <free>` would return the free's `()`
+                // (rustc E0069); emitting it as a statement keeps the cleanup.
+                if let Value::Return(inner) = v.unspan()
+                    && Self::free_op_var(inner.unspan(), self.data).is_some()
+                {
+                    self.indent(w)?;
+                    self.output_code_inner(w, inner.unspan())?;
+                    writeln!(w, ";")?;
+                }
                 self.indent(w)?;
                 writeln!(w, "return __native_tail_ret;")?;
                 continue;

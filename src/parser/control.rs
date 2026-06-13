@@ -1670,11 +1670,18 @@ impl Parser {
                 }
             }
 
-            // Type unification across arms.
-            if result_type == Type::Void {
+            // Type unification across arms.  A `null` arm (Type::Null) lowers to
+            // the result type's null sentinel — it unifies with any sibling type
+            // and never pins the result, so the first CONCRETE arm wins even when
+            // a `null` arm comes first (`Jade => null, Crimson => S{…}`).  Treat a
+            // current `Null` result like `Void` for promotion, and skip the unify
+            // check when this arm is itself `null`.  Without this, struct-or-null
+            // enum matches were rejected ("cannot unify: S and null", #365).
+            if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
                 && arm_type != Type::Void
+                && arm_type != Type::Null
                 && !match_arm_types_unify(&result_type, &arm_type)
             {
                 diagnostic!(
@@ -1738,10 +1745,50 @@ impl Parser {
             }
         }
 
+        // A `null` arm lowers to the result type's null sentinel — `parse_if`
+        // (~line 1250) and `build_scalar_chain` do the same.  Now that
+        // result_type is final, convert bare-null (and block-trailing-null) arm
+        // bodies, and keep `arm.tp` in step so the guarded-binding block wrapper
+        // (below) declares the right result type.  Without this a `null` arm
+        // pushes nothing and the if-chain join reads an unwritten, value-sized
+        // slot (interp stack underflow / native lost value) — the #365 family.
+        let base = if matches!(result_type, Type::Void | Type::Null) {
+            Value::Null
+        } else {
+            let typed_null = self.null(&result_type);
+            for arm in &mut arms {
+                let null_body = match &arm.code {
+                    Value::Null => true,
+                    Value::Block(bl) => bl
+                        .operators
+                        .last()
+                        .is_some_and(|o| matches!(o, Value::Null)),
+                    _ => false,
+                };
+                if !null_body {
+                    continue;
+                }
+                match &mut arm.code {
+                    Value::Block(bl) => {
+                        let last = bl.operators.len() - 1;
+                        bl.operators[last] = typed_null.clone();
+                        bl.result = result_type.clone();
+                    }
+                    _ => arm.code = typed_null.clone(),
+                }
+                arm.tp = result_type.clone();
+            }
+            // Seed the chain base with the typed null too: an exhaustive enum
+            // match's innermost else is unreachable, but codegen still emits it
+            // and it must balance the value-sized stack slot the arms push.
+            typed_null
+        };
+
         // Build the if-chain from the collected arms (last to first).
-        // Value::Null is the base case — reached only when no arm matches
-        // (only possible if exhaustiveness fails, which is a compile error).
-        let mut chain = Value::Null;
+        // `base` is reached only when no arm matches (only possible if
+        // exhaustiveness fails, which is a compile error) — but it still has to
+        // typecheck and balance the stack, so it carries the typed null.
+        let mut chain = base;
         for arm in arms.iter().rev() {
             if arm.discs.is_empty() {
                 // Wildcard — always taken; becomes the else branch of the chain.
@@ -2331,7 +2378,11 @@ impl Parser {
             } else {
                 self.expression(&mut arm_code)
             };
-            if result_type == Type::Void {
+            // A `null`-first arm must NOT pin the result to `Null` — promote to
+            // the first CONCRETE arm's type (else `match c { false => null, true
+            // => S{…} }` resolves to `Null`, `build_scalar_chain` can't type the
+            // null sentinel, and the value arm returns null — silently wrong).
+            if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
             // P209 — when the arm has both a guard and pattern bindings
@@ -2836,6 +2887,25 @@ impl Parser {
         result_type: &Type,
         mut arms: Vec<(Option<Value>, Value, Type, Option<Value>)>,
     ) -> Value {
+        // A bare `null` arm value (`false => null`) parses to `Value::Null`, which
+        // lowers to NO push (Type::Void).  In a value-producing match the if-chain
+        // join then reads an unwritten, value-sized slot — interp stack underflow
+        // ("No elements left on the stack"), native a lost value.  Convert each
+        // bare-null arm to the result type's typed null sentinel, the same
+        // transform `parse_if` applies to a null branch (~line 1250) and the
+        // fallback gets just below.  `self.null` is a no-op (returns
+        // `Value::Null`) for Void/Unknown result types, so a statement-style
+        // match is untouched.  Compute the typed null once (it's the same for
+        // every arm — `result_type` is fixed), releasing the `&mut self` borrow
+        // before mutating `arms`.
+        if arms.iter().any(|a| matches!(a.1, Value::Null)) {
+            let typed_null = self.null(result_type);
+            for arm in &mut arms {
+                if matches!(arm.1, Value::Null) {
+                    arm.1 = typed_null.clone();
+                }
+            }
+        }
         let fallback = if has_wildcard {
             let (_, arm_code, _, _) = arms.pop().unwrap();
             arm_code

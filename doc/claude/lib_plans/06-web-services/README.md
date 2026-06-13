@@ -3,7 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Web Services — client-side library
+# Web Services — client-side library (@PLN19)
+
+**Tracker: [loft-lang/plans#19](https://github.com/loft-lang/plans/issues/19)** —
+lifecycle state lives on the issue, not in this path.
 
 Long-term plan for a **fully functioning client-side web
 services library** in loft.  Server-side HTTP / WebSocket /
@@ -17,14 +20,20 @@ single concern:
 
 | Sub-plan | File | Status |
 |---|---|---|
-| JSON serialization + deserialization | [JSON.md](JSON.md) | **Shipped** — `Type.parse()` + `:j` format flag work today |
-| HTTP client (verbs + headers) | [HTTP_CLIENT.md](HTTP_CLIENT.md) | **Planned** — locked-in design; deferred to 1.1+ per ROADMAP H4 |
+| JSON serialization + deserialization | [JSON.md](JSON.md) | **Shipped** — `Type.parse()` + `:j` format flag work today; re-verified hands-on 2026-06-12 against a real ~100-field GitHub API payload (unknown-field tolerance, nested structs, JSON `null` → loft null caught with `??`, `:j` round-trip, dynamic `json_parse` navigation with safe `JNull` on missing fields) |
+| HTTP client (verbs + headers) | [HTTP_CLIENT.md](HTTP_CLIENT.md) | **Shipped** — as the **`web` registry package** in [`loft-lang/loft-libs-net`](https://github.com/loft-lang/loft-libs-net) (cdylib + `ureq`), NOT in-repo `lib/` or `default/`; full verb set + `_h` header variants + WebSocket client + session/cookie/base64 (@PLAN23).  Verified end-to-end 2026-06-12: `use web; http_get(...)` + `Repo.parse(resp.body)` against the live GitHub API |
 | Future expansions | (this file, see below) | Sketched only — no scheduled work |
 
-The JSON layer is reference documentation for capabilities
-already in production; the HTTP layer is the primary planned
-work; the future-expansions section sketches what else a
-"fully functioning" library would cover.
+The JSON layer and the HTTP client are reference documentation
+for capabilities already in production; the future-expansions
+section sketches what else a "fully functioning" library would
+cover.
+
+**Caveat (2026-06-12):** on `main`'s binary, `use web` +
+`http_get` panics in the interpreter
+(`src/database/allocation.rs:1632` index OOB) before the request
+runs; the same program works on the `windows-probe` stability
+branch.  Re-verify once the stability stream merges.
 
 ## Scope
 
@@ -46,7 +55,7 @@ or otherwise), and acts on them.  Common shapes:
   promotion).
 - Game-client multiplayer protocol — see
   `GAME_CLIENT_LIB.md` and the EVENT_LOOP plan
-  ([../../plans/future/23-event-loop/](../../../plans/future/23-event-loop/)).
+  ([../../plans/future/23-event-loop/](../../plans/future/23-event-loop/)).
 - WASM HTTP fetch in the browser — currently routed through
   the host's `fetch()` via the W1.x bridge; would inherit
   this design's `HttpResponse` shape but uses a different
@@ -152,10 +161,13 @@ The same `Type.parse()` mechanism could underlie:
 When the H tier opens (1.1+ or earlier per release decisions),
 the suggested ordering is:
 
-1. **HTTP client basics** — Steps 1–5 of
-   [HTTP_CLIENT.md § Implementation plan](HTTP_CLIENT.md#implementation-plan).
-   Lands `http_get` / `http_post` / `http_put` / `http_delete`
-   + the `_h` header variants.
+1. **HTTP client basics** — ~~Steps 1–5 of
+   [HTTP_CLIENT.md § Implementation plan](HTTP_CLIENT.md#implementation-plan)~~
+   **SHIPPED** as the `web` package (`loft-libs-net`):
+   `http_get` / `http_post` / `http_put` / `http_delete`
+   + the `_h` header variants, plus a WebSocket client and
+   session/cookie/base64 helpers (@PLAN23) beyond the
+   original step list.
 2. **URL handling** — `URL` struct + parser, `url_with_params`
    helper.  Required by anything more sophisticated than
    string-concat URLs.
@@ -184,10 +196,10 @@ first real consumer actually needs.
 
 - [JSON.md](JSON.md) — currently-shipped JSON capabilities
 - [HTTP_CLIENT.md](HTTP_CLIENT.md) — HTTP client design
-- [../../../STDLIB.md](../../../STDLIB.md) — stdlib reference
-- [../../../LOFT.md](../../../LOFT.md) — language reference
-- [../../../PLANNING.md](../../../PLANNING.md) — H-tier items in the backlog
-- [../../../ROADMAP.md](../../../ROADMAP.md) — milestone placement
-- `../../../WEB_SERVER_LIB.md` (still at doc root) —
+- [../../STDLIB.md](../../STDLIB.md) — stdlib reference
+- [../../LOFT.md](../../LOFT.md) — language reference
+- [../../PLANNING.md](../../PLANNING.md) — H-tier items in the backlog
+- [../../ROADMAP.md](../../ROADMAP.md) — milestone placement
+- `../../WEB_SERVER_LIB.md` (still at doc root) —
   server-side counterpart; covers HTTP server, WebSockets,
   TLS, ACME, auth, RBAC.

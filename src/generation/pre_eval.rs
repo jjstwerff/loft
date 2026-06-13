@@ -381,7 +381,7 @@ impl Output<'_> {
     /// `OpFreeRefIfDistinct`), return the var it frees (its first `Var`
     /// argument); otherwise `None`.  Used by the B5-L3 text-temp collapse
     /// to avoid hoisting a Call past a free of one of the Call's operands.
-    fn free_op_var(op: &Value, data: &crate::data::Data) -> Option<u16> {
+    pub(crate) fn free_op_var(op: &Value, data: &crate::data::Data) -> Option<u16> {
         if let Value::Call(d, args) = op.unspan() {
             let name = data.def(*d).name();
             if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
@@ -729,7 +729,24 @@ impl Output<'_> {
             | Value::Set(_, _)
             | Value::Line(_)
             | Value::TuplePut(_, _, _) => true,
-            Value::If(_, _, false_v) => matches!(**false_v, Value::Null),
+            // An `if … else { null }` is a void STATEMENT only when its TAKEN
+            // branch also yields no value — it diverges (`return …`) or is a
+            // void / Never block (the enum-dispatch shape
+            // `if tag==a { return … } else { null }`).  When the taken branch
+            // PRODUCES a value (e.g. `if c { …; r } else { null }` of a
+            // ref/struct type) the `if/else` IS the block's nullable return
+            // value, not a statement — classifying it void let
+            // `detect_ref_tail_capture` skip it, so the value was emitted as a
+            // discarded statement and the trailing `Return(Null)` returned the
+            // null SENTINEL (the imaging `png()` width=null bug under --native).
+            Value::If(_, true_v, false_v) => {
+                matches!(**false_v, Value::Null)
+                    && match &**true_v {
+                        Value::Return(_) => true,
+                        Value::Block(bl) => matches!(bl.result, Type::Void | Type::Never),
+                        other => self.is_void_value(other),
+                    }
+            }
             Value::Call(d_nr, _) => {
                 let def = self.data.def(*d_nr);
                 matches!(def.returned(), Type::Void)
@@ -792,7 +809,16 @@ impl Output<'_> {
         let Value::Return(ret_val) = operators[ret_idx].unspan() else {
             return None;
         };
-        if !matches!(*ret_val.unspan(), Value::Null) {
+        // The placeholder return is normally `Return(Null)`.  But when the
+        // block's last op was itself a scope-exit free, `scopes::insert_free`
+        // wraps THAT in the return: `Return(OpFreeText(j))` (a struct-returning
+        // `match … { … => null }` whose value arm holds a heap local).  Treat that
+        // free-wrapped return the same way — it's a void cleanup standing in for
+        // the value, so capture the real preceding value; `output_block` emits
+        // the inner free before `return __native_tail_ret`.
+        if !matches!(*ret_val.unspan(), Value::Null)
+            && Self::free_op_var(ret_val.unspan(), self.data).is_none()
+        {
             return None;
         }
         // Walk backwards through cleanup ops to find the tail user Call.
@@ -822,6 +848,27 @@ impl Output<'_> {
                     if !Self::heap_shape_matches(callee_ret, target_type) {
                         return None;
                     }
+                    return Some((i, ret_idx));
+                }
+                // A value-producing tail expr (an `if … else { null }` whose
+                // taken branch yields a value, etc.) is the block's nullable
+                // heap result.  Capture it into `__native_tail_ret` BEFORE the
+                // cleanup frees — exactly as the Call case — which preserves
+                // order and avoids the use-after-free that blocks
+                // `patch_hoisted_returns` (the value-`if` reads a work buffer a
+                // cleanup op frees).  Without it the value is a discarded
+                // statement and the trailing `Return(Null)` returns the null
+                // sentinel (the fn always returned null under --native; imaging
+                // `png()` width=null).  The `heap_shape_matches` guard (via
+                // `infer_type`) mirrors the Call arm so the emitted
+                // `let __native_tail_ret: DbRef = <tail>` stays well-typed;
+                // `is_void_value` excludes diverging/void tails (enum-dispatch).
+                other
+                    if !self.is_void_value(other)
+                        && self
+                            .infer_type(IrNode::Native(other))
+                            .is_some_and(|t| Self::heap_shape_matches(&t, target_type)) =>
+                {
                     return Some((i, ret_idx));
                 }
                 _ => return None,

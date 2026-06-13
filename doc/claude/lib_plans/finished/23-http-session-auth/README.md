@@ -45,6 +45,6 @@ only.
 
 ## See also
 
-- [`../../future/06-web-services/HTTP_CLIENT.md`](../../future/06-web-services/HTTP_CLIENT.md) — the broader HTTP-client design this plan implemented one slice of.
+- [`../../06-web-services/HTTP_CLIENT.md`](../../06-web-services/HTTP_CLIENT.md) — the broader HTTP-client design this plan implemented one slice of.
 - [`../../future/15-process/`](../../future/15-process/) — `exec()` subprocess primitive (for non-HTTP shell-out use cases).
 - [`IMPL.md`](IMPL.md) — implementation steps (closure archaeology).

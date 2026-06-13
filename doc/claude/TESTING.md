@@ -1138,6 +1138,14 @@ dual-mode coverage.
 **When a `.rs` test and a script test cover the same behaviour**, the `.rs` test should be removed
 — the script is the authoritative version.
 
+**Naming a bug regression: use the GitHub issue number.**  A regression for a fixed bug is
+`tests/scripts/<issue>-<slug>.loft` — e.g. `366-native-abib-scalar-literal-arg.loft` guards #366,
+`368-nullable-struct-return-heap-param.loft` guards #368.  This makes the test greppable from the
+issue and back: the issue's `fixed-pending-merge` comment names the file, the file's header cites
+`#<issue>`.  Don't reuse a feature/era number for a bug (a fix for #366 filed under `304-…` is a
+mis-file — rename it).  The original topic suites (`01-integers`, `05-enums`, …) keep their
+sequential feature numbers; those predate the issue-number convention and are not renamed.
+
 In `cargo test` mode, `run_test` writes a bytecode dump to `tests/dumps/` in debug builds.
 No generated Rust code is produced.
 

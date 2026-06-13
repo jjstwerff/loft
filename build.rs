@@ -84,11 +84,20 @@ fn main() {
     }
     println!("cargo:rustc-env=LOFT_FFI_FINGERPRINT={ffi_fp}");
 
-    // Only re-run when the git HEAD changes or build.rs itself changes.
+    // Re-run when anything that identifies this build changes: git HEAD / refs
+    // (committed state), build.rs itself, the compiler source (`src/`) and stdlib
+    // (`default/`), and loft-ffi's source.  Without src/ + default/, build.rs never
+    // recomputes on an uncommitted WIP edit, so a source-content build id goes
+    // stale across WIP rebuilds and the bytecode/stdlib cache mis-reads a store
+    // laid out by a different binary (the cross-checkout / WIP-rebuild corruption:
+    // `d_nr=u32::MAX`).  loft-ffi/src keeps LOFT_FFI_FINGERPRINT accurate.  git
+    // HEAD alone is blind to WIP; these make the rerun fire on the edits a content
+    // hash must reflect.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
     println!("cargo:rerun-if-changed=build.rs");
-    // …and when loft-ffi's source changes, so LOFT_FFI_FINGERPRINT stays accurate.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=default");
     println!("cargo:rerun-if-changed=loft-ffi/src");
     // …and when the build flags change, so LOFT_BUILD_RUSTFLAGS stays accurate.
     println!("cargo:rerun-if-env-changed=RUSTFLAGS");
