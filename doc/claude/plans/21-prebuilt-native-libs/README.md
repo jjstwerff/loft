@@ -249,12 +249,19 @@ sha256, loft_ffi_fp}` index entries. Untestable locally — scoped, not yet buil
 
    **Probe:** a test index entry with a `binaries` slot + matching fp → `loft install` downloads + sidecars it → a later `use` loads without building.
 
-### Phase 5 — Registry surfacing · S
+### Phase 5 — Registry surfacing · S — **SURFACING DONE 2026-06-13**
 **Goal:** the runtime requirement + available prebuilts are visible.
-1. **`loft install`/`loft info`** — list `runtime-libs` ("requires libGL at runtime") + the prebuilt triples present (`Version.binaries` keys).
-2. **Submit-CI gate** (REGISTRY_SUBMIT.md) — validate each `binaries` entry's `sha256` + `loft_ffi_fp`, and require `runtime-libs` to be declared when a prebuilt's `objdump -p` NEEDED list has a non-`libc` entry.
-
-   **Probe:** `loft install graphics` prints `runtime: libGL, libasound · prebuilt: x86_64-…-linux-gnu, aarch64-…-macos`.
+**Landed (the `loft install` surfacing):** `InstallReport` gains a `surface: Vec<String>`;
+`install_one` populates a per-package "Native:" block via `prebuilt_status(host, available,
+installed)` — "prebuilt installed for `<triple>` — no Rust toolchain needed" / "no prebuilt
+for `<triple>` (available: …) — builds from source (needs rustc)" / "a `<triple>` prebuilt
+exists but was built against a different loft-ffi" — plus a "runtime libraries: …" line from
+the manifest's `runtime-libs`. `format_report` renders it. `prebuilt_status` is pure and
+unit-tested (`prebuilt_status_branches`, 4 cells); install suite passes; `fmt`/`clippy` clean.
+**Remaining (the submit-CI gate — registry infra):** the REGISTRY_SUBMIT.md gate that
+validates each `binaries` entry's `sha256` + `loft_ffi_fp` and requires `runtime-libs` to be
+declared when a prebuilt's `objdump -p` NEEDED list has a non-`libc` entry — needs the
+registry submit pipeline, like Phase 4's publish glue.
 
 ### Phase 6 — Build determinism (the fallback's reliability) · M
 **Goal:** the source-build fallback is reproducible across machines.
