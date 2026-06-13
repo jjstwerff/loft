@@ -145,6 +145,31 @@ clean). To resume: `git apply doc/claude/plans/22-namespaces/phase1-step1-2.patc
 then do step 3 (thread the expected enum into `parse_var` at the value-position
 sites) — so the step-1+2 implementation isn't re-derived.
 
+**Step 3 exploration (2026-06-13) — the `var_tp` unifying lever is FALSIFIED.**
+Tried: add an `expected_tp` param to `parse_var` + a `variant_ctx(name, parent_tp,
+expected_tp)` helper (resolve a variant against either context enum), and pass
+`var_tp` (the operand's expected type, already threaded through `parse_operators`)
+as `expected_tp` from `parse_single` (vectors.rs:400). Result on the four
+isolation probes:
+- `p_arg` (`classify(Red)`) and `p_ret` (`-> Light { Red }`): **still fail** —
+  `var_tp` is NOT the param / return type at those leaves; the call-arg parser
+  and the return-body parser don't thread their expected type as `var_tp`.
+- `p_decl` (`l: Light = Red`): now resolves but `l == Light::Red` is **false** —
+  a **bare-vs-qualified variant-value representation mismatch** (the bare
+  `attr_value` form ≠ the qualified `Light::Red` form). A correctness bug, not
+  just a resolution gap.
+
+So step 3 is **genuinely per-site**, not one lever: at each value-position site
+find where its expected type actually lives and thread it as the variant context
+— call arg (param type in `parse_call`), `return` (fn return type at the body
+parse), comparison RHS (the LHS `current_type` at `operators.rs:1295`, NOT the
+outer `parent_tp`), typed-local decl — **and** reconcile the bare vs `Enum::V`
+variant value representations so `==` agrees. Each is its own probe + targeted
+edit; watch the silent create-placeholder-var fallback (it turns a missed site
+into a wrong result, not a loud error). The `var_tp` attempt was reverted (not in
+the patch); the helper idea may still seed step 3, but with the *correct*
+per-site type, not `var_tp`.
+
 ### Phase 2 — prelude shadowing (S–M)
 
 A user definition in the user source **shadows** a wildcard-imported / stdlib
