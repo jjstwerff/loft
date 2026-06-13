@@ -397,6 +397,18 @@ impl Parser {
             self.lexer.token("(");
             self.parse_intrinsic_call(val, "panic")
         } else if let Some((name, name_pos)) = self.lexer.has_identifier_pos() {
+            // @PLN22 Phase 1 — with no receiver-chain parent type set, fall back
+            // to the operand's expected enum as the resolution context, so a bare
+            // value-position variant resolves against it once variants are no
+            // longer globally keyed.  `var_tp` carries the enum for typed-local
+            // decls and `==`; `enum_hint` carries it for call args / return body.
+            if matches!(parent_tp, Type::Null) {
+                if self.enum_context(var_tp) {
+                    *parent_tp = var_tp.clone();
+                } else if self.enum_context(&self.enum_hint) {
+                    *parent_tp = self.enum_hint.clone();
+                }
+            }
             self.parse_var(val, &name, parent_tp, &name_pos)
         } else if self.lexer.peek_token("$") {
             let name_pos = self.lexer.peek_pos().clone();

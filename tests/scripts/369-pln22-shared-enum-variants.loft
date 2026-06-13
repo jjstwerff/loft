@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN22 Phase 1 — two enums may share a variant name (`Red` below).  Before
+// this landed, defining the second enum panicked at parse ("Dual definition of
+// Red").  Now the collision is legal and a bare `Red` resolves against the
+// CONTEXT enum: match subject, typed-local decl, `==` LHS, call argument,
+// return type, `is`, and `Enum::Variant` qualifier.  A bare variant with no
+// such context (`x = Idle` for a unique variant) still infers its type — only
+// an AMBIGUOUS bare variant with no context is rejected (qualify it).
+enum Light { Red, Green, Blue }
+enum Berry { Red, Black }
+
+fn lname(l: Light) -> text { match l { Red => "L-red", Green => "L-green", Blue => "L-blue", } }
+fn bname(b: Berry) -> text { match b { Red => "B-red", Black => "B-black", } }
+
+// bare variant in RETURN position resolves against the declared return enum.
+fn make_light() -> Light { Red }
+fn make_berry() -> Berry { Red }
+
+fn test_pln22_shared_variants() {
+  // match arm: shared `Red` resolves per subject enum.
+  assert(lname(Light::Blue) == "L-blue", "match resolves Light");
+  assert(bname(Berry::Red) == "B-red", "match resolves Berry's Red");
+
+  // call argument: the SAME bare `Red` token resolves by parameter enum.
+  assert(lname(Red) == "L-red", "arg Red -> Light::Red");
+  assert(bname(Red) == "B-red", "arg Red -> Berry::Red");
+
+  // typed-local declaration: bare init resolves by the declared type.
+  x: Light = Red;
+  y: Berry = Black;
+  assert(x is Red, "typed-local x is Light::Red");
+  assert(y is Black, "typed-local y is Berry::Black");
+  assert(!(y is Red), "Berry y is not the (Berry) Red");
+
+  // comparison RHS: bare `Red` resolves by the LHS enum.
+  a = Light::Green;
+  c = Berry::Red;
+  assert(!(a == Red), "a (Green) != Light::Red");
+  assert(c == Red, "c == Berry::Red");
+
+  // `is` against the subject enum.
+  assert(make_light() is Red, "make_light returns Light::Red");
+  assert(make_berry() is Red, "make_berry returns Berry::Red");
+  assert(!(make_light() is Green), "make_light is not Green");
+
+  // qualified construction + qualified `==`, per enum.
+  assert(Light::Red == Light::Red, "Light::Red == Light::Red");
+  assert(Berry::Red == Berry::Red, "Berry::Red == Berry::Red");
+  assert(!(Light::Red == Light::Green), "Light::Red != Light::Green");
+}

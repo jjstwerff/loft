@@ -11,7 +11,18 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Phase 1 design round done (2026-06-13); build pending. Phases 2–4 drafted.**
+**Phase 1 BUILT (2026-06-14) — two enums may share a variant name; full matrix
+green on both backends; `loft_suite`/`issues`/`imports` green. Phases 2–4 drafted.**
+
+The build landed via the chokepoint-first order, with one essential refinement to
+the de-globalize step (see *Phase 1 — built* below): instead of removing variants
+from the flat namespace outright, a same-source variant collision is now recorded
+in an `ambiguous_variants` set and the flat value resolver *declines* an ambiguous
+name so it resolves by context — which **preserves** the widely-used no-context
+unique-variant inference (`s = Idle`) that the original plan wrongly assumed was
+already an error (falsified by 44 existing tests).
+
+**Phase 1 design round done (2026-06-13). Phases 2–4 drafted.**
 An earlier draft framed this as
 "loft has a single flat namespace / `match North` resolves by global lookup."
 **That was wrong** — validated against the current tree (probes, 2026-06-13).
@@ -139,11 +150,9 @@ init), after which the context branch resolves the variant. A focused
 session-sized parser change; do NOT interleave with other work (it leaves the
 tree red until step 3 lands). Both spikes reverted; `2026-07` clean.
 
-**Resume artifact:** steps 1–2 are pre-built in
-[`phase1-step1-2.patch`](phase1-step1-2.patch) (verified `git apply --check`
-clean). To resume: `git apply doc/claude/plans/22-namespaces/phase1-step1-2.patch`,
-then do step 3 (thread the expected enum into `parse_var` at the value-position
-sites) — so the step-1+2 implementation isn't re-derived.
+**Resume artifact (SUPERSEDED — Phase 1 is built):** the old `phase1-step1-2.patch`
+encoded the de-globalize-FIRST approach the build-order correction reversed; it was
+removed once Phase 1 landed. The as-built record is *Phase 1 — BUILT* above.
 
 **Step 3 exploration (2026-06-13) — the `var_tp` unifying lever is FALSIFIED.**
 Tried: add an `expected_tp` param to `parse_var` + a `variant_ctx(name, parent_tp,
@@ -201,6 +210,50 @@ chokepoint]; (5) verify matrix + C53 + suites both backends. The step-1+2 patch'
 de-globalize half moves to step 4; its `variant_of` + `definitions.rs:220` halves
 stay at step 1.
 
+### Phase 1 — BUILT (2026-06-14)
+
+Built in the chokepoint-first order above. The boundary matrix (`/tmp/claude/pln22`,
+graduated to [`tests/scripts/369-pln22-shared-enum-variants.loft`](../../../../tests/scripts/369-pln22-shared-enum-variants.loft))
+is green on **both** backends: 7 single-enum regression cells + 7 two-enum
+collision cells pass, the control cell fails.
+
+**Step-6 ESSENTIAL DIVERGENCE — de-globalize became "ambiguity-tracking," not
+"remove the key."** Applying a pure de-globalize (drop variants from `def_names`
+entirely) made the matrix reveal a class the design missed: a bare variant with
+**no** expected-type context (`s = Idle`, untyped local) is *widely* used — 44
+existing tests rely on it — and resolves today only because the flat global
+registry infers the variant's enum. The plan's open-question #2 ("no-context bare
+variant is already an error") was **falsified** by those tests. So the flip keeps
+the flat key for the FIRST variant of a name (unique → still resolves with no
+context, preserving inference) and records a same-source collision in a new
+`ambiguous_variants` set; the flat value resolver (`parse_constant_value` AND the
+`parse_var` `def_nr` branch) **declines** an ambiguous name so it routes to the
+context chokepoints. A no-context *ambiguous* bare variant is the only new error
+(qualify it) — exactly the narrow case the collision creates.
+
+**As-built sites:**
+- `data.rs` — `Data::variant_of(enum, name)` + `variant_in_source(source, name)`
+  chokepoints; `add_def` records EnumValue collisions in `ambiguous_variants`
+  (no panic) instead of asserting; `is_ambiguous_variant`; `rebuild_indices` +
+  `derived_indices_diff` re-derive/compare the set (cache round-trip safe).
+- `parser/control.rs` — match arm + or-pattern + `is` route through `variant_of`;
+  call-arg sets `enum_hint` from the param enum (both passes); `parse_block` sets
+  `enum_hint` from the block's expected type (return-body tail).
+- `parser/objects.rs` — qualified `Enum::Variant` / `lib::Variant` resolve via
+  `variant_of`/`variant_in_source` (new `qualifier_enum` param); flat `def_nr`
+  branch + `parse_constant_value` decline ambiguous variants; new
+  `Type::Reference(enum)` ↔ `Type::Enum` normalization branch; `enum_context` helper.
+- `parser/vectors.rs` — `parse_single` seeds the variant context from `var_tp`
+  (typed-decl / `==`) else `enum_hint` (arg / return).
+- `parser/mod.rs` — `enum_hint` parser field (mirrors `lambda_hint`).
+- `parser/definitions.rs` — enum second-pass re-resolve via `variant_of`.
+
+**Threading mechanism (the bulk, as the spikes predicted):** the bare value-position
+variant resolves against an expected enum carried by `var_tp` (typed-local decl,
+`==` RHS — already threaded) or the `enum_hint` parser field (call arg, return-body
+tail — NOT carried by `var_tp`, set per-site and on BOTH passes so pass-1 does not
+create a stray placeholder var that shadows the variant on pass-2).
+
 ### Phase 2 — prelude shadowing (S–M)
 
 A user definition in the user source **shadows** a wildcard-imported / stdlib
@@ -235,9 +288,11 @@ Drop the flat top-level comma list (`use lib::a, b, c;`), which reads poorly.
 1. **Variant storage shape** — reuse `attr_names` (variants as enum attributes),
    or a dedicated `variant_names` map keyed `(enum_def, name)`? Settle in the
    Phase-1 design round; `attr_names` reuse is the leaner hypothesis.
-2. **Bare variant with NO context** (`x = Up`, untyped) — already an error today
-   in non-match positions; keep requiring `x = Dir::Up`. Confirm no regression to
-   the working context cases.
+2. **Bare variant with NO context** (`x = Up`, untyped) — RESOLVED (Phase 1
+   build): the original premise ("already an error") was FALSE — a *unique*
+   no-context bare variant resolves and infers its enum (44 tests rely on it), so
+   the build preserves it. Only an *ambiguous* no-context bare variant (a name two
+   enums share, used with no context) is an error → qualify it (`x = Dir::Up`).
 3. **Shadowing scope** — only wildcard/prelude names shadowable, or any imported
    name? Narrow first (prelude only).
 4. **1.0 sequencing** — the `(enum, variant)` key change is observable (two-enum

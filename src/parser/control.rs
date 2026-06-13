@@ -308,7 +308,16 @@ impl Parser {
             }
             let mut n = Value::Null;
             last_expr_peek = self.lexer.peek();
+            // @PLN22 Phase 1 — hint the block's expected enum so a bare
+            // value-position variant tail (`fn f() -> Light { Red }`, or an
+            // `if c { Red } else { Green }` block) resolves against it once
+            // variants are no longer globally keyed.  Cleared after the
+            // statement; a nested call sets its own argument hint.
+            if self.enum_context(result) {
+                self.enum_hint = result.clone();
+            }
             t = self.expression(&mut n);
+            self.enum_hint = Type::Unknown(0);
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
@@ -4496,6 +4505,21 @@ impl Parser {
                     self.lambda_hint = expected;
                 }
             }
+            // @PLN22 Phase 1 — hint the expected enum so a bare value-position
+            // variant argument (`f(Red)`) resolves against the parameter's enum.
+            // Resolved on BOTH passes (unlike the pass-2-only `fn_def_nr` above):
+            // on pass 1 the callee is already registered, and skipping the hint
+            // there would let a bare variant become a stray placeholder var that
+            // shadows the real variant on pass 2.
+            if !in_named {
+                let hint_d_nr = self.data.def_nr(&format!("n_{name}"));
+                if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
+                    let expected = self.data.attr_type(hint_d_nr, arg_idx);
+                    if self.enum_context(&expected) {
+                        self.enum_hint = expected;
+                    }
+                }
+            }
             // for map/filter/reduce, infer lambda hint from the vector
             // element type so that short-form |x| lambdas can infer types.
             if fn_def_nr.is_none()
@@ -4535,6 +4559,7 @@ impl Parser {
             arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
             self.lambda_hint = Type::Unknown(0);
+            self.enum_hint = Type::Unknown(0);
             types.push(t);
             list.push(p);
             arg_idx += 1;

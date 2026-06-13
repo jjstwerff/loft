@@ -191,6 +191,14 @@ pub struct Parser {
     /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
     /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
     pub(crate) lambda_hint: Type,
+    /// @PLN22 Phase 1 — expected enum type for the value currently being parsed
+    /// where the operand `var_tp` does not carry it (a call argument, a function
+    /// return-body tail).  Set by `parse_call` / the return-body parse before the
+    /// value is parsed, consulted by `parse_single` to resolve a bare
+    /// value-position variant against the expected enum, then cleared to
+    /// `Type::Unknown(0)`.  (`var_tp` already carries the enum for typed-local
+    /// decls and `==`, so those need no hint.)
+    pub(crate) enum_hint: Type,
     /// Expected destination type for an `f#read` with no explicit `(n)` and
     /// no `as T` cast.  Set by `parse_assign` from the LHS type before
     /// parsing the RHS so that `s.field = f#read` infers the byte width
@@ -466,6 +474,7 @@ impl Parser {
             expr_not_null_name: String::new(),
             lambda_counter: 0,
             lambda_hint: Type::Unknown(0),
+            enum_hint: Type::Unknown(0),
             read_target_type: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),

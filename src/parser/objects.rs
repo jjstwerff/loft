@@ -10,6 +10,18 @@ use super::{
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
+    /// @PLN22 Phase 1 — true if `tp` denotes an enum, either directly
+    /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
+    /// the expected-enum context for bare value-position variant resolution
+    /// once variants are no longer globally keyed.
+    pub(crate) fn enum_context(&self, tp: &Type) -> bool {
+        match tp {
+            Type::Enum(_, _, _) => true,
+            Type::Reference(d_nr, _) => self.data.def_type(*d_nr) == DefType::Enum,
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(
         &mut self,
@@ -291,6 +303,14 @@ impl Parser {
                 self.data.def_type(self.data.def_nr(name)),
                 DefType::Function
             )
+            // @PLN22 Phase 1 — an ambiguous bare variant (shared by two enums)
+            // must NOT be resolved by this flat def_nr branch (it would pick the
+            // first enum and mis-tag the type); skip it so the parent_tp context
+            // branches below resolve it against the expected enum.
+            && !(self.data.def_type(self.data.def_nr(name)) == DefType::EnumValue
+                && self
+                    .data
+                    .is_ambiguous_variant(name, self.data.def(self.data.def_nr(name)).source))
         {
             // @P335: functions are stored mangled as `n_<name>` and are reached
             // ONLY via the `n_`+ident lookup below — never by matching the RAW
@@ -317,6 +337,18 @@ impl Parser {
         {
             *code = self.data.attr_value(*enr, *a_nr);
             t = parent_tp.clone();
+        // @PLN22 Phase 1 — a typed-declaration / call-arg / return site threads
+        // the expected enum as `Type::Reference(enum)`, not `Type::Enum`; accept
+        // it too so a bare variant resolves against the declared enum once
+        // variants are no longer globally keyed.
+        } else if let Type::Reference(enr, _) = parent_tp
+            && self.data.def_type(*enr) == DefType::Enum
+            && let Some(a_nr) = self.data.def(*enr).attr_names.get(name)
+        {
+            let enr = *enr;
+            let a_nr = *a_nr;
+            *code = self.data.attr_value(enr, a_nr);
+            t = self.data.def(enr).returned().clone();
         } else {
             // try resolving as a bare function reference.
             // On the first pass, only do this when the identifier is NOT followed
@@ -845,10 +877,23 @@ impl Parser {
         } else {
             self.data.source_nr(source, name)
         };
+        // @PLN22 Phase 1 — an AMBIGUOUS bare variant (a name shared by two enums)
+        // must NOT resolve via the flat global, which keeps only the first; drop
+        // it so the qualifier / context fallbacks below (and parse_var's
+        // parent_tp branches) pick the right enum.  A UNIQUE variant keeps
+        // resolving here, preserving no-context inference like `s = Idle`.
+        if d_nr != u32::MAX
+            && self.data.def_type(d_nr) == DefType::EnumValue
+            && self
+                .data
+                .is_ambiguous_variant(name, self.data.def(d_nr).source)
+        {
+            d_nr = u32::MAX;
+        }
         // @PLN22 Phase 1 — a qualified `Enum::Variant` resolves the variant
-        // WITHIN the qualifier enum via the variant_of chokepoint.  Non-breaking
-        // while variants are globally keyed (def_nr already found it); required
-        // once de-globalize lands (step 4), when def_nr no longer keys variants.
+        // WITHIN the qualifier enum via the variant_of chokepoint.  Required for
+        // an ambiguous variant (declined above) and once def_nr no longer keys
+        // a collision's second variant.
         if d_nr == u32::MAX && qualifier_enum != u32::MAX {
             d_nr = self.data.variant_of(qualifier_enum, name);
         }
