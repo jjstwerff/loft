@@ -160,8 +160,14 @@ build-deps   = ["libgl-dev", "libasound2-dev"]    # rustc + dev headers, for the
 
 ## Phases (designed)
 
-### Phase 1 — Per-triple prebuilt resolve (the load hook) · S
+### Phase 1 — Per-triple prebuilt resolve (the load hook) · S — **SHIPPED 2026-06-13**
 **Goal:** loft loads `prebuilt/<host-triple>/lib<stem>.<ext>` when present and fp-valid, before any build.
+**Landed:** `build.rs` stamps `LOFT_BUILD_TARGET`; `cache::host_triple()` reads it;
+`resolve_native_lib` checks `prebuilt/<triple>/` (fp-gated via the `.loft-build-fp` sidecar)
+before the legacy `native/` path and `auto_build_native`; a hit emits a `prebuilt` timing
+event. Probe ✓ both cells: installed prebuilt → loads with **no build**; corrupted sidecar
+fp → skipped, falls through to source build. (The wasm-path helper-extraction was dropped —
+a wasm *rlib* and a native *cdylib* validate differently, so sharing was net-negative.)
 1. **Authoritative host triple** — stamp `LOFT_BUILD_TARGET` in `build.rs` (`env::var("TARGET")`); the building loft *is* the host, so this is exact (C1). Expose `cache::host_triple()` reading it (replaces the lossy runtime `target_triple()` for this use).
 2. **Shared helper** — lift the wasm logic (`native_utils.rs:652`, `pkg_dir/prebuilt/<target>/<file>`) into `fn prebuilt_lib(pkg_dir, triple, stem) -> Option<PathBuf>`.
 3. **Hook `resolve_native_lib`** (`extensions.rs:2272`) — BEFORE the existing `native/<filename>` check: `prebuilt_lib(pkg_dir, host_triple, stem)`; if found AND `native_artifact_fingerprint_matches(prebuilt_dir, loft_ffi_fingerprint())` → return it; on fp mismatch → skip (never load a wrong-ABI cdylib), fall through to `native/<filename>` → `auto_build_native`.

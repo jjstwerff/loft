@@ -2271,6 +2271,24 @@ pub fn native_target_root(pkg_dir: &std::path::Path) -> std::path::PathBuf {
 /// so a cached run re-checks cdylib freshness exactly like a cold parse.
 pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
     let filename = platform_lib_name(stem);
+    // @PLN21 Phase 1 — a precompiled cdylib shipped for THIS host triple wins
+    // over a source build (the "no rustc to use a library" path).  A cdylib
+    // links loft-ffi (the C-ABI), not libloft, so it is valid for any loft on
+    // the same loft-ffi version — gated on the `.loft-build-fp` sidecar matching
+    // `loft_ffi_fingerprint()`, so a binary built against a different loft-ffi
+    // is skipped (never mis-loaded), falling through to a source build.
+    let triple_dir = format!("{pkg_dir}/prebuilt/{}", crate::cache::host_triple());
+    let triple_lib = format!("{triple_dir}/{filename}");
+    if std::path::Path::new(&triple_lib).exists()
+        && crate::cache::native_artifact_fingerprint_matches(
+            std::path::Path::new(&triple_dir),
+            crate::cache::loft_ffi_fingerprint(),
+        )
+    {
+        crate::platform::timing_record("prebuilt", stem, true, None);
+        return Some(triple_lib);
+    }
+    // Legacy platform-agnostic prebuilt (existence-only; kept for back-compat).
     let prebuilt = format!("{pkg_dir}/native/{filename}");
     if std::path::Path::new(&prebuilt).exists() {
         return Some(prebuilt);
