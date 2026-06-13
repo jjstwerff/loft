@@ -4053,6 +4053,22 @@ impl Data {
             .map(|(i, _)| i as u32)
     }
 
+    /// @PLN22 Phase 1 — resolve a variant by name within ONE enum's members
+    /// (the `(enum, variant)` scope key).  The single chokepoint every variant
+    /// resolution routes through, replacing the bare global `def_nr(name)` +
+    /// `parent == e_nr` dance — so two enums may share a variant name and a
+    /// variant is never found without a contextual enum.  Returns `u32::MAX`
+    /// when `name` is not a variant of `enum_nr`.
+    #[must_use]
+    pub fn variant_of(&self, enum_nr: u32, name: &str) -> u32 {
+        if enum_nr == u32::MAX {
+            return u32::MAX;
+        }
+        self.children_of(enum_nr)
+            .find(|&c| self.def_type(c) == DefType::EnumValue && self.def(c).name() == name)
+            .unwrap_or(u32::MAX)
+    }
+
     /// # Panics
     /// When no definition on that number is found.
     pub fn def_mut(&mut self, dnr: u32) -> &mut Definition {

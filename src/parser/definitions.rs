@@ -217,7 +217,12 @@ impl Parser {
                 self.data.definitions[v as usize].parent = d_nr;
                 v
             } else {
-                self.data.def_nr(&value_name)
+                // @PLN22 Phase 1 — the second-pass re-resolve goes through the
+                // enum (d_nr) we are parsing via the variant_of chokepoint, not
+                // the bare global def_nr.  Non-breaking while variants are still
+                // globally keyed (the variant is a child of d_nr); required once
+                // de-globalize lands (step 4), when def_nr no longer keys variants.
+                self.data.variant_of(d_nr, &value_name)
             };
             if self.lexer.has_token("{") {
                 if self.first_pass {
