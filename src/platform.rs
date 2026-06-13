@@ -5,6 +5,84 @@
 
 use std::sync::OnceLock;
 
+/// Process-scoped native-compile timing — a gated singleton.  The expensive
+/// native work (cdylib `cargo build`s, per-fixture `rustc`) runs across
+/// SPAWNED loft processes, so a threaded object can't span the boundary: each
+/// process owns this singleton, subsystems record into it, and every event
+/// also emits a `[loft-timing]` stderr line so it survives into the parent /
+/// CI log (`ci-probe` aggregates the lines into a per-package breakdown).
+///
+/// Disabled unless `LOFT_TIMING` is set — [`Timing::global`] returns `None`,
+/// so recording is one cached env read and a no-op.
+pub struct Timing {
+    /// `(kind, name, cache_hit, compile_seconds)`.  Accumulated for an
+    /// in-process summary; the per-event stderr line is the cross-process channel.
+    events: std::sync::Mutex<Vec<(&'static str, String, bool, Option<f64>)>>,
+}
+
+static TIMING: OnceLock<Option<Timing>> = OnceLock::new();
+
+impl Timing {
+    /// The process singleton, or `None` when `LOFT_TIMING` is unset.
+    #[must_use]
+    pub fn global() -> Option<&'static Timing> {
+        TIMING
+            .get_or_init(|| {
+                let on = std::env::var("LOFT_TIMING").is_ok()
+                    || std::env::var("LOFT_TIMING_LEDGER").is_ok();
+                on.then(|| Timing {
+                    events: std::sync::Mutex::new(Vec::new()),
+                })
+            })
+            .as_ref()
+    }
+
+    /// Record a native-compile event.  `kind` is `"cdylib"` or `"fixture"`;
+    /// `secs` is the compile wall-clock on a cache MISS (`None` on a hit).
+    ///
+    /// Two channels, because the expensive native work runs in SPAWNED loft
+    /// processes whose stderr a test harness CAPTURES (visible only on
+    /// failure):
+    /// - a `[loft-timing]` stderr line (for a direct `loft` invocation), and
+    /// - when `LOFT_TIMING_LEDGER=<dir>` is set, an append to
+    ///   `<dir>/timing-<pid>.tsv` — a file survives the capture, so the parent
+    ///   / CI reads it back (the same side-channel shape as the skip ledger).
+    pub fn record(&self, kind: &'static str, name: &str, hit: bool, secs: Option<f64>) {
+        let cache = if hit { "hit" } else { "miss" };
+        match secs {
+            Some(s) => eprintln!("[loft-timing] {kind} {name} cache={cache} secs={s:.2}"),
+            None => eprintln!("[loft-timing] {kind} {name} cache={cache}"),
+        }
+        if let Ok(dir) = std::env::var("LOFT_TIMING_LEDGER")
+            && std::fs::create_dir_all(&dir).is_ok()
+        {
+            use std::io::Write;
+            let path =
+                std::path::Path::new(&dir).join(format!("timing-{}.tsv", std::process::id()));
+            let secs_s = secs.map_or_else(String::new, |s| format!("{s:.2}"));
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "{kind}\t{name}\t{cache}\t{secs_s}");
+            }
+        }
+        if let Ok(mut e) = self.events.lock() {
+            e.push((kind, name.to_string(), hit, secs));
+        }
+    }
+}
+
+/// Record a native-compile event into the process [`Timing`] singleton — a
+/// no-op when `LOFT_TIMING` is unset.  The one call subsystems use, so they
+/// don't each repeat the `global()` gate.
+pub fn timing_record(kind: &'static str, name: &str, hit: bool, secs: Option<f64>) {
+    if let Some(t) = Timing::global() {
+        t.record(kind, name, hit, secs);
+    }
+}
+
 /// `true` when the runtime filesystem uses `'\\'` as the path separator (Windows).
 /// Initialised once at startup from [`std::path::MAIN_SEPARATOR`].
 static WINDOWS_FS: OnceLock<bool> = OnceLock::new();
@@ -96,6 +174,20 @@ pub fn fs_avail_bytes(path: &std::path::Path) -> Option<u64> {
         .parse()
         .ok()?;
     Some(avail_kb.saturating_mul(1024))
+}
+
+/// Opt-in native-compile timing (`LOFT_TIMING=1`).  OFF by default — a single
+/// cached env read, zero cost when unset.  When set, the native-compile sites
+/// (cdylib `auto_build_native`, the test runner's per-fixture rustc) emit one
+/// `[loft-timing] …` line per event — cache hit vs miss, and the compile
+/// wall-clock on a miss — to stderr.  `ci-probe` (and any local run)
+/// aggregates these into a where-did-the-time-go view inside loft that the
+/// CI step-level timing cannot see.
+#[must_use]
+pub fn timing_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LOFT_TIMING").is_ok())
 }
 
 /// Minimum free space (bytes) a native-compile path insists on before

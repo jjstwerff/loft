@@ -36,6 +36,12 @@ env:
   # Per-phase timing ledger (TSV: phase \t seconds \t sub-metric), drained by
   # the final report step.
   PROBE_LEDGER: ${{ github.workspace }}/_probe_timings.tsv
+  # loft's OWN per-event native-compile ledger (Timing object → one TSV row per
+  # cdylib build / fixture rustc: kind \t name \t hit|miss \t secs).  Outside
+  # `target/` so it is fresh each run (not cache-restored).  Inherited by the
+  # spawned loft child processes, so it captures the cdylib builds the
+  # phase-level timing can't see inside.
+  LOFT_TIMING_LEDGER: ${{ github.workspace }}/_loft_timing
 
 jobs:
   probe:
@@ -158,6 +164,37 @@ jobs:
             echo "_Re-run to get WARM numbers: cdylibs should collapse (restored), build → near-no-op._"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "===== probe timing ====="; cat "$PROBE_LEDGER"
+
+      # Aggregate loft's OWN per-event ledger (the Timing object) — the inside
+      # view: which cdylibs built (miss) vs restored (hit), per-package seconds,
+      # and the fixture rustc total.  This is what the phase-level timing can't
+      # see, because the work runs in spawned loft child processes.
+      - name: loft internal timing (cdylib hit/miss, per-package secs)
+        if: always()
+        run: |
+          dir="$LOFT_TIMING_LEDGER"
+          if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "no loft timing ledger (LOFT_TIMING_LEDGER unset or no native compiles)"; exit 0
+          fi
+          all=$(cat "$dir"/*.tsv)
+          {
+            echo ""
+            echo "### loft internal native-compile timing"
+            echo ""
+            echo "| cdylib | builds (miss) | restored (hit) | build secs |"
+            echo "|---|---:|---:|---:|"
+            for pkg in $(echo "$all" | awk -F'\t' '$1=="cdylib"{print $2}' | sort -u); do
+              miss=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="miss"' | wc -l)
+              hit=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p&&$3=="hit"' | wc -l)
+              secs=$(echo "$all" | awk -F'\t' -v p="$pkg" '$1=="cdylib"&&$2==p{s+=$4} END{printf "%.1f", s}')
+              printf '| %s | %s | %s | %s |\n' "$pkg" "$miss" "$hit" "$secs"
+            done
+            fixn=$(echo "$all" | awk -F'\t' '$1=="fixture"' | wc -l)
+            fixs=$(echo "$all" | awk -F'\t' '$1=="fixture"{s+=$4} END{printf "%.1f", s}')
+            echo ""
+            echo "**fixtures:** ${fixn} compiled, ${fixs}s total rustc"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== loft timing ledger ====="; echo "$all" | awk -F'\t' '$1=="cdylib"' | sort | uniq -c
 
       - name: Upload cargo --timings (per-crate compile breakdown)
         if: always()

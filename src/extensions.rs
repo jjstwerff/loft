@@ -2336,6 +2336,7 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         None
     };
     if let Some(p) = find_existing() {
+        crate::platform::timing_record("cdylib", stem, true, None);
         return Some(p);
     }
 
@@ -2412,7 +2413,14 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         cmd.env("CARGO_TARGET_DIR", &target_root);
     }
     let built_path = target_root.join("release").join(&lib_name);
+    let build_start = std::time::Instant::now();
     let status = cmd.status();
+    crate::platform::timing_record(
+        "cdylib",
+        stem,
+        false,
+        Some(build_start.elapsed().as_secs_f64()),
+    );
     match status {
         Ok(s) if s.success() => {
             // @PLN11 Arc N / N0 — stamp the build fingerprint on ANY successful

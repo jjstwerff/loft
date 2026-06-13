@@ -886,6 +886,7 @@ pub(crate) fn run_tests(
                             );
                         }
                         let compile_ok = if cached {
+                            crate::platform::timing_record("fixture", &stem, true, None);
                             true
                         } else {
                             // Compile with rustc.
@@ -948,7 +949,14 @@ pub(crate) fn run_tests(
                                 None,
                                 loft_deps.as_deref(),
                             );
+                            let rustc_start = std::time::Instant::now();
                             let compile_result = cmd.output();
+                            crate::platform::timing_record(
+                                "fixture",
+                                &stem,
+                                false,
+                                Some(rustc_start.elapsed().as_secs_f64()),
+                            );
                             let ok = compile_result
                                 .as_ref()
                                 .map(|o| o.status.success())
