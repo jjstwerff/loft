@@ -199,7 +199,7 @@ These metrics drive acceptance for each phase.
 | 3 | [loft-lsp integration](03-loft-lsp.md) | M | Once `lib_plans/future/09-lsp/` LSP.1 ships, bridge spawns `loft-lsp` for `.loft` files.  Same hover / def / refs UX as rust-analyzer.  First-class loft treatment. | Open (depends on @PLAN09 LSP.1) |
 | 4 | [Java via jdtls](04-jdtls.md) | M | Bridge spawns jdtls (Eclipse JDT-LS) for `.java` files.  `LOFT_JDTLS_HOME` env var or auto-discovery.  Same UI shape across all three languages. | Open |
 | 5 | [Browser editor R1 + R2](05-browser-editor.md) | M | Read-only nav + diagnostics layer in the browser.  No editor framework yet.  Completes the "review dashboard" framing.  E1 (CodeMirror inline edit) is a stretch follow-up. | Open |
-| 6 | [Closeout + colleague-onboarding doc](06-closeout.md) | S | DEBUG.md § "Multi-language code intelligence in `make view`"; install instructions for rust-analyzer/jdtls auto-discovery; CHANGELOG; move plan to finished/. | Open |
+| 6 | [Closeout + colleague-onboarding doc](06-closeout.md) | S | DEBUG.md § "Multi-language code intelligence in `make view`"; install instructions for rust-analyzer/jdtls auto-discovery; CHANGELOG; close the issue (`status:finished`). | Open |
 
 Total estimated effort: **VH** (per-phase letters MH-H each;
 sum is on the order of two quarters of focused work).  Phases

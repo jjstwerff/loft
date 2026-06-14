@@ -126,15 +126,16 @@ the underlying data exist.
 
 ### Plan-doc maintenance use case
 
-When a plan moves from `future/` to `plans/N-…/` to
-`finished/`, every link pointing at the old path becomes
-broken.  Today this is caught (sometimes) by manual diff
-review; phase 09 surfaces it explicitly:
+When a plan closes, its REFERENCE content moves out to a doc
+home (`_LIFECYCLE.md` Steps 1-2), and every link that pointed
+at the plan for design/how-it-works becomes stale.  Today this
+is caught (sometimes) by manual diff review; phase 09 surfaces
+it explicitly:
 
 ```bash
-$ ./scripts/idx incoming:doc/claude/plans/future/22-mutable-closures/
-# (after the move to finished/, this returns leftover refs
-# at any callers that didn't update their paths)
+$ ./scripts/idx incoming:doc/claude/plans/22-mutable-closures/
+# returns callers still linking the plan for design content
+# that has since moved to its reference home
 ```
 
 The broken-link audit (phase 03) can EXTEND to flag

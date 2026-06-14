@@ -9,11 +9,11 @@ I/III straight-line watermark is fixed (reclaim is default), and the rc-removal
 tail-end (follow-up #1) is complete.  This is the checklist to **close the plan
 cleanly**: promote the probes that are permanent guarantees into CI tests, file
 the sibling bugs the probing surfaced, get the docs (in-plan and out) honest, and
-move the plan to `finished/`.
+close the issue (`status:finished`).
 
 Execute the workstreams in order **B → A → C → D** (file bugs first so the probes
-have a forward home, then tests, then docs, then the move).  One commit per
-workstream; `make ci` green before the move.
+have a forward home, then tests, then docs, then the close).  One commit per
+workstream; `make ci` green before the close.
 
 ---
 
@@ -120,19 +120,18 @@ Net: coverage is essentially complete; the only required code change is **A.1**.
 
 ## Workstream D — close-out mechanics
 
-- **D.1** `git mv doc/claude/plans/future/57-vector-store-watermark
-  doc/claude/plans/finished/57-vector-store-watermark`.
-- **D.2** Add the close-out banner to the moved `README.md`:
+- **D.1** Add the close-out banner to the plan `README.md` (the dir stays in
+  place — no move):
   > ✅ **CLOSED 2026-06.** @P393 resolved (cluster II) + reclaim default (I/III
   > straight-line) + rc removed (follow-up #1, Phases A/B/C).  Tracked elsewhere:
   > Cluster III Route 2 → QUALITY.md; parallel feature → lib_plans 08/10; nightly
   > parity sweep → TESTING.md; sibling bugs B.1–B.3 → PROBLEMS.md.
-- **D.3** `plans/README.md` — move the 57 index row future→finished; fix the prose
-  back-references (they already cite `plans/future/57…` — repoint to `finished/`).
-- **D.4** Grep the repo for `plans/future/57-vector-store-watermark` links and
-  repoint them to `finished/` (probe READMEs, cross-doc links, memory).
-- **D.5** `make ci` green; commit the closure.  Update the
-  `[[project_drop_store_refcount]]` / plan memory pointers if they cite the old path.
+- **D.2** Set the issue label + close it: `gh issue edit <N> --repo
+  loft-lang/plans --remove-label status:active --add-label status:finished`,
+  then `gh issue close <N>`.  See [`../../_LIFECYCLE.md`](../../_LIFECYCLE.md).
+- **D.3** `ROADMAP.md` — remove the 57 row from the active section.
+- **D.4** `make ci` green; commit the closure.  (The plan path is unchanged, so
+  no link repointing is needed beyond reference content moved out in Workstream C.)
 
 ---
 
@@ -141,7 +140,7 @@ Net: coverage is essentially complete; the only required code change is **A.1**.
 1. **B.0** re-verify the 3 crashes → **B.1–B.3** file the survivors (PROBLEMS.md + USER_FACING.md).
 2. **A.1** de-RC_OFF `closure_cell_ownership.rs`; **A.2** confirm 174; (A.3 optional).
 3. **C.1–C.4** in-plan docs → **C.5–C.10** outside docs → **C.11–C.12** confirm routing.
-4. **D.1–D.5** move to `finished/`, banner, index, back-refs, `make ci`, commit.
+4. **D.1–D.4** banner, close the issue (`status:finished`), ROADMAP, `make ci`, commit.
 
 Estimated effort: **S–M** — mostly doc edits; the only code is A.1 (test hygiene)
 and the B-bug repros.  No behaviour change ships from the closure itself.

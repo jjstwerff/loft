@@ -428,21 +428,20 @@ the next-up promotion candidates.
 
 ### Closing a plan — documentation must move out
 
-When a plan ships and moves to `finished/`, its
-**documentation content must move to its proper home** in
-the reference layer:
+When a plan ships (issue → `status:finished`, then closed — the dir stays in
+place, see [`_LIFECYCLE.md`](_LIFECYCLE.md)), its **documentation content must
+move to its proper home** in the reference layer:
 
 - Library-scoped reference content → `lib/<name>/README.md`
   (or other library-internal docs).
 - Project-wide reference content → `doc/claude/*.md`
   (architecture, runtime semantics, language / API surface).
 
-**The `finished/<NN>-<slug>/` directory is for closure
-record only** — git history pointer, commit chain, P-issues
-filed/closed, lessons learned.  It is NOT a place that other
-docs link to for ongoing reference.
+**A closed plan's README is a closure record only** — git history pointer,
+commit chain, P-issues filed/closed, lessons learned.  It is NOT a place that
+other docs link to for ongoing reference.
 
-**Why this matters:** retaining links to `finished/`
+**Why this matters:** retaining links to closed
 plans across the docs creates drift.  A future contributor
 clicking through to a closed plan finds a closure record
 where they expected design content; the actual design has
@@ -456,7 +455,7 @@ by close + defer.  Two shapes: **CREATE-AND-MOVE**
 (`31-html-export → HTML_EXPORT.md`) and **TRIM-ONLY**
 (`04-slot-assignment-redesign → SLOTS.md`).
 
-This rule applies retroactively: a `finished/` plan being linked
+This rule applies retroactively: a closed plan being linked
 from current docs is a cleanup signal — either the reference
 content never moved out, or the link wasn't updated when it did.
 `scripts/check_doc_drift.sh` catches the common shapes
@@ -599,10 +598,10 @@ item that's been deferred for two releases.
 - Existing `NN-slug/` dirs predate this (number = monotonic open-order, not
   priority) and are kept as-is.
 - Phase files begin with `Status: open | in-progress | done`.
-- A closed plan's issue is closed; any local dir → `finished/` (apply
-  [`_LIFECYCLE.md`](_LIFECYCLE.md)).
-- Paused-with-trigger plans → `deferred/` (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)
-  + add row to [`DEFERRED.md`](DEFERRED.md)).
+- Closing a plan: set the issue `status:finished` and close it; the local dir
+  stays in place as a closure record (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
+- Paused-with-trigger plans: set the issue `status:future` (keep it open) + add a
+  row to [`DEFERRED.md`](DEFERRED.md) (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
 
 ## Ground rule — plans never allow regressions
 
@@ -683,16 +682,21 @@ the plan README's job is "where it stands today."
 
 ## Where to look for plans by state
 
-The filesystem is the source of truth — duplicate per-state tables
-in this README rotted faster than they helped.  Use:
+The **`loft-lang/plans` issue's `status:*` label is the source of truth** —
+duplicate per-state tables in this README rotted faster than they helped, and
+directories are no longer moved between states.  Query by label:
 
 ```bash
-ls doc/claude/plans/[0-9]*/             # current (max 2-3)
-ls doc/claude/plans/future/             # paused, intent to finish
-ls doc/claude/plans/deferred/           # paused, awaits trigger (see DEFERRED.md)
-ls doc/claude/plans/finished/           # closed (closure records only)
-ls doc/claude/lib_plans/{future,deferred,finished}/   # library plans
+gh issue list --repo loft-lang/plans --label status:active    # in progress now
+gh issue list --repo loft-lang/plans --label status:future    # planned / paused (trigger in DEFERRED.md)
+gh issue list --repo loft-lang/plans --label status:finished  # delivered / closed
 ```
+
+A plan's local `plans/<N>-<slug>/` dir (if it has one) lives at the top level
+regardless of state — read its README `## Status` block for the in-place detail.
+The `future/` / `deferred/` / `finished/` subdirectories are a **legacy archive**
+from the old local-numbering era (closure records only); new plans are not added
+to them.
 
 Each plan directory contains a `README.md` with Status block, Goal,
 and per-phase index — that's the per-plan source of truth.
