@@ -29,10 +29,14 @@
 //! recursively eat itself), and any path component starting with `.`
 //! that isn't an explicit allow-listed dotfile (none today).
 //!
-//! `.gitignore` parsing is NOT implemented in the MVP — the hardcoded
-//! exclusion list above covers the conventional cases.  Add a real
-//! `.gitignore` walker when a package genuinely needs custom
-//! ignores (open Q for later).
+//! In a git repo, files git ignores (untracked + matched by `.gitignore` /
+//! `.git/info/exclude` / `core.excludesfile`) are ALSO excluded — see
+//! `git_ignored_set`.  This keeps a package built from a dirty working tree
+//! (e.g. after `loft test` wrote gitignored scratch files like
+//! `tests/_tmp_*.bin`) byte-identical to one built from a clean clone, which the
+//! registry's gate-3 reproducible-build check requires.  Parsing is delegated to
+//! `git` rather than re-implemented; outside a git repo only the hardcoded list
+//! above applies.
 
 #![cfg(feature = "registry")]
 
@@ -186,7 +190,55 @@ fn add_dir_contents(
     archive_prefix: &str,
     out_name: &str,
 ) -> io::Result<()> {
-    walk(builder, src_dir, src_dir, archive_prefix, out_name)
+    let ignored = git_ignored_set(src_dir);
+    walk(
+        builder,
+        src_dir,
+        src_dir,
+        archive_prefix,
+        out_name,
+        &ignored,
+    )
+}
+
+/// Paths (relative to the package root) that git ignores — UNTRACKED files
+/// matched by `.gitignore` / `.git/info/exclude` / `core.excludesfile`.  We skip
+/// these when packaging so a tarball built from a DIRTY working tree (e.g. after
+/// `loft test` wrote gitignored scratch files such as `tests/_tmp_*.bin`) matches
+/// one built from a clean clone — the registry's gate-3 reproducible-build
+/// invariant.  `.gitignore` parsing is delegated to `git` itself rather than
+/// re-implemented.
+///
+/// Returns empty (skip nothing) when the dir is not a git repo or `git` is
+/// missing, so non-git packaging is unchanged.  Only *untracked* ignored files
+/// are listed, so a clean checkout (which has none) packages identically before
+/// and after this change — existing releases stay valid.
+fn git_ignored_set(root: &Path) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(out) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ])
+        .output()
+    else {
+        return set; // git not installed → behave as before
+    };
+    if !out.status.success() {
+        return set; // not inside a git repo → behave as before
+    }
+    for p in out.stdout.split(|&b| b == 0) {
+        if !p.is_empty() {
+            let s = String::from_utf8_lossy(p);
+            set.insert(PathBuf::from(s.trim_end_matches('/')));
+        }
+    }
+    set
 }
 
 fn walk(
@@ -195,6 +247,7 @@ fn walk(
     current: &Path,
     archive_prefix: &str,
     out_name: &str,
+    ignored: &std::collections::HashSet<PathBuf>,
 ) -> io::Result<()> {
     // Collect + sort entries so the resulting tarball is deterministic
     // across runs (same bytes → same SHA-256, which the publisher's
@@ -207,6 +260,15 @@ fn walk(
         let file_name = entry.file_name();
         let name_str = file_name.to_string_lossy();
         let file_type = entry.file_type()?;
+
+        // Skip anything git ignores (see git_ignored_set) — keeps a dirty-tree
+        // package byte-identical to a clean clone (gate-3 reproducible build).
+        if path
+            .strip_prefix(root)
+            .is_ok_and(|rel| ignored.contains(rel))
+        {
+            continue;
+        }
 
         // Top-level dir exclusions.
         if file_type.is_dir()
@@ -237,7 +299,7 @@ fn walk(
         let archive_rel = PathBuf::from(archive_prefix).join(rel);
 
         if file_type.is_dir() {
-            walk(builder, root, &path, archive_prefix, out_name)?;
+            walk(builder, root, &path, archive_prefix, out_name, ignored)?;
         } else if file_type.is_file() {
             // Deterministic file entry: hand-construct the tar header
             // with mtime=0, uid=0, gid=0, mode=0o644, empty owner
@@ -474,6 +536,63 @@ mod tests {
         assert!(
             !paths.iter().any(|p| p.contains("target/")),
             "target leaked: {paths:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn excludes_gitignored_untracked_files() {
+        // A tarball built from a DIRTY tree (gitignored scratch files present —
+        // e.g. `tests/_tmp_*.bin` left by `loft test`) must match one built from
+        // a clean clone, or the registry's gate-3 reproducible-build check fails.
+        // Regression for the hex_world 0.1.x mismatch.
+        let dir = tmpdir("excludes_gitignored_untracked_files");
+        let pkg = dir.join("ignlib");
+        write(
+            &pkg.join("loft.toml"),
+            "[package]\nname = \"ignlib\"\nversion = \"0.1.0\"\n",
+        );
+        write(&pkg.join("src").join("ignlib.loft"), "// real source\n");
+        write(&pkg.join(".gitignore"), "tests/_tmp_*.bin\n");
+        write(&pkg.join("tests").join("_tmp_scratch.bin"), "junk\n");
+
+        // Needs a git repo so git can resolve the ignore rules.  If git is
+        // unavailable the fix degrades to a no-op, so skip rather than fail.
+        let git_ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&pkg)
+            .args(["init", "-q"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !git_ok {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+
+        let out = package_create(&pkg, None).expect("package_create");
+        let tar_gz = fs::File::open(&out.tarball).unwrap();
+        let dec = flate2::read::GzDecoder::new(tar_gz);
+        let mut ar = tar::Archive::new(dec);
+        let mut paths: Vec<String> = Vec::new();
+        for entry in ar.entries().unwrap() {
+            paths.push(
+                entry
+                    .unwrap()
+                    .path()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        assert!(
+            paths.iter().any(|p| p.contains("src/ignlib.loft")),
+            "src missing: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("_tmp_scratch.bin")),
+            "gitignored scratch file leaked into the package: {paths:?}"
         );
 
         let _ = fs::remove_dir_all(&dir);
