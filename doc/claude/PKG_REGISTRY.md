@@ -192,10 +192,11 @@ Everything else is repo-internal infrastructure for keeping
       "yanked": ["0.1.2", …],
       "versions": {
         "<semver>": {
-          "url": "https://github.com/loft-lang/loft-<pkg>/releases/download/v<semver>/<pkg>-<semver>.tar.gz",
+          "url": "https://github.com/loft-lang/loft-libs-<domain>/releases/download/<pkg>-v<semver>/<pkg>-<semver>.tar.gz",
           "sha256": "<64-hex>",
           "size": <bytes>,
           "loft": ">=0.8",
+          "subpath": "<pkg>",
           "deps": {
             "<dep_pkg>": ">=0.1"
           },
@@ -228,6 +229,7 @@ Everything else is repo-internal infrastructure for keeping
 | `…sha256` | yes | Lowercase hex of the SHA-256 hash of the tarball bytes.  Verified post-download. |
 | `…size` | yes | Byte length.  Bandwidth sanity check + early-abort on giant downloads. |
 | `…loft` | yes | Required loft interpreter version.  `>=0.8` syntax mirrors `loft.toml::[package] loft`. |
+| `…subpath` | for monorepos | Package directory within the release repo (e.g. `crypto` inside `loft-libs-core`).  The loft-lang libraries are **domain monorepos** (`loft-libs-core`/`-net`/`-graphics`/`-game`/`-world`/`-assets`/`-docs`) tagged `<pkg>-v<version>`, so `subpath` tells the installer where the package lives in the unpacked tarball.  Omit for a one-repo-per-package layout. |
 | `…deps` | no | Inter-package dependencies.  Resolved during install; failures abort before any download. |
 | `…conflicts` | no | **(Schema slot — resolver support deferred.)** Array of package names + version constraints that cannot coexist with this version in the same dependency graph.  Inspired by Debian's `Conflicts:`.  Reserved field so the schema doesn't need a bump when the resolver gains support. |
 | `…replaces` | no | **(Schema slot — resolver support deferred.)** Array of packages this version takes over from (rename / fork takeover).  Inspired by Debian's `Replaces:`. |
@@ -547,11 +549,12 @@ description; that doc is what you'd hand to a contributor.
    ```diff
     "crypto": {
       "versions": {
-   +    "0.1.0": {
-   +      "url": "https://github.com/loft-lang/loft-crypto/releases/download/v0.1.0/crypto-0.1.0.tar.gz",
+   +    "0.2.1": {
+   +      "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz",
    +      "sha256": "abc123…",
    +      "size": 12698,
    +      "loft": ">=0.8",
+   +      "subpath": "crypto",
    +      "published": "2026-05-24T08:00:00Z"
    +    }
       }
