@@ -417,4 +417,7 @@ sign_args=(--registry-dir "$REG_DIR" --key "$KEY" --message "publish: ${publishe
 
 echo
 echo "verifying — coverage check should now be clean:"
-"$here/scripts/check_registry_coverage.sh"
+# Check against the index we JUST pushed (local REG_DIR copy), not the CDN-cached
+# raw URL — otherwise a publish shows a spurious "stale" until the cache catches
+# up (the CDN serves the pre-push index for a few minutes).
+"$here/scripts/check_registry_coverage.sh" --index "$REG_DIR/index.json"

@@ -21,7 +21,15 @@
 set -euo pipefail
 
 STRICT=0
-[ "${1:-}" = "--strict" ] && STRICT=1
+INDEX_FILE=""        # --index <path>: use a local index instead of the CDN URL
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --strict) STRICT=1 ;;
+        --index)  INDEX_FILE="$2"; shift ;;
+        *) echo "check_registry_coverage: unknown arg: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 ORG=loft-lang
 INDEX_URL="https://raw.githubusercontent.com/$ORG/registry/main/index.json"
@@ -29,7 +37,13 @@ INDEX_URL="https://raw.githubusercontent.com/$ORG/registry/main/index.json"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-if ! curl -fsSL "$INDEX_URL" -o "$tmp/index.json"; then
+if [ -n "$INDEX_FILE" ]; then
+    # Caller supplied a local index (registry_maintain passes its just-pushed
+    # copy).  Avoids a spurious "stale" right after a publish, when the CDN-cached
+    # raw.githubusercontent URL still serves the pre-push index.
+    cp "$INDEX_FILE" "$tmp/index.json" 2> /dev/null \
+        || { echo "check_registry_coverage: cannot read --index $INDEX_FILE" >&2; exit 2; }
+elif ! curl -fsSL "$INDEX_URL" -o "$tmp/index.json"; then
     echo "registry index unreachable ($INDEX_URL) — skipping (needs network)"
     exit 0
 fi
