@@ -1,7 +1,8 @@
 [package]
 name = "game_protocol"
-version = "0.1.1"
+version = "0.1.2"
 loft = ">=0.8"
+repository = "loft-libs-net"
 
 [library]
 entry = "src/game_protocol.loft"

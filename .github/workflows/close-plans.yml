@@ -1,0 +1,39 @@
+# Close loft-lang/plans issues when a PR that resolves them merges to main.
+#
+# GitHub's native `Fixes #N` auto-close is SAME-REPO only, so it can never close
+# a plan that lives in the separate loft-lang/plans repo.  This workflow is the
+# cross-repo closer: on a merge to `main`, it scans the PR body for plan-close
+# directives (`Closes @PLN22` / `Fixes loft-lang/plans#22`) and runs
+# scripts/close-shipped-plans.sh, which sets each plan `status:finished` + closes
+# it.  Idempotent — safe if a plan is referenced by more than one PR.
+#
+# REQUIRES a repo/org secret `PLANS_TOKEN`: a fine-grained PAT or GitHub App
+# token with **Issues: write** on loft-lang/plans (the default GITHUB_TOKEN is
+# scoped to THIS repo and cannot touch the plans repo).  Without it the job
+# logs a warning and no-ops, so it never blocks a merge.
+name: close plans on merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  close-plans:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Close referenced plan issues
+        env:
+          GH_TOKEN: ${{ secrets.PLANS_TOKEN }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::PLANS_TOKEN not set — skipping cross-repo plan auto-close."
+            exit 0
+          fi
+          printf '%s' "$PR_BODY" > /tmp/pr_body.txt
+          scripts/close-shipped-plans.sh --body-file /tmp/pr_body.txt --yes

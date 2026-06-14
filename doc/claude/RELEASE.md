@@ -52,6 +52,30 @@ What work is in scope during a cycle (the warm feature freeze that
 began with the `2026-07` cycle) is described in
 [ROADMAP.md § Feature freeze](ROADMAP.md#feature-freeze--heading-into-the-2026-07-cycle-added-2026-06-07).
 
+### Closing plans when the release merges
+
+Plans live in [`loft-lang/plans`](https://github.com/loft-lang/plans); GitHub's
+`Fixes #N` auto-close is **same-repo only**, so a loft PR can never auto-close a
+plan.  Closing is explicit and cross-repo:
+
+- **A PR that completes a plan** carries a close directive in its body —
+  `Closes @PLN<n>` (or `Closes loft-lang/plans#<n>`).  The plan stays
+  `status:active` while the work is only on the cycle branch.
+- **On merge to `main`** (the release), the
+  [`close-plans` workflow](../../.github/workflows/close-plans.yml) reads the
+  merge PR's directives and runs
+  [`scripts/close-shipped-plans.sh`](../../scripts/close-shipped-plans.sh) —
+  setting each plan `status:finished` + closing it.  (Needs a `PLANS_TOKEN`
+  secret: Issues:write on the plans repo; without it the job no-ops.)
+- **Drift safety net (runs daily):** the nightly checks
+  ([`miri.yml`](../../.github/workflows/miri.yml) → `stale-plans-audit`
+  job) run `scripts/audit-stale-plans.sh` every day, warning when a
+  `status:active` plan's close directive is already on `main` — so a missed
+  close surfaces within a day, not at the next audit-by-hand (the drift this
+  caught manually in `2026-06`: @PLN1/5/10/16/21).
+- **Manual fallback:** run `scripts/close-shipped-plans.sh --range
+  <prev-release>..main` once after the merge if the on-merge workflow didn't fire.
+
 ### `2026-06` — first monthly cycle, and the switch to calendar versioning
 
 The monthly cadence is **adopted starting `2026-06`**, shipped **mid-month**

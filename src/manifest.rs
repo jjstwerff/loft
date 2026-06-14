@@ -18,6 +18,17 @@ pub struct Manifest {
     /// Interpreter version requirement from the `[package]` section,
     /// e.g. `">=1.0"`.  `None` means no constraint.
     pub loft_version: Option<String>,
+    /// GitHub repository that publishes this package's releases, from
+    /// `[package] repository = "..."`.  Either a bare repo name under the
+    /// `loft-lang` org (`"loft-libs-core"`) or a full `"owner/repo"`.  When
+    /// set, the package lives in a **monorepo**, so `loft package` emits the
+    /// `<name>-v<version>` release-tag scheme; absent → the legacy
+    /// one-repo-per-package `loft-<name>` + `v<version>` fallback.
+    pub repository: Option<String>,
+    /// One-line package description from `[package] description = "..."`.  The
+    /// official source for the registry catalog (`loft search` / `loft api
+    /// --registry`); registry tooling prefers this over scraping the README.
+    pub description: Option<String>,
     /// Native shared-library stem from `[library] native = "..."`.
     /// `None` for pure-loft packages.  The interpreter resolves this to the
     /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
@@ -103,6 +114,8 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 ("package", "name") => manifest.name = Some(value.to_string()),
                 ("package", "version") => manifest.version = Some(value.to_string()),
                 ("package", "loft") => manifest.loft_version = Some(value.to_string()),
+                ("package", "repository") => manifest.repository = Some(value.to_string()),
+                ("package", "description") => manifest.description = Some(value.to_string()),
                 ("library", "entry") => manifest.entry = Some(value.to_string()),
                 ("library", "native") => manifest.native = Some(value.to_string()),
                 ("library", "compile") => manifest.compile = Some(value.to_string()),
@@ -264,6 +277,28 @@ mod tests {
         assert_eq!(m.name.as_deref(), Some("graphics"));
         assert_eq!(m.version.as_deref(), Some("0.2.1"));
         assert_eq!(m.loft_version.as_deref(), Some(">=0.8"));
+        assert_eq!(m.repository, None);
+    }
+
+    /// `[package] repository` parses (drives `loft package`'s monorepo URL/tag).
+    #[test]
+    fn parses_package_repository() {
+        let p = write_temp(
+            "repo",
+            "[package]\nname = \"crypto\"\nversion = \"0.2.1\"\nrepository = \"loft-libs-core\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.repository.as_deref(), Some("loft-libs-core"));
+    }
+
+    #[test]
+    fn parses_package_description() {
+        let p = write_temp(
+            "desc",
+            "[package]\nname = \"crypto\"\nversion = \"0.2.1\"\ndescription = \"SHA-256, HMAC, base64.\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.description.as_deref(), Some("SHA-256, HMAC, base64."));
     }
 
     // @PLN21 Phase 2 — `[native] runtime-libs` / `build-deps` parse into trimmed

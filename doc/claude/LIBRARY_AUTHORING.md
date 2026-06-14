@@ -40,6 +40,19 @@ git tag + push + gh release create    4. release source + binary
 loft publish                          5. submit to registry
 ```
 
+**Maintaining the loft-lang family libs** (`loft-libs-*`) — run from a
+`loft-lang/loft` checkout, not a single package dir:
+
+```
+scripts/registry_maintain.sh   # publish every stale/missing own lib, sign the index, push
+scripts/registry-sign.sh       # re-sign the index after a hand-merge (review-then-sign)
+scripts/sync-fixtures.sh       # regenerate tests/fixtures/libs/<pkg>/ from the pinned tags
+```
+
+These automate the publish + sign + fixture steps (§4–§5) for our own
+libraries; the per-package `loft publish` flow below is the mechanism they
+wrap (and the path external contributors use — [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md)).
+
 ---
 
 ## 1. Scaffold a fresh library
@@ -51,10 +64,19 @@ Created library `my_lib/`:
   src/my_lib.loft
   tests/01-smoke.loft
   README.md
+  release.sh
 ```
 
 `loft new` validates the name (lowercase ascii + digits +
 underscore) and refuses to overwrite an existing dir.
+
+`release.sh` (executable) is a one-command release: it reads name + version
+from `loft.toml`, runs the test gate + a deterministic-package check, commits any
+version bump, tags `<name>-v<version>`, pushes, packages, and `gh release
+create`s.  `./release.sh` releases the current version; `./release.sh 0.2.0`
+bumps first.  It refuses to re-cut an existing tag (releases are immutable —
+bump instead).  Automates §4a–4b; afterwards an own lib is picked up by
+`registry_maintain.sh`, an external lib opens a registry PR.
 
 Flags:
 
@@ -124,6 +146,9 @@ Before you ship a version:
       kept `.allow_warnings` as an opt-out only when the
       package isn't ready yet).
 - [ ] `loft.toml` has the new version under `[package] version`.
+- [ ] `[package] description` is a real one-line summary (not the `loft new`
+      placeholder) — it's the official registry catalog text (`loft search` /
+      `loft api --registry`); registry tooling prefers it over the README.
 - [ ] README, doc comments on every `pub fn` / `pub struct`.
 - [ ] CHANGELOG note for the version (free-form).
 - [ ] Local re-package produces a byte-identical sha256 across
@@ -140,6 +165,29 @@ Before you ship a version:
 The publish flow has four phases: tag → release source + binary →
 emit registry entry → registry PR.
 
+> **Two paths — pick by who owns the library.**
+>
+> - **A loft-lang family library** (`loft-libs-*`, maintained from a
+>   `loft-lang/loft` checkout): don't paste-and-PR by hand.  Tag + release the
+>   version (§4a–4b), then run
+>   **[`scripts/registry_maintain.sh`](../../scripts/registry_maintain.sh)** — it
+>   clones every family repo fresh, publishes each stale/missing version against
+>   the live index (`loft publish` under the hood), **signs** the index (the
+>   trust-root step — it shows the diff to review first), and pushes.  One
+>   reviewed run catches up the whole registry; §4c–4d + §5a below are the
+>   mechanism it automates.  Before it signs it re-downloads every tarball and
+>   verifies the sha256 — on any mismatch it **refuses to sign** (so a stale
+>   release artifact can never reach the signed index; fix that release and
+>   re-run).
+> - **An external contributor's library**: the manual tag → package → upload →
+>   PR flow in §4a–4d (the maintainer signs the index on merge, you sign
+>   nothing) — see [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md).
+>
+> **Never hand-edit `index.json` for an own-lib release.**  `registry_maintain.sh`
+> (or `registry-sign.sh` after a hand-merge) regenerates + re-signs it.  A hand
+> edit that isn't re-signed leaves the published signature invalid and breaks
+> `loft install` / `loft search` for everyone.
+
 ### 4a. Tag the version
 
 ```
@@ -149,7 +197,10 @@ $ git push origin <name>-v<version>
 
 Tag convention is `<name>-v<version>` (e.g. `gridmesh-v0.1.1`).
 Required by the registry's gate-3 reproducible-build check —
-the validator clones at this tag to re-package.
+the validator clones at this tag to re-package.  Set
+`repository = "<monorepo>"` in `loft.toml` (e.g. `loft-libs-graphics`)
+so `loft package` emits the matching `<name>-v<version>` tag + release
+URL automatically (see PACKAGES.md § Manifest).
 
 ### 4b. Build + upload the release artifact
 
@@ -278,8 +329,13 @@ For a `0.1.0` → `0.1.1` patch:
 1. Bump `version` in `loft.toml`.
 2. Commit + tag `<name>-v0.1.1`.
 3. `loft package` + `gh release create <name>-v0.1.1 ...`.
-4. `loft publish` + registry PR with the new block (under the
-   same package, in `versions`).
+4. Publish to the registry:
+   - **Own (loft-lang family) lib:** run
+     [`scripts/registry_maintain.sh`](../../scripts/registry_maintain.sh) from a
+     `loft-lang/loft` checkout — it sees the new version as "stale", publishes it,
+     signs, and pushes (review the diff at the prompt).  No manual PR.
+   - **External lib:** `loft publish` + registry PR with the new block (under the
+     same package, in `versions`).
 
 The registry keeps all versions; old releases stay reachable
 unless explicitly yanked.
@@ -386,7 +442,12 @@ removal of the in-monorepo `lib/<pkg>/` source.  Full rationale +
 A library's source lives **only** in its chunk repo; loft consumes a pinned,
 read-only **snapshot** under `tests/fixtures/libs/<pkg>/` (§ 5d).  So a library
 fix never happens in the loft tree, and never by editing the fixture directly
-(that's drift — `scripts/sync-fixtures.sh --check` fails).  Work in the chunk
+(that's drift — `scripts/sync-fixtures.sh --check` fails).  This holds even when
+a *language* change breaks the fixture: when @PLN22 removed flat-list
+`use lib::a, b;`, `game_protocol`'s fixture stopped compiling — the right fix was
+to re-release the lib (`game_protocol-v0.1.2`, grouped `use`) and bump the pin,
+**not** to hand-patch the fixture to compile (that hides the drift and ships a
+library whose own tests no longer build on current loft).  Work in the chunk
 repo, **out of the loft tree**, so no stale artifacts accrue in loft:
 
 1. **Issue home.** File / find the bug in the **chunk repo's** tracker

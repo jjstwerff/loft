@@ -35,6 +35,27 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  stale-plans-audit:
+    name: Stale-plan drift audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0          # full main history for the close-directive grep
+      - name: Audit open status:active plans vs main
+        # Read-only: lists status:active plans + flags any whose close directive
+        # already landed on main (the drift the close-plans workflow would have
+        # caught).  PLANS_TOKEN if the plans repo is private; else the default
+        # token reads the public repo.  Never fails the run — surfaces a warning.
+        env:
+          GH_TOKEN: ${{ secrets.PLANS_TOKEN || github.token }}
+        run: |
+          out=$(scripts/audit-stale-plans.sh 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q DRIFT && \
+            echo "::warning::stale plans found — close directive on main but issue still status:active; run scripts/close-shipped-plans.sh" || true
+
   miri:
     name: Miri hard-UB gate
     runs-on: ubuntu-latest
@@ -264,3 +285,37 @@ jobs:
           path: /tmp/loft_native_*.rs
           if-no-files-found: ignore
           retention-days: 14
+
+  library-health:
+    name: Library health audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-libaudit-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-libaudit-cargo-
+      - name: Library health audit (correctness + drift + orphaned branches)
+        # Read-only across the loft-libs-* repos: lib_audit builds loft, then per
+        # library checks interpreter correctness + registry currency + stray
+        # branches (unmerged-no-PR orphans / prunable).  Informational — never
+        # fails the nightly; surfaces a warning + job summary so branch hygiene and
+        # library drift are caught routinely, not only on a manual run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$(scripts/lib_audit.sh --no-native 2>&1 || true)
+          echo "$out"
+          { echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$out" | grep -q "NOT GREEN" && \
+            echo "::warning::library audit not green — orphaned branches / drift / correctness (see job summary)" || true
