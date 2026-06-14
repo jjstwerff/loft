@@ -345,18 +345,21 @@ package`, but the resulting sha256 doesn't match.  Causes:
 
 - The tag was force-pushed AFTER you generated the original
   tarball.  Don't force-push tags.
-- Your local `loft package` saw files the clean clone
-  doesn't (uncommitted changes, files outside the tracked
-  set, an `.loftignore` that doesn't match the build's
-  exclusions).  Inspect with:
+- Your local `loft package` saw files the clean clone doesn't.
+  `loft package` now skips files git IGNORES (so leftover
+  `tests/_tmp_*.bin` from a `loft test` run no longer leak into
+  the tarball), but UNTRACKED-and-not-ignored files and
+  uncommitted edits to tracked files still change the bytes.
+  Inspect with:
 
   ```sh
-  git clean -fdx        # show what's NOT in git
+  git status --porcelain   # uncommitted edits + untracked files
+  git clean -ndx           # what a clean would remove (untracked + ignored)
   ```
 
-  Anything `git clean` reports should either be in `.gitignore`
-  / excluded by `loft package`, or committed to the repo
-  before re-tagging.
+  Commit (or `.gitignore`) anything that shows up, then re-tag.
+  `./release.sh` (scaffolded by `loft new`) commits + checks a
+  clean tree before tagging, which avoids this.
 - Different `loft` versions produce different tarballs (this
   is a known limitation of the MVP — `loft package` should
   pin its output format across versions, tracked as a

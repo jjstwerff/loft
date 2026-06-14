@@ -1571,6 +1571,7 @@ fn escape_json_string(s: &str) -> String {
 /// <name>/
 /// ├── loft.toml           — package manifest with [package] + [library]
 /// ├── README.md           — placeholder header pointing at the registry
+/// ├── release.sh          — one-command release: bump → test → tag → package → GH release
 /// ├── src/<name>.loft     — empty entry file with a `pub fn hello()` stub
 /// └── tests/
 ///     └── 01-smoke.loft   — single `test_smoke` exercising the stub
@@ -1667,11 +1668,101 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
          ```\n"
     );
 
+    // release.sh — one command to cut a release: bump → test → tag → package →
+    // GitHub release, with immutability + deterministic-package gates.  A plain
+    // &str (no interpolation): it reads name + version from loft.toml at runtime.
+    let release_sh = r#"#!/usr/bin/env bash
+# release.sh — cut a release of THIS loft library so the registry can publish it.
+# Run from the library directory (the one containing loft.toml).
+#
+#   ./release.sh            # release the version currently in loft.toml
+#   ./release.sh 0.2.0      # set loft.toml to 0.2.0, commit, then release
+#
+# Reads name + version from loft.toml, runs the test gate + a determinism check,
+# commits any version bump, tags <name>-v<version>, pushes the branch + tag,
+# packages the tarball, and creates the GitHub release.  Releases are immutable:
+# it refuses to re-cut an existing tag — bump the version instead.
+#
+# After a successful release:
+#   * loft-lang family lib -> run scripts/registry_maintain.sh in loft-lang/loft
+#     (publishes every stale/missing own lib + signs the registry index).
+#   * external lib         -> `loft publish` then open a registry PR
+#     (see LIBRARY_AUTHORING.md / REGISTRY_SUBMIT.md).
+#
+# Env: LOFT=/path/to/loft to use a non-PATH binary; SKIP_NATIVE=1 to skip the
+#      `loft --native test` gate (e.g. no Rust toolchain on this machine).
+set -euo pipefail
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+LOFT="${LOFT:-loft}"
+sha()   { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+field() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\".*/\1/p" loft.toml | head -1; }
+
+[ -f loft.toml ] || { echo "release.sh: no loft.toml here — run from the library dir." >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { echo "release.sh: needs the GitHub CLI (gh)." >&2; exit 1; }
+name=$(field name); [ -n "$name" ] || { echo "release.sh: no package name in loft.toml." >&2; exit 1; }
+
+# Optional version bump.
+if [ "${1:-}" != "" ]; then
+    case "$1" in
+        [0-9]*.[0-9]*.[0-9]*) : ;;
+        *) echo "release.sh: '$1' is not an x.y.z version." >&2; exit 1 ;;
+    esac
+    tmp=$(mktemp)
+    awk -v v="$1" '!d && /^[[:space:]]*version[[:space:]]*=/ {sub(/"[^"]*"/, "\"" v "\""); d=1} {print}' loft.toml >"$tmp"
+    mv "$tmp" loft.toml
+fi
+ver=$(field version); [ -n "$ver" ] || { echo "release.sh: no version in loft.toml." >&2; exit 1; }
+tag="$name-v$ver"
+echo "== releasing $name $ver ($tag) =="
+
+# Immutability — never re-cut an existing release; bump the version instead.
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 || gh release view "$tag" >/dev/null 2>&1; then
+    echo "release.sh: $tag already exists. Bump first: ./release.sh <new x.y.z>" >&2
+    exit 1
+fi
+
+# Gate 1 — tests pass (both backends unless SKIP_NATIVE=1).
+echo "-- loft test"; "$LOFT" test
+if [ "${SKIP_NATIVE:-}" != 1 ]; then echo "-- loft --native test (SKIP_NATIVE=1 to skip)"; "$LOFT" --native test; fi
+
+# Commit the bump FIRST so the tag points at exactly the bytes we package.
+if ! git diff --quiet -- loft.toml; then git add loft.toml && git commit -m "release: $name $ver"; fi
+git diff --quiet && git diff --cached --quiet || {
+    echo "release.sh: uncommitted changes — commit them so the tag matches the release." >&2; exit 1; }
+
+# Gate 2 — packaging is deterministic (two clean builds must hash equal); this is
+# the registry's gate-3 reproducible-build invariant, checked locally first.
+"$LOFT" package >/dev/null; a=$(sha "$name-$ver.tar.gz"); rm -f "$name-$ver.tar.gz"
+"$LOFT" package >/dev/null; b=$(sha "$name-$ver.tar.gz")
+[ "$a" = "$b" ] || { echo "release.sh: non-deterministic package ($a != $b)." >&2; rm -f "$name-$ver.tar.gz"; exit 1; }
+
+git tag "$tag"
+git push origin HEAD
+git push origin "$tag"
+gh release create "$tag" "$name-$ver.tar.gz" --title "$name v$ver" --notes "Release $name $ver."
+rm -f "$name-$ver.tar.gz"
+
+echo
+echo "released $tag."
+echo "  loft-lang family lib -> run scripts/registry_maintain.sh in loft-lang/loft."
+echo "  external lib         -> loft publish + open a registry PR."
+"#;
+
     if let Err(e) = (|| -> std::io::Result<()> {
         write_file("loft.toml", &loft_toml)?;
         write_file(&format!("src/{name}.loft"), &src_loft)?;
         write_file("tests/01-smoke.loft", &test_loft)?;
         write_file("README.md", &readme)?;
+        write_file("release.sh", release_sh)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let p = pkg_dir.join("release.sh");
+            let mut perm = std::fs::metadata(&p)?.permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&p, perm)?;
+        }
         if native {
             let cargo_toml = format!(
                 "[package]\nname = \"loft-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"LGPL-3.0-or-later\"\n\n\
@@ -1729,6 +1820,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     println!("  src/{name}.loft");
     println!("  tests/01-smoke.loft");
     println!("  README.md");
+    println!("  release.sh");
     if native {
         println!("  native/Cargo.toml");
         println!("  native/build.rs");
@@ -1742,7 +1834,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     println!("  cd {name}");
     println!("  loft test           # exercises the smoke test");
     println!("  $EDITOR src/{name}.loft   # add your library's API");
-    println!("  loft publish        # when ready to ship (after tag + GH release)");
+    println!("  ./release.sh        # when ready: test -> tag -> package -> GH release");
     0
 }
 

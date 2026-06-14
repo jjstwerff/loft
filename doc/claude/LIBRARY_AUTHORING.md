@@ -64,10 +64,19 @@ Created library `my_lib/`:
   src/my_lib.loft
   tests/01-smoke.loft
   README.md
+  release.sh
 ```
 
 `loft new` validates the name (lowercase ascii + digits +
 underscore) and refuses to overwrite an existing dir.
+
+`release.sh` (executable) is a one-command release: it reads name + version
+from `loft.toml`, runs the test gate + a deterministic-package check, commits any
+version bump, tags `<name>-v<version>`, pushes, packages, and `gh release
+create`s.  `./release.sh` releases the current version; `./release.sh 0.2.0`
+bumps first.  It refuses to re-cut an existing tag (releases are immutable —
+bump instead).  Automates §4a–4b; afterwards an own lib is picked up by
+`registry_maintain.sh`, an external lib opens a registry PR.
 
 Flags:
 
