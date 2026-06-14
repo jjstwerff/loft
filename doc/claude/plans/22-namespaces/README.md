@@ -11,9 +11,10 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Phase 1 BUILT (2026-06-14) — two enums may share a variant name; matrix green on
-both backends; full suite green bar known-environmental (WASM rlib / port-bind).
-Phase 2 design round done (2026-06-14); build pending. Phases 3–4 drafted.**
+**Phases 1 & 2 BUILT (2026-06-14) — two enums may share a variant name (P1); user
+defs shadow stdlib/prelude names while `std::Name` still reaches the prelude (P2).
+Matrix + suites green on both backends bar known-environmental (WASM rlib /
+port-bind). Phases 3–4 drafted.**
 
 The build landed via the chokepoint-first order.  **Final design (a deliberate
 choice with the project owner):** a bare variant used as a VALUE resolves ONLY via
@@ -269,7 +270,19 @@ context (regression: the `Cfg` case in 369).
 
 ### Phase 2 — prelude shadowing (M)
 
-**Design round done (2026-06-14); build pending.**  A user definition shadows a
+**BUILT (2026-06-14).**  Matrix + regression
+([`tests/scripts/370-pln22-prelude-shadowing.loft`](../../../../tests/scripts/370-pln22-prelude-shadowing.loft);
+the built-in-keyword reject in `102-expected-errors.loft`) green on both backends;
+full suite green bar the 3 known-environmental.  As-built notes: **(a)** the
+`fill_database` loop guarded struct/enum DB registration on the *bare name*, so a
+shadowing `struct File` (second def of the name) was skipped and crashed with a
+`u16::MAX` type-id at runtime — fixed to a PER-DEF guard (`known_type == MAX`), so
+the P379 source-qualified registration actually runs for the second definer.
+**(b)** `prelude_shadowed` must test namespace membership by NAME
+(`source_nr(cur, name)`), NOT the found def's physical `.source`: a cross-file
+forward-ref type (p173) lives in another file's source yet is imported into this
+one's namespace, so the `.source`-based check false-positived and double-defined
+it.  A user definition shadows a
 stdlib / wildcard-imported name of the same key instead of being rejected, so
 `enum E` / `struct File` / `enum Format` become legal — removing the "pick a
 different name" wall — while the shadowed name stays reachable via qualification

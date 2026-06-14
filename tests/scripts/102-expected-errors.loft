@@ -178,3 +178,9 @@ fn test_pln22_bare_variant_no_context() {
   d = PLN22North;   // no type context — must write `PLN22Dir.PLN22North`
   assert(d is PLN22North, "unreachable");
 }
+
+// ── @PLN22 Phase 2 — prelude shadowing allows `enum E` etc., but a built-in
+// type-keyword (`integer`, `vector`, …) is NEVER shadowable: it stays a hard
+// error so the language's own types can't be silently re-pointed. ──
+// @EXPECT_ERROR: conflicts with a type
+struct integer { pln22_field: i32 }

@@ -332,6 +332,37 @@ impl Parser {
         true
     }
 
+    /// @PLN22 Phase 2 — true if `name` resolves ONLY through the source-0 prelude
+    /// fallback (a stdlib / wildcard-imported name) and is NOT present in the
+    /// source being parsed — so a definition of it here SHADOWS the prelude one
+    /// rather than being rejected as a redefinition; the shadowed one stays
+    /// reachable via qualification (`std::E`).
+    ///
+    /// The membership test is by NAME against the current source's namespace
+    /// (`source_nr(cur, name)`), NOT by the found def's physical `.source`: a
+    /// cross-file forward-ref type (p173) lives physically in another file's
+    /// source yet is imported INTO this source's namespace, so it must be filled,
+    /// not shadowed.  Built-in type-keywords (`integer`, `vector`, … — the
+    /// stdlib's `DefType::Type` at source 0) are NEVER shadowable (shadowing them
+    /// would re-point the language's own types).  Every other prelude/import kind
+    /// (const, struct, enum, library typedef) is shadowable.
+    fn prelude_shadowed(&self, name: &str) -> bool {
+        let cur = self.data.source;
+        // the stdlib itself (source 0) never shadows; and a name already in THIS
+        // source's namespace (a real def or a cross-file forward-ref imported
+        // into it) is filled/conflicts, not shadowed.
+        if cur == 0 || self.data.source_nr(cur, name) != u32::MAX {
+            return false;
+        }
+        // resolvable only via the source-0 prelude fallback?
+        let prelude = self.data.def_nr(name);
+        prelude != u32::MAX
+            && self.data.def_type(prelude) != DefType::Unknown
+            // built-in type-keyword (stdlib typedef) — sacred.
+            && !(self.data.def_type(prelude) == DefType::Type
+                && self.data.def(prelude).source == 0)
+    }
+
     // <enum> ::= 'enum' <identifier> '{' <value> {, <value>} '}' [';']
     pub(crate) fn parse_enum(&mut self) -> bool {
         if !self.lexer.has_token("enum") {
@@ -349,6 +380,10 @@ impl Parser {
             );
         }
         let mut d_nr = self.data.def_nr(&type_name);
+        // @PLN22 Phase 2 — shadow a prelude/import name of the same key.
+        if self.prelude_shadowed(&type_name) {
+            d_nr = u32::MAX;
+        }
         let mut conflict = false;
         if d_nr == u32::MAX {
             let pos = self.lexer.pos();
@@ -410,7 +445,12 @@ impl Parser {
         // clear diagnostic citing the prior definition's location.
         let mut conflict = false;
         if self.first_pass {
-            let existing = self.data.def_nr(&type_name);
+            let mut existing = self.data.def_nr(&type_name);
+            // @PLN22 Phase 2 — shadow a prelude/import name (but not a built-in
+            // type-keyword, which prelude_shadowed excludes).
+            if self.prelude_shadowed(&type_name) {
+                existing = u32::MAX;
+            }
             if existing != u32::MAX {
                 let prev_pos = self.data.def(existing).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(existing).def_type()).to_lowercase();
@@ -495,7 +535,11 @@ impl Parser {
             if self.first_pass {
                 // detect a name collision before calling `add_def`,
                 // which would otherwise panic with `Dual definition of <name>`.
-                let existing = self.data.def_nr(&id);
+                let mut existing = self.data.def_nr(&id);
+                // @PLN22 Phase 2 — shadow a prelude/import name of the same key.
+                if self.prelude_shadowed(&id) {
+                    existing = u32::MAX;
+                }
                 if existing == u32::MAX {
                     let c_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Constant);
                     self.data.set_returned(c_nr, tp);
@@ -1819,6 +1863,19 @@ impl Parser {
             return true;
         };
         let mut d_nr = self.data.def_nr(&id);
+        // @PLN22 Phase 2 — shadow a prelude/import struct of the same key, EXCEPT a
+        // generic type-var placeholder (empty, self-referential) which keeps its
+        // dedicated "reserved as a generic type variable" diagnostic below.
+        if self.prelude_shadowed(&id) {
+            let is_type_var = {
+                let ex = &self.data.definitions[d_nr as usize];
+                ex.attributes.is_empty()
+                    && matches!(&ex.returned, Type::Reference(r, _) if *r == d_nr)
+            };
+            if !is_type_var {
+                d_nr = u32::MAX;
+            }
+        }
         if d_nr == u32::MAX {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
             self.data.definitions[d_nr as usize].returned =

@@ -42,6 +42,13 @@ pub static I32: Type = Type::Integer(IntegerSpec::signed32());
 /// and picks 8-byte storage.
 pub static I64: Type = Type::Integer(IntegerSpec::wide());
 
+/// @PLN22 Phase 2 — source numbering: 0 = the stdlib prelude, 1 = the main
+/// program, 2.. = imported libraries.  The main file gets its OWN source (not
+/// the stdlib's 0) so a user definition can shadow a prelude name — bare names
+/// resolve current-source-first with a fallback to source 0, while `std::Name`
+/// reaches the prelude.
+pub const MAIN_SOURCE: u16 = 1;
+
 /// Specification of an `integer`-family type — bounds, nullability,
 /// and optional forced storage width.
 ///
@@ -2947,7 +2954,12 @@ impl Data {
     }
 
     pub fn use_add(&mut self, short: &str) {
-        let n = self.use_names.len() as u16;
+        // @PLN22 Phase 2 — source 0 = stdlib prelude, source 1 = the main program
+        // (MAIN_SOURCE, reserved so a user def can shadow a prelude name without a
+        // `(name, source)` collision); imported libraries number up from 2.
+        // `use_names` holds std + the libs (never the main file), so `len() + 1`
+        // is the next free source after the reserved main slot.
+        let n = self.use_names.len() as u16 + 1;
         self.use_names.insert(short.to_string(), n);
         self.source = n;
     }

@@ -542,6 +542,13 @@ impl Parser {
         self.applied_imports.clear();
         self.deferred_unknown.clear();
         self.data.reset();
+        // @PLN22 Phase 2 — the main program parses under its own source
+        // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
+        // definition shadows a prelude name instead of colliding on `(name, 0)`.
+        // `reset()` set source to 0; the default stdlib parse stays at 0.
+        if !default {
+            self.data.source = crate::data::MAIN_SOURCE;
+        }
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.parse_file();
@@ -553,6 +560,9 @@ impl Parser {
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.data.reset();
+            if !default {
+                self.data.source = crate::data::MAIN_SOURCE;
+            }
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
             self.lexer.switch(filename);
