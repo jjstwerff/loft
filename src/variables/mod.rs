@@ -1131,7 +1131,16 @@ impl Function {
             self.variables[var_nr as usize].type_def = type_def.clone();
             return self.is_new(var_nr);
         }
-        if type_def.is_unknown() || var_tp.is_equal(type_def) {
+        // @P376 — assigning the `Never` poison (an errored struct construction,
+        // pass 2) to an as-yet-`Unknown` variable must OVERWRITE it to `Never`,
+        // NOT take the early-return below.  `is_equal(Unknown, Never)` is true,
+        // so without this guard the poison is dropped, the variable stays
+        // `Unknown`, and the typo cascades (`p.name` → "Field of unknown
+        // variable" → format-string fatal).  Falling through re-types it to
+        // `Never`, which field access / format interpolation / the unknown-type
+        // sweep all skip — leaving the single `unknown type '…'` diagnostic.
+        let never_into_unknown = matches!(type_def, Type::Never) && var_tp.is_unknown();
+        if !never_into_unknown && (type_def.is_unknown() || var_tp.is_equal(type_def)) {
             for on in type_def.depend() {
                 self.depend(var_nr, on);
             }
@@ -1164,6 +1173,12 @@ impl Function {
             // refines it (falling through to the type update below) instead of
             // erroring "cannot change type from &unknown to &T".
             && !matches!(var_tp, Type::RefVar(in_tp) if in_tp.is_unknown())
+            // `Never` → `T` (#376): an errored-construction poison (or dead
+            // post-divergence code) is the BOTTOM type — re-typeable to anything.
+            // Lets pass 2 re-resolve a forward `c = Cell{…}` (poisoned `Never`
+            // in pass 1) to its real type instead of erroring "cannot change
+            // type from never to Cell".
+            && !matches!(var_tp, Type::Never)
         {
             if let Type::RefVar(in_tp) = var_tp
                 && in_tp.is_equal(type_def)

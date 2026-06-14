@@ -1011,7 +1011,14 @@ use a separate collection or add after the loop"
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
         // check RHS of assignment for unresolved variables.
-        self.known_var_or_type(code, &rhs_pos);
+        // @P376 — skip when the RHS resolved to the `Never` poison from an
+        // errored struct construction (`p = Plyer { … }`, `Plyer` undefined):
+        // the real `unknown type '…'` already fired, and the failed construction
+        // leaves `code` as its (discarded) target `Var(p)`, so re-validating it
+        // here would re-report "Unknown variable 'p'" — the #376 cascade tail.
+        if !matches!(s_type, Type::Never) {
+            self.known_var_or_type(code, &rhs_pos);
+        }
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
         }

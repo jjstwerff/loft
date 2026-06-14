@@ -1211,7 +1211,11 @@ use #count instead"
                 }
             }
             _ => {
-                if !self.first_pass {
+                // @P376 — `Type::Never` is the poison an errored struct
+                // construction assigns; the real `unknown type '…'` was already
+                // reported, so silently skip formatting it instead of adding a
+                // cascade "Cannot format type never".
+                if !self.first_pass && !matches!(tp, Type::Never) {
                     diagnostic!(
                         self.lexer,
                         Level::Error,

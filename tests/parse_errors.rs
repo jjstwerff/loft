@@ -1477,20 +1477,14 @@ fn p302_type_mismatch_arg_column() {
 /// An undefined type in a struct literal yields `unknown type '…'` at the type
 /// name's start — not a misleading `Expect token ;` mid-`{`.
 ///
-/// @P376 — the construction-defer rework (emit `unknown type` on pass 2 so a
-/// genuine forward reference resolves silently) leaves `x` typed `Unknown(0)`
-/// when the type is truly undefined, so every later read of `x` cascades.  The
-/// extra reads below track that accepted cascade until @P376 lands a recovery
-/// type that suppresses them (the primary `unknown type 'NoSuchType'` assertion
-/// is the contract; the rest document the current cascade).
+/// @P376 — a genuinely-undefined struct construction (`NoSuchType { … }`) is
+/// reported as ONE clean error.  Pass 1 defers the unknown construction (so a
+/// real forward / cross-package `Cell { … }` resolves silently in pass 2); when
+/// the name is still undefined in pass 2 it is a typo, and the assigned variable
+/// is POISONED with `Type::Never` so every downstream read (`print(x)`, field
+/// access, the post-parse unknown-type sweep) is silenced — no cascade.
 #[test]
 fn p302_unknown_type_struct_literal() {
     code!("fn test() { x = NoSuchType { a: 1 }; print(x); }")
-        .error("unknown type 'NoSuchType' at p302_unknown_type_struct_literal:1:17")
-        .error("Unknown variable 'x' at p302_unknown_type_struct_literal:1:17")
-        .error("Unknown variable 'x' at p302_unknown_type_struct_literal:1:44")
-        .error(
-            "Variable 'x' has unknown type — possible typo or missing definition \
-             at p302_unknown_type_struct_literal:1:49",
-        );
+        .error("unknown type 'NoSuchType' at p302_unknown_type_struct_literal:1:17");
 }

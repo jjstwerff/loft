@@ -1133,7 +1133,32 @@ impl Parser {
                     break; // no forward progress (EOF) — bail rather than spin
                 }
             }
-            return Type::Unknown(0);
+            // @P376 — POISON the errored construction, PASS 2 ONLY.
+            //
+            // Pass 1 must DEFER as `Unknown(0)`: the construction may be a
+            // forward / cross-package `Cell { … }` (or `[Cell { … }]`) whose
+            // `struct Cell` registers before pass 2.  `Unknown` is the type
+            // every container / materialisation path already handles, so the
+            // forward ref re-resolves cleanly in pass 2.  (Returning the poison
+            // in pass 1 leaks `Never` into e.g. the vector-literal materialiser,
+            // which then can't find a type for it.)
+            //
+            // Pass 2 is final — a still-unknown name is a genuine typo (the
+            // `unknown type '…'` above just fired).  Leaving the variable
+            // `Unknown` makes every downstream use (`p.name`, the `{p.name}`
+            // format string, the post-parse unknown-type sweep) re-report: a
+            // 9-error cascade off one typo (#376).  `Type::Never` (the bottom
+            // type) makes the variable a registered, silently-typed poison that
+            // field access, format interpolation, and the sweep all skip, so the
+            // single `unknown type '…'` is the only diagnostic.  The program
+            // still aborts on that error, so the poison never reaches runtime.
+            // (`change_var_type` overwrites the pass-1 `Unknown` with this
+            // `Never`; single-pass #284/#302 got this for free by skipping
+            // pass 2, but two-pass deferral needs the explicit poison.)
+            if self.first_pass {
+                return Type::Unknown(0);
+            }
+            return Type::Never;
         }
         Type::Null
     }
