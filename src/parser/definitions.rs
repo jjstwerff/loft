@@ -416,7 +416,11 @@ impl Parser {
         if !self.parse_enum_values(d_nr) {
             return false;
         }
-        if self.first_pass {
+        // Skip type-completion when this enum conflicts with a builtin of the
+        // same name (e.g. `enum hash`): `d_nr` is then the existing builtin, and
+        // `complete_definition` would re-`set_returned` an already-typed def and
+        // panic.  The conflict diagnostic above is the user-facing result.
+        if self.first_pass && !conflict {
             complete_definition(&mut self.lexer, &mut self.data, d_nr);
         }
         self.lexer.token("}");
@@ -491,7 +495,9 @@ impl Parser {
             }
             self.lexer.token(")");
         }
-        if self.first_pass {
+        // Same guard as `parse_enum`: a conflicting `type hash = …` leaves `d_nr`
+        // pointing at the existing builtin, so re-completing it would panic.
+        if self.first_pass && !conflict {
             complete_definition(&mut self.lexer, &mut self.data, d_nr);
         }
         self.lexer.token(";");
@@ -1897,10 +1903,19 @@ impl Parser {
                     "'{}' is reserved as a generic type variable — choose a different struct name",
                     id
                 );
-            } else if matches!(
-                self.data.definitions[d_nr as usize].returned,
-                Type::Unknown(_)
-            ) {
+            } else if self.data.def_type(d_nr) == DefType::Unknown
+                && matches!(
+                    self.data.definitions[d_nr as usize].returned,
+                    Type::Unknown(_)
+                )
+            {
+                // Adopt a genuine same-file forward-reference placeholder (an
+                // `add_def(.., DefType::Unknown)` stub left by a use-before-def).
+                // A reserved builtin type-keyword forward-declared in the stdlib
+                // (e.g. `type iterator;`) is `DefType::Type` with an Unknown
+                // returned type — it must NOT be adopted, or `struct iterator`
+                // would silently shadow the builtin.  Without the def_type guard
+                // it fell through here; now it lands in the conflict arm below.
                 self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned =

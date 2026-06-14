@@ -1052,7 +1052,6 @@ pub fn len(both: hash) -> integer {
 fn OpLengthIndex(r: index, fields: const u16) -> integer;
 #rust"i64::from(tree::count(&@r, @fields, &s.database.allocations))"
 
-// type spacial;
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeBool(v1: boolean, v2: boolean) -> boolean;
@@ -1142,6 +1141,14 @@ fn OpClearKeyed(dest: reference, tp: const u16);
 // only update — it no-op'd into the null lookup when the key was absent).
 fn OpSetKeyed(coll: reference, value: reference, tp: const u16);
 type iterator;
+// Forward-declared builtin collection type-keywords: reserved names whose full
+// implementation lands with the crawler/moros/dryopea library work.  Declaring
+// them (rather than leaving them as bare parser keywords) makes them real
+// `DefType::Type` definitions, so `struct radix` / `enum spacial` are cleanly
+// rejected as a name conflict instead of being silently swallowed (struct) or
+// panicking in `complete_definition` (enum/type).
+type radix;
+type spacial;
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);
 // Create a DbRef that points INTO the current stack frame (not into a data store).
