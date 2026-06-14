@@ -2431,14 +2431,23 @@ impl Parser {
     /// `OpDatabase(db_tp=u16::MAX)` operand and crash in `set_default_value` at
     /// runtime.  Mirror the keyed-collection codegen path (`database.hash` /
     /// `database.sorted` register on demand) by filling the wrapper here; the
-    /// content type is fully resolved by pass 2 and the closing
-    /// `database.finish()` lays out the wrapper's field positions.
+    /// content type is fully resolved by pass 2.
+    ///
+    /// `fill_database` registers the wrapper struct and adds its `vector` field,
+    /// but the field's POSITION is assigned by `finish_type` (run from
+    /// `database.finish()`).  That finish normally runs at end of `parse_file` —
+    /// AFTER the codegen that reads the position here — so without finishing now
+    /// the `vector` field sits at `u16::MAX` and `OpGetField`/`get_field` read
+    /// through a bogus offset, corrupting the interpreter free path (a heap
+    /// write that SIGSEGVs at teardown after the correct value prints).  Finish
+    /// immediately so the position is laid out before codegen consumes it.
     fn vector_wrapper_known_type(&mut self, vec_def: u32) -> u16 {
         let tp = self.data.def(vec_def).known_type();
         if tp != u16::MAX {
             return tp;
         }
         crate::typedef::fill_database(&mut self.data, &mut self.database, vec_def);
+        self.database.finish();
         self.data.def(vec_def).known_type()
     }
 

@@ -8,21 +8,37 @@
 // forward reference.  These three positions each broke pass 1 differently:
 //   * for-loop over a `vector<struct>` field — the loop variable typed Null,
 //     so `it.n` hard-errored "Unknown type null" and aborted pass 1;
-//   * `match` on a forward enum — the arm-skip path desynced into "Expect }";
-// A third position — a local `vector<struct>` literal of a forward-referenced
-// element — is also @P375-adjacent but still corrupts the interpreter free path
-// (@P373); it is covered by the `#[ignore]`d `forward_ref_local_vector_literal`
-// Rust test, not asserted here, so this script stays green on both backends.
+//   * `match` on a forward enum — the arm-skip path consumed the body but not
+//     the trailing comma and desynced into "Expect }" (@P374);
+//   * a local `vector<struct>` literal (@P373) — the real `main_vector<Inner>`
+//     wrapper was born during pass-2 codegen, after the registration sweep, so
+//     codegen baked `OpDatabase(db_tp=u16::MAX)` (a panic), and once registered
+//     its `vector` field still sat at position u16::MAX, so element access read
+//     through a bogus offset and corrupted the interpreter free path (SIGSEGV at
+//     teardown after the correct value printed).
+// Running on both backends, the native path additionally exercises the
+// orphan-wrapper link guard in `Stores::field`.
+
+// A fourth position — an INLINE field of a forward-referenced struct
+// (`inner: Cell`, @P373) — shares the same free-path corruption: the host is
+// laid out before the content, so the field landed at offset u16::MAX.  `boxed`
+// exercises it; the nested and enum-variant forms are in the Rust tests.
 
 fn build(m: Map) -> integer { s = 0; for it in m.items { s = s + it.n; } s }
 fn pick() -> integer { c = Color::Green; match c { Color::Red => 0, Color::Green => 6 } }
+fn pull() -> integer { v = [Cell { n: 8 }]; v[0].n }
+fn boxed() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }
 
 struct Inner { n: integer }
 struct Map { items: vector<Inner> }
 enum Color { Red, Green }
+struct Cell { n: integer }
+struct Box { inner: Cell }
 
 fn main() {
   assert(build(Map { items: [Inner { n: 5 }, Inner { n: 7 }] }) == 12, "for-loop over forward vector<struct> field");
   assert(pick() == 6, "match on forward enum");
+  assert(pull() == 8, "local forward vector<struct> literal");
+  assert(boxed() == 4, "inline forward struct field");
   print("ok\n");
 }

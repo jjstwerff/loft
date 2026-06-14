@@ -14325,22 +14325,21 @@ fn run() -> integer { pick() }"
     .result(Value::Int(6));
 }
 
-// Local `vector<struct>` literal of a forward-referenced element.  In pass 1 the
-// element is Unknown, so the `main_vector<Unknown(0)>` wrapper born during codegen
-// is the wrong one; on pass 2 the real `main_vector<Inner>` wrapper is born during
-// body codegen — AFTER this file's `fill_all` registration sweep — so it never got
-// a database `known_type`, and codegen baked `OpDatabase(db_tp=u16::MAX)` that
-// crashed `set_default_value` at runtime.  Registering the wrapper on the spot
-// (vectors.rs `vector_wrapper_known_type`) makes the program produce the CORRECT
-// result, but the dead `main_vector<Unknown(0)>` orphan still corrupts the
-// interpreter free path at scope exit (a heap-metadata write through a stale
-// element type → non-deterministic SIGSEGV after the right value prints).  @P373
-// tracks the remaining interp-free fix; the for-loop-over-a-field-vector form
-// (the moros blocker) is unaffected and sound on both backends.  IGNORED until
-// @P373 lands so the otherwise-correct result is recorded without the crash
-// taking down the test binary.
+// Local `vector<struct>` literal of a forward-referenced element (@P373).  In
+// pass 1 the element is Unknown, so the real `main_vector<Inner>` wrapper is
+// born during pass-2 body codegen — AFTER this file's `fill_all` registration
+// sweep — and reaches codegen with no database `known_type` AND no laid-out
+// field positions.  Two faults followed: codegen baked `OpDatabase(db_tp=
+// u16::MAX)` (panic in `set_default_value`), and even once that was registered,
+// the wrapper's `vector` field sat at position `u16::MAX`, so `OpGetField` read
+// through a bogus offset and corrupted the interpreter free path — a heap write
+// that SIGSEGV'd at scope exit AFTER the correct value printed.  Fixed by
+// `vector_wrapper_known_type` (vectors.rs): register the wrapper on the spot
+// then `database.finish()` it so the field positions are laid out before
+// codegen consumes them.  The `result(8)` proves correctness; soundness (no
+// teardown SIGSEGV) is what regressed, so this also doubles as a free-path
+// guard on both backends.
 #[test]
-#[ignore = "@P373 — correct result but interp free-path corruption on a forward-ref local vector literal"]
 fn forward_ref_local_vector_literal() {
     code!(
         "fn pull() -> integer { v = [Cell { n: 8 }]; v[0].n }
@@ -14349,6 +14348,57 @@ fn run() -> integer { pull() }"
     )
     .expr("run()")
     .result(Value::Int(8));
+}
+
+// Struct with an INLINE field of a forward-referenced struct (`inner: Cell`,
+// @P373).  `Box` is laid out (pass-1 `fill_database`) before `Cell`, and the
+// embedded-reference arm read `Cell`'s `known_type` directly — still u16::MAX —
+// instead of laying `Cell` out first (as the vector / tuple arms do).  `Box.inner`
+// then landed at offset u16::MAX, never repaired on pass 2 (`finish_type` skips an
+// already-sized type), so `b.inner.n` read through a bogus offset and corrupted
+// the free path: a non-deterministic SIGSEGV at scope exit AFTER the correct
+// value printed.  Fixed by recursing into the inline content first in both the
+// interpreter (`fill_database`) and the native db-init generator.  A `result`
+// proves correctness; soundness (no teardown crash) is the real guard, so these
+// run their full free path.  This is the inline-struct sibling of @P373.
+#[test]
+fn forward_ref_inline_struct_field() {
+    code!(
+        "struct Box { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+// Two-level inline forward reference (`Outer.mid: Mid`, `Mid.inner: Cell`), both
+// hosts declared before their content — exercises the recursive content-layout
+// transitively (Outer → Mid → Cell).
+#[test]
+fn forward_ref_nested_inline_struct() {
+    code!(
+        "struct Outer { mid: Mid }
+struct Mid { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { o = Outer { mid: Mid { inner: Cell { n: 9 } } }; o.mid.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(9));
+}
+
+// Enum struct-variant with an inline forward-referenced field (`Sq { side: Cell }`
+// before `struct Cell`) — the EnumValue layout path takes the same inline-content
+// arm, so it had the same offset-u16::MAX corruption.
+#[test]
+fn forward_ref_enum_variant_inline_field() {
+    code!(
+        "enum Shape { Sq { side: Cell } }
+struct Cell { n: integer }
+fn run() -> integer { s = Sq { side: Cell { n: 2 } }; match s { Sq { side } => side.n } }"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
 }
 
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
