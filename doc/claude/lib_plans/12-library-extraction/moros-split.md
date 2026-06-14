@@ -68,11 +68,16 @@ since dryopea and bumper both consume it.
   bugs: #375 field resolution, #373 forward-ref struct layout, and the
   `&`-param addressability / work-buffer / `change_var_type` sites).
   The full stack now loads clean and **all 427 moros library tests pass
-  on the interpreter** (moros_map 51, moros_editor 44, moros_render 154,
-  moros_sim 137, moros_ui 41); `moros_map`/`moros_editor` (no graphics
-  dep) also pass on `--native`.  This was the standing prerequisite for
-  validating the split against the real consumer — the split work below
-  can now proceed against a loadable, test-green moros.
+  on BOTH backends** — interpreter and `--native` (moros_map 51,
+  moros_editor 44, moros_render 154, moros_sim 137, moros_ui 41).  This
+  was the standing prerequisite for validating the split against the real
+  consumer: moros is now a loadable, test-green, dual-backend consumer, so
+  the split work below can proceed against it.  Note `lib/world/` is now
+  empty — its hex substrate already shipped to `loft-libs-world` as
+  `hex_grid` (commit 6c9a03e9), so the "build out lib/world/" framing
+  below is partly historical; the live remaining work is the moros→shared
+  migration (step 6) and the moros project repo move, both of which the
+  loadable moros now unblocks.
 
 **Remaining work — UNBLOCKED today (re-evaluated 2026-05-29):**
 
