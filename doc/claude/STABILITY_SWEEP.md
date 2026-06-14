@@ -433,11 +433,64 @@ rebuild it with
 
 | Site | Files | Read |
 |---|---|---|
-| `vector.rs:331` | `132-vector-elemset-inline-literal-uaf` | the file's own name says UAF — likely the documented shape's armed twin |
-| `codegen.rs:1871` | `166-p390-self-slice-assign` | singleton |
-| `codegen.rs:2560` | `examples/collections.loft` | singleton |
-| `compile.rs:306` | `75-native-stub` | the native-stub panic is that test's SUBJECT — likely expected-fail by design |
+| ~~`vector.rs:331`~~ | ~~`132-vector-elemset-inline-literal-uaf`~~ | **FIXED 2026-06-14** — see below |
+| `codegen.rs:1871` | `166-p390-self-slice-assign` | **VERIFIED over-strict 2026-06-14** — see below |
+| `codegen.rs:2560` | `examples/collections.loft` | **REAL bug, localized 2026-06-14** — see below |
+| `compile.rs:306` | `75-native-stub` | now clean on the rebuilt armed binary (the native-stub panic is that test's SUBJECT — expected-fail by design) |
 | `control.rs:3487` (pass-2 growth) | `298-multi-return-site-ref-buffer` | the mapped arity-cascade class (see THE FIND above) |
+
+**2026-06-14 armed-residual triage** (branch `stability2nd`; reproduce any of
+these with `./target/debug/loft --tests <file>` on the armed binary — the CLI
+`--tests` runner is the harness's multi-top-level-entry path, the live shape):
+
+- **`132` — FIXED (was a SILENT use-after-free, interpreter only).**  A
+  field-of-element SET to a struct literal carrying a vector
+  (`xs[i].field = V{a: [literal]}`) built the nested vector IN PLACE by
+  appending via `OpNewRecord`, reusing one element-ref temp `_elm_2` across the
+  appends.  `generate_set`'s reassignment path emitted an UNCONDITIONAL pre-Set
+  `OpFreeRef` of the old `_elm_2` — but an `OpNewRecord` RHS returns an INTERIOR
+  ref into the vector's backing store, so consecutive elements share one store
+  and the whole-store free killed the live backing.  Correct bytes survived
+  until the next allocation recycled the freed store (NON-deterministic data
+  loss under churn; deterministic only under the armed `get_vector` assert).
+  The native generator's `if _old.store_nr != new.store_nr` guard already
+  protected it.  **Fix** (`src/state/codegen.rs` `generate_set`): route an
+  `OpNewRecord` RHS through the runtime-guarded post-free
+  (`OpFreeRefIfDistinct`).  Regression: `tests/scripts/372-field-elem-set-
+  nested-vector-uaf.loft` (armed-corpus member + release-CI over-fix baselines).
+- **`166` — VERIFIED over-strict armed assert (no runtime bug).**  The
+  `generate_set` first-assignment self-reference assert
+  (`!ir_contains_var(value, v)`) fires on the @P390 text/ref-element self-slice
+  (`v = v[a..b]`, `v: vector<text>`): `materialize_iterator` emits
+  `v_set(slice_elm, *next)` where `*next` legitimately re-reads `slice_elm`'s
+  slot (the materialization writes it before the outer Set re-reads), a benign
+  slot reuse.  Stress (50 rounds × 20-elem text vectors) is correct on BOTH
+  backends; the assert is over-approximating.  Lower priority (cosmetic for the
+  armed channel) — left as a known over-strict assert under the feature freeze.
+- **`collections.loft` — REAL bug, localized (NOT fixed).**  A struct with a
+  `vector<T>` field AND a `hash<T[key]>` field, constructed with an EMPTY hash
+  literal (`Counter { ordered: [...], by_text: {} }`), then any access of the
+  vector field → SIGSEGV on `--interpret`, E0308 on `--native`.  The armed
+  assert pins it: `generate_call [n_main]: mutable arg (src: Reference(N))
+  expected 16B but generate(Block "empty block" []) pushed 0B — Value::Null in a
+  typed slot?`.  The empty hash literal `{}` lowers to a 0-byte empty block
+  instead of a 16-byte hash-init Reference, UNDER-FILLING the struct so the
+  sibling vector field is mis-located.  Field order irrelevant; needs only the
+  empty `{}` + a vector field.  Distinct bug from `132` (struct-construction /
+  empty-keyed-literal lowering, not the reassignment-free).
+  **TWO bugs, M+/multi-session** (left unfixed under the feature freeze):
+  1. **Wrong syntax silently corrupts.**  loft's empty keyed-collection literal
+     is `[]` (e.g. `h: hash<HRec[name]> = []`, see `128-struct-keyed-field-init`),
+     NOT `{}`.  `parse_block` (`control.rs:218`) turns `{}` into a Void
+     `"empty block"` regardless of the expected type — the example used the
+     wrong `{}`.  Goal-F fix: a `{}` in a keyed/non-block-typed slot must ERROR
+     (or convert) — never silently emit a Void block that under-fills the struct.
+  2. **`[]` exposes a second bug.**  `examples/collections.loft` with `by_text: []`
+     stops crashing but the FIRST entry reads `null (count 4294967296)` on both
+     backends — the shared-record model (one `Word` in BOTH `c.ordered` and
+     `c.by_text`, `record` appended to each) corrupts the first shared record.
+     So the example needs both the syntax fix AND the shared-record fix; a focused
+     follow-up.
 
 **The `store.rs:1640` row (7 files) is RESOLVED 2026-06-12** — the
 "keyed armed UAF" was not a use-after-free; the one assert site hid

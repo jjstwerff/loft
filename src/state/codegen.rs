@@ -1612,8 +1612,24 @@ impl State {
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && stack.function.tp(v).depend().is_empty()
                 && !is_hidden_buf_arg;
+            // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
+            // container's backing store (a vector element / nested field), so
+            // the new value can land in the SAME store as v's old value —
+            // consecutive elements of one vector share its backing.  The
+            // unconditional pre-Set `OpFreeRef` below whole-store-frees that
+            // backing, killing the live data: `xs[i].field = V{a: [literal]}`
+            // (field-of-element set built in place) silently freed
+            // `xs[i].field.a`'s store (correct bytes until churn overwrote the
+            // freed slot; SIGSEGV/UAF under the armed build — the native
+            // generator's `if _old.store_nr != new.store_nr` guard already
+            // protects it).  Route it through the runtime-guarded post-free
+            // (`OpFreeRefIfDistinct`) so a same-store reassignment is a no-op.
+            let rhs_is_new_record = matches!(
+                value.unspan(),
+                Value::Call(fn_nr, _) if stack.data.def(*fn_nr).name() == "OpNewRecord"
+            );
             let mut stash_old_for_post_free = false;
-            if owned_ref && rhs_reads_v {
+            if owned_ref && (rhs_reads_v || rhs_is_new_record) {
                 let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
