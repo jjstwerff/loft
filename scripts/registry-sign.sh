@@ -154,7 +154,7 @@ for name in sorted(cp):
 
 if not changes:
     print("  (no added or changed versions vs the diff base)")
-fail = False
+failures = []  # (name, ver, reason) — collected so the end-of-run summary names each
 for name, ver, meta, is_new in changes:
     url, sha, size = meta.get("url", ""), meta.get("sha256", ""), meta.get("size")
     print(f"  [{'NEW' if is_new else 'CHANGED'}]  {name} {ver}")
@@ -190,22 +190,49 @@ for name, ver, meta, is_new in changes:
             got = hashlib.sha256(data).hexdigest()
             if got == sha:
                 print(f"        VERIFY   : sha256 MATCH ({len(data)} bytes downloaded)")
+                if size is not None and len(data) != size:
+                    print(f"        VERIFY   : size MISMATCH !!  downloaded {len(data)} != declared {size}")
+                    failures.append((name, ver,
+                        f"size mismatch: downloaded {len(data)} bytes, index declares {size}"))
             else:
-                print(f"        VERIFY   : sha256 MISMATCH !!  got {got}")
-                fail = True
-            if size is not None and len(data) != size:
-                print(f"        WARN     : downloaded size {len(data)} != declared {size}")
-                fail = True
+                print(f"        VERIFY   : sha256 MISMATCH !!  declared {sha[:16]}… got {got[:16]}…")
+                failures.append((name, ver,
+                    "sha256 mismatch — the uploaded release tarball does not match the index entry "
+                    f"(index says {sha[:16]}…, the download hashes to {got[:16]}…).\n"
+                    "             Cause: the release artifact is stale, or the lib's source on main "
+                    "moved past its released tag.\n"
+                    "             Fix: re-cut the release so its bytes match `loft package` at the tag "
+                    "(bump the version + re-release if main has changed).\n"
+                    f"             url: {url}"))
         except Exception as e:
             print(f"        VERIFY   : download FAILED: {e}")
-            fail = True
+            failures.append((name, ver,
+                f"download failed ({e}) — does the release exist with the named asset?\n"
+                f"             url: {url}"))
     print()
-sys.exit(1 if fail else 0)
+
+if failures:
+    n = len(failures)
+    print("══════════════════════════════════════════════════════════════════════")
+    print("!!  INTEGRITY CHECK FAILED — NOT signing.")
+    print(f"    {n} of {len(changes)} new/changed entr{'y' if n == 1 else 'ies'} "
+          "failed verification:")
+    print()
+    for name, ver, reason in failures:
+        print(f"  ✗  {name} {ver}")
+        print(f"        {reason}")
+    print()
+    print("    Nothing was signed.  Fix the flagged artifact(s) above, then re-run.")
+    print("    (Passing requires each tarball to byte-match `loft package` at its tag —")
+    print("     the registry's gate-3 reproducible-build invariant.)")
+    sys.exit(1)
+sys.exit(0)
 PY
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
-    echo "!!  INTEGRITY CHECK FAILED (sha256 mismatch / download error) — NOT signing." >&2
+    # The verification block above prints a named, per-package failure summary.
+    echo "registry-sign: refusing to sign — integrity check failed (see the summary above)." >&2
     exit 1
 fi
 
