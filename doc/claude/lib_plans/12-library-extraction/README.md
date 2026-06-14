@@ -107,6 +107,23 @@ Recently corrected (this README was stale before 2026-05-26):
   `[native.functions]` + `build.rs` + generated `loft_register!`;
   redundant `#native` annotations + dead `generated.rs` removed.
 
+### Remaining `lib/` inventory → destinations (recorded 2026-06)
+
+Ten packages are still in-repo, and they do **not** all go to the shared
+registry — the destination depends on what *kind* of code it is:
+
+| Still in `lib/` | Where it goes |
+|---|---|
+| `html`, `input`, `markdown` | **External registry chunk** (same Stage-A/B flow as the others) — the genuine remaining extraction candidates. |
+| `moros_map`, `moros_render`, `moros_sim`, `moros_editor`, `moros_ui` | **Split** (Phase 7a/7p → 7b).  The reusable *substrate* lifts to NEUTRAL registry packages **first**, so **dryopea** shares it — hex/chunk addressing → `world`/`hex_grid` (`hex_grid` already in `loft-libs-world`), `moros_sim/collide.loft` → `physics_2body`, mesh build → `gridmesh`.  The **moros-specific remainder** (editor UX, RPG rules, render specifics) then moves to the **moros project's own repo** — NOT the shared registry.  A game-specific package belongs in the loft repo no more than a shared one does; its home is just a *different* repo. |
+| `engine_host` | **Engine-layer kernel** (@PLN18 `run_local`/`run`/`run_client`) — belongs with the engine, not the shared registry; exact destination settles as the engine / lavition layer firms up. |
+| `audience_crystal` | **Stays** as the monorepo-paired test/demo fixture (the standing exception in § Goal) — the prototype that seeded `gridmesh`. |
+
+Rule of thumb: **shared → registry, game-specific → the game's own repo, engine
+core → the engine.**  This is what "drain the compiler crate of *all* library
+code" means in practice — it does not force game code into a neutral published
+package; it just gets it out of the loft repo into the right home.
+
 ## Goal
 
 Every `lib/*/` package (except the monorepo-paired `audience_crystal`)
