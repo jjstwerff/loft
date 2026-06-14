@@ -2967,6 +2967,14 @@ impl Data {
         self.source = n;
     }
 
+    /// @PLN22 Phase 3 — register an additional name (`use lib as alias`) for an
+    /// ALREADY-loaded library source, so `alias::fn` resolves the same source as
+    /// `lib::fn`.  Unlike [`use_add`] this allocates no new source and does not
+    /// switch `self.source`; it only adds a qualifier alias to `use_names`.
+    pub fn use_alias(&mut self, alias: &str, source: u16) {
+        self.use_names.insert(alias.to_string(), source);
+    }
+
     /// Allow a new attribute on a definition with a specified type.
     pub fn add_attribute(
         &mut self,
@@ -3757,13 +3765,22 @@ impl Data {
         }
     }
 
-    /// Import a single name from `lib_source` into `into_source`.
-    /// Returns `false` if neither the plain name nor its `n_`-prefixed function
-    /// form exists in `lib_source`, so the caller can emit an appropriate error.
-    /// Names already present in `into_source` are kept unchanged (local wins).
-    pub fn import_name(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+    /// Import a single name from `lib_source` into `into_source`, BINDING it
+    /// under `bind` (= `name` for a plain `use lib::name`, or the alias for
+    /// `use lib::name as bind` — @PLN22 Phase 3).  Returns `false` if neither the
+    /// plain name nor its `n_`-prefixed function form exists in `lib_source`, so
+    /// the caller can emit an appropriate error.  Names already present in
+    /// `into_source` are kept unchanged (local wins).
+    pub fn import_name(
+        &mut self,
+        lib_source: u16,
+        into_source: u16,
+        name: &str,
+        bind: &str,
+    ) -> bool {
         // Functions are stored under the `n_` prefix; try both forms.
         let fn_key = format!("n_{name}");
+        let bind_fn_key = format!("n_{bind}");
         let found_plain = self
             .def_names
             .get(&(name.to_string(), lib_source))
@@ -3771,7 +3788,7 @@ impl Data {
             .filter(|&d| self.definitions[d as usize].pub_visible);
         let found_fn = self
             .def_names
-            .get(&(fn_key.clone(), lib_source))
+            .get(&(fn_key, lib_source))
             .copied()
             .filter(|&d| self.definitions[d as usize].pub_visible);
         if found_plain.is_none() && found_fn.is_none() {
@@ -3779,12 +3796,12 @@ impl Data {
         }
         if let Some(def_nr) = found_plain {
             self.def_names
-                .entry((name.to_string(), into_source))
+                .entry((bind.to_string(), into_source))
                 .or_insert(def_nr);
         }
         if let Some(def_nr) = found_fn {
             self.def_names
-                .entry((fn_key, into_source))
+                .entry((bind_fn_key, into_source))
                 .or_insert(def_nr);
         }
         true
@@ -3816,8 +3833,15 @@ impl Data {
     /// Variant of [`import_name`] that overwrites forward-reference stubs.
     /// See [`import_all_overwrite`] for the rationale.  Returns the same
     /// `false` on lookup miss as [`import_name`].
-    pub fn import_name_overwrite(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+    pub fn import_name_overwrite(
+        &mut self,
+        lib_source: u16,
+        into_source: u16,
+        name: &str,
+        bind: &str,
+    ) -> bool {
         let fn_key = format!("n_{name}");
+        let bind_fn_key = format!("n_{bind}");
         let found_plain = self
             .def_names
             .get(&(name.to_string(), lib_source))
@@ -3825,17 +3849,17 @@ impl Data {
             .filter(|&d| self.definitions[d as usize].pub_visible);
         let found_fn = self
             .def_names
-            .get(&(fn_key.clone(), lib_source))
+            .get(&(fn_key, lib_source))
             .copied()
             .filter(|&d| self.definitions[d as usize].pub_visible);
         if found_plain.is_none() && found_fn.is_none() {
             return false;
         }
         if let Some(def_nr) = found_plain {
-            self.insert_or_replace_stub((name.to_string(), into_source), def_nr);
+            self.insert_or_replace_stub((bind.to_string(), into_source), def_nr);
         }
         if let Some(def_nr) = found_fn {
-            self.insert_or_replace_stub((fn_key, into_source), def_nr);
+            self.insert_or_replace_stub((bind_fn_key, into_source), def_nr);
         }
         true
     }

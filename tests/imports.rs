@@ -98,3 +98,23 @@ fn p173_intra_cycle_resolves_cross_file_types() {
         p.diagnostics.lines()
     );
 }
+
+/// @PLN22 Phase 3 — `use … as …` aliasing.  Parses a main file that uses all
+/// three alias forms against `enumlib` (library alias `use enumlib as el`, type
+/// alias `use enumlib::Status as St`, function alias `use enumlib::make as mk`)
+/// and asserts every alias binds (an unbound alias surfaces as "Unknown
+/// function" / "Undefined type").
+#[test]
+fn pln22_phase3_use_as_aliasing() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}p3_alias_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "Expected no errors; got: {:?}",
+        p.diagnostics.lines()
+    );
+}

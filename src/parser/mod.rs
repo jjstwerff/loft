@@ -36,7 +36,10 @@ function.
 #[derive(Clone)]
 enum ImportSpec {
     Wildcard,
-    Names(Vec<String>),
+    /// Each entry is `(name_in_library, bind_name)`; `bind_name == name` for a
+    /// plain `use lib::name`, or the alias for `use lib::name as bind` (@PLN22
+    /// Phase 3).
+    Names(Vec<(String, String)>),
 }
 
 /// A pending import queued when `use lib::spec` is parsed.
@@ -671,9 +674,9 @@ impl Parser {
                     self.data.import_all_overwrite(pi.lib_source, pi.for_source);
                 }
                 ImportSpec::Names(names) => {
-                    for name in names {
+                    for (name, bind) in names {
                         self.data
-                            .import_name_overwrite(pi.lib_source, pi.for_source, name);
+                            .import_name_overwrite(pi.lib_source, pi.for_source, name, bind);
                     }
                 }
             }
@@ -4494,18 +4497,30 @@ impl Parser {
         while self.lexer.has_token("use") {
             if let Some(id) = self.lexer.has_identifier() {
                 had_use = true;
-                // Parse optional import spec: `::*` for wildcard or `::name1, name2` for selective.
+                // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
+                let lib_alias = if self.lexer.has_token("as") {
+                    self.lexer.has_identifier()
+                } else {
+                    None
+                };
+                // Parse optional import spec: `::*` for wildcard, or
+                // `::name [as bind], …` for selective (with per-name aliases).
                 let spec = if self.lexer.has_token("::") {
                     if self.lexer.has_token("*") {
                         Some(ImportSpec::Wildcard)
                     } else {
                         let mut names = Vec::new();
-                        if let Some(name) = self.lexer.has_identifier() {
-                            names.push(name);
-                            while self.lexer.has_token(",") {
-                                if let Some(name) = self.lexer.has_identifier() {
-                                    names.push(name);
-                                }
+                        while let Some(name) = self.lexer.has_identifier() {
+                            // @PLN22 Phase 3 — `use lib::Name as Alias;` binds the
+                            // imported Name under the bare alias.
+                            let bind = if self.lexer.has_token("as") {
+                                self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+                            } else {
+                                name.clone()
+                            };
+                            names.push((name, bind));
+                            if !self.lexer.has_token(",") {
+                                break;
                             }
                         }
                         if names.is_empty() {
@@ -4524,14 +4539,26 @@ impl Parser {
                 };
                 if self.data.use_exists(&id) {
                     let lib_source = self.data.get_source(&id);
-                    // Plain `use foo` (no ::* or ::names) implicitly imports
-                    // all pub definitions so they are visible in this source.
-                    let import_spec = spec.unwrap_or(ImportSpec::Wildcard);
-                    self.pending_imports.push(PendingImport {
-                        for_source: self.data.source,
-                        lib_source,
-                        spec: import_spec,
-                    });
+                    // @PLN22 Phase 3 — register the library alias for `m::` access.
+                    if let Some(alias) = &lib_alias {
+                        self.data.use_alias(alias, lib_source);
+                    }
+                    // Plain `use foo` (no spec) wildcard-imports all pub defs.
+                    // `use foo as m;` (alias, no spec) does NOT — it only provides
+                    // the `m::` qualifier (the disambiguation escape hatch).  An
+                    // explicit `::` spec is honoured in either case.
+                    let import_spec = match spec {
+                        Some(s) => Some(s),
+                        None if lib_alias.is_some() => None,
+                        None => Some(ImportSpec::Wildcard),
+                    };
+                    if let Some(import_spec) = import_spec {
+                        self.pending_imports.push(PendingImport {
+                            for_source: self.data.source,
+                            lib_source,
+                            spec: import_spec,
+                        });
+                    }
                     if !self.lexer.has_token(";") {
                         diagnostic!(
                             self.lexer,
@@ -4556,8 +4583,13 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&id);
-                    // spec is consumed (tokens already read); the import will be recorded
-                    // when this `use` statement is seen again via todo_files with use_exists=true.
+                    // @PLN22 Phase 3 — register the library alias now that the lib's
+                    // source exists (use_add set self.data.source to it).  The
+                    // import itself is recorded on the second encounter (via
+                    // todo_files re-parse with use_exists=true).
+                    if let Some(alias) = &lib_alias {
+                        self.data.use_alias(alias, self.data.source);
+                    }
                     drop(spec);
                     self.switch_to_dep(&f);
                 } else {
@@ -4792,8 +4824,8 @@ impl Parser {
                     self.data.import_all(pi.lib_source, cur);
                 }
                 ImportSpec::Names(names) => {
-                    for name in &names {
-                        if !self.data.import_name(pi.lib_source, cur, name) {
+                    for (name, bind) in &names {
+                        if !self.data.import_name(pi.lib_source, cur, name, bind) {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,

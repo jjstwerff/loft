@@ -11,10 +11,11 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Phases 1 & 2 BUILT (2026-06-14) — two enums may share a variant name (P1); user
-defs shadow stdlib/prelude names while `std::Name` still reaches the prelude (P2).
-Matrix + suites green on both backends bar known-environmental (WASM rlib /
-port-bind). Phases 3–4 drafted.**
+**Phases 1, 2 & 3 BUILT (2026-06-14) — two enums may share a variant name (P1);
+user defs shadow stdlib/prelude names while `std::Name` still reaches the prelude
+(P2); `use … as …` aliasing for libraries, types, and functions (P3).  Matrix +
+suites green on both backends bar known-environmental (WASM rlib / port-bind).
+Phase 4 drafted.**
 
 The build landed via the chokepoint-first order.  **Final design (a deliberate
 choice with the project owner):** a bare variant used as a VALUE resolves ONLY via
@@ -360,14 +361,30 @@ tests especially), not just the enum matrix.
 - **Shadow direction:** user def wins in its own source; `std::Name` reaches the
   shadowed stdlib one.  (Open question #3 is settled by the scope above.)
 
-### Phase 3 — `use … as …` aliasing (S–M)
+### Phase 3 — `use … as …` aliasing — BUILT (2026-06-14)
 
-Add the missing alias clause to the `use` grammar (`mod.rs:4475`):
+Added the `as` clause to the `use` grammar.  Three forms, all green on both
+backends (fixture [`tests/lib/p3_alias_main.loft`](../../../../tests/lib/p3_alias_main.loft),
+test `imports::pln22_phase3_use_as_aliasing`):
 
-- `use math as m;` → `m::sqrt`.
-- `use compass::North as CNorth;` → bare alias, disambiguating a collision.
-- This is the escape hatch Phase 1/2 leave open (two libs export `parse`; two
-  enums you want both bare).
+- **library alias** `use enumlib as el;` → `el::make()` — a qualifier alias.
+- **type alias** `use enumlib::Status as St;` → bare `St` (and `St.Yay`).
+- **function alias** `use enumlib::make as mk;` → `mk()`.
+
+This is the escape hatch Phases 1/2 leave open (two libs export `parse`; a name
+you want bare under a non-colliding spelling).
+
+**As-built semantics + sites:**
+- `ImportSpec::Names` carries `(name_in_library, bind_name)` pairs (`bind == name`
+  unless `as`).  `import_name` / `import_name_overwrite` gained a `bind` param: the
+  lib LOOKUP uses `name` (+ `n_name`), the BIND uses `bind` (+ `n_bind`).
+- `use lib as m;` registers the alias via the new `Data::use_alias` (a qualifier
+  alias on `use_names`, no new source) — and is **qualified-only**: unlike plain
+  `use lib;` it does NOT wildcard-import (so bare names aren't polluted; that is
+  the disambiguation point).  An explicit `::` spec is still honoured.
+- Parsing (`parser/mod.rs` use-region): `as` after the lib id → library alias;
+  `as` after a `::`-spec name → per-name bind alias.  Both register/bind in the
+  two-phase load (first-load + the `use_exists` re-parse).
 
 ### Phase 4 — selective-import syntax (S; decision + migration)
 
