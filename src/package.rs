@@ -564,8 +564,7 @@ mod tests {
             .arg(&pkg)
             .args(["init", "-q"])
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+            .is_ok_and(|s| s.success());
         if !git_ok {
             let _ = fs::remove_dir_all(&dir);
             return;
