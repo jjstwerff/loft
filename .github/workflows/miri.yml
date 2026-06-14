@@ -285,3 +285,37 @@ jobs:
           path: /tmp/loft_native_*.rs
           if-no-files-found: ignore
           retention-days: 14
+
+  library-health:
+    name: Library health audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-libaudit-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-libaudit-cargo-
+      - name: Library health audit (correctness + drift + orphaned branches)
+        # Read-only across the loft-libs-* repos: lib_audit builds loft, then per
+        # library checks interpreter correctness + registry currency + stray
+        # branches (unmerged-no-PR orphans / prunable).  Informational — never
+        # fails the nightly; surfaces a warning + job summary so branch hygiene and
+        # library drift are caught routinely, not only on a manual run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$(scripts/lib_audit.sh --no-native 2>&1 || true)
+          echo "$out"
+          { echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$out" | grep -q "NOT GREEN" && \
+            echo "::warning::library audit not green — orphaned branches / drift / correctness (see job summary)" || true

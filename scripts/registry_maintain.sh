@@ -140,6 +140,32 @@ gh pr list -R "$ORG/registry" --state open \
     --jq '.[] | [.number, .author.login, ([.statusCheckRollup[]?.conclusion] | if length == 0 then "pending" elif all(. == "SUCCESS") then "green" else "red" end), .title] | @tsv' \
     > "$tmp/prs.tsv" 2> /dev/null || : > "$tmp/prs.tsv"
 
+# Branch hygiene: we already enumerate every family repo above, so surface their
+# stray branches here too — unmerged with no open PR (orphaned work to PR-or-delete)
+# and merged with no PR (prunable).  We shallow-clone only main, so this lists
+# branches via the API rather than checking them out.  Informational — never
+# blocks the publish/sign; it just nudges cleanup during a maintenance run.
+: > "$tmp/orphan_branches.txt"
+: > "$tmp/prunable_branches.txt"
+for r in $repos; do
+    pr_heads=$(gh pr list -R "$ORG/$r" --state open --json headRefName --jq '.[].headRefName' 2> /dev/null || true)
+    while read -r br; do
+        [ -n "$br" ] && [ "$br" != "main" ] || continue
+        printf '%s\n' "$pr_heads" | grep -qxF "$br" && continue   # has an open PR — in review
+        read -r ahead last <<< "$(gh api "repos/$ORG/$r/compare/main...$br" \
+            --jq '"\(.ahead_by) \(.commits[-1].commit.committer.date // "?")"' 2> /dev/null || echo '0 ?')"
+        # A squash-merged branch is "ahead" (its commits aren't individually on
+        # main) yet its work DID land — detect that via a merged PR so it's
+        # classed prunable, not orphaned.
+        merged=$(gh pr list -R "$ORG/$r" --state merged --head "$br" --json number --jq 'length' 2> /dev/null || echo 0)
+        if [ "${ahead:-0}" = 0 ] || [ "${merged:-0}" != 0 ]; then
+            echo "  $r/$br" >> "$tmp/prunable_branches.txt"
+        else
+            echo "  $r/$br ($ahead ahead, last ${last%%T*})" >> "$tmp/orphan_branches.txt"
+        fi
+    done < <(gh api "repos/$ORG/$r/branches?per_page=100" --jq '.[].name' 2> /dev/null || true)
+done
+
 # ── pre-flight: stale-release gate (runs BEFORE the worklist/prompt + in dry-run) ─
 # A worklist lib whose source on main moved past its `<name>-v<ver>` tag with no
 # version bump packages to bytes the EXISTING release tarball lacks — that fails
@@ -194,10 +220,18 @@ echo "== foreign submission PRs on $ORG/registry ($n_prs) =="
 awk -F'\t' '{ printf "  #%s by %s [%s] %s\n", $1, $2, $3, $4 }' "$tmp/prs.tsv"
 echo "== foreign upstream drift (informational) =="
 cat "$tmp/foreign_drift.txt"
+if [ -s "$tmp/orphan_branches.txt" ]; then
+    echo "== unmerged branches, no open PR (orphaned — PR or delete) =="
+    cat "$tmp/orphan_branches.txt"
+fi
+if [ -s "$tmp/prunable_branches.txt" ]; then
+    echo "== merged branches, no open PR (prunable) =="
+    cat "$tmp/prunable_branches.txt"
+fi
 echo
 
 if [ "$n_own" = 0 ] && [ "$n_prs" = 0 ]; then
-    echo "nothing to do — registry is current."
+    echo "nothing to do to publish — registry is current (see any branch hygiene above)."
     exit 0
 fi
 if [ "$DRY" = 1 ]; then
