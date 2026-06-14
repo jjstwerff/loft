@@ -43,10 +43,26 @@ disrupting anyone. Maintainers sign with a review-then-sign tool that shows
 exactly what's going into a signature — re-downloading each library tarball to
 confirm its checksum — before the key is ever used.
 
-### Libraries get their own namespace
+### Names that don't fight each other — enum-scoped variants, shadowing, import aliases
 
-*(Placeholder — the flat-namespace break is landing from an in-progress
-integration; this entry will be written once it is on `main`.)*
+Naming got a lot less cramped (`@PLN22`):
+
+- **Two enums can share a variant name.**  `enum Color { Red, Green }` and
+  `enum Light { Red, Amber }` now coexist — a bare `Red` resolves from its
+  context (the match subject, the declared type, a comparison, a function
+  argument), and you can always qualify it as `Color.Red` when there's no
+  context.  Defining a *new untyped variable* straight from a bare variant
+  (`x = Red`) is a deliberate error — qualify it or give `x` a type — so adding a
+  second enum with that variant can never silently re-point existing code.
+- **Your names can shadow the standard library.**  `enum E`, `struct File`,
+  `pub PI = 3` are all legal even though the stdlib already has `E` / `File` /
+  `PI`; your definition wins bare lookup, and `std::E` still reaches the original.
+  (The built-in *type* keywords — `integer`, `vector`, `iterator`, … — stay
+  reserved.)
+- **Import aliases.**  Rename a whole library or individual names on import:
+  `use lib as m;` (qualifier `m::fn`), `use lib::Name as Alias;`, and grouped
+  `use lib::(a as x, b, c);`.  Multiple names from one library must be
+  parenthesised — `use lib::a, b;` is no longer accepted.
 
 ### Windowed games without a server — `engine_host::run_local`
 

@@ -341,12 +341,65 @@ pub type u8 = integer limit(0, 255) size(1);
 ### Library imports
 
 ```
-use arguments;
+use arguments;                     // wildcard: every pub name bare + `arguments::` qualifier
+use arguments::*;                  // explicit wildcard (same as above)
+use arguments::parse_args;         // selective: one name, bare
+use arguments::(parse_args, Flag); // selective group — MULTIPLE names need parentheses
+use arguments::Flag as Opt;        // alias an imported name (bare `Opt`)
+use arguments::(Flag as Opt, parse_args);  // per-name aliases inside a group
+use arguments as args;             // library alias → `args::parse_args` (qualifier only;
+                                   //   does NOT bring names in bare)
 ```
 
 Searches for `arguments.loft` in `lib/`, the current directory, directories from the
 `LOFT_LIB` environment variable, and relative to the current script.
 `use` declarations must appear at the top of the file, before any other declarations.
+A qualified `lib::fn()` auto-loads the library, so an explicit `use` is optional for
+qualified access.
+
+**Multiple names from one library must be parenthesised.** `use lib::a, b;` (a flat
+comma list) is a compile error; write `use lib::(a, b);`.
+
+### Shadowing and qualified names (`@PLN22`)
+
+Definitions are scoped, not flat. A name resolves first in the current file, then
+falls back to the imported-library and standard-library *prelude*:
+
+- **Your definitions may shadow a prelude name.** `enum E { … }`, `struct File { … }`,
+  `pub PI = 3` are all legal even though the stdlib defines `E` / `File` / `PI`. Your
+  definition wins bare lookup; the original is still reachable as `std::E` (and a
+  library's via `lib::Name`).
+- **Built-in type keywords are reserved** and cannot be shadowed: `integer`, `float`,
+  `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`, `index`,
+  `radix`, `spacial`, `iterator`, `reference`, and the sized integers
+  `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. `struct integer { … }` errors with *"conflicts
+  with a type"* (for `struct`, `enum`, and `type` alike).
+
+### Enum-scoped variants (`@PLN22`)
+
+Variants belong to their enum, so **two enums may share a variant name**:
+
+```loft
+enum Color { Red, Green }
+enum Light { Red, Amber }
+```
+
+A bare variant used as a **value** resolves from its type context — a `match`
+subject, a typed declaration (`c: Color = Red`), a comparison (`c == Red`), a
+function argument, a return position, or a struct-field type/default. With no
+context, qualify it: `Color.Red` (or `Color::Red`). Defining a *new untyped
+variable* directly from a bare variant is a deliberate error:
+
+```loft
+x = Red;            // error: bare variant 'Red' has no type here — qualify it as 'Color.Red'
+x = Color.Red;      // ok
+c: Color = Red;     // ok — the declared type supplies the context
+```
+
+This keeps a later `enum Light { Red, … }` from silently re-pointing an existing
+bare assignment. The variant name remains usable as a **type / constructor**
+(`Circle { … }`, `s: Circle`, `fn f(self: Circle)`), so struct-variant
+construction is unaffected.
 
 ---
 

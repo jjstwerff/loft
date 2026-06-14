@@ -5,6 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 22 — Enum-scoped variants, prelude shadowing, and `use … as …`
 
+> **CLOSURE RECORD — DONE 2026-06-14.**  All four phases built and validated on
+> both backends; issue [@PLN22](https://github.com/loft-lang/plans/issues/22) is
+> `status:finished` (closed).  **User-facing reference moved to its home:**
+> [LOFT.md § Library imports / Shadowing / Enum-scoped variants](../../LOFT.md#library-imports)
+> + [CHANGELOG_TECHNICAL.md](../../CHANGELOG_TECHNICAL.md) (technical) and
+> [CHANGELOG.md](../../../../CHANGELOG.md) (user-facing).  This file is retained
+> as the design + build record (the chokepoint-first build order, the
+> design-protocol rounds, and the as-built per-phase notes) — read LOFT.md for
+> how it works today, this file for how it was built.
+
 Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 (design-before-build).  Every M+ phase runs the
 [design-protocol](../../DESIGN_PROTOCOL.md); every fix runs matrix-first.
