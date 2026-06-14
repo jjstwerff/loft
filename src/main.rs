@@ -178,7 +178,9 @@ fn print_help() {
     println!("  api [name]                    discover library APIs without leaving the shell:");
     println!("                                api            — list libraries reachable from here");
     println!("                                api <name>     — print its public API surface");
-    println!("                                api --registry — list the whole installable catalog");
+    println!(
+        "                                api --registry [--refresh] — the whole installable catalog"
+    );
     println!("                                (pub signatures + doc comments, bodies stripped)");
     println!("  audit                         check every installed package against the");
     println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
@@ -738,10 +740,13 @@ fn api_command(target: Option<&str>) {
 /// Mirrors `loft search`'s trust posture (`allow_unsigned: true`): a *missing*
 /// signature is tolerated, but an *invalid* one still hard-fails.
 #[cfg(feature = "registry")]
-fn api_registry_catalog() {
+fn api_registry_catalog(refresh: bool) {
+    // The catalog is cached with a 1-hour TTL; `--refresh` forces a re-fetch so an
+    // agent sees registry changes (new packages, fixed descriptions) immediately
+    // rather than waiting out the TTL.
     let opts = loft::install::InstallOptions {
         allow_unsigned: true,
-        refresh: false,
+        refresh,
         offline: false,
         allow_prerelease: false,
         lock_path: None,
@@ -3949,7 +3954,8 @@ fn main() {
             #[cfg(feature = "registry")]
             {
                 if argv[i..].iter().any(|s| s == "--registry") {
-                    api_registry_catalog();
+                    let refresh = argv[i..].iter().any(|s| s == "--refresh");
+                    api_registry_catalog(refresh);
                 } else {
                     let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
                     api_command(target.as_deref());

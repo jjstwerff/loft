@@ -191,7 +191,9 @@ export.  Discovery surface, nearest first:
    installed registry packages, user libraries) with their source paths.
 4. **`loft api <name>`** — print one library's full public surface.
 5. **`loft api --registry`** — print the whole installable catalog on demand
-   (the live form of `_available.api`).
+   (the live form of `_available.api`).  The catalog is cached ~1h; add
+   **`--refresh`** to force a re-fetch (e.g. after a package was just published
+   or its description changed).
 6. **`loft search <query>`** / **`loft info <name>`** — query the registry
    for libraries not installed yet; `loft install <name>` fetches one and
    refreshes the stubs.
