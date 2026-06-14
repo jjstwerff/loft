@@ -48,7 +48,7 @@ fn ref_vector_replace(out: & vector < integer >, a: vector<integer>, x: vector<i
 
 // @EXPECT_ERROR: match on Direction is not exhaustive
 fn test_plain_missing_arm() {
-  d = North;
+  d = Direction.North;
   match d { North => "N", East => "E", South => "S" };
 }
 
@@ -60,13 +60,13 @@ fn test_struct_missing_arm() {
 
 // @EXPECT_ERROR: cannot unify: text and integer
 fn test_match_type_mismatch() {
-  d = North;
+  d = Direction.North;
   match d { North => "text", _ => 42 };
 }
 
 // @EXPECT_ERROR: match on Direction is not exhaustive
 fn test_match_duplicate_arm() {
-  d = North;
+  d = Direction.North;
   match d { North => "first", North => "second", _ => "other" };
 }
 
@@ -149,7 +149,7 @@ fn test_const_local_vector_appended() {
 
 // @EXPECT_ERROR: Cannot modify const variable 'c'
 fn test_const_local_ref_reassigned() {
-  const c = North;
+  const c = Direction.North;
   c = South;
 }
 
@@ -169,3 +169,37 @@ fn test_integer_to_i32_arg() {
   n: integer = 5;
   assert(p370_takes_i32(n) == 5, "unreachable");   // narrowing arg — requires `as i32`
 }
+
+// ── @PLN22 Phase 1 — a bare variant defining an untyped variable is an error ──
+enum PLN22Dir { PLN22North, PLN22South }
+
+// @EXPECT_ERROR: bare variant 'PLN22North' has no type here
+fn test_pln22_bare_variant_no_context() {
+  d = PLN22North;   // no type context — must write `PLN22Dir.PLN22North`
+  assert(d is PLN22North, "unreachable");
+}
+
+// ── @PLN22 Phase 2 — prelude shadowing allows `enum E` etc., but a built-in
+// type-keyword (`integer`, `vector`, …) is NEVER shadowable: it stays a hard
+// error so the language's own types can't be silently re-pointed. ──
+// @EXPECT_ERROR: conflicts with a type
+struct integer { pln22_field: i32 }
+
+// A bodyless stdlib forward-decl (`type iterator;`) is `DefType::Type` with an
+// Unknown returned type.  Before the adopt-branch `DefType::Unknown` guard,
+// `struct iterator` was silently swallowed (adopted) instead of rejected.
+// @EXPECT_ERROR: conflicts with a type
+struct iterator { pln22_field: i32 }
+
+// `enum`/`type` reusing a keyed-collection keyword used to PANIC in
+// `complete_definition` (re-`set_returned` on an already-typed builtin) because
+// the completion call ran on `self.first_pass` without the `!conflict` guard.
+// (The keyed-collection keywords are lowercase, so the camel-case check also
+// fires first — annotate both diagnostics.)
+// @EXPECT_ERROR: Expect enum definitions to be in camel case style
+// @EXPECT_ERROR: conflicts with a type
+enum hash { Pln22A, Pln22B }
+
+// @EXPECT_ERROR: Expect type definitions to be in camel case style
+// @EXPECT_ERROR: conflicts with a type
+type sorted = integer;

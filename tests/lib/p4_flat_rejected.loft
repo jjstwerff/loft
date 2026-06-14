@@ -1,0 +1,6 @@
+// @PLN22 Phase 4 — the flat comma list is DROPPED; this must error (the parser
+// requires `use enumlib::(Status, make);`).  Used by the
+// `pln22_phase4_flat_list_rejected` regression.
+use enumlib::Status, make;
+
+fn main() { println("unreachable"); }

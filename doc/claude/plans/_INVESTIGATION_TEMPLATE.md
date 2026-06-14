@@ -413,11 +413,11 @@ mild version of this failure mode — the lesson generalises.
 
 ## Closing an investigation plan (REQUIRED)
 
-Run [`_LIFECYCLE.md`](_LIFECYCLE.md)'s general 6 steps (extract
-reference content → trim README → reclassify ROADMAP → move dir →
-rewrite links), **plus these two obligations that are specific to
-investigation plans** — both must happen BEFORE the dir moves to
-`finished/`:
+Run [`_LIFECYCLE.md`](_LIFECYCLE.md)'s general steps (extract
+reference content → trim README → reclassify ROADMAP → set the issue
+`status:finished` + close it → repoint links; the dir stays in
+place), **plus these two obligations that are specific to
+investigation plans** — both must happen BEFORE the issue closes:
 
 1. **File the still-open findings.**  The active-phase no-file rule
    (§ In-plan vs spinoff) inverts at closure: the cluster catalogue
@@ -430,9 +430,9 @@ investigation plans** — both must happen BEFORE the dir moves to
      (`gh issue create`, the `bug_report` template; `sev:` + `area:` +
      a VERIFIED `wa:*` label) — see
      [ISSUE_TRACKING.md](../ISSUE_TRACKING.md).
-   - Each cites the now-`finished/` cluster / probe doc as the repro
-     landmark.  A finding whose FIX shipped needs no row — the fix +
-     its test are the record.
+   - Each cites the plan's cluster / probe doc as the repro
+     landmark (the dir stays in place at close).  A finding whose FIX
+     shipped needs no row — the fix + its test are the record.
 
 2. **Promote permanent-guarantee probes → CI tests.**  Doc-probes
    under `probes/` are NOT run by CI.  Every probe that encodes a
@@ -441,12 +441,12 @@ investigation plans** — both must happen BEFORE the dir moves to
    (`tests/scripts/<NN>-*.loft` for cross-backend behaviour,
    `tests/*.rs` for in-process invariants).  Characterization probes
    (watermark counts, bug repros, reference↔problem pairings) stay in
-   `probes/` as landmarks — they move to `finished/` with the plan.
+   the plan's `probes/` as landmarks (the dir is not moved at close).
    A probe whose guarantee is already covered by an existing suite
    needs no new test; just record the mapping.
 
-The closure record (the trimmed `finished/<NN>/` README) should list
-the P-issues filed + the probe→test mapping, so a later reader sees
+The closure record (the trimmed plan README) should list the
+P-issues filed + the probe→test mapping, so a later reader sees
 where each open thread went.
 
 ## See also (REQUIRED)

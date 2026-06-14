@@ -397,6 +397,21 @@ impl Parser {
             self.lexer.token("(");
             self.parse_intrinsic_call(val, "panic")
         } else if let Some((name, name_pos)) = self.lexer.has_identifier_pos() {
+            // @PLN22 Phase 1 — when the receiver context (`parent_tp`) is not
+            // itself an enum, supply the operand's expected enum so a bare
+            // value-position variant resolves against it (variants are not in the
+            // flat namespace).  `var_tp` carries the enum for typed-local decls,
+            // typed reassignment, `==`, and struct-field init; `enum_hint` carries
+            // it for call args / return body.  This only feeds parse_var's
+            // last-resort variant branch — a name that resolves as a variable,
+            // field, function, or `$` is handled by an earlier branch unaffected.
+            if !self.enum_context(parent_tp) {
+                if self.enum_context(var_tp) {
+                    *parent_tp = var_tp.clone();
+                } else if self.enum_context(&self.enum_hint) {
+                    *parent_tp = self.enum_hint.clone();
+                }
+            }
             self.parse_var(val, &name, parent_tp, &name_pos)
         } else if self.lexer.peek_token("$") {
             let name_pos = self.lexer.peek_pos().clone();

@@ -119,13 +119,11 @@ accidental regressions, not enforce zero.
 - `CHANGELOG_TECHNICAL.md` — @PLAN37 retrospective entry
   (per-phase summary + bug yield + adoption stats:
   "before/after legacy ref count").
-- `ROADMAP.md` — remove @PLAN37 row from active section;
-  add to closed.
-- `plans/README.md` — if listed.
-- `git mv doc/claude/plans/37-tracker-index
-  doc/claude/plans/finished/37-tracker-index`.
-- Update intra-plan + sibling-plan link paths (per the
-  @PLAN22 closeout precedent).
+- `ROADMAP.md` — remove @PLAN37 row from active section.
+- Close the issue: `gh issue edit <N> --repo loft-lang/plans
+  --remove-label status:active --add-label status:finished`,
+  then `gh issue close <N>`.  The plan dir stays in place; its
+  README becomes the closure record (see `_LIFECYCLE.md`).
 
 ### Optional: rewrite scanner in loft
 

@@ -1,0 +1,21 @@
+// @PLN22 Phase 3 — `use … as …` aliasing.  Exercises all three forms against
+// enumlib (`pub enum Status { Yay, Boo, Pending }`, `pub fn make() -> Status`):
+//   - library alias        `use enumlib as el;`        → `el::make()`
+//   - type alias (bare)    `use enumlib::Status as St;` → `St` / `St.Yay`
+//   - function alias (bare) `use enumlib::make as mk;`  → `mk()`
+use enumlib as el;
+use enumlib::Status as St;
+use enumlib::make as mk;
+
+fn pick(s: St) -> text { match s { Yay => "y", Boo => "b", Pending => "p" } }
+
+fn test_phase3_aliases() {
+  // library-qualified alias.
+  a = el::make();
+  assert(a is Yay, "el::make() resolves the aliased library");
+  // function alias (bare).
+  b = mk();
+  assert(b is Yay, "mk() resolves the aliased function");
+  // type alias (bare), incl. qualified construction `St.Yay`.
+  assert(pick(St.Yay) == "y", "St type alias resolves enumlib::Status");
+}

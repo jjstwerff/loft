@@ -162,9 +162,10 @@ has a single concern.
    the issue: `plans/<N>-<slug>/README.md` (or `lib_plans/<N>-<slug>/`), `<N>` =
    the issue #, using this template's shape.  Small plans live in the issue alone.
 2. Fill in Status + Goal first; link the loft-lang issue + carry `@PLN<N>` in the body.
-3. **Label the loft-lang issue**: `plan` + `subject:*` (loft / libs / audience) +
-   `status:*` (future / active / finished).  **No ROADMAP row, no plans/README table
-   row** — tracking lives on the issue.
+3. **Label the loft-lang issue**: `subject:*` (loft / libs / audience) + `status:*`
+   (future / active / finished).  (No `plan` label — every issue in the `plans`
+   repo IS a plan, so the marker carried no information; retired 2026-06-14.)
+   **No ROADMAP row, no plans/README table row** — tracking lives on the issue.
 4. **Do NOT add a CLAUDE.md doc index entry by default.**  Add ONLY if the plan
    introduces a NEW top-level reference concept with no doc-root home (vanishingly rare).
 

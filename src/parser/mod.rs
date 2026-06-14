@@ -36,7 +36,10 @@ function.
 #[derive(Clone)]
 enum ImportSpec {
     Wildcard,
-    Names(Vec<String>),
+    /// Each entry is `(name_in_library, bind_name)`; `bind_name == name` for a
+    /// plain `use lib::name`, or the alias for `use lib::name as bind` (@PLN22
+    /// Phase 3).
+    Names(Vec<(String, String)>),
 }
 
 /// A pending import queued when `use lib::spec` is parsed.
@@ -191,6 +194,14 @@ pub struct Parser {
     /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
     /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
     pub(crate) lambda_hint: Type,
+    /// @PLN22 Phase 1 — expected enum type for the value currently being parsed
+    /// where the operand `var_tp` does not carry it (a call argument, a function
+    /// return-body tail).  Set by `parse_call` / the return-body parse before the
+    /// value is parsed, consulted by `parse_single` to resolve a bare
+    /// value-position variant against the expected enum, then cleared to
+    /// `Type::Unknown(0)`.  (`var_tp` already carries the enum for typed-local
+    /// decls and `==`, so those need no hint.)
+    pub(crate) enum_hint: Type,
     /// Expected destination type for an `f#read` with no explicit `(n)` and
     /// no `as T` cast.  Set by `parse_assign` from the LHS type before
     /// parsing the RHS so that `s.field = f#read` infers the byte width
@@ -466,6 +477,7 @@ impl Parser {
             expr_not_null_name: String::new(),
             lambda_counter: 0,
             lambda_hint: Type::Unknown(0),
+            enum_hint: Type::Unknown(0),
             read_target_type: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
@@ -533,6 +545,13 @@ impl Parser {
         self.applied_imports.clear();
         self.deferred_unknown.clear();
         self.data.reset();
+        // @PLN22 Phase 2 — the main program parses under its own source
+        // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
+        // definition shadows a prelude name instead of colliding on `(name, 0)`.
+        // `reset()` set source to 0; the default stdlib parse stays at 0.
+        if !default {
+            self.data.source = crate::data::MAIN_SOURCE;
+        }
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.parse_file();
@@ -544,6 +563,9 @@ impl Parser {
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.data.reset();
+            if !default {
+                self.data.source = crate::data::MAIN_SOURCE;
+            }
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
             self.lexer.switch(filename);
@@ -652,9 +674,9 @@ impl Parser {
                     self.data.import_all_overwrite(pi.lib_source, pi.for_source);
                 }
                 ImportSpec::Names(names) => {
-                    for name in names {
+                    for (name, bind) in names {
                         self.data
-                            .import_name_overwrite(pi.lib_source, pi.for_source, name);
+                            .import_name_overwrite(pi.lib_source, pi.for_source, name, bind);
                     }
                 }
             }
@@ -4475,25 +4497,52 @@ impl Parser {
         while self.lexer.has_token("use") {
             if let Some(id) = self.lexer.has_identifier() {
                 had_use = true;
-                // Parse optional import spec: `::*` for wildcard or `::name1, name2` for selective.
+                // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
+                let lib_alias = if self.lexer.has_token("as") {
+                    self.lexer.has_identifier()
+                } else {
+                    None
+                };
+                // Parse optional import spec: `::*` wildcard, a single
+                // `::name [as bind]`, or the grouped `::(a [as x], b, …)`.
+                // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
+                // the flat top-level comma list (`use lib::a, b`) is dropped (it
+                // read poorly — `b` didn't visually bind to `lib::`).
                 let spec = if self.lexer.has_token("::") {
                     if self.lexer.has_token("*") {
                         Some(ImportSpec::Wildcard)
                     } else {
+                        let grouped = self.lexer.has_token("(");
                         let mut names = Vec::new();
-                        if let Some(name) = self.lexer.has_identifier() {
-                            names.push(name);
-                            while self.lexer.has_token(",") {
-                                if let Some(name) = self.lexer.has_identifier() {
-                                    names.push(name);
-                                }
+                        while let Some(name) = self.lexer.has_identifier() {
+                            // @PLN22 Phase 3 — `Name as Alias` binds the imported
+                            // name under the bare alias (works inside `(…)` too).
+                            let bind = if self.lexer.has_token("as") {
+                                self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+                            } else {
+                                name.clone()
+                            };
+                            names.push((name, bind));
+                            if !self.lexer.has_token(",") {
+                                break;
                             }
+                        }
+                        if grouped {
+                            self.lexer.token(")");
+                        } else if names.len() > 1 {
+                            // @PLN22 Phase 4 — flat comma list dropped; the names
+                            // are still bound (recovery) so the rest parses cleanly.
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "import multiple names with parentheses: `use {id}::(a, b, …)`"
+                            );
                         }
                         if names.is_empty() {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
-                                "Expected name or '*' after '::'"
+                                "Expected name, '*', or '(' after '::'"
                             );
                             None
                         } else {
@@ -4505,14 +4554,26 @@ impl Parser {
                 };
                 if self.data.use_exists(&id) {
                     let lib_source = self.data.get_source(&id);
-                    // Plain `use foo` (no ::* or ::names) implicitly imports
-                    // all pub definitions so they are visible in this source.
-                    let import_spec = spec.unwrap_or(ImportSpec::Wildcard);
-                    self.pending_imports.push(PendingImport {
-                        for_source: self.data.source,
-                        lib_source,
-                        spec: import_spec,
-                    });
+                    // @PLN22 Phase 3 — register the library alias for `m::` access.
+                    if let Some(alias) = &lib_alias {
+                        self.data.use_alias(alias, lib_source);
+                    }
+                    // Plain `use foo` (no spec) wildcard-imports all pub defs.
+                    // `use foo as m;` (alias, no spec) does NOT — it only provides
+                    // the `m::` qualifier (the disambiguation escape hatch).  An
+                    // explicit `::` spec is honoured in either case.
+                    let import_spec = match spec {
+                        Some(s) => Some(s),
+                        None if lib_alias.is_some() => None,
+                        None => Some(ImportSpec::Wildcard),
+                    };
+                    if let Some(import_spec) = import_spec {
+                        self.pending_imports.push(PendingImport {
+                            for_source: self.data.source,
+                            lib_source,
+                            spec: import_spec,
+                        });
+                    }
                     if !self.lexer.has_token(";") {
                         diagnostic!(
                             self.lexer,
@@ -4537,8 +4598,13 @@ impl Parser {
                     let cur = &self.lexer.pos().file;
                     self.todo_files.push((cur.clone(), self.data.source));
                     self.data.use_add(&id);
-                    // spec is consumed (tokens already read); the import will be recorded
-                    // when this `use` statement is seen again via todo_files with use_exists=true.
+                    // @PLN22 Phase 3 — register the library alias now that the lib's
+                    // source exists (use_add set self.data.source to it).  The
+                    // import itself is recorded on the second encounter (via
+                    // todo_files re-parse with use_exists=true).
+                    if let Some(alias) = &lib_alias {
+                        self.data.use_alias(alias, self.data.source);
+                    }
                     drop(spec);
                     self.switch_to_dep(&f);
                 } else {
@@ -4773,8 +4839,8 @@ impl Parser {
                     self.data.import_all(pi.lib_source, cur);
                 }
                 ImportSpec::Names(names) => {
-                    for name in &names {
-                        if !self.data.import_name(pi.lib_source, cur, name) {
+                    for (name, bind) in &names {
+                        if !self.data.import_name(pi.lib_source, cur, name, bind) {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,

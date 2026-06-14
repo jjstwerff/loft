@@ -161,8 +161,8 @@ fn incorrect_name() {
 
 #[test]
 fn wrong_compare() {
-    code!("enum EType{ V1 }\nenum Next{ V2 }\nfn test() { V1 == V2; }")
-        .error("No matching operator '==' on 'EType' and 'Next' at wrong_compare:3:21");
+    code!("enum EType{ V1 }\nenum Next{ V2 }\nfn test() { EType.V1 == Next.V2; }")
+        .error("No matching operator '==' on 'EType' and 'Next' at wrong_compare:3:32");
 }
 
 #[test]
@@ -179,20 +179,20 @@ fn wrong_if() {
 
 #[test]
 fn wrong_assign() {
-    code!("enum EType { V1 }\nfn test() {a = 1; a = V1 }")
-        .error("Variable 'a' cannot change type from integer to EType; use a new variable name or cast with 'as' at wrong_assign:2:27");
+    code!("enum EType { V1 }\nfn test() {a = 1; a = EType.V1 }")
+        .error("Variable 'a' cannot change type from integer to EType; use a new variable name or cast with 'as' at wrong_assign:2:33");
 }
 
 #[test]
 fn mixed_enums() {
-    code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(V1) }")
+    code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(E1.V1) }")
         .error("expected E2, got E1 on call to a at mixed_enums:4:15");
 }
 
 #[test]
 fn wrong_cast() {
-    code!("enum E1 { V1 }\nfn test() { V1 as float }")
-        .error("Unknown cast from E1 to float at wrong_cast:2:26");
+    code!("enum E1 { V1 }\nfn test() { E1.V1 as float }")
+        .error("Unknown cast from E1 to float at wrong_cast:2:29");
 }
 
 #[test]

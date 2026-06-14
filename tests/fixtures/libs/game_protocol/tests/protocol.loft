@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-use game_protocol::msg_ping, msg_pong, msg_chat, msg_input, msg_state, msg_error;
+use game_protocol::(msg_ping, msg_pong, msg_chat, msg_input, msg_state, msg_error);
 use game_protocol::MsgType;
 
 fn test_ping_pong() {

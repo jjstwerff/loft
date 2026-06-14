@@ -42,6 +42,16 @@ pub static I32: Type = Type::Integer(IntegerSpec::signed32());
 /// and picks 8-byte storage.
 pub static I64: Type = Type::Integer(IntegerSpec::wide());
 
+/// @PLN22 Phase 2 — source numbering: `STD_SOURCE` (0) = the stdlib prelude AND
+/// the home of program-global synthetic wrappers (`__tuple<…>`, `__fn_ref`,
+/// `main_vector<…>`); `MAIN_SOURCE` (1) = the user's main program; 2.. = imported
+/// libraries.  The main file gets its OWN source (not the prelude's) so a user
+/// definition can shadow a prelude name — bare names resolve current-source-first
+/// with a fallback to `STD_SOURCE`, while `std::Name` reaches the prelude.
+pub const STD_SOURCE: u16 = 0;
+/// See [`STD_SOURCE`] for the full source-numbering scheme.
+pub const MAIN_SOURCE: u16 = 1;
+
 /// Specification of an `integer`-family type — bounds, nullability,
 /// and optional forced storage width.
 ///
@@ -2705,7 +2715,7 @@ impl Data {
             definitions: Vec::new(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
-            source: 0,
+            source: STD_SOURCE,
             used_definitions: HashSet::new(),
             used_attributes: HashSet::new(),
             referenced: HashMap::new(),
@@ -2725,8 +2735,8 @@ impl Data {
 
     pub fn reset(&mut self) {
         self.use_names.clear();
-        self.source = 0;
-        self.use_names.insert("std".to_string(), 0);
+        self.source = STD_SOURCE;
+        self.use_names.insert("std".to_string(), STD_SOURCE);
     }
 
     /// @PLN12 phase 02 — transactional rollback for the REPL statement parser.
@@ -2752,8 +2762,10 @@ impl Data {
     /// this re-derives them so the loaded `Data` matches a fresh parse:
     ///
     /// * `def_names` — `(name, source) -> def_nr`, inserted in definition
-    ///   order so a duplicate `(name, source)` resolves last-wins, exactly
-    ///   as repeated `add_def` calls do during parsing.
+    ///   order.  Non-variant kinds are unique per source; an enum VARIANT
+    ///   keeps a FIRST-wins key (@PLN22 Phase 1 — reachable as a
+    ///   type/constructor, while a bare variant VALUE resolves via context),
+    ///   mirroring `add_def`.
     /// * `operators` — `op_code -> def_nr`, and `op_codes` — the
     ///   next-free counter (`max assigned op_code + 1`).  `op_code` values
     ///   themselves are restored from each `Definition` (not recomputed).
@@ -2773,7 +2785,16 @@ impl Data {
         let mut max_op: i32 = -1;
         for d_nr in 0..self.definitions.len() as u32 {
             let def = &self.definitions[d_nr as usize];
-            self.def_names.insert((def.name.clone(), def.source), d_nr);
+            // @PLN22 Phase 1 — mirror add_def: an enum variant keeps a FIRST-wins
+            // flat key (reachable as a type/constructor); a later same-key variant
+            // does not overwrite it.  Every other def kind is unique per source.
+            if def.def_type == DefType::EnumValue {
+                self.def_names
+                    .entry((def.name.clone(), def.source))
+                    .or_insert(d_nr);
+            } else {
+                self.def_names.insert((def.name.clone(), def.source), d_nr);
+            }
             if def.is_operator() {
                 if def.op_code != u16::MAX {
                     self.operators.insert(def.op_code, d_nr);
@@ -2791,7 +2812,7 @@ impl Data {
         }
         self.op_codes = (max_op + 1) as u16;
         if self.use_names.is_empty() {
-            self.use_names.insert("std".to_string(), 0);
+            self.use_names.insert("std".to_string(), STD_SOURCE);
         }
     }
 
@@ -2936,9 +2957,22 @@ impl Data {
     }
 
     pub fn use_add(&mut self, short: &str) {
-        let n = self.use_names.len() as u16;
+        // @PLN22 Phase 2 — source 0 = stdlib prelude, source 1 = the main program
+        // (MAIN_SOURCE, reserved so a user def can shadow a prelude name without a
+        // `(name, source)` collision); imported libraries number up from 2.
+        // `use_names` holds std + the libs (never the main file), so `len() + 1`
+        // is the next free source after the reserved main slot.
+        let n = self.use_names.len() as u16 + 1;
         self.use_names.insert(short.to_string(), n);
         self.source = n;
+    }
+
+    /// @PLN22 Phase 3 — register an additional name (`use lib as alias`) for an
+    /// ALREADY-loaded library source, so `alias::fn` resolves the same source as
+    /// `lib::fn`.  Unlike [`use_add`] this allocates no new source and does not
+    /// switch `self.source`; it only adds a qualifier alias to `use_names`.
+    pub fn use_alias(&mut self, alias: &str, source: u16) {
+        self.use_names.insert(alias.to_string(), source);
     }
 
     /// Allow a new attribute on a definition with a specified type.
@@ -3000,13 +3034,30 @@ impl Data {
     */
     pub fn add_def(&mut self, name: &str, position: &Position, def_type: DefType) -> u32 {
         let rec = self.definitions();
-        assert!(
-            !self
-                .def_names
-                .contains_key(&(name.to_string(), self.source)),
-            "Dual definition of {name} at {position}"
-        );
-        self.def_names.insert((name.to_string(), self.source), rec);
+        // @PLN22 Phase 1 — an enum variant keeps a flat `(name, source)` key
+        // (FIRST-wins, no panic) so it is reachable as a TYPE / constructor
+        // (`Circle { … }`, `s: Circle`, `fn f(self: Circle)`); two enums may
+        // therefore share a variant name.  But a bare variant used as a VALUE
+        // resolves ONLY via context (match subject, typed decl, typed
+        // reassignment / `rec.field`, parameter, return, `==` LHS, `Enum::`/`lib::`
+        // qualifier — the variant_of chokepoints), NEVER via this flat key, so a
+        // no-context `s = Red` is an error even when the name is currently unique
+        // (see parse_constant_value).  That way adding a second enum with the same
+        // variant name can never silently break an existing bare assignment.
+        // Every OTHER def kind keeps the flat key + the hard dual-definition guard.
+        if def_type == DefType::EnumValue {
+            self.def_names
+                .entry((name.to_string(), self.source))
+                .or_insert(rec);
+        } else {
+            assert!(
+                !self
+                    .def_names
+                    .contains_key(&(name.to_string(), self.source)),
+                "Dual definition of {name} at {position}"
+            );
+            self.def_names.insert((name.to_string(), self.source), rec);
+        }
         let new_def = Definition {
             name: name.to_string(),
             source: self.source,
@@ -3446,7 +3497,9 @@ impl Data {
         if d_nr == u32::MAX {
             let vd = self.add_def(&name, lexer.pos(), DefType::Struct);
             // Also register globally (source=0) so other files can find it.
-            self.def_names.entry((name.clone(), 0)).or_insert(vd);
+            self.def_names
+                .entry((name.clone(), STD_SOURCE))
+                .or_insert(vd);
             // This synthetic wrapper is global, not owned by the file that
             // happened to first request it.  Stamp `source = 0` so a cache
             // reload's `rebuild_indices` (which keys `def_names` on each def's
@@ -3477,7 +3530,7 @@ impl Data {
     pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
         let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
         let name = format!("__tuple<{}>", inner_names.join(","));
-        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+        if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
             return nr;
         }
         if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
@@ -3488,8 +3541,10 @@ impl Data {
         // same tuple shape resolve to the same def.  Stamp `source = 0` too so
         // a cache reload's `rebuild_indices` reproduces the global binding (see
         // `vector_def`).
-        self.def_names.entry((name.clone(), 0)).or_insert(d);
-        self.definitions[d as usize].source = 0;
+        self.def_names
+            .entry((name.clone(), STD_SOURCE))
+            .or_insert(d);
+        self.definitions[d as usize].source = STD_SOURCE;
         self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         let mut indices: Vec<u16> = Vec::with_capacity(types.len());
         let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
@@ -3568,7 +3623,7 @@ impl Data {
     /// across every `Type::Function(...)` value in the program.
     pub fn fn_ref_def(&mut self, lexer: &mut Lexer) -> u32 {
         let name = "__fn_ref".to_string();
-        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+        if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
             return nr;
         }
         if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
@@ -3579,8 +3634,10 @@ impl Data {
         // `Type::Function` across all source files resolves to the
         // same synthetic struct.  Stamp `source = 0` too so a cache reload's
         // `rebuild_indices` reproduces the global binding (see `vector_def`).
-        self.def_names.entry((name.clone(), 0)).or_insert(d);
-        self.definitions[d as usize].source = 0;
+        self.def_names
+            .entry((name.clone(), STD_SOURCE))
+            .or_insert(d);
+        self.definitions[d as usize].source = STD_SOURCE;
         self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         // `_d_nr`: 4-byte signed integer holding the function's
         // def-nr.  The integer alias `i32` carries the `size(4)`
@@ -3633,7 +3690,7 @@ impl Data {
     pub fn def_nr(&self, name: &str) -> u32 {
         if let Some(nr) = self.def_names.get(&(name.to_string(), self.source)) {
             *nr
-        } else if let Some(nr) = self.def_names.get(&(name.to_string(), 0)) {
+        } else if let Some(nr) = self.def_names.get(&(name.to_string(), STD_SOURCE)) {
             *nr
         } else {
             u32::MAX
@@ -3659,7 +3716,7 @@ impl Data {
     pub fn name_type(&self, name: &str, source: u16) -> u16 {
         let nr = if let Some(nr) = self.def_names.get(&(name.to_string(), source)) {
             *nr
-        } else if let Some(nr) = self.def_names.get(&(name.to_string(), 0)) {
+        } else if let Some(nr) = self.def_names.get(&(name.to_string(), STD_SOURCE)) {
             *nr
         } else {
             return u16::MAX;
@@ -3708,13 +3765,22 @@ impl Data {
         }
     }
 
-    /// Import a single name from `lib_source` into `into_source`.
-    /// Returns `false` if neither the plain name nor its `n_`-prefixed function
-    /// form exists in `lib_source`, so the caller can emit an appropriate error.
-    /// Names already present in `into_source` are kept unchanged (local wins).
-    pub fn import_name(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+    /// Import a single name from `lib_source` into `into_source`, BINDING it
+    /// under `bind` (= `name` for a plain `use lib::name`, or the alias for
+    /// `use lib::name as bind` — @PLN22 Phase 3).  Returns `false` if neither the
+    /// plain name nor its `n_`-prefixed function form exists in `lib_source`, so
+    /// the caller can emit an appropriate error.  Names already present in
+    /// `into_source` are kept unchanged (local wins).
+    pub fn import_name(
+        &mut self,
+        lib_source: u16,
+        into_source: u16,
+        name: &str,
+        bind: &str,
+    ) -> bool {
         // Functions are stored under the `n_` prefix; try both forms.
         let fn_key = format!("n_{name}");
+        let bind_fn_key = format!("n_{bind}");
         let found_plain = self
             .def_names
             .get(&(name.to_string(), lib_source))
@@ -3722,7 +3788,7 @@ impl Data {
             .filter(|&d| self.definitions[d as usize].pub_visible);
         let found_fn = self
             .def_names
-            .get(&(fn_key.clone(), lib_source))
+            .get(&(fn_key, lib_source))
             .copied()
             .filter(|&d| self.definitions[d as usize].pub_visible);
         if found_plain.is_none() && found_fn.is_none() {
@@ -3730,12 +3796,12 @@ impl Data {
         }
         if let Some(def_nr) = found_plain {
             self.def_names
-                .entry((name.to_string(), into_source))
+                .entry((bind.to_string(), into_source))
                 .or_insert(def_nr);
         }
         if let Some(def_nr) = found_fn {
             self.def_names
-                .entry((fn_key, into_source))
+                .entry((bind_fn_key, into_source))
                 .or_insert(def_nr);
         }
         true
@@ -3767,8 +3833,15 @@ impl Data {
     /// Variant of [`import_name`] that overwrites forward-reference stubs.
     /// See [`import_all_overwrite`] for the rationale.  Returns the same
     /// `false` on lookup miss as [`import_name`].
-    pub fn import_name_overwrite(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+    pub fn import_name_overwrite(
+        &mut self,
+        lib_source: u16,
+        into_source: u16,
+        name: &str,
+        bind: &str,
+    ) -> bool {
         let fn_key = format!("n_{name}");
+        let bind_fn_key = format!("n_{bind}");
         let found_plain = self
             .def_names
             .get(&(name.to_string(), lib_source))
@@ -3776,17 +3849,17 @@ impl Data {
             .filter(|&d| self.definitions[d as usize].pub_visible);
         let found_fn = self
             .def_names
-            .get(&(fn_key.clone(), lib_source))
+            .get(&(fn_key, lib_source))
             .copied()
             .filter(|&d| self.definitions[d as usize].pub_visible);
         if found_plain.is_none() && found_fn.is_none() {
             return false;
         }
         if let Some(def_nr) = found_plain {
-            self.insert_or_replace_stub((name.to_string(), into_source), def_nr);
+            self.insert_or_replace_stub((bind.to_string(), into_source), def_nr);
         }
         if let Some(def_nr) = found_fn {
-            self.insert_or_replace_stub((fn_key, into_source), def_nr);
+            self.insert_or_replace_stub((bind_fn_key, into_source), def_nr);
         }
         true
     }
@@ -4051,6 +4124,54 @@ impl Data {
             .enumerate()
             .filter(move |(_, d)| d.parent == parent_nr)
             .map(|(i, _)| i as u32)
+    }
+
+    /// @PLN22 Phase 1 — resolve a variant by name within ONE enum's members
+    /// (the `(enum, variant)` scope key).  The single chokepoint every variant
+    /// resolution routes through, replacing the bare global `def_nr(name)` +
+    /// `parent == e_nr` dance — so two enums may share a variant name and a
+    /// variant is never found without a contextual enum.  Returns `u32::MAX`
+    /// when `name` is not a variant of `enum_nr`.
+    #[must_use]
+    pub fn variant_of(&self, enum_nr: u32, name: &str) -> u32 {
+        if enum_nr == u32::MAX {
+            return u32::MAX;
+        }
+        self.children_of(enum_nr)
+            .find(|&c| self.def_type(c) == DefType::EnumValue && self.def(c).name() == name)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// @PLN22 Phase 1 — every enum that has a variant named `name`, in
+    /// definition order.  Used by the resolver's error path to recognise a bare
+    /// variant used with no type context and name the enum(s) to qualify with.
+    #[must_use]
+    pub fn enums_with_variant(&self, name: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        for i in 0..self.definitions.len() as u32 {
+            if self.def_type(i) == DefType::Enum && self.variant_of(i, name) != u32::MAX {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// @PLN22 Phase 1 — resolve a variant by name across every enum defined in
+    /// `source` (a library-qualified `lib::Variant`).  Returns the FIRST match;
+    /// a library exposing two enums with the same variant name needs the
+    /// `lib::Enum::Variant` form to disambiguate (Phase 3 `as` aliasing).
+    /// `u32::MAX` when no enum in `source` has the variant.
+    #[must_use]
+    pub fn variant_in_source(&self, source: u16, name: &str) -> u32 {
+        for i in 0..self.definitions.len() as u32 {
+            if self.def(i).source == source && self.def_type(i) == DefType::Enum {
+                let v = self.variant_of(i, name);
+                if v != u32::MAX {
+                    return v;
+                }
+            }
+        }
+        u32::MAX
     }
 
     /// # Panics

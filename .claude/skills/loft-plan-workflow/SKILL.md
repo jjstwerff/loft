@@ -83,8 +83,9 @@ Use when the deliverable is a feature ship or a fix landing.
 3. **Fill Status + Goal first.**  Add Sub-arcs / Phase ordering / Open questions /
    Cross-arc dependencies / See-also as the design clarifies.  Link the source
    issue(s) and carry the plan id in the body.
-4. **Label the issue** — type (`plan`) + subject + status (`future` planned ·
-   `active` in progress · `finished`).
+4. **Label the issue** — subject + status (`future` planned · `active` in
+   progress · `finished`).  (No `plan` type label: in a dedicated plans repo
+   every issue is a plan, so it partitioned nothing — retired 2026-06-14.)
 5. **No roadmap row, no per-plan entry in the master-instructions index** — the
    plan is discoverable via the tracker and the plans-overview doc.  Add a
    master-index entry *only* if the plan introduces a genuinely new top-level
@@ -166,7 +167,9 @@ graduate a representative sibling from the same cluster instead.
 **Common to close + defer:**
 
 4. Reclassify any overview rows (shipped parts leave; deferred parts stay if
-   tracked).  Update lifecycle **state on the issue** (not a directory move).
+   tracked).  Set the lifecycle **state on the issue** (not a directory move):
+   closing → swap `status:active` for `status:finished` **and close the issue**;
+   deferring → swap for `status:future`, issue stays open.
 5. **Grep + rewrite incoming links — THE most-skipped step.**  Reference content
    embedded in a finished plan gets linked to from other docs; those links rot when
    the content moves.  Grep every doc for the plan's path, rewrite the links to the

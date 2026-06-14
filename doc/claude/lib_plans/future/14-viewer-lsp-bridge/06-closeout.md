@@ -15,7 +15,7 @@ formidable programmers evaluating loft as a tool platform.
 
 Phase 06 ships the documentation that turns "we have it" into
 "any colleague can use it from a cold install in under 10
-minutes."  Then move @PLAN14 to `lib_plans/finished/`.
+minutes."  Then close @PLAN14 (issue `status:finished`).
 
 ## What ships
 
@@ -118,20 +118,21 @@ Closes plan-14.
   closeout retrospectives.
 ```
 
-### Move to `lib_plans/finished/14-viewer-lsp-bridge/`
+### Close the issue
 
-Standard closeout: `git mv` the directory; update the
-`lib_plans/README.md` table to reflect "Finished".
+Standard closeout: set the issue `status:finished` and close
+it (`gh issue edit/close --repo loft-lang/plans`); the plan
+dir stays in place as the closure record.  See
+[`../../plans/_LIFECYCLE.md`](../../plans/_LIFECYCLE.md).
 
 ### Cross-doc updates
 
 - `CLAUDE.md` § Key commands: `make view` row mentions
   "+ multi-language LSP (Rust/loft/Java)" — keeps the
   Key Commands as the discovery surface.
-- `ROADMAP.md`: row added under § F — Foundation /
-  Tooling, marked closed with a pointer to
-  `lib_plans/finished/14-viewer-lsp-bridge/`.
-- `lib_plans/finished/09-lsp/` (if @PLAN09 has shipped by
+- `ROADMAP.md`: remove the § F — Foundation / Tooling row
+  from the active section on close.
+- `lib_plans/09-lsp/` (if @PLAN09 has shipped by
   this point): cross-link to @PLAN14 as "the client side
   of this server".
 
@@ -154,8 +155,8 @@ Standard closeout: `git mv` the directory; update the
    + quickstart + extension pointer.
 3. CHANGELOG entries land in both user-facing + technical
    variants.
-4. Plan-14 directory moved to `lib_plans/finished/14-…/`.
-5. `lib_plans/README.md` table reflects "Finished".
+4. @PLAN14 issue set `status:finished` and closed; the plan
+   dir stays in place as the closure record.
 6. ROADMAP.md row added under § F — Foundation / Tooling.
 7. CLAUDE.md § Key commands updated.
 8. CI gate `tests/lsp_bridge_smoke.rs` passes on Linux lane.

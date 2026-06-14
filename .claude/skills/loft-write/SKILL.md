@@ -156,8 +156,21 @@ allowed inside a fn body.
 ## Imports
 
 ```loft
-use arguments;    // resolved via lockfile -> loft.toml deps -> lib/ -> ~/.loft -> LOFT_LIB
+use arguments;                       // wildcard: all pub names bare + `arguments::` qualifier
+use arguments::*;                    // explicit wildcard (same as above)
+use arguments::parse_args;           // selective: just one name, bare
+use arguments::(parse_args, Flag);   // selective group — MULTIPLE names need parentheses
+use arguments::Flag as Opt;          // alias an imported name (bare `Opt`)
+use arguments::(Flag as Opt, parse_args);   // per-name aliases inside the group
+use arguments as args;               // library alias → `args::parse_args` (qualified-only,
+                                     //   does NOT import names bare)
 ```
+
+- **Multiple names MUST be parenthesised** — `use lib::a, b;` (flat comma list) is a
+  hard error; write `use lib::(a, b);`.  (@PLN22 Phase 4.)
+- `use lib as m;` gives a qualifier alias only (`m::fn`); it does not wildcard-import.
+- A qualified `lib::fn()` auto-loads the library — an explicit `use` is optional for
+  qualified access.
 
 **`use` declarations must appear before any other declarations in the file.**
 
@@ -271,9 +284,18 @@ integer (`t.0 as integer == 97`) or destructure first
 Simple enum (value type, no fields):
 ```loft
 enum Color { Red, Green, Blue }
-c = Color.Red;
+c = Color.Red;                 // qualify when DEFINING a new variable
 // ordering follows declaration order: Red < Green < Blue
 ```
+
+**Bare variants need a type context (@PLN22 Phase 1).**  A bare `Red` resolves only
+against a known enum — a `match` subject, a typed target (`c: Color = Red`), a
+typed reassignment / field, a parameter, a return type, an `==` LHS, or an `is`
+subject.  Defining a NEW untyped variable from a bare variant (`c = Red`) is a hard
+error — qualify it (`c = Color.Red`) or annotate (`c: Color = Red`).  Match arms and
+the other context positions still use the bare form (`match c { Red => … }`).  Two
+enums MAY share a variant name (`enum Color { Red }` + `enum Berry { Red }`); the
+bare `Red` resolves by its context enum.
 
 Struct-enum (each variant has fields; polymorphic dispatch via methods):
 ```loft
@@ -564,30 +586,62 @@ annotations collapses the distinction between the two forms.
 
 ---
 
-## CRITICAL — flat namespace (interpreter limitation)
+## Variable scoping — one type per name, per function
 
-**All variable names across every function in a file share one global namespace.** This is an interpreter limitation.
+Variable names are **per-function**, and loft has **no block scoping**: a
+`for`/`if` body does not open a fresh binding — every local (loop variables
+included) lives in the enclosing function's scope for the whole function.  So the
+rule that matters is narrow: *within one function, a name maps to a single
+slot + type.*  The same name in a **different** function is completely free.
 
-Rules to avoid codegen panics:
-- Use **unique loop variable names** across all functions (e.g. `fib_i`, `mb_x`) — defensive default that sidesteps every collision class below
-- Descriptive parameter names help avoid collisions
+All of the violations below are **clean compile-time errors with fix hints** —
+never a codegen panic or silent corruption, on either backend:
 
-**Precise rule for *reusing* a loop-var name (@P344):** reuse is allowed as long
-as the type stays consistent — `for i in [1,2,3] {…}` then `for i in [4,5,6] {…}`
-works, and the same name is fine in different functions.  It FAILS only when the
-element type differs: `for i in [1,2,3]` then `for i in ["a","b"]` →
-`loop variable 'i' has type text but was previously used as integer` (one slot +
-type per name in the per-function flat table).  When two loops iterate different
-types, give them distinct names.  (Loop variables are also inference-only —
-`for i: integer in …` does not parse, @P345.)
+- **A name reused with a different type in one function** → error, even across
+  disjoint blocks: `if … { x = 1 }  if … { x = "hi" }` →
+  `Variable 'x' cannot change type from integer to text`.  Re-assigning the *same*
+  type is fine (`x = 1; x = 2`).
+- **A loop variable reused with a different element type (@P344)** →
+  `for i in [1,2,3] {…}` then `for i in ["a","b"] {…}` in the same function →
+  `loop variable 'i' has type text but was previously used as integer`.  Same
+  element type is fine (`[1,2,3]` then `[4,5,6]`); the same name in a *different*
+  function is fine.  Two same-function loops over different types → distinct names
+  (`for n in nums {…}  for s in strs {…}`).
+- **A loop variable named like an existing local** →
+  `loop variable 'x' shadows a local named 'x' — rename the loop variable
+  (e.g. loop_x)`.  Rename it, or drop the dead outer local.
+- **Loop variables are inference-only (@P345)** — `for i: integer in …` does not
+  parse (`loop variable 'i' is type-inferred from the iterable — remove the
+  ': <type>' annotation`).  Drop the annotation.
 
-**Unused loop variable = exit 1.** Use `_` when the value is not needed.
+This is accepted-as-intended (CAVEATS.md § P344); true per-loop scoping is a
+deferred resolver change, **not** a bug to work around.  The zero-cost habit:
+**descriptive, distinct names** (`fib_i`, `mb_x`) — it sidesteps every case above
+and reads better anyway.  (You do *not* need names unique across the whole file;
+the constraint is per-function.)
+
+**Unused variable = warning, not an error** — the program still runs (exit 0).
+Use `_` for an unused loop variable to keep the build warning-clean.
 
 ---
 
-## Builtin names — do not shadow
+## Builtin names — shadowing rules (@PLN22 Phase 2)
 
-`len`, `ticks`, `round`, `sorted`, `null`, `map`, `filter`, `reduce`, `rev`
+- **Definitions CAN shadow a stdlib/library name.**  `enum E`, `struct File`,
+  `pub PI = 3` are legal even though the stdlib has `E`/`File`/`PI`; your name wins
+  bare resolution and `std::Name` still reaches the original.
+- **Built-in TYPE-KEYWORDS are reserved** — you cannot define `struct integer`,
+  `enum vector`, etc. (it errors: "conflicts with a type").  Reserved: `integer`,
+  `float`, `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`,
+  `index`, `radix`, `spacial`, `iterator`, `i8`/`i16`/`i32`, `u8`/`u16`/`u32`,
+  `reference`.  This holds for `struct`, `enum`, and `type` alike.
+- **A few builtin names break as a local variable name** — the literal `null`
+  (`Not implemented operation = for type null`), the special `ticks`
+  (`Cannot redefine function 'ticks' as a variable`), and the higher-order method
+  names `map`/`filter`/`reduce` (a local of that name derails the later
+  `v.map(x => …)` lambda parse → `Expect token )`).  Most builtins are safe as
+  variable names — `len`, `round`, `rev`, and `sorted` (as a value) all work — but
+  distinct, descriptive names sidestep the question entirely.
 
 ---
 
@@ -824,10 +878,11 @@ when-to-reach-for-which:
 
 | Error message | Fix |
 |--------------|-----|
-| `Too few parameters on n_<fn>` | Flat namespace collision — unique loop variable names; avoid `for` in `const vector<T>` recursive fns |
-| `Variable <x> is never read` (exit 1) | Use the variable, or name loop var `_` |
-| `Indexing a non vector` | Variable name shadows `sorted` keyword — rename it |
-| `Not implemented operation = for type null` | Variable shadows builtin (e.g. `len = 1`) — rename |
+| `Too few parameters on n_<fn>` | Per-function name collision — give the loop/local a name distinct from the function's params; avoid `for` in `const vector<T>` recursive fns |
+| `Variable <x> is never read` | A **warning** (program still runs, exit 0) — use the variable, or name an unused loop var `_` |
+| `loop variable 'i' has type … but was previously used as …` | Two same-function loops over different element types share one name — give them distinct names |
+| `Indexing a non vector` | You indexed a scalar (`x = 5; x[0]`) — index a vector/collection, not a single value |
+| `Not implemented operation = for type null` | A local named `null` (a literal keyword) — rename it |
 | `Cannot iterate a hash directly` | Track aggregate separately |
 | `Undefined type string` | Use `text`, not `string` |
 | `Allocating a used store` | Field named `key` in hash-value struct — rename the field |

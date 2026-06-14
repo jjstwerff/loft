@@ -80,7 +80,7 @@ fn test_struct_enum_match() {
   d = Disk { r: 4 };
   v = decode(d);
   assert(v != null && v.x == 4, "Disk arm x=4");
-  h = Hollow;
+  h = Figure.Hollow;
   z = decode(h);
   assert(z == null, "Hollow arm must be null");
 }

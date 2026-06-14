@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 06 — Closeout: docs, decision record, finished/
+# Phase 06 — Closeout: docs, decision record, close the issue
 
 **Status:** Open
 
@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Lock in the durability tiers as a stable, documented API
 surface; capture the design choices in
 DESIGN_DECISIONS.md so future contributors don't relitigate
-them; move the plan to `finished/`.
+them; close the plan (issue `status:finished`).
 
 ## What ships
 
@@ -124,17 +124,17 @@ limitations, document them as caveats with reproducers +
 workarounds.  No-op if the tiers all pass cleanly on all
 OSes.
 
-### Move to `finished/`
+### Close the issue
 
 ```bash
-git mv doc/claude/plans/future/38-loft-store-durable \
-       doc/claude/plans/finished/38-loft-store-durable
+gh issue edit <N> --repo loft-lang/plans \
+  --remove-label status:active --add-label status:finished
+gh issue close <N> --repo loft-lang/plans \
+  --comment "Closed: all phases shipped. Reference → DATABASE.md § Durable stores."
 ```
 
-Update intra-plan + sibling-plan link paths per the
-@PLAN22 closeout precedent.  This plan started in
-`future/`, so the move is from `future/38-` to
-`finished/38-`.
+The plan dir stays in place (it currently lives under `future/`); its README
+becomes the closure record.  See [`../../_LIFECYCLE.md`](../../_LIFECYCLE.md).
 
 ## Critical files
 

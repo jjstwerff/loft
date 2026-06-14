@@ -5,27 +5,35 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan lifecycle checklist — closing or deferring
 
-Use this when a plan exits the active state.  Two outcomes share
-most of the procedure:
+Use this when a plan exits the active state.  **Lifecycle state lives on the
+[`loft-lang/plans`](https://github.com/loft-lang/plans) issue's `status:*` label,
+not on the directory.**  We no longer move plan directories: an existing local
+`plans/<N>-<slug>/` dir stays where it is and its README becomes the closure (or
+defer) record in place.  The `finished/` / `deferred/` / `future/`
+subdirectories are a **legacy archive** from the old local-numbering era — read
+them, but don't add to them.
 
-- **Closing** (move to `finished/`): all phases shipped.
-- **Deferring** (move to `deferred/`): some or no phases shipped;
-  remaining work has a **concrete trigger**.
+Two outcomes share most of the procedure:
+
+- **Closing** — all phases shipped → issue `status:active` → `status:finished`,
+  then close the issue.
+- **Deferring** — some or no phases shipped, remaining work has a **concrete
+  trigger** → issue `status:active` → `status:future` (issue stays open); record
+  the trigger.
 
 If remaining work has no concrete trigger, the design moves to
-[`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md), not `deferred/`.
-"Will get to it later" is not a trigger; "when 3+ template-path
-bugs accumulate" is.
+[`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md).  "Will get to it later" is not
+a trigger; "when 3+ template-path bugs accumulate" is.
 
 ## Pick the outcome
 
 | Situation | Outcome |
 |---|---|
-| All phases shipped | **Close** — `finished/` |
-| Some phases shipped, others paused with concrete trigger | **Partial defer** — `deferred/`, Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLAN28, @PLAN12. |
-| No phases shipped, all paused with concrete trigger | **Full defer** — `deferred/` |
-| Some phases shipped, others abandoned without trigger | Apply this checklist for the shipped portion as if closing it; remaining design moves to `DESIGN_DECISIONS.md` |
-| Waiting on a date or "appetite" with no concrete signal | Stay in `future/` (date-bound) or move design to `DESIGN_DECISIONS.md` (appetite-bound).  Don't defer. |
+| All phases shipped | **Close** — `status:finished`, close the issue |
+| Some phases shipped, others paused with concrete trigger | **Partial defer** — `status:future`, issue stays open; Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLAN28, @PLAN12. |
+| No phases shipped, all paused with concrete trigger | **Full defer** — `status:future`, issue stays open |
+| Some phases shipped, others abandoned without trigger | Close the shipped portion as above; remaining design moves to `DESIGN_DECISIONS.md` |
+| Waiting on a date or "appetite" with no concrete signal | Keep `status:future` (date-bound) or move design to `DESIGN_DECISIONS.md` (appetite-bound).  Don't defer. |
 
 ## Steps 1-3 — Per shipped phase, extract reference content
 
@@ -80,7 +88,7 @@ canonical shape.
 > [`_INVESTIGATION_TEMPLATE.md` § Closing an investigation plan](_INVESTIGATION_TEMPLATE.md#closing-an-investigation-plan-required):
 > (1) **file the still-open findings** — the active-phase no-file rule inverts at
 > closure, so a deferred/benign residual → QUALITY.md `## Open work` and an
-> unfixed sibling bug → PROBLEMS.md, each citing the `finished/` cluster doc;
+> unfixed sibling bug → PROBLEMS.md, each citing the plan's cluster doc;
 > (2) **promote permanent-guarantee probes → CI tests** (doc-probes aren't
 > CI-run).  A FIXED finding needs no row — the fix + its test are the record.
 
@@ -98,55 +106,62 @@ For each ROADMAP row touched by the plan:
 For the "Plans index by category" subsection at the bottom of
 ROADMAP.md, move/remove rows accordingly.
 
-### Step 5 — Move the directory + update tracker tables
+### Step 5 — Set the issue label + close the issue (THE lifecycle state)
+
+The `loft-lang/plans` issue's `status:*` label IS the lifecycle state — this
+step replaces the old directory move.  **Do not `git mv` the local dir**: it
+stays in place and its README (now the closure / defer record) travels with it.
+The `status:*` labels are `active` / `future` / `finished` (`gh label list
+--repo loft-lang/plans`).
 
 ```bash
-# Closing:
-git mv doc/claude/plans/<NN>-<slug>           doc/claude/plans/finished/<NN>-<slug>
-# OR  doc/claude/plans/future/<NN>-<slug>    → finished/
+# Closing — all phases shipped:
+gh issue edit <N> --repo loft-lang/plans \
+  --remove-label status:active --add-label status:finished
+gh issue close <N> --repo loft-lang/plans \
+  --comment "Closed: all phases shipped (<commit/PR>). Reference → <doc home>."
 
-# Deferring:
-git mv doc/claude/plans/<NN>-<slug>           doc/claude/plans/deferred/<NN>-<slug>
-# OR  doc/claude/plans/future/<NN>-<slug>    → deferred/
+# Deferring — paused with a concrete trigger (issue stays OPEN):
+gh issue edit <N> --repo loft-lang/plans \
+  --remove-label status:active --add-label status:future
+#   then record the trigger in the issue body + the plan README Status block
 ```
 
-Update `plans/README.md` (or `lib_plans/README.md`) tracker
-tables:
-- Remove from "Current" / "Future" table.
-- Closing: add to "Finished" table (one line: closure date + ref home).
-- Deferring: add to "Deferred" table + add a row to
-  [`DEFERRED.md`](DEFERRED.md) with the trigger.
+There are no per-state tables in `plans/README.md` / `lib_plans/README.md` to
+edit — tracking lives on the issue (`_TEMPLATE.md` step 3).  A deferred plan
+additionally records its **trigger** in [`DEFERRED.md`](DEFERRED.md).
 
-### Step 6 — Grep + rewrite incoming links (THE most-skipped step)
+### Step 6 — Repoint design links to the reference home
+
+The plan path does NOT change (no move), so there are no path-only fixes — but
+after Steps 1-2 move reference content out, incoming links that pointed at the
+plan for *design / how-it-works* must follow it to the new home.
 
 ```bash
-grep -rn "plans/<NN>-<slug>\|plans/future/<NN>-<slug>\|plans/finished/<NN>-<slug>\|plans/deferred/<NN>-<slug>" \
-  CLAUDE.md doc/claude/ --include="*.md"
+grep -rn "plans/<N>-<slug>" CLAUDE.md doc/claude/ --include="*.md"
 ```
 
 Rewrite each match:
 - **Design / how-it-works links** → reference home (the
   `doc/claude/<NAME>.md` location).
-- **Closure-record links** → keep pointing at the closed/deferred
-  plan.
-- **Path-only updates** (the link should still point at the plan
-  but the path changed) → fix the relative path.
+- **Closure-record links** → keep pointing at the plan README (history,
+  what-shipped) — its path is unchanged.
 
 Verify `scripts/check_doc_drift.sh` reports no broken plan paths
 afterwards.
 
 ## Lifecycle after defer
 
-The plan stays in `deferred/` while ANY remaining phase has a
-concrete trigger.
+A deferred plan keeps `status:future` (issue open) while ANY remaining phase has
+a concrete trigger.
 
-- **Trigger fires** → move plan back to `plans/future/` (or directly
-  into a current arc); remove DEFERRED.md row; add ROADMAP rows;
-  rewrite incoming links per Step 6.
-- **Remaining phases ship** → re-apply this checklist, this time
-  closing.
+- **Trigger fires** → set the issue back to `status:active`; remove the
+  DEFERRED.md row; add ROADMAP rows; repoint design links per Step 6 if
+  reference content had moved.
+- **Remaining phases ship** → re-apply this checklist, this time closing.
 - **Remaining phases reclassified as won't-do** → design moves to
-  `DESIGN_DECISIONS.md`; remove plan directory + DEFERRED.md row.
+  `DESIGN_DECISIONS.md`; close the issue (`status:finished`) noting the partial
+  delivery; remove the DEFERRED.md row.
 
 ## Pitfalls
 

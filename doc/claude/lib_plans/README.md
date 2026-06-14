@@ -40,18 +40,18 @@ work.
   open-order, independent of `plans/`).
 - Every phase plan file begins with `Status: open | in-progress |
   done` so a fresh session can orient quickly.
-- When an initiative is fully closed (all phases committed, no
-  open follow-ups), move its entire subdirectory into `finished/`.
-- When an initiative is intentionally paused — well-described,
-  no driving bug or feature, picked up only when triggered —
-  move its entire subdirectory into `deferred/`.  Deferred
-  library plans differ from finished plans: they're not done,
-  they're parked.  Their READMEs must state the **trigger** that
-  would unpause them.
-- `future/` = **paused, not abandoned** — real commitment to
-  finish, eventually.  The long-term direction is to drain
-  `future/` to zero by shipping each plan through to
-  `finished/`.  May take years; that is fine.
+- When an initiative is fully closed (all phases committed, no open follow-ups),
+  set its issue `status:finished` and close it; the local dir (if any) stays in
+  place as a closure record.  See [`../plans/_LIFECYCLE.md`](../plans/_LIFECYCLE.md).
+- When an initiative is intentionally paused — well-described, no driving bug or
+  feature, picked up only when triggered — set its issue `status:future` (keep it
+  open).  A deferred library plan differs from a finished one: it's not done,
+  it's parked.  Its README + issue must state the **trigger** that would unpause
+  it.
+- The `future/` / `deferred/` / `finished/` subdirectories are a **legacy
+  archive** (closure records only); state now lives on the issue's `status:*`
+  label.  The long-term direction is still to drain planned work to zero by
+  shipping each plan through to `status:finished`.  May take years; that is fine.
 - `deferred/` = **won't do absent a concrete trigger** —
   different intent.  May never run.
 - Work flows in one direction: `future/` → current →

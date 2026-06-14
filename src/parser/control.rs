@@ -308,7 +308,18 @@ impl Parser {
             }
             let mut n = Value::Null;
             last_expr_peek = self.lexer.peek();
+            // @PLN22 Phase 1 — hint the block's expected enum so a bare
+            // value-position variant tail (`fn f() -> Light { Red }`, or an
+            // `if c { Red } else { Green }` block) resolves against it.  SAVE and
+            // RESTORE the prior hint rather than clearing to Unknown, so sibling
+            // statements / if-branches under the same expected type each still see
+            // it (clearing made only the FIRST branch of an `if`-return resolve).
+            let saved_enum_hint = self.enum_hint.clone();
+            if self.enum_context(result) {
+                self.enum_hint = result.clone();
+            }
             t = self.expression(&mut n);
+            self.enum_hint = saved_enum_hint;
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
@@ -1402,21 +1413,16 @@ impl Parser {
                 break;
             }
 
-            // Look up the variant definition. C53: when the bare name is not
-            // visible in the current source (e.g. a library enum variant that
-            // was not wildcard-imported), fall back to searching the enum's
-            // children by name.
-            let mut variant_def_nr = self.data.def_nr(&pattern_name);
-            if (variant_def_nr == u32::MAX
-                || self.data.def_type(variant_def_nr) != DefType::EnumValue
-                || self.data.def(variant_def_nr).parent() != e_nr)
-                && e_nr != u32::MAX
-                && let Some(child) = self
-                    .data
-                    .children_of(e_nr)
-                    .find(|&c| self.data.def(c).name() == pattern_name)
-            {
-                variant_def_nr = child;
+            // @PLN22 Phase 1 — resolve the variant against the subject enum via
+            // the variant_of chokepoint (the (enum, variant) scope key), not the
+            // bare global def_nr.  This also subsumes the C53 fix (a library
+            // variant not wildcard-imported is still a child of its enum).  A
+            // plain-struct match's "pattern" is the struct TYPE itself (still
+            // globally keyed, never an EnumValue), so fall back to def_nr when
+            // variant_of finds nothing.
+            let mut variant_def_nr = self.data.variant_of(e_nr, &pattern_name);
+            if variant_def_nr == u32::MAX {
+                variant_def_nr = self.data.def_nr(&pattern_name);
             }
 
             // for plain struct match, the pattern name must match the struct type.
@@ -1531,18 +1537,10 @@ impl Parser {
                 } else {
                     first_or.clone()
                 };
-                let mut next_def_nr = self.data.def_nr(&next_name);
-                if (next_def_nr == u32::MAX
-                    || self.data.def_type(next_def_nr) != DefType::EnumValue
-                    || self.data.def(next_def_nr).parent() != e_nr)
-                    && e_nr != u32::MAX
-                    && let Some(child) = self
-                        .data
-                        .children_of(e_nr)
-                        .find(|&c| self.data.def(c).name() == next_name)
-                {
-                    next_def_nr = child;
-                }
+                // @PLN22 Phase 1 — or-pattern variant resolves against the
+                // subject enum via the variant_of chokepoint (or-patterns are
+                // plain-enum only, so no struct fallback is needed).
+                let next_def_nr = self.data.variant_of(e_nr, &next_name);
                 if !self.first_pass
                     && (next_def_nr == u32::MAX
                         || self.data.def_type(next_def_nr) != DefType::EnumValue
@@ -3012,19 +3010,10 @@ impl Parser {
                 return Type::Boolean;
             }
         };
-        let mut variant_def_nr = self.data.def_nr(variant_name);
-        if (variant_def_nr == u32::MAX
-            || self.data.def_type(variant_def_nr) != DefType::EnumValue
-            || self.data.def(variant_def_nr).parent() != e_nr)
-            && e_nr != u32::MAX
-        {
-            for child in self.data.children_of(e_nr) {
-                if self.data.def(child).name() == variant_name {
-                    variant_def_nr = child;
-                    break;
-                }
-            }
-        }
+        // @PLN22 Phase 1 — resolve the variant against the subject enum via the
+        // variant_of chokepoint (the (enum, variant) scope key), not the bare
+        // global def_nr.  `is` is always enum-typed here (see the match above).
+        let variant_def_nr = self.data.variant_of(e_nr, variant_name);
         if variant_def_nr == u32::MAX || self.data.def_type(variant_def_nr) != DefType::EnumValue {
             if !self.first_pass {
                 diagnostic!(
@@ -4518,6 +4507,21 @@ impl Parser {
                     self.lambda_hint = expected;
                 }
             }
+            // @PLN22 Phase 1 — hint the expected enum so a bare value-position
+            // variant argument (`f(Red)`) resolves against the parameter's enum.
+            // Resolved on BOTH passes (unlike the pass-2-only `fn_def_nr` above):
+            // on pass 1 the callee is already registered, and skipping the hint
+            // there would let a bare variant become a stray placeholder var that
+            // shadows the real variant on pass 2.
+            if !in_named {
+                let hint_d_nr = self.data.def_nr(&format!("n_{name}"));
+                if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
+                    let expected = self.data.attr_type(hint_d_nr, arg_idx);
+                    if self.enum_context(&expected) {
+                        self.enum_hint = expected;
+                    }
+                }
+            }
             // for map/filter/reduce, infer lambda hint from the vector
             // element type so that short-form |x| lambdas can infer types.
             if fn_def_nr.is_none()
@@ -4557,6 +4561,7 @@ impl Parser {
             arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
             self.lambda_hint = Type::Unknown(0);
+            self.enum_hint = Type::Unknown(0);
             types.push(t);
             list.push(p);
             arg_idx += 1;

@@ -10,6 +10,18 @@ use super::{
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
+    /// @PLN22 Phase 1 — true if `tp` denotes an enum, either directly
+    /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
+    /// the expected-enum context for bare value-position variant resolution
+    /// once variants are no longer globally keyed.
+    pub(crate) fn enum_context(&self, tp: &Type) -> bool {
+        match tp {
+            Type::Enum(_, _, _) => true,
+            Type::Reference(d_nr, _) => self.data.def_type(*d_nr) == DefType::Enum,
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(
         &mut self,
@@ -35,6 +47,20 @@ impl Parser {
             }
         } else {
             name.to_string()
+        };
+        // @PLN22 Phase 1 — for a qualified `Enum::Variant` (the qualifier is a
+        // local enum, not a library), the variant is resolved WITHIN that enum
+        // via the variant_of chokepoint inside parse_constant_value, so it keeps
+        // working once variants are no longer globally keyed (step 4).
+        let qualifier_enum = if qualified && source == u16::MAX {
+            let q = self.data.def_nr(name);
+            if q != u32::MAX && self.data.def_type(q) == DefType::Enum {
+                q
+            } else {
+                u32::MAX
+            }
+        } else {
+            u32::MAX
         };
         // Tier-0 auto-`use`: a qualified `name::…` whose lowercase `name` is
         // neither a loaded library (`source` == MAX) nor a known definition is
@@ -92,7 +118,7 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
-        let mut t = self.parse_constant_value(code, source, &nm, name_pos);
+        let mut t = self.parse_constant_value(code, source, &nm, name_pos, qualifier_enum);
         if t != Type::Null {
             return t;
         }
@@ -275,7 +301,11 @@ impl Parser {
             && (!self.lexer.peek_token("=") || self.lexer.peek_token("=="))
             && !matches!(
                 self.data.def_type(self.data.def_nr(name)),
-                DefType::Function
+                // @PLN22 Phase 1 — exclude EnumValue: a bare variant used as a
+                // VALUE resolves via the context branches below (or errors with no
+                // context), never via this flat key.  Struct-variant CONSTRUCTION
+                // and qualified forms are handled earlier in parse_constant_value.
+                DefType::Function | DefType::EnumValue
             )
         {
             // @P335: functions are stored mangled as `n_<name>` and are reached
@@ -287,8 +317,6 @@ impl Parser {
             let dnr = self.data.def_nr(name);
             if self.data.def_type(dnr) == DefType::Enum {
                 t = self.data.def(dnr).returned().clone();
-            } else if self.data.def_type(dnr) == DefType::EnumValue {
-                t = Type::Enum(self.data.def(dnr).parent(), true, crate::data::Deps::none());
             } else {
                 t = Type::Null;
             }
@@ -298,11 +326,22 @@ impl Parser {
             let fnr = self.data.attr(self.context, name);
             *code = self.get_field(self.context, fnr, Value::Var(0));
             t = self.data.attr_type(self.context, fnr);
+        // @PLN22 Phase 1 — the bare variant VALUE resolves against the expected
+        // enum from context: `Type::Enum` (match subject, `==` LHS) or
+        // `Type::Reference(enum)` (typed decl / reassignment / field init / call
+        // arg / return).  emit_variant_value picks the right discriminant (and
+        // the mixed-enum allocation form) for that enum.
         } else if let Type::Enum(enr, _, _) = parent_tp
-            && let Some(a_nr) = self.data.def(*enr).attr_names.get(name)
+            && self.data.def(*enr).attr_names.contains_key(name)
         {
-            *code = self.data.attr_value(*enr, *a_nr);
-            t = parent_tp.clone();
+            let enr = *enr;
+            t = self.emit_variant_value(enr, name, code);
+        } else if let Type::Reference(enr, _) = parent_tp
+            && self.data.def_type(*enr) == DefType::Enum
+            && self.data.def(*enr).attr_names.contains_key(name)
+        {
+            let enr = *enr;
+            t = self.emit_variant_value(enr, name, code);
         } else {
             // try resolving as a bare function reference.
             // On the first pass, only do this when the identifier is NOT followed
@@ -361,12 +400,50 @@ impl Parser {
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
                 }
-            } else if !self.first_pass {
-                diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
-                t = Type::Unknown(0);
             } else {
-                *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
-                t = Type::Unknown(0);
+                // @PLN22 Phase 1 — a bare name that is a VARIANT of some enum,
+                // used with no type context, is the "needs qualification" error.
+                // Emit a targeted diagnostic, then RECOVER by resolving it against
+                // its enum (the first when the name is shared) so the rest of the
+                // function parses cleanly — without this recovery a placeholder var
+                // would shadow every later variant reference on the second pass and
+                // bury the real error under a cascade of "Unknown variable".
+                let variant_enums = self.data.enums_with_variant(name);
+                if let Some(&e_nr) = variant_enums.first() {
+                    // Emit unconditionally (not pass-2-gated): the recovery below
+                    // types the target from the variant's enum, so on the SECOND
+                    // pass the target has context and this branch is not re-reached
+                    // — emitting only on pass 2 would never fire.  Diagnostics
+                    // dedupe by position, so a both-pass emit still shows once.
+                    let enum_name = self.data.def(e_nr).name().to_string();
+                    if variant_enums.len() == 1 {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "bare variant '{name}' has no type here — qualify it as \
+                             '{enum_name}.{name}', or give the target an enum type"
+                        );
+                    } else {
+                        let names: Vec<String> = variant_enums
+                            .iter()
+                            .map(|&e| self.data.def(e).name().to_string())
+                            .collect();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "ambiguous variant '{name}' (a variant of {}) — qualify it, \
+                             e.g. '{enum_name}.{name}'",
+                            names.join(", ")
+                        );
+                    }
+                    t = self.emit_variant_value(e_nr, name, code);
+                } else if !self.first_pass {
+                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                    t = Type::Unknown(0);
+                } else {
+                    *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
+                    t = Type::Unknown(0);
+                }
             }
         }
         // Plan-22 phase 02d-iii.b — read auto-deref for boxed
@@ -817,19 +894,94 @@ impl Parser {
         Value::Insert(vec![assign, write])
     }
 
+    /// @PLN22 Phase 1 — emit the VALUE of `enum_nr`'s variant `variant_name`,
+    /// resolved within that enum (so a name two enums share picks the right one).
+    /// A plain enum yields the discriminant (`attr_value`); a MIXED struct-enum's
+    /// unit variant yields a freshly-allocated DbRef record with the discriminant
+    /// at offset 0 (the B2-runtime form) — never a bare `u8` into a DbRef slot.
+    /// Returns the enum's value type.  The single emitter every variant-value
+    /// resolution site routes through (context branches + the qualified path).
+    pub(crate) fn emit_variant_value(
+        &mut self,
+        enum_nr: u32,
+        variant_name: &str,
+        code: &mut Value,
+    ) -> Type {
+        let ret = self.data.def(enum_nr).returned().clone();
+        let variant_nr = self.data.variant_of(enum_nr, variant_name);
+        if matches!(ret, Type::Enum(_, true, _))
+            && !self.first_pass
+            && variant_nr != u32::MAX
+            && self.data.def(variant_nr).known_type() != u16::MAX
+        {
+            // Mixed struct-enum unit variant: allocate a record + set the
+            // discriminant, mirroring the struct-variant construction path.
+            let w = self.vars.work_refs(&ret, &mut self.lexer);
+            let known_type = i32::from(self.data.def(variant_nr).known_type());
+            let mut list = vec![
+                v_set(w, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]),
+            ];
+            self.object_init(&mut list, variant_nr, 0, &Value::Var(w), &HashSet::new());
+            list.push(Value::Var(w));
+            // The LHS owns the store (empty dep); the work-ref is skip_free
+            // (same store, no double-free).
+            self.vars.set_skip_free(w);
+            *code = v_block(
+                list,
+                Type::Enum(enum_nr, true, crate::data::Deps::none()),
+                "EnumUnitLit",
+            );
+            return ret;
+        }
+        if let Some(a_nr) = self.data.def(enum_nr).attr_names.get(variant_name) {
+            *code = self.data.attr_value(enum_nr, *a_nr);
+        }
+        ret
+    }
+
     pub(crate) fn parse_constant_value(
         &mut self,
         code: &mut Value,
         source: u16,
         name: &str,
         name_pos: &Position,
+        qualifier_enum: u32,
     ) -> Type {
         let mut t;
-        let d_nr = if source == u16::MAX {
+        let mut d_nr = if source == u16::MAX {
             self.data.def_nr(name)
         } else {
             self.data.source_nr(source, name)
         };
+        // @PLN22 Phase 1 — a qualified `Enum::Variant` resolves WITHIN the
+        // qualifier enum via the variant_of chokepoint, NOT the first-wins flat
+        // key (which may point at a different enum's same-named variant).
+        if qualifier_enum != u32::MAX {
+            d_nr = self.data.variant_of(qualifier_enum, name);
+        }
+        // @PLN22 Phase 1 — a library-qualified `lib::Variant` falls back to the
+        // variant_in_source chokepoint.  Harmless for non-variant `lib::name`
+        // (no enum has the variant → MAX → falls through).
+        if d_nr == u32::MAX && source != u16::MAX {
+            d_nr = self.data.variant_in_source(source, name);
+        }
+        // @PLN22 Phase 1 — a BARE variant used as a VALUE (not qualified, not a
+        // `{ … }` construction) resolves ONLY via context: defer to parse_var's
+        // context branches, which resolve it against the expected enum or error
+        // if none is in scope.  So `s = Red` with no type context is an error
+        // even when `Red` is currently unique — adding a second enum with that
+        // variant name can never silently re-point an existing bare assignment.
+        // A following `{` is a struct-variant CONSTRUCTION (`Circle { … }`) and
+        // keeps resolving below, as does an `Enum::`/`lib::` qualified value.
+        if d_nr != u32::MAX
+            && source == u16::MAX
+            && qualifier_enum == u32::MAX
+            && self.data.def_type(d_nr) == DefType::EnumValue
+            && !self.lexer.peek_token("{")
+        {
+            return Type::Null;
+        }
         if d_nr != u32::MAX {
             self.data.def_used(d_nr);
             t = self.data.def(d_nr).returned().clone();
@@ -883,58 +1035,13 @@ impl Parser {
                 *code = const_code;
                 return const_tp;
             }
-            if let Type::Enum(en, _, _) = t {
-                for a_nr in 0..self.data.attributes(en) {
-                    if self.data.attr_name(en, a_nr) == name {
-                        // B2-runtime (2026-04-13): in a mixed struct-enum,
-                        // a bare-identifier unit-variant literal (`s = Idle`)
-                        // must produce a DbRef to a freshly allocated record
-                        // with the discriminant set at offset 0, not a bare
-                        // `Value::Enum(u8)`.  Without this, the receiving
-                        // slot is typed DbRef but holds a u8 — native emit
-                        // produces `let var_s: DbRef = 2_u8;` (rustc E0308)
-                        // and the interpreter double-frees at exit.  Emit
-                        // the same `OpDatabase` + field-init sequence that
-                        // `parse_object` would for the struct-variant form.
-                        let parent_is_mixed =
-                            matches!(self.data.def(en).returned(), Type::Enum(_, true, _));
-                        if parent_is_mixed && !self.first_pass {
-                            let e_nr = self.data.def_nr(name);
-                            if e_nr != u32::MAX && self.data.def(e_nr).known_type() != u16::MAX {
-                                let ret = self.data.def(en).returned().clone();
-                                let w = self.vars.work_refs(&ret, &mut self.lexer);
-                                let known_type = i32::from(self.data.def(e_nr).known_type());
-                                let mut list = Vec::new();
-                                list.push(v_set(w, Value::Null));
-                                list.push(
-                                    self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]),
-                                );
-                                self.object_init(
-                                    &mut list,
-                                    e_nr,
-                                    0,
-                                    &Value::Var(w),
-                                    &HashSet::new(),
-                                );
-                                list.push(Value::Var(w));
-                                // The work-ref's DbRef is copied into the
-                                // receiving slot (the LHS of assignment).
-                                // The LHS OWNS the store (empty dep); the
-                                // work-ref is skip_free (same store, no
-                                // double-free).
-                                self.vars.set_skip_free(w);
-                                *code = v_block(
-                                    list,
-                                    Type::Enum(en, true, crate::data::Deps::none()),
-                                    "EnumUnitLit",
-                                );
-                                return t;
-                            }
-                        }
-                        *code = self.data.attr_value(en, a_nr);
-                        return t;
-                    }
-                }
+            // @PLN22 Phase 1 — a qualified `Enum::Variant` / `lib::Variant` value:
+            // emit via the shared emitter (plain discriminant or mixed-enum
+            // allocation), resolved within the variant's own enum.
+            if let Type::Enum(en, _, _) = t
+                && self.data.def(en).attr_names.contains_key(name)
+            {
+                return self.emit_variant_value(en, name, code);
             }
         }
         // #271 — a brace-construction `Name { … }` of a type that exists in a
@@ -1904,6 +2011,21 @@ impl Parser {
                 // fields take the sentinel branch above: a pointer's zero
                 // value IS null.
                 default = to_default(&tp, &self.data);
+            } else if matches!(&default, Value::Block(b) if b.name == "EnumUnitLit") {
+                // @PLN22 Phase 1 — a mixed struct-enum unit-variant default
+                // (`mode: Mode = Idle`) is a SELF-CONTAINED allocation block whose
+                // `Var(0)` is its OWN work-ref, not the record placeholder.  Re-home
+                // it to a FRESH work-ref in THIS construction context: leaving
+                // `Var(0)` for the `replace_record_ref(_, code)` below would rewrite
+                // it to the struct's own ref, so the default's `OpDatabase`
+                // re-allocates the struct variable and clobbers already-written
+                // sibling fields (the `Widget { color: Red }` corruption).  The
+                // record is deep-copied into the field (set_field_no_check emits an
+                // OpCopyRecord), so the temp is a SEPARATE store — leave it to be
+                // freed at scope end (NOT skip_free, unlike the `s = Idle`
+                // assignment case where the LHS owns the store directly).
+                let fresh = self.vars.work_refs(&tp, &mut self.lexer);
+                default = Self::replace_record_ref(default, &Value::Var(fresh));
             } else {
                 default = Self::replace_record_ref(default, code);
             }

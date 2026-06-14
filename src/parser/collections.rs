@@ -3692,7 +3692,11 @@ use #count instead"
             };
 
             let field_read = self.get_field(struct_def_nr, a, source_expr.clone());
-            let variant_def_nr = self.data.def_nr(variant_name);
+            // @PLN22 Phase 1 — the FieldValue reflection variants (FvBool, FvInt,
+            // …) resolve within the FieldValue enum via the variant_of chokepoint,
+            // not the bare global def_nr (the enum itself stays globally keyed).
+            let fv_enum = self.data.def_nr("FieldValue");
+            let variant_def_nr = self.data.variant_of(fv_enum, variant_name);
             let disc_val = self.data.def(variant_def_nr).attributes()[0].value.clone();
 
             // Construct FieldValue variant as Value::Insert (flat ops list).

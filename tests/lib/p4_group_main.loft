@@ -1,0 +1,14 @@
+// @PLN22 Phase 4 — grouped selective-import syntax `use lib::(a [as x], …)`.
+// Multiple imports must be parenthesised (the flat `use lib::a, b` list is
+// dropped); per-name `as` aliases work inside the group (Phase 3 reused).
+// enumlib exports `pub enum Status { Yay, Boo, Pending }` + `pub fn make() -> Status`.
+use enumlib::(Status as St, make as mk);
+
+fn pick(s: St) -> text { match s { Yay => "y", Boo => "b", Pending => "p" } }
+
+fn test_phase4_grouped_import() {
+  // grouped import bound both names under their aliases.
+  s = mk();
+  assert(s is Yay, "grouped fn alias mk() resolves enumlib::make");
+  assert(pick(St.Yay) == "y", "grouped type alias St resolves enumlib::Status");
+}

@@ -263,9 +263,16 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         data.vector_def(lexer, &tp);
     }
     for d_nr in 0..data.definitions() {
+        // @PLN22 Phase 2 — register every not-yet-registered struct / struct-enum
+        // variant.  The guard is PER-DEF (`known_type == u16::MAX`), not
+        // per-bare-name: a second def with a name the stdlib/another source
+        // already registered (a shadowing `struct File`, or P379's two-library
+        // same-name structs) must still be filled — fill_database registers it
+        // under a source-qualified name.  A bare-name guard skipped it, leaving
+        // `known_type = u16::MAX` and a runtime out-of-bounds on `self.types`.
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
-            && !database.has_type(&data.def(d_nr).name)
+            && data.def(d_nr).known_type == u16::MAX
         {
             fill_database(data, database, d_nr);
         }

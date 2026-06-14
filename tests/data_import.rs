@@ -97,7 +97,7 @@ fn name_overwrite_targets_single_name() {
     let player_stub = add_stub(&mut d, 2, "Player");
     let monster_stub = add_stub(&mut d, 2, "Monster");
 
-    let ok = d.import_name_overwrite(1, 2, "Player");
+    let ok = d.import_name_overwrite(1, 2, "Player", "Player");
     assert!(ok);
 
     assert_eq!(d.source_nr(2, "Player"), real_player);

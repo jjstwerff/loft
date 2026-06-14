@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN22 — enum-scoped variants, prelude shadowing, `use … as …` aliasing (2026-06-14)
+
+All four phases of the namespaces initiative (`loft-lang/plans#22`), built
+chokepoint-first and verified on both backends.
+
+- **P1 — enum-scoped variant definitions.** Variants are resolved through one
+  `Data::variant_of(enum, name)` chokepoint (plus `variant_in_source` /
+  `enums_with_variant`) instead of a global bare key, so two enums may share a
+  variant name. A bare variant used as a *value* resolves only via context
+  (match subject, typed decl, typed reassignment / `rec.field`, parameter,
+  return incl. an `if`-branch tail, struct-field type & default, `==` LHS,
+  `Enum::`/`Enum.` qualifier); defining a new untyped variable from a bare
+  variant (`x = Red`) is a hard error even when the name is unique. Mixed-enum
+  unit-variant field defaults no longer clobber a sibling field. The variant
+  name stays usable as a TYPE / constructor (`Circle { … }`, `s: Circle`).
+- **P2 — prelude shadowing.** `STD_SOURCE = 0` (stdlib + global synthetic
+  wrappers) and `MAIN_SOURCE = 1` (user main) are named explicitly; the user
+  main file gets its own source so a user `enum E` / `struct File` / `pub PI`
+  shadows the stdlib name in bare lookup while `std::Name` still reaches the
+  prelude. Built-in type-keywords (`integer`, `vector`, …) stay sacred —
+  non-shadowable — via the `DefType::Type @ STD_SOURCE` guard.
+- **P3 — `use … as …` aliasing** for libraries (`use lib as m`), types
+  (`use lib::Type as T`), and functions (`use lib::fn as f`).
+- **P4 — grouped selective imports** `use lib::(a as x, b, c)`; the flat comma
+  list `use lib::a, b` is dropped (hard error). Design decision C76.
+- **Reserved-keyword hardening (commit `c383a25c`).** `struct iterator` was
+  silently adopted (the struct adopt-branch swallowed the `type iterator;`
+  forward-decl); `enum hash` / `type sorted` panicked in `complete_definition`.
+  Guarded the adopt branch on `DefType::Unknown`, gated the enum/typedef
+  completion calls on `!conflict`, and forward-declared `type radix;` /
+  `type spacial;`. All builtin type-keywords now reject cleanly across
+  struct/enum/type. Regression: `tests/scripts/102-expected-errors.loft`.
+
+Regressions: `tests/scripts/369-pln22-shared-enum-variants.loft`,
+`370-pln22-prelude-shadowing.loft`, `tests/imports.rs` (phase 3/4 aliasing +
+grouped + flat-list-rejected). Resolves INC#34.
+
 ### engine_host: `run_local` — the standalone windowed host (#343) (2026-06-12)
 
 A windowed program with no server could not run on the @PLN18 kernel: `run`
