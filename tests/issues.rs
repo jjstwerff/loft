@@ -14208,6 +14208,79 @@ fn run() -> integer {
     .result(Value::Int(60));
 }
 
+// ── pass-1 index of a vector whose element struct is forward-referenced ──────
+// `f` indexes `vector<Later>` before `struct Later` is registered.  In pass-1
+// the element type is still `Unknown`, so `parse_vector_index`'s
+// `def(type_elm(etp))` saw `u32::MAX` and panicked ("Unknown definition").  The
+// fix substitutes the builtin `reference` def for the unresolved element so a
+// placeholder read builds; pass-2 (every def registered) resolves `Later` and
+// rebuilds the real read.  A genuinely-undefined element still errors at the
+// type declaration, so this never masks a real typo.  The `42` proves pass-2
+// produced a correct read, not just a non-crashing parse.
+#[test]
+fn forward_ref_struct_vector_index() {
+    code!(
+        "fn f(v: vector<Later>) -> integer { v[0].x }
+struct Later { x: integer }
+fn run() -> integer { v = [Later { x: 42 }]; f(v) }"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+// ── forward-reference resolution: the two-pass invariant ────────────────────
+// loft's parser runs pass-1 (register definitions) then pass-2 (resolve bodies
+// with everything registered), and pass-2 only runs if pass-1 emitted zero
+// errors.  A type referenced before its definition is legitimately `Unknown` in
+// pass-1 and resolves in pass-2 — so pass-1 must DEFER on it (no hard error, no
+// panic, no token desync) or it deletes the very pass that would resolve it.
+// These guard three positions that each used to break pass-1 differently; the
+// values prove pass-2 produced a correct read, not just a non-crashing parse.
+
+// Return type named before its struct definition.  A forward `-> Cell` registers
+// an `Unknown` stub, so the body's `Cell { … }` construction found a non-struct
+// def and desynced into "Expect token ;".  Fixed by treating the stub as
+// not-yet-real in the construction dispatch (defer; pass-2 sees the real struct).
+#[test]
+fn forward_ref_return_type() {
+    code!(
+        "fn make2() -> Cell { Cell { n: 2 } }
+struct Cell { n: integer }
+fn run() -> integer { make2().n }"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+// Local type annotation named before its struct.  Same `Unknown`-stub
+// construction desync as the return-type case, via `c: Cell = Cell { … }`.
+#[test]
+fn forward_ref_local_annotation() {
+    code!(
+        "fn use3() -> integer { c: Cell = Cell { n: 3 }; c.n }
+struct Cell { n: integer }
+fn run() -> integer { use3() }"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+// Direct struct field whose type is defined later.  `b.inner` reads a field
+// whose declared type is still `Unknown` in pass-1; `get_val` emitted "Field
+// access not supported on type unknown", killing pass-2 before
+// `actual_types_deferred` resolved the field type.  Fixed by deferring the
+// field read on an `Unknown` type in pass-1.
+#[test]
+fn forward_ref_struct_field_type() {
+    code!(
+        "struct Box { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
 // Two libraries each defining `struct Chunk` with DIFFERENT field layouts
 // (moros_map's holds vector<Hex>, hex_world's holds vector<Cell>) must load
@@ -14251,6 +14324,49 @@ fn p379_two_libs_same_struct_name() {
     assert!(
         !state.database.had_fatal,
         "per-library Chunk fields resolved incorrectly (an in-loft assert failed)"
+    );
+}
+
+// ── use-region fixpoint — manifest dep that is a MULTI-FILE package ──────────
+// `mfdep_app` declares `mfdep_leaf` only as a manifest `[dependencies]` edge
+// (no source `use`), so the multi-file `mfdep_leaf` reaches the lexer through
+// the pending-deps loop rather than the explicit-`use` pre-scan.  Its entry
+// file opens with `use mfdep_leafmod;`.  Before parse_file wrapped the
+// pre-scan + pending-deps drain in a fixpoint loop, the pending loop parked the
+// lexer on that un-pre-scanned entry file, and the main definition-loop then
+// read its legitimately-leading `use` as "use statements must appear before all
+// definitions" — and never imported it.  This guards that a multi-file package
+// pulled purely via a manifest edge still has its leading uses pre-scanned.
+#[test]
+fn manifest_dep_multifile_use_order() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/mfdep_use_order.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "multi-file manifest dep tripped the use-region check: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "manifest-dep multi-file package failed to load/resolve at runtime"
     );
 }
 

@@ -3276,6 +3276,16 @@ impl Parser {
                 }
                 Value::Tuple(tuple_elems)
             }
+            // Pass-1 deferral: reading a field whose declared type is still
+            // `Unknown` (a forward-referenced or cross-package field type, e.g.
+            // `struct Box { inner: Cell }` parsed above `struct Cell`) must not
+            // emit — `actual_types_deferred` resolves the field type after this
+            // pass, and pass-2 re-reads it with the concrete type.  Emitting
+            // here would (via the pass-2 gate) suppress that resolution.  In
+            // pass-2 a still-`Unknown` type is genuinely undefined and its
+            // "Undefined type" error already fires from type resolution, so
+            // fall through to the diagnostic only there.
+            Type::Unknown(_) if self.first_pass => Value::Null,
             _ => {
                 diagnostic!(
                     self.lexer,
@@ -4494,150 +4504,166 @@ impl Parser {
         // libraries by hand, so a `lib::` to an un-`use`d library is a forgotten
         // `use`, not a request to auto-load.  Skip the pre-scan for those files.
         let mut had_use = self.default;
-        while self.lexer.has_token("use") {
-            if let Some(id) = self.lexer.has_identifier() {
-                had_use = true;
-                // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
-                let lib_alias = if self.lexer.has_token("as") {
-                    self.lexer.has_identifier()
-                } else {
-                    None
-                };
-                // Parse optional import spec: `::*` wildcard, a single
-                // `::name [as bind]`, or the grouped `::(a [as x], b, …)`.
-                // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
-                // the flat top-level comma list (`use lib::a, b`) is dropped (it
-                // read poorly — `b` didn't visually bind to `lib::`).
-                let spec = if self.lexer.has_token("::") {
-                    if self.lexer.has_token("*") {
-                        Some(ImportSpec::Wildcard)
+        // Use-region fixpoint.  Pre-scan explicit `use`s, then load manifest
+        // `[dependencies]`.  Loading a manifest dep `switch_to_dep`s the lexer
+        // ONTO it; a MULTI-FILE dependency lands on an entry file that still has
+        // its own leading `use` statements — which the pending loop, unlike this
+        // pre-scan, does NOT handle.  Loop until the cursor rests on a use-free
+        // file with nothing pending, so every file the main definition-loop
+        // parses has had its uses processed (otherwise a dependency's legitimate
+        // top `use` is misread as "use after definitions" — and never imported).
+        loop {
+            while self.lexer.has_token("use") {
+                if let Some(id) = self.lexer.has_identifier() {
+                    had_use = true;
+                    // @PLN22 Phase 3 — optional library alias: `use lib as m;` → `m::fn`.
+                    let lib_alias = if self.lexer.has_token("as") {
+                        self.lexer.has_identifier()
                     } else {
-                        let grouped = self.lexer.has_token("(");
-                        let mut names = Vec::new();
-                        while let Some(name) = self.lexer.has_identifier() {
-                            // @PLN22 Phase 3 — `Name as Alias` binds the imported
-                            // name under the bare alias (works inside `(…)` too).
-                            let bind = if self.lexer.has_token("as") {
-                                self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+                        None
+                    };
+                    // Parse optional import spec: `::*` wildcard, a single
+                    // `::name [as bind]`, or the grouped `::(a [as x], b, …)`.
+                    // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
+                    // the flat top-level comma list (`use lib::a, b`) is dropped (it
+                    // read poorly — `b` didn't visually bind to `lib::`).
+                    let spec = if self.lexer.has_token("::") {
+                        if self.lexer.has_token("*") {
+                            Some(ImportSpec::Wildcard)
+                        } else {
+                            let grouped = self.lexer.has_token("(");
+                            let mut names = Vec::new();
+                            while let Some(name) = self.lexer.has_identifier() {
+                                // @PLN22 Phase 3 — `Name as Alias` binds the imported
+                                // name under the bare alias (works inside `(…)` too).
+                                let bind = if self.lexer.has_token("as") {
+                                    self.lexer.has_identifier().unwrap_or_else(|| name.clone())
+                                } else {
+                                    name.clone()
+                                };
+                                names.push((name, bind));
+                                if !self.lexer.has_token(",") {
+                                    break;
+                                }
+                            }
+                            if grouped {
+                                self.lexer.token(")");
+                            } else if names.len() > 1 {
+                                // @PLN22 Phase 4 — flat comma list dropped; the names
+                                // are still bound (recovery) so the rest parses cleanly.
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "import multiple names with parentheses: `use {id}::(a, b, …)`"
+                                );
+                            }
+                            if names.is_empty() {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "Expected name, '*', or '(' after '::'"
+                                );
+                                None
                             } else {
-                                name.clone()
-                            };
-                            names.push((name, bind));
-                            if !self.lexer.has_token(",") {
-                                break;
+                                Some(ImportSpec::Names(names))
                             }
                         }
-                        if grouped {
-                            self.lexer.token(")");
-                        } else if names.len() > 1 {
-                            // @PLN22 Phase 4 — flat comma list dropped; the names
-                            // are still bound (recovery) so the rest parses cleanly.
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "import multiple names with parentheses: `use {id}::(a, b, …)`"
-                            );
-                        }
-                        if names.is_empty() {
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "Expected name, '*', or '(' after '::'"
-                            );
-                            None
-                        } else {
-                            Some(ImportSpec::Names(names))
-                        }
-                    }
-                } else {
-                    None
-                };
-                if self.data.use_exists(&id) {
-                    let lib_source = self.data.get_source(&id);
-                    // @PLN22 Phase 3 — register the library alias for `m::` access.
-                    if let Some(alias) = &lib_alias {
-                        self.data.use_alias(alias, lib_source);
-                    }
-                    // Plain `use foo` (no spec) wildcard-imports all pub defs.
-                    // `use foo as m;` (alias, no spec) does NOT — it only provides
-                    // the `m::` qualifier (the disambiguation escape hatch).  An
-                    // explicit `::` spec is honoured in either case.
-                    let import_spec = match spec {
-                        Some(s) => Some(s),
-                        None if lib_alias.is_some() => None,
-                        None => Some(ImportSpec::Wildcard),
+                    } else {
+                        None
                     };
-                    if let Some(import_spec) = import_spec {
-                        self.pending_imports.push(PendingImport {
-                            for_source: self.data.source,
-                            lib_source,
-                            spec: import_spec,
-                        });
+                    if self.data.use_exists(&id) {
+                        let lib_source = self.data.get_source(&id);
+                        // @PLN22 Phase 3 — register the library alias for `m::` access.
+                        if let Some(alias) = &lib_alias {
+                            self.data.use_alias(alias, lib_source);
+                        }
+                        // Plain `use foo` (no spec) wildcard-imports all pub defs.
+                        // `use foo as m;` (alias, no spec) does NOT — it only provides
+                        // the `m::` qualifier (the disambiguation escape hatch).  An
+                        // explicit `::` spec is honoured in either case.
+                        let import_spec = match spec {
+                            Some(s) => Some(s),
+                            None if lib_alias.is_some() => None,
+                            None => Some(ImportSpec::Wildcard),
+                        };
+                        if let Some(import_spec) = import_spec {
+                            self.pending_imports.push(PendingImport {
+                                for_source: self.data.source,
+                                lib_source,
+                                spec: import_spec,
+                            });
+                        }
+                        if !self.lexer.has_token(";") {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Missing ';' after 'use {id}' — use statements must end with a semicolon"
+                            );
+                        }
+                        continue;
                     }
-                    if !self.lexer.has_token(";") {
+                    let f = self.lib_path(&id);
+                    let f_exists = std::path::Path::new(&f).exists() || {
+                        #[cfg(feature = "wasm")]
+                        {
+                            crate::wasm::virt_fs_get(&f).is_some()
+                        }
+                        #[cfg(not(feature = "wasm"))]
+                        {
+                            false
+                        }
+                    };
+                    if f_exists {
+                        let cur = &self.lexer.pos().file;
+                        self.todo_files.push((cur.clone(), self.data.source));
+                        self.data.use_add(&id);
+                        // @PLN22 Phase 3 — register the library alias now that the lib's
+                        // source exists (use_add set self.data.source to it).  The
+                        // import itself is recorded on the second encounter (via
+                        // todo_files re-parse with use_exists=true).
+                        if let Some(alias) = &lib_alias {
+                            self.data.use_alias(alias, self.data.source);
+                        }
+                        drop(spec);
+                        self.switch_to_dep(&f);
+                    } else {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "Missing ';' after 'use {id}' — use statements must end with a semicolon"
+                            "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
                         );
+                        self.lexer.has_token(";");
                     }
-                    continue;
-                }
-                let f = self.lib_path(&id);
-                let f_exists = std::path::Path::new(&f).exists() || {
-                    #[cfg(feature = "wasm")]
-                    {
-                        crate::wasm::virt_fs_get(&f).is_some()
-                    }
-                    #[cfg(not(feature = "wasm"))]
-                    {
-                        false
-                    }
-                };
-                if f_exists {
-                    let cur = &self.lexer.pos().file;
-                    self.todo_files.push((cur.clone(), self.data.source));
-                    self.data.use_add(&id);
-                    // @PLN22 Phase 3 — register the library alias now that the lib's
-                    // source exists (use_add set self.data.source to it).  The
-                    // import itself is recorded on the second encounter (via
-                    // todo_files re-parse with use_exists=true).
-                    if let Some(alias) = &lib_alias {
-                        self.data.use_alias(alias, self.data.source);
-                    }
-                    drop(spec);
-                    self.switch_to_dep(&f);
-                } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
-                    );
-                    self.lexer.has_token(";");
                 }
             }
-        }
-        // PKG.3: load transitive dependencies discovered during manifest reading.
-        // Dependencies are queued by lib_path_manifest when it reads [dependencies].
-        while !self.pending_pkg_deps.is_empty() {
-            let deps = std::mem::take(&mut self.pending_pkg_deps);
-            for (dep_id, parent_dir) in deps {
-                if self.data.use_exists(&dep_id) {
-                    continue;
+            // PKG.3: load transitive dependencies discovered during manifest reading.
+            // Dependencies are queued by lib_path_manifest when it reads [dependencies].
+            while !self.pending_pkg_deps.is_empty() {
+                let deps = std::mem::take(&mut self.pending_pkg_deps);
+                for (dep_id, parent_dir) in deps {
+                    if self.data.use_exists(&dep_id) {
+                        continue;
+                    }
+                    // First try the sibling package directory (same parent as the
+                    // depending package), then fall back to the normal lib_path search.
+                    let f = if let Some(entry) = self.lib_path_manifest(&parent_dir, &dep_id) {
+                        entry
+                    } else {
+                        self.lib_path(&dep_id)
+                    };
+                    if std::path::Path::new(&f).exists() {
+                        let cur = &self.lexer.pos().file;
+                        self.todo_files.push((cur.clone(), self.data.source));
+                        self.data.use_add(&dep_id);
+                        self.switch_to_dep(&f);
+                    }
                 }
-                // First try the sibling package directory (same parent as the
-                // depending package), then fall back to the normal lib_path search.
-                let f = if let Some(entry) = self.lib_path_manifest(&parent_dir, &dep_id) {
-                    entry
-                } else {
-                    self.lib_path(&dep_id)
-                };
-                if std::path::Path::new(&f).exists() {
-                    let cur = &self.lexer.pos().file;
-                    self.todo_files.push((cur.clone(), self.data.source));
-                    self.data.use_add(&dep_id);
-                    self.switch_to_dep(&f);
-                }
+            }
+            // Fixpoint exit: the cursor rests on a use-free file and no manifest
+            // dependency is still queued.  `peek_token` (not `has_token`) so the
+            // check never consumes a leading `use` that the next iteration must see.
+            if !self.lexer.peek_token("use") && self.pending_pkg_deps.is_empty() {
+                break;
             }
         }
         // Tier-0 lazy auto-`use`: scan this file for `lib::` references and load

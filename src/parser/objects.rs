@@ -982,6 +982,18 @@ impl Parser {
         {
             return Type::Null;
         }
+        // A forward / cross-package type reference earlier in the body (an
+        // `-> Cell` return type or a `c: Cell` annotation parsed above `struct
+        // Cell`) registers an `Unknown` STUB def for the name.  For dispatch
+        // here that stub is not yet a real type, so treat it like a never-seen
+        // name: fall through to the construction-deferral branch below (consume
+        // the `{ … }`, return Unknown) instead of the struct path, which would
+        // mis-handle the stub and desync the parser into a spurious "Expect
+        // token ;".  The stub upgrades to the real struct after this pass, so
+        // pass-2 sees a concrete `DefType::Struct` here and builds for real.
+        if d_nr != u32::MAX && matches!(self.data.def_type(d_nr), DefType::Unknown) {
+            d_nr = u32::MAX;
+        }
         if d_nr != u32::MAX {
             self.data.def_used(d_nr);
             t = self.data.def(d_nr).returned().clone();
@@ -1093,9 +1105,17 @@ impl Parser {
             && self.lexer.peek_token("{")
             && self.peek_struct_literal_body()
         {
-            // Emit on pass 1 (matching the private-type branch above) so the
-            // error fires once; recover on both passes so neither cascades.
-            if self.first_pass {
+            // Emit on pass 2, NOT pass 1: unlike the private-type branch above
+            // (a private type is `u32::MAX` in BOTH passes, so pass-1 emission
+            // fires once and is always correct), a FORWARD-REFERENCED or
+            // cross-package struct is `u32::MAX` only in pass-1 — its definition
+            // registers before pass-2.  Emitting in pass-1 raised a false
+            // "unknown type" for `Cell { … }` written above `struct Cell`.
+            // Pass-2 has every def, so `u32::MAX` there means the type is
+            // genuinely undefined; emit then (still once).  Both passes still
+            // recover by consuming the balanced `{ … }`, so pass-1 never
+            // cascades while it waits for pass-2 to resolve the forward ref.
+            if !self.first_pass {
                 diagnostic_at!(self.lexer, name_pos, Level::Error, "unknown type '{name}'");
             }
             self.lexer.has_token("{");
