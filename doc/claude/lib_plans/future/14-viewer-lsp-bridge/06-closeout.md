@@ -123,7 +123,7 @@ Closes plan-14.
 Standard closeout: set the issue `status:finished` and close
 it (`gh issue edit/close --repo loft-lang/plans`); the plan
 dir stays in place as the closure record.  See
-[`../../plans/_LIFECYCLE.md`](../../plans/_LIFECYCLE.md).
+[`../../../plans/_LIFECYCLE.md`](../../../plans/_LIFECYCLE.md).
 
 ### Cross-doc updates
 

@@ -335,7 +335,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     }
 }
 
-fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
+pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if data.def(d_nr).name == "Unknown(0)" {
         return;
     }

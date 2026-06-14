@@ -123,7 +123,16 @@ impl Stores {
         | Parts::Index(c, _, _)
         | Parts::Spacial(c, _) = self.types[content as usize].parts
         {
-            self.types[c as usize].parents.insert(structure);
+            // A dead `main_vector<unknown>` wrapper — left over when a vector's
+            // element type was an unresolved cross-package forward reference on
+            // pass 1 (#375) — carries a `Parts::Vector(u16::MAX)` field.  The
+            // real wrapper is built and used instead; this orphan is never
+            // instantiated, but the native database-build still walks every
+            // registered type to link parents.  Skip the MAX sentinel rather
+            // than indexing `self.types` out of bounds.
+            if c != u16::MAX {
+                self.types[c as usize].parents.insert(structure);
+            }
         }
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &self.types[structure as usize].parts
         {

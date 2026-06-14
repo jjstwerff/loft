@@ -1478,6 +1478,16 @@ impl Parser {
                 self.expect_match_arm_arrow();
                 let mut arm_code = Value::Null;
                 self.expression(&mut arm_code);
+                // Consume the optional trailing comma, mirroring the wildcard /
+                // struct arm paths.  Without it, the next loop iteration sees the
+                // leading `,` instead of a variant name and breaks early, leaving
+                // the lexer mid-arm-list — which desyncs into "Expect token }".
+                // This skip path fires on pass 1 whenever `e_nr == u32::MAX`
+                // (the subject enum is an unresolved cross-package forward
+                // reference whose dependency parses later — #375); a clean skip
+                // keeps pass 1 from aborting before the dependency registers, so
+                // pass 2 (with the enum resolved) parses the arms normally.
+                self.lexer.has_token(",");
                 continue;
             }
 
@@ -3198,16 +3208,26 @@ impl Parser {
                 return self.data.def(next_d_nr).returned().clone();
             }
             in_type.clone()
-        } else {
-            if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Unknown in expression type {}",
-                    in_type.name(&self.data)
-                );
-            }
+        } else if !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Unknown in expression type {}",
+                in_type.name(&self.data)
+            );
             Type::Null
+        } else {
+            // First pass, iterable type not yet resolved — a forward or
+            // cross-package reference whose definition registers later in the
+            // recursion (#375: a dependency imported at a high source number is
+            // parsed AFTER the importing package on pass 1).  Return Unknown,
+            // not Null, so downstream field/method access on the loop variable
+            // routes through the existing `Type::Unknown` defer-guard in
+            // `field()` and DEFERS to pass 2, instead of hard-erroring
+            // "Unknown type null" — which would abort pass 1 before the
+            // dependency's definitions are registered, leaving pass 2 (which
+            // would resolve cleanly) unreachable.
+            Type::Unknown(0)
         }
     }
 

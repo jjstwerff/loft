@@ -1162,7 +1162,10 @@ mod toolchain_hint_tests {
                       error: aborting due to 1 previous error";
         let hint = toolchain_failure_hint(stderr).expect("SIGBUS must produce a hint");
         assert!(hint.contains("ENVIRONMENT"), "hint: {hint}");
-        assert!(hint.contains("TMPDIR"), "hint should point at TMPDIR: {hint}");
+        assert!(
+            hint.contains("TMPDIR"),
+            "hint should point at TMPDIR: {hint}"
+        );
     }
 
     #[test]

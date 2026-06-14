@@ -14281,6 +14281,76 @@ fn run() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }"
     .result(Value::Int(4));
 }
 
+// ── @P375 — pass-1 must DEFER, not break, on three more forward positions ────
+// A dependency imported at a high source number is parsed AFTER the importing
+// package on pass 1 (the package loader reserves source slots eagerly but parses
+// bodies in todo-stack order), so a cross-package type is legitimately Unknown
+// while the dependent's body parses.  The same shape reproduces single-file with
+// a plain forward reference.  Each test below broke pass 1 a different way before
+// the fix and now resolves on pass 2; the value proves a correct read, not just a
+// non-crashing parse.  The full cross-package boundary matrix lives in the @P375
+// investigation probes.
+
+// For-loop over a forward-referenced `vector<struct>` field.  `for it in m.items`
+// makes `m.items` Unknown in pass 1, so `for_type` fell to its catch-all and
+// returned `Type::Null`; the loop body's `it.n` then hit `field()` on a Null type
+// (past the `Type::Unknown` defer-guard) and hard-errored "Unknown type null",
+// aborting pass 1 before the type could resolve.  Fixed by returning `Unknown`
+// (not `Null`) so the read routes through the existing defer-guard.
+#[test]
+fn forward_ref_for_loop_vector_struct_field() {
+    code!(
+        "fn build(m: Map) -> integer { s = 0; for it in m.items { s = s + it.n; } s }
+struct Inner { n: integer }
+struct Map { items: vector<Inner> }
+fn run() -> integer { build(Map { items: [Inner { n: 5 }] }) }"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+// `match` on a forward-referenced enum.  With the subject enum still an Unknown
+// stub in pass 1, every arm hit the `bad_variant` skip path — which consumed the
+// `=> expr` body but NOT the trailing comma, so the next iteration saw the leading
+// `,` instead of a variant name, broke early, and desynced into "Expect token }".
+// Fixed by consuming the optional trailing comma in the skip path.
+#[test]
+fn forward_ref_enum_match() {
+    code!(
+        "fn pick() -> integer { c = Color::Green; match c { Color::Red => 0, Color::Green => 6 } }
+enum Color { Red, Green }
+fn run() -> integer { pick() }"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
+}
+
+// Local `vector<struct>` literal of a forward-referenced element.  In pass 1 the
+// element is Unknown, so the `main_vector<Unknown(0)>` wrapper born during codegen
+// is the wrong one; on pass 2 the real `main_vector<Inner>` wrapper is born during
+// body codegen — AFTER this file's `fill_all` registration sweep — so it never got
+// a database `known_type`, and codegen baked `OpDatabase(db_tp=u16::MAX)` that
+// crashed `set_default_value` at runtime.  Registering the wrapper on the spot
+// (vectors.rs `vector_wrapper_known_type`) makes the program produce the CORRECT
+// result, but the dead `main_vector<Unknown(0)>` orphan still corrupts the
+// interpreter free path at scope exit (a heap-metadata write through a stale
+// element type → non-deterministic SIGSEGV after the right value prints).  @P373
+// tracks the remaining interp-free fix; the for-loop-over-a-field-vector form
+// (the moros blocker) is unaffected and sound on both backends.  IGNORED until
+// @P373 lands so the otherwise-correct result is recorded without the crash
+// taking down the test binary.
+#[test]
+#[ignore = "@P373 — correct result but interp free-path corruption on a forward-ref local vector literal"]
+fn forward_ref_local_vector_literal() {
+    code!(
+        "fn pull() -> integer { v = [Cell { n: 8 }]; v[0].n }
+struct Cell { n: integer }
+fn run() -> integer { pull() }"
+    )
+    .expr("run()")
+    .result(Value::Int(8));
+}
+
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
 // Two libraries each defining `struct Chunk` with DIFFERENT field layouts
 // (moros_map's holds vector<Hex>, hex_world's holds vector<Cell>) must load

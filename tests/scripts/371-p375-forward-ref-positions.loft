@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @P375 — pass 1 must DEFER, never break, on a forward-referenced type.  A
+// dependency imported at a high source number is parsed AFTER the importing
+// package on pass 1, so a cross-package type is legitimately Unknown while the
+// dependent's body parses; the same shape reproduces single-file with a plain
+// forward reference.  These three positions each broke pass 1 differently:
+//   * for-loop over a `vector<struct>` field — the loop variable typed Null,
+//     so `it.n` hard-errored "Unknown type null" and aborted pass 1;
+//   * `match` on a forward enum — the arm-skip path desynced into "Expect }";
+// A third position — a local `vector<struct>` literal of a forward-referenced
+// element — is also @P375-adjacent but still corrupts the interpreter free path
+// (@P373); it is covered by the `#[ignore]`d `forward_ref_local_vector_literal`
+// Rust test, not asserted here, so this script stays green on both backends.
+
+fn build(m: Map) -> integer { s = 0; for it in m.items { s = s + it.n; } s }
+fn pick() -> integer { c = Color::Green; match c { Color::Red => 0, Color::Green => 6 } }
+
+struct Inner { n: integer }
+struct Map { items: vector<Inner> }
+enum Color { Red, Green }
+
+fn main() {
+  assert(build(Map { items: [Inner { n: 5 }, Inner { n: 7 }] }) == 12, "for-loop over forward vector<struct> field");
+  assert(pick() == 6, "match on forward enum");
+  print("ok\n");
+}
