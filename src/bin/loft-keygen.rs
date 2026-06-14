@@ -43,6 +43,14 @@ use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `-h`/`--help` ANYWHERE prints help and exits 0 — BEFORE dispatch.  Without
+    // this, `loft-keygen generate --help` fell through to `cmd_generate` (which
+    // ignored its args) and *generated a keypair* instead of showing help, and a
+    // bare `loft-keygen --help` exited 1 as an "unknown command".
+    if args[1..].iter().any(|a| a == "-h" || a == "--help") {
+        print_help();
+        std::process::exit(0);
+    }
     let cmd = args.get(1).map(String::as_str).unwrap_or("");
     match cmd {
         "generate" => cmd_generate(&args[2..]),
@@ -89,7 +97,16 @@ fn print_help() {
     eprintln!("via `loft-keygen sign`, not in CI.");
 }
 
-fn cmd_generate(_extra: &[String]) {
+fn cmd_generate(extra: &[String]) {
+    // `generate` takes no arguments (help is handled in `main`).  Reject stray
+    // ones rather than silently ignore them — a typo'd flag must not quietly
+    // produce a keypair.
+    if let Some(arg) = extra.first() {
+        eprintln!(
+            "loft-keygen generate: unexpected argument `{arg}` (generate takes none; try --help)"
+        );
+        std::process::exit(2);
+    }
     // Use the OS CSPRNG via getrandom — `ed25519_dalek::SigningKey`'s
     // `generate` takes a `CryptoRngCore`; OsRng from rand_core 0.6 (the
     // version dalek 2.x expects).  We're already paying for the dalek

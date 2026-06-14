@@ -65,12 +65,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # Mirrors release.yml; native per-OS runner per target.  Add
-      # aarch64-unknown-linux-gnu via cross once the glibc baseline is sorted.
+      # Native per-OS runner per target — the build is NATIVE, so the runner's
+      # arch IS the target arch (build-native reports the host triple; the
+      # matrix `target` label is decorative).  GitHub's macOS runners are all
+      # Apple Silicon now (macos-13, the last Intel image, retired Dec 2025), and
+      # Apple capped Intel at macOS Tahoe — so there is no native x86_64-apple
+      # runner.  Ship arm64 macOS only; an Intel-mac prebuilt would need
+      # `macos-15-intel` (sunset Fall 2027) or cross-compilation — add later if a
+      # real Intel-Mac user base appears.  Add aarch64-unknown-linux-gnu via
+      # cross once the glibc baseline is sorted.
       matrix:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
-          - { target: x86_64-apple-darwin, os: macos-14 }
           - { target: aarch64-apple-darwin, os: macos-latest }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
 

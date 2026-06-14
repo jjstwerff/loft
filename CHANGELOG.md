@@ -12,11 +12,41 @@ invariants, internal phase numbers)?  See
 
 ---
 
-## Unreleased — heading toward 0.8.6
+## 2026-06
 
-0.8.6 adds **learnability**: syntax highlighting, a VS Code extension,
-and a "learn loft in 30 minutes" walkthrough so new users can get from
-zero to a running demo without reading the reference.
+**New versioning.** Starting here, loft moves to a **monthly,
+calendar-versioned cadence**: releases are named for their month — this one
+is **`2026-06`** — which `Cargo.toml` spells `2026.6.0` (year.month.patch;
+the patch digit is reserved for in-month security fixes). A deliberate step
+up from the old `0.8.x` line.
+
+This release rounds out loft's **library system** — toolchain-free native
+libraries, signature-verified installs, and (with the namespace change below)
+per-library namespaces instead of one shared flat space.
+
+### Use a native library without a Rust toolchain
+
+Native libraries (like `graphics` or `imaging`) used to compile their Rust
+`cdylib` from source the first time you `use` them — needing `rustc`, `cargo`,
+and the right system dev headers. loft can now fetch a **prebuilt** cdylib for
+your platform and load it directly: no toolchain, no ~90-second first-use
+compile. Building from source stays the automatic fallback when no prebuilt is
+published for your platform.
+
+### Registry installs are now signature-verified
+
+`loft install` verifies the registry's index against a **trust root** embedded
+in the loft binary before trusting any of it — every install is
+cryptographically signed end to end, and a tampered index is refused. The trust
+root is three independent keys, so a lost signing device can be retired without
+disrupting anyone. Maintainers sign with a review-then-sign tool that shows
+exactly what's going into a signature — re-downloading each library tarball to
+confirm its checksum — before the key is ever used.
+
+### Libraries get their own namespace
+
+*(Placeholder — the flat-namespace break is landing from an in-progress
+integration; this entry will be written once it is on `main`.)*
 
 ### Windowed games without a server — `engine_host::run_local`
 

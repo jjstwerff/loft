@@ -438,6 +438,39 @@ deterministic native-build check — registry-side, like the Phase 4/5 infra tai
 **Critical path to "no rustc to use graphics": `1 → 4`** (a load path + one published prebuilt);
 `2`/`3` make the failure modes humane, `5`/`6` are polish.
 
+## Starting distribution — the publish glue (remaining critical-path step, 2026-06-14)
+
+Producer (`loft build-native` + `prebuild-native.yml`) and consumer (`fetch_prebuilt` +
+`resolve_native_lib`) both ship; the gap is the wiring that gets a built cdylib INTO the
+registry index.  Verified prereqs (2026-06-14): `graphics-v0.1.0` exists in
+`loft-lang/loft-libs-graphics`, but that repo has **no prebuild caller workflow yet**.  Minimal
+end-to-end to seed the first prebuilt (graphics) — scoped to **hand-written** native libs (the
+auto-compiled, `loft_build_fp`-locked case stays out, [§ The boundary of this
+claim](#the-boundary-of-this-claim--it-holds-for-hand-written-native-not-auto-compiled-corrected-2026-06-13)):
+
+1. **Build + attach the cdylibs to the release.**  The workflow's `gh release upload` fires only
+   on `workflow_call` with `publish: true`.  Two ways:
+   - *one-off (proves the loop now):* `gh workflow run prebuild-native.yml -f
+     library_repo=loft-lang/loft-libs-graphics -f package_subdir=graphics` builds the 4 cdylibs as
+     artifacts (each job prints `{url, sha256, loft_ffi_fp}`); then download + `gh release upload
+     graphics-v0.1.0 <cdylibs>`.
+   - *repeatable:* add the ~10-line caller (LIBRARY_AUTHORING.md § 4b) to each library repo so a
+     version tag auto-builds + attaches.
+2. **Add the index `binaries` entry.**  Under the version in `index.json`: `"binaries": {
+   "<triple>": { "url", "sha256", "loft_ffi_fp" }, … }` (already parsed by
+   `registry_index::BinaryEntry`).  Sign + push with `scripts/registry-sign.sh` (shows the diff,
+   verifies, signs).
+3. **Verify the consume path.**  `loft install graphics` on a clean host → `fetch_prebuilt`
+   matches the host triple + `loft_ffi_fp`, downloads + sha256-checks the cdylib, `dlopen`s it —
+   no rustc.
+4. **Automate (make it routine):** the per-repo caller workflow; a tool that collects the
+   job-summary `binaries` entries into the index; the submit-CI gates (Phase 5 — sha256/fp +
+   `runtime-libs` when `objdump -p` NEEDED has a non-`libc` entry); the manylinux glibc baseline
+   (Phase 6 / Risks).
+
+**Timing:** seed prebuilts right AFTER cutting the loft release that activates the trust root —
+same `loft_ffi_fp` everywhere, so the seeded `binaries` match the released loft.
+
 ## Risks / open questions
 
 - **glibc baseline** — prebuilts must be built on an OS old enough that a newer host's
