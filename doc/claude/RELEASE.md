@@ -52,6 +52,15 @@ What work is in scope during a cycle (the warm feature freeze that
 began with the `2026-07` cycle) is described in
 [ROADMAP.md § Feature freeze](ROADMAP.md#feature-freeze--heading-into-the-2026-07-cycle-added-2026-06-07).
 
+**Cycle themes:**
+
+- **`2026-07`** — stability, the package registry, and library hardening
+  (extraction finished, registry maintenance + discovery, reproducible packaging).
+- **`2026-08` — "become a better PHP"**: the server-side-web + database stack —
+  the `#c` direct-C-ABI tier (@PLN24), the MariaDB/PostgreSQL clients (@PLN23),
+  and the real HTTP server (@PLN4). Explicitly **not** `2026-07` work. Full
+  rationale + critical path: [BROADENING.md § Better PHP](BROADENING.md#better-php--the-2026-08-cycle-theme).
+
 ### Closing plans when the release merges
 
 Plans live in [`loft-lang/plans`](https://github.com/loft-lang/plans); GitHub's
