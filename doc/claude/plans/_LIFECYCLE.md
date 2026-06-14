@@ -131,6 +131,15 @@ There are no per-state tables in `plans/README.md` / `lib_plans/README.md` to
 edit — tracking lives on the issue (`_TEMPLATE.md` step 3).  A deferred plan
 additionally records its **trigger** in [`DEFERRED.md`](DEFERRED.md).
 
+**Closing is automated at release.**  Put a close directive in the PR that
+finishes the plan — `Closes @PLN<n>` (cross-repo `Fixes #N` can't reach the
+plans repo) — and on merge to `main` the `close-plans` workflow runs
+`scripts/close-shipped-plans.sh`, doing the `status:finished` + close above for
+you.  So the manual `gh` here is the *fallback* (or for an out-of-band close);
+`scripts/audit-stale-plans.sh` is the drift sweep that catches any plan left
+`status:active` after its work shipped.  See
+[RELEASE.md § Closing plans when the release merges](../RELEASE.md#closing-plans-when-the-release-merges).
+
 ### Step 6 — Repoint design links to the reference home
 
 The plan path does NOT change (no move), so there are no path-only fixes — but
