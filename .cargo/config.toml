@@ -22,3 +22,15 @@
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Activates the bundled `rust-lld` linker on Windows x64 (MSVC).  The default
+# `link.exe` is the slowest part of a Windows build — CI's Windows `Build` was
+# ~2x the Linux `Build` (which gets `mold` above) — and it is re-paid on every
+# `--native` test compile.  `rust-lld` ships with the toolchain (no install)
+# and links the loft binary + ~80 deps markedly faster.
+#
+# VERIFY on the `windows-probe` workflow before relying on it: a wrong linker
+# surfaces as LNK / rust-lld errors only at link time.  If it misbehaves on a
+# given setup, comment this block out — cargo falls back to `link.exe`.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

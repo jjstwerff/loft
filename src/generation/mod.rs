@@ -2023,6 +2023,20 @@ extern crate loft;"
                         .filter(|cr| *cr != u32::MAX)
                         .map(|cr| self.data.def(cr).known_type())
                         .filter(|t| *t != u16::MAX),
+                    // An embedded struct/enum-reference field (`inner: Cell`,
+                    // empty deps) stores the content's bytes INLINE, so the host's
+                    // `db.field` needs the content type already declared.  When the
+                    // host is defined BEFORE the content — a forward or
+                    // cross-package reference — the content's `db.structure` would
+                    // otherwise land after the host's `db.field`, a use-before-
+                    // declare that corrupts the field offset (the native sibling of
+                    // the interp `fill_database` default-arm recursion, @P373).
+                    // The `!emitted` guard below makes this a no-op unless the
+                    // content really is still forward.  Non-empty deps = a 12-byte
+                    // dbref (not inline) — no size dependency, so no hoist.
+                    Type::Reference(c_nr, ref_deps) if ref_deps.is_empty() => (*c_nr != u32::MAX)
+                        .then(|| self.data.def(*c_nr).known_type())
+                        .filter(|t| *t != u16::MAX),
                     _ => None,
                 };
                 if let Some(dep_tp) = dep_tp

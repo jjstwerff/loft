@@ -14208,6 +14208,199 @@ fn run() -> integer {
     .result(Value::Int(60));
 }
 
+// ── pass-1 index of a vector whose element struct is forward-referenced ──────
+// `f` indexes `vector<Later>` before `struct Later` is registered.  In pass-1
+// the element type is still `Unknown`, so `parse_vector_index`'s
+// `def(type_elm(etp))` saw `u32::MAX` and panicked ("Unknown definition").  The
+// fix substitutes the builtin `reference` def for the unresolved element so a
+// placeholder read builds; pass-2 (every def registered) resolves `Later` and
+// rebuilds the real read.  A genuinely-undefined element still errors at the
+// type declaration, so this never masks a real typo.  The `42` proves pass-2
+// produced a correct read, not just a non-crashing parse.
+#[test]
+fn forward_ref_struct_vector_index() {
+    code!(
+        "fn f(v: vector<Later>) -> integer { v[0].x }
+struct Later { x: integer }
+fn run() -> integer { v = [Later { x: 42 }]; f(v) }"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+// ── forward-reference resolution: the two-pass invariant ────────────────────
+// loft's parser runs pass-1 (register definitions) then pass-2 (resolve bodies
+// with everything registered), and pass-2 only runs if pass-1 emitted zero
+// errors.  A type referenced before its definition is legitimately `Unknown` in
+// pass-1 and resolves in pass-2 — so pass-1 must DEFER on it (no hard error, no
+// panic, no token desync) or it deletes the very pass that would resolve it.
+// These guard three positions that each used to break pass-1 differently; the
+// values prove pass-2 produced a correct read, not just a non-crashing parse.
+
+// Return type named before its struct definition.  A forward `-> Cell` registers
+// an `Unknown` stub, so the body's `Cell { … }` construction found a non-struct
+// def and desynced into "Expect token ;".  Fixed by treating the stub as
+// not-yet-real in the construction dispatch (defer; pass-2 sees the real struct).
+#[test]
+fn forward_ref_return_type() {
+    code!(
+        "fn make2() -> Cell { Cell { n: 2 } }
+struct Cell { n: integer }
+fn run() -> integer { make2().n }"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+// Local type annotation named before its struct.  Same `Unknown`-stub
+// construction desync as the return-type case, via `c: Cell = Cell { … }`.
+#[test]
+fn forward_ref_local_annotation() {
+    code!(
+        "fn use3() -> integer { c: Cell = Cell { n: 3 }; c.n }
+struct Cell { n: integer }
+fn run() -> integer { use3() }"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
+
+// Direct struct field whose type is defined later.  `b.inner` reads a field
+// whose declared type is still `Unknown` in pass-1; `get_val` emitted "Field
+// access not supported on type unknown", killing pass-2 before
+// `actual_types_deferred` resolved the field type.  Fixed by deferring the
+// field read on an `Unknown` type in pass-1.
+#[test]
+fn forward_ref_struct_field_type() {
+    code!(
+        "struct Box { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+// ── @P375 — pass-1 must DEFER, not break, on three more forward positions ────
+// A dependency imported at a high source number is parsed AFTER the importing
+// package on pass 1 (the package loader reserves source slots eagerly but parses
+// bodies in todo-stack order), so a cross-package type is legitimately Unknown
+// while the dependent's body parses.  The same shape reproduces single-file with
+// a plain forward reference.  Each test below broke pass 1 a different way before
+// the fix and now resolves on pass 2; the value proves a correct read, not just a
+// non-crashing parse.  The full cross-package boundary matrix lives in the @P375
+// investigation probes.
+
+// For-loop over a forward-referenced `vector<struct>` field.  `for it in m.items`
+// makes `m.items` Unknown in pass 1, so `for_type` fell to its catch-all and
+// returned `Type::Null`; the loop body's `it.n` then hit `field()` on a Null type
+// (past the `Type::Unknown` defer-guard) and hard-errored "Unknown type null",
+// aborting pass 1 before the type could resolve.  Fixed by returning `Unknown`
+// (not `Null`) so the read routes through the existing defer-guard.
+#[test]
+fn forward_ref_for_loop_vector_struct_field() {
+    code!(
+        "fn build(m: Map) -> integer { s = 0; for it in m.items { s = s + it.n; } s }
+struct Inner { n: integer }
+struct Map { items: vector<Inner> }
+fn run() -> integer { build(Map { items: [Inner { n: 5 }] }) }"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+// `match` on a forward-referenced enum.  With the subject enum still an Unknown
+// stub in pass 1, every arm hit the `bad_variant` skip path — which consumed the
+// `=> expr` body but NOT the trailing comma, so the next iteration saw the leading
+// `,` instead of a variant name, broke early, and desynced into "Expect token }".
+// Fixed by consuming the optional trailing comma in the skip path.
+#[test]
+fn forward_ref_enum_match() {
+    code!(
+        "fn pick() -> integer { c = Color::Green; match c { Color::Red => 0, Color::Green => 6 } }
+enum Color { Red, Green }
+fn run() -> integer { pick() }"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
+}
+
+// Local `vector<struct>` literal of a forward-referenced element (@P373).  In
+// pass 1 the element is Unknown, so the real `main_vector<Inner>` wrapper is
+// born during pass-2 body codegen — AFTER this file's `fill_all` registration
+// sweep — and reaches codegen with no database `known_type` AND no laid-out
+// field positions.  Two faults followed: codegen baked `OpDatabase(db_tp=
+// u16::MAX)` (panic in `set_default_value`), and even once that was registered,
+// the wrapper's `vector` field sat at position `u16::MAX`, so `OpGetField` read
+// through a bogus offset and corrupted the interpreter free path — a heap write
+// that SIGSEGV'd at scope exit AFTER the correct value printed.  Fixed by
+// `vector_wrapper_known_type` (vectors.rs): register the wrapper on the spot
+// then `database.finish()` it so the field positions are laid out before
+// codegen consumes them.  The `result(8)` proves correctness; soundness (no
+// teardown SIGSEGV) is what regressed, so this also doubles as a free-path
+// guard on both backends.
+#[test]
+fn forward_ref_local_vector_literal() {
+    code!(
+        "fn pull() -> integer { v = [Cell { n: 8 }]; v[0].n }
+struct Cell { n: integer }
+fn run() -> integer { pull() }"
+    )
+    .expr("run()")
+    .result(Value::Int(8));
+}
+
+// Struct with an INLINE field of a forward-referenced struct (`inner: Cell`,
+// @P373).  `Box` is laid out (pass-1 `fill_database`) before `Cell`, and the
+// embedded-reference arm read `Cell`'s `known_type` directly — still u16::MAX —
+// instead of laying `Cell` out first (as the vector / tuple arms do).  `Box.inner`
+// then landed at offset u16::MAX, never repaired on pass 2 (`finish_type` skips an
+// already-sized type), so `b.inner.n` read through a bogus offset and corrupted
+// the free path: a non-deterministic SIGSEGV at scope exit AFTER the correct
+// value printed.  Fixed by recursing into the inline content first in both the
+// interpreter (`fill_database`) and the native db-init generator.  A `result`
+// proves correctness; soundness (no teardown crash) is the real guard, so these
+// run their full free path.  This is the inline-struct sibling of @P373.
+#[test]
+fn forward_ref_inline_struct_field() {
+    code!(
+        "struct Box { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+// Two-level inline forward reference (`Outer.mid: Mid`, `Mid.inner: Cell`), both
+// hosts declared before their content — exercises the recursive content-layout
+// transitively (Outer → Mid → Cell).
+#[test]
+fn forward_ref_nested_inline_struct() {
+    code!(
+        "struct Outer { mid: Mid }
+struct Mid { inner: Cell }
+struct Cell { n: integer }
+fn run() -> integer { o = Outer { mid: Mid { inner: Cell { n: 9 } } }; o.mid.inner.n }"
+    )
+    .expr("run()")
+    .result(Value::Int(9));
+}
+
+// Enum struct-variant with an inline forward-referenced field (`Sq { side: Cell }`
+// before `struct Cell`) — the EnumValue layout path takes the same inline-content
+// arm, so it had the same offset-u16::MAX corruption.
+#[test]
+fn forward_ref_enum_variant_inline_field() {
+    code!(
+        "enum Shape { Sq { side: Cell } }
+struct Cell { n: integer }
+fn run() -> integer { s = Sq { side: Cell { n: 2 } }; match s { Sq { side } => side.n } }"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
 // ── @P379 — `use` namespaces struct types per library ────────────────────────
 // Two libraries each defining `struct Chunk` with DIFFERENT field layouts
 // (moros_map's holds vector<Hex>, hex_world's holds vector<Cell>) must load
@@ -14251,6 +14444,49 @@ fn p379_two_libs_same_struct_name() {
     assert!(
         !state.database.had_fatal,
         "per-library Chunk fields resolved incorrectly (an in-loft assert failed)"
+    );
+}
+
+// ── use-region fixpoint — manifest dep that is a MULTI-FILE package ──────────
+// `mfdep_app` declares `mfdep_leaf` only as a manifest `[dependencies]` edge
+// (no source `use`), so the multi-file `mfdep_leaf` reaches the lexer through
+// the pending-deps loop rather than the explicit-`use` pre-scan.  Its entry
+// file opens with `use mfdep_leafmod;`.  Before parse_file wrapped the
+// pre-scan + pending-deps drain in a fixpoint loop, the pending loop parked the
+// lexer on that un-pre-scanned entry file, and the main definition-loop then
+// read its legitimately-leading `use` as "use statements must appear before all
+// definitions" — and never imported it.  This guards that a multi-file package
+// pulled purely via a manifest edge still has its leading uses pre-scanned.
+#[test]
+fn manifest_dep_multifile_use_order() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/multilib/mfdep_use_order.loft", false);
+    let errors: Vec<String> = p
+        .diagnostics
+        .entries()
+        .iter()
+        .filter(|e| e.level >= loft::diagnostics::Level::Error)
+        .map(|e| e.to_string_compact())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "multi-file manifest dep tripped the use-region check: {errors:?}"
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let config = RuntimeLogConfig {
+        log_path: std::path::PathBuf::from("/dev/null"),
+        production: true,
+        ..Default::default()
+    };
+    state.database.logger = Some(Arc::new(Mutex::new(Logger::new(config, None))));
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "manifest-dep multi-file package failed to load/resolve at runtime"
     );
 }
 

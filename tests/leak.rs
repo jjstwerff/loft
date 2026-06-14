@@ -656,8 +656,9 @@ pub fn test() {
     );
 }
 
-/// P150 file-level regression guard: `lib/moros_map/tests/serial.loft`
-/// used to leak 1 store via interpreter (warning: `2(bc:0)`) when
+/// P150 file-level regression guard: `tests/fixtures/libs/moros_map/tests/serial.loft`
+/// (a fixture clone of the moros_map package, kept after moros was extracted to
+/// its own repo) used to leak 1 store via interpreter (warning: `2(bc:0)`) when
 /// `test_from_json_empty_string` called `map_from_json("")`, which has
 /// the early-return + fall-through `Struct.parse` shape that triggered
 /// the orphan placeholder alloc.  Closed by the P150 fix (drop
@@ -679,8 +680,8 @@ fn p150_moros_map_serial_leak() {
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
-    p.lib_dirs.push("lib".to_string());
-    p.parse("lib/moros_map/tests/serial.loft", false);
+    p.lib_dirs.push("tests/fixtures/libs".to_string());
+    p.parse("tests/fixtures/libs/moros_map/tests/serial.loft", false);
     // Filter out Warning-level diagnostics — plan-07 phase 4e.2/4h
     // emit informational warnings for undefended division, OOB
     // indexing, and `not null` field reminders.  Those are

@@ -1,0 +1,6 @@
+[package]
+name = "mfdep_app"
+version = "0.1.0"
+
+[dependencies]
+mfdep_leaf = { path = "../mfdep_leaf" }

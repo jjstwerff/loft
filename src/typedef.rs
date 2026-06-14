@@ -335,7 +335,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     }
 }
 
-fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
+pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if data.def(d_nr).name == "Unknown(0)" {
         return;
     }
@@ -546,7 +546,30 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     // every existing struct field.
                     database.dbref()
                 }
-                _ => data.def(t_nr).known_type,
+                _ => {
+                    // A struct/enum-reference field stored INLINE (`inner: Cell`,
+                    // empty deps) — its bytes live inside the host record, so the
+                    // host layout needs the content type's size now.  The host can
+                    // be declared BEFORE the content (a forward or cross-package
+                    // reference), in which case the content's `known_type` is still
+                    // u16::MAX here.  Lay it out first — mirroring the vector /
+                    // tuple / keyed-collection recursion above — otherwise the
+                    // field's content id stays u16::MAX, `finish_type` cannot
+                    // position it (the field lands at offset u16::MAX, never
+                    // repaired on pass 2 because `finish_type` skips an
+                    // already-sized type), and codegen reads the bogus offset and
+                    // corrupts the free path (@P373: a SIGSEGV at scope exit
+                    // AFTER the correct value prints).  Primitive fields already
+                    // carry a real `known_type`, so the guard never recurses for
+                    // them; a genuinely-undefined `Unknown(0)` stub short-circuits
+                    // in `fill_database` (already diagnosed elsewhere).
+                    let mut kt = data.def(t_nr).known_type;
+                    if kt == u16::MAX {
+                        fill_database(data, database, t_nr);
+                        kt = data.def(t_nr).known_type;
+                    }
+                    kt
+                }
             };
             database.field(s_type, &data.attr_name(d_nr, a_nr), tp);
         }

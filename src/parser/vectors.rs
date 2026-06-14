@@ -2418,6 +2418,39 @@ impl Parser {
         ls
     }
 
+    /// Return the database `known_type` of a `main_vector<T>` wrapper struct,
+    /// registering it on the spot if it is still unassigned (`u16::MAX`).
+    ///
+    /// The wrapper is normally registered by `fill_all`'s sweep, which scans
+    /// struct fields and (P191) function-local keyed collections — but NOT
+    /// function-local plain vectors.  When the element type only resolves on
+    /// pass 2 (a cross-package forward reference whose dependency is parsed
+    /// after the importing package — #375), the `main_vector<T>` wrapper is
+    /// born here during pass-2 codegen, AFTER this file's `fill_all` already
+    /// ran, so it never receives a `known_type`.  Codegen would then bake an
+    /// `OpDatabase(db_tp=u16::MAX)` operand and crash in `set_default_value` at
+    /// runtime.  Mirror the keyed-collection codegen path (`database.hash` /
+    /// `database.sorted` register on demand) by filling the wrapper here; the
+    /// content type is fully resolved by pass 2.
+    ///
+    /// `fill_database` registers the wrapper struct and adds its `vector` field,
+    /// but the field's POSITION is assigned by `finish_type` (run from
+    /// `database.finish()`).  That finish normally runs at end of `parse_file` —
+    /// AFTER the codegen that reads the position here — so without finishing now
+    /// the `vector` field sits at `u16::MAX` and `OpGetField`/`get_field` read
+    /// through a bogus offset, corrupting the interpreter free path (a heap
+    /// write that SIGSEGVs at teardown after the correct value prints).  Finish
+    /// immediately so the position is laid out before codegen consumes it.
+    fn vector_wrapper_known_type(&mut self, vec_def: u32) -> u16 {
+        let tp = self.data.def(vec_def).known_type();
+        if tp != u16::MAX {
+            return tp;
+        }
+        crate::typedef::fill_database(&mut self.data, &mut self.database, vec_def);
+        self.database.finish();
+        self.data.def(vec_def).known_type()
+    }
+
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
         if self.first_pass || vec == u16::MAX || self.vars.is_argument(vec) {
             Vec::new()
@@ -2428,7 +2461,7 @@ impl Parser {
                 .vars
                 .work_vec_db(&Type::Reference(vec_def, Deps::none()), &mut self.lexer);
             self.vars.depend(vec, db);
-            let tp = self.data.def(vec_def).known_type();
+            let tp = self.vector_wrapper_known_type(vec_def);
             debug_assert_ne!(
                 tp,
                 u16::MAX,
@@ -2468,7 +2501,7 @@ impl Parser {
             .work_vec_db(&Type::Reference(vec_def, Deps::none()), &mut self.lexer);
         self.vars.depend(elm, db);
         self.vars.depend(vec, db);
-        let known = Value::Int(i32::from(self.data.def(vec_def).known_type()));
+        let known = Value::Int(i32::from(self.vector_wrapper_known_type(vec_def)));
         ls.insert(0, self.cl("OpDatabase", &[Value::Var(db), known]));
         // Reference to the vector field.
         ls.insert(1, v_set(vec, self.get_field(vec_def, 0, Value::Var(db))));

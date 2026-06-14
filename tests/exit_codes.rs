@@ -217,7 +217,8 @@ fn w1_1_html_export_produces_file() {
 /// → OpCopyRecord with the 0x8000 tag set.
 #[test]
 fn p171_native_copy_record_high_bit_does_not_panic() {
-    let script = workspace_root().join("lib/moros_render/examples/isolated_stair.loft");
+    let script =
+        workspace_root().join("tests/fixtures/libs/moros_render/examples/isolated_stair.loft");
     // The script writes `isolated_stair.glb` CWD-relative (portable — Windows
     // has no /tmp), so run it in a temp working dir and read the GLB from
     // there.  Mirrors the moros_glb_cli_end_to_end pattern below.
@@ -464,7 +465,7 @@ fn moros_glb_cli_end_to_end() {
     std::fs::write(&json_path, map_json).expect("write map JSON");
     let _ = std::fs::remove_file(&glb_path);
 
-    let script = workspace_root().join("lib/moros_render/examples/moros_glb.loft");
+    let script = workspace_root().join("tests/fixtures/libs/moros_render/examples/moros_glb.loft");
     let path_flag = format!("{}/", workspace_root().display());
     let out = Command::new(loft_bin())
         .arg("--interpret")

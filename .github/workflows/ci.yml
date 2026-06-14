@@ -28,6 +28,15 @@ env:
   # seconds on cold fetches to stop a network blip from costing a PR re-run.
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Incremental compilation is useless in CI (every job is a fresh checkout; the
+  # restored cache is from a different commit, so source fingerprints miss
+  # anyway) yet it bloats `target/` by ~1.8 GB of tiny files — the dominant cost
+  # of the Windows cache-SAVE step (~7m vs ~50s on Linux, where compressing that
+  # many small NTFS files is an order of magnitude slower).  Off → a much
+  # smaller cache, faster save/restore on every OS, negligible build impact.
+  # This keeps the deliberate `run_id` save-key (native-fixture persistence)
+  # intact — it only removes the incremental bloat from what gets compressed.
+  CARGO_INCREMENTAL: "0"
   # BUILD2: keep loft's native-test binary cache inside target/ so
   # actions/cache (which persists ~/.cargo + target/) carries it across runs.
   # The in-run binary cache is keyed on the rlib's CONTENT hash (mtime-stable
@@ -104,6 +113,21 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      # Windows Defender real-time scanning inspects every artifact rustc and
+      # link.exe write — inflating both the Build step and every per-test
+      # `--native` compile.  Exclude the workspace + cargo/loft homes so the
+      # scan skips them.  GitHub-hosted Windows runners run elevated, so
+      # Add-MpPreference works; tolerate failure so a policy change can't red a
+      # PR.
+      - name: Exclude build dirs from Defender (Windows only)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.loft"
 
       # `.cargo/config.toml` activates the `mold` linker on
       # x86_64-unknown-linux-gnu for a unified cache + slightly faster

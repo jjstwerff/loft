@@ -660,7 +660,21 @@ impl Parser {
     ) -> Option<Type> {
         let mut p = Value::Null;
         let index_t = self.parse_in_range(&mut p, code, "$");
-        let elm_td = self.data.type_elm(etp);
+        // Pass-1 deferral: a `vector<S>` whose element `S` is not yet registered
+        // (forward-referenced or cross-package, e.g. `vector<WallDef>` indexed
+        // before `WallDef` is parsed) yields `type_elm == u32::MAX`, which would
+        // panic the `def(elm_td)` below.  `etp` is still `Unknown` here, so the
+        // op-dispatch matches (Tuple/Function/base) all fall through to the
+        // generic linked-handle read.  Substitute the builtin `reference` def so
+        // a placeholder read (stride + `OpVectorRef`) builds and the caller's
+        // index chain / assignment stays well-formed; pass-2 sees the resolved
+        // element, skips this branch, and rebuilds the real op + stride.  Only
+        // reachable in pass-1 (pass-2 has every def); a genuinely-undefined
+        // element surfaces its error at the type declaration, not here.
+        let elm_td = match self.data.type_elm(etp) {
+            u32::MAX => self.data.source_nr(0, "reference"),
+            td => td,
+        };
         let known = self.data.def(elm_td).known_type();
         // honour narrow vector-element stride when the
         // content Type::Integer carries a forced_size AND Phase 2 would

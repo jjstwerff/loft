@@ -1156,7 +1156,15 @@ impl Function {
                     type_def.name(data)
                 );
             }
-        } else if !var_tp.is_unknown() {
+        } else if !var_tp.is_unknown()
+            // `&unknown` → `&T` (#375): a `&` parameter whose pointee was an
+            // unresolved forward / cross-package reference on pass 1 carries the
+            // type `RefVar(Unknown)`, which the outer `is_unknown()` does not see
+            // through.  Treat it as unknown here so pass 2's resolved `&T`
+            // refines it (falling through to the type update below) instead of
+            // erroring "cannot change type from &unknown to &T".
+            && !matches!(var_tp, Type::RefVar(in_tp) if in_tp.is_unknown())
+        {
             if let Type::RefVar(in_tp) = var_tp
                 && in_tp.is_equal(type_def)
             {

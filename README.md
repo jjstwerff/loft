@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/loft-lang/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/loft-lang/loft/actions/workflows/ci.yml)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/loft-lang/loft/releases)
+[![Version](https://img.shields.io/badge/version-0.8.5-blue.svg)](https://github.com/loft-lang/loft/releases)
 [![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://loft-lang.org/loft/gallery.html)
 
 [**▶ Try it in the browser**](https://loft-lang.org/loft/playground.html) · [**🎮 Play Brick Buster**](https://loft-lang.org/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://loft-lang.org/loft/gallery.html) · [**📘 Docs**](https://loft-lang.org/loft/)
@@ -35,7 +35,8 @@ And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.l
 ## Why people like it
 
 - **Write once, runs in the browser and on your desktop.** The same source compiles to WebAssembly+WebGL for browsers and to a native binary using OpenGL for Mac/Linux/Windows.
-- **Reads like Python, runs fast like Rust.** Statically typed with almost no annotations — loft infers types, catches mistakes at compile time, and runs interpreted *or* compiled.
+- **Reads like Python, runs fast like Rust.** Statically typed with almost no annotations — loft infers types and catches mistakes at compile time. By default it **compiles to native code** through rustc; add `--interpret` for instant startup, or `--native-wasm` for the browser.
+- **Batteries via packages.** `loft install <name>` pulls libraries from the registry — graphics, imaging, input, an HTTP server, a markdown renderer — each itself written in loft. Bounded generics and interfaces keep those libraries type-safe without ceremony.
 - **Shareable by link.** A finished loft program is a directory of static files. Put it on any web host. Send someone the URL. They play.
 - **Trivially embeddable.** Loft is a Rust crate. Drop it into an existing Rust application to script game logic, hot-reload configs, or run untrusted code safely.
 
@@ -45,24 +46,24 @@ And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.l
 struct Point { x: float, y: float }
 
 fn distance(a: Point, b: Point) -> float {
-    dx = a.x - b.x
-    dy = a.y - b.y
+    dx = a.x - b.x;
+    dy = a.y - b.y;
     sqrt(dx * dx + dy * dy)
 }
 
 fn main() {
-    p1 = Point { x: 0.0, y: 0.0 }
-    p2 = Point { x: 3.0, y: 4.0 }
+    p1 = Point { x: 0.0, y: 0.0 };
+    p2 = Point { x: 3.0, y: 4.0 };
     println("distance: {distance(p1, p2)}")
 }
 ```
 
 ```
 $ loft hello.loft
-distance: 5.0
+distance: 5
 ```
 
-Everything you might want is there: `vector<T>`, `sorted<T>`, `index<T>`, `hash<T>` collections; `par(...)` for parallel loops; `yield` for generators; pattern matching with `match`; null-safe with `?? default`; format strings like Rust's.
+Everything you might want is there: `vector<T>`, `sorted<T>`, `index<T>`, `hash<T>` collections; bounded generics and interfaces; `par(...)` for parallel loops; `yield` for generators; pattern matching with `match`; null-safe with `?? default`; format strings like Rust's.
 
 ## Getting started
 
@@ -100,9 +101,27 @@ loft examples/structs.loft      # Structs and methods
 loft examples/match.loft        # Pattern matching on enums
 ```
 
+## Packages & libraries
+
+`loft install <name>` downloads a library from the registry into `~/.loft/lib/`
+(or `loft install .` / `loft install /path` for a local package). The
+libraries are **themselves written in loft** — no C, no FFI glue — so they
+read, debug, and ship like your own code:
+
+| library | what it gives you |
+|---|---|
+| `graphics` | 2D canvas + 3D scene rendering (WebGL in the browser, OpenGL native) |
+| `imaging` | image decode/encode and pixel operations |
+| `input` | keyboard / pointer / window events |
+| `server` | a small HTTP server |
+| `markdown` | a CommonMark-ish renderer (it builds these docs) |
+
+Bounded generics and interfaces keep them type-safe; `loft test` runs a
+package's test suite.
+
 ## Graphics examples
 
-24 progressive examples. Hover each for a live preview in the [gallery](https://loft-lang.org/loft/gallery.html):
+The `graphics` library ships 24 progressive examples — hover each for a live preview in the [gallery](https://loft-lang.org/loft/gallery.html):
 
 | File | What it shows |
 |---|---|
@@ -120,8 +139,8 @@ See the [full example list](https://github.com/loft-lang/loft-libs-graphics/tree
 
 Highest-impact areas today:
 
-- **Example games** — small playable demos that showcase the language
-- **Game library** — input, sprites, tilemaps, collision, audio abstractions
+- **Example programs** — small playable games and demos that show the language off
+- **Libraries** — publish a package (sprites, tilemaps, collision, audio, data formats); each is plain loft, so the bar to contribute is low
 - **WebGL backend** — closing the last gaps between native and browser rendering
 - **Documentation polish** — every page runs as a test, so contributions stay correct by construction
 

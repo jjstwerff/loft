@@ -19,6 +19,18 @@ The shared-library matrix in the [main plan README](README.md#cross-project-cons
 sits alongside these phases — that matrix is the WHY for the
 work in this file.
 
+> **STATUS 2026-06-14 — the moros project repo move (Phase 7b) is DONE.**  Once
+> the compiler fixes (#375/#374/#373 + the `&`-param deferrals) made the moros
+> stack load + test-green on both backends, all five `lib/moros_*` packages were
+> moved to the moros project's own repo (`workspace/moros/lib/`) and removed from
+> this monorepo.  loft keeps fixture clones of the three it exercises in its own
+> feature tests (`tests/fixtures/libs/{moros_map,moros_editor,moros_render}`) — the
+> P150 leak guard, the `--html`/WASM smoke, the GLB exit-code guards, and the
+> @P379 per-library-namespace test retarget to those.  The Phase 7a "build out
+> `lib/world/`" narrative below is **historical** — `lib/world` already shipped to
+> `loft-libs-world` as `hex_grid`, and moros shipped with its own `Hex`/`Chunk`
+> rather than adopting it (a later adoption is the moros project's call).
+
 ---
 
 ### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
@@ -59,6 +71,25 @@ since dryopea and bumper both consume it.
   6-step migration plan to `world::load_mapfile()` for when the
   consumer stall lifts.  Schema is currently enforced by
   `lib/moros_map`'s `Map` struct (the contract names what's there).
+- **The moros stack LOADS again (2026-06-14).**  The deep
+  `moros_ui → moros_sim → moros_render/moros_editor → moros_map` diamond
+  pushes `moros_map` to a high source number, which had broken
+  cross-package type resolution on pass 1 — the load failed outright.
+  Fixed in the compiler (a class of "pass 1 hard-errors on a still-
+  resolving cross-package reference instead of deferring to pass 2"
+  bugs: #375 field resolution, #373 forward-ref struct layout, and the
+  `&`-param addressability / work-buffer / `change_var_type` sites).
+  The full stack now loads clean and **all 427 moros library tests pass
+  on BOTH backends** — interpreter and `--native` (moros_map 51,
+  moros_editor 44, moros_render 154, moros_sim 137, moros_ui 41).  This
+  was the standing prerequisite for validating the split against the real
+  consumer: moros is now a loadable, test-green, dual-backend consumer, so
+  the split work below can proceed against it.  Note `lib/world/` is now
+  empty — its hex substrate already shipped to `loft-libs-world` as
+  `hex_grid` (commit 6c9a03e9), so the "build out lib/world/" framing
+  below is partly historical; the live remaining work is the moros→shared
+  migration (step 6) and the moros project repo move, both of which the
+  loadable moros now unblocks.
 
 **Remaining work — UNBLOCKED today (re-evaluated 2026-05-29):**
 

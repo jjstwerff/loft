@@ -333,6 +333,11 @@ You've seen the language surface.  Pick one of:
 - **Browse more examples** — `examples/` has runnable demos for
   every concept above.  Variations and extensions live in
   `tests/docs/`, which doubles as a tested doc tour.
+- **Pull in a library** — `loft install graphics` (or `imaging`,
+  `input`, `server`, `markdown`) vendors a package — itself written
+  in loft — into your project.  The
+  [graphics gallery](https://loft-lang.org/loft/gallery.html) shows
+  what the rendering library can do.
 - **Try the parallel surface** — loft makes parallelism a one-line
   addition: `for s in items par(r = work(s), 4) { ... }` runs the
   worker on 4 threads.  See [STDLIB.md § Parallel] and
