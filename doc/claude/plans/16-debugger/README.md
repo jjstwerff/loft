@@ -11,6 +11,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > the issue tracker is the source of truth, so this plan was renumbered to its claimed
 > issue.)
 
+> **CLOSURE RECORD — DONE 2026-06-09, closed 2026-06-14** (`@PLN16` `status:finished`).
+> The interpreter-mode debugger is delivered: function-scoped line breakpoints
+> (dense `line_numbers` resolution), live frame capture (every value type,
+> liveness-gated), REPL-at-frame evaluation, conditional breakpoints, step
+> into/over/out/continue, edit-and-continue (scalars + dotted/element writes), and
+> the `loft debug --rpc` NDJSON stdio driver.  Reference: [DEBUG.md](../../DEBUG.md).
+> **One deferral routed to [@PLN18 engine host](https://github.com/loft-lang/plans/issues/18):**
+> mid-run on-stack deopt (loft calls are *jumps*; full mid-run deopt lands with the
+> lavition engine integration).  Exact value-for-value frame seeding tracks under
+> [@PLN14](https://github.com/loft-lang/plans/issues/14).  This file is retained as
+> the closure record + build narrative.
+
 ## Status
 
 In progress — **tracer-bullet slice landed (2026-06-08)**: the riskiest unknown is

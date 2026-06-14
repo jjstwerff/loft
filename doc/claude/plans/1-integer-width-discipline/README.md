@@ -7,33 +7,36 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-In flight, partially landed (uncommitted).  Surfaced re-validating the external
-`loft-libs-core/random` package: a native `n_rand(i64,i64)->i64` returning the
-`i64::MIN` null sentinel works on `--native` but returns `0` on `--interpret`,
-because the interpreter's FFI auto-marshal mapped a plain loft `integer` to
-**i32** and truncated the i64 return (filed **@P370**).  The maintainer's rule:
-**a plain loft `integer` is 64-bit; the only 4-byte int is an explicit `i32`;
-and `integer`→`i32` (data-losing narrowing) must NEVER be implicit — it requires
-`as i32`.**  This plan makes the whole toolchain obey that, end to end.
+> **CLOSURE RECORD — DONE, closed 2026-06-14** (`@PLN1`, local slug `48`,
+> `status:finished`).  `integer` is i64 end-to-end, `i32` is the only 4-byte int,
+> and `integer`→`i32` narrowing is never implicit (requires `as i32`).  Verified
+> on both backends; `scripts/verify_external_libs.sh` shows `loft-libs-core/random`
+> **ok on interpret + native** — the original **@P370** acceptance (a native
+> `(i64,i64)->i64` returning the `i64::MIN` null sentinel no longer truncates to
+> `0` on `--interpret`).  This file is retained as the closure record + build
+> narrative.
 
-- **P1 (FFI marshal) — inference DONE; I64 dispatch arms PENDING (uncommitted).**
-  `src/extensions.rs` maps a plain `integer` (`forced_size.is_none()`) →
-  `ArgT::I64`; narrow (`forced_size`) / `Character` → `ArgT::I32`.  But the
-  dispatcher has NO `(I64, …)`-shaped arms for most signatures yet, so a native
-  fn that declares plain `integer` (i64 impl) panics `auto-marshal: unsupported
-  signature` at runtime.  Adding those arms is the open P1 work (see § Remaining).
-- **P2 (compiler enforcement) — DONE & validated (uncommitted).**  Implicit
-  `integer`→`i32`/narrow is a compile error; widening `i32`→`integer` stays
-  implicit; `as i32` escape hatch + constant-fits literal exemption work.  See
-  § Progress for the exact sites + regression tests.
-- **P3 (library consequences) — web/server DONE; graphics impls DONE; arms +
-  fallout PENDING.**  web/server `#native` decls + handle structs/params i32
-  (validated both backends).  graphics: the ~40 `loft_*` native impls converted
-  i32→i64 (decls stay `integer`, no game-code churn — cdylib builds clean), but
-  the matching I64 dispatch arms (P1) aren't added yet → graphics still fails.
-  imaging is clean (no scalar-integer natives).
-- **P4 (@P368 follow-up) — NOT STARTED.**  The divide-by-zero warning still
-  fires on a *named-constant* divisor (`const K = 2.0; x / K`).  See @P368b.
+The maintainer's rule — **a plain loft `integer` is 64-bit; the only 4-byte int is
+an explicit `i32`; and `integer`→`i32` (data-losing narrowing) must NEVER be
+implicit — it requires `as i32`** — now holds across the whole toolchain.
+
+- **P1 (FFI marshal) — DONE.**  `src/extensions.rs` maps a plain `integer`
+  (`forced_size.is_none()`) → `ArgT::I64`; narrow (`forced_size`) / `Character`
+  → `ArgT::I32`.
+- **P1b (I64 dispatch arms) — DONE.**  The full `(I64, …)` arm set is in the
+  dispatcher (`extensions.rs:1389–2191`), including the trickier store/`Ref` arms
+  (`save_png` / `gl_upload_*` / `set_mat4` / `rasterize_text` / `audio_play_raw`).
+- **P2 (compiler enforcement) — DONE.**  Implicit `integer`→`i32`/narrow is a
+  compile error; widening `i32`→`integer` stays implicit; `as i32` escape hatch +
+  constant-fits literal exemption work.
+- **P3 (library consequences) — DONE.**  web/server/graphics native decls + impls
+  converted (imaging was already clean); `tests/native_loader.rs` vec_* suite
+  green; external-libs verify passes.  (The unrelated `game_protocol` / `crypto`
+  fails in that run are @PLN22 import-syntax migration debt — flat `use lib::a, b`
+  → `use lib::(a, b)` — tracked separately, not a width-discipline item.)
+- **P4 (@P368b divide-by-zero warning on a named-constant divisor) — routed out**
+  as a standalone warning-quality follow-up (`@P368b`); never part of the width
+  discipline.  See [42-warning-quality](../future/42-warning-quality/README.md).
 
 ## Goal
 
@@ -73,7 +76,7 @@ Explicit `as` and the typer enforces it.
 
 ## Progress + remaining work (2026-05-27)
 
-### Done & validated (uncommitted)
+### Done & validated (landed)
 - **P2 enforcement** — fully working: `x: i32 = some_integer` and `f(some_integer)`
   (i32 param) error with *"cannot implicitly narrow integer to i32 — cast
   explicitly with `as i32`"*; `n as i32` (escape hatch), `x: i32 = 5` (literal
@@ -86,7 +89,7 @@ Explicit `as` and the typer enforces it.
   (2 error fns) + `tests/scripts/repro_p370_widen.loft` (allowed cases, both backends).
 - **P1a marshal inference** + **P3 web/server** + **P3 graphics impls** + LOFT.md row.
 
-### REMAINING — P1b: I64 dispatch arms (the immediate blocker)
+### P1b: I64 dispatch arms — DONE (landed; build narrative below)
 
 Add these `(params) -> ret` arms to the `src/extensions.rs` dispatcher (mirror the
 existing `I32` twins; use `i64_arg!` + `stores.put::<i64>(…)` with NO `widen_int`
@@ -118,7 +121,7 @@ hand-arms.  P1b is the one-time unblock; FFI.1/FFI.3 remove the recurrence.
 path needs this; perf is unaffected.  A uniform-cell shim / libffi were
 considered and rejected — see that section.)
 
-### REMAINING — P3 fallout + verification
+### P3 fallout + verification — DONE
 - `tests/native_loader.rs` `vec_*` (`vec_i32_sum`, `vec_from_returned_struct`,
   `scalar_before_vec`, `vec_between_scalars`, `vec_in_loop_if`, …) and multiplayer
   v2/v5: re-run after P1b; diagnose any residual (likely the same missing-arm /
@@ -134,7 +137,7 @@ lib declaring `integer` (web, server, graphics; imaging was clean).  The
 inspection under-counted (it called graphics clean).  Pace it lib-by-lib behind
 P1b, each lib re-verified on both backends before the next.
 
-### Working-tree state (uncommitted, ~10 files)
+### Working-tree state (landed — historical, ~10 files)
 `src/extensions.rs` (P1a marshal), `src/parser/{mod,expressions,operators}.rs`
 (P2), `lib/web/src/web.loft` + `lib/server/src/server.loft` (P3 decls/casts),
 `lib/graphics/native/src/{lib,audio}.rs` (P3 impls→i64), `doc/claude/LOFT.md`
