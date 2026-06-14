@@ -146,6 +146,9 @@ Before you ship a version:
       kept `.allow_warnings` as an opt-out only when the
       package isn't ready yet).
 - [ ] `loft.toml` has the new version under `[package] version`.
+- [ ] `[package] description` is a real one-line summary (not the `loft new`
+      placeholder) — it's the official registry catalog text (`loft search` /
+      `loft api --registry`); registry tooling prefers it over the README.
 - [ ] README, doc comments on every `pub fn` / `pub struct`.
 - [ ] CHANGELOG note for the version (free-form).
 - [ ] Local re-package produces a byte-identical sha256 across

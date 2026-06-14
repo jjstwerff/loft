@@ -25,6 +25,10 @@ pub struct Manifest {
     /// `<name>-v<version>` release-tag scheme; absent → the legacy
     /// one-repo-per-package `loft-<name>` + `v<version>` fallback.
     pub repository: Option<String>,
+    /// One-line package description from `[package] description = "..."`.  The
+    /// official source for the registry catalog (`loft search` / `loft api
+    /// --registry`); registry tooling prefers this over scraping the README.
+    pub description: Option<String>,
     /// Native shared-library stem from `[library] native = "..."`.
     /// `None` for pure-loft packages.  The interpreter resolves this to the
     /// platform-correct filename (`lib<stem>.so` / `.dylib` / `.dll`).
@@ -111,6 +115,7 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                 ("package", "version") => manifest.version = Some(value.to_string()),
                 ("package", "loft") => manifest.loft_version = Some(value.to_string()),
                 ("package", "repository") => manifest.repository = Some(value.to_string()),
+                ("package", "description") => manifest.description = Some(value.to_string()),
                 ("library", "entry") => manifest.entry = Some(value.to_string()),
                 ("library", "native") => manifest.native = Some(value.to_string()),
                 ("library", "compile") => manifest.compile = Some(value.to_string()),
@@ -284,6 +289,16 @@ mod tests {
         );
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert_eq!(m.repository.as_deref(), Some("loft-libs-core"));
+    }
+
+    #[test]
+    fn parses_package_description() {
+        let p = write_temp(
+            "desc",
+            "[package]\nname = \"crypto\"\nversion = \"0.2.1\"\ndescription = \"SHA-256, HMAC, base64.\"\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.description.as_deref(), Some("SHA-256, HMAC, base64."));
     }
 
     // @PLN21 Phase 2 — `[native] runtime-libs` / `build-deps` parse into trimmed

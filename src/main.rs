@@ -1623,13 +1623,15 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     // loft.toml — includes [native] declaration when --native.
     let loft_toml = if native {
         format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+             description = \"One-line description of {name}.\"\n\n\
              [library]\nentry = \"src/{name}.loft\"\nnative = \"loft_{name}\"\n\n\
              [native]\ncrate = \"loft-{name}\"\n\n[dependencies]\n"
         )
     } else {
         format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+             description = \"One-line description of {name}.\"\n\n\
              [library]\nentry = \"src/{name}.loft\"\n\n[dependencies]\n"
         )
     };

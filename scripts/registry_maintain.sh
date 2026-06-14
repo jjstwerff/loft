@@ -308,31 +308,44 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     # only the `"<ver>": {…}` member remains — wrapping `{…}` + parsing it below
     # choked on those trailing status lines otherwise.
     grep -vE '^#|^\[publish\]|^[[:space:]]*$' "$tmp/pub_$name.out" > "$tmp/entry_$name.json"
-    # First-version packages also need a package block; take the description from
-    # the README's first real prose line.  Skip what isn't a description: HTML/
-    # license comment blocks (`<!-- … -->`), markdown headings (`# …`), fenced
-    # code blocks (``` … ```), and `//` / `<` lines.  (The old "first non-#,
-    # non-blank line" grabbed `<!--` as the description — see hex_world.)
-    desc=$(awk '
-        /^[[:space:]]*<!--/ { inc=1 }
-        inc { if (/-->/) inc=0; next }
-        /^[[:space:]]*```/ { fence = !fence; next }
-        fence { next }
-        /^[[:space:]]*$/ { next }
-        /^[[:space:]]*#/ { next }
-        /^[[:space:]]*(\/\/|<)/ { next }
-        { print; exit }
-    ' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
+    # Description: prefer the OFFICIAL `[package] description` in loft.toml.  When
+    # present it is authoritative (refreshed on every publish below); absent, fall
+    # back to the README's first real prose line — skipping HTML/license comment
+    # blocks (`<!-- … -->`), markdown headings (`# …`), fenced code blocks
+    # (``` … ```), and `//` / `<` lines (the old "first non-# line" grabbed `<!--`
+    # as the description — see hex_world).  The README fallback only sets the
+    # description on FIRST publish; it never overwrites an existing one.
+    desc=$(sed -n 's/^[[:space:]]*description[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$tmp/$repo/$name/loft.toml" | head -1)
+    desc_src=manifest
+    if [ -z "$desc" ]; then
+        desc_src=readme
+        desc=$(awk '
+            /^[[:space:]]*<!--/ { inc=1 }
+            inc { if (/-->/) inc=0; next }
+            /^[[:space:]]*```/ { fence = !fence; next }
+            fence { next }
+            /^[[:space:]]*$/ { next }
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*(\/\/|<)/ { next }
+            { print; exit }
+        ' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
+    fi
     if ! python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
-        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" <<'EOF'
+        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" "$desc_src" <<'EOF'
 import json, sys
 
-index_path, name, ver, entry_path, homepage, desc = sys.argv[1:7]
+index_path, name, ver, entry_path, homepage, desc, desc_src = sys.argv[1:8]
 entry = json.loads("{%s}" % open(entry_path).read())[ver]
 index = json.load(open(index_path))
 pkg = index["packages"].setdefault(
     name, {"description": desc, "homepage": homepage, "categories": [], "yanked": [], "versions": {}}
 )
+# The official manifest description is authoritative — refresh it on every publish
+# so a corrected `[package] description` propagates.  A README-scraped fallback
+# only seeds a brand-new package (setdefault above); it never clobbers an
+# existing, possibly hand-curated, description.
+if desc_src == "manifest" and desc:
+    pkg["description"] = desc
 pkg["versions"][ver] = entry
 json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
 open(index_path, "a").write("\n")

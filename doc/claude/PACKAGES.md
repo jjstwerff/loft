@@ -113,6 +113,10 @@ graphics/
 name = "graphics"
 version = "0.1.0"
 loft = ">=0.9"
+description = "2D canvas + 3D rendering for loft."  # one-line registry summary —
+                                   # the OFFICIAL source for `loft search` /
+                                   # `loft api --registry`.  Registry tooling
+                                   # prefers this over scraping the README.
 repository = "loft-libs-graphics"  # publishing repo — drives `loft package`'s
                                    # release URL/tag.  A monorepo value (several
                                    # packages share the repo) → `<name>-v<version>`
