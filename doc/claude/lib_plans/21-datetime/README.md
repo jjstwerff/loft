@@ -207,6 +207,13 @@ matches the native golden, since that's the path the JS fallback lives on.
 
 ## Open design questions
 
+> **Resolved 2026-06-14 in [DESIGN.md](DESIGN.md)** — the code-grounded
+> implementation design for the full-datetime tail (arcs B/C/A): Q1 distinct
+> `Type::DateTime` (silent integer arithmetic proven impossible by construction
+> via `can_convert`), Q2 constructor-only, Q3 comparison opt-in / arithmetic
+> forbidden, Q6 token vocabulary + bare-`{dt}` default.  Originals kept below for
+> context.
+
 1. **Distinct `Type::DateTime` vs a tagged `Integer`?**  Locked to
    *distinct* by the user, but confirm the storage/codegen route:
    reuse the long-integer storage path (`i64`, `i64::MIN` null) and add
