@@ -183,10 +183,18 @@ export.  Discovery surface, nearest first:
 1. **`.loft/api/<name>.api`** in the project — generated public-API stubs
    (signatures + doc comments) for every locked dependency.  Written by
    `loft install` / `loft update` / `loft pin`; read these first.
-2. **`loft api`** — list every library reachable from the cwd (project deps,
+2. **`.loft/api/_available.api`** — the registry CATALOG: every package you
+   could `loft install` (name, latest version, one-line description), written
+   alongside the per-dep stubs.  Read this to see what EXISTS, not just what's
+   installed.
+3. **`loft api`** — list every library reachable from the cwd (project deps,
    installed registry packages, user libraries) with their source paths.
-3. **`loft api <name>`** — print one library's full public surface.
-4. **`loft search <query>`** / **`loft info <name>`** — query the registry
+4. **`loft api <name>`** — print one library's full public surface.
+5. **`loft api --registry`** — print the whole installable catalog on demand
+   (the live form of `_available.api`).  The catalog is cached ~1h; add
+   **`--refresh`** to force a re-fetch (e.g. after a package was just published
+   or its description changed).
+6. **`loft search <query>`** / **`loft info <name>`** — query the registry
    for libraries not installed yet; `loft install <name>` fetches one and
    refreshes the stubs.
 

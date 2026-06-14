@@ -50,7 +50,7 @@ loft-libs-graphics  shapes-v0.2.0            shapes
 loft-libs-graphics  gridmesh-v0.1.1          gridmesh
 loft-libs-graphics  graphics-v0.1.1            graphics
 loft-libs-graphics  imaging-v0.1.0           imaging
-loft-libs-net       game_protocol-v0.1.1     game_protocol
+loft-libs-net       game_protocol-v0.1.2     game_protocol
 loft-libs-net       web-v0.1.1               web
 loft-libs-world     hex_world-v0.1.0         hex_world
 loft-libs-game      time-v0.1.0              time

@@ -20,9 +20,12 @@
 #     --notes             also print each release's full notes (gh release body)
 #     --no-download       skip the tarball sha256 re-download check
 #     --no-push           sign + commit locally but do NOT push (keeps the clone)
+#     --message MSG       commit message (default: "sign: …"; registry_maintain
+#                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
 #
-# On confirm it signs, commits index.json.sig, pushes, and (for an auto-clone)
+# On confirm it signs, commits index.json + index.json.sig together (so HEAD's
+# index always matches its signature — #377), pushes, and (for an auto-clone)
 # deletes the temp checkout.  A failed push keeps the clone so the signed commit
 # is never lost.
 #
@@ -30,7 +33,7 @@
 # at the prompt.  Needs: python3, gh (for notes), and target/release/loft-keygen.
 set -euo pipefail
 
-REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1
+REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -41,6 +44,7 @@ while [ $# -gt 0 ]; do
         --notes)        NOTES=1;;
         --no-download)  DOWNLOAD=0;;
         --no-push)      PUSH=0;;
+        --message)      MSG="$2"; shift;;
         --yes)          YES=1;;
         -h|--help)      sed -n '2,30p' "$0"; exit 0;;
         *) echo "unknown argument: $1" >&2; exit 2;;
@@ -150,7 +154,7 @@ for name in sorted(cp):
 
 if not changes:
     print("  (no added or changed versions vs the diff base)")
-fail = False
+failures = []  # (name, ver, reason) — collected so the end-of-run summary names each
 for name, ver, meta, is_new in changes:
     url, sha, size = meta.get("url", ""), meta.get("sha256", ""), meta.get("size")
     print(f"  [{'NEW' if is_new else 'CHANGED'}]  {name} {ver}")
@@ -186,22 +190,49 @@ for name, ver, meta, is_new in changes:
             got = hashlib.sha256(data).hexdigest()
             if got == sha:
                 print(f"        VERIFY   : sha256 MATCH ({len(data)} bytes downloaded)")
+                if size is not None and len(data) != size:
+                    print(f"        VERIFY   : size MISMATCH !!  downloaded {len(data)} != declared {size}")
+                    failures.append((name, ver,
+                        f"size mismatch: downloaded {len(data)} bytes, index declares {size}"))
             else:
-                print(f"        VERIFY   : sha256 MISMATCH !!  got {got}")
-                fail = True
-            if size is not None and len(data) != size:
-                print(f"        WARN     : downloaded size {len(data)} != declared {size}")
-                fail = True
+                print(f"        VERIFY   : sha256 MISMATCH !!  declared {sha[:16]}… got {got[:16]}…")
+                failures.append((name, ver,
+                    "sha256 mismatch — the uploaded release tarball does not match the index entry "
+                    f"(index says {sha[:16]}…, the download hashes to {got[:16]}…).\n"
+                    "             Cause: the release artifact is stale, or the lib's source on main "
+                    "moved past its released tag.\n"
+                    "             Fix: re-cut the release so its bytes match `loft package` at the tag "
+                    "(bump the version + re-release if main has changed).\n"
+                    f"             url: {url}"))
         except Exception as e:
             print(f"        VERIFY   : download FAILED: {e}")
-            fail = True
+            failures.append((name, ver,
+                f"download failed ({e}) — does the release exist with the named asset?\n"
+                f"             url: {url}"))
     print()
-sys.exit(1 if fail else 0)
+
+if failures:
+    n = len(failures)
+    print("══════════════════════════════════════════════════════════════════════")
+    print("!!  INTEGRITY CHECK FAILED — NOT signing.")
+    print(f"    {n} of {len(changes)} new/changed entr{'y' if n == 1 else 'ies'} "
+          "failed verification:")
+    print()
+    for name, ver, reason in failures:
+        print(f"  ✗  {name} {ver}")
+        print(f"        {reason}")
+    print()
+    print("    Nothing was signed.  Fix the flagged artifact(s) above, then re-run.")
+    print("    (Passing requires each tarball to byte-match `loft package` at its tag —")
+    print("     the registry's gate-3 reproducible-build invariant.)")
+    sys.exit(1)
+sys.exit(0)
 PY
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
-    echo "!!  INTEGRITY CHECK FAILED (sha256 mismatch / download error) — NOT signing." >&2
+    # The verification block above prints a named, per-package failure summary.
+    echo "registry-sign: refusing to sign — integrity check failed (see the summary above)." >&2
     exit 1
 fi
 
@@ -231,23 +262,37 @@ SIGNED=1
 [ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
 echo "signed: $SIG"
 
-# Automated git: stage the signature, commit, push.  Ed25519 is deterministic,
-# so re-signing identical content yields the same bytes → nothing to commit.
-git -C "$REG_DIR" add index.json.sig
+# Automated git: stage index.json AND its signature together, commit, push.
+# Ed25519 is deterministic, so re-signing identical content yields the same bytes
+# → nothing to commit.  #377: staging only index.json.sig while a new/dirty
+# index.json sat uncommitted silently published a sig/index mismatch — the
+# committed .sig verified against content that never landed, and the new version
+# was never published.  Staging BOTH keeps HEAD self-consistent: its committed
+# index.json always matches its committed index.json.sig.
+git -C "$REG_DIR" add index.json index.json.sig
 if git -C "$REG_DIR" diff --cached --quiet; then
     echo "index.json.sig unchanged — nothing to commit."
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
-    git -C "$REG_DIR" commit -q -m "sign: regenerate index.json.sig"
-    if git -C "$REG_DIR" push -q 2>/tmp/_rs_push.$$; then
+    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
+    # Push reusing the gh login as git's credential helper: no username/password
+    # prompt on an HTTPS remote (the registry is often cloned over HTTPS), and
+    # harmless on an SSH remote (which uses your key).  `gh release create` etc.
+    # work because gh uses API auth; plain `git push` uses git's credential
+    # system, which without a helper falls back to prompting — and GitHub no
+    # longer accepts a password there.  GIT_TERMINAL_PROMPT=0 makes a genuinely
+    # missing credential fail fast instead of hanging on an interactive prompt.
+    if GIT_TERMINAL_PROMPT=0 git -C "$REG_DIR" \
+        -c credential.helper='!gh auth git-credential' push -q 2>/tmp/_rs_push.$$; then
         echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
         PUSHED=1
     else
         echo "!! push FAILED: $(cat /tmp/_rs_push.$$ 2>/dev/null)" >&2
         echo "   signed commit kept at $REG_DIR — push it manually." >&2
+        echo "   (auth? run 'gh auth setup-git' once, or use an SSH remote, then re-run.)" >&2
     fi
     rm -f "/tmp/_rs_push.$$"
 else
-    git -C "$REG_DIR" commit -q -m "sign: regenerate index.json.sig"
+    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     echo "committed (--no-push): $(git -C "$REG_DIR" rev-parse --short HEAD) at $REG_DIR — push when ready."
 fi

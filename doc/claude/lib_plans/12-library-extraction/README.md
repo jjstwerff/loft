@@ -64,6 +64,15 @@ Shipped so far:
   `src/wasm.rs::BUNDLED_LIB_FILES` repointed to fixture clones;
   `tests/extraction_hygiene.rs::FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`
   gained 57 graphics + imaging symbols.
+- **`loft-libs-docs` created + `html`/`markdown`/`input` extracted** (2026-06-14):
+  new domain chunk [loft-lang/loft-libs-docs](https://github.com/loft-lang/loft-libs-docs)
+  for general document/markup libs — `html 0.1.0` + `markdown 0.1.0`; `input 0.1.0`
+  → `loft-libs-game` (depends on `graphics`).  GitHub releases cut; registry entries
+  + sign pending (`registry_maintain.sh`).  **Stage-B remaining:** migrate
+  `tools/viewer` (uses markdown + input) to registry deps, then remove
+  `lib/{html,markdown,input}/` from the monorepo.  Surfaced + fixed the
+  `loft package` monorepo-URL bug (`[package] repository` field) — see
+  [PACKAGES.md](../../PACKAGES.md) / [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md).
 - **Consumer-side surface SHIPPED** (PR #238): `loft new <name>`
   scaffolder (with `--native` / `--chunk` flags); Phase 6.6
   auto-install on `use` + `loft pin` sidecar + walk-up

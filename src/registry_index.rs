@@ -738,6 +738,40 @@ pub fn extract_tarball(
     Ok(())
 }
 
+/// Render the registry catalog: one line per package — name, latest STABLE
+/// version (yanked + prereleases skipped, via `find_best_version`), and the
+/// one-line description.  Packages come out alphabetical (`packages` is a
+/// `BTreeMap`).  Backs `loft api --registry` (printed) and the
+/// `.loft/api/_available.api` discovery file, so an agent sees what it can
+/// `loft install`, not just what's already installed.
+#[must_use]
+pub fn render_catalog(index: &RegistryIndex) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# loft registry — {} available packages",
+        index.packages.len()
+    );
+    let _ = writeln!(
+        out,
+        "# install: `loft install <name>`   ·   surface: `loft api <name>`"
+    );
+    let _ = writeln!(out);
+    for (name, pkg) in &index.packages {
+        let latest = find_best_version(pkg, "*", false).map_or("?", |v| v.semver.as_str());
+        match pkg.description.as_deref() {
+            Some(d) if !d.is_empty() => {
+                let _ = writeln!(out, "{name} {latest} — {d}");
+            }
+            _ => {
+                let _ = writeln!(out, "{name} {latest}");
+            }
+        }
+    }
+    out
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -780,6 +814,23 @@ mod tests {
             }
         }
     }"#;
+
+    /// `render_catalog` lists each package with its latest STABLE version
+    /// (yanked + prereleases skipped) + description — the agent discovery view.
+    #[test]
+    fn render_catalog_shows_latest_stable() {
+        let index = parse_index(SAMPLE).expect("parse SAMPLE");
+        let cat = render_catalog(&index);
+        assert!(
+            cat.contains("# loft registry — 1 available packages"),
+            "header/count: {cat}"
+        );
+        // 0.1.0 is yanked, 0.2.0-beta is prerelease → latest stable is 0.1.1.
+        assert!(
+            cat.contains("crypto 0.1.1 — SHA-256 etc."),
+            "latest-stable + description line: {cat}"
+        );
+    }
 
     #[test]
     fn parses_triggers_field() {

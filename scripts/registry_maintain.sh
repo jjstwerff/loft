@@ -27,14 +27,15 @@
 #
 #   --dry-run        gather + print the worklist, change nothing
 #   --yes            skip the confirmation prompt
-#   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY)
+#   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY, else
+#                    ~/.loft/trust-root/registry-signing-key.bin)
 #   --registry-dir   existing loft-lang/registry checkout (default: temp clone)
 set -euo pipefail
 
 ORG=loft-lang
 DRY=0
 YES=0
-KEY="${LOFT_REGISTRY_KEY:-}"
+KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 REG_DIR="${LOFT_REGISTRY_DIR:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,6 +64,10 @@ if [ ! -x "$LOFT" ] || [ ! -x "$KEYGEN" ]; then
     echo "building loft + loft-keygen (release) ..."
     (cd "$here" && cargo build --release --bin loft --bin loft-keygen --features registry)
 fi
+
+# sha256 of a file via python3 (already a hard dep; avoids sha256sum-vs-shasum
+# portability differences across the laptops that sign).
+sha256_of() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 
 # ── gather ────────────────────────────────────────────────────────────────────
 
@@ -135,21 +140,98 @@ gh pr list -R "$ORG/registry" --state open \
     --jq '.[] | [.number, .author.login, ([.statusCheckRollup[]?.conclusion] | if length == 0 then "pending" elif all(. == "SUCCESS") then "green" else "red" end), .title] | @tsv' \
     > "$tmp/prs.tsv" 2> /dev/null || : > "$tmp/prs.tsv"
 
+# Branch hygiene: we already enumerate every family repo above, so surface their
+# stray branches here too — unmerged with no open PR (orphaned work to PR-or-delete)
+# and merged with no PR (prunable).  We shallow-clone only main, so this lists
+# branches via the API rather than checking them out.  Informational — never
+# blocks the publish/sign; it just nudges cleanup during a maintenance run.
+: > "$tmp/orphan_branches.txt"
+: > "$tmp/prunable_branches.txt"
+for r in $repos; do
+    pr_heads=$(gh pr list -R "$ORG/$r" --state open --json headRefName --jq '.[].headRefName' 2> /dev/null || true)
+    while read -r br; do
+        [ -n "$br" ] && [ "$br" != "main" ] || continue
+        printf '%s\n' "$pr_heads" | grep -qxF "$br" && continue   # has an open PR — in review
+        read -r ahead last <<< "$(gh api "repos/$ORG/$r/compare/main...$br" \
+            --jq '"\(.ahead_by) \(.commits[-1].commit.committer.date // "?")"' 2> /dev/null || echo '0 ?')"
+        # A squash-merged branch is "ahead" (its commits aren't individually on
+        # main) yet its work DID land — detect that via a merged PR so it's
+        # classed prunable, not orphaned.
+        merged=$(gh pr list -R "$ORG/$r" --state merged --head "$br" --json number --jq 'length' 2> /dev/null || echo 0)
+        if [ "${ahead:-0}" = 0 ] || [ "${merged:-0}" != 0 ]; then
+            echo "  $r/$br" >> "$tmp/prunable_branches.txt"
+        else
+            echo "  $r/$br ($ahead ahead, last ${last%%T*})" >> "$tmp/orphan_branches.txt"
+        fi
+    done < <(gh api "repos/$ORG/$r/branches?per_page=100" --jq '.[].name' 2> /dev/null || true)
+done
+
+# ── pre-flight: stale-release gate (runs BEFORE the worklist/prompt + in dry-run) ─
+# A worklist lib whose source on main moved past its `<name>-v<ver>` tag with no
+# version bump packages to bytes the EXISTING release tarball lacks — that fails
+# the sign-time integrity check.  Catch it here, before anything is shown or
+# confirmed, so the dry-run + the publish prompt reflect only what can actually be
+# signed, and each blocked lib is reported with what is wrong + how to fix it.
+# Only libs whose `<name>-v<ver>` release ALREADY exists can be stale; a missing
+# release is created from main by the publish loop, so it always matches.
+: > "$tmp/blocked.txt"
+: > "$tmp/work_ok.tsv"
+while IFS=$'\t' read -r name ver repo libdir _why; do
+    [ -n "$name" ] || continue
+    tag="$name-v$ver"
+    if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$repo" "$libdir" "$_why" >> "$tmp/work_ok.tsv"
+        continue
+    fi
+    # Build main's tarball + fetch the published one; compare.  On any error
+    # (can't package / can't download) keep the lib — the publish loop reports it.
+    if "$LOFT" package "$libdir" > /dev/null 2>&1 && [ -f "$libdir/$name-$ver.tar.gz" ] \
+       && gh release download "$tag" -R "$ORG/$repo" --pattern "$name-$ver.tar.gz" \
+              --dir "$tmp/dl_$name" --clobber 2>/dev/null \
+       && [ -f "$tmp/dl_$name/$name-$ver.tar.gz" ] \
+       && [ "$(sha256_of "$libdir/$name-$ver.tar.gz")" != "$(sha256_of "$tmp/dl_$name/$name-$ver.tar.gz")" ]; then
+        {
+          echo "  ✗ $name $ver — STALE RELEASE: published $name-$ver.tar.gz ≠ \`loft package\` of main."
+          echo "      Why: main has commits past tag $tag with no version bump, so its source no"
+          echo "           longer matches the $tag release artifact (would fail the sign-time check)."
+          echo "      Fix: bump $name in $repo's loft.toml + commit, then re-run (cuts a new"
+          echo "           tag/release); OR if main is releasable unchanged, delete the stale $tag"
+          echo "           release so it is re-cut from current main."
+        } >> "$tmp/blocked.txt"
+    else
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$repo" "$libdir" "$_why" >> "$tmp/work_ok.tsv"
+    fi
+done < "$tmp/work.tsv"
+mv "$tmp/work_ok.tsv" "$tmp/work.tsv"
+
 # ── the worklist ──────────────────────────────────────────────────────────────
 
 n_own=$(wc -l < "$tmp/work.tsv")
 n_prs=$(wc -l < "$tmp/prs.tsv")
+n_blocked=$(grep -c '✗' "$tmp/blocked.txt" 2>/dev/null || true); n_blocked=${n_blocked:-0}
 echo
 echo "== own libs to publish ($n_own) =="
 awk -F'\t' '{ printf "  %s %s (%s, %s)\n", $1, $2, $3, $5 }' "$tmp/work.tsv"
+if [ "$n_blocked" != 0 ]; then
+    echo "== blocked: stale release — fix + re-run, NOT published this run ($n_blocked) =="
+    cat "$tmp/blocked.txt"
+fi
 echo "== foreign submission PRs on $ORG/registry ($n_prs) =="
 awk -F'\t' '{ printf "  #%s by %s [%s] %s\n", $1, $2, $3, $4 }' "$tmp/prs.tsv"
 echo "== foreign upstream drift (informational) =="
 cat "$tmp/foreign_drift.txt"
+if [ -s "$tmp/orphan_branches.txt" ]; then
+    echo "== unmerged branches, no open PR (orphaned — PR or delete) =="
+    cat "$tmp/orphan_branches.txt"
+fi
+if [ -s "$tmp/prunable_branches.txt" ]; then
+    echo "== merged branches, no open PR (prunable) =="
+    cat "$tmp/prunable_branches.txt"
+fi
 echo
 
 if [ "$n_own" = 0 ] && [ "$n_prs" = 0 ]; then
-    echo "nothing to do — registry is current."
+    echo "nothing to do to publish — registry is current (see any branch hygiene above)."
     exit 0
 fi
 if [ "$DRY" = 1 ]; then
@@ -158,19 +240,37 @@ if [ "$DRY" = 1 ]; then
 fi
 if [ "$YES" != 1 ]; then
     n_green=$(awk -F'\t' '$3 == "green"' "$tmp/prs.tsv" | wc -l)
-    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s), then sign? [y/N] " a
+    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s)? (registry-sign then shows the diff to review + sign) [y/N] " a
     [ "$a" = y ] || [ "$a" = Y ] || { echo "aborted."; exit 1; }
 fi
 
 # ── execute ───────────────────────────────────────────────────────────────────
 
 # Merge the green foreign PRs FIRST so the registry pull below includes them.
+# RELIABILITY: a green (CI-passed) PR can still have MERGE CONFLICTS if main moved
+# since its CI run.  A failed `gh pr merge` must NOT abort the routine — `gh pr
+# merge` squash-commits the PR's index.json change to the remote, but the .sig is
+# only regenerated by the sign step at the very end; aborting here leaves the
+# registry with a changed index.json and a STALE signature (= "signature invalid
+# — refusing to load" for every consumer).  So skip the unmergeable PR, record
+# it, and carry on to the sign step, which re-signs the resulting index.
+SKIPPED_PRS=()
 while IFS=$'\t' read -r num _author state _title; do
-    if [ "$state" = green ]; then
-        echo "merging $ORG/registry#$num ..."
-        gh pr merge "$num" -R "$ORG/registry" --squash
-    else
+    if [ "$state" != green ]; then
         echo "skipping $ORG/registry#$num ($state — review by hand)"
+        continue
+    fi
+    mergeable=$(gh pr view "$num" -R "$ORG/registry" --json mergeable -q .mergeable 2>/dev/null || echo UNKNOWN)
+    if [ "$mergeable" = CONFLICTING ]; then
+        echo "⚠ skipping $ORG/registry#$num — merge conflict (main moved since CI); rebase or close it separately"
+        SKIPPED_PRS+=("#$num (conflict)")
+        continue
+    fi
+    echo "merging $ORG/registry#$num ..."
+    if ! gh pr merge "$num" -R "$ORG/registry" --squash 2>"$tmp/merge_$num.err"; then
+        echo "⚠ could not merge $ORG/registry#$num: $(head -1 "$tmp/merge_$num.err" 2>/dev/null); skipping"
+        SKIPPED_PRS+=("#$num (merge failed)")
+        continue
     fi
 done < "$tmp/prs.tsv"
 
@@ -205,60 +305,119 @@ for line in open(f"{tmp}/work.tsv"):
 open(f"{tmp}/work.tsv", "w").writelines(keep)
 EOF
 
+# sha256 of a file via python3 (already a hard dep; avoids sha256sum-vs-shasum
+# portability differences across the laptops that sign).
+sha256_of() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+
 # Publish each own lib: tarball → tag + release (created only when absent,
 # so re-runs are safe) → `loft publish` emits the verified index entry.
+# RELIABILITY: one own-lib that can't publish (missing release asset, package
+# error) must not abort the rest — skip it, record it, keep going so the others
+# publish and the index still gets signed.
 published=()
+SKIPPED_LIBS=()
 while IFS=$'\t' read -r name ver repo libdir _why; do
     echo "publishing $name $ver from $repo ..."
     tag="$name-v$ver"
     tarball="$libdir/$name-$ver.tar.gz"
-    "$LOFT" package "$libdir" > /dev/null
-    [ -f "$tarball" ] || { echo "  expected tarball $tarball missing" >&2; exit 1; }
-    if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
-        gh release create "$tag" "$tarball" -R "$ORG/$repo" \
-            --target "$(git -C "$tmp/$repo" rev-parse HEAD)" --title "$name v$ver"
+    if ! "$LOFT" package "$libdir" > /dev/null 2>&1 || [ ! -f "$tarball" ]; then
+        echo "  ⚠ package/tarball failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
     fi
-    "$LOFT" publish "$libdir" | grep -v '^#' > "$tmp/entry_$name.json"
-    # First-version packages also need a package block; take the description
-    # from the library README's first paragraph.
-    desc=$(awk '/^[^#[:space:]]/ { print; exit }' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
-    python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
-        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" <<'EOF'
+    if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
+        if ! gh release create "$tag" "$tarball" -R "$ORG/$repo" \
+            --target "$(git -C "$tmp/$repo" rev-parse HEAD)" --title "$name v$ver" 2>"$tmp/rel_$name.err"; then
+            echo "  ⚠ release create failed ($(head -1 "$tmp/rel_$name.err" 2>/dev/null)) — skipping $name $ver"
+            SKIPPED_LIBS+=("$name-$ver"); continue
+        fi
+    fi
+    # (Stale-release detection ran in the pre-flight gate before the prompt — a
+    # lib reaching this loop either matches its release or had none yet, which the
+    # create-from-main step above just produced.  registry-sign re-verifies every
+    # tarball as the trust-root backstop.)
+    if ! "$LOFT" publish "$libdir" > "$tmp/pub_$name.out" 2>"$tmp/pub_$name.err"; then
+        echo "  ⚠ loft publish failed ($(head -1 "$tmp/pub_$name.err" 2>/dev/null)) — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
+    fi
+    # The pasteable JSON entry is on stdout; `[publish]` status is on stderr (so
+    # do NOT merge with 2>&1).  Strip any #-comment / [publish] / blank line so
+    # only the `"<ver>": {…}` member remains — wrapping `{…}` + parsing it below
+    # choked on those trailing status lines otherwise.
+    grep -vE '^#|^\[publish\]|^[[:space:]]*$' "$tmp/pub_$name.out" > "$tmp/entry_$name.json"
+    # Description: prefer the OFFICIAL `[package] description` in loft.toml.  When
+    # present it is authoritative (refreshed on every publish below); absent, fall
+    # back to the README's first real prose line — skipping HTML/license comment
+    # blocks (`<!-- … -->`), markdown headings (`# …`), fenced code blocks
+    # (``` … ```), and `//` / `<` lines (the old "first non-# line" grabbed `<!--`
+    # as the description — see hex_world).  The README fallback only sets the
+    # description on FIRST publish; it never overwrites an existing one.
+    desc=$(sed -n 's/^[[:space:]]*description[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$tmp/$repo/$name/loft.toml" | head -1)
+    desc_src=manifest
+    if [ -z "$desc" ]; then
+        desc_src=readme
+        desc=$(awk '
+            /^[[:space:]]*<!--/ { inc=1 }
+            inc { if (/-->/) inc=0; next }
+            /^[[:space:]]*```/ { fence = !fence; next }
+            fence { next }
+            /^[[:space:]]*$/ { next }
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*(\/\/|<)/ { next }
+            { print; exit }
+        ' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
+    fi
+    if ! python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
+        "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" "$desc_src" <<'EOF'
 import json, sys
 
-index_path, name, ver, entry_path, homepage, desc = sys.argv[1:7]
+index_path, name, ver, entry_path, homepage, desc, desc_src = sys.argv[1:8]
 entry = json.loads("{%s}" % open(entry_path).read())[ver]
 index = json.load(open(index_path))
 pkg = index["packages"].setdefault(
     name, {"description": desc, "homepage": homepage, "categories": [], "yanked": [], "versions": {}}
 )
+# The official manifest description is authoritative — refresh it on every publish
+# so a corrected `[package] description` propagates.  A README-scraped fallback
+# only seeds a brand-new package (setdefault above); it never clobbers an
+# existing, possibly hand-curated, description.
+if desc_src == "manifest" and desc:
+    pkg["description"] = desc
 pkg["versions"][ver] = entry
-json.dump(index, open(index_path, "w"), indent=2)
+json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
+open(index_path, "a").write("\n")
 EOF
+    then
+        echo "  ⚠ index update failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
+    fi
     published+=("$name-$ver")
 done < "$tmp/work.tsv"
 
-if [ "${#published[@]}" -gt 0 ]; then
+# Summary — never drop a skip silently.
+if [ "${#SKIPPED_PRS[@]}" -gt 0 ] || [ "${#SKIPPED_LIBS[@]}" -gt 0 ] || [ "$n_blocked" != 0 ]; then
     echo
-    git -C "$REG_DIR" --no-pager diff --stat index.json
-    git -C "$REG_DIR" add index.json
+    echo "⚠ skipped (resolve + re-run to include): PRs: ${SKIPPED_PRS[*]:-none} | libs: ${SKIPPED_LIBS[*]:-none}"
+    if [ "$n_blocked" != 0 ]; then
+        echo "  stale releases excluded in pre-flight ($n_blocked) — bump version + re-release:"
+        cat "$tmp/blocked.txt"
+    fi
 fi
+
+echo
+git -C "$REG_DIR" --no-pager diff --stat index.json || true
 
 # ── sign + push ───────────────────────────────────────────────────────────────
-
-if [ -z "$KEY" ] || [ ! -f "$KEY" ]; then
-    echo
-    echo "no signing key (--key / LOFT_REGISTRY_KEY) — staged but NOT signed/pushed."
-    echo "on the machine holding the key, finish with:"
-    echo "  $KEYGEN sign --in $REG_DIR/index.json --key <keyfile> --out $REG_DIR/index.json.sig"
-    echo "  git -C $REG_DIR add index.json.sig && git -C $REG_DIR commit -m 'publish: ${published[*]:-}' && git -C $REG_DIR push"
-    exit 0
-fi
-"$KEYGEN" sign --in "$REG_DIR/index.json" --key "$KEY" --out "$REG_DIR/index.json.sig"
-git -C "$REG_DIR" add index.json index.json.sig
-git -C "$REG_DIR" commit -m "publish: ${published[*]:-PR merges only}"
-git -C "$REG_DIR" push
+# Delegate to registry-sign.sh — the SINGLE trust-root signer.  It stages
+# index.json + its .sig together (#377), shows the diff + re-verifies each
+# tarball's sha256, signs, runs `keygen verify`, then commits + pushes.  Keeping
+# one signer means the signing-safety rules (commit both, post-sign verify, key
+# default) live in exactly one place instead of drifting between two scripts.
+# Re-signing here is also what fixes a `gh pr merge` that changed index.json on
+# the remote without re-signing — the routine must never leave it unsigned.
+sign_args=(--registry-dir "$REG_DIR" --key "$KEY" --message "publish: ${published[*]:-PR merges / re-sign}")
+[ "$YES" = 1 ] && sign_args+=(--yes)
+"$here/scripts/registry-sign.sh" "${sign_args[@]}"
 
 echo
 echo "verifying — coverage check should now be clean:"
-"$here/scripts/check_registry_coverage.sh"
+# Check against the index we JUST pushed (local REG_DIR copy), not the CDN-cached
+# raw URL — otherwise a publish shows a spurious "stale" until the cache catches
+# up (the CDN serves the pre-push index for a few minutes).
+"$here/scripts/check_registry_coverage.sh" --index "$REG_DIR/index.json"

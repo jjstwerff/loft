@@ -176,8 +176,11 @@ fn print_help() {
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
     println!("  api [name]                    discover library APIs without leaving the shell:");
-    println!("                                api        — list libraries reachable from here");
-    println!("                                api <name> — print its public API surface");
+    println!("                                api            — list libraries reachable from here");
+    println!("                                api <name>     — print its public API surface");
+    println!(
+        "                                api --registry [--refresh] — the whole installable catalog"
+    );
     println!("                                (pub signatures + doc comments, bodies stripped)");
     println!("  audit                         check every installed package against the");
     println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
@@ -732,6 +735,31 @@ fn api_command(target: Option<&str>) {
     println!("`loft api <name>` prints a library's public API (signatures + doc comments).");
 }
 
+/// `loft api --registry` — list the whole installable catalog from the registry
+/// index (so an agent can discover what EXISTS, not just what's installed).
+/// Mirrors `loft search`'s trust posture (`allow_unsigned: true`): a *missing*
+/// signature is tolerated, but an *invalid* one still hard-fails.
+#[cfg(feature = "registry")]
+fn api_registry_catalog(refresh: bool) {
+    // The catalog is cached with a 1-hour TTL; `--refresh` forces a re-fetch so an
+    // agent sees registry changes (new packages, fixed descriptions) immediately
+    // rather than waiting out the TTL.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    match loft_install_load_index(&opts) {
+        Ok(index) => print!("{}", loft::registry_index::render_catalog(&index)),
+        Err(e) => {
+            eprintln!("loft api --registry: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// PKG.STUB — write `.loft/api/<name>.api` stubs (the public surface of every
 /// locked dependency) under `project_dir`.  Called by the lockfile-writing
 /// commands, so stub freshness rides the same trigger as `loft.lock` itself:
@@ -766,6 +794,25 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
         println!(
             "wrote {written} API stub(s) to {} (agent-readable; commit them)",
             api_dir.display()
+        );
+    }
+
+    // Alongside the per-dep stubs, write the registry CATALOG (_available.api) so
+    // an agent reading `.loft/api/` sees not just what the project depends on but
+    // everything else it could `loft install`.  Best-effort + cache-first: if the
+    // index can't load (offline / invalid signature) just skip — the install
+    // already succeeded, and discovery is a convenience, never a blocker.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    if let Ok(index) = loft_install_load_index(&opts) {
+        let _ = std::fs::write(
+            api_dir.join("_available.api"),
+            loft::registry_index::render_catalog(&index),
         );
     }
 }
@@ -1529,6 +1576,7 @@ fn escape_json_string(s: &str) -> String {
 /// <name>/
 /// ├── loft.toml           — package manifest with [package] + [library]
 /// ├── README.md           — placeholder header pointing at the registry
+/// ├── release.sh          — one-command release: bump → test → tag → package → GH release
 /// ├── src/<name>.loft     — empty entry file with a `pub fn hello()` stub
 /// └── tests/
 ///     └── 01-smoke.loft   — single `test_smoke` exercising the stub
@@ -1580,13 +1628,15 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     // loft.toml — includes [native] declaration when --native.
     let loft_toml = if native {
         format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+             description = \"One-line description of {name}.\"\n\n\
              [library]\nentry = \"src/{name}.loft\"\nnative = \"loft_{name}\"\n\n\
              [native]\ncrate = \"loft-{name}\"\n\n[dependencies]\n"
         )
     } else {
         format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\n\
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nloft = \">=0.8\"\n\
+             description = \"One-line description of {name}.\"\n\n\
              [library]\nentry = \"src/{name}.loft\"\n\n[dependencies]\n"
         )
     };
@@ -1625,11 +1675,115 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
          ```\n"
     );
 
+    // release.sh — one command to cut a release: bump → test → tag → package →
+    // GitHub release, with immutability + deterministic-package gates.  A plain
+    // &str (no interpolation): it reads name + version from loft.toml at runtime.
+    let release_sh = r#"#!/usr/bin/env bash
+# release.sh — cut a release of THIS loft library so the registry can publish it.
+# Run from the library directory (the one containing loft.toml).
+#
+#   ./release.sh            # release the version currently in loft.toml
+#   ./release.sh 0.2.0      # set loft.toml to 0.2.0, commit, then release
+#
+# Reads name + version from loft.toml, runs the test gate + a determinism check,
+# commits any version bump, tags <name>-v<version>, pushes the branch + tag,
+# packages the tarball, and creates the GitHub release.  Releases are immutable:
+# it refuses to re-cut an existing tag — bump the version instead.
+#
+# After a successful release:
+#   * loft-lang family lib -> run scripts/registry_maintain.sh in loft-lang/loft
+#     (publishes every stale/missing own lib + signs the registry index).
+#   * external lib         -> `loft publish` then open a registry PR
+#     (see LIBRARY_AUTHORING.md / REGISTRY_SUBMIT.md).
+#
+# Env: LOFT=/path/to/loft to use a non-PATH binary; SKIP_NATIVE=1 to skip the
+#      `loft --native test` gate (e.g. no Rust toolchain on this machine).
+set -euo pipefail
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+LOFT="${LOFT:-loft}"
+sha()   { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+field() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\".*/\1/p" loft.toml | head -1; }
+
+[ -f loft.toml ] || { echo "release.sh: no loft.toml here — run from the library dir." >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { echo "release.sh: needs the GitHub CLI (gh)." >&2; exit 1; }
+
+# Push without a username/password prompt by reusing your gh login as git's
+# credential helper (HTTPS remotes); harmless on SSH remotes (which use your
+# key).  `gh release create` works via gh's API auth, but plain `git push` uses
+# git's credential system — without a helper it prompts, and GitHub no longer
+# accepts a password there.  GIT_TERMINAL_PROMPT=0 fails fast instead of hanging.
+export GIT_TERMINAL_PROMPT=0
+gitpush() {
+    git -c credential.helper='!gh auth git-credential' push "$@" || {
+        echo "release.sh: git push failed — set up auth once with 'gh auth setup-git'," >&2
+        echo "             or use an SSH remote (git@github.com:OWNER/REPO.git)." >&2
+        exit 1
+    }
+}
+name=$(field name); [ -n "$name" ] || { echo "release.sh: no package name in loft.toml." >&2; exit 1; }
+
+# Optional version bump.
+if [ "${1:-}" != "" ]; then
+    case "$1" in
+        [0-9]*.[0-9]*.[0-9]*) : ;;
+        *) echo "release.sh: '$1' is not an x.y.z version." >&2; exit 1 ;;
+    esac
+    tmp=$(mktemp)
+    awk -v v="$1" '!d && /^[[:space:]]*version[[:space:]]*=/ {sub(/"[^"]*"/, "\"" v "\""); d=1} {print}' loft.toml >"$tmp"
+    mv "$tmp" loft.toml
+fi
+ver=$(field version); [ -n "$ver" ] || { echo "release.sh: no version in loft.toml." >&2; exit 1; }
+tag="$name-v$ver"
+echo "== releasing $name $ver ($tag) =="
+
+# Immutability — never re-cut an existing release; bump the version instead.
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 || gh release view "$tag" >/dev/null 2>&1; then
+    echo "release.sh: $tag already exists. Bump first: ./release.sh <new x.y.z>" >&2
+    exit 1
+fi
+
+# Gate 1 — tests pass (both backends unless SKIP_NATIVE=1).
+echo "-- loft test"; "$LOFT" test
+if [ "${SKIP_NATIVE:-}" != 1 ]; then echo "-- loft --native test (SKIP_NATIVE=1 to skip)"; "$LOFT" --native test; fi
+
+# Commit the bump FIRST so the tag points at exactly the bytes we package.
+if ! git diff --quiet -- loft.toml; then git add loft.toml && git commit -m "release: $name $ver"; fi
+git diff --quiet && git diff --cached --quiet || {
+    echo "release.sh: uncommitted changes — commit them so the tag matches the release." >&2; exit 1; }
+
+# Gate 2 — packaging is deterministic (two clean builds must hash equal); this is
+# the registry's gate-3 reproducible-build invariant, checked locally first.
+"$LOFT" package >/dev/null; a=$(sha "$name-$ver.tar.gz"); rm -f "$name-$ver.tar.gz"
+"$LOFT" package >/dev/null; b=$(sha "$name-$ver.tar.gz")
+[ "$a" = "$b" ] || { echo "release.sh: non-deterministic package ($a != $b)." >&2; rm -f "$name-$ver.tar.gz"; exit 1; }
+
+git tag "$tag"
+gitpush origin HEAD
+gitpush origin "$tag"
+gh release create "$tag" "$name-$ver.tar.gz" --title "$name v$ver" --notes "Release $name $ver."
+rm -f "$name-$ver.tar.gz"
+
+echo
+echo "released $tag."
+echo "  loft-lang family lib -> run scripts/registry_maintain.sh in loft-lang/loft."
+echo "  external lib         -> loft publish + open a registry PR."
+"#;
+
     if let Err(e) = (|| -> std::io::Result<()> {
         write_file("loft.toml", &loft_toml)?;
         write_file(&format!("src/{name}.loft"), &src_loft)?;
         write_file("tests/01-smoke.loft", &test_loft)?;
         write_file("README.md", &readme)?;
+        write_file("release.sh", release_sh)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let p = pkg_dir.join("release.sh");
+            let mut perm = std::fs::metadata(&p)?.permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&p, perm)?;
+        }
         if native {
             let cargo_toml = format!(
                 "[package]\nname = \"loft-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"LGPL-3.0-or-later\"\n\n\
@@ -1687,6 +1841,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     println!("  src/{name}.loft");
     println!("  tests/01-smoke.loft");
     println!("  README.md");
+    println!("  release.sh");
     if native {
         println!("  native/Cargo.toml");
         println!("  native/build.rs");
@@ -1700,7 +1855,7 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     println!("  cd {name}");
     println!("  loft test           # exercises the smoke test");
     println!("  $EDITOR src/{name}.loft   # add your library's API");
-    println!("  loft publish        # when ready to ship (after tag + GH release)");
+    println!("  ./release.sh        # when ready: test -> tag -> package -> GH release");
     0
 }
 
@@ -3798,8 +3953,13 @@ fn main() {
             // print one library's public surface.
             #[cfg(feature = "registry")]
             {
-                let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
-                api_command(target.as_deref());
+                if argv[i..].iter().any(|s| s == "--registry") {
+                    let refresh = argv[i..].iter().any(|s| s == "--refresh");
+                    api_registry_catalog(refresh);
+                } else {
+                    let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
+                    api_command(target.as_deref());
+                }
                 return;
             }
             #[cfg(not(feature = "registry"))]
