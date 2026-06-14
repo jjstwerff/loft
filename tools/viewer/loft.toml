@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 #
 # @PLAN12 Phase 6b — loft.toml for the branch-review viewer tool
-# (`tools/viewer/`).  Uses `server` for the HTTP serving and the
-# monorepo `markdown` library for content rendering.
+# (`tools/viewer/`).  Uses the registry `server` library for HTTP serving and
+# the registry `markdown` library for content rendering.
 
 [package]
 name    = "loft_viewer"
@@ -15,4 +15,4 @@ entry = "src/main.loft"
 
 [dependencies]
 server   = ">=0.1"
-markdown = { path = "../../lib/markdown" }
+markdown = ">=0.1"

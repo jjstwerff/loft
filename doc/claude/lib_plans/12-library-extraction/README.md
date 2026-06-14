@@ -20,9 +20,25 @@ status + the forward path only.**
 
 ## Status
 
-**ACTIVE.**  Trigger (2026-05-23): @P321c showed the project kept
-re-adding library code to the compiler crate; the plan reframed to
-**drain what's there** and extract by chunk.
+**FINISHED 2026-06-14.**  The drain goal is met: every shared-registry package
+is extracted to its `loft-libs-*` chunk and installable; the monorepo carries no
+`lib/<pkg>/` directory for any extracted package.  The last three — `html`,
+`input`, `markdown` — completed Stage B on 2026-06-14 (`tools/viewer` migrated to
+the registry `markdown`, the `lib/` dirs removed, gates green).  Two items are
+**out of this plan's registry-drain scope** and routed to their canonical homes:
+
+- **`engine_host`** → the engine/lavition layer (@PLN18 `run_local`/`run`) — it
+  is engine core, not a shared-registry library; it leaves `lib/` when the engine
+  layer firms up.
+- **Prebuilt-native cdylib distribution** (toolchain-free consumers of the native
+  chunks) → **@PLN21**.
+
+`audience_crystal` *stays* by design (the documented monorepo-paired fixture),
+and the loose `lib/*.loft` files are monorepo-internal, not extracted packages.
+
+Trigger (2026-05-23): @P321c showed the project kept re-adding library code to
+the compiler crate; the plan reframed to **drain what's there** and extract by
+chunk.
 
 Shipped so far:
 
@@ -123,7 +139,7 @@ registry — the destination depends on what *kind* of code it is:
 
 | Still in `lib/` | Where it goes |
 |---|---|
-| `html`, `input`, `markdown` | **External registry chunk** (same Stage-A/B flow as the others) — the genuine remaining extraction candidates. |
+| ~~`html`, `input`, `markdown`~~ | **✅ EXTRACTED 2026-06-14** — `html`/`markdown` → `loft-libs-docs`, `input` → `loft-libs-game`; published + installable, `lib/` dirs removed (Stage B), `tools/viewer` migrated to the registry `markdown`. |
 | ~~`moros_map`, `moros_render`, `moros_sim`, `moros_editor`, `moros_ui`~~ | **✅ MOVED 2026-06-14** to the moros project's own repo (`workspace/moros/lib/`) — game-specific code belongs with the game, not the shared registry.  All 5 packages + their tests left `lib/`; loft keeps fixture clones of the 3 it exercises in its own feature tests (`tests/fixtures/libs/{moros_map,moros_editor,moros_render}`, the same pattern as the graphics/imaging extraction) — the leak, `--html`/WASM, GLB-exit-code, and per-library-namespace (@P379) guards retarget to those.  The substrate-lift framing (hex/chunk → `hex_grid`, already in `loft-libs-world`) was the *option* moros never adopted; it shipped with its own `Hex`/`Chunk` and a possible later migration to the shared `hex_grid` is the moros project's call. |
 | `engine_host` | **Engine-layer kernel** (@PLN18 `run_local`/`run`/`run_client`) — belongs with the engine, not the shared registry; exact destination settles as the engine / lavition layer firms up. |
 | `audience_crystal` | **Stays** as the monorepo-paired test/demo fixture (the standing exception in § Goal) — the prototype that seeded `gridmesh`. |
