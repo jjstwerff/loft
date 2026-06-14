@@ -27,14 +27,15 @@
 #
 #   --dry-run        gather + print the worklist, change nothing
 #   --yes            skip the confirmation prompt
-#   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY)
+#   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY, else
+#                    ~/.loft/trust-root/registry-signing-key.bin)
 #   --registry-dir   existing loft-lang/registry checkout (default: temp clone)
 set -euo pipefail
 
 ORG=loft-lang
 DRY=0
 YES=0
-KEY="${LOFT_REGISTRY_KEY:-}"
+KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 REG_DIR="${LOFT_REGISTRY_DIR:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -266,7 +267,8 @@ pkg = index["packages"].setdefault(
     name, {"description": desc, "homepage": homepage, "categories": [], "yanked": [], "versions": {}}
 )
 pkg["versions"][ver] = entry
-json.dump(index, open(index_path, "w"), indent=2)
+json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
+open(index_path, "a").write("\n")
 EOF
     then
         echo "  ⚠ index update failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
