@@ -65,6 +65,10 @@ if [ ! -x "$LOFT" ] || [ ! -x "$KEYGEN" ]; then
     (cd "$here" && cargo build --release --bin loft --bin loft-keygen --features registry)
 fi
 
+# sha256 of a file via python3 (already a hard dep; avoids sha256sum-vs-shasum
+# portability differences across the laptops that sign).
+sha256_of() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+
 # ── gather ────────────────────────────────────────────────────────────────────
 
 echo "fetching registry index ..."
@@ -136,13 +140,56 @@ gh pr list -R "$ORG/registry" --state open \
     --jq '.[] | [.number, .author.login, ([.statusCheckRollup[]?.conclusion] | if length == 0 then "pending" elif all(. == "SUCCESS") then "green" else "red" end), .title] | @tsv' \
     > "$tmp/prs.tsv" 2> /dev/null || : > "$tmp/prs.tsv"
 
+# ── pre-flight: stale-release gate (runs BEFORE the worklist/prompt + in dry-run) ─
+# A worklist lib whose source on main moved past its `<name>-v<ver>` tag with no
+# version bump packages to bytes the EXISTING release tarball lacks — that fails
+# the sign-time integrity check.  Catch it here, before anything is shown or
+# confirmed, so the dry-run + the publish prompt reflect only what can actually be
+# signed, and each blocked lib is reported with what is wrong + how to fix it.
+# Only libs whose `<name>-v<ver>` release ALREADY exists can be stale; a missing
+# release is created from main by the publish loop, so it always matches.
+: > "$tmp/blocked.txt"
+: > "$tmp/work_ok.tsv"
+while IFS=$'\t' read -r name ver repo libdir _why; do
+    [ -n "$name" ] || continue
+    tag="$name-v$ver"
+    if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$repo" "$libdir" "$_why" >> "$tmp/work_ok.tsv"
+        continue
+    fi
+    # Build main's tarball + fetch the published one; compare.  On any error
+    # (can't package / can't download) keep the lib — the publish loop reports it.
+    if "$LOFT" package "$libdir" > /dev/null 2>&1 && [ -f "$libdir/$name-$ver.tar.gz" ] \
+       && gh release download "$tag" -R "$ORG/$repo" --pattern "$name-$ver.tar.gz" \
+              --dir "$tmp/dl_$name" --clobber 2>/dev/null \
+       && [ -f "$tmp/dl_$name/$name-$ver.tar.gz" ] \
+       && [ "$(sha256_of "$libdir/$name-$ver.tar.gz")" != "$(sha256_of "$tmp/dl_$name/$name-$ver.tar.gz")" ]; then
+        {
+          echo "  ✗ $name $ver — STALE RELEASE: published $name-$ver.tar.gz ≠ \`loft package\` of main."
+          echo "      Why: main has commits past tag $tag with no version bump, so its source no"
+          echo "           longer matches the $tag release artifact (would fail the sign-time check)."
+          echo "      Fix: bump $name in $repo's loft.toml + commit, then re-run (cuts a new"
+          echo "           tag/release); OR if main is releasable unchanged, delete the stale $tag"
+          echo "           release so it is re-cut from current main."
+        } >> "$tmp/blocked.txt"
+    else
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$repo" "$libdir" "$_why" >> "$tmp/work_ok.tsv"
+    fi
+done < "$tmp/work.tsv"
+mv "$tmp/work_ok.tsv" "$tmp/work.tsv"
+
 # ── the worklist ──────────────────────────────────────────────────────────────
 
 n_own=$(wc -l < "$tmp/work.tsv")
 n_prs=$(wc -l < "$tmp/prs.tsv")
+n_blocked=$(grep -c '✗' "$tmp/blocked.txt" 2>/dev/null || true); n_blocked=${n_blocked:-0}
 echo
 echo "== own libs to publish ($n_own) =="
 awk -F'\t' '{ printf "  %s %s (%s, %s)\n", $1, $2, $3, $5 }' "$tmp/work.tsv"
+if [ "$n_blocked" != 0 ]; then
+    echo "== blocked: stale release — fix + re-run, NOT published this run ($n_blocked) =="
+    cat "$tmp/blocked.txt"
+fi
 echo "== foreign submission PRs on $ORG/registry ($n_prs) =="
 awk -F'\t' '{ printf "  #%s by %s [%s] %s\n", $1, $2, $3, $4 }' "$tmp/prs.tsv"
 echo "== foreign upstream drift (informational) =="
@@ -249,34 +296,10 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
             SKIPPED_LIBS+=("$name-$ver"); continue
         fi
     fi
-    # Early per-lib integrity gate — catch a stale release BEFORE the sign step.
-    # The published release tarball must byte-match the one we just built from
-    # main.  They diverge when main has commits past the `<name>-v<ver>` tag with
-    # NO version bump: `loft package` then produces bytes the published release
-    # lacks.  Deferred to the sign step this fails the WHOLE batch's integrity
-    # check (all-or-nothing, and you only learn which lib by scrolling); here we
-    # catch it per-lib, skip only this one, and say exactly what is wrong + how to
-    # fix it, so the others still publish + sign.  A release we just created above
-    # always matches — this only fires on a pre-existing, now-stale release.
-    asset="$name-$ver.tar.gz"
-    if gh release download "$tag" -R "$ORG/$repo" --pattern "$asset" \
-           --dir "$tmp/dl_$name" --clobber 2>/dev/null && [ -f "$tmp/dl_$name/$asset" ]; then
-        local_sha=$(sha256_of "$tarball")
-        rel_sha=$(sha256_of "$tmp/dl_$name/$asset")
-        if [ "$local_sha" != "$rel_sha" ]; then
-            echo "  ✗ $name $ver: STALE RELEASE — published $asset ≠ \`loft package\` of main."
-            echo "      published $tag : ${rel_sha:0:16}…"
-            echo "      main \`loft package\` : ${local_sha:0:16}…"
-            echo "      Why: main has commits past tag $tag with no version bump, so its source no"
-            echo "           longer matches the $tag release artifact (would fail the sign-time"
-            echo "           integrity check for the whole batch)."
-            echo "      Fix: bump $name in $repo's loft.toml + commit, then re-run — registry_maintain"
-            echo "           cuts the new tag/release.  OR, only if main is releasable unchanged,"
-            echo "           delete the stale $tag release so it is re-cut from current main."
-            SKIPPED_LIBS+=("$name-$ver (stale release — bump version + re-release)")
-            continue
-        fi
-    fi
+    # (Stale-release detection ran in the pre-flight gate before the prompt — a
+    # lib reaching this loop either matches its release or had none yet, which the
+    # create-from-main step above just produced.  registry-sign re-verifies every
+    # tarball as the trust-root backstop.)
     if ! "$LOFT" publish "$libdir" > "$tmp/pub_$name.out" 2>"$tmp/pub_$name.err"; then
         echo "  ⚠ loft publish failed ($(head -1 "$tmp/pub_$name.err" 2>/dev/null)) — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
     fi
@@ -309,9 +332,13 @@ EOF
 done < "$tmp/work.tsv"
 
 # Summary — never drop a skip silently.
-if [ "${#SKIPPED_PRS[@]}" -gt 0 ] || [ "${#SKIPPED_LIBS[@]}" -gt 0 ]; then
+if [ "${#SKIPPED_PRS[@]}" -gt 0 ] || [ "${#SKIPPED_LIBS[@]}" -gt 0 ] || [ "$n_blocked" != 0 ]; then
     echo
     echo "⚠ skipped (resolve + re-run to include): PRs: ${SKIPPED_PRS[*]:-none} | libs: ${SKIPPED_LIBS[*]:-none}"
+    if [ "$n_blocked" != 0 ]; then
+        echo "  stale releases excluded in pre-flight ($n_blocked) — bump version + re-release:"
+        cat "$tmp/blocked.txt"
+    fi
 fi
 
 echo
