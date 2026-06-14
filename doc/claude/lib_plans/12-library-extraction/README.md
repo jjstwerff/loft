@@ -32,9 +32,12 @@ Shipped so far:
   list, `tests/extraction_hygiene.rs` locks the boundary.
 - **Registry code complete** (Phase 3, PKG_REGISTRY.md R1–R9):
   `loft package` / `install` / `search` / `info`, lockfile, signing.
-  Ecosystem bootstrapped with interim `K_tmp` (YubiKey `K_real` swap
-  is a later Scenario-C rotation; do not ship a public release with
-  `K_tmp` embedded).
+- **Trust root BOOTSTRAPPED with `K_real`** (PR #371, 2026-06-14) — the
+  interim-`K_tmp` plan is superseded: `TRUSTED_PUBLIC_KEYS` now embeds
+  **three independent keys** (1 software laptop + 2 on-card YubiKeys), the
+  live index is signed, and `scripts/registry-sign.sh` is the review-then-sign
+  path ([REGISTRY_BOOTSTRAP.md](../../REGISTRY_BOOTSTRAP.md)).  Fully active on
+  the next loft release.
 - **`loft-libs-core` SHIPPED** (Phase 4): `arguments`, `random`,
   `crypto` published + installable end-to-end; their `lib/` dirs are
   removed from the monorepo (residual `lib/random/native/target/`
@@ -74,6 +77,19 @@ Shipped so far:
   `LIBRARY_AUTHORING.md` end-to-end author guide; Phase 6.14
   `loft doc` + canonical `library-ci.yml` gh-pages step;
   Phase 6.15 `scripts/gen_library_catalog.py` catalog generator.
+
+Remaining for the externalised **native** libs (`graphics`, `imaging`, `web`,
+`server`) — the "no rustc to *use* them" piece:
+
+- **Native prebuilt distribution** (@PLN21).  Today a consumer without a prebuilt
+  compiles the library's cdylib from source on first use (needs rustc + dev
+  headers).  @PLN21's producer (`loft build-native` + `prebuild-native.yml`) and
+  consumer (`fetch_prebuilt` + `resolve_native_lib`) both ship; the open step is
+  the **publish glue** that seeds `index.json binaries[<triple>]` from a release's
+  cdylib assets (per-repo caller workflow → `gh release upload` → signed index
+  entry).  Scoped to hand-written native libs (auto-compiled libs are
+  loft-build-locked).  Concrete steps: [plans/21 § Starting distribution](../../plans/21-prebuilt-native-libs/README.md#starting-distribution--the-publish-glue-remaining-critical-path-step-2026-06-14).
+  This is what makes an extracted native chunk fully toolchain-free for consumers.
 
 Recently corrected (this README was stale before 2026-05-26):
 
