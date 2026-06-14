@@ -200,9 +200,10 @@ ceremony — and fix PHP's weaknesses.
 **The stack + its plans (the critical path, in build order):**
 
 1. **@PLN24 — the `#c` direct C-ABI tier.**  Bind a C library straight from loft
-   with **no rustc** (libffi in loft-core; pure-loft `#c` decls + optional
-   `cc`-compiled ANSI-C shims).  Foundational — unblocks the DB layer and every
-   future C binding.  **Native-only by nature** (wasm has no C ABI / `dlopen`).
+   with **no rustc and no libffi** (a small fixed per-arity C-ABI caller in
+   loft-core; pure-loft `#c` decls + optional `cc`-compiled ANSI-C shims).
+   Foundational — unblocks the DB layer and every future C binding.
+   **Native-only by nature** (wasm has no C ABI / `dlopen`).
 2. **@PLN23 — MariaDB + PostgreSQL clients**, uniform API (prepared statements,
    transactions, bulk-edits) over `#c`.  PHP's killer feature; loft's biggest
    current gap.
@@ -219,9 +220,9 @@ compression, crypto, BLAS, and C UI toolkits as later riders.  That is the
 sub-feature.
 
 **Keep the loft side minimal — just the tooling to link.**  loft-core gains only
-a *generic linking tool* (the `#c` annotation + a `dlopen`/libffi runtime caller
-+ the smallest viable marshalling); it carries **zero** database or per-library
-knowledge.  All complexity — type-specific conversions, structs/callbacks, the
+a *generic linking tool* (the `#c` annotation + a `dlopen` + fixed per-arity
+C-ABI caller, no libffi + the smallest viable marshalling); it carries **zero**
+database or per-library knowledge.  All complexity — type-specific conversions, structs/callbacks, the
 SQL + result-set logic — lives in the libraries (loft `#c` decls + `cc`-compiled
 ANSI-C shims).  The shim is the deliberate sink for complexity, so the success
 test for the `#c` work is *how little it adds to loft-core* — same ethos as
