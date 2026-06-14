@@ -59,6 +59,20 @@ since dryopea and bumper both consume it.
   6-step migration plan to `world::load_mapfile()` for when the
   consumer stall lifts.  Schema is currently enforced by
   `lib/moros_map`'s `Map` struct (the contract names what's there).
+- **The moros stack LOADS again (2026-06-14).**  The deep
+  `moros_ui → moros_sim → moros_render/moros_editor → moros_map` diamond
+  pushes `moros_map` to a high source number, which had broken
+  cross-package type resolution on pass 1 — the load failed outright.
+  Fixed in the compiler (a class of "pass 1 hard-errors on a still-
+  resolving cross-package reference instead of deferring to pass 2"
+  bugs: #375 field resolution, #373 forward-ref struct layout, and the
+  `&`-param addressability / work-buffer / `change_var_type` sites).
+  The full stack now loads clean and **all 427 moros library tests pass
+  on the interpreter** (moros_map 51, moros_editor 44, moros_render 154,
+  moros_sim 137, moros_ui 41); `moros_map`/`moros_editor` (no graphics
+  dep) also pass on `--native`.  This was the standing prerequisite for
+  validating the split against the real consumer — the split work below
+  can now proceed against a loadable, test-green moros.
 
 **Remaining work — UNBLOCKED today (re-evaluated 2026-05-29):**
 
