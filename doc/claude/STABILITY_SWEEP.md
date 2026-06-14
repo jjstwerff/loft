@@ -435,7 +435,7 @@ rebuild it with
 |---|---|---|
 | ~~`vector.rs:331`~~ | ~~`132-vector-elemset-inline-literal-uaf`~~ | **FIXED 2026-06-14** — see below |
 | `codegen.rs:1871` | `166-p390-self-slice-assign` | **VERIFIED over-strict 2026-06-14** — see below |
-| `codegen.rs:2560` | `examples/collections.loft` | **Bug 1 (empty `{}`) FIXED 2026-06-14; bug 2 (dup-key vector+hash) design-level, documented** — see below |
+| ~~`codegen.rs:2560`~~ | ~~`examples/collections.loft`~~ | **Both bugs FIXED 2026-06-14** (empty `{}` + dup-key vector+hash) — see below |
 | `compile.rs:306` | `75-native-stub` | now clean on the rebuilt armed binary (the native-stub panic is that test's SUBJECT — expected-fail by design) |
 | `control.rs:3487` (pass-2 growth) | `298-multi-return-site-ref-buffer` | the mapped arity-cascade class (see THE FIND above) |
 
@@ -482,19 +482,22 @@ these with `./target/debug/loft --tests <file>` on the armed binary — the CLI
     `tests/scripts/373-empty-braces-collection-field.loft`.
 
   - **Bug 2 — duplicate hash key in a vector+hash sibling pair corrupts the
-    vector. DESIGN-LEVEL, NOT fixed.**  `Stores::field` (`src/database/types.rs`
-    ~149) deliberately LINKS an index-type field (`hash`/`sorted`/`index`) to a
-    same-content sibling field via `other_indexes` — the "two views share records"
-    secondary-index pattern (append to `vector<Word>` auto-maintains the
-    `hash<Word[text]>` index).  Sound ONLY with UNIQUE keys: a duplicate key
-    (`["apple","banana","apple"]`) makes the hash replace/free the first record
-    while the vector still holds it → element [0] reads null / `Unknown record`.
-    Requires same struct + same element type + a `hash` sibling (not `sorted`) +
-    a key-field duplicate (matrix-confirmed; hash elsewhere or distinct keys are
-    clean).  Collides with loft's single-ownership model (no rc) — needs a design
-    round (who owns a shared record; what a duplicate key should do).  The example
-    was rewritten to the correct pattern: `[]` inits + DISTINCT keys; works on both
-    backends.
+    vector. FIXED.**  `Stores::field` (`src/database/types.rs` ~149) deliberately
+    LINKS an index-type field (`hash`/`sorted`/`index`) to a same-content sibling
+    field via `other_indexes` — the "two views share records" secondary-index
+    pattern (append to `vector<Word>` auto-maintains the `hash<Word[text]>`
+    index).  A duplicate key (`["apple","banana","apple"]`) routed through
+    `dedup_keyed`, which DELETED the displaced record to enforce the hash's
+    unique-key invariant — but the vector still held it positionally → element [0]
+    read null / `Unknown record` SIGSEGV (matrix: same struct + same element type
+    + a `hash` sibling (not `sorted`) + a KEY-field duplicate; hash elsewhere or
+    distinct keys were clean).  Fix (`src/database/search.rs` `dedup_keyed` gains a
+    `secondary` flag; `structures.rs` `record_finish` passes `true` for the
+    `other_indexes` loop): a SECONDARY index only UNLINKS the stale key→record
+    mapping, never deletes the record — the `other_indexes` analogue of @P305's
+    `keyed_field_is_linked` update-only path.  Semantics: the vector keeps every
+    record (insertion order, duplicates included); the hash keeps one per key, the
+    latest appended.  Regression `tests/scripts/374-vector-hash-sibling-dup-key.loft`.
 
 **The `store.rs:1640` row (7 files) is RESOLVED 2026-06-12** — the
 "keyed armed UAF" was not a use-after-free; the one assert site hid

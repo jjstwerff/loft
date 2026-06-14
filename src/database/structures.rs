@@ -75,7 +75,7 @@ impl Stores {
             self.field_type(parent_tp, field)
         };
         let d = self.field_ref(data, parent_tp, field);
-        self.insert_record(&d, rec, tp);
+        self.insert_record(&d, rec, tp, false);
         if field != u16::MAX
             && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 self.types[parent_tp as usize].parts.clone()
@@ -85,7 +85,9 @@ impl Stores {
             if !o.is_empty() && o[0] != u16::MAX {
                 for fld_nr in o {
                     let o = self.field_ref(data, parent_tp, *fld_nr);
-                    self.insert_record(&o, rec, fields[*fld_nr as usize].content);
+                    // Secondary index for a sibling field — index-only, never
+                    // delete the displaced record (the primary collection owns it).
+                    self.insert_record(&o, rec, fields[*fld_nr as usize].content, true);
                 }
             }
         }
@@ -130,7 +132,7 @@ impl Stores {
         }
     }
 
-    pub(super) fn insert_record(&mut self, data: &DbRef, rec: &DbRef, tp: u16) {
+    pub(super) fn insert_record(&mut self, data: &DbRef, rec: &DbRef, tp: u16, secondary: bool) {
         match self.types[tp as usize].parts.clone() {
             Parts::Vector(_) => {
                 vector::vector_finish(data, &mut self.allocations);
@@ -152,14 +154,14 @@ impl Stores {
             }
             Parts::Hash(c, _) => {
                 // @P306 — replace any existing record with this key (dedup).
-                self.dedup_keyed(data, rec, tp, c);
+                self.dedup_keyed(data, rec, tp, c, secondary);
                 let keys = self.types[tp as usize].keys.clone();
                 hash::add(data, rec, &mut self.allocations, &keys);
             }
             Parts::Index(c, _, _) => {
                 // @P306 — replace any existing record with this key (dedup);
                 // tree::add otherwise rejects the duplicate and keeps the old.
-                self.dedup_keyed(data, rec, tp, c);
+                self.dedup_keyed(data, rec, tp, c, secondary);
                 let left = self.fields(tp);
                 let keys = self.types[tp as usize].keys.clone();
                 tree::add(data, rec, left, &mut self.allocations, &keys);
