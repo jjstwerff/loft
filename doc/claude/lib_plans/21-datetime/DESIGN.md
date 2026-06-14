@@ -3,160 +3,179 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 21 — DateTime full-support tail — implementation design
+# 21 — DateTime: a library struct + one general format hook (not a built-in type)
 
-Code-grounded design for the remaining tail of [`@PLN8`](README.md): a built-in
-`DateTime` value type + `{dt:…}` formatting.  The basics (arc D — the pure-loft
-`time` library over `integer` epoch-ms) already shipped as `time 0.1.0`; this
-covers **arc B** (native/wasm conversion), **arc C** (`{dt:…}` format opcodes),
-and **arc A** (the distinct `Type::DateTime`).  Written against the present code
-(line refs are anchors, verify on edit) and run through the
-[design-protocol](../../../../.claude/skills/design-protocol/SKILL.md): the
-invariant is named, its re-assertion sites counted, and the load-bearing claim
-falsified before any code.
+Code-grounded design for the remaining tail of [`@PLN8`](README.md). The basics
+(arc D — the pure-loft `time` library over `integer` epoch-ms) shipped as
+`time 0.1.0`. This document **supersedes** the earlier "build a distinct built-in
+`Type::DateTime`" plan (arcs A/B/C): an evaluation against the present code
+(2026-06-14) showed a **library struct** `DateTime { ms: integer }` gets every
+property the built-in was for — at a fraction of the cost, and with the missing
+piece (custom formatting) generalised into a feature **every** library reuses.
+
+> **Status: DEFERRED past the 2026-07 release.** This is post-release work and
+> fits the 2026-08 "better PHP / more capable libraries" cycle — the one core
+> change here (a per-type format hook) is exactly the "more complex
+> libraries/types" capability that cycle is about. No code lands now.
 
 ---
 
-## The invariant (one sentence)
+## The decision (one sentence)
 
-> A `DateTime` is an `i64` epoch-millisecond value with a **distinct static
-> type** that **shares integer STORAGE** (8-byte slot, `i64::MIN` null) but
-> inherits **no integer BEHAVIOR** — chronological comparison, date formatting,
-> and the *absence* of arithmetic are each selected by `Type::DateTime` at the
-> type-keyed dispatch points, so an expression no test covered behaves correctly
-> because dispatch keys on the *type*, never on the raw `i64` bits.
+> `DateTime` becomes a **`time`-library struct** `DateTime { ms: integer }` — a
+> distinct nominal type that **cannot** be confused with `integer`, with
+> chronological operators defined as ordinary library operator functions and
+> date formatting served by **one new general core feature**: `append_data`
+> dispatches `{x}` / `{x:spec}` on a user struct to that struct's own
+> `to_text(self, spec)` method. **No built-in `Type::DateTime`, no core
+> conversion opcodes, no core format opcodes.**
 
-## The load-bearing claim — probed, holds
+## Why the struct wins — evaluated against current code (2026-06-14)
 
-The one way this design fails is **silent over-unification**: `dt + 5` (or
-`{dt}` rendering a raw number) compiling as integer behavior because a `DateTime`
-is "just an i64". Probed against the present code and it **cannot happen**:
+The built-in's whole purpose was a *distinct type that shares integer storage but
+not integer behavior*. A struct is **already** a distinct type, so three of the
+four properties come for free; the fourth (formatting) is the only gap, and it is
+better filled by a general hook than by a one-off built-in.
 
-- **Surprise from the probe:** there is no `Type::Long`; a 64-bit integer is
-  `Type::Integer(IntegerSpec::wide())`, null = `i64::MIN` (`src/data.rs` enum
-  ~1080-1130; `IntegerSpec::wide()` ~93; null checks throughout `src/ops.rs`).
-  So "reuse the long path" means *share the wide-`Integer` storage rules*, not a
-  separate variant.
-- **Operator selection** runs through `call_op` → `process_call_args` →
-  `convert` / `can_convert` (`src/parser/mod.rs:4173`, `:1177`, `:1454`). An
-  argument matches a parameter **only if `convert` coerces it**; `can_convert`
-  coerces solely through *explicit per-type rules* (enum→int, text→text,
-  refvar, bare collections, function) and returns **`false`** for everything
-  else (`mod.rs:1517`).
-- **Therefore:** a new `Type::DateTime` with **no coercion rule added** never
-  satisfies an `integer` parameter → `OpAddInt(integer, integer)` rejects `dt` →
-  **`dt + 5` is a compile error**. Comparison is **opt-in**: we *define*
-  `OpEqDateTime(datetime, datetime)` etc., whose `#rust` bodies do a plain `i64`
-  compare. Arithmetic is **forbidden by omission**. The dangerous inheritance is
-  impossible by construction, not by vigilance.
-
-This is why the design picks a **distinct variant over a tagged `IntegerSpec`**
-(open question Q1): a tag would make `DateTime` inherit *all* integer behavior
-unless re-checked at every operator site — `N × silence` on the *dangerous*
-side. The distinct variant moves the cost to the **safe** side (storage sites),
-where it is contained and test-guarded (next section).
-
-## Brittleness: N × silence, counted before coding
-
-Adding a `Type` variant is part loud (exhaustive `match` → compile error, free
-correctness), part silent (catch-all `_ =>` → wrong result if `DateTime` is
-omitted). Probing every `match` on `Type` in `src/data.rs` gives the **exact**
-silent checklist — `N` is small and known:
-
-| Site (≈line) | Catch-all today | DateTime must |
+| Property the built-in was for | A struct gives it via | Core change? |
 |---|---|---|
-| `element_size` (~1665) | `_ => 0` | return **8** (group with wide `Integer`) |
-| `element_align` (~1626) | `_ => 1` | return **8** |
-| `to_default` (~741) | `_ => Value::Null` | return the **null DateTime** (`i64::MIN`) |
-| `content` (~1335) | `_ => Unknown(0)` | return self (leaf scalar) |
-| `typedef::fill_database` Integer arm | — | store `DateTime` as the 8-byte int field |
-| `heap_dep` / `heap_def_nr` / `depend` | `_ => None`/`{}` | **no change** (correct for a scalar) |
+| `dt + 5` is a compile error | `DateTime` is `Type::Reference`; `can_convert` never coerces a reference to an `integer` param (`parser/mod.rs:1517`), so no `Op*Int` accepts it, and no `OpAdd(DateTime, …)` is defined. **Impossible by construction.** | none |
+| `dt1 < dt2`, `dt1 == dt2`, `dt2 - dt1` | library operator defs — `call_op` looks up *all* `OpLt`/`OpEq`/`OpMin` defs via `get_possible` (`parser/mod.rs:3964`); user types dispatch exactly like primitives (`default/01_code.loft:42` documents "any user type defining OpLt" satisfies `Ordered`). | none |
+| civil-calendar math (`epoch_ms ↔ y/mo/d/h/…`) | pure-loft, already shipped in `time 0.1.0` | none |
+| `{dt}` / `{dt:date}` formatting | **the one gap** — `append_data` renders a plain struct as a generic dump; custom `to_text` fires only inside bounded generics (`collections.rs:1037`). → close it with the general hook below. | **one feature** |
 
-`Type::name` / `Type::show` are **exhaustive** → adding `DateTime` there is a
-compile error (free). So `N ≈ 5` silent sites, all enumerated.
+This **deletes the entire built-in plan**: arc A (the ~25-file `Type::DateTime`
+blast radius), arc B (native/wasm core conversion opcodes), and arc C (core
+`{dt:…}` format opcodes) all dissolve. What replaces them is a single, reusable
+core feature plus pure-library work.
 
-**Cure (design-protocol step 2 — make omission loud / collapse N):**
-1. At each silent site, put `DateTime` in the **same arm as wide-`Integer`** —
-   one storage rule consulted at each site, not five independent restatements.
-2. Add **one storage round-trip test**: a struct with a `DateTime` field —
-   set / get / null / compare — exercised on every backend, so a missed site
-   fails loudly in CI rather than silently corrupting a date. `N × silence` is
-   thus small, listed, and guarded by a single test.
+## The one core change — generalise the format hook
 
----
+The feature has **two parts**: the *hook* (how a type declares formatting) and
+the *spec parse* (how `{x:spec}` is tokenised for a custom type). The second is
+the real work — the current spec grammar actively rejects custom specs.
 
-## Resolved open questions
+### Part 1 — the hook: `to_text(self, spec: text) -> text`
 
-- **Q1 storage** → **distinct `Type::DateTime`**, backed by `i64`, null
-  `i64::MIN`, storage shared with wide-`Integer`. (Rationale above: dangerous
-  inheritance impossible by construction.)
-- **Q2 literals** → **constructor-only**. No lexer literal; values come from
-  `time::parse` / `time::from_millis` / `now()`. The lexer is untouched.
-- **Q3 operators** → define `OpEq/OpNe/OpLt/OpLe/OpGt/OpGe DateTime`
-  (chronological, `i64` compare). `dt - dt` → `OpMinDateTime(datetime,datetime)
-  -> integer` (ms). **No** `dt + integer` or `dt + dt` — bare arithmetic is a
-  compile error (no operator + no coercion); `time::add_days/add_weeks/
-  add_seconds` wrap explicit stepping.
-- **Q6 tokens** → bare `{dt}` = `YYYY-MM-DD HH:MM` (minute precision — the common
-  log/display case; ISO is opt-in). `{dt:date}`=`YYYY-MM-DD`,
-  `{dt:time}`=`HH:MM`, `{dt:datetime}`=`…:SS`, `{dt:iso}`=`…TZ`, `{dt:wday}`=`Mon`.
-- **Q4 weekday (integer), Q5 name (`time`), Q7 parse strictness** — already
-  resolved in the shipped basics; unchanged here.
+`try_bound_to_text_call` (`src/parser/collections.rs:1037`) already lets a value
+render through a `to_text` method, and `append_data`'s `Type::Reference` arm
+(`:1166`) already routes to it — but **only** when the value's type is the
+type-variable of the *current bounded-generic* function (`None` when `context ==
+u32::MAX` or the context isn't `DefType::Generic`), and it passes the value + a
+hidden work-text buffer, **not the spec** (the spec lives in `state`, never
+threaded in). Two changes:
 
-## Implementation map (per arc, from the probes)
+1. **Drop the generic-only gate** — try the `t_<len><Type>_to_text` lookup for
+   *any* `Type::Reference(d_nr, _)`, not just the current generic's type variable.
+2. **Thread the spec** — pass the raw spec text as a `text` argument (`""` for
+   bare `{x}`). The value owns its spec vocabulary — the Python
+   `__format__(self, spec)` model; core learns nothing of date tokens. The hidden
+   I9 work-text output buffer carries through unchanged.
 
-### Arc B — conversion core + parity (build first; zero type-system risk)
-- `src/ops.rs`: native `days_from_civil` / `civil_from_days` (Hinnant) realising
-  the one contract `epoch_ms ↔ {y, mo, d, h, mi, s, wday}` (UTC).
-- wasm: same contract via `js_sys::Date` UTC getters (`src/wasm.rs` / the
-  generation wasm path) — no calendar math compiled into the wasm binary.
-- **Parity test**: one epoch-ms renders identically on interp / native / browser-
-  wasm / wasm32-wasip2, riding `tests/html_wasm.rs::wasm_library_suite`.
+A struct with no `to_text` formats exactly as today (the generic `OpFormatDatabase`
+dump) — nothing regresses. This is the natural loft analog of
+`Display`/`__format__`/`ToString`, reusable by every library (money, colour, a DB
+`Decimal`, a URL), not a DateTime one-off.
 
-### Arc C — `{dt:…}` format opcodes (de-risk on plain `integer` as `{ms:date}`)
-- `src/parser/objects.rs` `get_radix()` (~1455): parse the date tokens
-  (`date`/`time`/`datetime`/`iso`/`wday`) → a format code.
-- `src/parser/collections.rs` `append_data()` (~1112): a `Type::DateTime` arm →
-  emit `OpFormatDate` (and an `integer` `{ms:date}` path for the de-risk step).
-- `src/generation/ops/mod.rs` (~127, ~219): register `OpFormatDate` /
-  `OpFormatStackDate`; `src/generation/ops/text_ops.rs` + `src/generation/
-  text.rs`: the `format_date` emitter.
-- `src/state/text.rs` + `src/fill.rs`: interpreter handlers.
-- `src/ops.rs`: `format_datetime(s, epoch_ms, token)` using arc B; `i64::MIN` →
-  `"null"` (mirrors `format_long`).
+### Part 2 — the spec parse (`src/parser/objects.rs:1367-1406`)
 
-### Arc A — distinct `Type::DateTime` (largest blast radius, last)
-- `src/data.rs`: add the variant; arms in `name`/`show` (loud) and the silent
-  checklist `element_size`/`element_align`/`to_default`/`content` (grouped with
-  wide-`Integer`).
-- `src/typedef.rs`: `"datetime"` keyword → `Type::DateTime`; `fill_database`
-  lays it out as the 8-byte int field.
-- `default/*.loft`: `OpEq/Lt/Le/Gt/Ge/Ne/Min DateTime` operator defs with
-  `#rust` `i64` bodies (→ generate `fill.rs` handlers); `now()` / `from_millis`
-  return `DateTime`; `append_data`'s default `{dt}` picks the minute renderer.
-- `lib/time` (loft-libs-core): migrate `time::*` signatures `integer → DateTime`
-  — a **type-only** change (bodies unchanged) → a new `time` minor release.
-- the storage round-trip test (the brittleness guard) + the 4-backend gate.
+Today's spec grammar is `:` `[padchar][flags][width-expr][radix-id]`, and
+`get_radix` (`:1455`) **errors on any identifier outside `{x,b,o,d,f,e,json}`**
+(`:1470`) while a bare word like `date` is swallowed as the pad-char token
+(`:1374`). So `{dt:iso}` is a compile error and `{dt:date}` is silently wrong —
+custom specs do not fit the grammar at all. The fix: **branch on the value type
+`tp`** (already known at `:1355`, before the `:` is consumed):
 
-## Phasing (de-risk order)
+- built-in type → existing grammar, unchanged;
+- custom type (struct defining `to_text`) → read the spec as a **free-form raw
+  string up to the closing `}`** and hand it to `to_text`.
 
-1. **Arc B** — conversion + parity. Pure functions, no type changes, fully
-   testable in isolation.
-2. **Arc C on `integer`** — wire the format opcode end-to-end as `{ms:date}`
-   with zero type-system risk; proves the opcode plumbing.
-3. **Arc A** — add `Type::DateTime` + operators + the silent-site arms + the
-   storage test; flip the `{dt}` default and the `time::*` signatures. Largest
-   blast, done last, guarded by the round-trip test + the 4-backend gate.
+Simpler than extending the grammar, and strictly more powerful — each type gets
+an arbitrary spec DSL (even strftime-style `{dt:%Y-%m-%d}`).
 
-## Testing
+### The load-bearing claim — probe before coding (design-protocol)
 
-The existing 4-backend gate (interp `wrap.rs` / native `native.rs` / browser +
-wasm32-wasip2 `html_wasm.rs`) already exercises `time`; arc B's parity test pins
-the two conversion backends together on that gate, and the storage round-trip
-test guards the silent `Type` sites. No new harness needed.
+The raw-vs-grammar branch **must be pass-stable**: the `t_<len><Type>_to_text`
+def must be discoverable when a function body's format string is parsed in
+*both* parser passes, or pass 1 parses the spec with the numeric grammar while
+pass 2 reads it raw and the **token stream desyncs**. `try_bound_to_text_call`
+already relies on early signature collection; the one thing to falsify first is
+that it holds for *concrete* (non-generic) structs too.
+
+### One deferred sub-decision — width/align on custom types
+
+`{dt:date>12}` (pad the rendered date to width 12). v1: the type owns the whole
+spec, no outer padding — simplest, fully general. v2 (only if it earns its keep):
+layer the generic align+width over the `to_text` result.
+
+## The `time`-side work (pure library, no core)
+
+Once the hook exists, everything else is a `time` library release:
+
+- `struct DateTime { ms: integer }` (null = the struct ref is null, or `ms ==
+  i64::MIN` — pick one and test it).
+- Operators: `OpLt/OpLe/OpGt/OpGe/OpEq/OpNe(a: DateTime, b: DateTime) -> boolean`
+  (plain `i64` compare on `.ms`); `OpMin(a: DateTime, b: DateTime) -> integer`
+  for `dt - dt` → milliseconds. **No** `OpAdd` — `dt + 5` stays a compile error;
+  stepping is `time::add_days/add_weeks/add_seconds`.
+- `to_text(self: DateTime, spec: text) -> text`: `""`/`datetime` →
+  `YYYY-MM-DD HH:MM`, `date` → `YYYY-MM-DD`, `time` → `HH:MM`, `iso` →
+  `…THH:MM:SSZ`, `wday` → `Mon`. Body calls the civil-math already in the library.
+- Constructors return `DateTime`: `now()`, `from_millis`, `from_ymd`, `parse`,
+  `today`. Field accessors and `add_*`/`*_between` change `integer` → `DateTime`
+  in their signatures — bodies unchanged (they already operate on the ms value).
+- Ships as a new `time` minor release; the training app and any consumer move to
+  it when ready (the `integer`-based 0.1.0 keeps working until then).
+
+## The one real tradeoff — and its mitigation
+
+A struct value is a 12-byte `DbRef` + a heap record + `OpFreeRef` lifetime
+tracking (`data.rs:1677`, `scopes.rs:14`), versus the built-in's inline 8-byte
+`i64`. For most date use (parse, store, compare, format) this is negligible. The
+case that *could* bite is the high-performance DB path (@PLN23): a result set
+with a timestamp column should **not** heap-allocate a `DateTime` per row.
+
+**Mitigation (a library-design rule, not a core feature):** a DB client keeps the
+raw `i64` in its row/cell buffer and materialises a `DateTime` struct **lazily**,
+only when the program reads that cell. Bulk scans stay `i64`; the struct cost is
+per-materialised-value, not per-row. So the struct model does **not** compromise
+the "break out of rustc, fast path into databases" goal.
+
+If profiling ever shows the per-value cost matters in a hot loop, the *general*
+answer is inline/value structs (small structs stored by value, not by `DbRef`) —
+a language feature that would benefit every small wrapper type, tracked
+separately if it earns its keep. It is **not** needed for DateTime.
+
+## What this changes vs. the old design / README
+
+| Old plan (built-in) | This design (struct + hook) |
+|---|---|
+| Arc A: distinct `Type::DateTime`, ~25 files | **gone** — `DateTime` is a library struct |
+| Arc B: native + wasm core conversion opcodes | **gone** — civil math is pure-loft library code (shipped) |
+| Arc C: core `{dt:…}` format opcodes | **gone** — replaced by the general `to_text` hook |
+| README decision #3: "no per-type format hook, so it must be in core" | **reversed** — the per-type hook is exactly the feature we add |
+| Effort H (a new language primitive) | one general S–M core feature + a pure-library `time` release |
+
+## Phasing (post-release)
+
+1. **Core: generalise the format hook** — lift `try_bound_to_text_call` to any
+   struct with `to_text(self, spec)`; fall back to the generic dump otherwise.
+   Test with a throwaway struct that renders `{x:foo}` custom. This is the only
+   core change and it stands alone (useful to every library).
+2. **`time` release** — add the `DateTime` struct, operators, `to_text`, and the
+   constructor/accessor signature changes; cut a new `time` minor.
+3. **Consumers** migrate at will (training app, future DB clients).
+
+This feature needs a home of its own once work starts (the format hook is a
+general language capability, not a `time` detail) — a small plan or a
+`QUALITY.md` row, created when the 2026-08 cycle picks it up.
 
 ## See also
 
-- [README.md](README.md) — the @PLN8 plan + the original open questions.
-- `doc/claude/LOFT.md § String formatting` — the format system arc C extends.
-- `doc/claude/WASM.md` + `src/wasm.rs` — the `js_sys` bridge arc B's wasm uses.
+- [README.md](README.md) — the @PLN8 plan + the shipped basics (`time 0.1.0`).
+- `src/parser/collections.rs:1037` (`try_bound_to_text_call`) + `:1112`
+  (`append_data`) — the format path the hook generalises.
+- `src/parser/mod.rs:3964` (`call_op`) — why user-struct operators dispatch.
+- `doc/claude/INTERFACES.md` — operator overloading on user types.
+- `doc/claude/BROADENING.md` — the 2026-08 "better PHP / more capable libraries"
+  cycle this lands in.

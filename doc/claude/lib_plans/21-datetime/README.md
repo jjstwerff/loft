@@ -7,15 +7,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Active 2026-05-25.**  Building the **basics first** to unblock the
-trainer app: a pure-loft `lib/time` library over `integer`
-epoch-milliseconds (operations arc D + `format_*` text renderers),
-needing **zero core changes** and working identically on
-interpret / `--native` / wasm.  The **distinct built-in `DateTime`
-type** (arc A) + the **built-in `{dt:…}` format specifiers** (arc C) +
-`js_sys::Date` wasm delegation are kept as this plan's **"full datetime
-support" tail** — fully designed below, scheduled after the basics ship
-and the trainer app has continued on them.
+**Basics SHIPPED (`time 0.1.0`, 2026-05-25).  Full-support tail PIVOTED +
+DEFERRED past the 2026-07 release (2026-06-14).**
+
+The pure-loft `lib/time` library over `integer` epoch-ms (operations arc D +
+`format_*` text renderers) shipped and unblocked the trainer app, needing zero
+core changes and working identically on interpret / `--native` / wasm.
+
+The **full-datetime tail no longer builds a distinct built-in `Type::DateTime`**
+(old arcs A/B/C).  An evaluation against the present code (2026-06-14) showed a
+**`time`-library struct** `DateTime { ms: integer }` gets every property the
+built-in was for — distinct-type safety, operators, civil math — for free, and
+the one gap (custom `{dt:…}` formatting) is better filled by **one general core
+feature**: a per-type `to_text(self, spec)` format hook that *every* library
+reuses.  This collapses ~25 files of built-in into one small reusable feature +
+a pure-library `time` release.  Full rationale + design:
+**[DESIGN.md](DESIGN.md)**.  Deferred to the 2026-08 "better PHP / more capable
+libraries" cycle; no code lands for 2026-07.
 
 Driver: the `training` app (`../personal/training`,
 see its `MIGRATION.md § Loft capability gaps`) is date-indexed
@@ -23,28 +31,28 @@ see its `MIGRATION.md § Loft capability gaps`) is date-indexed
 HRV-by-day) and its B8–B10 routines are blocked on dates alone.
 `BROADENING.md`'s Data/ETL gap list names the same hole.
 
-Four decisions are already locked (recorded in `DESIGN_DECISIONS.md`
-when arc A lands — see Open questions for the ones still open):
+Decisions (updated 2026-06-14 by the [DESIGN.md](DESIGN.md) pivot):
 
-1. **A distinct built-in `DateTime` value type**, backed by `i64`
-   epoch-milliseconds — the old-Java-`Date`-over-`long` model, not a
-   plain `integer`, so the compiler gives chronological type safety
-   and bare `{dt}` auto-renders.
+1. **`DateTime` is a `time`-library struct `DateTime { ms: integer }`**, *not*
+   a distinct built-in type.  It is a distinct nominal type (`Type::Reference`),
+   so `dt + 5` is a compile error by construction and `dt1 < dt2` works via
+   library operator defs — the chronological type safety the built-in was for,
+   with zero core type-system changes.  *(Was: a distinct built-in `DateTime`
+   value type over `i64`.)*
 2. **UTC formatting + a fixed-offset helper** for local-day bucketing.
    No IANA timezone database, no DST handling (documented limitation).
-3. **Formatting is built into core; operations live in a library.**
-   Loft's format specifiers compile straight to opcodes
-   (`format_long` in `src/ops.rs`, dispatched in `src/fill.rs`) — there
-   is **no per-type hook a library can register**, so `{dt:date}`-style
-   rendering *must* be in core.  Everything derivable (parse, add, diff,
-   weekday, week number) is pure loft in `lib/time`.
-4. **JS-`Date`-aligned semantics so the WASM build borrows the browser.**
-   Loft's epoch-ms unit already equals JS `Date`'s, and both map
-   epoch-ms → calendar fields through the *proleptic Gregorian
-   calendar* — identical results.  So the conversion core has two
-   backends with one contract: native pure-Rust civil-calendar math;
-   wasm delegates to `js_sys::Date::get_utc_*`.  No calendar math is
-   compiled into the WASM binary.
+3. **REVERSED — formatting gets a per-type hook in core; everything else is
+   library code.**  The old decision said "no per-type format hook exists, so
+   `{dt:date}` rendering must be in core."  The pivot *adds* that hook: a general
+   `to_text(self, spec)` dispatch from `append_data` for any user struct (the
+   natural loft analog of `Display`/`__format__`).  It is the one core change,
+   and it is reusable by every library — not a DateTime one-off.
+4. **JS-`Date`-aligned epoch + proleptic-Gregorian civil math** (the unit/epoch
+   match JS `Date`).  The civil math is **pure-loft library code** (already
+   shipped in `time 0.1.0`) — *not* a two-backend core contract with
+   `js_sys::Date` delegation.  Dropping that delegation removes a browser-only
+   path wasip2 can't use; the ~30-line Rust-free civil math compiles into every
+   backend identically.
 
 ## Goal
 
@@ -55,25 +63,24 @@ built-in `DateTime` type with built-in `{dt:…}` formatting.
 
 ## Effort + design
 
-- **Effort:** H — the new primitive type ripples through ~25 files
-  (`Type::Character` appears in 25 files / 104 sites today; a new
-  scalar variant is comparable).  Library + formatting are S–M.
-- **Design:** ~ partial — principles locked, token vocabulary and
-  type-operator rules still open (see Open questions).
-- **Last touched:** 2026-05-25
+- **Effort (post-pivot):** S–M — **one** general core feature (the per-type
+  `to_text(self, spec)` format hook) + a pure-library `time` release (struct +
+  operators + `to_text` + signature changes).  *(Was H: the old built-in
+  `Type::DateTime` rippled through ~25 files — that path is dropped.)*
+- **Design:** ✓ resolved — see [DESIGN.md](DESIGN.md) (struct + format hook).
+- **Last touched:** 2026-06-14 (pivot to struct + general format hook)
 
 ## Design principles
 
-- **`DateTime` = `i64` epoch-ms, JS-`Date`-aligned.**  Same unit/epoch
-  as `now()` and JS `Date`.  Null sentinel `i64::MIN`, matching the
-  long-integer null pattern.  Cross-backend parity is *structural*, not
-  best-effort: the same epoch-ms renders identically on
-  interpret / `--native` / wasm because all three implement the one
-  Gregorian mapping.
-- **Thin WASM.**  One conversion contract `epoch_ms ↔ {y,mo,d,h,mi,s,wday}`,
-  two impls: native `days_from_civil`/`civil_from_days`; wasm
-  `js_sys::Date` UTC getters.  A cross-mode parity test pins them
-  together.
+- **`DateTime` = a struct over `i64` epoch-ms, JS-`Date`-aligned.**  Same
+  unit/epoch as `now()` and JS `Date`.  Cross-backend parity is *structural*:
+  the same epoch-ms renders identically on interpret / `--native` / wasm
+  because the civil-calendar mapping is one body of **pure-loft** code (already
+  shipped in `time 0.1.0`) that compiles into every backend.
+- **No `js_sys` delegation (post-pivot).**  The earlier "thin WASM" plan routed
+  wasm through `js_sys::Date` UTC getters; dropped — the ~30-line proleptic-
+  Gregorian civil math is tiny, compiles into every target, and gives results
+  identical to JS `Date`, so a browser-only path wasip2 can't use buys nothing.
 - **Small, bounded surface.**  This is a "basic" type (user's word):
   no `Duration` type, no calendar arithmetic beyond day/week/second
   steps, no locales.  `DateTime − DateTime` yields plain milliseconds;
@@ -85,9 +92,10 @@ built-in `DateTime` type with built-in `{dt:…}` formatting.
 |---|---|---|
 | **D** — `lib/time` operations + `format_*` renderers (pure loft, over `integer` epoch-ms) | `lib/time/` (new package) | **BASICS — SHIPPED 2026-05-25.**  Validated on interpreter + `--native` (run, all asserts pass) and wasm32-wasip2 (compiles clean).  Test: `tests/docs/32-time.loft` (CI three-backend) + `lib/time/tests/01-basics.loft` (package smoke). |
 | **E** — port the training app's date-dependent routines onto `lib/time` | `../personal/training/loft/` | BASICS — next |
-| **A** — distinct `DateTime` variant in the `Type` enum + parser + type rules | `src/data.rs`, `src/typedef.rs`, `src/parser/` | FULL — deferred (plan tail) |
-| **B** — native + wasm conversion backends (`js_sys::Date`) + cross-mode parity test | `src/ops.rs`, `src/wasm.rs` | FULL — deferred (basics use pure-loft math; B replaces it with the two-backend contract) |
-| **C** — built-in `{dt:…}` format specifiers | `src/ops.rs`, `src/fill.rs`, `src/state/codegen.rs` | FULL — deferred (basics use `time::format_*`) |
+| **A** — distinct `DateTime` variant in the `Type` enum | — | **SUPERSEDED** by [DESIGN.md](DESIGN.md): `DateTime` is a library struct, no core type |
+| **B** — native + wasm conversion backends (`js_sys::Date`) | — | **SUPERSEDED**: civil math stays pure-loft library code (shipped); no `js_sys` delegation |
+| **C** — built-in `{dt:…}` format specifiers | — | **SUPERSEDED** by the general `to_text(self, spec)` hook (one core feature, all libraries) |
+| **F** — general per-type format hook (`to_text(self, spec)` from `append_data`) | `src/parser/collections.rs` | **DEFERRED (post-release)** — the one core change; replaces arcs B+C |
 
 ## Phase ordering
 
@@ -102,17 +110,21 @@ built-in `DateTime` type with built-in `{dt:…}` formatting.
    goals/phase/schedule) onto `lib/time`; verify against the Python
    parity oracle.
 
-**Full datetime support (plan tail — after the basics are in use):**
+**Full datetime support (PIVOTED 2026-06-14 — see [DESIGN.md](DESIGN.md); deferred
+past the 2026-07 release):**
 
-3. **B** — replace the library's pure-loft conversion with a two-backend
-   contract: native pure-Rust civil-calendar; wasm `js_sys::Date` UTC
-   getters.  Cross-mode parity test pins them.
-4. **C** — wire the `{dt:…}` format-opcode tokens using B (de-risk on a
-   plain `integer` first: `{ms:date}`).
-5. **A** — add the distinct `Type::DateTime`; bare `{dt}` auto-picks the
-   renderer; define the operator rules.  Largest blast radius, done
-   last.  `time::*` signatures migrate `integer` → `DateTime` here — a
-   type-only change to the library, its bodies unchanged.
+The old arcs B→C→A (two-backend conversion core, `{dt:…}` core opcodes, a built-in
+`Type::DateTime`) are **dropped**.  The full tail is now:
+
+3. **F (core)** — one general per-type format hook: `append_data` dispatches
+   `{x}` / `{x:spec}` on any user struct to its `to_text(self, spec: text) ->
+   text` method.  Two-part: lift the bounded-generic-only gate on
+   `try_bound_to_text_call`, and branch the spec parser
+   (`objects.rs:1367-1406`) so a custom type's spec is read as a free-form raw
+   string instead of the numeric `get_radix` grammar.  Reusable by every library.
+4. **`time` release** — `struct DateTime { ms: integer }` + operators
+   (`OpLt/…/OpEq/OpMin`) + `to_text` + constructor/accessor signature changes.
+   Pure library work; civil math stays the pure-loft code already shipped.
 
 ## Training-app coverage — every API traces to a real use
 
@@ -137,10 +149,11 @@ home in A–D.
 | local "today" via `zoneinfo` | `time::local_day(dt, offset_min)` / `time::today(offset_min)` — fixed offset, **no DST** |
 | ordering / comparison of dates | built-in `==` `<` `>` on `DateTime` (chronological) |
 
-## Built-in format tokens (arc C) — proposal
+## `DateTime` format tokens — proposal (now `time::to_text` specs, not core)
 
-Mirror what JS `Date.toISOString()` / field getters produce; keep the
-set small.  Bikeshed in Q6.
+These are the spec strings the library's `to_text(self, spec)` interprets (the
+general format hook, arc F) — **not** built-in core specifiers.  Mirror what JS
+`Date.toISOString()` / field getters produce; keep the set small.
 
 | Spec | Renders | JS analogue |
 |---|---|---|
@@ -201,18 +214,18 @@ browser's own image codec, not a bundled Rust PNG stack), and `world`
 ([@P334](../../PROBLEMS.md) — traps on both wasm runtimes though it
 passes interp + native; surfaced by this gate).
 
-**Arc-B note:** when the `js_sys::Date` browser delegation lands, its
-parity test rides this same gate — assert the Node (browser) run's output
-matches the native golden, since that's the path the JS fallback lives on.
+**Post-pivot note:** the `js_sys::Date` browser delegation is dropped (see
+[DESIGN.md](DESIGN.md)); civil math stays pure-loft, so the existing
+three-backend `time` gate already covers it with no extra parity path.  The
+`time::to_text` renderings ride this same gate when the struct lands.
 
 ## Open design questions
 
-> **Resolved 2026-06-14 in [DESIGN.md](DESIGN.md)** — the code-grounded
-> implementation design for the full-datetime tail (arcs B/C/A): Q1 distinct
-> `Type::DateTime` (silent integer arithmetic proven impossible by construction
-> via `can_convert`), Q2 constructor-only, Q3 comparison opt-in / arithmetic
-> forbidden, Q6 token vocabulary + bare-`{dt}` default.  Originals kept below for
-> context.
+> **Superseded 2026-06-14 by the [DESIGN.md](DESIGN.md) pivot.**  Q1 is no longer
+> "built-in vs tagged integer" — `DateTime` is a **library struct** (distinct
+> `Type::Reference`, so `dt + 5` is a compile error by construction without any
+> core type).  Q3 operators are library `Op*` defs; Q6 tokens are `time::to_text`
+> spec strings, not core specifiers.  Originals kept below for context.
 
 1. **Distinct `Type::DateTime` vs a tagged `Integer`?**  Locked to
    *distinct* by the user, but confirm the storage/codegen route:
@@ -248,20 +261,21 @@ matches the native golden, since that's the path the JS fallback lives on.
   `native/` dir, zero compiler-crate coupling).  The training app
   consumes it as a registry dependency (`loft install time`), so it
   must be a published library, not monorepo-internal.  **Boundary
-  note:** the built-in `DateTime` type (arc A) is a language PRIMITIVE
-  in the compiler crate, NOT library code — it does not count against
-  plan-12's drain goal, exactly as `integer`/`text` don't.  Keep all
-  *operations* in `lib/time` (extractable); only the type identity +
-  format dispatch live in core.
+  note (post-pivot):** `DateTime` is now a `lib/time` **struct** — fully
+  library code in the `loft-libs-core` chunk, type and operators and all.
+  The only core piece is the *general* `to_text(self, spec)` format hook
+  (arc F), which is type-agnostic and serves every library, not a
+  DateTime primitive.
 - **lib_plans/future/03-lazy-stdlib** — if `lib/time` ever grows a
   native bridge, it inherits the lazy-load trigger pattern; the
   pure-loft design avoids needing it.
 
 ## See also
 
-- `doc/claude/LOFT.md § String formatting` — the format system arc C extends.
-- `doc/claude/WASM.md` + `src/wasm.rs` (`host_call` / `js_sys`) — the
-  browser-bridge mechanism arc B's wasm backend uses.
+- [DESIGN.md](DESIGN.md) — the struct + general `to_text(self, spec)` format-hook
+  design that supersedes the old built-in arcs A/B/C.
+- `doc/claude/LOFT.md § String formatting` — the format system the `to_text` hook
+  (arc F) extends.
 - `doc/claude/BROADENING.md` — Data/ETL gap list naming the date hole.
 - `../personal/training/MIGRATION.md` — the driving consumer + parity oracle.
 - ROADMAP.md `F` table row `TIME.1`.
