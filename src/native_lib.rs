@@ -896,16 +896,59 @@ pub fn build_shared_cdylib(
         .map_err(|e| format!("launch rustc: {e} (is the Rust toolchain installed?)"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let hint = toolchain_failure_hint(&stderr)
+            .map(|h| format!("{h}\n\n"))
+            .unwrap_or_default();
         let tail: Vec<&str> = stderr.lines().rev().take(30).collect();
         let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
         return Err(format!(
-            "cdylib compile failed (source kept at {}):\n{tail}",
+            "{hint}cdylib compile failed (source kept at {}):\n{tail}",
             rs.display()
         ));
     }
     std::fs::rename(&tmp_so, &so)
         .map_err(|e| format!("install {} -> {}: {e}", tmp_so.display(), so.display()))?;
     Ok(so)
+}
+
+/// Detect ENVIRONMENT failures that masquerade as compiler/linker errors.
+///
+/// A `rustc`/`cc`/`ld` invocation that dies from a full temp dir or OOM emits a
+/// cryptic crash, not a clear diagnosis: a SIGBUS from `ld` writing to a full
+/// tmpfs (the common case — the linker mmaps object files into `TMPDIR`, and a
+/// write the tmpfs can no longer back faults with a Bus error) reads like a
+/// linker bug or a stale-artifact problem, when it is really "disk is full".
+/// Scan a failed invocation's captured stderr for those signatures and return a
+/// one-line, actionable hint to surface ABOVE the raw output; return `None` for
+/// a genuine compile error so the real diagnostics show through untouched.
+#[must_use]
+pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    let env_fault = |what: &str| {
+        Some(format!(
+            "NOTE: the toolchain {what} — this is an ENVIRONMENT failure, not a \
+             code error. The build temp dir is almost certainly full (or out of \
+             memory). Free space on TMPDIR ({tmp}), or set TMPDIR to a larger \
+             filesystem, then retry."
+        ))
+    };
+    if stderr.contains("No space left on device") || stderr.contains("ENOSPC") {
+        return env_fault("ran out of disk space");
+    }
+    if stderr.contains("Bus error")
+        || stderr.contains("signal: 7")
+        || stderr.contains("signal 7")
+        || stderr.contains("SIGBUS")
+    {
+        return env_fault("crashed with a Bus error (SIGBUS), typically a full temp dir");
+    }
+    if stderr.contains("Cannot allocate memory")
+        || stderr.contains("signal: 9")
+        || stderr.contains("SIGKILL")
+    {
+        return env_fault("was killed (out of memory)");
+    }
+    None
 }
 
 /// Derive the auto-native cdylib crate stem from a package directory.
@@ -1105,4 +1148,32 @@ fn source_newer_than(pkg_dir: &str, artifact: &std::path::Path) -> bool {
         }
     }
     newest.is_some_and(|src| src > art_mtime)
+}
+
+#[cfg(test)]
+mod toolchain_hint_tests {
+    use super::toolchain_failure_hint;
+
+    #[test]
+    fn flags_sigbus_as_environment_failure() {
+        // The real shape that misled diagnosis: ld dies with a Bus error when
+        // TMPDIR's tmpfs is full.  Must be named an ENVIRONMENT failure.
+        let stderr = "collect2: fatal error: ld terminated with signal 7 [Bus error], core dumped\n\
+                      error: aborting due to 1 previous error";
+        let hint = toolchain_failure_hint(stderr).expect("SIGBUS must produce a hint");
+        assert!(hint.contains("ENVIRONMENT"), "hint: {hint}");
+        assert!(hint.contains("TMPDIR"), "hint should point at TMPDIR: {hint}");
+    }
+
+    #[test]
+    fn flags_enospc() {
+        assert!(toolchain_failure_hint("error: No space left on device (os error 28)").is_some());
+    }
+
+    #[test]
+    fn genuine_compile_error_gets_no_hint() {
+        // A real type error must pass through untouched so its diagnostics show.
+        let stderr = "error[E0308]: mismatched types\n  expected `i32`, found `&str`";
+        assert!(toolchain_failure_hint(stderr).is_none());
+    }
 }

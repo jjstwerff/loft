@@ -134,11 +134,18 @@ fn compile_cdylib(src: &str, stem: &str, tmp: &Path, rlib: &Path, deps: &Path) -
         .arg(format!("@{}", argfile.display()))
         .output()
         .expect("invoke rustc");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Surface an environment-failure hint (full TMPDIR / OOM) ABOVE the raw
+    // rustc spam — a SIGBUS from `ld` writing to a full tmpfs otherwise reads
+    // like a stale-cdylib or codegen bug. (Shared with loft's own pipeline.)
+    let hint = loft::native_lib::toolchain_failure_hint(&stderr)
+        .map(|h| format!("{h}\n\n"))
+        .unwrap_or_default();
     assert!(
         out.status.success(),
-        "cdylib compile FAILED. source at {}\n--- rustc stderr (tail) ---\n{}",
+        "{hint}cdylib compile FAILED. source at {}\n--- rustc stderr (tail) ---\n{}",
         rs.display(),
-        String::from_utf8_lossy(&out.stderr)
+        stderr
             .lines()
             .rev()
             .take(40)
