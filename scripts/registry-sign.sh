@@ -275,12 +275,21 @@ if git -C "$REG_DIR" diff --cached --quiet; then
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
     git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
-    if git -C "$REG_DIR" push -q 2>/tmp/_rs_push.$$; then
+    # Push reusing the gh login as git's credential helper: no username/password
+    # prompt on an HTTPS remote (the registry is often cloned over HTTPS), and
+    # harmless on an SSH remote (which uses your key).  `gh release create` etc.
+    # work because gh uses API auth; plain `git push` uses git's credential
+    # system, which without a helper falls back to prompting — and GitHub no
+    # longer accepts a password there.  GIT_TERMINAL_PROMPT=0 makes a genuinely
+    # missing credential fail fast instead of hanging on an interactive prompt.
+    if GIT_TERMINAL_PROMPT=0 git -C "$REG_DIR" \
+        -c credential.helper='!gh auth git-credential' push -q 2>/tmp/_rs_push.$$; then
         echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
         PUSHED=1
     else
         echo "!! push FAILED: $(cat /tmp/_rs_push.$$ 2>/dev/null)" >&2
         echo "   signed commit kept at $REG_DIR — push it manually." >&2
+        echo "   (auth? run 'gh auth setup-git' once, or use an SSH remote, then re-run.)" >&2
     fi
     rm -f "/tmp/_rs_push.$$"
 else

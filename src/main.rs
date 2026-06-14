@@ -1700,6 +1700,20 @@ field() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\".*/\1/p" l
 
 [ -f loft.toml ] || { echo "release.sh: no loft.toml here — run from the library dir." >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { echo "release.sh: needs the GitHub CLI (gh)." >&2; exit 1; }
+
+# Push without a username/password prompt by reusing your gh login as git's
+# credential helper (HTTPS remotes); harmless on SSH remotes (which use your
+# key).  `gh release create` works via gh's API auth, but plain `git push` uses
+# git's credential system — without a helper it prompts, and GitHub no longer
+# accepts a password there.  GIT_TERMINAL_PROMPT=0 fails fast instead of hanging.
+export GIT_TERMINAL_PROMPT=0
+gitpush() {
+    git -c credential.helper='!gh auth git-credential' push "$@" || {
+        echo "release.sh: git push failed — set up auth once with 'gh auth setup-git'," >&2
+        echo "             or use an SSH remote (git@github.com:OWNER/REPO.git)." >&2
+        exit 1
+    }
+}
 name=$(field name); [ -n "$name" ] || { echo "release.sh: no package name in loft.toml." >&2; exit 1; }
 
 # Optional version bump.
@@ -1738,8 +1752,8 @@ git diff --quiet && git diff --cached --quiet || {
 [ "$a" = "$b" ] || { echo "release.sh: non-deterministic package ($a != $b)." >&2; rm -f "$name-$ver.tar.gz"; exit 1; }
 
 git tag "$tag"
-git push origin HEAD
-git push origin "$tag"
+gitpush origin HEAD
+gitpush origin "$tag"
 gh release create "$tag" "$name-$ver.tar.gz" --title "$name v$ver" --notes "Release $name $ver."
 rm -f "$name-$ver.tar.gz"
 
