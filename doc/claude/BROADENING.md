@@ -218,6 +218,15 @@ compression, crypto, BLAS, and C UI toolkits as later riders.  That is the
 "there will be more" — recorded so the tier is designed as reusable, not a DB
 sub-feature.
 
+**Keep the loft side minimal — just the tooling to link.**  loft-core gains only
+a *generic linking tool* (the `#c` annotation + a `dlopen`/libffi runtime caller
++ the smallest viable marshalling); it carries **zero** database or per-library
+knowledge.  All complexity — type-specific conversions, structs/callbacks, the
+SQL + result-set logic — lives in the libraries (loft `#c` decls + `cc`-compiled
+ANSI-C shims).  The shim is the deliberate sink for complexity, so the success
+test for the `#c` work is *how little it adds to loft-core* — same ethos as
+draining library code out of the compiler crate (@PLN3).
+
 ---
 
 ## What not to do
