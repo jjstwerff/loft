@@ -176,8 +176,9 @@ fn print_help() {
     println!("                                (from ~/.loft/registry/), annotated with sha256");
     println!("                                + size + index status (active / yanked / orphan)");
     println!("  api [name]                    discover library APIs without leaving the shell:");
-    println!("                                api        — list libraries reachable from here");
-    println!("                                api <name> — print its public API surface");
+    println!("                                api            — list libraries reachable from here");
+    println!("                                api <name>     — print its public API surface");
+    println!("                                api --registry — list the whole installable catalog");
     println!("                                (pub signatures + doc comments, bodies stripped)");
     println!("  audit                         check every installed package against the");
     println!("                                advisory feed; exit 0 if clean, 1 if any low/bug,");
@@ -732,6 +733,28 @@ fn api_command(target: Option<&str>) {
     println!("`loft api <name>` prints a library's public API (signatures + doc comments).");
 }
 
+/// `loft api --registry` — list the whole installable catalog from the registry
+/// index (so an agent can discover what EXISTS, not just what's installed).
+/// Mirrors `loft search`'s trust posture (`allow_unsigned: true`): a *missing*
+/// signature is tolerated, but an *invalid* one still hard-fails.
+#[cfg(feature = "registry")]
+fn api_registry_catalog() {
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    match loft_install_load_index(&opts) {
+        Ok(index) => print!("{}", loft::registry_index::render_catalog(&index)),
+        Err(e) => {
+            eprintln!("loft api --registry: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// PKG.STUB — write `.loft/api/<name>.api` stubs (the public surface of every
 /// locked dependency) under `project_dir`.  Called by the lockfile-writing
 /// commands, so stub freshness rides the same trigger as `loft.lock` itself:
@@ -766,6 +789,25 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
         println!(
             "wrote {written} API stub(s) to {} (agent-readable; commit them)",
             api_dir.display()
+        );
+    }
+
+    // Alongside the per-dep stubs, write the registry CATALOG (_available.api) so
+    // an agent reading `.loft/api/` sees not just what the project depends on but
+    // everything else it could `loft install`.  Best-effort + cache-first: if the
+    // index can't load (offline / invalid signature) just skip — the install
+    // already succeeded, and discovery is a convenience, never a blocker.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+    if let Ok(index) = loft_install_load_index(&opts) {
+        let _ = std::fs::write(
+            api_dir.join("_available.api"),
+            loft::registry_index::render_catalog(&index),
         );
     }
 }
@@ -3798,8 +3840,12 @@ fn main() {
             // print one library's public surface.
             #[cfg(feature = "registry")]
             {
-                let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
-                api_command(target.as_deref());
+                if argv[i..].iter().any(|s| s == "--registry") {
+                    api_registry_catalog();
+                } else {
+                    let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
+                    api_command(target.as_deref());
+                }
                 return;
             }
             #[cfg(not(feature = "registry"))]
