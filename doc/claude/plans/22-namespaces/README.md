@@ -13,7 +13,7 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 **Phase 1 BUILT (2026-06-14) — two enums may share a variant name; matrix green on
 both backends; full suite green bar known-environmental (WASM rlib / port-bind).
-Phases 2–4 drafted.**
+Phase 2 design round done (2026-06-14); build pending. Phases 3–4 drafted.**
 
 The build landed via the chokepoint-first order.  **Final design (a deliberate
 choice with the project owner):** a bare variant used as a VALUE resolves ONLY via
@@ -267,14 +267,73 @@ clobbered an explicitly-provided sibling field (`Widget { color: Red }` → wron
 `color`).  Fixed by re-homing such a default to a FRESH work-ref in the construction
 context (regression: the `Cfg` case in 369).
 
-### Phase 2 — prelude shadowing (S–M)
+### Phase 2 — prelude shadowing (M)
 
-A user definition in the user source **shadows** a wildcard-imported / stdlib
-name of the same key, instead of being rejected. Makes `enum E` (and a user
-`PI`, `value`, `name`, …) legal. Removes the "pick a different name" wall.
+**Design round done (2026-06-14); build pending.**  A user definition shadows a
+stdlib / wildcard-imported name of the same key instead of being rejected, so
+`enum E` / `struct File` / `enum Format` become legal — removing the "pick a
+different name" wall — while the shadowed name stays reachable via qualification
+(`std::E`).
 
-- Decide the shadow direction explicitly (user def wins in its own source; a
-  *qualified* `consts::E` still reaches the shadowed one).
+**The collision surface (measured).**  Top-level stdlib *constants* are only two,
+both mathematical: `PI` and `E` (`E` = Euler's number, used by the stdlib's own
+`exp`/`ln`; those bind it at stdlib-parse time so shadowing never affects them).
+The larger, more valuable surface is stdlib **struct / enum** names a domain type
+wants to reuse — `File`, `Format`, `JsonValue`, `ArgValue`, `StackFrame`, … .
+Phase 2 is **scoped to const / struct / enum** shadowing; the **typedef
+type-keywords** (`integer`, `text`, `vector`, `hash`, `i32`, `reference`, …) stay
+a hard error — shadowing a built-in type is never intended and is a footgun.
+
+**The root clash (the load-bearing finding).**  The stdlib *and the user's main
+file are both `source 0`*, and `def_names` maps `(name, source) → one def_nr`.
+Bare `E` (`def_nr`) and `std::E` (`source_nr(0, …)`) therefore resolve through the
+**same `("E", 0)` slot** — it can hold the stdlib constant *or* the user enum, not
+both, and `add_def` panics on the duplicate `(E, 0)` key.  That single shared slot
+is the entire problem; nothing else clashes.
+
+**Chosen fix — give the main file its own source (`source 1`; stdlib stays
+`source 0`).**  The two `E`s then land in different slots, so bare and qualified
+naturally diverge — no extra machinery, and it matches the plan invariant
+(`(name, source)` key, current-source-first resolution):
+
+| lookup | keys | result |
+|---|---|---|
+| bare `E` | `("E", 1)` then `("E", 0)` | user enum |
+| `std::E` | `source_nr(0, "E")` → `("E", 0)` | stdlib constant |
+| `add_def("E")` in main | inserts a fresh `("E", 1)` | no dual-key panic |
+
+Two required changes: **(1)** assign the main file a non-zero source (after
+`reset()` sets `source = 0`, set it for the first `!default` parse); **(2)** make
+the four conflict checks **same-source** (`def(existing).source == self.data.source`)
+— `parse_enum`, `parse_struct`, `parse_constant`, the typedef path
+(`definitions.rs` ~351 / ~1845 / ~498 / ~413) — otherwise `def_nr` still falls
+through to the stdlib `E` at `source 0` and rejects it.
+
+**Rejected alternative — a shadow-map** (keep `("E", 0)` = stdlib; a separate
+`shadows` table consulted only by *bare* resolution, bypassed by `std::`).  It
+preserves `std::` too and is more localised, but it adds a parallel resolution
+table every bare-name site must consult and a stdlib/user boundary
+(`def_nr < first_user_def`) to tell "shadowing the prelude" from "redefining my
+own def".  `source 1` is preferred: less standing complexity, same guarantee.
+
+**Ripple risk to verify (why this is M, not S).**  Much of the compiler assumes
+`source 0 = user code`.  Moving main to `source 1` must be verified against:
+- **function overload resolution** (`find_fn`) — a user `fn sqrt` becomes
+  `(n_sqrt, 1)` vs stdlib `(n_sqrt, 0)`; confirm dispatch still collects stdlib
+  candidates;
+- **native symbol naming** (`n_<name>`, the P379 source-qualified rename) and
+  **database type registration** (`qualified_type_name`, which keys on
+  `def.source`) — user types' generated symbols / DB keys shift source;
+- **import source numbering** — libraries currently number up from 0; main taking
+  1 means libs start at 2.
+
+None look broken by construction, but these are where a subtle regression hides —
+so the build verifies the Phase-2 matrix (`/tmp/claude/p2`, graduate to
+`tests/scripts/`) **plus the full suite on both backends** (native / DB / import
+tests especially), not just the enum matrix.
+
+- **Shadow direction:** user def wins in its own source; `std::Name` reaches the
+  shadowed stdlib one.  (Open question #3 is settled by the scope above.)
 
 ### Phase 3 — `use … as …` aliasing (S–M)
 
@@ -308,8 +367,11 @@ Drop the flat top-level comma list (`use lib::a, b, c;`), which reads poorly.
    2 doc/lib fixtures relied on that), but the owner chose to make it an error so
    adding a second enum with the variant name can never silently re-point an
    existing bare assignment.  Those fixtures were migrated to the qualified form.
-3. **Shadowing scope** — only wildcard/prelude names shadowable, or any imported
-   name? Narrow first (prelude only).
+3. **Shadowing scope** — SETTLED (Phase 2 design, 2026-06-14): shadow stdlib /
+   wildcard-imported **const / struct / enum** names; built-in type-keywords
+   (`integer`, `vector`, …) stay a hard error.  Mechanism: give the main file its
+   own source (`source 1`) so `(name, source)` keys no longer collide with the
+   stdlib's `source 0`.  See Phase 2.
 4. **1.0 sequencing** — the `(enum, variant)` key change is observable (two-enum
    programs that panic today start compiling); land before the 1.0 stability
    contract.
