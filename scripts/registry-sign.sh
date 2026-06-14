@@ -22,7 +22,8 @@
 #     --no-push           sign + commit locally but do NOT push (keeps the clone)
 #     --yes               skip the confirm prompt (scripted use)
 #
-# On confirm it signs, commits index.json.sig, pushes, and (for an auto-clone)
+# On confirm it signs, commits index.json + index.json.sig together (so HEAD's
+# index always matches its signature — #377), pushes, and (for an auto-clone)
 # deletes the temp checkout.  A failed push keeps the clone so the signed commit
 # is never lost.
 #
@@ -231,14 +232,19 @@ SIGNED=1
 [ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
 echo "signed: $SIG"
 
-# Automated git: stage the signature, commit, push.  Ed25519 is deterministic,
-# so re-signing identical content yields the same bytes → nothing to commit.
-git -C "$REG_DIR" add index.json.sig
+# Automated git: stage index.json AND its signature together, commit, push.
+# Ed25519 is deterministic, so re-signing identical content yields the same bytes
+# → nothing to commit.  #377: staging only index.json.sig while a new/dirty
+# index.json sat uncommitted silently published a sig/index mismatch — the
+# committed .sig verified against content that never landed, and the new version
+# was never published.  Staging BOTH keeps HEAD self-consistent: its committed
+# index.json always matches its committed index.json.sig.
+git -C "$REG_DIR" add index.json index.json.sig
 if git -C "$REG_DIR" diff --cached --quiet; then
     echo "index.json.sig unchanged — nothing to commit."
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
-    git -C "$REG_DIR" commit -q -m "sign: regenerate index.json.sig"
+    git -C "$REG_DIR" commit -q -m "sign: commit index.json + regenerate index.json.sig"
     if git -C "$REG_DIR" push -q 2>/tmp/_rs_push.$$; then
         echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
         PUSHED=1
@@ -248,6 +254,6 @@ elif [ "$PUSH" = 1 ]; then
     fi
     rm -f "/tmp/_rs_push.$$"
 else
-    git -C "$REG_DIR" commit -q -m "sign: regenerate index.json.sig"
+    git -C "$REG_DIR" commit -q -m "sign: commit index.json + regenerate index.json.sig"
     echo "committed (--no-push): $(git -C "$REG_DIR" rev-parse --short HEAD) at $REG_DIR — push when ready."
 fi
