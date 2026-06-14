@@ -308,9 +308,21 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     # only the `"<ver>": {…}` member remains — wrapping `{…}` + parsing it below
     # choked on those trailing status lines otherwise.
     grep -vE '^#|^\[publish\]|^[[:space:]]*$' "$tmp/pub_$name.out" > "$tmp/entry_$name.json"
-    # First-version packages also need a package block; take the description
-    # from the library README's first paragraph.
-    desc=$(awk '/^[^#[:space:]]/ { print; exit }' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
+    # First-version packages also need a package block; take the description from
+    # the README's first real prose line.  Skip what isn't a description: HTML/
+    # license comment blocks (`<!-- … -->`), markdown headings (`# …`), fenced
+    # code blocks (``` … ```), and `//` / `<` lines.  (The old "first non-#,
+    # non-blank line" grabbed `<!--` as the description — see hex_world.)
+    desc=$(awk '
+        /^[[:space:]]*<!--/ { inc=1 }
+        inc { if (/-->/) inc=0; next }
+        /^[[:space:]]*```/ { fence = !fence; next }
+        fence { next }
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*(\/\/|<)/ { next }
+        { print; exit }
+    ' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
     if ! python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
         "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" <<'EOF'
 import json, sys
