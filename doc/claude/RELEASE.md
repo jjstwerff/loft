@@ -67,11 +67,14 @@ plan.  Closing is explicit and cross-repo:
   [`scripts/close-shipped-plans.sh`](../../scripts/close-shipped-plans.sh) —
   setting each plan `status:finished` + closing it.  (Needs a `PLANS_TOKEN`
   secret: Issues:write on the plans repo; without it the job no-ops.)
-- **Manual fallback + drift sweep:** run
-  `scripts/close-shipped-plans.sh --range <prev-release>..main` once after the
-  merge, and `scripts/audit-stale-plans.sh` to list any `status:active` plan
-  whose close directive is already on `main` — the safety net against forgotten
-  closes (the drift this caught by hand in `2026-06`: @PLN1/5/10/16/21).
+- **Drift safety net (runs daily):** the nightly checks
+  ([`miri.yml`](../../.github/workflows/miri.yml) → `stale-plans-audit`
+  job) run `scripts/audit-stale-plans.sh` every day, warning when a
+  `status:active` plan's close directive is already on `main` — so a missed
+  close surfaces within a day, not at the next audit-by-hand (the drift this
+  caught manually in `2026-06`: @PLN1/5/10/16/21).
+- **Manual fallback:** run `scripts/close-shipped-plans.sh --range
+  <prev-release>..main` once after the merge if the on-merge workflow didn't fire.
 
 ### `2026-06` — first monthly cycle, and the switch to calendar versioning
 

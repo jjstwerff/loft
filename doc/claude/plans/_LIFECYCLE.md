@@ -137,7 +137,8 @@ plans repo) — and on merge to `main` the `close-plans` workflow runs
 `scripts/close-shipped-plans.sh`, doing the `status:finished` + close above for
 you.  So the manual `gh` here is the *fallback* (or for an out-of-band close);
 `scripts/audit-stale-plans.sh` is the drift sweep that catches any plan left
-`status:active` after its work shipped.  See
+`status:active` after its work shipped — it runs **daily** in the nightly checks
+(`miri.yml` → `stale-plans-audit`).  See
 [RELEASE.md § Closing plans when the release merges](../RELEASE.md#closing-plans-when-the-release-merges).
 
 ### Step 6 — Repoint design links to the reference home
