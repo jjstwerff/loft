@@ -748,7 +748,8 @@ The core language, in one place.
 
 ## Version comparison links
 
-- [Unreleased vs 0.8.5](https://github.com/loft-lang/loft/compare/v0.8.5...main)
+- [Unreleased vs 2026-06](https://github.com/loft-lang/loft/compare/v2026.6.0...main)
+- [2026-06 (2026.6.0)](https://github.com/loft-lang/loft/compare/v0.8.5...v2026.6.0)
 - [0.8.5](https://github.com/loft-lang/loft/compare/v0.8.4...v0.8.5)
 - [0.8.4](https://github.com/loft-lang/loft/compare/v0.8.3...v0.8.4)
 - [0.8.3](https://github.com/loft-lang/loft/compare/v0.8.2...v0.8.3)

@@ -8,8 +8,15 @@ use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, 
 impl Parser {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
-        if let Type::Unknown(_) = tp {
-            if !self.first_pass {
+        if let Type::Unknown(_) | Type::Never = tp {
+            // @P376 — `Type::Never` is the poison an errored struct construction
+            // (`p = Plyer { … }` with an unknown `Plyer`) assigns to its
+            // variable.  Recover exactly like an unknown field access but
+            // WITHOUT a diagnostic: the real `unknown type '…'` was already
+            // reported at the construction, and re-reporting here is the
+            // cascade #376 is about.  Returning `tp` (Never) keeps the poison
+            // flowing so the enclosing format string / sweep stays silent too.
+            if !self.first_pass && matches!(tp, Type::Unknown(_)) {
                 diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
             }
             // In the first pass, skip the field name token so parsing continues.

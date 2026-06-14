@@ -520,14 +520,34 @@ impl Stores {
     /// slot.  (Sorted / ordered records are inline in the vector and the new
     /// one is already appended at the end when their `*_finish` runs, so they
     /// dedup by overwriting the found slot in place there, not here.)
-    pub(crate) fn dedup_keyed(&mut self, data: &DbRef, rec: &DbRef, db: u16, content_tp: u16) {
+    /// Replace any record already stored under `rec`'s key.
+    ///
+    /// `secondary` distinguishes a PRIMARY keyed collection (this index OWNS its
+    /// records) from a SECONDARY index auto-maintained for a sibling field via
+    /// `Field.other_indexes` (the "two views share records" pattern — a
+    /// `vector<T>` + `hash<T[k]>` in one struct).  A secondary index must only
+    /// UNLINK the stale key→record mapping; the displaced record is still held
+    /// by the primary collection (the vector), so freeing it here corrupts that
+    /// collection (read-back nulls / `Unknown record`).  This is the
+    /// `other_indexes` analogue of the @P305 `keyed_field_is_linked` update-only
+    /// path already used by `OpSetKeyed`.
+    pub(crate) fn dedup_keyed(
+        &mut self,
+        data: &DbRef,
+        rec: &DbRef,
+        db: u16,
+        content_tp: u16,
+        secondary: bool,
+    ) {
         let keys = self.types[db as usize].keys.clone();
         let key = keys::get_key(rec, &self.allocations, &keys);
         let existing = self.find(data, db, &key);
         if existing.rec != 0 && existing.rec != rec.rec {
-            self.remove_claims(&existing, content_tp);
             self.remove(data, &existing, db);
-            self.store_mut(data).delete(existing.rec);
+            if !secondary {
+                self.remove_claims(&existing, content_tp);
+                self.store_mut(data).delete(existing.rec);
+            }
         }
     }
 

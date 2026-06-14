@@ -1010,8 +1010,34 @@ use a separate collection or add after the loop"
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
-        // check RHS of assignment for unresolved variables.
-        self.known_var_or_type(code, &rhs_pos);
+        // @P376 — POISON an errored whole-RHS that resolves to `Unknown` (pass 2)
+        // so the assigned variable doesn't cascade.  In the final pass an Unknown
+        // whole-RHS is always an unresolved-name error — an undefined variable
+        // (`p = qqq`), an undefined function (`p = nofn(1)`), or an unknown
+        // struct (`p = Plyer {…}`, already `Never` via the construction).  The
+        // root error is reported (by `known_var_or_type` / the call resolver /
+        // the type lookup); leaving the variable `Unknown` makes every downstream
+        // use (`p.name`, the `{p.name}` format string, the post-parse sweep)
+        // re-report — an 8-9 error pileup ending in a format-string fatal.
+        // `Never` makes it the silent poison.  Pass 1 defers, and a forward ref
+        // resolves to a concrete type in pass 2, so its RHS is not `Unknown`
+        // there; a partly-bad RHS that still types (`p = qqq + 1` → integer) is
+        // not unknown, so it is untouched.
+        let poison = !self.first_pass && s_type.is_unknown();
+        // Check the RHS for unresolved variables — but NOT when `code` IS the
+        // assignment target: a failed struct construction / call leaves its
+        // discarded target `Var(var_nr)` as `code`, and re-validating it reports
+        // the spurious "Unknown variable '<target>'" (the cascade tail).  A
+        // genuine RHS variable (`p = qqq`) has `code != Var(var_nr)`, so its real
+        // "Unknown variable 'qqq'" still fires.
+        let code_is_target = matches!(code, Value::Var(c) if *c == var_nr);
+        let skip_rhs_check = matches!(s_type, Type::Never) || (poison && code_is_target);
+        if !skip_rhs_check {
+            self.known_var_or_type(code, &rhs_pos);
+        }
+        if poison {
+            s_type = Type::Never;
+        }
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
         }

@@ -433,11 +433,71 @@ rebuild it with
 
 | Site | Files | Read |
 |---|---|---|
-| `vector.rs:331` | `132-vector-elemset-inline-literal-uaf` | the file's own name says UAF — likely the documented shape's armed twin |
-| `codegen.rs:1871` | `166-p390-self-slice-assign` | singleton |
-| `codegen.rs:2560` | `examples/collections.loft` | singleton |
-| `compile.rs:306` | `75-native-stub` | the native-stub panic is that test's SUBJECT — likely expected-fail by design |
+| ~~`vector.rs:331`~~ | ~~`132-vector-elemset-inline-literal-uaf`~~ | **FIXED 2026-06-14** — see below |
+| `codegen.rs:1871` | `166-p390-self-slice-assign` | **VERIFIED over-strict 2026-06-14** — see below |
+| ~~`codegen.rs:2560`~~ | ~~`examples/collections.loft`~~ | **Both bugs FIXED 2026-06-14** (empty `{}` + dup-key vector+hash) — see below |
+| `compile.rs:306` | `75-native-stub` | now clean on the rebuilt armed binary (the native-stub panic is that test's SUBJECT — expected-fail by design) |
 | `control.rs:3487` (pass-2 growth) | `298-multi-return-site-ref-buffer` | the mapped arity-cascade class (see THE FIND above) |
+
+**2026-06-14 armed-residual triage** (branch `stability2nd`; reproduce any of
+these with `./target/debug/loft --tests <file>` on the armed binary — the CLI
+`--tests` runner is the harness's multi-top-level-entry path, the live shape):
+
+- **`132` — FIXED (was a SILENT use-after-free, interpreter only).**  A
+  field-of-element SET to a struct literal carrying a vector
+  (`xs[i].field = V{a: [literal]}`) built the nested vector IN PLACE by
+  appending via `OpNewRecord`, reusing one element-ref temp `_elm_2` across the
+  appends.  `generate_set`'s reassignment path emitted an UNCONDITIONAL pre-Set
+  `OpFreeRef` of the old `_elm_2` — but an `OpNewRecord` RHS returns an INTERIOR
+  ref into the vector's backing store, so consecutive elements share one store
+  and the whole-store free killed the live backing.  Correct bytes survived
+  until the next allocation recycled the freed store (NON-deterministic data
+  loss under churn; deterministic only under the armed `get_vector` assert).
+  The native generator's `if _old.store_nr != new.store_nr` guard already
+  protected it.  **Fix** (`src/state/codegen.rs` `generate_set`): route an
+  `OpNewRecord` RHS through the runtime-guarded post-free
+  (`OpFreeRefIfDistinct`).  Regression: `tests/scripts/372-field-elem-set-
+  nested-vector-uaf.loft` (armed-corpus member + release-CI over-fix baselines).
+- **`166` — VERIFIED over-strict armed assert (no runtime bug).**  The
+  `generate_set` first-assignment self-reference assert
+  (`!ir_contains_var(value, v)`) fires on the @P390 text/ref-element self-slice
+  (`v = v[a..b]`, `v: vector<text>`): `materialize_iterator` emits
+  `v_set(slice_elm, *next)` where `*next` legitimately re-reads `slice_elm`'s
+  slot (the materialization writes it before the outer Set re-reads), a benign
+  slot reuse.  Stress (50 rounds × 20-elem text vectors) is correct on BOTH
+  backends; the assert is over-approximating.  Lower priority (cosmetic for the
+  armed channel) — left as a known over-strict assert under the feature freeze.
+- **`collections.loft` — TWO bugs.  Bug 1 FIXED 2026-06-14; bug 2 is
+  design-level, localized + documented, example corrected to sidestep it.**
+
+  - **Bug 1 — empty `{}` keyed-literal silently corrupts. FIXED.**  loft's empty
+    collection literal is `[]`, NOT `{}` (`{}` is an empty Void BLOCK).  In a
+    collection-typed struct field, `Counter { by_text: {} }` lowered the `{}` to a
+    0-byte empty block that UNDER-FILLED the struct record (sibling vector field
+    mis-located → SIGSEGV interp / E0308 native; armed assert
+    `generate_call: mutable arg expected 16B but Block "empty block" pushed 0B`).
+    Fix (`src/parser/objects.rs` `parse_object_field`): in a collection-field
+    position, accept `{}` as the already-primed empty collection and WARN toward
+    `[]` (Goal F — warn + continue over silent corruption).  Regression
+    `tests/scripts/373-empty-braces-collection-field.loft`.
+
+  - **Bug 2 — duplicate hash key in a vector+hash sibling pair corrupts the
+    vector. FIXED.**  `Stores::field` (`src/database/types.rs` ~149) deliberately
+    LINKS an index-type field (`hash`/`sorted`/`index`) to a same-content sibling
+    field via `other_indexes` — the "two views share records" secondary-index
+    pattern (append to `vector<Word>` auto-maintains the `hash<Word[text]>`
+    index).  A duplicate key (`["apple","banana","apple"]`) routed through
+    `dedup_keyed`, which DELETED the displaced record to enforce the hash's
+    unique-key invariant — but the vector still held it positionally → element [0]
+    read null / `Unknown record` SIGSEGV (matrix: same struct + same element type
+    + a `hash` sibling (not `sorted`) + a KEY-field duplicate; hash elsewhere or
+    distinct keys were clean).  Fix (`src/database/search.rs` `dedup_keyed` gains a
+    `secondary` flag; `structures.rs` `record_finish` passes `true` for the
+    `other_indexes` loop): a SECONDARY index only UNLINKS the stale key→record
+    mapping, never deletes the record — the `other_indexes` analogue of @P305's
+    `keyed_field_is_linked` update-only path.  Semantics: the vector keeps every
+    record (insertion order, duplicates included); the hash keeps one per key, the
+    latest appended.  Regression `tests/scripts/374-vector-hash-sibling-dup-key.loft`.
 
 **The `store.rs:1640` row (7 files) is RESOLVED 2026-06-12** — the
 "keyed armed UAF" was not a use-after-free; the one assert site hid

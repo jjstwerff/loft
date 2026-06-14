@@ -1477,20 +1477,44 @@ fn p302_type_mismatch_arg_column() {
 /// An undefined type in a struct literal yields `unknown type '…'` at the type
 /// name's start — not a misleading `Expect token ;` mid-`{`.
 ///
-/// @P376 — the construction-defer rework (emit `unknown type` on pass 2 so a
-/// genuine forward reference resolves silently) leaves `x` typed `Unknown(0)`
-/// when the type is truly undefined, so every later read of `x` cascades.  The
-/// extra reads below track that accepted cascade until @P376 lands a recovery
-/// type that suppresses them (the primary `unknown type 'NoSuchType'` assertion
-/// is the contract; the rest document the current cascade).
+/// @P376 — a genuinely-undefined struct construction (`NoSuchType { … }`) is
+/// reported as ONE clean error.  Pass 1 defers the unknown construction (so a
+/// real forward / cross-package `Cell { … }` resolves silently in pass 2); when
+/// the name is still undefined in pass 2 it is a typo, and the assigned variable
+/// is POISONED with `Type::Never` so every downstream read (`print(x)`, field
+/// access, the post-parse unknown-type sweep) is silenced — no cascade.
 #[test]
 fn p302_unknown_type_struct_literal() {
     code!("fn test() { x = NoSuchType { a: 1 }; print(x); }")
-        .error("unknown type 'NoSuchType' at p302_unknown_type_struct_literal:1:17")
-        .error("Unknown variable 'x' at p302_unknown_type_struct_literal:1:17")
-        .error("Unknown variable 'x' at p302_unknown_type_struct_literal:1:44")
-        .error(
-            "Variable 'x' has unknown type — possible typo or missing definition \
-             at p302_unknown_type_struct_literal:1:49",
-        );
+        .error("unknown type 'NoSuchType' at p302_unknown_type_struct_literal:1:17");
+}
+
+/// @P376 (sibling) — an undefined VARIABLE on an assignment RHS, then used in a
+/// format string, used to produce the same 8-error cascade + nested-string
+/// fatal as the unknown-struct path.  The assignment poisons the variable to
+/// `Never` (pass 2), so only the root "Unknown variable 'qqq'" remains.
+#[test]
+fn p376_undefined_var_rhs_no_cascade() {
+    code!("fn test() { p = qqq; print(\"{p.name}\"); }")
+        .error("Unknown variable 'qqq' at p376_undefined_var_rhs_no_cascade:1:17");
+}
+
+/// @P376 (sibling) — an undefined FUNCTION call on an assignment RHS.  The
+/// failed call leaves its discarded target `Var(p)` as the RHS, so the cascade
+/// tail used to be a spurious "Unknown variable 'p'"; the poison + the
+/// `code == target` skip leave only the root "Unknown function".
+#[test]
+fn p376_undefined_fn_rhs_no_cascade() {
+    code!("fn test() { p = nofn(1); print(\"{p.name}\"); }")
+        .error("Unknown function nofn at p376_undefined_fn_rhs_no_cascade:1:25");
+}
+
+/// @P376 (sibling) — a directly interpolated undefined variable.  Returning
+/// `Void` from the format expression used to abort mid-placeholder, cascading
+/// "Expect token )" + "expected text, got void" + a nested-string fatal; the
+/// format expression now poisons to `Never` and parses the `{…}` cleanly.
+#[test]
+fn p376_undefined_var_in_format_no_cascade() {
+    code!("fn test() { print(\"{zzz}\"); }")
+        .error("Unknown variable 'zzz' at p376_undefined_var_in_format_no_cascade:1:21");
 }
