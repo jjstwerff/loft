@@ -386,6 +386,24 @@ narrow-int returns automatically.
 (the interpreter passes the store of the first ref arg, with allocation
 callbacks for ref/vector returns).
 
+### Direct C binding — `#c` (planned, @PLN24)
+
+`#native` above is the **Rust** binding: a hand-written `extern "C"` fn compiled
+by rustc into a cdylib.  A planned sibling annotation, **`#c "<symbol>"`**, binds
+a loft function **straight to a C-library symbol — no Rust wrapper, no rustc, no
+libffi**.  loft-core `dlopen`s the system library and calls the symbol through a
+small **fixed per-arity C-ABI caller** (`extern "C" fn(u64, …) -> u64`, one per
+arity — integer-class args collapse to a `u64` slot); the library is **pure loft**
+(`#c` decls) plus, for signatures the caller can't express (float / struct-by-
+value / varargs arguments), a `cc`-compiled **ANSI-C shim**.  Native-only (wasm
+has no C ABI / `dlopen`).  It is the foundation for binding system C libraries
+(databases, codecs, …) without the rustc toolchain, keeping loft-core minimal —
+the linking tool lives in core, all complexity in the library + shim.
+
+**Status: planned** — design in [@PLN24](https://github.com/loft-lang/plans/issues/24)
+(first consumer: the MariaDB/PostgreSQL clients, @PLN23).  Not yet implemented;
+`#native` is today's path.
+
 ### Registration — zero boilerplate
 
 You do **not** hand-maintain a register list.  A `build.rs` source-scans the
