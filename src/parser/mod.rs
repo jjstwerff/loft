@@ -4503,16 +4503,20 @@ impl Parser {
                 } else {
                     None
                 };
-                // Parse optional import spec: `::*` for wildcard, or
-                // `::name [as bind], …` for selective (with per-name aliases).
+                // Parse optional import spec: `::*` wildcard, a single
+                // `::name [as bind]`, or the grouped `::(a [as x], b, …)`.
+                // @PLN22 Phase 4 — multiple names MUST be grouped in parentheses;
+                // the flat top-level comma list (`use lib::a, b`) is dropped (it
+                // read poorly — `b` didn't visually bind to `lib::`).
                 let spec = if self.lexer.has_token("::") {
                     if self.lexer.has_token("*") {
                         Some(ImportSpec::Wildcard)
                     } else {
+                        let grouped = self.lexer.has_token("(");
                         let mut names = Vec::new();
                         while let Some(name) = self.lexer.has_identifier() {
-                            // @PLN22 Phase 3 — `use lib::Name as Alias;` binds the
-                            // imported Name under the bare alias.
+                            // @PLN22 Phase 3 — `Name as Alias` binds the imported
+                            // name under the bare alias (works inside `(…)` too).
                             let bind = if self.lexer.has_token("as") {
                                 self.lexer.has_identifier().unwrap_or_else(|| name.clone())
                             } else {
@@ -4523,11 +4527,22 @@ impl Parser {
                                 break;
                             }
                         }
+                        if grouped {
+                            self.lexer.token(")");
+                        } else if names.len() > 1 {
+                            // @PLN22 Phase 4 — flat comma list dropped; the names
+                            // are still bound (recovery) so the rest parses cleanly.
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "import multiple names with parentheses: `use {id}::(a, b, …)`"
+                            );
+                        }
                         if names.is_empty() {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
-                                "Expected name or '*' after '::'"
+                                "Expected name, '*', or '(' after '::'"
                             );
                             None
                         } else {

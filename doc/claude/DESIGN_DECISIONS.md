@@ -1243,3 +1243,29 @@ guards: `tests/issues.rs::issue_318_*`.
 the deep-copy path gets a designed ownership transfer (claim the captured
 stores into the host, or re-point the record at host-owned copies) —
 verified on both backends.
+
+## C76 — Selective imports group with `()`, not Rust-style `{}`; flat comma list dropped
+
+**Question.** How does a `use` import multiple names from one library — a flat
+top-level comma list (`use lib::a, b, c;`), Rust-style braces
+(`use lib::{a, b, c};`), or parentheses (`use lib::(a, b, c);`)?
+
+**Evaluation.** The flat list reads poorly — `b`/`c` don't visually bind to
+`lib::`, and at a glance look like separate statements.  `{}` is loft's
+block/struct-literal delimiter; reusing it for imports invites confusion with
+struct construction and a future `use lib::{ … }` block.  `()` is loft's existing
+arg-list/grouping delimiter, reads as "these names belong to `lib::`", and is
+lighter than braces.  Per-name `as` aliasing (@PLN22 Phase 3) composes inside any
+of the three.
+
+**Decision.** **Grouped `use lib::(a [as x], b, c);` (@PLN22 Phase 4, 2026-06-14).**
+A single `use lib::name [as bind];` is unchanged; multiple names MUST be
+parenthesised; the flat `use lib::a, b;` list is a hard error ("import multiple
+names with parentheses") that still binds the names (recovery).  Rust-style `{}`
+braces are NOT adopted — `{}` stays reserved for blocks/structs.  Sole flat-list
+site migrated; tests `imports::pln22_phase4_grouped_import` /
+`pln22_phase4_flat_list_rejected`.
+
+**Revisit when.** A concrete need arises for nested/path grouping that `()` can't
+express (e.g. `use a::(b::c, d)`), with a parse that doesn't collide with the
+struct-literal or call grammar.

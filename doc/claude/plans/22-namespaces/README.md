@@ -11,11 +11,11 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Phases 1, 2 & 3 BUILT (2026-06-14) — two enums may share a variant name (P1);
-user defs shadow stdlib/prelude names while `std::Name` still reaches the prelude
-(P2); `use … as …` aliasing for libraries, types, and functions (P3).  Matrix +
-suites green on both backends bar known-environmental (WASM rlib / port-bind).
-Phase 4 drafted.**
+**ALL PHASES BUILT (2026-06-14) — two enums may share a variant name (P1); user
+defs shadow stdlib/prelude names while `std::Name` still reaches the prelude (P2);
+`use … as …` aliasing for libraries, types, and functions (P3); grouped
+`use lib::(a as x, b);` selective imports, flat comma-list dropped (P4).  Matrix +
+suites green on both backends bar known-environmental (WASM rlib / port-bind).**
 
 The build landed via the chokepoint-first order.  **Final design (a deliberate
 choice with the project owner):** a bare variant used as a VALUE resolves ONLY via
@@ -386,16 +386,28 @@ you want bare under a non-colliding spelling).
   `as` after a `::`-spec name → per-name bind alias.  Both register/bind in the
   two-phase load (first-load + the `use_exists` re-parse).
 
-### Phase 4 — selective-import syntax (S; decision + migration)
+### Phase 4 — selective-import syntax — BUILT (2026-06-14)
 
-Drop the flat top-level comma list (`use lib::a, b, c;`), which reads poorly.
+Dropped the flat top-level comma list (`use lib::a, b, c;`), which read poorly
+(`b`/`c` didn't visually bind to `lib::`).  Now:
 
-- **Idiom**: one `use lib::name;` per line — greppable, unambiguous, no grouping.
-- **Optional grouped form**: `use lib::(a, b, c);` — `()` (loft's existing
-  arg-list delimiter) visually binds the names to `lib::`; lighter than Rust's
-  `::{}`, which stays reserved for blocks/structs.
-- Most code needs neither: `use lib;` (wildcard) or qualified `lib::fn()`
-  (auto-`use`) already cover the common cases. Migrate the few `::a, b` sites.
+- **Single**: `use lib::name [as bind];` — unchanged.
+- **Grouped**: `use lib::(a, b, c);` — `()` (loft's existing arg-list delimiter)
+  binds the names to `lib::`; per-name `as` aliases work inside (Phase 3 reused):
+  `use lib::(a as aa, b, c as cc);`.
+- **Flat list dropped**: `use lib::a, b;` errors ("import multiple names with
+  parentheses: `use lib::(a, b, …)`") and still binds the names (recovery), so the
+  rest of the file parses.
+- `use lib;` (wildcard) and qualified `lib::fn()` (auto-`use`) still cover the
+  common cases.
+
+**As-built:** one parsing change in the `use` region — after `::`, an optional `(`
+marks the group; the existing Phase-3 name loop parses `name [as bind]` entries; a
+grouped spec requires the closing `)`, an un-grouped spec with >1 name is the
+dropped flat list (error + recovery).  Migrated the sole flat-list `.loft` site
+(`tests/fixtures/libs/game_protocol/tests/protocol.loft`).  Tests:
+`tests/lib/p4_group_main.loft` (grouped + aliases, both backends),
+`imports::pln22_phase4_grouped_import` + `pln22_phase4_flat_list_rejected`.
 
 ## Open questions
 

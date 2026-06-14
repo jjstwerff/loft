@@ -156,8 +156,21 @@ allowed inside a fn body.
 ## Imports
 
 ```loft
-use arguments;    // resolved via lockfile -> loft.toml deps -> lib/ -> ~/.loft -> LOFT_LIB
+use arguments;                       // wildcard: all pub names bare + `arguments::` qualifier
+use arguments::*;                    // explicit wildcard (same as above)
+use arguments::parse_args;           // selective: just one name, bare
+use arguments::(parse_args, Flag);   // selective group — MULTIPLE names need parentheses
+use arguments::Flag as Opt;          // alias an imported name (bare `Opt`)
+use arguments::(Flag as Opt, parse_args);   // per-name aliases inside the group
+use arguments as args;               // library alias → `args::parse_args` (qualified-only,
+                                     //   does NOT import names bare)
 ```
+
+- **Multiple names MUST be parenthesised** — `use lib::a, b;` (flat comma list) is a
+  hard error; write `use lib::(a, b);`.  (@PLN22 Phase 4.)
+- `use lib as m;` gives a qualifier alias only (`m::fn`); it does not wildcard-import.
+- A qualified `lib::fn()` auto-loads the library — an explicit `use` is optional for
+  qualified access.
 
 **`use` declarations must appear before any other declarations in the file.**
 
@@ -271,9 +284,18 @@ integer (`t.0 as integer == 97`) or destructure first
 Simple enum (value type, no fields):
 ```loft
 enum Color { Red, Green, Blue }
-c = Color.Red;
+c = Color.Red;                 // qualify when DEFINING a new variable
 // ordering follows declaration order: Red < Green < Blue
 ```
+
+**Bare variants need a type context (@PLN22 Phase 1).**  A bare `Red` resolves only
+against a known enum — a `match` subject, a typed target (`c: Color = Red`), a
+typed reassignment / field, a parameter, a return type, an `==` LHS, or an `is`
+subject.  Defining a NEW untyped variable from a bare variant (`c = Red`) is a hard
+error — qualify it (`c = Color.Red`) or annotate (`c: Color = Red`).  Match arms and
+the other context positions still use the bare form (`match c { Red => … }`).  Two
+enums MAY share a variant name (`enum Color { Red }` + `enum Berry { Red }`); the
+bare `Red` resolves by its context enum.
 
 Struct-enum (each variant has fields; polymorphic dispatch via methods):
 ```loft
@@ -585,9 +607,19 @@ types, give them distinct names.  (Loop variables are also inference-only —
 
 ---
 
-## Builtin names — do not shadow
+## Builtin names — shadowing rules (@PLN22 Phase 2)
 
-`len`, `ticks`, `round`, `sorted`, `null`, `map`, `filter`, `reduce`, `rev`
+- **Definitions CAN shadow a stdlib/library name.**  `enum E`, `struct File`,
+  `pub PI = 3` are legal even though the stdlib has `E`/`File`/`PI`; your name wins
+  bare resolution and `std::Name` still reaches the original.
+- **Built-in TYPE-KEYWORDS are reserved** — you cannot define `struct integer`,
+  `enum vector`, etc.  Reserved: `integer`, `float`, `single`, `text`, `boolean`,
+  `character`, `vector`, `hash`, `sorted`, `index`, `i8`/`i16`/`i32`,
+  `u8`/`u16`/`u32`, `reference`, `iterator` (it errors: "conflicts with a type").
+- **A bare LOCAL variable must not be named after a builtin function/keyword** —
+  `len = 1`, `sorted = …`, `map = …` break the call/keyword (see the error table).
+  Builtin functions to avoid as variable names: `len`, `ticks`, `round`, `sorted`,
+  `null`, `map`, `filter`, `reduce`, `rev`.
 
 ---
 

@@ -118,3 +118,36 @@ fn pln22_phase3_use_as_aliasing() {
         p.diagnostics.lines()
     );
 }
+
+/// @PLN22 Phase 4 — grouped selective import `use lib::(a as x, b);`.  Parses a
+/// main file that imports two names from `enumlib` in one parenthesised group,
+/// with per-name aliases, and asserts both bind.
+#[test]
+fn pln22_phase4_grouped_import() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}p4_group_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "Expected no errors; got: {:?}",
+        p.diagnostics.lines()
+    );
+}
+
+/// @PLN22 Phase 4 — the flat comma list `use lib::a, b` is dropped; multiple
+/// names must be parenthesised.  Parsing the flat form must produce an error.
+#[test]
+fn pln22_phase4_flat_list_rejected() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}p4_flat_rejected.loft"), false);
+    assert!(
+        p.diagnostics.level() >= Level::Error,
+        "Expected the flat `use lib::a, b` list to be rejected"
+    );
+}
