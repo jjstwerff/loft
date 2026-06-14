@@ -360,7 +360,7 @@ impl Parser {
             && self.data.def_type(prelude) != DefType::Unknown
             // built-in type-keyword (stdlib typedef) — sacred.
             && !(self.data.def_type(prelude) == DefType::Type
-                && self.data.def(prelude).source == 0)
+                && self.data.def(prelude).source == crate::data::STD_SOURCE)
     }
 
     // <enum> ::= 'enum' <identifier> '{' <value> {, <value>} '}' [';']

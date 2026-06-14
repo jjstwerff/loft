@@ -42,11 +42,14 @@ pub static I32: Type = Type::Integer(IntegerSpec::signed32());
 /// and picks 8-byte storage.
 pub static I64: Type = Type::Integer(IntegerSpec::wide());
 
-/// @PLN22 Phase 2 — source numbering: 0 = the stdlib prelude, 1 = the main
-/// program, 2.. = imported libraries.  The main file gets its OWN source (not
-/// the stdlib's 0) so a user definition can shadow a prelude name — bare names
-/// resolve current-source-first with a fallback to source 0, while `std::Name`
-/// reaches the prelude.
+/// @PLN22 Phase 2 — source numbering: `STD_SOURCE` (0) = the stdlib prelude AND
+/// the home of program-global synthetic wrappers (`__tuple<…>`, `__fn_ref`,
+/// `main_vector<…>`); `MAIN_SOURCE` (1) = the user's main program; 2.. = imported
+/// libraries.  The main file gets its OWN source (not the prelude's) so a user
+/// definition can shadow a prelude name — bare names resolve current-source-first
+/// with a fallback to `STD_SOURCE`, while `std::Name` reaches the prelude.
+pub const STD_SOURCE: u16 = 0;
+/// See [`STD_SOURCE`] for the full source-numbering scheme.
 pub const MAIN_SOURCE: u16 = 1;
 
 /// Specification of an `integer`-family type — bounds, nullability,
@@ -2712,7 +2715,7 @@ impl Data {
             definitions: Vec::new(),
             def_names: HashMap::new(),
             use_names: HashMap::new(),
-            source: 0,
+            source: STD_SOURCE,
             used_definitions: HashSet::new(),
             used_attributes: HashSet::new(),
             referenced: HashMap::new(),
@@ -2732,8 +2735,8 @@ impl Data {
 
     pub fn reset(&mut self) {
         self.use_names.clear();
-        self.source = 0;
-        self.use_names.insert("std".to_string(), 0);
+        self.source = STD_SOURCE;
+        self.use_names.insert("std".to_string(), STD_SOURCE);
     }
 
     /// @PLN12 phase 02 — transactional rollback for the REPL statement parser.
@@ -2809,7 +2812,7 @@ impl Data {
         }
         self.op_codes = (max_op + 1) as u16;
         if self.use_names.is_empty() {
-            self.use_names.insert("std".to_string(), 0);
+            self.use_names.insert("std".to_string(), STD_SOURCE);
         }
     }
 
@@ -3486,7 +3489,9 @@ impl Data {
         if d_nr == u32::MAX {
             let vd = self.add_def(&name, lexer.pos(), DefType::Struct);
             // Also register globally (source=0) so other files can find it.
-            self.def_names.entry((name.clone(), 0)).or_insert(vd);
+            self.def_names
+                .entry((name.clone(), STD_SOURCE))
+                .or_insert(vd);
             // This synthetic wrapper is global, not owned by the file that
             // happened to first request it.  Stamp `source = 0` so a cache
             // reload's `rebuild_indices` (which keys `def_names` on each def's
@@ -3517,7 +3522,7 @@ impl Data {
     pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
         let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
         let name = format!("__tuple<{}>", inner_names.join(","));
-        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+        if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
             return nr;
         }
         if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
@@ -3528,8 +3533,10 @@ impl Data {
         // same tuple shape resolve to the same def.  Stamp `source = 0` too so
         // a cache reload's `rebuild_indices` reproduces the global binding (see
         // `vector_def`).
-        self.def_names.entry((name.clone(), 0)).or_insert(d);
-        self.definitions[d as usize].source = 0;
+        self.def_names
+            .entry((name.clone(), STD_SOURCE))
+            .or_insert(d);
+        self.definitions[d as usize].source = STD_SOURCE;
         self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         let mut indices: Vec<u16> = Vec::with_capacity(types.len());
         let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
@@ -3608,7 +3615,7 @@ impl Data {
     /// across every `Type::Function(...)` value in the program.
     pub fn fn_ref_def(&mut self, lexer: &mut Lexer) -> u32 {
         let name = "__fn_ref".to_string();
-        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+        if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
             return nr;
         }
         if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
@@ -3619,8 +3626,10 @@ impl Data {
         // `Type::Function` across all source files resolves to the
         // same synthetic struct.  Stamp `source = 0` too so a cache reload's
         // `rebuild_indices` reproduces the global binding (see `vector_def`).
-        self.def_names.entry((name.clone(), 0)).or_insert(d);
-        self.definitions[d as usize].source = 0;
+        self.def_names
+            .entry((name.clone(), STD_SOURCE))
+            .or_insert(d);
+        self.definitions[d as usize].source = STD_SOURCE;
         self.definitions[d as usize].returned = Type::Reference(d, Deps::none());
         // `_d_nr`: 4-byte signed integer holding the function's
         // def-nr.  The integer alias `i32` carries the `size(4)`
@@ -3673,7 +3682,7 @@ impl Data {
     pub fn def_nr(&self, name: &str) -> u32 {
         if let Some(nr) = self.def_names.get(&(name.to_string(), self.source)) {
             *nr
-        } else if let Some(nr) = self.def_names.get(&(name.to_string(), 0)) {
+        } else if let Some(nr) = self.def_names.get(&(name.to_string(), STD_SOURCE)) {
             *nr
         } else {
             u32::MAX
@@ -3699,7 +3708,7 @@ impl Data {
     pub fn name_type(&self, name: &str, source: u16) -> u16 {
         let nr = if let Some(nr) = self.def_names.get(&(name.to_string(), source)) {
             *nr
-        } else if let Some(nr) = self.def_names.get(&(name.to_string(), 0)) {
+        } else if let Some(nr) = self.def_names.get(&(name.to_string(), STD_SOURCE)) {
             *nr
         } else {
             return u16::MAX;
