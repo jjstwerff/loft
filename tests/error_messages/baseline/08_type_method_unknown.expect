@@ -7,40 +7,4 @@ error: Unknown field text.lengt
 3 |   n = t.lengt();
   |               ^
 
-error: Unknown variable 'n'
-  --> <cases>/08_type_method_unknown.loft:4:11
-  |
-4 |   print("{n}");
-  |           ^
-
-error: Incorrect expression in string was Unknown(0)
-  --> <cases>/08_type_method_unknown.loft:4:13
-  |
-4 |   print("{n}");
-  |             ^
-
-error: Expect token )
-  --> <cases>/08_type_method_unknown.loft:4:13
-  |
-4 |   print("{n}");
-  |             ^
-
-error: expected text, got void on call to print
-  --> <cases>/08_type_method_unknown.loft:4:10
-  |
-4 |   print("{n}");
-  |          ^
-
-fatal: Nested string literal not correctly terminated
-  --> <cases>/08_type_method_unknown.loft:4:16
-  |
-4 |   print("{n}");
-  |                ^
-
-error: Variable 'n' has unknown type — possible typo or missing definition
-  --> <cases>/08_type_method_unknown.loft:4:16
-  |
-4 |   print("{n}");
-  |                ^
-
-error: aborting due to 7 previous errors
+error: aborting due to 1 previous error

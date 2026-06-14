@@ -7,28 +7,4 @@ error: Unknown variable 'x'
 2 |   print("{x}");
   |           ^
 
-error: Incorrect expression in string was Unknown(0)
-  --> <cases>/11_type_var_uninitialised.loft:2:13
-  |
-2 |   print("{x}");
-  |             ^
-
-error: Expect token )
-  --> <cases>/11_type_var_uninitialised.loft:2:13
-  |
-2 |   print("{x}");
-  |             ^
-
-error: expected text, got void on call to print
-  --> <cases>/11_type_var_uninitialised.loft:2:10
-  |
-2 |   print("{x}");
-  |          ^
-
-fatal: Nested string literal not correctly terminated
-  --> <cases>/11_type_var_uninitialised.loft:2:16
-  |
-2 |   print("{x}");
-  |                ^
-
-error: aborting due to 5 previous errors
+error: aborting due to 1 previous error

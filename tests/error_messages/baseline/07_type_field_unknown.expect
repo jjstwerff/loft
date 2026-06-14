@@ -7,28 +7,4 @@ error: Unknown field Player.naem
 4 |   print("{p.naem}");
   |                  ^
 
-error: Incorrect expression in string was Unknown(0)
-  --> <cases>/07_type_field_unknown.loft:4:18
-  |
-4 |   print("{p.naem}");
-  |                  ^
-
-error: Expect token )
-  --> <cases>/07_type_field_unknown.loft:4:18
-  |
-4 |   print("{p.naem}");
-  |                  ^
-
-error: expected text, got void on call to print
-  --> <cases>/07_type_field_unknown.loft:4:10
-  |
-4 |   print("{p.naem}");
-  |          ^
-
-fatal: Nested string literal not correctly terminated
-  --> <cases>/07_type_field_unknown.loft:4:21
-  |
-4 |   print("{p.naem}");
-  |                     ^
-
-error: aborting due to 5 previous errors
+error: aborting due to 1 previous error

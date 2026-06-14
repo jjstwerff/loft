@@ -1378,13 +1378,17 @@ impl Parser {
                 list.push(tag_call);
             }
             self.un_ref(&mut tp, &mut format);
+            // @P376 — the format expression resolved to `Unknown`: a directly
+            // interpolated unresolved name (`print("{zzz}")`, zzz undefined)
+            // whose root "Unknown variable 'zzz'" already fired.  Returning
+            // `Void` here aborted mid-placeholder — the lexer never entered
+            // `Formatting` mode nor consumed the rest of the `{…}`, cascading
+            // "Expect token )", "expected text, got void", and a nested-string
+            // fatal.  Poison `tp` to `Never` and fall through to the normal flow:
+            // the placeholder parses + is consumed cleanly, the format dispatch
+            // silences `Never`, and only the root error remains.
             if !self.first_pass && tp.is_unknown() {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Incorrect expression in string was {tp:?}"
-                );
-                return Type::Void;
+                tp = Type::Never;
             }
             self.lexer.set_mode(Mode::Formatting);
             let mut state = OUTPUT_DEFAULT;
