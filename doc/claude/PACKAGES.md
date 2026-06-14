@@ -1256,34 +1256,27 @@ nothing else works.  P5-P6 can proceed in parallel with P3-P4 since the
 
 ## Open work
 
-The package **format itself is shipped**: `loft.toml` manifests
-work today, and 14 `lib/*` packages already use the format
-(`lib/server`, `lib/arguments`, `lib/moros_*`, `lib/graphics`,
-etc.).  The items below are remaining infrastructure work.
+The package **format, registry, and signing are SHIPPED**: `loft.toml`
+manifests, `loft package`/`install`/`search`/`info`, `loft.lock`, Ed25519
+index signing, and a bootstrapped 3-key trust root all work today —
+**13 libraries are live in [loft-lang/registry](https://github.com/loft-lang/registry)**
+and `loft install <name>` resolves + verifies + extracts them.  What remains is
+the native-prebuilt **distribution** glue, a release to activate the trust root,
+and the library-extraction arc.
 
-| Item | ROADMAP row | Section above | Status |
-|---|---|---|---|
-| **PKG.REG** — central package registry MVP (`loft install <name>` / `loft publish`) | 0.8.6 | § Package Registry; detailed draft in [PKG_REGISTRY.md](PKG_REGISTRY.md) | Open — designed, scheduled.  File-based MVP scopes to ~1 week (no server).  Migration to a real server later is a drop-in replacement at the same URL — see [PKG_REGISTRY.md § The invariant](PKG_REGISTRY.md#the-invariant--end-user-experience-is-identical-to-a-real-server). |
-| **PKG.7** — lock file (`loft.lock`) for reproducible builds | 0.8.6 | § Implementation phases | Open — small.  Implementation surface in `manifest.rs`. |
-| **PKG.EXTRACT** — move `lib/*/` out into per-family GitHub repos | 1.1+ | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) | Open, BLOCKED on PKG.REG.  Execution arc tracked separately in [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/) — per-library decisions, version-sync policy, per-library CI. |
-| **PKG.STUB** — generated in-project API stubs (`.loft/api/<name>.api`) + `loft api` for agent discovery | — | § Agent discovery — generated API stubs | SHIPPED (stubs on install/update/pin, `loft api [name]`, loft-write skill section, `tests/api_discovery.rs`).  Remaining: parser-walk upgrade (struct fields / multi-line signatures) shared with [API_SURFACE.md](API_SURFACE.md) `api-lint`. |
+| Item | Status |
+|---|---|
+| **PKG.REG** — registry MVP (`loft package`/`install`/`search`/`info`, resolve, sig-verify) | **SHIPPED 2026-05-24** — [PKG_REGISTRY.md](PKG_REGISTRY.md) R1–R9; 13 libs published. |
+| **PKG.7** — `loft.lock` reproducible builds | **SHIPPED 2026-05-24** — `src/lockfile.rs` (= R2). |
+| **PKG.SIGN** — Ed25519 trust root | **SHIPPED + MERGED 2026-06-14** — PR #371: three independent keys in `registry_keys.rs`, `scripts/registry-sign.sh` review-then-sign tool, live index signed ([REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)).  Fully active once a loft **release** ships the embedded keys. |
+| **PKG.PREBUILT** (@PLN21) — native prebuilts, no rustc to *use* a lib | **Producer SHIPPED, distribution glue OPEN.** `loft build-native` + the 4-OS `prebuild-native.yml` build cdylibs; consumer `fetch_prebuilt` loads a host-matching one.  Remaining: wire workflow artifacts → `index.json binaries[<triple>]`, the submit-CI gates, and a manylinux glibc baseline.  Scoped to **hand-written** native libs (auto-compiled libs are loft-build-locked — [plans/21](plans/21-prebuilt-native-libs/README.md)). |
+| **PKG.EXTRACT** — move `lib/*/` to per-family GitHub repos | **In progress.** Libraries already live in `loft-lang/loft-libs-*` + published; the prerequisite arc (drain library `#native` code out of the compiler crate) is active — [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/). |
+| **PKG.STUB** — generated API stubs + `loft api` | **SHIPPED** (stubs on install/update/pin, `loft api [name]`, `tests/api_discovery.rs`).  Remaining: parser-walk upgrade shared with [API_SURFACE.md](API_SURFACE.md) `api-lint`. |
 
-Suggested order:
-1. **PKG.7 lock file** — smallest, contained in `manifest.rs`.
-   Lands quickly; gives reproducible builds before registry work starts.
-2. **PKG.REG registry MVP** — bulk of the work.  Detailed design:
-   [PKG_REGISTRY.md](PKG_REGISTRY.md) (file-based MVP, server-compatible
-   URL surface).  Phases R1-R9 there map to:
-   (a) `loft package` CLI — tarball + sha256 (R1)
-   (b) `loft.lock` schema + writer (R2 = PKG.7)
-   (c) bootstrap `loft-lang/registry` repo with empty `registry.json` (R3)
-   (d) `loft install <name>[@<v>]` (R4)
-   (e) `loft install` (project), `loft update`, transitive resolution (R5-R7)
-   (f) `loft search` / `loft info` (R8)
-   (g) registry-PR CI validator (R9)
-   Server, signing, publish API are **future** Path 1 from PKG_REGISTRY.md
-   — the MVP buys per-library extraction without funding a service.
-3. **PKG.EXTRACT** — unblocked once PKG.REG ships; per-library extractions begin via [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/).
+**Remaining, in order:**
+1. **Cut a loft release** — activates the embedded trust root (PKG.SIGN); until then deployed loft has an empty trust root and ignores signatures.
+2. **Prebuilt distribution glue** (PKG.PREBUILT) — on a library tag, the producer attaches per-triple cdylibs to the GitHub release (`gh release upload`), then the registry `index.json` gains a `binaries[<triple>] = {url, sha256, loft_ffi_fp}` entry (signed via `registry-sign.sh`); add the submit-CI gates + a manylinux glibc baseline.  See [plans/21 § Phase 4b / Open](plans/21-prebuilt-native-libs/README.md).
+3. **PKG.EXTRACT** — continue draining the compiler crate + per-library moves via [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/).
 
 ---
 
