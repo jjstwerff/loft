@@ -275,6 +275,18 @@ stdlib / wildcard-imported name of the same key instead of being rejected, so
 different name" wall — while the shadowed name stays reachable via qualification
 (`std::E`).
 
+**Guiding principle (the WHY): a simple script is namespace-less; a complex
+program may redefine everything.**  A throwaway script writes bare `E`, `File`,
+`sqrt(…)` with zero ceremony — it never writes `std::` and never thinks about
+sources — because bare names resolve current-source-first with a **fallback to the
+stdlib (`source 0`)**.  A larger program may define its own `File` / `Format` /
+`E`; bare names then resolve to *its* definitions (current source wins), and
+`std::Name` is the explicit escape hatch back to the prelude.  The SAME lookup
+serves both — the only difference is whether you defined the name yourself — which
+is exactly why the `source 1` model is chosen: it makes "redefine everything" free
+(a fresh `(name, source)` key) and "namespace-less" free (the `source 0` fallback),
+with no mode switch.
+
 **The collision surface (measured).**  Top-level stdlib *constants* are only two,
 both mathematical: `PI` and `E` (`E` = Euler's number, used by the stdlib's own
 `exp`/`ln`; those bind it at stdlib-parse time so shadowing never affects them).
