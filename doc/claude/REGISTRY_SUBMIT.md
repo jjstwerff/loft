@@ -31,7 +31,7 @@ Before you can submit, you need:
 
    ```text
    my-lib/
-   ├── loft.toml          # [package] name, version, loft
+   ├── loft.toml          # [package] name, version, loft, repository
    ├── src/<name>.loft    # entry point (or [library] entry = "...")
    ├── tests/             # optional, but expected
    └── native/            # optional cdylib if you have native code
@@ -61,14 +61,33 @@ You do NOT need:
 
 ### 1. Tag the release in your source repo
 
+The tag scheme depends on the repo layout.  The loft-lang libraries ship as
+**domain monorepos** (`loft-libs-core`, `loft-libs-net`, `loft-libs-graphics`,
+`loft-libs-game`, `loft-libs-world`, `loft-libs-assets`) — several packages per
+repo — so the tag is **`<pkg>-v<version>`** to disambiguate.  A
+one-repo-per-package layout uses a bare `v<version>`.
+
 ```sh
-cd my-lib/
-git tag v0.1.0      # match [package] version in loft.toml
+cd loft-libs-core/                 # the monorepo
+git tag crypto-v0.2.1              # MONOREPO:  <pkg>-v<version>
+# git tag v0.2.1                   # one-repo-per-package: bare v<version>
 git push --tags
 ```
 
-The tag name MUST be `v<version>` — the registry's
-reproducible-build re-check expects this convention.
+Tell `loft package` which scheme to emit via `[package] repository` in
+`loft.toml`:
+
+```toml
+[package]
+name = "crypto"
+version = "0.2.1"
+repository = "loft-libs-core"      # → tag crypto-v0.2.1 at loft-lang/loft-libs-core
+                                   #   (a value with "/" is a full owner/repo)
+                                   # omit → legacy loft-<pkg> repo + bare v<version>
+```
+
+The version in the tag MUST match `[package] version` — the registry's
+reproducible-build re-check (gate 3) clones the tag and re-runs `loft package`.
 
 ### 2. Build the tarball with `loft package`
 
@@ -85,8 +104,8 @@ Package created:
   sha256:   <hex>
 
 Index entry to paste into loft-lang/registry/index.json (PKG_REGISTRY.md schema):
-  "0.1.0": {
-    "url": "https://github.com/<owner>/<repo>/releases/download/v0.1.0/my-lib-0.1.0.tar.gz",
+  "0.2.1": {
+    "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz",
     "sha256": "<hex>",
     "size": <N>,
     "loft": ">=0.8",
@@ -94,15 +113,19 @@ Index entry to paste into loft-lang/registry/index.json (PKG_REGISTRY.md schema)
   }
 ```
 
-The tarball is **deterministic** — same source dir → same
-sha256 across runs.  This is what gate 3 will re-check.
+The `url` is generated from `[package] repository` (the `<pkg>-v<version>` tag at
+that repo); with no `repository` it falls back to `loft-<pkg>/…/v<version>/…`.
+The tarball is **deterministic** — same source dir → same sha256 across runs.
+This is what gate 3 will re-check.
 
 ### 3. Upload the tarball as a GitHub release asset
 
+Use the SAME tag you pushed in step 1 (`<pkg>-v<version>` for a monorepo):
+
 ```sh
-gh release create v0.1.0 my-lib-0.1.0.tar.gz \
-    --title "v0.1.0" \
-    --notes "Initial release."
+gh release create crypto-v0.2.1 crypto-0.2.1.tar.gz \
+    --title "crypto 0.2.1" \
+    --notes "Patch release."
 ```
 
 The asset's URL — printed by `gh release create` and matching
@@ -196,14 +219,14 @@ depending on maintainer availability.
 
 ## Subsequent releases
 
-For `v0.2.0` after `v0.1.0` already shipped:
+For a new version after one already shipped (monorepo example, `crypto 0.2.1`):
 
 1. Bump `version` in `loft.toml`.
-2. `git tag v0.2.0 && git push --tags`.
+2. `git tag crypto-v0.2.1 && git push --tags`  (bare `v0.2.1` for a per-package repo).
 3. `loft package`.
-4. `gh release create v0.2.0 my-lib-0.2.0.tar.gz`.
+4. `gh release create crypto-v0.2.1 crypto-0.2.1.tar.gz`.
 5. PR adding ONLY the new version row (don't touch the
-   existing `0.1.0` row):
+   existing rows):
 
    ```diff
        "versions": {

@@ -84,6 +84,10 @@ pub struct PackageOutput {
     pub name: String,
     /// Package version (from `[package] version`).
     pub version: String,
+    /// Publishing repository (from `[package] repository`), if set.  Present →
+    /// monorepo (`<name>-v<version>` release tags); absent → legacy
+    /// one-repo-per-package fallback.  See `print_summary`.
+    pub repository: Option<String>,
 }
 
 /// Walk `pkg_dir`, build a gzipped tarball, write it to disk, and
@@ -166,6 +170,7 @@ pub fn package_create(pkg_dir: &Path, out_dir: Option<&Path>) -> io::Result<Pack
         sha256,
         name,
         version,
+        repository: manifest.repository,
     })
 }
 
@@ -312,16 +317,34 @@ pub fn print_summary(out: &PackageOutput, w: &mut dyn Write) -> io::Result<()> {
         "Index entry to paste into loft-lang/registry/index.json (PKG_REGISTRY.md schema):"
     )?;
     writeln!(w, "  \"{}\": {{", out.version)?;
-    writeln!(
-        w,
-        "    \"url\": \"https://github.com/loft-lang/loft-{}/releases/download/v{}/{}\",",
-        out.name,
-        out.version,
-        out.tarball
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default()
-    )?;
+    let tarball_name = out
+        .tarball
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // `[package] repository` set → the package ships from a monorepo, so the
+    // release tag is `<name>-v<version>` (disambiguates packages sharing one
+    // repo) at the named repo.  Absent → the legacy one-repo-per-package form
+    // (`loft-<name>` repo, bare `v<version>` tag).  A bare repository value is
+    // an org-relative repo under `loft-lang`; a value with `/` is `owner/repo`.
+    let url = match out.repository.as_deref() {
+        Some(repo) => {
+            let owner_repo = if repo.contains('/') {
+                repo.to_string()
+            } else {
+                format!("loft-lang/{repo}")
+            };
+            format!(
+                "https://github.com/{owner_repo}/releases/download/{}-v{}/{tarball_name}",
+                out.name, out.version
+            )
+        }
+        None => format!(
+            "https://github.com/loft-lang/loft-{}/releases/download/v{}/{tarball_name}",
+            out.name, out.version
+        ),
+    };
+    writeln!(w, "    \"url\": \"{url}\",")?;
     writeln!(w, "    \"sha256\": \"{}\",", out.sha256)?;
     writeln!(w, "    \"size\": {},", out.size)?;
     writeln!(w, "    \"loft\": \">=0.8\",")?;
@@ -376,6 +399,38 @@ mod tests {
         assert!(out.sha256.chars().all(|c| c.is_ascii_hexdigit()));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The generated registry URL follows `[package] repository`: a monorepo
+    /// uses the `<name>-v<version>` tag at the named repo; absence falls back to
+    /// the legacy one-repo-per-package `loft-<name>` + `v<version>` form.
+    #[test]
+    fn index_url_monorepo_vs_legacy() {
+        let mk = |repo: Option<&str>| PackageOutput {
+            tarball: PathBuf::from("crypto-0.2.1.tar.gz"),
+            size: 1,
+            sha256: "00".to_string(),
+            name: "crypto".to_string(),
+            version: "0.2.1".to_string(),
+            repository: repo.map(str::to_string),
+        };
+        let url_of = |o: &PackageOutput| {
+            let mut buf = Vec::new();
+            print_summary(o, &mut buf).unwrap();
+            String::from_utf8(buf).unwrap()
+        };
+        // monorepo (bare repo → org-relative under loft-lang)
+        assert!(url_of(&mk(Some("loft-libs-core"))).contains(
+            "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+        ));
+        // explicit owner/repo
+        assert!(url_of(&mk(Some("acme/widgets"))).contains(
+            "https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+        ));
+        // legacy fallback (no repository)
+        assert!(url_of(&mk(None)).contains(
+            "https://github.com/loft-lang/loft-crypto/releases/download/v0.2.1/crypto-0.2.1.tar.gz"
+        ));
     }
 
     #[test]

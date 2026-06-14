@@ -149,7 +149,10 @@ $ git push origin <name>-v<version>
 
 Tag convention is `<name>-v<version>` (e.g. `gridmesh-v0.1.1`).
 Required by the registry's gate-3 reproducible-build check —
-the validator clones at this tag to re-package.
+the validator clones at this tag to re-package.  Set
+`repository = "<monorepo>"` in `loft.toml` (e.g. `loft-libs-graphics`)
+so `loft package` emits the matching `<name>-v<version>` tag + release
+URL automatically (see PACKAGES.md § Manifest).
 
 ### 4b. Build + upload the release artifact
 

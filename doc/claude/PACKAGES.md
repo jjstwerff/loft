@@ -113,6 +113,11 @@ graphics/
 name = "graphics"
 version = "0.1.0"
 loft = ">=0.9"
+repository = "loft-libs-graphics"  # publishing repo — drives `loft package`'s
+                                   # release URL/tag.  A monorepo value (several
+                                   # packages share the repo) → `<name>-v<version>`
+                                   # tags; a value with "/" is a full owner/repo;
+                                   # omit → legacy loft-<name> repo + bare v<version>.
 
 [library]
 entry = "src/graphics.loft"
