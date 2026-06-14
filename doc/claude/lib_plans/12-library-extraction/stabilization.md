@@ -53,16 +53,13 @@ of scope here.  What remains in `lib/`:
 | `html`             | 3  | ✗ missing | ☐ | ☐ | ☐ | ☐ |
 | `input`            | 2  | ✗ missing | ☐ | ☐ | ☐ | ☐ |
 | `markdown`         | 2  | ✗ missing | ☐ | ☐ | ☐ | ☐ |
-| `moros_editor`     | 6  | ✗ missing | ☐ | ☐ | ☐ | ☐ |
-| `moros_map`        | 12 | ✗ missing | ☐ | ☐ | ☐ | ☐ |
-| `moros_render`     | 10 | ✗ missing | ☐ | ☐ | ☐ | ☐ |
-| `moros_sim`        | 17 | ✗ missing | ☐ | ☐ | ☐ | ☐ |
-| `moros_ui`         | 10 | ✗ missing | ☐ | ☐ | ☐ | ☐ |
+| ~~`moros_editor`/`moros_map`/`moros_render`/`moros_sim`/`moros_ui`~~ | — | **MOVED 2026-06-14** | — | — | — | — |
 
-**Cross-cutting finding (all nine):** none declares a `description` in
-its `loft.toml` — a LIBRARY_CHECKLIST metadata gap to fix across the
-set.  The five `moros_*` packages are one family (the moros RPG; see
-[moros-split.md](moros-split.md)).
+**Cross-cutting finding:** none of the remaining four (`audience_crystal`,
+`html`, `input`, `markdown`) declares a `description` in its `loft.toml` — a
+LIBRARY_CHECKLIST metadata gap to fix across the set.  (The five `moros_*`
+packages — the moros RPG family — left this table on 2026-06-14, moved to the
+moros project's own repo; see [moros-split.md](moros-split.md).)
 
 ### Loose single-file libraries (`lib/*.loft`, no manifest) — triage
 

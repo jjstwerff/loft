@@ -19,6 +19,18 @@ The shared-library matrix in the [main plan README](README.md#cross-project-cons
 sits alongside these phases — that matrix is the WHY for the
 work in this file.
 
+> **STATUS 2026-06-14 — the moros project repo move (Phase 7b) is DONE.**  Once
+> the compiler fixes (#375/#374/#373 + the `&`-param deferrals) made the moros
+> stack load + test-green on both backends, all five `lib/moros_*` packages were
+> moved to the moros project's own repo (`workspace/moros/lib/`) and removed from
+> this monorepo.  loft keeps fixture clones of the three it exercises in its own
+> feature tests (`tests/fixtures/libs/{moros_map,moros_editor,moros_render}`) — the
+> P150 leak guard, the `--html`/WASM smoke, the GLB exit-code guards, and the
+> @P379 per-library-namespace test retarget to those.  The Phase 7a "build out
+> `lib/world/`" narrative below is **historical** — `lib/world` already shipped to
+> `loft-libs-world` as `hex_grid`, and moros shipped with its own `Hex`/`Chunk`
+> rather than adopting it (a later adoption is the moros project's call).
+
 ---
 
 ### Phase 7a — moros world split (cross-project unlock; appears monorepo-internal)
