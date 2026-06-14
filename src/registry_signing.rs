@@ -50,6 +50,14 @@ pub enum VerifyResult {
 /// appropriate behaviour (refuse install unless `--allow-unsigned`).
 #[must_use]
 pub fn verify_index(index_bytes: &[u8], sig_bytes: &[u8]) -> VerifyResult {
+    verify_index_with_keys(TRUSTED_PUBLIC_KEYS, index_bytes, sig_bytes)
+}
+
+/// Core of [`verify_index`], parameterised on the trust-root key set so the
+/// `NoTrustRoot` (empty-set) and `Valid` branches stay testable independent of
+/// the compile-time `TRUSTED_PUBLIC_KEYS` — which is non-empty in a bootstrapped
+/// binary, so a test can no longer reach the empty case through it.
+fn verify_index_with_keys(keys: &[[u8; 32]], index_bytes: &[u8], sig_bytes: &[u8]) -> VerifyResult {
     if sig_bytes.len() != SIGNATURE_LENGTH {
         return VerifyResult::MalformedSignature;
     }
@@ -58,11 +66,11 @@ pub fn verify_index(index_bytes: &[u8], sig_bytes: &[u8]) -> VerifyResult {
     };
     let signature = Signature::from_bytes(&sig_array);
 
-    if TRUSTED_PUBLIC_KEYS.is_empty() {
+    if keys.is_empty() {
         return VerifyResult::NoTrustRoot;
     }
 
-    for pk_bytes in TRUSTED_PUBLIC_KEYS {
+    for pk_bytes in keys {
         let Ok(verifying_key) = VerifyingKey::from_bytes(pk_bytes) else {
             continue;
         };
@@ -86,11 +94,24 @@ mod tests {
 
     #[test]
     fn empty_trust_roots_yield_no_trust_root() {
-        // Pre-bootstrap state.  TRUSTED_PUBLIC_KEYS is empty by
-        // design — production binaries embed the real key.
+        // A bootstrapped binary's TRUSTED_PUBLIC_KEYS is non-empty, so exercise
+        // the NoTrustRoot branch through the parameterised core with an explicit
+        // empty key set.
         let sig = [0u8; SIGNATURE_LENGTH];
-        let result = verify_index(b"any bytes", &sig);
+        let result = verify_index_with_keys(&[], b"any bytes", &sig);
         assert!(matches!(result, VerifyResult::NoTrustRoot));
+    }
+
+    #[test]
+    fn non_empty_trust_root_verifies_a_matching_signature() {
+        // The Valid branch via the parameterised core: a signature made by an
+        // embedded key verifies (what `verify_index` does in production).
+        let signing = SigningKey::from_bytes(&[0x42u8; 32]);
+        let pk = signing.verifying_key().to_bytes();
+        let msg = b"index payload";
+        let sig = signing.sign(msg).to_bytes();
+        let result = verify_index_with_keys(&[pk], msg, &sig);
+        assert!(matches!(result, VerifyResult::Valid));
     }
 
     /// Round-trip test against a hard-coded keypair seed.  Validates
