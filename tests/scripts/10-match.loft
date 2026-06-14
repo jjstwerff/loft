@@ -8,19 +8,19 @@
 enum Direction { North, East, South, West }
 
 fn test_plain_all_arms() {
-  d = South;
+  d = Direction.South;
   r = match d { North => "N", East => "E", South => "S", West => "W" };
   assert(r == "S", "all arms");
 }
 
 fn test_plain_wildcard() {
-  d = West;
+  d = Direction.West;
   r = match d { North => "north", _ => "other" };
   assert(r == "other", "wildcard");
 }
 
 fn test_plain_wildcard_first() {
-  d = North;
+  d = Direction.North;
   r = match d { South => "south", _ => "not south" };
   assert(r == "not south", "wildcard first");
 }
@@ -38,7 +38,7 @@ fn test_plain_as_statement() {
 enum Priority { Low, Medium, High }
 
 fn test_plain_as_integer_value() {
-  p = High;
+  p = Priority.High;
   v = match p { Low => 1, Medium => 5, High => 10 };
   assert(v * 2 == 20, "integer value");
 }
@@ -106,8 +106,8 @@ enum NX { NA, NB }
 enum NY { NP, NQ }
 
 fn test_match_nested() {
-  x = NA;
-  y = NQ;
+  x = NX.NA;
+  y = NY.NQ;
   r = match x { NA => match y { NP => 1, NQ => 2 }, NB => 0 };
   assert(r == 2, "nested");
 }
@@ -115,7 +115,7 @@ fn test_match_nested() {
 enum Flag { On, Off }
 
 fn test_match_in_call() {
-  f = On;
+  f = Flag.On;
   r = len(match f { On => "enabled", Off => "disabled" });
   assert(r == 7, "in call");
 }
@@ -161,7 +161,7 @@ fn test_match_scalar_boolean() {
 }
 
 fn test_match_with_commas() {
-  d = East;
+  d = Direction.East;
   r = match d { North => "N", East => "E", South => "S", West => "W", };
   assert(r == "E", "commas");
 }
@@ -207,7 +207,7 @@ fn test_match_range_boundary() {
 // ── Guard clauses ───────────────────────────────────────────────────────────
 
 fn test_guard_basic() {
-  p = High;
+  p = Priority.High;
   r = match p { High if false => 99, High => 10, _ => 0 };
   assert(r == 10, "basic guard");
 }

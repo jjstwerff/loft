@@ -11,16 +11,23 @@ Tracker: [@PLN22](https://github.com/loft-lang/plans/issues/22).  Standard plan
 
 ## Status (REQUIRED)
 
-**Phase 1 BUILT (2026-06-14) — two enums may share a variant name; full matrix
-green on both backends; `loft_suite`/`issues`/`imports` green. Phases 2–4 drafted.**
+**Phase 1 BUILT (2026-06-14) — two enums may share a variant name; matrix green on
+both backends; full suite green bar known-environmental (WASM rlib / port-bind).
+Phases 2–4 drafted.**
 
-The build landed via the chokepoint-first order, with one essential refinement to
-the de-globalize step (see *Phase 1 — built* below): instead of removing variants
-from the flat namespace outright, a same-source variant collision is now recorded
-in an `ambiguous_variants` set and the flat value resolver *declines* an ambiguous
-name so it resolves by context — which **preserves** the widely-used no-context
-unique-variant inference (`s = Idle`) that the original plan wrongly assumed was
-already an error (falsified by 44 existing tests).
+The build landed via the chokepoint-first order.  **Final design (a deliberate
+choice with the project owner):** a bare variant used as a VALUE resolves ONLY via
+context (match subject, typed decl, typed reassignment / `rec.field`, parameter,
+return incl. an `if`-branch tail, struct-field type & default, `==` LHS,
+`Enum::`/`Enum.` qualifier).  A bare variant used to DEFINE a new untyped variable
+(`x = Red`) is a **hard error — even when the name is currently unique** — so that
+adding a second enum with that variant name can never silently re-point an existing
+bare assignment (the friction the owner asked to eliminate).  The variant name
+stays usable as a TYPE / constructor (`Circle { … }`, `s: Circle`,
+`fn f(self: Circle)`), so struct-variant construction is unaffected.
+
+This SUPERSEDES an interim "ambiguity-tracking" build (which preserved no-context
+*unique* `s = Idle`) — the owner chose the stricter rule on 2026-06-14.
 
 **Phase 1 design round done (2026-06-13). Phases 2–4 drafted.**
 An earlier draft framed this as
@@ -212,47 +219,50 @@ stay at step 1.
 
 ### Phase 1 — BUILT (2026-06-14)
 
-Built in the chokepoint-first order above. The boundary matrix (`/tmp/claude/pln22`,
-graduated to [`tests/scripts/369-pln22-shared-enum-variants.loft`](../../../../tests/scripts/369-pln22-shared-enum-variants.loft))
-is green on **both** backends: 7 single-enum regression cells + 7 two-enum
-collision cells pass, the control cell fails.
+Built in the chokepoint-first order above.  The boundary matrix (`/tmp/claude/pln22`,
+graduated to [`tests/scripts/369-pln22-shared-enum-variants.loft`](../../../../tests/scripts/369-pln22-shared-enum-variants.loft)
+for the working cases + a `@EXPECT_ERROR` case in
+[`102-expected-errors.loft`](../../../../tests/scripts/102-expected-errors.loft))
+is green on **both** backends.
 
-**Step-6 ESSENTIAL DIVERGENCE — de-globalize became "ambiguity-tracking," not
-"remove the key."** Applying a pure de-globalize (drop variants from `def_names`
-entirely) made the matrix reveal a class the design missed: a bare variant with
-**no** expected-type context (`s = Idle`, untyped local) is *widely* used — 44
-existing tests rely on it — and resolves today only because the flat global
-registry infers the variant's enum. The plan's open-question #2 ("no-context bare
-variant is already an error") was **falsified** by those tests. So the flip keeps
-the flat key for the FIRST variant of a name (unique → still resolves with no
-context, preserving inference) and records a same-source collision in a new
-`ambiguous_variants` set; the flat value resolver (`parse_constant_value` AND the
-`parse_var` `def_nr` branch) **declines** an ambiguous name so it routes to the
-context chokepoints. A no-context *ambiguous* bare variant is the only new error
-(qualify it) — exactly the narrow case the collision creates.
+**The rule (owner decision, 2026-06-14):** a bare variant resolves as a VALUE only
+from CONTEXT; defining a new untyped variable from a bare variant is a hard error
+even when unique.  This SUPERSEDES the interim "ambiguity-tracking" build — which
+kept no-context *unique* `s = Idle` working — because that very inference is the
+friction the owner wanted gone (add a second enum with the name later → the bare
+assignment silently re-points or breaks).  An enum VARIANT keeps a first-wins flat
+`(name, source)` key so it stays reachable as a TYPE / constructor, but a bare
+variant VALUE never resolves through that key.
 
 **As-built sites:**
-- `data.rs` — `Data::variant_of(enum, name)` + `variant_in_source(source, name)`
-  chokepoints; `add_def` records EnumValue collisions in `ambiguous_variants`
-  (no panic) instead of asserting; `is_ambiguous_variant`; `rebuild_indices` +
-  `derived_indices_diff` re-derive/compare the set (cache round-trip safe).
-- `parser/control.rs` — match arm + or-pattern + `is` route through `variant_of`;
-  call-arg sets `enum_hint` from the param enum (both passes); `parse_block` sets
-  `enum_hint` from the block's expected type (return-body tail).
-- `parser/objects.rs` — qualified `Enum::Variant` / `lib::Variant` resolve via
-  `variant_of`/`variant_in_source` (new `qualifier_enum` param); flat `def_nr`
-  branch + `parse_constant_value` decline ambiguous variants; new
-  `Type::Reference(enum)` ↔ `Type::Enum` normalization branch; `enum_context` helper.
-- `parser/vectors.rs` — `parse_single` seeds the variant context from `var_tp`
-  (typed-decl / `==`) else `enum_hint` (arg / return).
+- `data.rs` — `variant_of(enum, name)` + `variant_in_source(source, name)` +
+  `enums_with_variant(name)` chokepoints; `add_def` keeps EnumValue as a FIRST-wins
+  flat key (no panic on a shared name); `rebuild_indices` mirrors it.
+- `parser/objects.rs` — `parse_constant_value` resolves a qualified `Enum::Variant`
+  via `variant_of(qualifier_enum)` and a `lib::Variant` via `variant_in_source`,
+  but DEFERS a bare variant VALUE (no `{`-construction) to context; the flat
+  `def_nr` branch excludes `EnumValue`; the context branches + a new
+  `Type::Reference(enum)`↔`Type::Enum` branch resolve via `emit_variant_value`
+  (the single emitter, plain discriminant or mixed-enum allocation); the resolver's
+  error path emits a targeted "bare variant … qualify it as `Enum.X`" diagnostic and
+  RECOVERS by resolving against the enum so no placeholder var poisons the second
+  pass (without this, one bad site cascades into dozens of "Unknown variable").
+- `parser/control.rs` — match arm / or-pattern / `is` route through `variant_of`;
+  call-arg sets `enum_hint` from the param enum (BOTH passes); `parse_block` sets
+  `enum_hint` from the block's expected type and SAVES/RESTORES it (so every
+  `if`-branch tail of a typed-return fn sees it, not just the first).
+- `parser/vectors.rs` — `parse_single` seeds the variant context from `var_tp` else
+  `enum_hint` whenever `parent_tp` is not itself an enum (covers typed decl, `==`,
+  call arg, return, struct-field init); `enum_context` helper.
+- `parser/definitions.rs` — enum second-pass re-resolve via `variant_of`; struct
+  field DEFAULT (`level: Level = Warning`) sets `enum_hint` from the field type.
 - `parser/mod.rs` — `enum_hint` parser field (mirrors `lambda_hint`).
-- `parser/definitions.rs` — enum second-pass re-resolve via `variant_of`.
 
-**Threading mechanism (the bulk, as the spikes predicted):** the bare value-position
-variant resolves against an expected enum carried by `var_tp` (typed-local decl,
-`==` RHS — already threaded) or the `enum_hint` parser field (call arg, return-body
-tail — NOT carried by `var_tp`, set per-site and on BOTH passes so pass-1 does not
-create a stray placeholder var that shadows the variant on pass-2).
+**Known follow-up (branch-internal):** a MIXED struct-enum unit-variant used as a
+struct field DEFAULT (`sig: Sig = Idle`) combined with an explicitly-provided
+sibling field mis-builds the sibling on both backends.  Narrow combination
+(plain-enum defaults — the real lib/logger pattern — and mixed-enum typed locals
+both work); deferred, not a Phase-1 blocker.
 
 ### Phase 2 — prelude shadowing (S–M)
 
@@ -289,10 +299,12 @@ Drop the flat top-level comma list (`use lib::a, b, c;`), which reads poorly.
    or a dedicated `variant_names` map keyed `(enum_def, name)`? Settle in the
    Phase-1 design round; `attr_names` reuse is the leaner hypothesis.
 2. **Bare variant with NO context** (`x = Up`, untyped) — RESOLVED (Phase 1
-   build): the original premise ("already an error") was FALSE — a *unique*
-   no-context bare variant resolves and infers its enum (44 tests rely on it), so
-   the build preserves it. Only an *ambiguous* no-context bare variant (a name two
-   enums share, used with no context) is an error → qualify it (`x = Dir::Up`).
+   build, owner decision): it is ALWAYS a hard error, even when `Up` is currently
+   unique → qualify it (`x = Dir.Up` / `x: Dir = Up`).  The original premise
+   ("already an error") was inaccurate (it used to infer the enum, and ~16 tests +
+   2 doc/lib fixtures relied on that), but the owner chose to make it an error so
+   adding a second enum with the variant name can never silently re-point an
+   existing bare assignment.  Those fixtures were migrated to the qualified form.
 3. **Shadowing scope** — only wildcard/prelude names shadowable, or any imported
    name? Narrow first (prelude only).
 4. **1.0 sequencing** — the `(enum, variant)` key change is observable (two-enum

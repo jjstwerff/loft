@@ -63,16 +63,16 @@ fn tag_name(t: Tagged) -> text {
 
 fn main() {
   // --- Plain enum: equality and ordering ---
-  d = East;
+  d = Direction.East;
   assert(d == East, "enum equality");
   assert(d != North, "enum inequality");
   assert(d > North, "East > North by declaration order");
-  assert(West > South, "West last so greatest");
-  assert(North < East, "North first so smallest");
+  assert(Direction.West > South, "West last so greatest");
+  assert(Direction.North < East, "North first so smallest");
   // --- Text conversion ---
   assert("West" as Direction == West, "text to enum");
-  assert("{East}" == "East", "enum to text");
-  assert("{North}" == "North", "enum North to text");
+  assert("{Direction.East}" == "East", "enum to text");
+  assert("{Direction.North}" == "North", "enum North to text");
   // --- Struct enum: construction and field access ---
   c = Circle {radius: 1.0 };
   assert(c.radius == 1.0, "circle radius field");
@@ -95,7 +95,7 @@ fn main() {
   bad_dir2 = "" as Direction;
   assert("{bad_dir2}" == "null", "empty string to enum formats as null");
   // --- Enum stored in a vector ---
-  dirs =[North, East, South, West];
+  dirs: vector<Direction> = [North, East, South, West];
   assert(dirs[0] == North, "enum vector [0]");
   assert(dirs[3] == West, "enum vector [3]");
   assert("{dirs[10]}" == "null", "enum vector out-of-bounds formats as null");
@@ -110,8 +110,8 @@ fn main() {
   }
   assert(count == 4, "for loop over enum vector terminates with correct count");
   // Collect the values to verify ordering is preserved.
-  first_dir = North;
-  last_dir = North;
+  first_dir = Direction.North;
+  last_dir = Direction.North;
   n = 0;
   for curr_dir in dirs {
     if n == 0 {
@@ -123,7 +123,7 @@ fn main() {
   assert(first_dir == North, "first element from enum vector iteration");
   assert(last_dir == West, "last element from enum vector iteration");
   // --- Enum in if-expression ---
-  current = South;
+  current = Direction.South;
   label = if current == North {
     "N"
   } else if current == South {
@@ -133,10 +133,10 @@ fn main() {
   };
   assert(label == "S", "enum in if-expression branches");
   // --- Enum ordering covers all four values ---
-  assert(North < East, "N < E");
-  assert(East < South, "E < S");
-  assert(South < West, "S < W");
-  assert(West > North, "W > N");
+  assert(Direction.North < East, "N < E");
+  assert(Direction.East < South, "E < S");
+  assert(Direction.South < West, "S < W");
+  assert(Direction.West > North, "W > N");
   // --- Stub: non-stub variant dispatches correctly; stub variant does not panic ---
   f = Full {v: 7.0 };
   assert(f.blob_val() == 7.0, "stub: non-stub variant returns correct value");

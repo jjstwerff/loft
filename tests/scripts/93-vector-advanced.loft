@@ -16,7 +16,7 @@
 enum VVal { VA, VB, VC }
 
 fn test_append_vector() {
-  v = [VA, VA];
+  v: vector<VVal> = [VA, VA];
   v += [VB] + [VC] + [VA];
   assert("{v}" == "[VA,VA,VB,VC,VA]", "append enum vector");
 }

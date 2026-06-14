@@ -2505,13 +2505,6 @@ pub struct Data {
     pub definitions: Vec<Definition>,
     /// Index on definitions on name
     def_names: HashMap<(String, u16), u32>,
-    /// @PLN22 Phase 1 — `(variant_name, source)` keys shared by two or more
-    /// enum variants in the same source.  `add_def` records a collision here
-    /// instead of panicking; the flat resolver (`parse_constant_value`) declines
-    /// an ambiguous bare variant so it resolves by CONTEXT (match subject, typed
-    /// decl, parameter, return, `==` LHS, `Enum::`/`lib::` qualifier).  A pure
-    /// function of `definitions` — re-derived by `rebuild_indices`.
-    ambiguous_variants: HashSet<(String, u16)>,
     use_names: HashMap<String, u16>,
     /// Current source file
     pub source: u16,
@@ -2711,7 +2704,6 @@ impl Data {
         Data {
             definitions: Vec::new(),
             def_names: HashMap::new(),
-            ambiguous_variants: HashSet::new(),
             use_names: HashMap::new(),
             source: 0,
             used_definitions: HashSet::new(),
@@ -2760,8 +2752,10 @@ impl Data {
     /// this re-derives them so the loaded `Data` matches a fresh parse:
     ///
     /// * `def_names` — `(name, source) -> def_nr`, inserted in definition
-    ///   order so a duplicate `(name, source)` resolves last-wins, exactly
-    ///   as repeated `add_def` calls do during parsing.
+    ///   order.  Non-variant kinds are unique per source; an enum VARIANT
+    ///   keeps a FIRST-wins key (@PLN22 Phase 1 — reachable as a
+    ///   type/constructor, while a bare variant VALUE resolves via context),
+    ///   mirroring `add_def`.
     /// * `operators` — `op_code -> def_nr`, and `op_codes` — the
     ///   next-free counter (`max assigned op_code + 1`).  `op_code` values
     ///   themselves are restored from each `Definition` (not recomputed).
@@ -2776,22 +2770,20 @@ impl Data {
     /// reconciliation is a later extension if per-library snapshots land.
     pub(crate) fn rebuild_indices(&mut self) {
         self.def_names.clear();
-        self.ambiguous_variants.clear();
         self.operators.clear();
         self.possible.clear();
         let mut max_op: i32 = -1;
         for d_nr in 0..self.definitions.len() as u32 {
             let def = &self.definitions[d_nr as usize];
-            let key = (def.name.clone(), def.source);
-            // @PLN22 Phase 1 — mirror add_def: an enum variant is first-wins and
-            // a same-source duplicate is recorded ambiguous (not overwritten), so
-            // a rebuilt index matches a fresh parse.  Every other def kind keeps
-            // the original insert (no same-source duplicates exist for them).
-            let key_exists = self.def_names.contains_key(&key);
-            if def.def_type == DefType::EnumValue && key_exists {
-                self.ambiguous_variants.insert(key);
+            // @PLN22 Phase 1 — mirror add_def: an enum variant keeps a FIRST-wins
+            // flat key (reachable as a type/constructor); a later same-key variant
+            // does not overwrite it.  Every other def kind is unique per source.
+            if def.def_type == DefType::EnumValue {
+                self.def_names
+                    .entry((def.name.clone(), def.source))
+                    .or_insert(d_nr);
             } else {
-                self.def_names.insert(key, d_nr);
+                self.def_names.insert((def.name.clone(), def.source), d_nr);
             }
             if def.is_operator() {
                 if def.op_code != u16::MAX {
@@ -2873,14 +2865,6 @@ impl Data {
             out.push(format!(
                 "use_names module map differs: fresh {:?}, loaded {:?}",
                 self.use_names, other.use_names
-            ));
-        }
-        // @PLN22 Phase 1 — the ambiguous-variant set is re-derived by
-        // rebuild_indices, so a round-trip must reproduce it exactly.
-        if self.ambiguous_variants != other.ambiguous_variants {
-            out.push(format!(
-                "ambiguous_variants set differs: fresh {:?}, loaded {:?}",
-                self.ambiguous_variants, other.ambiguous_variants
             ));
         }
         out
@@ -3027,28 +3011,28 @@ impl Data {
     */
     pub fn add_def(&mut self, name: &str, position: &Position, def_type: DefType) -> u32 {
         let rec = self.definitions();
-        // @PLN22 Phase 1 — two enums may share a variant name (`enum A { Red }` +
-        // `enum B { Red }`).  A duplicate ENUM-VARIANT key no longer panics; the
-        // FIRST keeps the flat `(name, source)` entry (so a UNIQUE bare variant
-        // still resolves via `def_nr`, preserving no-context inference like
-        // `s = Idle`), and the collision is recorded in `ambiguous_variants`.
-        // An ambiguous bare variant is then DECLINED by the flat resolver
-        // (parse_constant_value) and resolved by CONTEXT instead — the enum from
-        // a match subject, a typed decl, a parameter, a return type, an `==` LHS,
-        // or an `Enum::`/`lib::` qualifier (the variant_of chokepoints).  Every
-        // OTHER def kind keeps the hard dual-definition guard.
-        let key_exists = self
-            .def_names
-            .contains_key(&(name.to_string(), self.source));
+        // @PLN22 Phase 1 — an enum variant keeps a flat `(name, source)` key
+        // (FIRST-wins, no panic) so it is reachable as a TYPE / constructor
+        // (`Circle { … }`, `s: Circle`, `fn f(self: Circle)`); two enums may
+        // therefore share a variant name.  But a bare variant used as a VALUE
+        // resolves ONLY via context (match subject, typed decl, typed
+        // reassignment / `rec.field`, parameter, return, `==` LHS, `Enum::`/`lib::`
+        // qualifier — the variant_of chokepoints), NEVER via this flat key, so a
+        // no-context `s = Red` is an error even when the name is currently unique
+        // (see parse_constant_value).  That way adding a second enum with the same
+        // variant name can never silently break an existing bare assignment.
+        // Every OTHER def kind keeps the flat key + the hard dual-definition guard.
         if def_type == DefType::EnumValue {
-            if key_exists {
-                self.ambiguous_variants
-                    .insert((name.to_string(), self.source));
-            } else {
-                self.def_names.insert((name.to_string(), self.source), rec);
-            }
+            self.def_names
+                .entry((name.to_string(), self.source))
+                .or_insert(rec);
         } else {
-            assert!(!key_exists, "Dual definition of {name} at {position}");
+            assert!(
+                !self
+                    .def_names
+                    .contains_key(&(name.to_string(), self.source)),
+                "Dual definition of {name} at {position}"
+            );
             self.def_names.insert((name.to_string(), self.source), rec);
         }
         let new_def = Definition {
@@ -4113,13 +4097,18 @@ impl Data {
             .unwrap_or(u32::MAX)
     }
 
-    /// @PLN22 Phase 1 — true if `name` is an enum-variant name shared by two or
-    /// more enums in `source` (recorded by `add_def`).  The flat value resolver
-    /// declines such a name so it resolves by context instead.
+    /// @PLN22 Phase 1 — every enum that has a variant named `name`, in
+    /// definition order.  Used by the resolver's error path to recognise a bare
+    /// variant used with no type context and name the enum(s) to qualify with.
     #[must_use]
-    pub fn is_ambiguous_variant(&self, name: &str, source: u16) -> bool {
-        self.ambiguous_variants
-            .contains(&(name.to_string(), source))
+    pub fn enums_with_variant(&self, name: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        for i in 0..self.definitions.len() as u32 {
+            if self.def_type(i) == DefType::Enum && self.variant_of(i, name) != u32::MAX {
+                out.push(i);
+            }
+        }
+        out
     }
 
     /// @PLN22 Phase 1 — resolve a variant by name across every enum defined in

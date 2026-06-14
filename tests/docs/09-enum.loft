@@ -67,17 +67,17 @@ fn opposite(self: Direction) -> Direction {
 fn main() {
   // Plain enum values are ordered by declaration position.
   // North comes first (smallest), West comes last (greatest).
-  d = East;
+  d = Direction.East;
   assert(d == East, "Enum equality");
   assert(d != North, "Enum inequality");
   assert(d > North, "East declared after North, so it is greater");
-  assert(West > South, "West declared last, so it is greatest");
+  assert(Direction.West > South, "West declared last, so it is greatest");
   // Convert between text and enum in both directions.
   assert("{d}" == "East", "Format plain enum as text");
   assert("West" as Direction == West, "Parse text to enum");
   // Use a plain enum method like any other method.
   assert(d.opposite() == West, "opposite of East is West");
-  assert(North.opposite() == South, "opposite of North is South");
+  assert(Direction.North.opposite() == South, "opposite of North is South");
   // Struct enum variants are constructed exactly like regular structs.
   c = Circle {radius: 1.0 };
   assert(c.radius == 1.0, "Circle radius field");

@@ -15,7 +15,8 @@ fn test_sizeof_float() {
 enum SzEn { V1, V2, V3 }
 
 fn test_sizeof_enum() {
-  assert(sizeof(SzEn) + 10 * sizeof(V1) == 11, "enum sizes");
+  v: SzEn = V1;
+  assert(sizeof(SzEn) + 10 * sizeof(v) == 11, "enum sizes");
 }
 
 enum SzVal {

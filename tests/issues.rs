@@ -1283,8 +1283,8 @@ fn p139_enum_vec_same_type_write_through_loop() {
     code!(
         "enum Dir { North, East, South, West }
 fn test() {
-    dirs = [North, East, South, West];
-    first_d = North;
+    dirs: vector<Dir> = [North, East, South, West];
+    first_d = Dir.North;
     for elem in dirs { first_d = elem; }
     assert(first_d == West, \"last element wins, got {first_d}\");
 }"
@@ -1297,11 +1297,11 @@ fn p139_enum_vec_two_loops_same_function() {
     code!(
         "enum D { A, B, C, W }
 fn test() {
-    dirs = [A, B, C, W];
+    dirs: vector<D> = [A, B, C, W];
     count = 0;
     for _ in dirs { count += 1; }
-    first = A;
-    last = A;
+    first = D.A;
+    last = D.A;
     n = 0;
     for elem in dirs {
         if n == 0 { first = elem; }
@@ -4469,7 +4469,7 @@ fn p54_b5_not_taken_arm_with_vector_binding_ok() {
         "struct Item { v: integer }
 pub enum Wrap { Empty, Full { items: vector<Item> } }
 fn run() -> integer {
-    w = Empty;
+    w = Wrap.Empty;
     match w {
         Empty => 42,
         Full { items } => items.len()
@@ -4732,7 +4732,7 @@ fn p54_b2_unit_variant_literal_construction() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }
 fn run() -> text {
-    s = Idle;
+    s = Sig.Idle;
     match s {
         Off => \"off\",
         Idle => \"idle\",
@@ -4753,7 +4753,7 @@ fn p54_plain_enum_bare_variant_works() {
     code!(
         "pub enum Sig { Off, Idle, On }
 fn run() -> text {
-    s = Idle;
+    s = Sig.Idle;
     match s {
         Off => \"off\",
         Idle => \"idle\",
@@ -4796,7 +4796,7 @@ fn p54_plain_enum_match_inside_for() {
     code!(
         "pub enum Item { One, Two }
 fn run() -> text {
-    v = [One, Two];
+    v: vector<Item> = [One, Two];
     r = \"\";
     for x in v {
         match x {
@@ -9502,7 +9502,7 @@ fn enhancement_is_plain_enum() {
     code!(
         "enum Dir { North, South, East, West }
 fn test() {
-    d = North;
+    d = Dir.North;
     assert(d is North, \"is North\");
     assert(!(d is South), \"not South\");
 }"
@@ -9869,7 +9869,7 @@ fn p164_trailing_comma_plain_enum() {
     P164West,
 }
 fn test() {
-    d = P164North;
+    d = P164Dir.P164North;
     assert(d is P164North, \"north\");
 }"
     )

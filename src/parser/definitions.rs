@@ -2149,7 +2149,14 @@ impl Parser {
                         // for circular-init detection (same as init(expr) path).
                         self.init_field_tracking = true;
                         self.init_field_deps.clear();
+                        // @PLN22 Phase 1 — hint the field's enum so a bare variant
+                        // default (`level: Level = Warning`) resolves against the
+                        // declared field type.
+                        if self.enum_context(&a_type) {
+                            self.enum_hint = a_type.clone();
+                        }
                         let tp = self.expression(&mut value);
+                        self.enum_hint = Type::Unknown(0);
                         self.init_field_tracking = false;
                         if a_type.is_unknown() {
                             a_type = tp;

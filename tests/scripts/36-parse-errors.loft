@@ -74,12 +74,12 @@ enum PEType { PEV1 }
 // @EXPECT_ERROR: cannot change type
 fn test_wrong_assign() {
   a = 1;
-  a = PEV1;
+  a = PEType.PEV1;
 }
 
 // @EXPECT_ERROR: Unknown cast
 fn test_wrong_cast() {
-  PEV1 as float;
+  PEType.PEV1 as float;
 }
 
 // @EXPECT_ERROR: Undefined type V
@@ -122,12 +122,12 @@ fn pe_typed_fn(t: PEEType) {}
 
 // @EXPECT_ERROR: No matching operator '=='
 fn test_wrong_compare() {
-  PEVal == PEVal2;
+  PEEType.PEVal == PENext.PEVal2;
 }
 
 // @EXPECT_ERROR: should be PENext on call to
 fn test_mixed_enums() {
-  pe_next_fn(PEVal);
+  pe_next_fn(PEEType.PEVal);
 }
 fn pe_next_fn(v: PENext) -> PENext { v }
 

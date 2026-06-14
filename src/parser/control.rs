@@ -310,14 +310,16 @@ impl Parser {
             last_expr_peek = self.lexer.peek();
             // @PLN22 Phase 1 — hint the block's expected enum so a bare
             // value-position variant tail (`fn f() -> Light { Red }`, or an
-            // `if c { Red } else { Green }` block) resolves against it once
-            // variants are no longer globally keyed.  Cleared after the
-            // statement; a nested call sets its own argument hint.
+            // `if c { Red } else { Green }` block) resolves against it.  SAVE and
+            // RESTORE the prior hint rather than clearing to Unknown, so sibling
+            // statements / if-branches under the same expected type each still see
+            // it (clearing made only the FIRST branch of an `if`-return resolve).
+            let saved_enum_hint = self.enum_hint.clone();
             if self.enum_context(result) {
                 self.enum_hint = result.clone();
             }
             t = self.expression(&mut n);
-            self.enum_hint = Type::Unknown(0);
+            self.enum_hint = saved_enum_hint;
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {

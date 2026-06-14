@@ -30,17 +30,17 @@ fn test_bitnot_in_expression() {
 enum Direction { North, East, South, West }
 
 fn test_is_plain_enum() {
-  d = North;
+  d = Direction.North;
   assert(d is North, "is North");
   assert(!(d is South), "not South");
   assert(!(d is East), "not East");
 }
 
 fn test_is_plain_enum_all_variants() {
-  assert(North is North, "N is N");
-  assert(East is East, "E is E");
-  assert(South is South, "S is S");
-  assert(West is West, "W is W");
+  assert(Direction.North is North, "N is N");
+  assert(Direction.East is East, "E is E");
+  assert(Direction.South is South, "S is S");
+  assert(Direction.West is West, "W is W");
 }
 
 enum Shape {
