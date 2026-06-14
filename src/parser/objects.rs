@@ -1805,7 +1805,38 @@ impl Parser {
             // (the literal writes THROUGH the field) — those must not be
             // hoisted; only pure value expressions (`value` started Null).
             let primed = !matches!(value, Value::Null);
-            let exp_tp = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
+            // `{}` is an empty Void BLOCK, not a collection literal — loft's empty
+            // collection literal is `[]`.  For a collection field an empty `{}`
+            // silently lowered to a 0-byte block that UNDER-FILLED the struct
+            // record (a sibling field landed at the wrong offset → SIGSEGV /
+            // use-after-free).  Accept it as the already-primed empty collection
+            // (the `OpSetInt4(.., 0)` above zeroed the header) but steer toward
+            // the canonical `[]`.
+            let empty_braces = matches!(
+                td,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Spacial(_, _, _)
+                    | Type::Index(_, _, _)
+            ) && {
+                let link = self.lexer.link();
+                let empty = self.lexer.has_token("{") && self.lexer.has_token("}");
+                if !empty {
+                    self.lexer.revert(link);
+                }
+                empty
+            };
+            let exp_tp = if empty_braces {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "empty `{{}}` is not a collection literal; use `[]` for an empty collection"
+                );
+                td.clone()
+            } else {
+                self.parse_operators(&td, &mut value, &mut parent_tp, 0)
+            };
             // #330: an initialiser that READS the in-place target is hoisted
             // into a typed temp; the temps run before the OpDatabase re-init
             // (spliced in parse_object), so they see the OLD record.
