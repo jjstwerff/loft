@@ -174,6 +174,15 @@ install:
 	sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
 	sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
 	sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
+	# Cargo emits the dependency rlibs/.sos with a 0640 (group/other-unreadable)
+	# build-umask mode, and the bare `cp`s above preserve it — so a non-root user
+	# running `loft` native codegen can't read /usr/local/share/loft/deps/*.rlib
+	# (error[E0786]: found invalid metadata files … Permission denied).
+	# `libloft.rlib` is already hardened via `install -m 644`; harden everything
+	# else in one pass.  `a+rX` = read for all + execute only on dirs:
+	# idempotent, source-mode-independent, covers the deps rlibs, the .sos, and
+	# both wasm deps/ trees.
+	sudo chmod -R a+rX /usr/local/share/loft
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
 	fi
