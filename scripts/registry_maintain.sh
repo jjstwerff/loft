@@ -159,7 +159,7 @@ if [ "$DRY" = 1 ]; then
 fi
 if [ "$YES" != 1 ]; then
     n_green=$(awk -F'\t' '$3 == "green"' "$tmp/prs.tsv" | wc -l)
-    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s), then sign? [y/N] " a
+    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s)? (registry-sign then shows the diff to review + sign) [y/N] " a
     [ "$a" = y ] || [ "$a" = Y ] || { echo "aborted."; exit 1; }
 fi
 
@@ -286,38 +286,16 @@ echo
 git -C "$REG_DIR" --no-pager diff --stat index.json || true
 
 # ── sign + push ───────────────────────────────────────────────────────────────
-# ALWAYS re-sign the current index.json.  A `gh pr merge` above changes
-# index.json on the remote without regenerating the .sig, so re-signing here is
-# what keeps the published signature valid — the routine must never leave the
-# index changed but unsigned (that bricks every consumer's install).
-
-if [ -z "$KEY" ] || [ ! -f "$KEY" ]; then
-    git -C "$REG_DIR" add index.json
-    echo
-    echo "no signing key (--key / LOFT_REGISTRY_KEY) — staged but NOT signed/pushed."
-    echo "on the machine holding the key, finish with:"
-    echo "  $KEYGEN sign --in $REG_DIR/index.json --key <keyfile> --out $REG_DIR/index.json.sig"
-    echo "  git -C $REG_DIR add index.json index.json.sig && git -C $REG_DIR commit -m 'publish: ${published[*]:-}' && git -C $REG_DIR push"
-    exit 0
-fi
-"$KEYGEN" sign --in "$REG_DIR/index.json" --key "$KEY" --out "$REG_DIR/index.json.sig"
-git -C "$REG_DIR" add index.json index.json.sig
-if git -C "$REG_DIR" diff --cached --quiet; then
-    echo "registry already current — nothing to commit."
-else
-    git -C "$REG_DIR" commit -m "publish: ${published[*]:-PR merges / re-sign}"
-    git -C "$REG_DIR" push
-fi
-
-# Final guard: the index MUST verify against its signature before we call it done
-# — this is exactly the check that would have caught the orphaned-sig breakage.
-pub="${KEY%.bin}.pub"
-if [ -f "$pub" ] && "$KEYGEN" verify --in "$REG_DIR/index.json" \
-        --sig "$REG_DIR/index.json.sig" --pub "$(cat "$pub")" >/dev/null 2>&1; then
-    echo "signature verifies against index ✓"
-else
-    echo "⚠ post-sign signature verify did not pass — DO NOT rely on this registry; investigate." >&2
-fi
+# Delegate to registry-sign.sh — the SINGLE trust-root signer.  It stages
+# index.json + its .sig together (#377), shows the diff + re-verifies each
+# tarball's sha256, signs, runs `keygen verify`, then commits + pushes.  Keeping
+# one signer means the signing-safety rules (commit both, post-sign verify, key
+# default) live in exactly one place instead of drifting between two scripts.
+# Re-signing here is also what fixes a `gh pr merge` that changed index.json on
+# the remote without re-signing — the routine must never leave it unsigned.
+sign_args=(--registry-dir "$REG_DIR" --key "$KEY" --message "publish: ${published[*]:-PR merges / re-sign}")
+[ "$YES" = 1 ] && sign_args+=(--yes)
+"$here/scripts/registry-sign.sh" "${sign_args[@]}"
 
 echo
 echo "verifying — coverage check should now be clean:"

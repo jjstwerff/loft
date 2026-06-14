@@ -20,6 +20,8 @@
 #     --notes             also print each release's full notes (gh release body)
 #     --no-download       skip the tarball sha256 re-download check
 #     --no-push           sign + commit locally but do NOT push (keeps the clone)
+#     --message MSG       commit message (default: "sign: …"; registry_maintain
+#                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
 #
 # On confirm it signs, commits index.json + index.json.sig together (so HEAD's
@@ -31,7 +33,7 @@
 # at the prompt.  Needs: python3, gh (for notes), and target/release/loft-keygen.
 set -euo pipefail
 
-REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1
+REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -42,6 +44,7 @@ while [ $# -gt 0 ]; do
         --notes)        NOTES=1;;
         --no-download)  DOWNLOAD=0;;
         --no-push)      PUSH=0;;
+        --message)      MSG="$2"; shift;;
         --yes)          YES=1;;
         -h|--help)      sed -n '2,30p' "$0"; exit 0;;
         *) echo "unknown argument: $1" >&2; exit 2;;
@@ -244,7 +247,7 @@ if git -C "$REG_DIR" diff --cached --quiet; then
     echo "index.json.sig unchanged — nothing to commit."
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
-    git -C "$REG_DIR" commit -q -m "sign: commit index.json + regenerate index.json.sig"
+    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     if git -C "$REG_DIR" push -q 2>/tmp/_rs_push.$$; then
         echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
         PUSHED=1
@@ -254,6 +257,6 @@ elif [ "$PUSH" = 1 ]; then
     fi
     rm -f "/tmp/_rs_push.$$"
 else
-    git -C "$REG_DIR" commit -q -m "sign: commit index.json + regenerate index.json.sig"
+    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     echo "committed (--no-push): $(git -C "$REG_DIR" rev-parse --short HEAD) at $REG_DIR — push when ready."
 fi
