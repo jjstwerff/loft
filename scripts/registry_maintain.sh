@@ -224,6 +224,10 @@ for line in open(f"{tmp}/work.tsv"):
 open(f"{tmp}/work.tsv", "w").writelines(keep)
 EOF
 
+# sha256 of a file via python3 (already a hard dep; avoids sha256sum-vs-shasum
+# portability differences across the laptops that sign).
+sha256_of() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+
 # Publish each own lib: tarball → tag + release (created only when absent,
 # so re-runs are safe) → `loft publish` emits the verified index entry.
 # RELIABILITY: one own-lib that can't publish (missing release asset, package
@@ -243,6 +247,34 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
             --target "$(git -C "$tmp/$repo" rev-parse HEAD)" --title "$name v$ver" 2>"$tmp/rel_$name.err"; then
             echo "  ⚠ release create failed ($(head -1 "$tmp/rel_$name.err" 2>/dev/null)) — skipping $name $ver"
             SKIPPED_LIBS+=("$name-$ver"); continue
+        fi
+    fi
+    # Early per-lib integrity gate — catch a stale release BEFORE the sign step.
+    # The published release tarball must byte-match the one we just built from
+    # main.  They diverge when main has commits past the `<name>-v<ver>` tag with
+    # NO version bump: `loft package` then produces bytes the published release
+    # lacks.  Deferred to the sign step this fails the WHOLE batch's integrity
+    # check (all-or-nothing, and you only learn which lib by scrolling); here we
+    # catch it per-lib, skip only this one, and say exactly what is wrong + how to
+    # fix it, so the others still publish + sign.  A release we just created above
+    # always matches — this only fires on a pre-existing, now-stale release.
+    asset="$name-$ver.tar.gz"
+    if gh release download "$tag" -R "$ORG/$repo" --pattern "$asset" \
+           --dir "$tmp/dl_$name" --clobber 2>/dev/null && [ -f "$tmp/dl_$name/$asset" ]; then
+        local_sha=$(sha256_of "$tarball")
+        rel_sha=$(sha256_of "$tmp/dl_$name/$asset")
+        if [ "$local_sha" != "$rel_sha" ]; then
+            echo "  ✗ $name $ver: STALE RELEASE — published $asset ≠ \`loft package\` of main."
+            echo "      published $tag : ${rel_sha:0:16}…"
+            echo "      main \`loft package\` : ${local_sha:0:16}…"
+            echo "      Why: main has commits past tag $tag with no version bump, so its source no"
+            echo "           longer matches the $tag release artifact (would fail the sign-time"
+            echo "           integrity check for the whole batch)."
+            echo "      Fix: bump $name in $repo's loft.toml + commit, then re-run — registry_maintain"
+            echo "           cuts the new tag/release.  OR, only if main is releasable unchanged,"
+            echo "           delete the stale $tag release so it is re-cut from current main."
+            SKIPPED_LIBS+=("$name-$ver (stale release — bump version + re-release)")
+            continue
         fi
     fi
     if ! "$LOFT" publish "$libdir" > "$tmp/pub_$name.out" 2>"$tmp/pub_$name.err"; then
