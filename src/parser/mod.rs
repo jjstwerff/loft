@@ -4137,12 +4137,22 @@ impl Parser {
                 && !matches!(&actual_code, Value::Var(_))
                 && !Self::is_addressable(&actual_code, &self.data)
             {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot pass a literal or expression to a '&' parameter — \
-                     assign to a variable first"
-                );
+                // Defer on pass 1 (#375): a field access on a struct whose
+                // layout is not yet finalised — because one of its fields is a
+                // forward / cross-package reference still resolving — lowers to
+                // `Null` here, which is not addressable.  Erroring now would
+                // abort pass 1 before the type resolves; on pass 2 the layout is
+                // complete and the access lowers to `OpGetField` (addressable),
+                // so the check passes.  A genuine literal-to-`&` is still an
+                // error: it is non-addressable on pass 2 too, where this fires.
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot pass a literal or expression to a '&' parameter — \
+                         assign to a variable first"
+                    );
+                }
                 actual.push(actual_code);
                 continue;
             }
@@ -4366,6 +4376,16 @@ impl Parser {
                             ls.push(self.cl("OpAppendText", &[Value::Var(wv), default]));
                         }
                         wv
+                    } else if self.first_pass {
+                        // Defer on pass 1 (#375): this missing-slot filler runs
+                        // when an arg lowered to `Null`.  A `&` field arg whose
+                        // owning struct's layout is not yet finalised (a forward /
+                        // cross-package field still resolving) lowers to `Null`
+                        // here, so it looks like a missing parameter.  Erroring
+                        // would abort pass 1; on pass 2 the access lowers to a real
+                        // `OpGetField` (non-Null), this filler is skipped, and a
+                        // genuinely-missing non-text `&` default still errors then.
+                        0
                     } else {
                         diagnostic!(
                             self.lexer,
