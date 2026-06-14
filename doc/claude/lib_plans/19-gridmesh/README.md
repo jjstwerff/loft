@@ -1,7 +1,10 @@
 # lib-plan 19 — `gridmesh`: chunk-local, bounded-extent grid→mesh primitives
 
-**Status:** ACTIVE (promoted from `future/` to a top-level `lib_plans/`
-slot 2026-05-21). Phase A + B done; crystal **C1 done** (chunk-driven
+**Status:** FINISHED 2026-06-14 — the `gridmesh` library shipped
+(`gridmesh 0.1.1`, in `loft-libs-world`, with an in-repo test fixture). The one
+remaining phase (C — the moros consumer) is now **moros-side** and out of this
+library plan's scope (see the close note at the end of the Status). Phase A + B
+done; crystal **C1 done** (chunk-driven
 `SegMesh` build, SET-equivalent to the legacy build cross-mode) and **G2
 done** (render-group / tile layer, tunable `group_dim`; tests
 `lib/gridmesh/tests/rendergroup.loft`).  Full-build perf characterised:
@@ -14,7 +17,14 @@ and the `c: &CrystalIncr` call-arg borrow conflict ([@P312](../../PROBLEMS.md),
 native E0503) is fixed in codegen (the pre-eval pass now hoists a `c.field`
 read passed alongside `&mut c`).  `CrystalIncr` two-level reuse is back on;
 incremental == full build (regression `tests/scripts/133-crystal-incr.loft`,
-both backends).  moros Phase C to follow.
+both backends).
+
+**Close note (2026-06-14):** the gridmesh *library* is complete and published, so
+@PLN7 is closed.  **Phase C — the moros consumer integration** (build_chunk_mesh
+over the moros world, LOD, per-chunk VBOs) is **not** library work: `moros_*`
+moved to the moros repo (#379), so applying `gridmesh` to the moros world is the
+moros project's call.  The Phase-C design below is retained here as the reference
+the moros project picks up from.
 
 **Full implementation design:** [DESIGN.md](DESIGN.md) — concrete types,
 the rule contract, the pipeline API, the crystal-consumer mapping, ordered
@@ -134,7 +144,7 @@ Net: **`hash<Chunk[cx,cy,cz]>` (sparse, indirection) → each `Chunk` = dense
 |---|---|---|
 | **A** | Extract coord + spatial-index primitives (`CellRef`, `enc_coord`, `build_index`, `idx_at`, `step_x/step_y`, `axial_dq/dr`, `nbr_count_idx`) into `lib/gridmesh`; re-point `audience_crystal` + the projector onto them. `build_index` replaces the inline @P300 workaround (now fixed). | ✅ **Done** — crystal output + memory byte-identical on both backends (block/100 = 2379 segs; block-500 = 12 738 segs / 2.83 MB / 9 free-blocks). |
 | **B** | Chunking + halo + bounded extent + dirty rebuild: `build_chunk(layout, field, cx,cz,cy, rule) -> Mesh` reading a ≤k-ring halo, emitting geometry owned by in-chunk cells bounded to the chunk; per-chunk/dirty-cell incremental rebuild (O(dirty) compute + O(N) copy). A `HexLayout` adapter (axial flat-top for moros, offset pointy-top for crystal). Carry M1 narrow types into the mesh accumulator. | **B1 + B2 done** — B1: `SegMesh` accumulator (M1 narrow). B2: `ChunkField` + `ChunkKey` + chunk partition (`chunk_of`/`chunk_div`) + wired-in `dirty: hash<ChunkKey[ck]>` (keyed set) + `field_new`/`field_add_cell`/`field_mark_dirty`/`clear_dirty`/`chunk_is_dirty`/`dirty_count`, all cross-mode (guard: `lib/gridmesh/tests/chunkfield.loft`). Surfaced + **fixed** @P308 (struct-literal keyed-HASH field init / whole-field assign now deep-copy via `OpReplaceKeyed`; `field_new` uses the clean `cidx: build_index(...)`); sorted/index struct-field deep-copy deferred as @P309. **B3 done** — `ChunkInput{key, cell_ixs, halo_ixs}` (no `cidx` — passed to the rule separately for cache locality) + `all_inputs`/`collect_dirty_inputs`: single-pass O(N) cell→chunk partition (in-place keyed-bucket accumulate) + ≤halo_k 6-axis cross-border halo gather (deduped); dirty-only via the wired-in set (guard: `lib/gridmesh/tests/chunkinput.loft`, cross-mode). **B fully done.** **G1 refinement (2026-05-21):** the per-call O(N) `partition_cells` re-scan is RETIRED — `ChunkField` now carries wired-in per-chunk `buckets: hash<ChunkBucket[ck]>` built once in `field_new` and appended in `field_add_cell`, so `all_inputs`/`collect_dirty_inputs` read the buckets directly and dirty extraction is **O(dirty), not O(N)** (this is the persistent-index half of @PLN6 § Performance I1). First dedicated `SegMesh` unit tests added (`lib/gridmesh/tests/segmesh.loft`: empty / emit narrowing / 9-column parallel-array alignment / u8 boundary). **C1 done** — see crystal C1 below. |
-| **C** | moros consumer (see "moros world architecture" above): fixed **32×32 dense** chunks in a **sparse `hash<Chunk[cx,cy,cz]>`** world index (replaces `moros_map`'s linear `m_chunks` scan); `build_chunk_mesh(map, cx,cy,cz)` over `gridmesh` (replacing the global `build_hex_meshes` path incrementally) with a moros RULE — surface + wall placement + edge rounding from the `Hex` neighbour pattern (the crystal technique applied to real world geometry); per-chunk VBOs + dirty IDs + frustum culling; **LOD**: near = full mesh, far = compact height-map profile uploaded to a texture + rendered by a shader (building silhouette). Own sub-plan; the payoff. The per-hex height field it meshes is produced upstream by [lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md) (slope-based generation; shared with the **dryopea** tower-defence game). | Open |
+| **C** | moros consumer (see "moros world architecture" above): fixed **32×32 dense** chunks in a **sparse `hash<Chunk[cx,cy,cz]>`** world index (replaces `moros_map`'s linear `m_chunks` scan); `build_chunk_mesh(map, cx,cy,cz)` over `gridmesh` (replacing the global `build_hex_meshes` path incrementally) with a moros RULE — surface + wall placement + edge rounding from the `Hex` neighbour pattern (the crystal technique applied to real world geometry); per-chunk VBOs + dirty IDs + frustum culling; **LOD**: near = full mesh, far = compact height-map profile uploaded to a texture + rendered by a shader (building silhouette). Own sub-plan; the payoff. The per-hex height field it meshes is produced upstream by [lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md) (slope-based generation; shared with the **dryopea** tower-defence game). | **Moros-side** — `moros_*` moved to the moros repo (#379), so this consumer integration is the moros project's call; this design is the reference it picks up from. Not gridmesh-library scope. |
 
 ## Parallelism — baked in from Phase B (chunks are embarrassingly parallel)
 

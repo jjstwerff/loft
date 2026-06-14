@@ -718,6 +718,15 @@ fn main() {
 
 ## Multi-threading model
 
+> **Superseded by [ARCHITECTURE.md](ARCHITECTURE.md) (2026-06-14).**  The
+> tokio-thread-pool-calls-loft-handler model below is **not buildable** on loft's
+> FFI — native cannot call into the interpreter (`src/native_gate.rs`: the
+> boundary is loft→native only), and `State` is `!Send`.  The real design is a
+> **native `mio` reactor that loft *drains*** (the proven `engine_host` pattern):
+> single-threaded loft dispatch, O(ready) polling, prompt native accept.  Read
+> ARCHITECTURE.md for the core I/O model; the rest of this section is retained for
+> the feature surface (handler thread-safety expectations) only.
+
 The native layer manages a `tokio` async runtime with a thread pool sized to
 `Server.threads` (default: CPU core count).  Each accepted connection is
 handled within the async runtime.  When a route handler (a loft function)

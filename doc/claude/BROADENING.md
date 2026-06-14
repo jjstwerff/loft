@@ -179,6 +179,57 @@ Maximum broadening per unit effort:
 
 ---
 
+## Better PHP — the `2026-08` cycle theme
+
+**Targeted at the `2026-08` release cycle, NOT `2026-07`.**  `2026-07` is the
+stability / registry / library-hardening cycle; `2026-08` turns to the
+server-side-web + database stack — the concrete realisation of the "server-side
+web" domain row above.  The shorthand is **"become a better PHP"**: write a
+request handler that talks to a database and renders HTML with near-zero
+ceremony — and fix PHP's weaknesses.
+
+**Why loft can be a *better* PHP, not a clone:**
+
+- **A persistent, typed, natively-fast process.**  The server is one long-lived
+  process (the @PLN4 reactor) that holds connections, prepared statements, and
+  caches *across* requests — not PHP's fork-per-request-and-die model.
+- **Static types** catch what PHP ships to production.
+- **A direct, rustc-free, high-performance path into the database** (@PLN24 +
+  @PLN23) — see "the `#c` tier" below.
+
+**The stack + its plans (the critical path, in build order):**
+
+1. **@PLN24 — the `#c` direct C-ABI tier.**  Bind a C library straight from loft
+   with **no rustc and no libffi** (a small fixed per-arity C-ABI caller in
+   loft-core; pure-loft `#c` decls + optional `cc`-compiled ANSI-C shims).
+   Foundational — unblocks the DB layer and every future C binding.
+   **Native-only by nature** (wasm has no C ABI / `dlopen`).
+2. **@PLN23 — MariaDB + PostgreSQL clients**, uniform API (prepared statements,
+   transactions, bulk-edits) over `#c`.  PHP's killer feature; loft's biggest
+   current gap.
+3. **@PLN4 — the real HTTP server** (routing + the native-reactor architecture,
+   designed `2026-06-14` in `lib_plans/future/08-server/ARCHITECTURE.md`) for the
+   web layer.
+4. **A server-side view/templating story** — programmatic HTML via format-strings
+   + the `html` escape lib, or template files; to be decided.
+
+**The `#c` tier is bigger than databases.**  It is loft's general "bind any C
+library without rustc" capability; DB is its first consumer, with image codecs,
+compression, crypto, BLAS, and C UI toolkits as later riders.  That is the
+"there will be more" — recorded so the tier is designed as reusable, not a DB
+sub-feature.
+
+**Keep the loft side minimal — just the tooling to link.**  loft-core gains only
+a *generic linking tool* (the `#c` annotation + a `dlopen` + fixed per-arity
+C-ABI caller, no libffi + the smallest viable marshalling); it carries **zero**
+database or per-library knowledge.  All complexity — type-specific conversions, structs/callbacks, the
+SQL + result-set logic — lives in the libraries (loft `#c` decls + `cc`-compiled
+ANSI-C shims).  The shim is the deliberate sink for complexity, so the success
+test for the `#c` work is *how little it adds to loft-core* — same ethos as
+draining library code out of the compiler crate (@PLN3).
+
+---
+
 ## What not to do
 
 - **Don't compete with Python in scientific computing head-on.**
