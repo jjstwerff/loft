@@ -738,23 +738,43 @@ impl Parser {
     /// and left the symbol unmapped — which later surfaces as a `todo!()`
     /// stub in the `--native` output and a runtime panic.
     ///
-    /// Walk every definition once more: if it has a `#native` symbol not in
-    /// the map and exactly one native package is registered, bind the symbol
-    /// to that package.  With multiple packages we conservatively skip — the
-    /// original per-manifest passes have already matched the first-seen
-    /// symbols to their owners.
+    /// Walk every definition once more and bind each `#native` symbol still
+    /// missing from the map to the native package that OWNS its definition:
+    /// the registered package whose directory is a prefix of the def's source
+    /// file (longest prefix wins, for nested packages).  Ownership-by-path is
+    /// the same invariant the per-manifest pass enforces, run once at the end
+    /// when every def exists, so it covers ANY number of native packages.
+    /// (The earlier `len() == 1` shortcut silently skipped programs using two
+    /// native packages — e.g. `graphics` + `random` — leaving BOTH unmapped:
+    /// the interpreter still dispatched them via `def.native` + dlopen, but
+    /// `--native` rejected the first reachable call with a P269 compile error.)
     fn backfill_native_symbol_crates(&mut self) {
-        if self.data.native_packages.len() != 1 {
+        if self.data.native_packages.is_empty() {
             return;
         }
-        let rust_crate = self.data.native_packages[0].0.replace('-', "_");
+        let mut binds: Vec<(String, String)> = Vec::new();
         for d_nr in 0..self.data.definitions() {
-            let sym = self.data.def(d_nr).native().to_string();
-            if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(&sym) {
-                self.data
-                    .native_symbol_crates
-                    .insert(sym, rust_crate.clone());
+            let def = self.data.def(d_nr);
+            let sym = def.native();
+            if sym.is_empty() || self.data.native_symbol_crates.contains_key(sym) {
+                continue;
             }
+            let sym = sym.to_string();
+            let file = def.position().file.clone();
+            // Owner = the registered native package whose dir is the longest
+            // prefix of this def's source file.
+            if let Some((crate_name, _)) = self
+                .data
+                .native_packages
+                .iter()
+                .filter(|(_, pkg_dir)| file.starts_with(pkg_dir.as_str()))
+                .max_by_key(|(_, pkg_dir)| pkg_dir.len())
+            {
+                binds.push((sym, crate_name.replace('-', "_")));
+            }
+        }
+        for (sym, rust_crate) in binds {
+            self.data.native_symbol_crates.insert(sym, rust_crate);
         }
     }
 
