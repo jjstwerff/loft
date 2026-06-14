@@ -258,11 +258,14 @@ variant VALUE never resolves through that key.
   field DEFAULT (`level: Level = Warning`) sets `enum_hint` from the field type.
 - `parser/mod.rs` — `enum_hint` parser field (mirrors `lambda_hint`).
 
-**Known follow-up (branch-internal):** a MIXED struct-enum unit-variant used as a
-struct field DEFAULT (`sig: Sig = Idle`) combined with an explicitly-provided
-sibling field mis-builds the sibling on both backends.  Narrow combination
-(plain-enum defaults — the real lib/logger pattern — and mixed-enum typed locals
-both work); deferred, not a Phase-1 blocker.
+**Field-default work-ref aliasing — FIXED.** A mixed struct-enum unit-variant used
+as a struct field DEFAULT (`sig: Sig = Idle`) is a self-contained `EnumUnitLit`
+allocation block whose `Var(0)` is its own work-ref, not the record placeholder.
+`object_init`'s `replace_record_ref(_, code)` was rewriting that `Var(0)` to the
+struct's own ref, so the default's `OpDatabase` re-allocated the struct variable and
+clobbered an explicitly-provided sibling field (`Widget { color: Red }` → wrong
+`color`).  Fixed by re-homing such a default to a FRESH work-ref in the construction
+context (regression: the `Cfg` case in 369).
 
 ### Phase 2 — prelude shadowing (S–M)
 

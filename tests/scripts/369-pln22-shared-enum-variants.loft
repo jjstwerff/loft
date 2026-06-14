@@ -25,10 +25,10 @@ enum Sig { Idle, On { level: integer } }
 
 // struct with a bare-variant field DEFAULT plus a sibling field whose bare-variant
 // init resolves against its own field enum (the lib/logger `level: Level = Warning`
-// shape).  NOTE: a MIXED-enum unit-variant default combined with an explicit
-// sibling field still mis-builds the sibling — tracked as a follow-up; this uses a
-// plain-enum default, which is the real consumer pattern.
-struct Cfg { first: Light = Green, light: Light }
+// shape).  `mode` defaults to a MIXED struct-enum UNIT variant (`Idle`) — its
+// allocation must NOT clobber the explicitly-provided sibling `light` (regression
+// for the field-default work-ref aliasing bug).
+struct Cfg { mode: Sig = Idle, first: Light = Green, light: Light }
 
 fn test_pln22_shared_variants() {
   // match arm + call argument: the SAME bare `Red` resolves by context enum.
@@ -57,10 +57,12 @@ fn test_pln22_shared_variants() {
   s: Sig = Idle;
   assert(s is Idle, "mixed-enum unit variant typed init");
 
-  // struct field default (`first: Light = Green`) + bare field init via the field type.
+  // struct field defaults (mixed-enum `mode: Sig = Idle`, plain `first: Light =
+  // Green`) + an explicit sibling init — the mixed default must not clobber it.
   cfg = Cfg { light: Red };
-  assert(cfg.first is Green, "struct field default bare variant");
-  assert(cfg.light is Red, "struct field init bare variant resolves to field enum");
+  assert(cfg.mode is Idle, "mixed-enum unit-variant field default");
+  assert(cfg.first is Green, "plain-enum field default bare variant");
+  assert(cfg.light is Red, "explicit sibling not clobbered by the mixed default");
 
   // qualified construction + qualified `==`, per enum (both `::` and `.`).
   assert(Light::Red == Light.Red, ":: and . qualified forms agree");

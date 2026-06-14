@@ -2011,6 +2011,21 @@ impl Parser {
                 // fields take the sentinel branch above: a pointer's zero
                 // value IS null.
                 default = to_default(&tp, &self.data);
+            } else if matches!(&default, Value::Block(b) if b.name == "EnumUnitLit") {
+                // @PLN22 Phase 1 — a mixed struct-enum unit-variant default
+                // (`mode: Mode = Idle`) is a SELF-CONTAINED allocation block whose
+                // `Var(0)` is its OWN work-ref, not the record placeholder.  Re-home
+                // it to a FRESH work-ref in THIS construction context: leaving
+                // `Var(0)` for the `replace_record_ref(_, code)` below would rewrite
+                // it to the struct's own ref, so the default's `OpDatabase`
+                // re-allocates the struct variable and clobbers already-written
+                // sibling fields (the `Widget { color: Red }` corruption).  The
+                // record is deep-copied into the field (set_field_no_check emits an
+                // OpCopyRecord), so the temp is a SEPARATE store — leave it to be
+                // freed at scope end (NOT skip_free, unlike the `s = Idle`
+                // assignment case where the LHS owns the store directly).
+                let fresh = self.vars.work_refs(&tp, &mut self.lexer);
+                default = Self::replace_record_ref(default, &Value::Var(fresh));
             } else {
                 default = Self::replace_record_ref(default, code);
             }
