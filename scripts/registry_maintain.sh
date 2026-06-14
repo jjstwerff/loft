@@ -244,10 +244,14 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
             SKIPPED_LIBS+=("$name-$ver"); continue
         fi
     fi
-    if ! "$LOFT" publish "$libdir" > "$tmp/pub_$name.out" 2>&1; then
-        echo "  ⚠ loft publish failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
+    if ! "$LOFT" publish "$libdir" > "$tmp/pub_$name.out" 2>"$tmp/pub_$name.err"; then
+        echo "  ⚠ loft publish failed ($(head -1 "$tmp/pub_$name.err" 2>/dev/null)) — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
     fi
-    grep -v '^#' "$tmp/pub_$name.out" > "$tmp/entry_$name.json"
+    # The pasteable JSON entry is on stdout; `[publish]` status is on stderr (so
+    # do NOT merge with 2>&1).  Strip any #-comment / [publish] / blank line so
+    # only the `"<ver>": {…}` member remains — wrapping `{…}` + parsing it below
+    # choked on those trailing status lines otherwise.
+    grep -vE '^#|^\[publish\]|^[[:space:]]*$' "$tmp/pub_$name.out" > "$tmp/entry_$name.json"
     # First-version packages also need a package block; take the description
     # from the library README's first paragraph.
     desc=$(awk '/^[^#[:space:]]/ { print; exit }' "$tmp/$repo/$name/README.md" 2> /dev/null || true)
