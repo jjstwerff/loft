@@ -1192,6 +1192,46 @@ fn native_crate_package_links_and_runs_via_cabi() -> std::io::Result<()> {
     Ok(())
 }
 
+/// The imaging fixture's PNG round-trip — a `[native] crate` package whose
+/// `#native` functions (`load_png`/`save_png`) do STORE-MUTATING file I/O via
+/// raw `std::fs`.  Guards two things at once: (1) the store-mutating C-ABI path
+/// (LoftStore + LoftRef marshalling, the hardest native shape), and (2) the
+/// source-dir cwd anchoring — `loft test` runs from the package root, but a
+/// native crate's `std::fs` must resolve `map.png` / `_tmp_*.png` where loft's
+/// `file()` does (`tests/`), which only holds because the runner chdir's to
+/// `source_dir`.  Both round-trip files assert hard pixel oracles, so a broken
+/// link OR a cwd regression fails loudly.  Runs on BOTH backends.
+///
+/// Serialises via `native_suite_lock`; skips cleanly without `rustc` / the loft
+/// rlib, like the other native suites.
+#[test]
+fn imaging_fixture_png_roundtrip_both_backends() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if find_loft_rlib().is_none() {
+        println!("imaging_fixture_png_roundtrip_both_backends: skipped (no libloft.rlib / rustc)");
+        return Ok(());
+    }
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let pkg_dir = Path::new("tests/fixtures/libs/imaging");
+    for stem in ["14-image", "15-regression"] {
+        for mode in ["--native", "--interpret"] {
+            let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, stem, &[mode])?;
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                combined.contains("test result: ok"),
+                "imaging {stem} {mode} round-trip did not pass:\n{combined}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Record environmental skips (tests that PASSED-by-skipping for a
 /// toolchain/OS reason, not a code reason) to a side-channel ledger so they
 /// survive nextest's success-output suppression.  Without this a green run
