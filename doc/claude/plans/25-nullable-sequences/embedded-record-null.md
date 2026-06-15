@@ -226,19 +226,36 @@ machinery survey.
     usize) < values.len()` (matches `validate_claims`; valid variant is 0-based after the
     shift, so `>= 0` keeps variant 0 — an earlier `>= 1` would have silently dropped the first
     variant's claims).  No crash now.
-  - **`vr[i] = null` SEMANTICS still wrong** — the crash is gone but the element is NOT nulled
-    (`vr[i] == null` stays false): the vector index-STORE doesn't set the element discriminant
-    to 0 for a `null` RHS.  Needs a coercion in the index-assignment path (`parse_assign_op` /
-    the `vr[i] = X` store) — when the element is a `__nullable<S>` enum and the RHS is `null`,
-    emit a discriminant-0 set instead of the generic element copy.  (Analog of E2a.4's
-    default-init, at the index-store site.)
-  - **`vr[i] == null`, `vr[i] = Row{…}` reassign, iteration** — not yet verified.
-  - **LOCAL / param `vr: vector<Row>`** (vs a struct FIELD) is NOT rewritten — the synth pass
-    runs over DEFS (struct/enum-value attributes), not function-local variable types.  A local
-    needs the element-type rewrite at PARSE time (where `vector<Row>` is resolved), gated, so
-    pass-2's index IR matches; the def-side fill_all hook is too late for locals.
-  *Verify (when done):* Probe 3 (`vr[i]=null` clean both backends), Probe 4 (slice/copy preserve
-  null-ness), Probe 5 (`vr[i].id` at the post-discriminant offset on native).
+  - **`vr[i] = null` SEMANTICS — DONE (BOTH backends).** The store-side chokepoint is
+    `towards_set` (`collections.rs`), where every inline nullable-enum `lvalue = null` with a
+    non-`Var` LHS routes to `copy_ref` → `OpCopyRecord(null, dest, …)`: a silent no-op on the
+    interpreter and a hard `E0308` on native (`OpCopyRecord(cell, (), …)` — `null` lowers to
+    `()`).  Added a branch BEFORE `copy_ref`: when `f_type` is a synthetic `__nullable<S>` enum
+    and the RHS is `null`, emit `OpSetEnum(to, 0, 0)` — write discriminant 0, the exact byte the
+    inline `== null` (operators.rs `enum_null`) reads.  Inert with the gate off (no `__nullable<`
+    enums exist).  **The matrix proved the bug was NOT vector-specific:** the embedded struct
+    field `bx.item = null` (CELL B) is the SAME mechanism through the SAME chokepoint — also a
+    no-op/`E0308` before, also fixed by the one branch.  *Leak:* nulling a present element/field
+    that carries a heap payload (text / nested vector) does NOT free that payload (the bare
+    `OpSetEnum` skips the `remove_claims` that `do_copy_record` does on reassign) — leaks until
+    the host is freed.  A leak, not corruption; freeing needs a `remove_claims(to, tp)`-style op
+    at the chokepoint (no standalone parser op exists yet) — follow-up.
+  - **`vr[i] == null`, `vr[i] = Row{…}` reassign, iteration — VERIFIED green (both backends).**
+    Reassigning a *genuinely*-nulled element back to a value rebuilds the `Some` payload
+    correctly (`remove_claims` on disc-0 frees nothing, `copy_block` + `copy_claims` rebuild);
+    full iteration past a null element yields `len` elements; nulling element 0 (the variant-0 /
+    `>= 0` guard edge) and null-all both round-trip.  Probes: `/tmp/p_e2a5/matrix*.loft`.
+  - **LOCAL / param `vr: vector<Row>` — STILL OPEN** (the last E2a.5 gap).  A function-local /
+    param `vector<Row>` is NOT rewritten — the synth pass runs over DEFS (struct/enum-value
+    attributes), not local variable types — so `vr[1] = null` is the un-rewritten *same* bug
+    (no-op on interp, `E0308` on native, confirmed `/tmp/p_e2a5/local.loft`).  The fix is a
+    PARSE-time element rewrite where the local's `vector<Row>` type is resolved (gated), so
+    pass-2's index IR + the literal construction see `vector<__nullable<Row>>`; the def-side
+    `fill_all` hook is too late for locals.  This is a distinct slice with its own design
+    questions (which declaration forms — annotated vs inferred; params; construction
+    propagation), NOT a one-liner — scope as E2a.5b before starting.
+  *Verify (when done):* Probe 3 (`vr[i]=null` clean both backends) ✅, Probe 4 (slice/copy preserve
+  null-ness — pending), Probe 5 (`vr[i].id` at the post-discriminant offset on native) ✅.
 - **E2a.6 — `not null` opt-out.** *Do:* `Row not null` field/element skips synthesis (plain
   inline). *Verify:* Probe 2 — byte-identical to today.
 - **E2a.7 — native parity + full suite** on both backends; regression cells.
@@ -367,10 +384,13 @@ was already retired by the representation + the compile rejection; this complete
   `Row` (`id@0,tag@8`) into the packed `Some` (`disc@0,tag@4,id@8`), hence the per-field copy.
 
 **STILL OPEN:**
-1. **Vector elements (E2a.5) — IN PROGRESS.** Struct-FIELD `vector<Row>` content is rewritten
-   to `vector<__nullable<Row>>`; literal construction + element read work (gate on). Remaining:
-   `vr[i] = null` (crashes in `copy_claims`), `== null` / reassign / iterate, and the
-   LOCAL/param `vr: vector<Row>` case (needs a parse-time element rewrite). Detail in the E2a.5
+1. **Vector elements (E2a.5) — STRUCT-FIELD case DONE; LOCAL/param case OPEN.** Struct-FIELD
+   `vector<Row>` content is rewritten to `vector<__nullable<Row>>`; literal construction +
+   element read, **`vr[i] = null` (discriminant-0 store in `towards_set`), `== null`, reassign,
+   and iteration all work on BOTH backends** (gate on) — and the embedded-field `bx.item = null`
+   sibling fell out of the same chokepoint.  *Remaining:* the LOCAL/param `vr: vector<Row>` case
+   (E2a.5b — a PARSE-time element rewrite, a distinct slice; confirmed still no-op/`E0308` via
+   `/tmp/p_e2a5/local.loft`), plus the present-payload free-on-null leak.  Detail in the E2a.5
    step above.
 2. **Gate removal + .loft regressions** — graduate the gated probes to
    `tests/scripts/25-nullable-sequences.loft` (which runs both backends without the env flag)

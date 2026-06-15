@@ -646,6 +646,31 @@ impl Parser {
             };
             return self.cl("OpSetDbRef", &[r, p, v]);
         }
+        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field /
+        // vector element.  The field/element is a synthetic `__nullable<S>` enum
+        // stored inline, so null is discriminant 0 (NOT the variable store_nr
+        // sentinel — an inline slot has no DbRef of its own).  `copy_ref` would
+        // emit `OpCopyRecord(null, dest, …)`: a silent no-op on the interpreter
+        // (the null source copies nothing) and a hard type error on native
+        // (`OpCopyRecord(cell, (), …)` — `()` where a DbRef is expected).  Write
+        // the discriminant at offset 0 to 0 instead; the inline form of `== null`
+        // reads exactly that (operators.rs `enum_null`).  Inert with the synthesis
+        // gate off — no `__nullable<` enums exist, so the name check never matches.
+        //
+        // NOTE: this does not free the prior element's heap payload (a present
+        // `Some` carrying a text / nested vector) — that leaks until the host is
+        // freed.  A leak, not corruption; tracked in embedded-record-null.md.
+        if op == "="
+            && matches!(val.unspan(), Value::Null)
+            && let Type::Enum(syn, true, _) = f_type
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && !matches!(to, Value::Var(_))
+        {
+            return self.cl(
+                "OpSetEnum",
+                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+            );
+        }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
             && !matches!(to, Value::Var(_))
