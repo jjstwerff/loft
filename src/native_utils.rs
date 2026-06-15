@@ -666,7 +666,14 @@ pub(crate) fn add_native_extern_flags(
             // loft-ffi ABI, so the `.so` survives loft rebuilds).  The shared
             // resolver keeps native-compile and interpret on the SAME `.so` and
             // adds the prebuilt + missing-syslib handling the hand-rolled path lacked.
-            let stem = crate_name.replace('-', "_");
+            // @PLN26 phase 0.4b — the cdylib is named after the `[library] native`
+            // stem, which can differ from the crate name; read it from the manifest
+            // (the SAME stem the interpreter resolves with) and fall back to the
+            // crate name only when absent.  This keeps native-compile and interpret
+            // on one `.so` even when `[lib] name` ≠ `crate_name`.
+            let stem = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+                .and_then(|m| m.native)
+                .unwrap_or_else(|| crate_name.replace('-', "_"));
             let Some(so) = crate::extensions::resolve_native_lib(pkg_dir, &stem) else {
                 // Unresolvable (missing system lib / build failed) — the resolver
                 // already printed an actionable message.  Skip; the link then fails
