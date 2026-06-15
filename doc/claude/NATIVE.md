@@ -1681,6 +1681,10 @@ loops, string allocation overhead.
 > with `found crates (libloading and libloading) with colliding StableCrateId
 > values`, and the identity model that prevents it. (Investigated 2026-06-15 on
 > the `crawler`/graphics consumer; `libloading` was the concrete collider.)
+>
+> **Resolution (see the end of this section): link the package's cdylib by C-ABI so
+> its Rust deps stay private — the StableCrateId class is eliminated by construction.
+> The build-identity exploration below is recorded but SUPERSEDED.**
 
 ## The shape of the problem
 
@@ -1774,6 +1778,11 @@ keep the wrong flags -> collision. Confirmed: graphics' `.loft-build-fp` stamp
 
 ## The design - build identity selects (fast, always); codegen hash validates (deep)
 
+> **SUPERSEDED** by the Resolution at the end.  Explored and partly built (it fixes
+> flag-axis collisions like `libloading`) but it is whack-a-mole: `log` collides on the
+> *profile* axis next.  Kept as the design record so the build-id approach is not
+> re-attempted.
+
 Two separate, legible axes - never folded into one number:
 
 - **Build identity = the fast selector.** The consumer computes its `<build-id>`
@@ -1833,3 +1842,59 @@ rlibs) through the same identity-keyed resolution and use one key on both sides.
   number). It detects the mismatch but forces a clobber-rebuild on every toolchain
   switch (churn) and conflates "which artifact" with "is it fresh" - the opposite of
   the fast-select / deep-validate split.
+
+---
+
+## Resolution: separate the API id from the Rust part (link the cdylib by C-ABI)
+
+The build-identity design above (rebuild the package so its shared deps MATCH loft's) was
+implemented and partly works — but it is whack-a-mole, and that is structural.  Verified
+end-to-end on the crawler:
+
+- keying rebuilt graphics into its slot with loft's flags (#274) and **`libloading`
+  vanished** — it was a *flags* mismatch (`-g` vs `mold`).
+- A NEW collision surfaced at once: **`log`** — same version/features/rustflags/rustc, but
+  a different **profile** hash.  The next would be build-script reproducibility.  Matching
+  *every* SVH-affecting input is the fragile path.
+
+**The reframe:** the collision exists ONLY because native-compile links the package as a
+Rust *rlib* (`extern crate loft_graphics_native`), pulling its whole crate graph into the
+consumer's rustc link where it overlaps loft's.  Link the package's **cdylib by C-ABI**
+instead and that graph is sealed in the `.so` — it never enters the link, so the class is
+gone BY CONSTRUCTION, for any toolchain / flags / profile / reproducibility.
+
+| | **API id** — crosses the boundary | **Rust part** — stays private |
+|---|---|---|
+| What | loft-ffi C-ABI: `gl_*` as `extern "C"` symbols + loft-ffi types as opaque pointers | the package's crate graph (`libloading`, `log`, `glutin`, ...) + its rustc/flags/profile |
+| Must match | only the **loft-ffi version** (already gated by the codegen hash) | **nobody** — sealed in the `.so` |
+
+Proven by the rebuilt artifact: `gl_*` are exported as plain C symbols
+(`#[no_mangle] pub unsafe extern "C"`, via loft-ffi-macros), and `nm -D ...so | grep -c
+'U .*(libloading|log)' == 0` — the deps are statically bundled inside the `.so`, not
+leaked.  Linking it brings ZERO Rust crates into the consumer.  It is also what the
+**interpreter already does** (dlopen the `.so`, call the C symbols), so this UNIFIES the
+two native-package paths; the codegen even has a non-rlib call mode already (the
+wasm-browser path emits `#[link(...)]` imports, not `krate::sym`).
+
+### Consequence: the build-identity axis disappears for native packages
+With the Rust part private, the package's rustc/flags/profile are **irrelevant** — so the
+build-identity keying, the multi-producer cache lifecycle, and the lazy GC above are all
+**unnecessary**.  F1/F2/F4 close *structurally* (no shared rlib to collide), not by
+matching.  The only remaining staleness axis is the **codegen hash** (loft-ffi ABI),
+which already gates the cdylib.
+
+### Scope of the codegen change (toward eliminating the rlib)
+- `emit_file_header`: for native packages emit `extern "C"` declarations of their `#native`
+  symbols (generalize the wasm-browser sig-gen at mod.rs:1098) + link the `.so`, instead of
+  `extern crate <ident>`.  **Key challenge:** the store-mutating `gl_*` (Reference args /
+  Vector-Reference returns) take a `LoftStore` handle — the cases the wasm-browser path
+  *skips*; native must include them (the `LoftStore` crosses the C-ABI, valid because both
+  sides share loft-ffi).
+- `output_native_direct_call` call site (mod.rs:2840): emit the **unqualified** symbol, not
+  `krate::sym`.
+- the link (`native_utils::add_native_extern_flags` / main.rs): `-L native=<so dir> -l ...`
+  + RPATH, not `--extern <ident>=<rlib>`.
+- likely **drop the rlib build** for native packages — one artifact (the cdylib) serves both
+  interpreter and native-compile.
+- The trade: the `.so` is a runtime/dynamic dependency (RPATH / shipped beside the binary)
+  rather than statically baked in — the same model the interpreter already needs.
