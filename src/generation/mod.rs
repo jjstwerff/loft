@@ -522,6 +522,11 @@ pub struct Output<'a> {
     /// False for wasm32-wasip2 (links the cross-compiled rlib) and `wasm_browser`
     /// (host imports).
     pub native_cabi: bool,
+    /// @PLN26 phase 1 — `#native` symbols exported by 2+ packages.  A *reachable*
+    /// call to one is rejected at native codegen (the flat C-ABI namespace can't
+    /// disambiguate); two packages sharing an UNUSED symbol still build.  Computed
+    /// once from `Data::native_symbol_collisions`.
+    pub native_collisions: HashSet<String>,
     /// @PLN18 08-S2 — the live-dispatch fn table, in emission order.  Each
     /// generated user fn with a dispatchable signature opens with
     /// `live_flipped(idx)`; `idx` is its position here.  `emit_native_main`
@@ -951,6 +956,11 @@ impl<'a> Output<'a> {
             call_stack_prefix: None,
             wasm_browser: false,
             native_cabi: false,
+            native_collisions: data
+                .native_symbol_collisions()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect(),
             live_fns: Vec::new(),
         }
     }
@@ -1287,17 +1297,6 @@ extern crate loft;"
                     writeln!(w, "    fn __cabi_{}({sig}){ret};", def.native())?;
                 }
                 writeln!(w, "}}")?;
-                // @PLN26 phase 1 — a `#native` symbol exported by 2+ packages
-                // cannot be disambiguated across the flat C-ABI namespace (nor the
-                // interpreter's symbol-keyed BRIDGE_REGISTRY); the link resolves
-                // first-`.so`-wins, silently the wrong fn.  Reject loudly with a
-                // module-level compile_error rather than mis-link.
-                for (sym, srcs) in data.native_symbol_collisions() {
-                    writeln!(
-                        w,
-                        "compile_error!(\"loft --native: native packages (sources {srcs:?}) export the same #native symbol '{sym}'; the C-ABI link cannot disambiguate them — rename one with #native \\\"<unique-symbol>\\\" (@PLN26 phase 1)\");"
-                    )?;
-                }
             } else {
                 // Emit extern crate declarations only for the native packages the
                 // emitted (reachable) code actually calls (#307).  A library cdylib
@@ -2991,16 +2990,28 @@ extern crate loft;"
                     self.output_native_direct_call(w, def_nr, def.native())?;
                 } else if let Some(krate) = self.data.native_symbol_crates.get(def.native()) {
                     if self.native_cabi {
-                        // C-ABI: call the symbol via its `__cabi_`-prefixed local
-                        // alias (declared with `#[link_name]` in the `extern "C"`
-                        // block), resolved by linking the package's cdylib `.so` —
-                        // no `extern crate` (NATIVE.md § Resolution).  The alias
-                        // avoids shadowing the same-named wrapper fn (E0428).  Only
-                        // `[native] crate` symbols reach here (they have a
-                        // native_symbol_crates entry); a stem/dlopen native falls to
-                        // the `else` branch below, unchanged.
-                        let aliased = format!("__cabi_{}", def.native());
-                        self.output_native_direct_call(w, def_nr, &aliased)?;
+                        // @PLN26 phase 1 — a `#native` symbol exported by 2+ packages
+                        // can't be disambiguated across the flat C-ABI namespace
+                        // (the link resolves first-`.so`-wins).  Reject it ONLY here,
+                        // at a REACHABLE call site — so two packages sharing an
+                        // unused symbol still build, and the error names a real call.
+                        let reachable =
+                            self.reachable.is_empty() || self.reachable.contains(&def_nr);
+                        if reachable && self.native_collisions.contains(def.native()) {
+                            writeln!(
+                                w,
+                                "{{ compile_error!(\"loft --native: native packages export the same #native symbol '{}'; the C-ABI link cannot disambiguate them — rename one with #native \\\"<unique-symbol>\\\" (@PLN26 phase 1)\") }}",
+                                def.native()
+                            )?;
+                        } else {
+                            // C-ABI: call the symbol via its `__cabi_`-prefixed alias
+                            // (declared with `#[link_name]` in the `extern "C"` block),
+                            // resolved by linking the package's cdylib `.so` — no
+                            // `extern crate` (NATIVE.md § Resolution).  The alias avoids
+                            // shadowing the same-named wrapper fn (E0428).
+                            let aliased = format!("__cabi_{}", def.native());
+                            self.output_native_direct_call(w, def_nr, &aliased)?;
+                        }
                     } else {
                         let qualified = format!("{}::{}", krate, def.native());
                         self.output_native_direct_call(w, def_nr, &qualified)?;
