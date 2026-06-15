@@ -71,7 +71,7 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 | Item | Concern | Status |
 |---|---|---|
 | **P1** — Foundation | ✅ Chokepoint `DbRef::is_null()` + `DbRef::NULL` (`store_nr==u16::MAX`) in `src/keys.rs`; vector store-accessors (`length`/`get`/`append`/`remove`/`insert`/`clear`; `sort`+`reverse` transitively via `length`) guarded through it. A null vector flows through `len`/`for`/`index`/`append`/`remove` with no `stores[u16::MAX]` OOB; null stays distinct from empty `[]`. Verified by `plan25_null_vector_tests` (4 tests) + full suite (2381 pass, 0 fail). | Shipped |
-| **P2** — Surface | mirror the 5 struct-or-null mechanisms for `Vector`: `convert(Null⇄Vector)`, `==`/`!=` overload, return-unification (nullable unless `not null`), codegen ref_ops Vector arm. `v == null` and `fn f() -> vector<T> { null }` compile + behave. | Open |
+| **P2** — Surface | ✅ `OpVectorIsNull(v)=store_nr==u16::MAX` (one `#rust` template → both backends via `make fill`); `==`/`!=` dispatch lowers `Vector ⊗ Null` directly to it (NOT `eq_ref`); `convert(Null→Vector)` via `OpNullRefSentinel` (return null). `v == null`/`!= null`, `fn f() -> vector<T> { null }`, and iterate-null all green on both backends; **empty `[]` correctly ≠ null**. Regression: `tests/scripts/25-nullable-sequences.loft`. | Shipped |
 | **P3** — Producers | `default_native_value` Vector arm (nullable field → `u16::MAX`; `not null` → empty); slice out-of-range → emit null vector. **Wires loft#384.** | Open |
 | **P4** — Hardening | consumer audit (every `t_*vector*` native fn), both backends + wasm, full suite, regression tests, docs (LOFT.md null model + STABILITY_HOTSPOTS H6). | Open |
 
@@ -123,6 +123,30 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
    via the now-guarded `length_vector`, so a null vector → length 0 → raises a
    recoverable `IndexOutOfBounds` and returns the null sentinel — safe, no OOB. Refine
    the error *kind* to a null-specific fault later (cosmetic; not blocking).
+
+## P2 findings (recorded while building Surface)
+
+4. **`OpEqRef` cannot be reused for vector `== null`.** Its `#rust` body (and `eq_ref`
+   in `fill.rs`) tests `rec == 0` as null — so references test null via `rec==0`, and an
+   empty vector (`rec==0`) routed through it would compare `== null` TRUE. The vector
+   null test MUST check `store_nr == u16::MAX` (`is_null()`). → P2 adds a dedicated
+   `OpVectorIsNull(v) -> boolean` = `v.store_nr == u16::MAX`, lowered directly in the
+   `==`/`!=` operator dispatch when one operand is `Vector` and the other `Null` (NOT via
+   the generic `OpConv`/`call_op` matcher — there is no untyped `vector` base that
+   `is_equal`-matches every `vector<T>`, the way `reference` does for structs).
+5. **The null-vector *producer* already exists.** `OpNullRefSentinel` emits
+   `{store_nr: u16::MAX, rec:0, pos:0}` = `DbRef::NULL`. So `return null` for a vector =
+   `convert(Null→Vector)` reusing `OpNullRefSentinel` (P3's slice-OOB null uses it too).
+6. **Decision (Q-new): `== null` is a store_nr identity test, not element equality.**
+   `v == null`/`v != null` only ever compare against the sentinel; this plan does NOT add
+   general `vector == vector` element equality (out of scope; would be a separate op).
+7. **Literal `v: vector<T> = null` stays rejected — by design, matching references.**
+   The var-type-change check rejects a `Type::Null` literal assigned to a typed var;
+   `m: SomeStruct = null` fails identically. So this is a general null-literal-assignment
+   limitation, NOT vector-specific — making vectors accept it would make them
+   *inconsistent* with references. A null vector enters a variable from a nullable source
+   (`v = maybe(false)`, a nullable field, a slice miss). Vectors now mirror references
+   exactly: `== null` ✓, `return null` ✓, literal `= null` ✗ (shared).
 
 ## Cross-arc dependencies
 

@@ -1545,7 +1545,28 @@ impl Parser {
                 }
             }
             self.expr_not_null = false;
-            if operator == ">" {
+            let vec_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Vector(_, _)) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Vector(_, _))));
+            if vec_null {
+                // @PLN25: `vector == null` / `vector != null` tests the null
+                // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
+                // whose rec==0 null test would also match an empty `[]`.
+                if !self.first_pass {
+                    let vec_code = if matches!(*ctp, Type::Vector(_, _)) {
+                        code.clone()
+                    } else {
+                        second_code
+                    };
+                    let is_null = self.cl("OpVectorIsNull", &[vec_code]);
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if operator == ">" {
                 *ctp = self.call_op(
                     code,
                     "<",

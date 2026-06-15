@@ -1,0 +1,27 @@
+// @PLN25 nullable sequences — a vector<T> can be null (absent), distinct from
+// an empty []. Null tests via the store_nr sentinel, NOT rec==0 (which empty
+// also has), so `[] == null` is false. Runs on both --interpret and --native.
+fn maybe(b: boolean) -> vector<integer> { if b { [10, 20] } else { null } }
+
+fn test() {
+    n = maybe(false);            // null vector
+    p = maybe(true);             // populated
+    e: vector<integer> = [];     // empty (a valid store, length 0)
+
+    assert(n == null, "null vector should equal null");
+    assert(!(n != null), "null vector != null should be false");
+
+    assert(!(p == null), "populated vector should not equal null");
+    assert(p != null, "populated vector should != null");
+    assert(len(p) == 2, "populated length");
+
+    // The P1/P2 footgun: empty is NOT null.
+    assert(!(e == null), "empty [] must NOT equal null");
+    assert(e != null, "empty [] should != null");
+    assert(len(e) == 0, "empty length");
+
+    // Iterating a null vector yields nothing (no OOB).
+    c = 0;
+    for x in n { c += 1; }
+    assert(c == 0, "iterating a null vector yields zero elements");
+}

@@ -1451,6 +1451,14 @@ impl Parser {
             }
             check_type = &e;
         }
+        // @PLN25: a null literal returned/assigned where a vector is expected becomes
+        // the null sentinel (store_nr=u16::MAX), reusing the reference sentinel producer
+        // — distinct from an empty `[]` (a valid store with length 0).
+        if *is_type == Type::Null && matches!(should, Type::Vector(_, _)) {
+            let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
+            *code = Value::Call(sentinel_nr, vec![]);
+            return true;
+        }
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
             if self.data.def(dnr).name().ends_with("FromNull") {
                 if *is_type == Type::Null {

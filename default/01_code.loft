@@ -915,6 +915,11 @@ fn OpTagFault(kind: const u8);
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
 #rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
+// @PLN25: true when the vector is the null sentinel (absent), tested via
+// store_nr — NOT rec==0, which an empty `[]` also has.  Lowered directly by the
+// `==`/`!=` operator dispatch for `vector == null` / `vector != null`.
+fn OpVectorIsNull(r: vector) -> boolean;
+#rust"@r.store_nr == u16::MAX"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)
