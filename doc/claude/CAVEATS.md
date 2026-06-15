@@ -127,9 +127,12 @@ literal no longer parses.  Use `integer` (i64) and plain literals.
   u32/u16/u8 binary field must add `as i32` / `as u16` / `as u8`
   explicitly.  Regression guard: `lib/graphics/src/glb.loft` was
   the flagship fix (`74aefb4`) — its test
-  `moros_glb_cli_end_to_end` now gates this behaviour.  There is
-  NO linter yet for the pattern; users writing custom binary
-  protocols need to audit their writers.
+  `moros_glb_cli_end_to_end` now gates this behaviour.  A parse-time
+  lint warns on every un-cast `f += <integer>` and lists the width
+  aliases; silence an intentional 8-byte write with `as integer`
+  (lint in `src/parser/objects.rs`, guarded by
+  `binary_write_bare_integer_warns` + the two `binary_write_*_cast_silent`
+  tests in `tests/parse_errors.rs`).
 - **~~Cross-crate cdylib FFI stays on i32 vector&lt;integer&gt;
   elements.~~ RESOLVED 2026-05-21 (@P310).**  This bullet (and the
   "obsolete claim" follow-up below) described the bug @P310 finally
