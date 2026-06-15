@@ -173,25 +173,48 @@ out to be two distinct bugs, neither the assign:*
 - **E1 gate:** enum-var null round-trips on both backends; `find_problems` full suite green;
   the repro graduates to `tests/scripts/`.
 
-### Phase E2 — nullable struct fields + vector elements (the same layout)
-- **E2.1 Byte-identity (the core claim — do this BEFORE wiring writes).** *Do:* give a
-  nullable struct field the discriminant-at-0 (enum) layout, fields after it. *Verify:*
-  **Probe 1** — `introspect`-diff a nullable embedded `Row` against a hand-written
-  `enum { Null, Some(Row) }`: record bytes, discriminant size+offset, field offsets, and the
-  generated field-read code must match. If they don't, stop — the representation is
-  aspirational, not real.
-- **E2.2 Field null-assign / read / default.** *Do:* `bx.item = null` → discriminant 0;
-  `bx.item == null` → discriminant; nullable-field default → 0 (finding 9). *Verify:*
-  `bx.item = mb(false)` clean on both backends, `== null` true, neighbour fields intact; an
-  unset nullable field reads null; an unset `not null` field reads a zero-initialised record.
-- **E2.3 Vector elements.** *Do:* `vector<Row>` elements carry the discriminant; `vr[i] =
-  null` → 0; wire element read / `== null` / iteration. *Verify:* **Probe 3** (`vr[i] =
-  null` clean both backends), **Probe 4** (slice `vr[a..b]` and copy `v2 = v1` preserve which
-  elements are null — no bitmap logic), **Probe 5** (`vr[i].id` reads at the
-  post-discriminant offset on `--native`).
-- **E2 gate:** embedded + element null round-trip both backends; slice/copy/append/remove
-  preserve null-ness; full suite green; regression cells added to
-  `tests/scripts/25-nullable-sequences.loft`.
+### Phase E2 — nullable struct fields + vector elements
+
+**E2.1 gate result (probed 2026-06-15): byte-identity is NOT free — chose approach (a).**
+A plain struct and the hand-written enum differ: `Row{id,tag}` lays out `id@0, tag@8`
+(size 12, no discriminant); the enum `RSome{id,tag}` reorders for packing — `disc@0,
+tag@4, id@8`. So the only way to byte-match is to **represent the nullable struct
+field/element AS a synthesized nullable enum** (approach (a)) and run it through the
+existing enum layout/construct/access/copy machinery — not to bolt a discriminant onto the
+struct layout. Staged below; each stage has its own gate and the entry point found in the
+machinery survey.
+
+- **E2a.1 — Synthesis helper [foundation].** *Do:* add a memoized
+  `nullable_enum_for(struct_d) -> enum_d` that builds, once per struct, a synthetic enum
+  `{ Null, Some<fields-of struct_d> }` — mirror `parse_enum` (`definitions.rs:367`,
+  `add_def(DefType::Enum)`) + `parse_enum_values` (`:199`, `add_def(DefType::EnumValue)` ×2,
+  `parent = enum_d`, the `Some` variant carrying `struct_d`'s attributes), then
+  `mark_synthetic`. *Verify (Probe 1):* a test calls it and asserts the synthesized type's
+  layout (discriminant@0 + packed fields) equals a hand-written `enum { Null, Some{…} }`.
+- **E2a.2 — Wire nullable struct FIELDS to it.** *Do:* at the field-type/offset hook
+  (`typedef.rs`, where `attr_nullable && !not_null` is known), when a field's content is a
+  struct and the field is nullable, set the field's content type to `nullable_enum_for(struct_d)`.
+  *Verify:* `introspect Box { item: Row }` shows `item`'s type is the synthetic enum, fields
+  offset past the discriminant.
+- **E2a.3 — Construction coercion.** *Do:* `Box { item: Row{…} }` builds the `Some` variant
+  (struct-literal → `Some(...)`; discriminant = present). *Verify:* construct + read
+  `bx.item.id` round-trips on both backends.
+- **E2a.4 — Access / null / default.** *Do:* `bx.item.id` unwraps `Some` (fields at the
+  post-discriminant offsets); `bx.item == null` → inline discriminant test (distinct from
+  E1's sentinel — this value is inline); `bx.item = null` → `Null` variant; default → `Null`
+  (finding 9). *Verify:* null/present round-trip, neighbour fields intact, both backends.
+- **E2a.5 — Vector elements.** *Do:* `vector<Row>` elements take the synthetic enum; wire
+  `vr[i]=null` / read / `== null` / iterate. *Verify:* Probe 3 (`vr[i]=null` clean both
+  backends), Probe 4 (slice/copy preserve null-ness), Probe 5 (`vr[i].id` at the
+  post-discriminant offset on native).
+- **E2a.6 — `not null` opt-out.** *Do:* `Row not null` field/element skips synthesis (plain
+  inline). *Verify:* Probe 2 — byte-identical to today.
+- **E2a.7 — native parity + full suite** on both backends; regression cells.
+
+*Risk note:* E2a.3/E2a.4 (struct-literal↔`Some` coercion, `.field` unwrap) are the load-
+bearing unknowns — the syntax says `Row` but the type is the enum, so construct/access need
+glue. If the existing enum machinery does NOT make these fall out cheaply, that is the alarm
+to re-scope (the "reuse, don't build" premise would be weaker than the design assumed).
 
 ### Phase E3 — `not null` opt-out + dense fast path
 - **E3.1 Parser.** *Do:* accept `not null` after a named element type in a generic
