@@ -163,8 +163,10 @@ must be releasable. All changes land on a feature branch and reach `main` only v
    branch first.
 2. **Pushing is OK by default — unless an open PR on the branch would be disturbed.** Push freely
    after green CI on a long-lived branch with no open PR (the user wants commits visible without
-   asking). With an open PR, do NOT push without explicit instruction — force-pushes, rebases, or
-   surprise commits disrupt review. Check `gh pr list --head <branch>` if unsure.
+   asking). With an open PR, do NOT push without the user's explicit consent — force-pushes,
+   rebases, or surprise commits disrupt review — **except a fix for a blocking failure** (red CI, a
+   broken build, a failing required check): a push that *unblocks* the PR is allowed without asking,
+   because the PR cannot merge while it is red anyway. Check `gh pr list --head <branch>` if unsure.
 3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
    PR", "merge", "switch to a new branch"). "fix X" / "implement Y" is NOT a PR instruction; a
    prior "open a PR" does not authorise the next one. When in doubt, summarise what's ready and ask.
