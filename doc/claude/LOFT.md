@@ -1662,6 +1662,34 @@ at the call site.  `assert` and `panic` are for programmer errors (bugs), not
 expected failures.  In production mode (`--production`), failed asserts are
 logged instead of aborting.
 
+### Relative paths resolve against the program's directory
+
+A relative path passed to file I/O is resolved against the **program's own
+directory** (the directory of the running `.loft` file), NOT the directory you
+launched loft from.  So `file("map.png")` reads the `map.png` that sits next to
+the program, wherever you run it from:
+
+```loft
+// program at  /home/me/game/level.loft
+// run as      loft /home/me/game/level.loft   (from anywhere)
+img = file("map.png").png();   // → /home/me/game/map.png
+```
+
+This rule is uniform across **every** file-touching path:
+
+- loft's built-in I/O (`file`, `read`, `write`, `delete`, …) joins the path onto
+  the program directory directly.
+- a **native library** function that does its own file I/O (raw Rust
+  `std::fs`, e.g. `imaging`'s `load_png`/`save_png`) sees the same anchor,
+  because loft sets the process working directory to the program directory
+  before running your code.  A library author therefore does **not** need a
+  special path API — a plain relative path resolves where the program expects.
+
+Opt out with the `#cwd` directive at the top of a file (or `LOFT_PATHS=cwd`),
+which anchors *both* built-in and native I/O at the process working directory
+instead — useful for a CLI tool that should read files relative to where the
+user invoked it.
+
 ### Closure capture: copy-at-definition, mutable within copy
 
 Captured variables are copied into the closure at definition time (value semantics,
