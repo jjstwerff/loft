@@ -857,7 +857,11 @@ pub fn build_shared_cdylib(
     // executable path — which also lifts the duplicate-`loft_register_v1` 2-package
     // limit).  Until a consumer triggers that work, this is a deliberate, loud gap.
     if !data.native_packages.is_empty() {
-        let names: Vec<&str> = data.native_packages.iter().map(|(c, _)| c.as_str()).collect();
+        let names: Vec<&str> = data
+            .native_packages
+            .iter()
+            .map(|(c, _)| c.as_str())
+            .collect();
         eprintln!(
             "loft: a library compiled to a shared-store cdylib that uses `[native] crate` \
              package(s) {names:?} is not yet supported on the native path (@PLN26 phase 2 — \
