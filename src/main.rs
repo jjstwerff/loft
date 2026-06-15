@@ -5502,6 +5502,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // Host-native backend: link each `#native` package's cdylib by C-ABI
+            // (`extern "C"` decls + `.so`), not its rlib — see NATIVE.md
+            // § Resolution: separate the API id from the Rust part.  The shared
+            // `native_cabi_enabled()` keeps codegen and the linker flags in sync
+            // (off on Windows, which stays on the rlib path).
+            out.native_cabi = native_utils::native_cabi_enabled();
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
                 let entry_defs: Vec<u32> = if main_nr < end_def {

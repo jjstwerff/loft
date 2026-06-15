@@ -1883,18 +1883,50 @@ build-identity keying, the multi-producer cache lifecycle, and the lazy GC above
 matching.  The only remaining staleness axis is the **codegen hash** (loft-ffi ABI),
 which already gates the cdylib.
 
-### Scope of the codegen change (toward eliminating the rlib)
-- `emit_file_header`: for native packages emit `extern "C"` declarations of their `#native`
-  symbols (generalize the wasm-browser sig-gen at mod.rs:1098) + link the `.so`, instead of
-  `extern crate <ident>`.  **Key challenge:** the store-mutating `gl_*` (Reference args /
-  Vector-Reference returns) take a `LoftStore` handle — the cases the wasm-browser path
-  *skips*; native must include them (the `LoftStore` crosses the C-ABI, valid because both
-  sides share loft-ffi).
-- `output_native_direct_call` call site (mod.rs:2840): emit the **unqualified** symbol, not
-  `krate::sym`.
-- the link (`native_utils::add_native_extern_flags` / main.rs): `-L native=<so dir> -l ...`
-  + RPATH, not `--extern <ident>=<rlib>`.
-- likely **drop the rlib build** for native packages — one artifact (the cdylib) serves both
-  interpreter and native-compile.
+### The codegen change — SHIPPED (host-native executable backend)
+The native executable backend (`output_native` / `output_native_reachable`) links a `[native]
+crate` package's cdylib `.so` by C-ABI; it no longer pulls the package's rlib into the
+consumer's rustc link, so the StableCrateId collision class is gone by construction.  Gated on
+`Output::native_cabi` (set by `native_utils::native_cabi_enabled()` — on everywhere except
+Windows, which stays on the rlib path until C-ABI dylib import-library linking is built).  The
+codegen and the linker flags read the *same* helper so they never disagree.
+
+- **`emit_file_header`** (`native_cabi` arm): emits `unsafe extern "C" { … }` declaring each
+  body-less `#native` fn (`code() == Null`) that belongs to a `[native] crate` package (has a
+  `native_symbol_crates` entry — a stem/dlopen native, `[library] native = "…"`, has none and
+  stays on its existing route, not declared/linked here).  The signature is derived from the
+  loft types to match exactly what `output_native_direct_call` marshals: a `loft_ffi::LoftStore`
+  first param when the fn writes the store (a Reference arg, or a Vector/Reference return);
+  text → `*const u8, usize`; vector → `*const ELEM, u32`; Reference → `loft_ffi::LoftRef`; text
+  return → `loft_ffi::LoftStr`; Vector/Reference return → `loft_ffi::LoftRef`; scalar widths per
+  `is_wide`.  **No reachability filter** — the fn emitter emits a wrapper (a native call) for
+  *every* body-less native in range, so each needs a decl (a genuinely-uncalled one is a
+  harmless dead extern).  **`#[link_name = "<sym>"]` + a `__cabi_<sym>` local alias** because a
+  bare `#native` defaults the symbol to the fn's own `n_<name>`, which would otherwise shadow
+  the generated `n_<name>` wrapper (E0428).
+- **call site**: `native_cabi` emits the unqualified `__cabi_<sym>` alias (resolved by the
+  link), not `krate::sym`.  `output_native_direct_call`'s body is unchanged — its
+  `transmute_copy`s are now harmless identities (the consumer has only loft's `loft_ffi`, named
+  via `--extern loft_ffi`, since the cdylib's copy is sealed in the `.so`).
+- **link** (`native_utils::add_native_extern_flags`, `target.is_none() && native_cabi_enabled()`):
+  `-L native=<so dir> -l dylib=<stem> -Clink-arg=-Wl,-rpath,<so dir>`, not `--extern
+  <ident>=<rlib>`.  Keyed on **`loft_ffi_fingerprint()`** (the ABI hash, matching what
+  `auto_build_native` stamps) — NOT `loft_build_fingerprint`: the `.so` is ABI-sealed and stays
+  valid across loft rebuilds.
+- The rlib is **still built** (`auto_build_native` builds `.so` + rlib) and still *linked* by
+  wasm32-wasip2 (cross-compiled rlib), the library-cdylib path, and Windows.  Dropping the rlib
+  build awaits converting those remaining paths; the win here is removing it from the native
+  executable consumer's link, the one place the collision arose.
 - The trade: the `.so` is a runtime/dynamic dependency (RPATH / shipped beside the binary)
   rather than statically baked in — the same model the interpreter already needs.
+
+**Verified** (2026-06-15): a store-mutating round-trip — imaging `save_png` + `load_png` (both
+Reference-arg/`LoftStore`) — native-compiles, links `libloft_imaging.so` by C-ABI, runs the
+store mutation through the handle, and prints output identical to `--interpret`
+(`saved=true reloaded=2x1`).  Full native test suite green.
+
+**Remaining paths + residual gaps** — the library-cdylib path (the viewer collision),
+wasm32-wasip2, and Windows still link the rlib; plus same-symbol cross-package
+disambiguation, `make install` `.so` packaging (`$ORIGIN` RPATH + copy), the
+boolean→`u8` ABI, and the `prebuilt/` + `fp == 0` resolution edges — are tracked in
+**@PLN26** ([loft-lang/plans#26](https://github.com/loft-lang/plans/issues/26)).

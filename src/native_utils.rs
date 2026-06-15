@@ -619,6 +619,17 @@ pub(crate) fn rlibs_in_dir(
     map
 }
 
+/// Whether the host-native backend links `#native` packages by C-ABI (their
+/// cdylib `.so`) instead of as Rust rlibs — see NATIVE.md § Resolution: separate
+/// the API id from the Rust part.  Both the codegen (`Output::native_cabi`) and
+/// the linker flags below read this, so they always agree on a given host.  Off
+/// on Windows: cdylib import-library linking + no RPATH differ there, so Windows
+/// stays on the proven rlib path until the C-ABI path is built and verified.
+#[must_use]
+pub(crate) fn native_cabi_enabled() -> bool {
+    cfg!(not(target_os = "windows"))
+}
+
 /// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
 /// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
 /// otherwise looks for native rlibs in `native/target/release/`.
@@ -640,6 +651,42 @@ pub(crate) fn add_native_extern_flags(
     let loft_rlibs = loft_deps_dir.map(rlibs_in_dir).unwrap_or_default();
 
     for (crate_name, pkg_dir) in &data.native_packages {
+        // Host-native C-ABI link (NATIVE.md § Resolution: separate the API id
+        // from the Rust part).  Link the package's cdylib `.so` by C-ABI instead
+        // of its rlib via `--extern`: the `.so` seals the package's whole Rust
+        // crate graph (its own `loft_ffi` copy included), so no `-L dependency=`
+        // or per-crate pinning is needed and the shared-dep `StableCrateId`
+        // collision class is gone by construction.  An RPATH points the binary at
+        // the build dir so it loads the `.so` at run time.  Native target only —
+        // wasm cross-compiles the package to an rlib (the branch below).
+        if target.is_none() && native_cabi_enabled() {
+            let stem = crate_name.replace('-', "_");
+            let so_dir = crate::extensions::native_target_root(std::path::Path::new(pkg_dir))
+                .join("release");
+            let so_path = so_dir.join(crate::extensions::platform_lib_name(&stem));
+            // The cdylib is keyed on the loft-ffi ABI fingerprint, NOT the full
+            // libloft build hash — that is the whole point of the C-ABI link: the
+            // `.so` seals its Rust graph and stays valid across loft rebuilds as
+            // long as the loft-ffi ABI is unchanged.  This matches the fingerprint
+            // `auto_build_native` stamps (extensions.rs ~2415), so a current `.so`
+            // is seen as fresh instead of needlessly rebuilt on every loft build.
+            let stale = !loft::cache::native_artifact_fingerprint_matches(
+                &so_dir,
+                loft::cache::loft_ffi_fingerprint(),
+            );
+            if !so_path.exists() || stale {
+                let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
+            }
+            if so_path.exists() {
+                cmd.arg("-L").arg(format!("native={}", so_dir.display()));
+                cmd.arg("-l").arg(format!("dylib={stem}"));
+                // RPATH so the produced binary finds the `.so` at run time
+                // without LD_LIBRARY_PATH (relocating it beside the binary is an
+                // install-time packaging step).
+                cmd.arg(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+            }
+            continue;
+        }
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
         // P244-windows fix #2 (2026-05-12): use single-segment joins,

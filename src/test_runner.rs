@@ -803,6 +803,8 @@ pub(crate) fn run_tests(
                     let gen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut buf: Vec<u8> = Vec::new();
                         let mut out = generation::Output::new(&native_data, &native_db);
+                        // Host-native backend: C-ABI cdylib link (NATIVE.md § Resolution).
+                        out.native_cabi = native_utils::native_cabi_enabled();
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");
                         // output_native_reachable emits fn main() when n_main
@@ -951,6 +953,25 @@ pub(crate) fn run_tests(
                                 cmd.arg("--extern")
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));
                                 cmd.arg("-L").arg(native_utils::deps_dir_of(ld));
+                                // The C-ABI native consumer names `loft_ffi` types
+                                // (LoftStore/LoftRef/LoftStr) in its `extern "C"`
+                                // decls, so loft's own `loft_ffi` rlib must be on
+                                // the command (mirrors the standalone native
+                                // compile in main.rs).
+                                if let Ok(rd) = std::fs::read_dir(native_utils::deps_dir_of(ld)) {
+                                    for e in rd.flatten() {
+                                        let name = e.file_name().to_string_lossy().to_string();
+                                        if name.starts_with("libloft_ffi-")
+                                            && std::path::Path::new(&name)
+                                                .extension()
+                                                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                                        {
+                                            cmd.arg("--extern")
+                                                .arg(format!("loft_ffi={}", e.path().display()));
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             // LibCI: link each package's `#native` crate so tests
                             // for native-backed libraries (graphics, crypto, …)

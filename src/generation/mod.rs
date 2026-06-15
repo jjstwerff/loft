@@ -514,6 +514,14 @@ pub struct Output<'a> {
     /// When true, emit `#[no_mangle] pub extern "C" fn loft_start()`
     /// instead of `fn main()` and use WASM imports for native package functions.
     pub wasm_browser: bool,
+    /// When true, the host-native backend: emit `unsafe extern "C"` declarations
+    /// for `#native` package functions (instead of `extern crate <pkg>`) and link
+    /// each package's cdylib `.so` by C-ABI, sealing the package's Rust crate graph
+    /// inside the `.so` — this eliminates the shared-dep `StableCrateId` collision
+    /// class (see NATIVE.md § Resolution: separate the API id from the Rust part).
+    /// False for wasm32-wasip2 (links the cross-compiled rlib) and `wasm_browser`
+    /// (host imports).
+    pub native_cabi: bool,
     /// @PLN18 08-S2 — the live-dispatch fn table, in emission order.  Each
     /// generated user fn with a dispatchable signature opens with
     /// `live_flipped(idx)`; `idx` is its position here.  `emit_native_main`
@@ -942,6 +950,7 @@ impl<'a> Output<'a> {
             tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
+            native_cabi: false,
             live_fns: Vec::new(),
         }
     }
@@ -1034,6 +1043,7 @@ impl Output<'_> {
         w: &mut dyn Write,
         data: &Data,
         wasm_browser: bool,
+        native_cabi: bool,
         reachable: &HashSet<u32>,
     ) -> std::io::Result<()> {
         writeln!(
@@ -1147,28 +1157,155 @@ extern crate loft;"
             }
             writeln!(w, "}}")?;
         } else {
-            // Emit extern crate declarations only for the native packages the
-            // emitted (reachable) code actually calls (#307).  A library cdylib
-            // built inside a multi-package program (the viewer: markdown +
-            // server + web) must not declare unrelated packages: no `--extern`
-            // is supplied for them (E0463), and two loft-ffi package rlibs
-            // cannot link into one cdylib anyway (each exports `#[no_mangle]
-            // loft_register_v1` → duplicate symbol).  An empty `reachable` is
-            // the whole-program fallback — keep every package.
-            let needed: Option<HashSet<&String>> = if reachable.is_empty() {
-                None
+            if native_cabi {
+                // Host-native backend (NATIVE.md § Resolution: separate the API
+                // id from the Rust part).  Declare each reachable `#native`
+                // package function as an `extern "C"` symbol; the cdylib `.so`
+                // is linked by C-ABI (`add_native_extern_flags`), so the
+                // package's Rust crate graph stays sealed inside the `.so` and
+                // the shared-dep `StableCrateId` collision class cannot arise.
+                // No `extern crate <pkg>`.  The signature mirrors exactly what
+                // `output_native_direct_call` marshals (store handle first,
+                // text → ptr+len, vector → ptr+count, ref → LoftRef, scalar
+                // widths per `is_wide`), so the unqualified C-ABI call is
+                // type-correct.  The opaque FFI types are named through loft's
+                // own `loft_ffi` (`--extern loft_ffi`) — the only copy left in
+                // the consumer now the cdylib's copy is sealed away.
+                use std::fmt::Write as _;
+                writeln!(w, "unsafe extern \"C\" {{")?;
+                let mut declared = HashSet::new();
+                for d_nr in 0..data.definitions() {
+                    let def = data.def(d_nr);
+                    // Only a body-less `#native` fn (`code() == Null`) is called
+                    // as a native symbol.  A fn WITH a loft body is compiled
+                    // inline as a regular `n_*` fn and the call resolves to that.
+                    // A pure-loft *package* fn carries a `loft_shared_*` bridge
+                    // name in `native()` (for the interpreter's shared-store
+                    // dispatch), but the native whole-program backend inlines it;
+                    // declaring it here would emit a dead, wrong-ABI extern.  This
+                    // matches the call branch, which emits a native call only when
+                    // `code() == Null` (see the `else if *def.code() == Value::Null`
+                    // arm in the fn emitter).
+                    if def.native().is_empty() || *def.code() != Value::Null {
+                        continue;
+                    }
+                    // Declare only natives belonging to a `[native] crate` package
+                    // we link by C-ABI — those have a `native_symbol_crates` entry.
+                    // A stem/dlopen native (`[library] native = "..."`, resolved at
+                    // runtime via `load_all`) is NOT linked here; declaring it
+                    // would force an undefined-symbol link error instead of leaving
+                    // it on its own dispatch path (the call branch keeps such a
+                    // symbol off the C-ABI route too).
+                    if data.native_symbol_crates.get(def.native()).is_none() {
+                        continue;
+                    }
+                    // No reachability filter here: the fn emitter emits a wrapper
+                    // (a native call) for EVERY body-less native def in range —
+                    // even ones the user never calls — so every such symbol needs
+                    // a decl or the wrapper fails to compile (E0425).  Declaring a
+                    // genuinely-unreferenced one is a harmless dead `extern` (no
+                    // symbol reference is emitted, so the linker never needs it).
+                    if !declared.insert(def.native().to_string()) {
+                        continue;
+                    }
+                    // A store handle is the first parameter when the fn writes
+                    // the store: a Reference arg the cdylib mutates, or a
+                    // Vector/Reference return it allocates.
+                    let returns_ref =
+                        matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+                    let has_ref_arg = def.attributes().iter().any(|a| {
+                        !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
+                    });
+                    let mut sig = String::new();
+                    if returns_ref || has_ref_arg {
+                        sig.push_str("store: loft_ffi::LoftStore");
+                    }
+                    for attr in def.attributes() {
+                        if attr.name.starts_with("__") {
+                            continue;
+                        }
+                        if !sig.is_empty() {
+                            sig.push_str(", ");
+                        }
+                        let n = sanitize(&attr.name);
+                        match &attr.typedef {
+                            Type::Text(_) => {
+                                let _ = write!(sig, "{n}_ptr: *const u8, {n}_len: usize");
+                            }
+                            Type::Vector(elem_tp, _) => {
+                                let elem = Self::vector_elem_rust_type(elem_tp);
+                                let _ = write!(sig, "{n}_ptr: *const {elem}, {n}_count: u32");
+                            }
+                            Type::Reference(_, _) => {
+                                let _ = write!(sig, "{n}: loft_ffi::LoftRef");
+                            }
+                            Type::Integer(s) if s.is_wide() => {
+                                let _ = write!(sig, "{n}: i64");
+                            }
+                            Type::Float => {
+                                let _ = write!(sig, "{n}: f64");
+                            }
+                            Type::Single => {
+                                let _ = write!(sig, "{n}: f32");
+                            }
+                            // `output_native_direct_call` passes `var != 0` (a
+                            // `bool`) for a boolean arg; declare it `bool`.
+                            Type::Boolean => {
+                                let _ = write!(sig, "{n}: bool");
+                            }
+                            _ => {
+                                let _ = write!(sig, "{n}: i32");
+                            }
+                        }
+                    }
+                    let ret = match def.returned() {
+                        Type::Void => String::new(),
+                        Type::Integer(s) if s.is_wide() => " -> i64".to_string(),
+                        Type::Integer(_) | Type::Character => " -> i32".to_string(),
+                        Type::Float => " -> f64".to_string(),
+                        Type::Single => " -> f32".to_string(),
+                        // The real fn returns `bool`; the call casts `as u8`.
+                        Type::Boolean => " -> bool".to_string(),
+                        Type::Text(_) => " -> loft_ffi::LoftStr".to_string(),
+                        Type::Vector(_, _) | Type::Reference(_, _) => {
+                            " -> loft_ffi::LoftRef".to_string()
+                        }
+                        _ => " -> i32".to_string(),
+                    };
+                    // The C-ABI symbol name can collide with the generated
+                    // wrapper fn: a bare `#native` defaults the symbol to the
+                    // fn's own `n_<name>` (e.g. `load_png` → wrapper `n_load_png`
+                    // AND symbol `n_load_png`).  Declare under a `__cabi_`-prefixed
+                    // local alias and bind the real symbol via `#[link_name]`, so
+                    // the extern never shadows the wrapper (E0428).
+                    writeln!(w, "    #[link_name = \"{}\"]", def.native())?;
+                    writeln!(w, "    fn __cabi_{}({sig}){ret};", def.native())?;
+                }
+                writeln!(w, "}}")?;
             } else {
-                Some(
-                    reachable
-                        .iter()
-                        .filter_map(|&d| data.native_symbol_crates.get(data.def(d).native()))
-                        .collect(),
-                )
-            };
-            for (crate_name, _) in &data.native_packages {
-                let ident = crate_name.replace('-', "_");
-                if needed.as_ref().is_none_or(|n| n.contains(&ident)) {
-                    writeln!(w, "extern crate {ident};")?;
+                // Emit extern crate declarations only for the native packages the
+                // emitted (reachable) code actually calls (#307).  A library cdylib
+                // built inside a multi-package program (the viewer: markdown +
+                // server + web) must not declare unrelated packages: no `--extern`
+                // is supplied for them (E0463), and two loft-ffi package rlibs
+                // cannot link into one cdylib anyway (each exports `#[no_mangle]
+                // loft_register_v1` → duplicate symbol).  An empty `reachable` is
+                // the whole-program fallback — keep every package.
+                let needed: Option<HashSet<&String>> = if reachable.is_empty() {
+                    None
+                } else {
+                    Some(
+                        reachable
+                            .iter()
+                            .filter_map(|&d| data.native_symbol_crates.get(data.def(d).native()))
+                            .collect(),
+                    )
+                };
+                for (crate_name, _) in &data.native_packages {
+                    let ident = crate_name.replace('-', "_");
+                    if needed.as_ref().is_none_or(|n| n.contains(&ident)) {
+                        writeln!(w, "extern crate {ident};")?;
+                    }
                 }
             }
         }
@@ -1274,7 +1411,7 @@ extern crate loft;"
                 self.reachable = reachable_functions(self.data, &entries);
             }
         }
-        Self::emit_file_header(w, self.data, self.wasm_browser, &self.reachable)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser, self.native_cabi, &self.reachable)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,
@@ -1368,7 +1505,7 @@ extern crate loft;"
         self.dup_fn_names = duplicate_fn_names(self.data);
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w, self.data, self.wasm_browser, &reachable)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser, self.native_cabi, &reachable)?;
         writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
         writeln!(
             w,
@@ -2833,13 +2970,25 @@ extern crate loft;"
             if !def.native().is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
-                    // call the imported function directly (unqualified).
-                    // The function is declared in the preamble via
-                    // #[link(wasm_import_module = "loft_gl")].
+                    // wasm host import — unqualified; declared in the preamble via
+                    // `#[link(wasm_import_module = "loft_gl")]`.
                     self.output_native_direct_call(w, def_nr, def.native())?;
                 } else if let Some(krate) = self.data.native_symbol_crates.get(def.native()) {
-                    let qualified = format!("{}::{}", krate, def.native());
-                    self.output_native_direct_call(w, def_nr, &qualified)?;
+                    if self.native_cabi {
+                        // C-ABI: call the symbol via its `__cabi_`-prefixed local
+                        // alias (declared with `#[link_name]` in the `extern "C"`
+                        // block), resolved by linking the package's cdylib `.so` —
+                        // no `extern crate` (NATIVE.md § Resolution).  The alias
+                        // avoids shadowing the same-named wrapper fn (E0428).  Only
+                        // `[native] crate` symbols reach here (they have a
+                        // native_symbol_crates entry); a stem/dlopen native falls to
+                        // the `else` branch below, unchanged.
+                        let aliased = format!("__cabi_{}", def.native());
+                        self.output_native_direct_call(w, def_nr, &aliased)?;
+                    } else {
+                        let qualified = format!("{}::{}", krate, def.native());
+                        self.output_native_direct_call(w, def_nr, &qualified)?;
+                    }
                 } else {
                     // P269: refuse to emit a runtime panic for a reachable
                     // unimplemented native — convert to a compile-time error
