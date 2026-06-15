@@ -35,6 +35,28 @@ tables.
 
 ---
 
+## Native build — same-symbol cross-package `#native` collision (fix deferred → @PLN26)
+
+Two native packages (`[native] crate`) that export the **same `#native` symbol**
+can't be disambiguated under `--native`: the C-ABI link resolves first-`.so`-wins,
+and the interpreter's bridge registry resolves last-loaded-wins (a *pre-existing
+both-backend* hazard).  Today `--native` **rejects a reachable call** to such a
+symbol with a clear `compile_error!` ("rename one with `#native \"<unique>\"`") —
+so you never silently call the wrong fn; two packages sharing an *unused* symbol
+still build.  `--interpret` keeps its existing (silent, last-loaded) behavior.
+
+- **Workaround:** rename one of the colliding `#native` symbols (when you own the
+  package); the error names the symbol.
+- **Deferred fix** ([@PLN26 phase 1](https://github.com/loft-lang/plans/issues/26)):
+  per-package symbol namespacing so same-symbol packages coexist — touches the
+  cdylib export, the interpreter registry, and codegen in lockstep; only needed to
+  *call* a symbol two un-renameable packages both export (uncommon).
+- **Repro / guards:** `tests/lib/collide_a` + `collide_b` (both export
+  `collide_shared`), `collide_main` (calls both → rejected) / `collide_unused`
+  (unused → builds); in-crate `native_symbol_collision_across_packages_detected`.
+
+---
+
 ## Scheduled — 0.8.5
 
 ### ~~P137~~ — `loft --html` Brick Buster: runtime `unreachable` panic — DONE
