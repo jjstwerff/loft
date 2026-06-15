@@ -953,6 +953,21 @@ pub(crate) fn run_tests(
                                 cmd.arg("--extern")
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));
                                 cmd.arg("-L").arg(native_utils::deps_dir_of(ld));
+                                // Propagate `-L native=` for every build-script
+                                // `OUT_DIR` that bundles a native lib — the G2
+                                // mitigation main.rs already has on the standalone
+                                // path.  windows-targets ships `windows.0.XX.0.lib`
+                                // inside its OUT_DIR; without these the Windows link
+                                // fails `LNK1181: cannot open input file
+                                // 'windows.0.XX.0.lib'`.  Native packages that pull
+                                // windows-targets via their OWN deps masked this (the
+                                // rlib branch of `add_native_extern_flags` harvests
+                                // the PACKAGE's OUT_DIRs), but a dependency-free
+                                // `[native] crate` package brings none — so the test
+                                // path needs loft's own OUT_DIRs too.
+                                for out_dir in native_utils::build_script_native_lib_dirs(ld) {
+                                    cmd.arg("-L").arg(format!("native={}", out_dir.display()));
+                                }
                                 // The C-ABI native consumer names `loft_ffi` types
                                 // (LoftStore/LoftRef/LoftStr) in its `extern "C"`
                                 // decls, so loft's own `loft_ffi` rlib must be on
@@ -1008,11 +1023,30 @@ pub(crate) fn run_tests(
                                 let stderr_msg = compile_result.as_ref().ok().map_or_else(
                                     || "rustc not found".to_string(),
                                     |o| {
-                                        String::from_utf8_lossy(&o.stderr)
+                                        let s = String::from_utf8_lossy(&o.stderr);
+                                        let err = s
                                             .lines()
                                             .find(|l| l.starts_with("error"))
-                                            .unwrap_or("(unknown)")
-                                            .to_string()
+                                            .unwrap_or("(unknown)");
+                                        // Append linker-detail lines (LNK####, "cannot
+                                        // open input file", undefined symbol) so a
+                                        // Windows link failure NAMES the missing file
+                                        // instead of just "exit code: 1181" — the first
+                                        // `error:` line alone hid the cause.
+                                        let detail: Vec<&str> = s
+                                            .lines()
+                                            .filter(|l| {
+                                                l.contains("LNK")
+                                                    || l.contains("cannot open")
+                                                    || l.contains("undefined")
+                                            })
+                                            .take(4)
+                                            .collect();
+                                        if detail.is_empty() {
+                                            err.to_string()
+                                        } else {
+                                            format!("{err} | {}", detail.join(" | "))
+                                        }
                                     },
                                 );
                                 let _ = std::fs::remove_file(&binary);
