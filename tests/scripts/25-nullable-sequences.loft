@@ -27,6 +27,29 @@ fn test() {
 
     slice_bounds();
     element_null();
+    enum_null();
+}
+
+enum Shape { Circle { r: integer }, Square { s: integer } }
+fn maybe_shape(b: boolean) -> Shape { if b { Circle { r: 7 } } else { null } }
+
+// @PLN25 E1: a nullable enum participates in the null model like a struct
+// reference.  `== null` tests the store_nr sentinel (OpRefIsNull) — NOT the
+// discriminant, whose read derefs the absent record.  And a present value
+// returned from a nullable-returning fn keeps its store_nr on BOTH backends
+// (the native ref-retbuf tail-capture must recognise the enum's variant type).
+fn enum_null() {
+    n = maybe_shape(false);
+    assert(n == null, "null enum == null");
+    assert(!(n != null), "null enum != null is false");
+
+    p = maybe_shape(true);
+    assert(!(p == null), "present enum is NOT null (native must not corrupt it)");
+    assert(p != null, "present enum != null");
+
+    // the present payload survives the nullable return on both backends
+    v = match p { Circle { r } => r, Square { s } => s, _ => -1 };
+    assert(v == 7, "present enum payload r == 7");
 }
 
 // A simple-typed vector element can be the inner typed null (e.g. integer

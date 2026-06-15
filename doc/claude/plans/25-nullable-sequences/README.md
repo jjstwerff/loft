@@ -259,11 +259,15 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
     `tests/scripts/25-nullable-sequences.loft`. Still open (pre-existing, NOT simple-typed):
     **reference / embedded-struct** vector elements — `vr[i] = null` no-ops on the
     interpreter and was a native codegen crash (`OpCopyRecord` gets `()`). That is a
-    representation gap shared with **nullable enums** (which crash identically — both are
+    representation gap shared with **nullable enums** (which crashed identically — both are
     inline value records). The fix gives a nullable inline record the **nullable-enum
     layout** (discriminant at offset 0, `0`=null) with a `vector<Row not null>` opt-out —
     designed in [embedded-record-null.md](embedded-record-null.md); one representation fixes
-    nullable enums, embedded structs, vector elements, and finding 9. Also pre-existing: a
+    nullable enums, embedded structs, vector elements, and finding 9. **E1 (nullable enum
+    VARIABLE) shipped** — `enum == null` now tests the `store_nr` sentinel (`OpRefIsNull`),
+    and a present enum returned from a nullable fn keeps its `store_nr` on native (a deeper
+    return-ABI bug E1 surfaced: the ref-retbuf tail-capture now matches a variant against its
+    enum). Both backends green. The embedded-field / vector-element cases (E2) remain. Also pre-existing: a
     reused `_` loop var across different element types is type-locked to its first type
     (native E0308) — separate from this fix.
 

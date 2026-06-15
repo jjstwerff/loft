@@ -141,24 +141,35 @@ only if the step is correct). A step does not start until the previous one's gat
 each phase ends with a full-suite gate on **both backends**. Every step begins by reading
 its named site — the sites below are the entry points, not a claim that nothing else moves.
 
-### Phase E1 — discriminant null-handling on the pure case (enum variable)
-*Why first: the enum variable is the simplest inline value record and it already crashes, so
-it validates the `discriminant==0 ⇒ null` mechanism before any struct/element layout work.*
+### Phase E1 — nullable enum VARIABLE [DONE — both backends green]
+*Probing corrected the plan: an enum **variable** is a `DbRef` slot (like a struct
+reference), so its null is the `store_nr==u16::MAX` SENTINEL — NOT a discriminant-0 record.
+The discriminant-0 encoding is for INLINE enums (fields/elements), which is E2. E1 turned
+out to be two distinct bugs, neither the assign:*
 
-- **E1.0 Characterize the crash.** *Do:* `introspect` the caller of `x = mb(false)`
-  (`n_test`); name the exact op that copies the returned possibly-null `ref(Shape)` into
-  `x` and the line where it derefs `store_nr==65535`. *Verify:* the op + `io.rs`/`fill.rs`
-  line are written down; the `/tmp` repro panics deterministically at that line.
-- **E1.1 Null-aware copy.** *Do:* at that copy site, when the source is null at runtime
-  (`store_nr==u16::MAX`), write discriminant `0` to the destination (freeing any prior heap
-  deps) instead of `OpCopyRecord`. *Verify (interp):* `x = mb(false)` runs clean and
-  `x == null` is true; `x = mb(true)` still yields a present value whose payload field reads
-  correctly (discriminant ≥ 1). (= Probe 3, enum subset.)
-- **E1.2 `== null` via discriminant.** *Do:* confirm/observe enum `== null` lowers to a
-  discriminant-`0` test (not a path that derefs). *Verify:* present-vs-null enum both report
-  correctly.
-- **E1.3 Native parity.** *Do:* mirror E1.1/E1.2 in native codegen. *Verify:* the E1.1/E1.2
-  probes pass on `--native`; `--native-emit` shows **no** deref of the null source.
+- **E1.0 Characterize.** The assign (`x = mb(false)`) does NOT crash — `x` holds the
+  sentinel fine. The crash is in **`x == null`**: enum `==null` lowered to
+  `OpEqInt(OpConvIntFromEnum(OpGetEnum(x,0)), …)`, and `OpGetEnum` derefs the absent
+  record (`store_nr=65535`) → `allocation.rs:560` OOB.
+- **E1.1 `== null` via the sentinel.** Added `OpRefIsNull(r) = store_nr==u16::MAX`
+  (`default/01_code.loft`, regenerated into both backends) and an `enum_null` branch in the
+  `==`/`!=` dispatch (`operators.rs`) that lowers `enum ⊗ null` to it. NOT `OpEqRef`: its
+  `rec==0` test misreads a *present* enum on native (enums are inline-represented there, so
+  `rec==0`), the same finding-1/4 distinction.
+- **E1.2 Native return-ABI bug (deeper, pre-existing — surfaced by E1's native gate).** A
+  nullable-returning fn's *present* enum value came back as the sentinel on native, so even
+  `match` crashed. Root: the ref-retbuf **tail-capture** (`pre_eval.rs heap_shape_matches`)
+  only matched `(Reference, Reference)` / `(Enum,true × Enum,true)`. The tail
+  `if c { Circle{} } else { null }` infers to the **variant** type `Reference(Circle)`,
+  while the target is `Enum(Shape,true)` — no match → capture missed → the present value was
+  dropped and a sentinel returned. Fix: match a variant-ref/enum tail against its enum target
+  via `def(variant).parent() == enum`. Nullable structs were unaffected (inline retbuf).
+- **E1 gate met:** `enum == null` (null→true, present→false), present payload survives the
+  nullable return, on BOTH backends; regression `enum_null()` in
+  `tests/scripts/25-nullable-sequences.loft`; full suite green (2381).
+
+(Original plan text, for E2/E3, kept below.)
+
 - **E1 gate:** enum-var null round-trips on both backends; `find_problems` full suite green;
   the repro graduates to `tests/scripts/`.
 

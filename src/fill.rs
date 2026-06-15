@@ -222,6 +222,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     tag_fault,
     length_vector,
     vector_is_null,
+    ref_is_null,
     length_sorted,
     clear_vector,
     get_vector,
@@ -1814,6 +1815,12 @@ fn length_vector(s: &mut State) {
 }
 
 fn vector_is_null(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = v_r.store_nr == u16::MAX;
+    s.put_stack(new_value);
+}
+
+fn ref_is_null(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = v_r.store_nr == u16::MAX;
     s.put_stack(new_value);

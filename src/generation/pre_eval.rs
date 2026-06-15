@@ -845,7 +845,7 @@ impl Output<'_> {
                         return None;
                     }
                     let callee_ret = self.data.def(*d_nr).returned();
-                    if !Self::heap_shape_matches(callee_ret, target_type) {
+                    if !self.heap_shape_matches(callee_ret, target_type) {
                         return None;
                     }
                     return Some((i, ret_idx));
@@ -867,7 +867,7 @@ impl Output<'_> {
                     if !self.is_void_value(other)
                         && self
                             .infer_type(IrNode::Native(other))
-                            .is_some_and(|t| Self::heap_shape_matches(&t, target_type)) =>
+                            .is_some_and(|t| self.heap_shape_matches(&t, target_type)) =>
                 {
                     return Some((i, ret_idx));
                 }
@@ -877,11 +877,22 @@ impl Output<'_> {
         None
     }
 
-    fn heap_shape_matches(callee_ret: &Type, block_result: &Type) -> bool {
+    fn heap_shape_matches(&self, callee_ret: &Type, block_result: &Type) -> bool {
         match (callee_ret, block_result) {
             (Type::Reference(d1, _), Type::Reference(d2, _)) => d1 == d2,
             (Type::Vector(d1, _), Type::Vector(d2, _)) => d1 == d2,
             (Type::Enum(d1, true, _), Type::Enum(d2, true, _)) => d1 == d2,
+            // A nullable-enum target also accepts a value of ONE OF ITS VARIANTS:
+            // the tail `if cond { Variant{..} } else { null }` infers to the
+            // variant's ref/enum type (e.g. `Circle`), whose parent def is the
+            // enum (`Shape`).  Without this the tail capture misses, the present
+            // value is dropped, and the native fn always returns the null sentinel.
+            (Type::Reference(d1, _) | Type::Enum(d1, _, _), Type::Enum(d2, true, _)) => {
+                // `parent()` is `u32::MAX` for a non-variant def; guard so a
+                // parentless ref never spuriously matches a `u32::MAX` target.
+                let parent = self.data.def(*d1).parent();
+                d1 == d2 || (parent != u32::MAX && parent == *d2)
+            }
             _ => false,
         }
     }

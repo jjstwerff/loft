@@ -1555,6 +1555,13 @@ impl Parser {
             let float_null = (operator == "==" || operator == "!=")
                 && ((matches!(*ctp, Type::Float | Type::Single) && second_type == Type::Null)
                     || (*ctp == Type::Null && matches!(second_type, Type::Float | Type::Single)));
+            // A nullable enum variable holds the reference null sentinel
+            // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
+            // must test that sentinel via OpEqRef — the default path reads the
+            // discriminant (`OpGetEnum`), which derefs the absent record and OOB-crashes.
+            let enum_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
@@ -1587,6 +1594,25 @@ impl Parser {
                         self.cl("OpNot", &[valid])
                     } else {
                         valid
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if enum_null {
+                // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
+                // rec==0: a present enum is inline-represented on native and carries
+                // rec==0, which rec==0 would misread as null.  store_nr==u16::MAX is
+                // the uniform marker across both backends.
+                if !self.first_pass {
+                    let e_code = if *ctp == Type::Null {
+                        second_code
+                    } else {
+                        code.clone()
+                    };
+                    let is_null = self.cl("OpRefIsNull", &[e_code]);
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
                     };
                 }
                 *ctp = Type::Boolean;
