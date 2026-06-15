@@ -1938,6 +1938,18 @@ impl Parser {
         let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
+            // @P386: `const` struct fields are a planned feature (@PLAN33), not yet
+            // supported.  Reject with ONE clear diagnostic and consume the keyword
+            // so the field still parses as `name: type` — without this, `const` is
+            // read as the field NAME and the real field cascades into 4 errors.
+            if self.lexer.has_keyword("const") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "const struct fields are not yet supported (planned — @PLAN33); \
+                     remove `const` for now"
+                );
+            }
             let Some(a_name) = self.lexer.has_identifier() else {
                 diagnostic!(self.lexer, Level::Error, "Expect attribute");
                 self.context = context;

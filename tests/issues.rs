@@ -1268,6 +1268,18 @@ fn test() {
     );
 }
 
+/// @P386 regression: a `const` struct field must produce ONE clear
+/// "not yet supported" diagnostic, not the prior 4-error cascade
+/// (`const` was read as the field name, then the real field choked).
+#[test]
+fn p386_const_struct_field_one_clear_error() {
+    code!("struct Cell { const c_color: integer, height: integer }")
+        .error(
+            "const struct fields are not yet supported (planned — @PLAN33); \
+             remove `const` for now at p386_const_struct_field_one_clear_error:1:28",
+        );
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
