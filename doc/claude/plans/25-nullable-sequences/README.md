@@ -257,10 +257,13 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
       validity check `OpNot(convert(f, boolean))` (= `is_nan`), `!= null` to its negation.
     Verified across int/bool/float/text on BOTH backends; regression cells in
     `tests/scripts/25-nullable-sequences.loft`. Still open (pre-existing, NOT simple-typed):
-    **reference** vector elements — `vr[i] = null` no-ops on the interpreter and was a
-    native codegen crash (`OpCopyRecord` gets `()`); and a reused `_` loop var across
-    different element types is type-locked to its first type (native E0308) — both are
-    separate from this fix.
+    **reference / embedded-struct** vector elements — `vr[i] = null` no-ops on the
+    interpreter and was a native codegen crash (`OpCopyRecord` gets `()`). That is a
+    representation gap (inline struct slots have no null encoding); the efficient,
+    no-indirection fix — a **container-held validity bit** with a `vector<Row not null>`
+    opt-out — is designed in [embedded-record-null.md](embedded-record-null.md) (resolves
+    finding 9 too). Also pre-existing: a reused `_` loop var across different element types
+    is type-locked to its first type (native E0308) — separate from this fix.
 
 ## Cross-arc dependencies
 
@@ -273,6 +276,8 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 
 ## See also
 
+- [embedded-record-null.md](embedded-record-null.md) — the container-validity-bit design
+  for null inline-struct elements/fields (finding 12's open case + finding 9).
 - `doc/claude/LOFT.md` § Null representation (the "nullable unless `not null`" model).
 - `doc/claude/STABILITY_HOTSPOTS.md` § H6 (null-sentinel matrix) — the shared hotspot.
 - `doc/claude/DATABASE.md` (Store / DbRef / vector record layout).
