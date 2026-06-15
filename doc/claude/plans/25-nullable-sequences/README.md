@@ -70,7 +70,7 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 
 | Item | Concern | Status |
 |---|---|---|
-| **P1** — Foundation | one `vec_record(db)->Option<…>` chokepoint in `src/vector.rs`; route all store-accessors (`length_vector`, `get_vector`, `vector_append`, `clear_vector`, `reverse_vector`, `sort_vector`, `remove_vector`, raise path) through it; null DbRef constant. Prove a null vector flows through `len`/`for`/`index`/`append` with no OOB. | Open |
+| **P1** — Foundation | ✅ Chokepoint `DbRef::is_null()` + `DbRef::NULL` (`store_nr==u16::MAX`) in `src/keys.rs`; vector store-accessors (`length`/`get`/`append`/`remove`/`insert`/`clear`; `sort`+`reverse` transitively via `length`) guarded through it. A null vector flows through `len`/`for`/`index`/`append`/`remove` with no `stores[u16::MAX]` OOB; null stays distinct from empty `[]`. Verified by `plan25_null_vector_tests` (4 tests) + full suite (2381 pass, 0 fail). | Shipped |
 | **P2** — Surface | mirror the 5 struct-or-null mechanisms for `Vector`: `convert(Null⇄Vector)`, `==`/`!=` overload, return-unification (nullable unless `not null`), codegen ref_ops Vector arm. `v == null` and `fn f() -> vector<T> { null }` compile + behave. | Open |
 | **P3** — Producers | `default_native_value` Vector arm (nullable field → `u16::MAX`; `not null` → empty); slice out-of-range → emit null vector. **Wires loft#384.** | Open |
 | **P4** — Hardening | consumer audit (every `t_*vector*` native fn), both backends + wasm, full suite, regression tests, docs (LOFT.md null model + STABILITY_HOTSPOTS H6). | Open |

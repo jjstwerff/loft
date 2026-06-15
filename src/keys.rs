@@ -206,6 +206,25 @@ pub struct DbRef {
 }
 
 impl DbRef {
+    /// The canonical null-reference sentinel (`store_nr == u16::MAX`).  Store
+    /// allocation asserts `slot != u16::MAX`, so this is distinct from every
+    /// real store — and from a valid-but-empty vector (a real store with
+    /// `rec == 0`).  It is the one representation of an *absent* heap value:
+    /// struct reference, struct-enum, and — plan-25 (@PLN25) — vector.
+    pub const NULL: DbRef = DbRef {
+        store_nr: u16::MAX,
+        rec: 0,
+        pos: 0,
+    };
+
+    /// True when this reference is the null sentinel (absent value).  The
+    /// single home for the null test: every store accessor consults it before
+    /// dereferencing, so an absent value never indexes `stores[u16::MAX]`.
+    #[must_use]
+    pub const fn is_null(&self) -> bool {
+        self.store_nr == u16::MAX
+    }
+
     #[must_use]
     pub fn plus(&self, pos: u32) -> DbRef {
         DbRef {
