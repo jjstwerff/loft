@@ -624,21 +624,19 @@ pub(crate) fn rlibs_in_dir(
 /// the API id from the Rust part.  Both the codegen (`Output::native_cabi`) and
 /// the linker flags below read this, so they always agree on a given host.
 ///
-/// @PLN26 phase 4 — verify-before-flip override for the Windows C-ABI path
-/// (import-library linking, no RPATH, DLL staged beside the binary).  That path
-/// is built but not yet the Windows default: `LOFT_NATIVE_CABI=1` forces it on
-/// so the focused Windows CI (`win-cdylib.yml`) can verify it against the native
-/// subset before we flip the default; `=0` forces the rlib path on any host (an
-/// escape hatch if the C-ABI path regresses).  Absent, the default is on
-/// everywhere except Windows, which stays on the proven rlib path until that
-/// focused CI is green.
+/// @PLN26 phase 4 — the C-ABI path (import-library linking + DLL staged beside
+/// the binary on Windows, an RPATH'd `.so` elsewhere) is now the default on
+/// EVERY host.  Windows was the last holdout; its arm was verified green in the
+/// focused CI (`win-cdylib.yml` job `win-cdylib-cabi`, `LOFT_NATIVE_CABI=1`,
+/// `native_crate_package_links_and_runs_via_cabi` PASS on `windows-latest`)
+/// before this flip.  `LOFT_NATIVE_CABI=0` remains an escape hatch that forces
+/// the legacy rlib link on any host should the C-ABI path regress; `=1` is now a
+/// no-op (it already matches the default).
 #[must_use]
 pub(crate) fn native_cabi_enabled() -> bool {
-    match std::env::var("LOFT_NATIVE_CABI").ok().as_deref() {
-        Some("1") => true,
-        Some("0") => false,
-        _ => cfg!(not(target_os = "windows")),
-    }
+    // The C-ABI path is the default on every host; only `LOFT_NATIVE_CABI=0`
+    // opts back into the legacy rlib link (the escape hatch).
+    !matches!(std::env::var("LOFT_NATIVE_CABI").ok().as_deref(), Some("0"))
 }
 
 /// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.

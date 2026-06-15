@@ -25,9 +25,15 @@ on:
         default: "binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)"
 
 jobs:
+  # @PLN26 phase 4 is FLIPPED: the C-ABI link is now the default on every host,
+  # incl. Windows.  This job pins `LOFT_NATIVE_CABI=0` so it keeps exercising the
+  # legacy rlib-link ESCAPE HATCH on Windows (the `win-cdylib-cabi` job covers
+  # the C-ABI default).
   win-cdylib:
-    name: Win cdylib subset
+    name: Win cdylib subset (rlib escape hatch)
     runs-on: windows-latest
+    env:
+      LOFT_NATIVE_CABI: "0"
     steps:
       - uses: actions/checkout@v5
 
@@ -67,14 +73,15 @@ jobs:
           FILTER: ${{ github.event.inputs.filter || 'binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)' }}
         run: cargo nextest run --profile ci -E "$FILTER"
 
-  # @PLN26 phase 4 — verify the Windows C-ABI link path (import-library linking,
-  # no RPATH, DLL staged beside the binary) BEFORE flipping the default.  Same
-  # native subset as the job above, but `LOFT_NATIVE_CABI=1` forces the C-ABI
-  # path on for Windows (the default there is still the proven rlib path).  The
-  # job above is the rlib control; this one is the C-ABI experiment.  Green here
-  # → flip `native_cabi_enabled()` to include Windows.
+  # @PLN26 phase 4 — the Windows C-ABI link path (import-library linking, no
+  # RPATH, DLL staged beside the binary), now the DEFAULT.  `LOFT_NATIVE_CABI=1`
+  # is a no-op post-flip (it already matches the default) but pins the intent:
+  # this job is the C-ABI regression guard for Windows; the `win-cdylib` job
+  # above guards the rlib escape hatch.  `native_crate_package_links_and_runs_via_cabi`
+  # (in `binary(native)`) is the non-vacuous check that actually links a
+  # `[native] crate` cdylib by C-ABI.
   win-cdylib-cabi:
-    name: Win cdylib subset (C-ABI forced on)
+    name: Win cdylib subset (C-ABI default)
     runs-on: windows-latest
     env:
       LOFT_NATIVE_CABI: "1"
