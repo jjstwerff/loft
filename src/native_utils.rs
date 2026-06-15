@@ -703,28 +703,32 @@ pub(crate) fn add_native_extern_flags(
                 cmd.arg("-l").arg(format!("dylib={libname}"));
                 if cfg!(windows) {
                     // @PLN26 phase 4 — Windows links a DLL through its IMPORT
-                    // LIBRARY (`<stem>.dll.lib`, emitted by the cdylib build next
-                    // to `<stem>.dll` in `so_dir`), which the `-L native=` +
-                    // `-l dylib=<stem>` above resolve.  There is NO RPATH: the
-                    // MSVC linker rejects `-Wl,-rpath`, and the loader finds the
-                    // DLL beside the `.exe` / on `PATH` — so the DLL is staged
-                    // beside the binary at run time (`stage_native_dlls`), the
-                    // Windows form of the `$ORIGIN` rpath used below.
-                    // Disallow-the-unverifiable-loudly: a missing import lib would
-                    // otherwise die on an opaque `LNK1181`, so name it.
-                    let has_import_lib = std::fs::read_dir(so_dir).is_ok_and(|rd| {
-                        rd.flatten().any(|e| {
-                            let n = e.file_name();
-                            let n = n.to_string_lossy();
-                            n.ends_with(".dll.lib") || (n.ends_with(".lib") && n.contains(libname))
-                        })
-                    });
-                    if !has_import_lib {
+                    // LIBRARY, and there is NO RPATH: the MSVC linker rejects
+                    // `-Wl,-rpath`, and the loader finds the DLL beside the `.exe`
+                    // / on `PATH` — so the DLL is staged beside the binary at run
+                    // time (`stage_native_dlls`), the Windows form of the
+                    // `$ORIGIN` rpath used below.
+                    //
+                    // Naming bridge: a Rust cdylib's import lib is `<stem>.dll.lib`,
+                    // but `-l dylib=<stem>` makes MSVC link.exe open `<stem>.lib`
+                    // (verified: `LNK1181: cannot open input file
+                    // 'loft_native_scalar.lib'`).  Copy `<stem>.dll.lib` →
+                    // `<stem>.lib` beside it so the `-l dylib=` above resolves —
+                    // both are import libs for the same DLL, identical content.
+                    let dll_lib = so_dir.join(format!("{libname}.dll.lib"));
+                    let plain_lib = so_dir.join(format!("{libname}.lib"));
+                    if dll_lib.exists() && !plain_lib.exists() {
+                        let _ = std::fs::copy(&dll_lib, &plain_lib);
+                    }
+                    // Disallow-the-unverifiable-loudly: if NEITHER import-lib name
+                    // is present the link would die on an opaque `LNK1181`, so name
+                    // it rather than mis-link.
+                    if !plain_lib.exists() && !dll_lib.exists() {
                         eprintln!(
                             "loft: native package `{crate_name}` cdylib at {} has no import \
-                             library (`{libname}.dll.lib`) — Windows links a DLL through its \
-                             import lib, not the DLL directly (@PLN26 phase 4).  Rebuild the \
-                             package's cdylib with a toolchain that emits one.",
+                             library (`{libname}.dll.lib` / `{libname}.lib`) — Windows links a \
+                             DLL through its import lib, not the DLL directly (@PLN26 phase 4).  \
+                             Rebuild the package's cdylib with a toolchain that emits one.",
                             so_dir.display()
                         );
                     }
