@@ -259,11 +259,13 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
     `tests/scripts/25-nullable-sequences.loft`. Still open (pre-existing, NOT simple-typed):
     **reference / embedded-struct** vector elements — `vr[i] = null` no-ops on the
     interpreter and was a native codegen crash (`OpCopyRecord` gets `()`). That is a
-    representation gap (inline struct slots have no null encoding); the efficient,
-    no-indirection fix — a **container-held validity bit** with a `vector<Row not null>`
-    opt-out — is designed in [embedded-record-null.md](embedded-record-null.md) (resolves
-    finding 9 too). Also pre-existing: a reused `_` loop var across different element types
-    is type-locked to its first type (native E0308) — separate from this fix.
+    representation gap shared with **nullable enums** (which crash identically — both are
+    inline value records). The fix gives a nullable inline record the **nullable-enum
+    layout** (discriminant at offset 0, `0`=null) with a `vector<Row not null>` opt-out —
+    designed in [embedded-record-null.md](embedded-record-null.md); one representation fixes
+    nullable enums, embedded structs, vector elements, and finding 9. Also pre-existing: a
+    reused `_` loop var across different element types is type-locked to its first type
+    (native E0308) — separate from this fix.
 
 ## Cross-arc dependencies
 
@@ -276,8 +278,8 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 
 ## See also
 
-- [embedded-record-null.md](embedded-record-null.md) — the container-validity-bit design
-  for null inline-struct elements/fields (finding 12's open case + finding 9).
+- [embedded-record-null.md](embedded-record-null.md) — null inline-struct elements/fields
+  via the nullable-enum representation (finding 12's open case + finding 9 + nullable enums).
 - `doc/claude/LOFT.md` § Null representation (the "nullable unless `not null`" model).
 - `doc/claude/STABILITY_HOTSPOTS.md` § H6 (null-sentinel matrix) — the shared hotspot.
 - `doc/claude/DATABASE.md` (Store / DbRef / vector record layout).
