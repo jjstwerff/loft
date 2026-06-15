@@ -1470,10 +1470,18 @@ impl Stores {
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
                 let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
-                let tp = values[e_nr as usize].0;
-                // Do not copy claims on simple enumerate types.
-                if tp != u16::MAX {
-                    self.copy_claims(rec, to, tp);
+                // @PLN25 — `get_byte(.., -1)` applies a -1 shift, so a valid variant is
+                // `e_nr` in `0..values.len()` (stored byte 1 = variant 0).  A null/absent
+                // inline enum reads NEGATIVE here (stored 0 → -1, an absent source rec →
+                // i32::MIN) and carries no payload claims; skip rather than index `values`
+                // out of bounds (matches `validate_claims`'s `>= 0` arm).  Covers
+                // `vr[i] = null` and whole-vector copy of a null element.
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let tp = values[e_nr as usize].0;
+                    // Do not copy claims on simple enumerate types.
+                    if tp != u16::MAX {
+                        self.copy_claims(rec, to, tp);
+                    }
                 }
             }
             _ => {}

@@ -213,10 +213,32 @@ machinery survey.
   post-discriminant offsets); `bx.item == null` → inline discriminant test (distinct from
   E1's sentinel — this value is inline); `bx.item = null` → `Null` variant; default → `Null`
   (finding 9). *Verify:* null/present round-trip, neighbour fields intact, both backends.
-- **E2a.5 — Vector elements.** *Do:* `vector<Row>` elements take the synthetic enum; wire
-  `vr[i]=null` / read / `== null` / iterate. *Verify:* Probe 3 (`vr[i]=null` clean both
-  backends), Probe 4 (slice/copy preserve null-ness), Probe 5 (`vr[i].id` at the
-  post-discriminant offset on native).
+- **E2a.5 — Vector elements [IN PROGRESS].** *Do:* `vector<Row>` elements take the synthetic
+  enum; wire `vr[i]=null` / read / `== null` / iterate. **Partial (2026-06-15):** the synth
+  pass (`synth_nullable_struct_fields`) now also rewrites a struct FIELD of type
+  `vector<Row>` → `vector<__nullable<Row>>`. *Falls out for free, gate on:* the vector LITERAL
+  `[Row{…}, …]` constructs each element as `Some` and `b.items[i].id` reads correctly. **Still
+  broken / open:**
+  - **`copy_claims` OOB guard DONE (ungated robustness fix).** `Parts::Enum` in `copy_claims`
+    (`allocation.rs`) indexed `values[e_nr]` where a null/absent source reads `e_nr` NEGATIVE
+    (`get_byte(.., -1)` shifts: stored 0 → -1; absent rec → i32::MIN), OOB-crashing on
+    `vr[i] = null` / whole-vector copy of a null element.  Now guarded `e_nr >= 0 && (e_nr as
+    usize) < values.len()` (matches `validate_claims`; valid variant is 0-based after the
+    shift, so `>= 0` keeps variant 0 — an earlier `>= 1` would have silently dropped the first
+    variant's claims).  No crash now.
+  - **`vr[i] = null` SEMANTICS still wrong** — the crash is gone but the element is NOT nulled
+    (`vr[i] == null` stays false): the vector index-STORE doesn't set the element discriminant
+    to 0 for a `null` RHS.  Needs a coercion in the index-assignment path (`parse_assign_op` /
+    the `vr[i] = X` store) — when the element is a `__nullable<S>` enum and the RHS is `null`,
+    emit a discriminant-0 set instead of the generic element copy.  (Analog of E2a.4's
+    default-init, at the index-store site.)
+  - **`vr[i] == null`, `vr[i] = Row{…}` reassign, iteration** — not yet verified.
+  - **LOCAL / param `vr: vector<Row>`** (vs a struct FIELD) is NOT rewritten — the synth pass
+    runs over DEFS (struct/enum-value attributes), not function-local variable types.  A local
+    needs the element-type rewrite at PARSE time (where `vector<Row>` is resolved), gated, so
+    pass-2's index IR matches; the def-side fill_all hook is too late for locals.
+  *Verify (when done):* Probe 3 (`vr[i]=null` clean both backends), Probe 4 (slice/copy preserve
+  null-ness), Probe 5 (`vr[i].id` at the post-discriminant offset on native).
 - **E2a.6 — `not null` opt-out.** *Do:* `Row not null` field/element skips synthesis (plain
   inline). *Verify:* Probe 2 — byte-identical to today.
 - **E2a.7 — native parity + full suite** on both backends; regression cells.
@@ -345,8 +367,11 @@ was already retired by the representation + the compile rejection; this complete
   `Row` (`id@0,tag@8`) into the packed `Some` (`disc@0,tag@4,id@8`), hence the per-field copy.
 
 **STILL OPEN:**
-1. **Vector elements (E2a.5)** — `vector<Row>` element null/`==null`/iterate via the same
-   synthetic enum.
+1. **Vector elements (E2a.5) — IN PROGRESS.** Struct-FIELD `vector<Row>` content is rewritten
+   to `vector<__nullable<Row>>`; literal construction + element read work (gate on). Remaining:
+   `vr[i] = null` (crashes in `copy_claims`), `== null` / reassign / iterate, and the
+   LOCAL/param `vr: vector<Row>` case (needs a parse-time element rewrite). Detail in the E2a.5
+   step above.
 2. **Gate removal + .loft regressions** — graduate the gated probes to
    `tests/scripts/25-nullable-sequences.loft` (which runs both backends without the env flag)
    in the final green-without-flag commit; delete `LOFT_E2_SYNTH` + the non-stdlib restriction.

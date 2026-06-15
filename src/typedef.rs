@@ -369,10 +369,17 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
             if data.def(host).attributes[a_nr].constant || !data.attr_nullable(host, a_nr) {
                 continue;
             }
-            // Only an inline struct-reference field is rewritten; vectors,
-            // keyed collections, primitives, fn-refs are out of scope here.
-            let Type::Reference(struct_d, _) = data.attr_type(host, a_nr) else {
-                continue;
+            // Rewrite a nullable inline struct field — directly (`item: Row`) or
+            // as a vector element (`items: vector<Row>`, E2a.5) — to the synthetic
+            // enum.  Keyed collections, primitives, fn-refs are out of scope.
+            let a_type = data.attr_type(host, a_nr);
+            let (struct_d, vec_deps) = match &a_type {
+                Type::Reference(d, _) => (*d, None),
+                Type::Vector(content, deps) => match &**content {
+                    Type::Reference(d, _) => (*d, Some(deps.clone())),
+                    _ => continue,
+                },
+                _ => continue,
             };
             if data.def_type(struct_d) != DefType::Struct || data.def(struct_d).synthetic.is_some()
             {
@@ -382,8 +389,11 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
             if data.def(syn).known_type == u16::MAX {
                 register_enum_db(data, database, syn);
             }
-            data.definitions[host as usize].attributes[a_nr].typedef =
-                Type::Enum(syn, true, Deps::none());
+            let elem = Type::Enum(syn, true, Deps::none());
+            data.definitions[host as usize].attributes[a_nr].typedef = match vec_deps {
+                Some(deps) => Type::Vector(Box::new(elem), deps),
+                None => elem,
+            };
         }
     }
 }
