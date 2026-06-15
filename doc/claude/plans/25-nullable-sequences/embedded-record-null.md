@@ -328,19 +328,30 @@ yet — the hook needs threading work, see below):
   `b.item.id`/`.tag` read correctly, assignment form clean. The native `E0308` from the
   earlier present-literal run is also resolved by these fixes.
 
+**Null-SOURCE convert DONE (BOTH backends).** `Box { item: maybe(false) }` — a nullable struct
+SOURCE flowing into a `__nullable<S>` field — now works (the original `allocation.rs:560` crash
+was already retired by the representation + the compile rejection; this completes the feature).
+- **`convert`** (`mod.rs`): accept `(Reference(S), Enum(__nullable<S>, true))`.
+- **`handle_field`** (`objects.rs`): bind the source to a temp, then
+  `v_if(OpNot(OpRefIsNull(src)))` → set discriminant 2 (`OpSetEnum(field,0,2)`) and copy each
+  payload field `src.f → field.f` via `get_field`/`set_field_no_check` (so the Some offsets +
+  per-type copy semantics — int/text/nested — are correct); the null branch is empty, leaving
+  the `OpDatabase` zero-init (discriminant 0 = null) — NEVER `OpCopyRecord` a null source.
+  An inline `S{…}` literal already took the Some-construction path in `parse_var`, so this
+  fires only for an expression source.
+- *Verified (gate on, BOTH backends):* `src-present → id/tag read, isnull=false`;
+  `src-null → isnull=true` (was the crash). No existing op could be reused — `do_copy_record`
+  is a layout-preserving byte copy, `copy_ref_or_null` is variable-slot only; neither remaps
+  `Row` (`id@0,tag@8`) into the packed `Some` (`disc@0,tag@4,id@8`), hence the per-field copy.
+
 **STILL OPEN:**
-1. **Runtime null SOURCE rejected** at `convert` (`mod.rs:1177` → `handle_field` diagnostic,
-   `objects.rs:2368`): `Box { item: maybe(false) }` → "Cannot assign ref(Row) to ref(
-   __nullable<Row>)". Needs a `Reference(S)` → `Enum(__nullable<S>)` convert: present source →
-   copy into `Some`; **null source → discriminant 0 + free deps, NOT `OpCopyRecord`** (THE
-   crash retirement, the original E2 motivation). Verify on both backends.
-2. **Vector elements (E2a.5)** — `vector<Row>` element null/`==null`/iterate via the same
+1. **Vector elements (E2a.5)** — `vector<Row>` element null/`==null`/iterate via the same
    synthetic enum.
-3. **Gate removal + .loft regressions** — graduate the gated probes to
+2. **Gate removal + .loft regressions** — graduate the gated probes to
    `tests/scripts/25-nullable-sequences.loft` (which runs both backends without the env flag)
    in the final green-without-flag commit; delete `LOFT_E2_SYNTH` + the non-stdlib restriction.
 
-Once 1–2 land, the gate comes off and the suite stays green WITHOUT the env flag (the vertical
+Once 1 lands, the gate comes off and the suite stays green WITHOUT the env flag (the vertical
 slice).
 
 ### The corrected first move (this session changed the order)

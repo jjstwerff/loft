@@ -1351,6 +1351,14 @@ impl Parser {
                     return true;
                 }
             }
+            // @PLN25 — a nullable struct SOURCE (`Reference(S)`, possibly the null
+            // sentinel) flows into a synthetic `__nullable<S>` field.  Accept it here;
+            // `handle_field` emits the wrap (null → discriminant 0, present → `Some`).
+            if self.data.def(*enum_tp).name
+                == format!("__nullable<{}>", self.data.def(*ref_tp).name())
+            {
+                return true;
+            }
         }
         if let Type::RefVar(ref_tp) = is_type
             && self.convert(code, ref_tp, should)

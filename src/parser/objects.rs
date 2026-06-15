@@ -2290,6 +2290,65 @@ impl Parser {
     ) {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
+        // @PLN25 — null-source convert: a nullable struct SOURCE (a call / variable
+        // of type `Reference(S)`, possibly the null sentinel) assigned to a synthetic
+        // `__nullable<S>` field.  Build the `Some` variant from the source when
+        // present (discriminant 2 + per-field copy at the Some offsets); leave the
+        // zero-init (discriminant 0 = null) when the source is null — NEVER
+        // OpCopyRecord a null source (the crash the representation retires).  An
+        // inline `S{…}` literal already took the Some-construction path in parse_var,
+        // so this fires only for an expression source.
+        if !self.first_pass
+            && let Type::Enum(syn, true, _) = &td
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && let Type::Reference(src_d, _) = exp_tp
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+        {
+            let syn = *syn;
+            let src_d = *src_d;
+            let some_d = self.data.variant_of(syn, "Some");
+            let enum_kt = i32::from(self.data.def(syn).known_type());
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            // Payload field pairs (index-in-S, index-in-Some) — Some copied S's
+            // fields verbatim, so they share names; offsets differ (Some reserves
+            // the discriminant at 0), which get_field/set_field resolve per type.
+            let pairs: Vec<(usize, usize)> = (0..self.data.attributes(src_d))
+                .filter(|&f| !self.data.def(src_d).attributes[f].constant)
+                .filter_map(|f| {
+                    let nm = self.data.attr_name(src_d, f);
+                    let in_some = self.data.attr(some_d, &nm);
+                    (in_some != usize::MAX).then_some((f, in_some))
+                })
+                .collect();
+            let src_var = self.vars.work_refs(exp_tp, &mut self.lexer);
+            list.push(v_set(src_var, value.clone()));
+            let field_ref = self.cl(
+                "OpGetField",
+                &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
+            );
+            // discriminant 2 = the `Some` variant (Null=1, Some=2; 0 = absent).
+            let mut present = vec![self.cl(
+                "OpSetEnum",
+                &[field_ref.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
+            )];
+            for (f_in_src, f_in_some) in pairs {
+                let read = self.get_field(src_d, f_in_src, Value::Var(src_var));
+                present.push(self.set_field_no_check(
+                    some_d,
+                    f_in_some,
+                    0,
+                    field_ref.clone(),
+                    read,
+                ));
+            }
+            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+            let not_null = self.cl("OpNot", &[is_null]);
+            list.push(v_if(not_null, Value::Insert(present), Value::Null));
+            return;
+        }
         if matches!(
             td,
             Type::Vector(_, _)
