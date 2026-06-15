@@ -5,19 +5,35 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 25 — Nullable sequences (`vector<T>` participates in the null model)
 
-> **Identity pending.** The `loft-lang/plans` issue (`@PLN25`) is NOT yet filed —
-> creating it needs explicit authorization (external-repo write). `25` is provisional
-> (tracker latest = 24); rename the dir if the issue lands on a different number.
+> **Tracker:** `@PLN25` ([loft-lang/plans#25](https://github.com/loft-lang/plans/issues/25),
+> `status:active`). **Branch:** `2026-07-mac` (all phases below committed + pushed there).
 
 ## Status
 
-Open — design validated, no implementation yet. Promoted from the design discussion
-on loft#384 (negative-slice silent-empty / wrap-around garbage) and loft#387 (text
-fn-ref buffer family). The invariant was validated against a boundary matrix and three
-subsystem maps (struct-or-null blueprint, vector-consumer inventory, H6 sentinel
-model); the representation decision is pinned. **This plan intersects the H6 stability
-hotspot** — it is the vector-axis reconciliation of the scattered null-sentinel matrix,
-not adjacent to it.
+**P1 (Foundation) + P2 (Surface) SHIPPED and verified on both backends; P3 (Producers)
+is the next concrete work — localized, not yet implemented.** A `vector<T>` can now be
+null (absent), distinct from empty `[]`: the runtime is null-safe (P1) and `v == null` /
+`v != null` / `return null` work (P2). What remains: wire the loft#384 slice fix (P3,
+fully localized — see finding 8) and the field-default arm (P3, blast-radius flagged —
+finding 9), then hardening (P4).
+
+Promoted from the design discussion on loft#384 (negative-slice silent-empty / wrap-around
+garbage) and loft#387 (text fn-ref buffer family). The invariant was validated against a
+boundary matrix and three subsystem maps; the representation decision is pinned. **This
+plan intersects the H6 stability hotspot** — it is the vector-axis reconciliation of the
+scattered null-sentinel matrix, not adjacent to it.
+
+## RESUME HERE (next action)
+
+Implement the **slice from-end + clamp fix (loft#384)** — finding 8 has the full design:
+in `parse_in_range_body` (`src/parser/objects.rs:1605`), when `data != Null` (vector
+slice, NOT a pure `0..10` range), route `expr` (start) and `till` (end) through a
+from-end+clamp helper using `len = OpLengthVector(data)`. Mind the i64/i32 coercion
+caveat and bind bounds to temps. Verify interpreter-first against the slice matrix
+(`/tmp`-style: `[2..-1]→[30,40]`, `[-2..]→[40,50]`, `[2..100]→[30,40,50]`, `[1..3]`
+unchanged, pure `0..10` unchanged), then `--native`, then full suite; graduate probes
+into `tests/scripts/25-nullable-sequences.loft`. On landing, the finishing PR closes
+loft#384. Then the field-default arm (finding 9) as a separate verified change.
 
 ## Goal
 
