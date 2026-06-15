@@ -1134,6 +1134,64 @@ fn native_library_suite() -> std::io::Result<()> {
     Ok(())
 }
 
+/// @PLN26 — the C-ABI native-package EXEC path: a program that `use`s a
+/// `[native] crate` package, compiled with `--native`, must link the package's
+/// cdylib by C-ABI (`add_native_extern_flags`) and call its `#native` symbol.
+/// The minimal `native_scalar_pkg` fixture exports one scalar symbol
+/// (`n_native_answer` → 42), so this is cheap to build yet covers the whole
+/// path — including, on Windows, the import-library link + DLL staging of
+/// @PLN26 phase 4 (the focused `win-cdylib` workflow's C-ABI job sets
+/// `LOFT_NATIVE_CABI=1` to force that arm on; on the normal Windows CI this
+/// exercises the rlib-link path instead).  The hard-coded 42 is the oracle, so
+/// a broken link (undefined symbol / P269 / wrong value) fails LOUDLY — not
+/// vacuously.  This is the regression guard the C-ABI exec path previously
+/// lacked (phase 0 was a manual probe).
+///
+/// Serialises via `native_suite_lock` (shared /tmp rlib + binary cache) and
+/// skips cleanly when `rustc` / the loft rlib are unavailable, like the other
+/// native suites.
+#[test]
+fn native_crate_package_links_and_runs_via_cabi() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if find_loft_rlib().is_none() {
+        println!("native_crate_package_links_and_runs_via_cabi: skipped (no libloft.rlib / rustc)");
+        return Ok(());
+    }
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let pkg_dir = Path::new("tests/lib/native_scalar_pkg");
+
+    // --native: the C-ABI exec path (the path @PLN26 phase 4's Windows arm extends).
+    let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "answer", &["--native"])?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("no implementation"),
+        "native_crate package symbol was not linked (P269) — the C-ABI exec path regressed:\n{combined}"
+    );
+    assert!(
+        combined.contains("test result: ok"),
+        "--native native_crate exec test did not pass:\n{combined}"
+    );
+
+    // --interpret parity: the same package via the runtime dylib dispatch.
+    let out_i = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "answer", &["--interpret"])?;
+    let combined_i = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_i.stdout),
+        String::from_utf8_lossy(&out_i.stderr)
+    );
+    assert!(
+        combined_i.contains("test result: ok"),
+        "--interpret native_crate exec test did not pass:\n{combined_i}"
+    );
+    Ok(())
+}
+
 /// Record environmental skips (tests that PASSED-by-skipping for a
 /// toolchain/OS reason, not a code reason) to a side-channel ledger so they
 /// survive nextest's success-output suppression.  Without this a green run

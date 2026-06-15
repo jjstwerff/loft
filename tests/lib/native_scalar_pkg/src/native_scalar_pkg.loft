@@ -1,0 +1,10 @@
+// Minimal `[native] crate` package for C-ABI exec-path coverage (@PLN26).
+//
+// One scalar `#native` fn — no store / text / vector / reference args — so the
+// native Rust crate is a plain `extern "C"` symbol with NO loft-ffi dependency.
+// A program that `use`s this package and is compiled with `--native` links the
+// package's cdylib by C-ABI (`add_native_extern_flags`); on Windows that means
+// the import-library link + DLL staging of @PLN26 phase 4.
+// Bare `#native` → symbol `n_native_answer` by convention (the fn name).
+pub fn native_answer() -> integer not null;
+#native
