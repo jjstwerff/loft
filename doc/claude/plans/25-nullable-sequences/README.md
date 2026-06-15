@@ -72,7 +72,7 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 |---|---|---|
 | **P1** — Foundation | ✅ Chokepoint `DbRef::is_null()` + `DbRef::NULL` (`store_nr==u16::MAX`) in `src/keys.rs`; vector store-accessors (`length`/`get`/`append`/`remove`/`insert`/`clear`; `sort`+`reverse` transitively via `length`) guarded through it. A null vector flows through `len`/`for`/`index`/`append`/`remove` with no `stores[u16::MAX]` OOB; null stays distinct from empty `[]`. Verified by `plan25_null_vector_tests` (4 tests) + full suite (2381 pass, 0 fail). | Shipped |
 | **P2** — Surface | ✅ `OpVectorIsNull(v)=store_nr==u16::MAX` (one `#rust` template → both backends via `make fill`); `==`/`!=` dispatch lowers `Vector ⊗ Null` directly to it (NOT `eq_ref`); `convert(Null→Vector)` via `OpNullRefSentinel` (return null). `v == null`/`!= null`, `fn f() -> vector<T> { null }`, and iterate-null all green on both backends; **empty `[]` correctly ≠ null**. Regression: `tests/scripts/25-nullable-sequences.loft`. | Shipped |
-| **P3** — Producers | `default_native_value` Vector arm (nullable field → `u16::MAX`; `not null` → empty); slice out-of-range → emit null vector. **Wires loft#384.** | Open |
+| **P3** — Producers | Slice from-end + clamp (**loft#384**) — LOCALIZED, not yet implemented (see finding 8); `default_native_value` Vector arm (nullable field → `u16::MAX`; `not null` → empty) — note: changes init semantics for ALL vector fields, blast radius (see finding 9). | In progress |
 | **P4** — Hardening | consumer audit (every `t_*vector*` native fn), both backends + wasm, full suite, regression tests, docs (LOFT.md null model + STABILITY_HOTSPOTS H6). | Open |
 
 ## Phase ordering
@@ -147,6 +147,36 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
    *inconsistent* with references. A null vector enters a variable from a nullable source
    (`v = maybe(false)`, a nullable field, a slice miss). Vectors now mirror references
    exactly: `== null` ✓, `return null` ✓, literal `= null` ✗ (shared).
+
+## P3 findings (localized; implementation pending careful both-backend verify)
+
+8. **Slice bug is the iteration BOUNDS, not the element fetch — loft#384.** A vector
+   slice `v[a..b]` lowers (in `parse_in_range_body`, `src/parser/objects.rs:1605`) to an
+   iterator `ivar = a, a+1, … until till(=b) <= ivar`, fetching `v[ivar]` via
+   `OpGetVectorNullable`. The per-element fetch already resolves a negative index
+   from-end and returns null on OOB — but the iteration **endpoints** (`expr`=start,
+   `till`=end) are the raw user values, never resolved/clamped. Result on `[10,20,30,40,50]`:
+   `[2..100]` reads garbage past the end (`i64::MIN` sentinels), `[-2..]` wraps
+   (`[40,50,10,20,30,40,50]`), `[2..-1]` silently empties.
+   **Fix (localized):** in `parse_in_range_body`, when `data != Null` (a vector slice, NOT
+   a pure `0..10` range), wrap BOTH `expr` and `till` through a from-end+clamp helper:
+   `r = if b<0 { b+len } else { b }; clamp(r, 0, len)` where `len = OpLengthVector(data)`.
+   Gives `[2..-1]→[30,40]`, `[-2..]→[40,50]`, `[2..100]→[30,40,50]`, pure ranges
+   untouched. **Caveat:** `OpLengthVector` returns `i64`; bounds may be `i32` — the clamp
+   IR must coerce types (use `conv_op` with matching `in_type`/`I32`/`I64`), and bind
+   `b`/`len` to temps to avoid re-evaluating a side-effecting bound. Must be verified on
+   BOTH backends against the full slice matrix (`a..b`, `a..=b`, `a..`, `..b`, neg a/b,
+   reversed, over-range) — a subtle coercion error reintroduces garbage. Deferred from
+   this session for that careful verification rather than shipped half-checked.
+   Q3 resolved: **clamp** (a partial slice like `[2..100]` must yield the valid tail
+   `[30,40,50]`, not null); a *fully* out-of-range slice clamps to empty `[]`. Returning a
+   null vector for a whole slice is awkward (slices materialize element-by-element) and is
+   NOT adopted.
+9. **`default_native_value` Vector arm has blast radius.** Making a nullable vector field
+   default to null (`u16::MAX`) instead of empty changes init semantics for EVERY struct
+   vector field — existing code assuming "unset = empty `[]`" could break. Needs its own
+   matrix + `not null` opt-in to the empty fast path before shipping; do as a separate,
+   independently-verified change, not bundled with the slice fix.
 
 ## Cross-arc dependencies
 
