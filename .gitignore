@@ -18,6 +18,9 @@ lib/graphics/examples/*.png
 # PNGs into the package's tests/ dir.  Each test recreates its tmp
 # file; leftovers are harmless but should never be committed.
 lib/imaging/tests/_tmp_*.png
+# Same imaging round-trip tests, fixture copy (the cwd now == source_dir,
+# so save_png writes here under tests/fixtures/libs/imaging/tests/).
+tests/fixtures/libs/imaging/tests/_tmp_*.png
 # World save/load regression tests (Phase 6t Tier 5) write binary
 # snapshots into the package's tests/ dir.  Same convention as
 # imaging: each test recreates its tmp file; never commit.

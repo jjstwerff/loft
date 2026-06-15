@@ -18,6 +18,36 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
+/// RAII process-cwd guard for the duration of one program's execution.
+///
+/// loft's `file()` resolves a relative path against `source_dir`
+/// (`Stores::resolve_path`), but a native crate's raw `std::fs` resolves against
+/// the process cwd — so the two diverge when cwd ≠ source_dir (e.g. `loft test`
+/// runs from the package root while a test file lives in `tests/`, breaking
+/// imaging's `load_png`/`save_png`).  `enter_source_dir` chdir's to `source_dir`
+/// for the run so native I/O anchors where loft's does; the guard restores the
+/// original cwd on drop, so the NEXT serially-run test file's parse/compile is
+/// unaffected.  Gated on `program_relative` so a `#cwd` program (which anchors
+/// loft I/O at the cwd) keeps native I/O at the cwd too.
+struct CwdGuard(Option<std::path::PathBuf>);
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0.take() {
+            let _ = std::env::set_current_dir(prev);
+        }
+    }
+}
+fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
+    if program_relative
+        && !source_dir.is_empty()
+        && let Ok(prev) = std::env::current_dir()
+        && std::env::set_current_dir(source_dir).is_ok()
+    {
+        return CwdGuard(Some(prev));
+    }
+    CwdGuard(None)
+}
+
 /// Run all zero-parameter functions in `.loft` files under `root_dir` as tests.
 /// Supports `@ARGS`, `@EXPECT_ERROR`, and `@EXPECT_FAIL` file annotations.
 /// Returns 0 if all pass, 1 if any fail.
@@ -1089,6 +1119,14 @@ pub(crate) fn run_tests(
                             {
                                 run_cmd.env("LOFT_SOURCE_DIR", dir);
                             }
+                            // Run the native test binary with cwd = source_dir so its
+                            // raw `std::fs` (e.g. imaging's load_png/save_png) anchors
+                            // where its loft `file()` does — the test codegen always
+                            // sets `program_relative = true`.  Mirrors the in-process
+                            // interpreter guard above + the standalone path in main.rs.
+                            if let Some(dir) = std::path::Path::new(&abs_file).parent() {
+                                run_cmd.current_dir(dir);
+                            }
                             let run_ok = run_cmd.status().map(|s| s.success()).unwrap_or(false);
                             if run_ok {
                                 for (_, fn_name) in &native_fns {
@@ -1111,6 +1149,10 @@ pub(crate) fn run_tests(
                 }
             } else {
                 // ── Interpreter mode ──────────────────────────────────────────
+                // Anchor native file I/O at the program's source_dir for the
+                // duration of this file's tests; the guard restores the cwd
+                // afterwards so the next file's parse/compile is unaffected.
+                let _cwd = enter_source_dir(&clean_db.source_dir, clean_db.program_relative);
                 for (_, fn_name) in &test_fns {
                     // Per-function @IGNORE: skip without running.
                     if ann.ignore_fn.contains(fn_name.as_str()) {

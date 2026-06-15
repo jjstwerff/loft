@@ -6012,6 +6012,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         // explicit user-set values win.
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(&user_args);
+        // @PLN26 follow-up — run the native binary with cwd = source_dir so its
+        // raw `std::fs` anchors where its loft `file()` does (the binary bakes
+        // `program_relative` + reads source_dir from LOFT_SOURCE_DIR).  Mirrors
+        // the interpreter chdir above; gated on the same `program_relative`.
+        if state.database.program_relative
+            && let Some(dir) = std::path::Path::new(&abs_file).parent()
+        {
+            cmd.current_dir(dir);
+        }
         // The artifact anchors relative paths at its OWN dir (the
         // standalone-bundle rule) — in driver mode that is the cache/tmp
         // dir, not the program's.  Hand the source anchor down so file I/O
@@ -6104,6 +6113,16 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             std::process::exit(1);
         }
         return;
+    }
+    // @PLN26 follow-up — anchor native file I/O at source_dir: chdir so a native
+    // crate's raw `std::fs` resolves a relative path the SAME way loft's
+    // `resolve_path` (which joins source_dir) does.  Gated on `program_relative`
+    // so a `#cwd` program keeps both at the cwd.  Done here — after parse +
+    // native-lib resolution (those ran against the invocation cwd), before user
+    // execution; no restore needed (the process exits after the run).  The
+    // --native path uses `Command::current_dir` on the spawn instead.
+    if state.database.program_relative && !state.database.source_dir.is_empty() {
+        let _ = std::env::set_current_dir(&state.database.source_dir);
     }
     if main_nr == u32::MAX && !dump_only {
         // No main() — execute each zero-parameter user `test_*()` function
