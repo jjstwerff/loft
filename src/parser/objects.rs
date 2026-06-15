@@ -171,8 +171,12 @@ impl Parser {
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
                     let n_args = self.data.attributes(fn_d_nr);
+                    // @P387: exclude the synthetic `RefVar(Text)` work-buffer from
+                    // the fn-ref type (same as the bare-name path below) — a
+                    // forward-declared text fn re-resolved on pass 2 reaches here.
                     let arg_types: Vec<Type> = (0..n_args)
                         .map(|a| self.data.attr_type(fn_d_nr, a))
+                        .filter(|t| !matches!(t, Type::RefVar(_)))
                         .collect();
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     return Type::Function(
@@ -394,8 +398,15 @@ impl Parser {
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
                     let n_args = self.data.attributes(fn_d_nr);
+                    // @P387: a text-returning fn carries a synthetic `RefVar(Text)`
+                    // work-buffer (the return-buffer ABI, added for every text fn).
+                    // It is NOT part of the user-facing signature — the fn-ref
+                    // dispatch injects it — so exclude it from the fn-ref TYPE, or
+                    // `fn(integer) -> text` mis-types as `fn(integer, &text) -> text`
+                    // and every fn-value use of a text fn fails the arity check.
                     let arg_types: Vec<Type> = (0..n_args)
                         .map(|a| self.data.attr_type(fn_d_nr, a))
+                        .filter(|t| !matches!(t, Type::RefVar(_)))
                         .collect();
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());

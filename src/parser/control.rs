@@ -3304,16 +3304,17 @@ impl Parser {
             // pass; the second-pass `__closure` injection (if any)
             // happens later in parse_lambda so the trailing position is
             // preserved.
-            let is_lambda = self
-                .data
-                .def(self.context)
-                .name()
-                .starts_with("n___lambda_");
+            // @P387 (option A): normalize EVERY text-returning fn — not just
+            // lambdas — to carry one `RefVar(Text)` work-buffer, so the fn-ref
+            // dispatch ABI is uniform (a named text fn used as a fn-value gets a
+            // slot for the injected buffer instead of SIGSEGV / arity-leak).
+            // Previously gated on `is_lambda` to respect @PLAN59's plain-fn
+            // signature finality; correctness-first for now, optimise later.
             let has_work_buf =
                 self.data.def(self.context).attributes().iter().any(
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
                 );
-            if self.first_pass && is_lambda && !has_work_buf {
+            if self.first_pass && !has_work_buf {
                 let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
