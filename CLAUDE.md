@@ -61,8 +61,11 @@ regex collides with `2P259`, `P2590`, and prose):
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
 - **Plans (canonical)**: `@PLN3` = a [`loft-lang/plans`](https://github.com/loft-lang/plans)
   issue (the cross-ecosystem plan id = its issue number).
-- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`, `@PLAN22-2d-iii.a` — point at
-  the design dir `plans/<NN>/`.
+- **Plan dirs + phases (legacy/local, being migrated)**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` — point at the design dir `plans/<NN>/`.  Active + future local dirs are
+  migrating to `@PLN` issues under **@PLN27**; `finished/` keeps its `@PLAN<NN>` refs.  File a
+  NEW plan as a `loft-lang/plans` issue, not a dir — with a required `status:*` + `subject:*`
+  label (every plan carries exactly one of each).
 
 Bare-name forms (`P259`, `plan-22 phase 03`) still work in prose; the indexer tracks both. <!--noindex-->
 

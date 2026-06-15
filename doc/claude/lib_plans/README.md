@@ -9,6 +9,11 @@ Multi-phase library design + implementation initiatives that
 span more than one session.  Each subdirectory holds the
 README (goal + index) plus one markdown file per phase.
 
+> **Migrating to issues (@PLN27).** Like core `plans/`, the canonical home
+> for an active or future library plan is now a
+> [`loft-lang/plans`](https://github.com/loft-lang/plans) issue (`@PLN<n>`);
+> the local dirs here are legacy/transitional and migrating under **@PLN27**.
+
 **Distinct from `plans/`.**  `plans/` tracks core-language and
 compiler / runtime initiatives (validation matrices, codegen
 arcs, language features).  `lib_plans/` tracks **library**

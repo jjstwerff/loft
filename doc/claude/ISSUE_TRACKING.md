@@ -358,10 +358,13 @@ The rest of this section is the *design rationale*; here is the **current realit
   subject — the tag *is* the number.
 - **`@PLAN<NN>` is now only a legacy *dir-pointer*** ("design lives in
   `plans/<NN>/`"), carried in the issue body; per-tree and harmless because the
-  `@PLN` number is the real key.
+  `@PLN` number is the real key.  Active + future local dirs are being migrated
+  to `@PLN` issues under **@PLN27** (`finished/` keeps its `@PLAN<NN>` refs).
 - **Dimensions ride on labels** for now — `subject:*` (the primary cut) +
-  `status:*` (lifecycle).  A gh **Project board** (the richer field schema below)
-  is a later browser add-on; the labelled list already gives the overview.
+  `status:*` (lifecycle); **every plan issue MUST carry exactly one of each**
+  (`subject:{loft,libs,audience}` × `status:{active,future,finished}`).  A gh
+  **Project board** (the richer field schema below) is a later browser add-on;
+  the labelled list already gives the overview.
 - **Design stays in each code repo's `plans/` dir**; the loft-lang issue links to it.
 
 ### Why a clean view at all — the resonance test

@@ -4,6 +4,15 @@ Multi-phase initiatives that span more than one session.  Each
 subdirectory holds the README (goal + index) plus one markdown file
 per phase.
 
+> **Migrating to issues (@PLN27).** The canonical home for an active or
+> future plan is now a [`loft-lang/plans`](https://github.com/loft-lang/plans)
+> issue (`@PLN<n>` = its issue number).  The local dirs here are
+> legacy/transitional — active + future plans are being converted to issues
+> under **@PLN27**; `finished/` stays as the historical record.  File a NEW
+> plan as an issue (`gh issue create --repo loft-lang/plans`), not a dir — and
+> tag it with a **required `status:*` + `subject:*` label** (the two tracking
+> dimensions; every plan issue carries exactly one of each).
+
 ## The rule — docs vs plans
 
 **Documentation about how things work** (architecture, runtime
