@@ -1264,8 +1264,13 @@ extern crate loft;"
                         Type::Integer(_) | Type::Character => " -> i32".to_string(),
                         Type::Float => " -> f64".to_string(),
                         Type::Single => " -> f32".to_string(),
-                        // The real fn returns `bool`; the call casts `as u8`.
-                        Type::Boolean => " -> bool".to_string(),
+                        // @PLN26 phase 0.2 — declare `u8` (loft's boolean storage
+                        // form, 0/1/255), NOT `bool`: a cdylib returning a u8 that
+                        // isn't 0/1, read back through a `bool` return, is UB.  The
+                        // call's `(…) as u8` becomes identity.  (The boolean *arg*
+                        // stays `bool` — `output_native_direct_call` passes
+                        // `var != 0`, always 0/1, valid at the 1-byte C-ABI.)
+                        Type::Boolean => " -> u8".to_string(),
                         Type::Text(_) => " -> loft_ffi::LoftStr".to_string(),
                         Type::Vector(_, _) | Type::Reference(_, _) => {
                             " -> loft_ffi::LoftRef".to_string()

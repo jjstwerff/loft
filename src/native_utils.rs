@@ -656,34 +656,40 @@ pub(crate) fn add_native_extern_flags(
         // of its rlib via `--extern`: the `.so` seals the package's whole Rust
         // crate graph (its own `loft_ffi` copy included), so no `-L dependency=`
         // or per-crate pinning is needed and the shared-dep `StableCrateId`
-        // collision class is gone by construction.  An RPATH points the binary at
-        // the build dir so it loads the `.so` at run time.  Native target only —
-        // wasm cross-compiles the package to an rlib (the branch below).
+        // collision class is gone by construction.  Native target only — wasm
+        // cross-compiles the package to an rlib (the branch below).
         if target.is_none() && native_cabi_enabled() {
+            // @PLN26 phase 0.4 — resolve the `.so` exactly as the interpreter does
+            // (`resolve_native_lib`): a host-triple prebuilt (ABI-gated on
+            // `loft_ffi_fingerprint`) wins over a source build, a missing declared
+            // system lib is terminal, else auto-build (freshness keyed on the
+            // loft-ffi ABI, so the `.so` survives loft rebuilds).  The shared
+            // resolver keeps native-compile and interpret on the SAME `.so` and
+            // adds the prebuilt + missing-syslib handling the hand-rolled path lacked.
             let stem = crate_name.replace('-', "_");
-            let so_dir = crate::extensions::native_target_root(std::path::Path::new(pkg_dir))
-                .join("release");
-            let so_path = so_dir.join(crate::extensions::platform_lib_name(&stem));
-            // The cdylib is keyed on the loft-ffi ABI fingerprint, NOT the full
-            // libloft build hash — that is the whole point of the C-ABI link: the
-            // `.so` seals its Rust graph and stays valid across loft rebuilds as
-            // long as the loft-ffi ABI is unchanged.  This matches the fingerprint
-            // `auto_build_native` stamps (extensions.rs ~2415), so a current `.so`
-            // is seen as fresh instead of needlessly rebuilt on every loft build.
-            let stale = !loft::cache::native_artifact_fingerprint_matches(
-                &so_dir,
-                loft::cache::loft_ffi_fingerprint(),
-            );
-            if !so_path.exists() || stale {
-                let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
-            }
-            if so_path.exists() {
+            let Some(so) = crate::extensions::resolve_native_lib(pkg_dir, &stem) else {
+                // Unresolvable (missing system lib / build failed) — the resolver
+                // already printed an actionable message.  Skip; the link then fails
+                // loudly on the undefined symbol rather than silently mis-linking.
+                continue;
+            };
+            let so_path = std::path::PathBuf::from(&so);
+            if let Some(so_dir) = so_path.parent() {
+                // `-l dylib=<name>` derived from the RESOLVED file (strip the `lib`
+                // prefix + extension) so a prebuilt or non-`lib<stem>` cdylib links.
+                let libname = so_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(stem.as_str(), |s| s.strip_prefix("lib").unwrap_or(s));
                 cmd.arg("-L").arg(format!("native={}", so_dir.display()));
-                cmd.arg("-l").arg(format!("dylib={stem}"));
-                // RPATH so the produced binary finds the `.so` at run time
-                // without LD_LIBRARY_PATH (relocating it beside the binary is an
-                // install-time packaging step).
+                cmd.arg("-l").arg(format!("dylib={libname}"));
+                // @PLN26 phase 0.1 — two RPATH entries: the build/prebuilt dir
+                // (run-from-build-tree: tests, dev) AND `$ORIGIN` (an installed
+                // binary that ships the `.so` beside it — `make install` copies it
+                // next to the binary).  `$ORIGIN` is passed literally; the dynamic
+                // loader expands it at run time.
                 cmd.arg(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+                cmd.arg("-Clink-arg=-Wl,-rpath,$ORIGIN");
             }
             continue;
         }
