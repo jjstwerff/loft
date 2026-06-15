@@ -89,8 +89,9 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
 1. **Null encoding** — RESOLVED: `store_nr = u16::MAX` (reuse reference sentinel; nets
    H6 toward one encoding). Alternative (new vector-only code) rejected: adds a 6th
    sentinel, worsens H6.
-2. **`len(null)`** — `0` (treat absent as zero-length, matches existing `rec==0`→0) or
-   itself `null`? Leaning `0` for ergonomics; revisit against the `!v` truthiness rule.
+2. **`len(null)`** — RESOLVED in P1: `0` (absent reads as zero-length, matches the
+   existing `rec==0`→0 path). Revisit only if the `!v` truthiness rule needs `len`/null
+   to differ.
 3. **Slice out-of-range** — return a null vector (consistent with this plan) vs
    clamp-and-warn vs empty-and-warn. Leaning **null vector** now that null is a real
    value — that is the whole point of the feature.
@@ -98,6 +99,30 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
    error: appending to an absent vector is a logic bug, make it loud.
 5. **`not null vector<T>`** — does the field/param modifier suppress nullability and
    unlock the empty-only fast path (skip the `u16::MAX` guard)? Mirror `Reference`.
+
+## P1 findings (recorded from the build — these constrain P2/P3)
+
+1. **Container-null ≠ element-null — the P2 footgun.** The runtime already uses
+   `rec == 0` as the "universal null-DbRef indicator" for vector *elements* and
+   out-of-range results (`State::vec_get_or_raise` comment, `src/state/mod.rs`). That is
+   a DIFFERENT convention from this plan's *container* null (`store_nr == u16::MAX`). The
+   P2 `== null` / `!= null` operator for a vector MUST test `is_null()`
+   (`store_nr==u16::MAX`), **never `rec==0`** — an empty `[]` is a valid store with
+   `rec==0`, so a `rec==0` test would make `[] == null` wrongly true. This is the exact
+   over-unification the design protocol flagged: two states that look alike under the
+   wrong predicate.
+2. **Loudness of a missed guard is debug-only.** `keys::store`/`mut_store` panic on
+   `store_nr==u16::MAX` via `debug_assert!` — so a future accessor that forgets the
+   `is_null()` guard crashes loudly in debug/tests but is silent OOB/UB in `--release`.
+   The "make omission loud" cure (design-protocol step 2) therefore holds only under
+   debug. **P4 decision:** either make the deref loud in release too (cheap branch in
+   `keys::store`) or fold all vector store-access behind one `vec_record()` deref
+   chokepoint so there is a single site to guard. Until then: N per-accessor guards,
+   one-home *test* (`is_null`) but sprayed *guards*.
+3. **Raising index path already covered (good news).** `vec_get_or_raise` reads length
+   via the now-guarded `length_vector`, so a null vector → length 0 → raises a
+   recoverable `IndexOutOfBounds` and returns the null sentinel — safe, no OOB. Refine
+   the error *kind* to a null-specific fault later (cosmetic; not blocking).
 
 ## Cross-arc dependencies
 
