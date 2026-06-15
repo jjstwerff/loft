@@ -759,6 +759,23 @@ pub(crate) fn add_native_extern_flags(
             let stem = crate_name.replace('-', "_");
             let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
         }
+        // @PLN26 phase 3 — a wasm target (`target.is_some()`) can't auto-build the
+        // package rlib (no host cross-compile) and can't use the C-ABI `.so` path
+        // (wasm links statically).  A missing wasm rlib means the package has no
+        // wasm build at all, so the compile would die on a bare E0463 "can't find
+        // crate".  Per "disallow the unverifiable loudly", emit a clear signal
+        // instead.  (The StableCrateId collision the C-ABI path fixes is UNREALIZED
+        // for wasm: it needs two colliding wasm rlibs, and no native package
+        // compiles to wasm today — so wasm stays on the rlib path, see § Open work.)
+        if target.is_some() && !rlib_path.exists() {
+            eprintln!(
+                "loft: native package `{crate_name}` has no {} build (no prebuilt or \
+                 cross-built rlib) — compiling a program that uses native packages to wasm \
+                 is not supported yet (@PLN26 phase 3, loft-lang/plans#26).  Ship a prebuilt \
+                 rlib for the package, or run with --interpret.",
+                target.unwrap_or("wasm32-wasip2")
+            );
+        }
         if rlib_path.exists() {
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
