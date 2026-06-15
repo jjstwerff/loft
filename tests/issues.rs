@@ -5511,13 +5511,13 @@ fn inc28_slice_open_start() {
     .result(Value::Int(60)); // 10 + 20 + 30
 }
 
-// INC#28: the doc claim that negative indices count from the end
-// is aspirational.  Today `v[2..-1]` is the range `2..-1`, which
-// is empty.  Locks the current behaviour so a future implementor
-// of negative indexing can't silently change what programs do
-// when they hit this form.
+// INC#28 (@P384 fixed): a negative slice bound now counts from the end,
+// mirroring single-index `v[-1]`.  `v[2..-1]` is indices 2..(len-1) = 2..4,
+// i.e. two elements — no longer the empty range that the aspirational-doc
+// era produced.  Full backend-parity matrix lives in
+// tests/scripts/388-p384-negative-slice-from-end.loft.
 #[test]
-fn inc28_negative_index_in_slice_yields_empty() {
+fn inc28_negative_slice_counts_from_end() {
     code!(
         "fn run_neg() -> integer {
     v_neg = [10, 20, 30, 40, 50];
@@ -5527,7 +5527,7 @@ fn inc28_negative_index_in_slice_yields_empty() {
 }"
     )
     .expr("run_neg()")
-    .result(Value::Int(0));
+    .result(Value::Int(2)); // indices 2,3 → two iterations
 }
 
 // ── INC#9: text indexing vs. slicing return different types ────────────
