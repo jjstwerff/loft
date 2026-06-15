@@ -142,6 +142,24 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
+        // @PLN25 E2a.3 — transparent construction: when the expected type is a
+        // synthetic nullable-struct enum `__nullable<S>` (propagated into
+        // `parent_tp` by parse_single) and the literal is the underlying struct
+        // `S { … }`, build the `Some` variant instead — the discriminant
+        // defaults to present via object_init, so `item: Row{…}` maps onto the
+        // enum with the user still writing the struct name.
+        if let Type::Enum(syn, true, _) = &*parent_tp
+            && self.data.def(*syn).name == format!("__nullable<{nm}>")
+            && self.lexer.peek_token("{")
+        {
+            let some_d = self.data.variant_of(*syn, "Some");
+            if some_d != u32::MAX {
+                let tp = self.parse_object(some_d, code);
+                if tp != Type::Unknown(0) {
+                    return tp;
+                }
+            }
+        }
         let mut t = self.parse_constant_value(code, source, &nm, name_pos, qualifier_enum);
         if t != Type::Null {
             return t;

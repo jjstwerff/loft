@@ -134,14 +134,7 @@ pub fn actual_types_deferred(
             DefType::Struct => {
                 copy_unknown_fields(data, d);
             }
-            DefType::Enum => {
-                let e_nr = database.enumerate(&data.def(d).name.clone());
-                for a in 0..data.attributes(d) {
-                    database.value(e_nr, &data.attr_name(d, a), u16::MAX);
-                    data.set_attr_value(d, a, Value::Enum(a as u8 + 1, e_nr));
-                }
-                data.definitions[d as usize].known_type = e_nr;
-            }
+            DefType::Enum => register_enum_db(data, database, d),
             DefType::EnumValue if data.attributes(d) > 0 => {
                 copy_unknown_fields(data, d);
             }
@@ -188,6 +181,15 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                 );
             }
         }
+    }
+    // @PLN25 E2a.2 — give each nullable struct-typed field the synthetic
+    // `__nullable<T>` enum BEFORE the unit-variant discriminant pass + the
+    // layout loop below, so the synthetic enum is registered and laid out like
+    // any hand-written enum.  Scaffolding (vertical-slice landing): gated and
+    // non-stdlib-only while the construct/access glue (E2a.3/4) is built — see
+    // the fn doc.
+    if std::env::var("LOFT_E2_SYNTH").is_ok() {
+        synth_nullable_struct_fields(data, database, lexer);
     }
     // Start from 0 (not start_def) so struct-enum variants defined in earlier
     // default library files are processed when later files trigger fill_all.
@@ -333,6 +335,71 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
+}
+
+/// @PLN25 E2a.2 — rewrite each nullable struct-typed field to the synthetic
+/// `__nullable<T>` enum (`Null | Some<fields>`), so an absent value is
+/// representable inline (discriminant `0`) instead of crashing the
+/// `OpCopyRecord`-of-a-null-source path.  Runs at the very start of `fill_all`
+/// (before the unit-variant discriminant pass + the layout loop) so the
+/// synthetic enum is registered (`register_enum_db`) and laid out like any
+/// hand-written enum.
+///
+/// SCAFFOLDING (vertical-slice landing): gated behind `LOFT_E2_SYNTH` and
+/// limited to non-stdlib sources while the construct/access glue (E2a.3/4) is
+/// built — a plain `Row{…}` literal / `b.item.id` still lowers as a struct, so
+/// flipping the field type tree-wide before the glue exists would break every
+/// nullable-struct-field program.  Lifts to always-on, tree-wide once the glue
+/// lands.
+fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &mut Lexer) {
+    for host in 0..data.definitions() {
+        // Stdlib stays untouched while this is scaffolding; synthetic hosts
+        // (tuples, fn-ref, and our own `__nullable<T>` variants) are skipped so
+        // the rewrite never recurses into generated layouts.
+        if data.def(host).source == crate::data::STD_SOURCE || data.def(host).synthetic.is_some() {
+            continue;
+        }
+        if !(matches!(data.def_type(host), DefType::Struct)
+            || (matches!(data.def_type(host), DefType::EnumValue) && data.attributes(host) > 0))
+        {
+            continue;
+        }
+        for a_nr in 0..data.attributes(host) {
+            // Skip the per-variant `constant` markers and `not null` fields.
+            if data.def(host).attributes[a_nr].constant || !data.attr_nullable(host, a_nr) {
+                continue;
+            }
+            // Only an inline struct-reference field is rewritten; vectors,
+            // keyed collections, primitives, fn-refs are out of scope here.
+            let Type::Reference(struct_d, _) = data.attr_type(host, a_nr) else {
+                continue;
+            };
+            if data.def_type(struct_d) != DefType::Struct || data.def(struct_d).synthetic.is_some()
+            {
+                continue;
+            }
+            let syn = data.nullable_enum_for(lexer, struct_d);
+            if data.def(syn).known_type == u16::MAX {
+                register_enum_db(data, database, syn);
+            }
+            data.definitions[host as usize].attributes[a_nr].typedef =
+                Type::Enum(syn, true, Deps::none());
+        }
+    }
+}
+
+/// Register an enum's database type and its variant entries, and stamp each
+/// parent variant attribute's discriminant value with the database enum id.
+/// Shared by `actual_types_deferred` (hand-written enums) and `fill_all`'s
+/// @PLN25 nullable-struct-field synthesis (synthetic `__nullable<T>` enums),
+/// so both register identically.
+fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
+    let e_nr = database.enumerate(&data.def(d).name.clone());
+    for a in 0..data.attributes(d) {
+        database.value(e_nr, &data.attr_name(d, a), u16::MAX);
+        data.set_attr_value(d, a, Value::Enum(a as u8 + 1, e_nr));
+    }
+    data.definitions[d as usize].known_type = e_nr;
 }
 
 pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {

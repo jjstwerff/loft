@@ -184,18 +184,28 @@ existing enum layout/construct/access/copy machinery — not to bolt a discrimin
 struct layout. Staged below; each stage has its own gate and the entry point found in the
 machinery survey.
 
-- **E2a.1 — Synthesis helper [foundation].** *Do:* add a memoized
-  `nullable_enum_for(struct_d) -> enum_d` that builds, once per struct, a synthetic enum
-  `{ Null, Some<fields-of struct_d> }` — mirror `parse_enum` (`definitions.rs:367`,
-  `add_def(DefType::Enum)`) + `parse_enum_values` (`:199`, `add_def(DefType::EnumValue)` ×2,
-  `parent = enum_d`, the `Some` variant carrying `struct_d`'s attributes), then
-  `mark_synthetic`. *Verify (Probe 1):* a test calls it and asserts the synthesized type's
-  layout (discriminant@0 + packed fields) equals a hand-written `enum { Null, Some{…} }`.
-- **E2a.2 — Wire nullable struct FIELDS to it.** *Do:* at the field-type/offset hook
-  (`typedef.rs`, where `attr_nullable && !not_null` is known), when a field's content is a
-  struct and the field is nullable, set the field's content type to `nullable_enum_for(struct_d)`.
-  *Verify:* `introspect Box { item: Row }` shows `item`'s type is the synthetic enum, fields
-  offset past the discriminant.
+- **E2a.1 — Synthesis helper [foundation]. [DONE]** `Data::nullable_enum_for(lexer,
+  struct_d) -> enum_d` (`src/data.rs`, after `tuple_def`) builds, once per struct, a
+  synthetic enum `{ Null, Some<fields-of struct_d> }` by mirroring `parse_enum_values`'
+  first-pass calls EXACTLY (parent per-variant `constant` attrs with discriminants 1/2; the
+  `Some` variant's `enum` discriminant at offset 0 + `struct_d`'s payload copied in order;
+  `Null` is unit), so layout-identity is by construction.  Memoized on `__nullable<{name}>`,
+  registered at `STD_SOURCE`, `mark_synthetic`.  *Verified:* `tests/plan25_nullable_enum.rs`
+  (4 tests — def structure, unit-Null/payload-Some, verbatim field types, idempotent).
+- **E2a.2 — Wire nullable struct FIELDS to it. [DONE — gated]** A new pass
+  `synth_nullable_struct_fields` at the **start of `fill_all`** (`src/typedef.rs`, before the
+  unit-variant discriminant pass + the layout loop) rewrites each nullable inline
+  struct-reference field's typedef to `Type::Enum(syn, true, _)` and registers the synthetic
+  enum via the extracted `register_enum_db` helper (shared with `actual_types_deferred`'s
+  `Enum` arm, so synthetic + hand-written enums register identically).  **Scaffolding:** gated
+  behind env `LOFT_E2_SYNTH` and limited to non-stdlib sources — default-off keeps every
+  existing program byte-identical (a plain `Row{…}` / `b.item.id` still lowers as a struct
+  until the E2a.3/4 glue exists).  *Verified (Probe 1):* `tests/plan25_e2_layout.rs` — with
+  the gate on, `Box { item: Row }` rewrites `item` to `__nullable<Row>`, and the synthetic
+  `Some` variant is **byte-identical** to a hand-written `enum { HNull, HSome{…} }`
+  (discriminant @0 on both, matching `id`/`tag` offsets, matching variant size).  *Gotcha
+  recorded:* `parse_str` parses into source 0 (= STD_SOURCE) so the scaffolding skips it — the
+  layout test parses a real FILE (`Parser::parse`, source = MAIN_SOURCE) like the binary does.
 - **E2a.3 — Construction coercion.** *Do:* `Box { item: Row{…} }` builds the `Some` variant
   (struct-literal → `Some(...)`; discriminant = present). *Verify:* construct + read
   `bx.item.id` round-trips on both backends.
@@ -239,6 +249,87 @@ reverse-slice; simple-typed vector ELEMENT null (int/bool/float/text — iterati
 breaks at a null element + `float == null`); **E1** = nullable enum VARIABLE null on both
 backends. **E2 (this doc) = nullable inline STRUCT fields + vector elements — NOT started in
 code.** Full suite was 2381-green at the last push.
+
+### Step 0 RESULT (probed 2026-06-15, BOTH backends) — YES, (a) is sound
+`/tmp/p_step0/step0.loft` + `step0_present.loft` (hand-written `enum NRow { RNil, RSome
+{ id, tag } }` as `struct Box { item: NRow }`):
+- **Present value works on both backends:** construct `Box { item: RSome{…} }`, payload via
+  `match b.item` (id=5, tag="a"), present `== null` → false / `!= null` → true, and an
+  explicit `RNil` variant — all green on interpret AND native. So enum-typed fields are NOT
+  themselves broken → **synthesis (a) is the sound path** (gate's YES branch).
+- **Null source into the field crashes — the PREDICTED target, not a re-scope.**
+  `Box { item: maybe(false) }` (a nullable-returning fn) hits exactly `allocation.rs:560`
+  (index 65535) — the `OpCopyRecord`-on-null-source bug — on BOTH backends at the SAME
+  runtime site (cleaner than the anticipated separate native-codegen crash). This is E2's
+  fix-surface target: on null-assign, set discriminant 0 + free heap deps, do NOT
+  `OpCopyRecord` the null source.
+- **Two things Step 0 did NOT settle (both blocked behind that crash → E2a.4, neither
+  changes the GO):** (1) whether present `== null`→false goes through the *discriminant*
+  test vs. accidentally reading inline bytes as a `store_nr` (the crucial distinction below
+  — inline MUST use the discriminant, not `OpRefIsNull`); (2) whether inline `== null`
+  returns *true* for a null (unobservable until the construct/assign crash is fixed).
+
+So the remaining E2 work is the **transparency glue** (next §) + the null-assign fix, NOT a
+question of whether enums-as-fields work. Proceed to E2a.1 synthesis + the vertical slice.
+
+### E2a.1 + E2a.2 DONE (gated) — NEXT: E2a.3 construction coercion
+**Built + verified (gate off by default; suite byte-identical):**
+- **E2a.1** `Data::nullable_enum_for` (`src/data.rs`) — synthesises `__nullable<T>`; 4 tests
+  in `tests/plan25_nullable_enum.rs`.
+- **E2a.2** `synth_nullable_struct_fields` pass + `register_enum_db` helper (`src/typedef.rs`),
+  gated behind `LOFT_E2_SYNTH`, non-stdlib-only — rewrites a nullable struct field to the
+  synthetic enum. **Probe 1 PASSES** (`tests/plan25_e2_layout.rs`): byte-identical to a hand
+  enum.
+
+**NEXT — E2a.3 (construction coercion), the load-bearing glue.** Scoped this session (no code
+yet — the hook needs threading work, see below):
+
+- **Failure mode (gate ON, characterized):** `Box { item: Row{id:5, tag:"hi"} }` does NOT
+  crash — it reads back `id=4 tag=null` (WRONG). Construction wrote `Row`'s bytes at `Row`'s
+  offsets (`id@0, tag@8`), but the field is now the enum, whose `Some` variant reorders to
+  `disc@0, tag@4, id@8` — so access reads the wrong slots. Coercion is simply missing.
+- **Storage model (confirmed):** a nullable struct field is a **big enum → 4-byte record
+  pointer** (`parse_object_field`'s `Type::Enum(_,true,_)` arm, `objects.rs:1902` — "enum-big
+  header is a 4-byte u32 record pointer"), NOT inline bytes. Probe 1's byte-identity is the
+  variant RECORD's internal layout; the field holds a pointer to it. Construction must
+  allocate a `Some` record, write disc + fields, store the rec-id — exactly the path a
+  hand-written `RSome{…}` already takes (Step 0).
+- **DESIGN RESOLVED — null = discriminant 0** (read from `set_default_value`,
+  `database/structures.rs`: `Parts::Enum` defaults the offset-0 byte to `0`). So:
+  - default / unset / `= null` → **discriminant 0** (the absent state; `== null` true).
+  - `Row{…}` → the **`Some` variant** (discriminant 2).
+  - the synthesized **`Null` variant (discriminant 1) is VESTIGIAL** in transparent mode —
+    never produced; null is disc-0, not the Null variant. (Could simplify E2a.1 to a
+    single-variant `{Some}` later; not worth churning the verified 2-variant helper now.)
+  - **E2a.4 `== null` tests `discriminant == 0`** — NOT the Null variant, and NOT E1's
+    `OpRefIsNull` (that is the VARIABLE store-sentinel; an inline field has no DbRef slot).
+- **The hook (chose (a), DONE for the literal form):** the existing machinery already
+  propagates the field's expected enum into `parent_tp` (`parse_single`, `vectors.rs:408-413`,
+  via `enum_context`), so the redirect lives in `parse_var` (`objects.rs`, just before
+  `parse_constant_value`): when `parent_tp == Enum(__nullable<S>, true)` and the literal is
+  `S{…}`, call `parse_object(variant_of(syn,"Some"), code)` — building the `Some` variant into
+  the primed field target. **Verified (gate on, interpreter):** `Box { item: Row{id:9,
+  tag:"x"} }` round-trips — `b.item.id`/`b.item.tag` read correctly AND access fell out for
+  free (the enum-field `.id` resolves to the `Some` payload), and present `b.item == null` is
+  `false`. The redirect is INERT with the gate off (no `__nullable<>` enums exist → the name
+  check never matches), so the default-off suite stays byte-identical.
+
+**STILL OPEN (the three forms beyond the present literal):**
+1. **`== null` on a DEFAULT/null field CRASHES** (`allocation.rs:560`, gate on): `d.item ==
+   null` on an unset field derefs the absent record. E2a.4 must lower inline-enum `== null` to
+   a **discriminant == 0 test** (NO deref) — distinct from E1's `OpRefIsNull` (the VARIABLE
+   store-sentinel). Present `== null` works only because it derefs a real `Some` record.
+2. **Runtime null SOURCE rejected** at `convert` (`mod.rs:1177` → `handle_field` diagnostic,
+   `objects.rs:2368`): `Box { item: maybe(false) }` → "Cannot assign ref(Row) to ref(
+   __nullable<Row>)". Needs a `Reference(S)` → `Enum(__nullable<S>)` convert: present source →
+   copy into `Some`; **null source → discriminant 0 + free deps, NOT `OpCopyRecord`** (THE
+   crash retirement, the original E2 motivation).
+3. **Native parity** — the present-literal case errors `E0308` on `--native`; the enum-field
+   access/construct codegen needs the same treatment on the native backend.
+
+Once 1–3 land (+ vector elements E2a.5), the gate comes off and the suite stays green WITHOUT
+the env flag (the vertical slice). Keep `LOFT_E2_SYNTH` + the non-stdlib restriction until
+then, then delete both.
 
 ### The corrected first move (this session changed the order)
 The staged list above puts synthesis (E2a.1) first, but the **load-bearing unknown is

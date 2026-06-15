@@ -37,11 +37,19 @@ scattered null-sentinel matrix, not adjacent to it.
 **E1** = nullable enum VARIABLE null on both backends. loft#384's commit carries `Fixes #384`
 (closes on merge to `main`; `fixed-pending-merge` until then).
 
-**Next: E2 — nullable inline STRUCT fields + vector elements**, via the full enum-synthesis
-approach (a). It is **fully specified and staged** in
+**Next: E2a.3 — construction coercion** (the load-bearing transparency glue). **E2a.1
+(synthesis helper) + E2a.2 (field-type rewrite hook) are DONE + verified**, gated behind
+`LOFT_E2_SYNTH` (default-off → suite byte-identical), and **Probe 1 passes** (the synthetic
+`__nullable<Row>` is byte-identical to a hand-written enum). **E2a.3 is fully scoped** (failure
+mode, storage model, and the null-representation design are pinned in
+[embedded-record-null.md § NEXT — E2a.3](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)):
+**null = discriminant 0**, `Row{…}` → the `Some` variant (disc 2), `== null` tests `disc == 0`
+(NOT E1's `OpRefIsNull`). The first move is a DECISION — thread the expected type into the
+literal dispatch (transparent) vs a post-hoc struct→`Some` convert — then build construct
+(E2a.3) + access/null/default (E2a.4) so the gate can come off green WITHOUT the env flag (that
+green-without-flag commit is the vertical slice). It is **fully specified and staged** in
 [embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)
-— read that section cold; it has the corrected first move (a Step-0 probe of construct/access
-on a hand-written enum field, BEFORE building synthesis), the `nullable_enum_for` recipe, the
+— read that section cold; it has the Step-0 result, the `nullable_enum_for` recipe, the
 transparency-glue crux, the entry points, and why the first green commit must be a vertical
 slice (synth+wire+construct+access for one field), not E2a.1 alone. The field-default arm
 (finding 9) is subsumed by E2 (a nullable field defaults to the `Null` variant).
