@@ -162,6 +162,10 @@ rebuild_native_cdylibs() {
   # 2. Test fixture cdylibs under tests/lib/*/native/
   while IFS= read -r manifest; do
     [[ -f "$manifest" ]] || continue
+    # Skip git-ignored manifests: orphaned generated fixtures left over from old
+    # runs (e.g. tests/test_native_pkg/ from a prior plugin-ABI) are not part of
+    # the tracked build and may no longer compile against the current tree.
+    git -C "$repo_root" check-ignore -q "$manifest" 2>/dev/null && continue
     any_src_cdylib=1
     local dir
     dir=$(dirname "$manifest")
