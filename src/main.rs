@@ -6000,6 +6000,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             println!("ok {abs_file} {}", artifact.display());
             return;
         }
+        // @PLN26 phase 4 — Windows has no RPATH, so a C-ABI-linked native-package
+        // DLL must sit beside the binary that loads it; stage it there before the
+        // spawn (no-op off Windows / on the rlib path).
+        if let Some(dir) = binary.parent() {
+            native_utils::stage_native_dlls(dir, &p.data);
+        }
         // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
         // re-parses the same sources, so hand it the resolved paths the driver
         // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;

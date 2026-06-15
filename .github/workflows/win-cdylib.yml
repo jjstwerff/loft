@@ -66,3 +66,42 @@ jobs:
         env:
           FILTER: ${{ github.event.inputs.filter || 'binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)' }}
         run: cargo nextest run --profile ci -E "$FILTER"
+
+  # @PLN26 phase 4 — verify the Windows C-ABI link path (import-library linking,
+  # no RPATH, DLL staged beside the binary) BEFORE flipping the default.  Same
+  # native subset as the job above, but `LOFT_NATIVE_CABI=1` forces the C-ABI
+  # path on for Windows (the default there is still the proven rlib path).  The
+  # job above is the rlib control; this one is the C-ABI experiment.  Green here
+  # → flip `native_cabi_enabled()` to include Windows.
+  win-cdylib-cabi:
+    name: Win cdylib subset (C-ABI forced on)
+    runs-on: windows-latest
+    env:
+      LOFT_NATIVE_CABI: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore cargo registry and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build test targets
+        run: cargo build --all-targets
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run cdylib / native subset (C-ABI)
+        shell: bash
+        env:
+          FILTER: ${{ github.event.inputs.filter || 'binary(n2_cdylib) or binary(n3_use_native) or binary(n3_parity) or binary(native)' }}
+        run: cargo nextest run --profile ci -E "$FILTER"

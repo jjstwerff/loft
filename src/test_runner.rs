@@ -1042,6 +1042,13 @@ pub(crate) fn run_tests(
                             // (which anchors at the test file's dir).  Mirrors the
                             // standalone `--native` run path in main.rs; an
                             // explicit user `LOFT_SOURCE_DIR` wins.
+                            // @PLN26 phase 4 — stage native-package DLLs beside the
+                            // test binary on Windows (no RPATH there); mirrors the
+                            // standalone run path in main.rs.  No-op off Windows /
+                            // on the rlib path.
+                            if let Some(dir) = binary.parent() {
+                                native_utils::stage_native_dlls(dir, &native_data);
+                            }
                             let mut run_cmd = std::process::Command::new(&binary);
                             if std::env::var("LOFT_SOURCE_DIR").is_err()
                                 && let Some(dir) = std::path::Path::new(&abs_file).parent()
