@@ -314,22 +314,34 @@ yet — the hook needs threading work, see below):
   `false`. The redirect is INERT with the gate off (no `__nullable<>` enums exist → the name
   check never matches), so the default-off suite stays byte-identical.
 
-**STILL OPEN (the three forms beyond the present literal):**
-1. **`== null` on a DEFAULT/null field CRASHES** (`allocation.rs:560`, gate on): `d.item ==
-   null` on an unset field derefs the absent record. E2a.4 must lower inline-enum `== null` to
-   a **discriminant == 0 test** (NO deref) — distinct from E1's `OpRefIsNull` (the VARIABLE
-   store-sentinel). Present `== null` works only because it derefs a real `Some` record.
-2. **Runtime null SOURCE rejected** at `convert` (`mod.rs:1177` → `handle_field` diagnostic,
+**E2a.4 DONE (`==null` + default-init, BOTH backends).** Two fixes, both gated/inert off:
+- **`== null` via the discriminant** (`operators.rs` `enum_null` branch): for a synthetic
+  `__nullable<S>` enum, lower `== null` to `OpEqInt(OpConvIntFromEnum(OpGetEnum(e,0)), 0)` — read
+  discriminant 0 directly, NO deref. (A user enum VARIABLE keeps `OpRefIsNull`, E1 — the branch
+  forks on the `__nullable<` name.)
+- **Default-init skip** (`object_init`, `objects.rs`): an omitted nullable-struct field is left
+  at its `OpDatabase`/`set_default_value` zero-init (discriminant 0 = null). The generic
+  `Reference`-recursion / `to_default` paths corrupted the inline enum bytes → the
+  `allocation.rs:560` crash on `Box{}` AND a slot mismatch on `x = d.item == null`; skipping
+  fixes both.
+- *Verified (gate on, BOTH backends):* `present → isnull=false`, `default → isnull=true`,
+  `b.item.id`/`.tag` read correctly, assignment form clean. The native `E0308` from the
+  earlier present-literal run is also resolved by these fixes.
+
+**STILL OPEN:**
+1. **Runtime null SOURCE rejected** at `convert` (`mod.rs:1177` → `handle_field` diagnostic,
    `objects.rs:2368`): `Box { item: maybe(false) }` → "Cannot assign ref(Row) to ref(
    __nullable<Row>)". Needs a `Reference(S)` → `Enum(__nullable<S>)` convert: present source →
    copy into `Some`; **null source → discriminant 0 + free deps, NOT `OpCopyRecord`** (THE
-   crash retirement, the original E2 motivation).
-3. **Native parity** — the present-literal case errors `E0308` on `--native`; the enum-field
-   access/construct codegen needs the same treatment on the native backend.
+   crash retirement, the original E2 motivation). Verify on both backends.
+2. **Vector elements (E2a.5)** — `vector<Row>` element null/`==null`/iterate via the same
+   synthetic enum.
+3. **Gate removal + .loft regressions** — graduate the gated probes to
+   `tests/scripts/25-nullable-sequences.loft` (which runs both backends without the env flag)
+   in the final green-without-flag commit; delete `LOFT_E2_SYNTH` + the non-stdlib restriction.
 
-Once 1–3 land (+ vector elements E2a.5), the gate comes off and the suite stays green WITHOUT
-the env flag (the vertical slice). Keep `LOFT_E2_SYNTH` + the non-stdlib restriction until
-then, then delete both.
+Once 1–2 land, the gate comes off and the suite stays green WITHOUT the env flag (the vertical
+slice).
 
 ### The corrected first move (this session changed the order)
 The staged list above puts synthesis (E2a.1) first, but the **load-bearing unknown is

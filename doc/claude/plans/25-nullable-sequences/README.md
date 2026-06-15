@@ -40,14 +40,14 @@ scattered null-sentinel matrix, not adjacent to it.
 **Next: E2a.3 — construction coercion** (the load-bearing transparency glue). **E2a.1
 (synthesis helper) + E2a.2 (field-type rewrite hook) are DONE + verified**, gated behind
 `LOFT_E2_SYNTH` (default-off → suite byte-identical), and **Probe 1 passes** (the synthetic
-`__nullable<Row>` is byte-identical to a hand-written enum). **E2a.3 is fully scoped** (failure
-mode, storage model, and the null-representation design are pinned in
-[embedded-record-null.md § NEXT — E2a.3](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)):
-**null = discriminant 0**, `Row{…}` → the `Some` variant (disc 2), `== null` tests `disc == 0`
-(NOT E1's `OpRefIsNull`). The first move is a DECISION — thread the expected type into the
-literal dispatch (transparent) vs a post-hoc struct→`Some` convert — then build construct
-(E2a.3) + access/null/default (E2a.4) so the gate can come off green WITHOUT the env flag (that
-green-without-flag commit is the vertical slice). It is **fully specified and staged** in
+`__nullable<Row>` is byte-identical to a hand-written enum). **E2a.3 (literal construct) + E2a.4 (`==null` + default-init) are DONE on BOTH backends**
+(gated): `Box{item:Row{…}}` round-trips, `b.item.id`/`.tag` read, `== null` is `false` for
+present and `true` for default — `null = discriminant 0`, `Row{…}` → the `Some` variant, `==
+null` tests `disc == 0` (NOT E1's `OpRefIsNull`). **Remaining before the gate comes off:** the
+runtime **null-SOURCE convert** (`Box{item: maybe(false)}` → `Reference(S)`→`Some`/disc-0, the
+`allocation.rs:560` crash retirement), **vector elements (E2a.5)**, then graduate the probes to
+`tests/scripts/` and delete the gate (the green-without-flag vertical-slice commit). Detail +
+hooks in [embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold). It is **fully specified and staged** in
 [embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)
 — read that section cold; it has the Step-0 result, the `nullable_enum_for` recipe, the
 transparency-glue crux, the entry points, and why the first green commit must be a vertical

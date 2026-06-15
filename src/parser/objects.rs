@@ -2195,6 +2195,15 @@ impl Parser {
             {
                 continue;
             }
+            // @PLN25 E2a.4 — a synthetic nullable-struct enum field omitted from the
+            // literal is left at its zero-init (discriminant 0 = null) by
+            // OpDatabase/set_default_value.  The Reference-recursion / to_default paths
+            // below would write inner-struct field defaults over the inline enum bytes
+            // and corrupt the record; "absent" is exactly discriminant 0, so skip it.
+            if matches!(&tp, Type::Enum(e, true, _) if self.data.def(*e).name.starts_with("__nullable<"))
+            {
+                continue;
+            }
             let mut default = self.data.attr_value(td_nr, aid);
             // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
             // marker) is a 12-byte DbRef — its omitted default is the null

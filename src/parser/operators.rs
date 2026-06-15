@@ -1598,17 +1598,38 @@ impl Parser {
                 }
                 *ctp = Type::Boolean;
             } else if enum_null {
-                // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
-                // rec==0: a present enum is inline-represented on native and carries
-                // rec==0, which rec==0 would misread as null.  store_nr==u16::MAX is
-                // the uniform marker across both backends.
                 if !self.first_pass {
-                    let e_code = if *ctp == Type::Null {
-                        second_code
+                    let (e_code, e_def) = if *ctp == Type::Null {
+                        let d = match &second_type {
+                            Type::Enum(d, _, _) => *d,
+                            _ => u32::MAX,
+                        };
+                        (second_code, d)
                     } else {
-                        code.clone()
+                        let d = match &*ctp {
+                            Type::Enum(d, _, _) => *d,
+                            _ => u32::MAX,
+                        };
+                        (code.clone(), d)
                     };
-                    let is_null = self.cl("OpRefIsNull", &[e_code]);
+                    // @PLN25 E2a.4 — a synthetic `__nullable<S>` enum backs an INLINE
+                    // struct field / vector element (no DbRef slot), so null is
+                    // discriminant 0 — read it directly (OpGetEnum @ offset 0), NEVER
+                    // OpRefIsNull, whose store_nr sentinel test would deref the absent
+                    // record and OOB-crash.  A user enum VARIABLE is a DbRef whose null
+                    // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
+                    let inline =
+                        e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+                    let is_null = if inline {
+                        let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
+                        let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                        self.cl("OpEqInt", &[disc, Value::Int(0)])
+                    } else {
+                        // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
+                        // rec==0: a present enum is inline-represented on native and carries
+                        // rec==0, which rec==0 would misread as null.
+                        self.cl("OpRefIsNull", &[e_code])
+                    };
                     *code = if operator == "==" {
                         is_null
                     } else {
