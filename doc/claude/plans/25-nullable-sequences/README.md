@@ -32,17 +32,19 @@ scattered null-sentinel matrix, not adjacent to it.
 
 ## RESUME HERE (next action)
 
-The slice fix (loft#384) and the reverse-slice fix are done (findings 8, 11 — both
-backends green, regression cells in `tests/scripts/25-nullable-sequences.loft`). The
-fixing commit must carry `Fixes #384` so the merge to `main` closes it (loft#384 is an
-existing issue; until merged it stays open with `fixed-pending-merge`).
+**Shipped + green on `2026-07-mac` (all pushed):** slice from-end+clamp (loft#384, findings
+8/11) + reverse-slice; simple-typed vector ELEMENT null (finding 12 — int/bool/float/text);
+**E1** = nullable enum VARIABLE null on both backends. loft#384's commit carries `Fixes #384`
+(closes on merge to `main`; `fixed-pending-merge` until then).
 
-**Next: the `default_native_value` Vector arm (finding 9).** Make a nullable vector
-field default to the null sentinel (`u16::MAX`) instead of empty `[]`, with a `not null`
-opt-in to the empty fast path. This changes init semantics for EVERY struct vector
-field, so it needs its own boundary matrix (existing code that assumes "unset = empty
-`[]`") before shipping — do it as a separate, independently-verified change, not bundled
-with anything. Then P4 hardening (consumer audit + wasm + docs).
+**Next: E2 — nullable inline STRUCT fields + vector elements**, via the full enum-synthesis
+approach (a). It is **fully specified and staged** in
+[embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)
+— read that section cold; it has the corrected first move (a Step-0 probe of construct/access
+on a hand-written enum field, BEFORE building synthesis), the `nullable_enum_for` recipe, the
+transparency-glue crux, the entry points, and why the first green commit must be a vertical
+slice (synth+wire+construct+access for one field), not E2a.1 alone. The field-default arm
+(finding 9) is subsumed by E2 (a nullable field defaults to the `Null` variant).
 
 ## Goal
 

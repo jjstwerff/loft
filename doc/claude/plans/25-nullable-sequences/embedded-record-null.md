@@ -232,6 +232,84 @@ inline struct fields/elements at compile time and raise a clean recoverable erro
 runtime-null source — keeps the `allocation.rs:560` OOB / native codegen crash from shipping
 while the representation work proceeds.
 
+## RESUME POINT — start E2a here (standalone; read this section cold)
+
+**Shipped + green on `2026-07-mac`** (all pushed): slice from-end+clamp (loft#384) +
+reverse-slice; simple-typed vector ELEMENT null (int/bool/float/text — iteration no longer
+breaks at a null element + `float == null`); **E1** = nullable enum VARIABLE null on both
+backends. **E2 (this doc) = nullable inline STRUCT fields + vector elements — NOT started in
+code.** Full suite was 2381-green at the last push.
+
+### The corrected first move (this session changed the order)
+The staged list above puts synthesis (E2a.1) first, but the **load-bearing unknown is
+construct/access glue** (E2a.3/E2a.4), and the protocol says probe that BEFORE building. So
+**Step 0 is a probe, not code:**
+
+> **Step 0 — de-risk with a HAND-WRITTEN enum field.** Write `struct Box { item: NRow }`
+> where `NRow` is a real `enum { RNil, RSome { id: integer, tag: text } }`, then try
+> `b = Box { item: RSome { id:5, tag:"a" } }`, `b.item == null`, and reading the payload
+> (probably via `match b.item { … }`). This answers the whole gamble: *does a struct field
+> that holds an enum already construct/access/`==null` correctly on both backends?*
+> - If YES → synthesis (a) is sound; the remaining work is the **transparency glue** that
+>   makes the user's `item: Row` / `Row{…}` / `b.item.id` map onto the synthesized enum.
+> - If NO (enum-typed fields are themselves broken) → STOP and re-scope; (a) is not "reuse",
+>   it's "build", and the bitmap or a different design may win after all.
+
+### The transparency question (the real design crux for E2)
+The design wants `item: Row` to *transparently* be nullable (stored as the enum) — so the
+user keeps writing `Row{…}` and `b.item.id`, never seeing `Some`. That requires coercion
+glue at three sites, and whether it's "reuse" or "new code" is the open risk:
+1. **Construct:** a `Row{…}` literal assigned to an enum-typed field must build the `Some`
+   variant (set discriminant=present, then the fields).
+2. **Access:** `b.item.id` on an enum-typed field must read the field at its
+   post-discriminant offset (the `Some` payload), not at the struct's offset.
+3. **null/default:** `= null`→`Null` variant, `== null`→discriminant test, default→`Null`.
+Decide explicitly whether transparency is worth the glue, or whether nullable struct fields
+should be *visibly* enum-shaped (less magic, less glue). Resolve this BEFORE E2a.2.
+
+### E2a.1 synthesis recipe (concrete — pure execution once Step 0 passes)
+`nullable_enum_for(&mut self, lexer, struct_d) -> u32` in `data.rs`, modeled on `tuple_def`
+(`data.rs:3530`) + `parse_enum_values` (`definitions.rs:199`):
+1. Memoize on `format!("__nullable<{}>", name)`; register at `STD_SOURCE` like `tuple_def`.
+2. `e = add_def(name, pos, DefType::Enum)`; `set_returned(e, Enum(e, true, none))`.
+3. `Null` variant: `nv = add_def(_, pos, DefType::EnumValue)`, `definitions[nv].parent = e`;
+   on `e` add a `constant` attribute `"Null"` typed `Enum(e,true)` with value `Enum(1,MAX)`;
+   on `nv` add the discriminant attribute `"enum"` typed `Enum(def_nr("enumerate"),false)`
+   with value `Enum(1,MAX)`; `set_returned(nv, Enum(e,true))`. (No payload.)
+4. `Some` variant: same shape with value `Enum(2,MAX)`, PLUS copy every attribute of
+   `struct_d` into `sv` via `add_attribute(lexer, sv, attr.name, attr.typedef)`.
+5. Layout is computed by the existing typedef pass via `calculate_positions(fields,
+   sub=true)` (`calc.rs:18`) — `sub=true` reserves the discriminant at offset 0 and gap-packs
+   the rest (→ `disc@0, tag@4, id@8`, byte-identical to a hand enum). So synthesize during
+   the **2nd parse pass** (where the lexer + resolved `struct_d` exist), like `tuple_def`, and
+   let the pass lay it out — do NOT hand-roll layout.
+
+### Why E2a.1 can't be a tiny isolated commit (so plan the vertical slice)
+The synthesis helper is dormant until wired, and **wiring breaks construct/access for every
+existing nullable-struct-field program** until the glue (E2a.3/4) lands — the suite goes red
+in between. So the **first GREEN commit is a vertical slice**: synth + wire + construct +
+access + null, for ONE simple field, gated end-to-end on both backends. Don't try to land
+E2a.1 alone.
+
+### Key entry points (verified this session)
+- Synthesis: `data.rs` `tuple_def:3530` (template), `add_def:3035`, `add_attribute:2979`
+  (only touches the lexer on error — safe to pass the parser's), `set_returned:3166`,
+  `variant_of:4136`, `def(d).parent():2410`.
+- Enum construction recipe: `parser/definitions.rs` `parse_enum:367`, `parse_enum_values:199`.
+- Layout: `calc.rs` `calculate_positions:18` (`sub=true` = the discriminant-reserving path).
+- Field nullability hook (for E2a.2 wiring): `typedef.rs` (`attr_nullable && !not_null`,
+  ~`:378-420` field-type/offset region).
+- Construct/access/null sites to glue (E2a.3/4): the struct-literal `Object` build and
+  `OpGetField` lowering in `parser/objects.rs` + `parser/fields.rs`; `== null` dispatch in
+  `parser/operators.rs` (the `enum_null` branch E1 added is the model, but inline fields use
+  the **discriminant**, not the `store_nr` sentinel — see below).
+
+### Crucial distinction carried from E1 (do NOT conflate)
+A nullable enum/struct **VARIABLE** is a `DbRef` slot → null = `store_nr==u16::MAX` sentinel
+(E1 fixed this with `OpRefIsNull`). A nullable **INLINE** field/element has no DbRef slot →
+null = **discriminant 0** (E2). These are two different null encodings on the two storage
+forms; E2's `== null` for an inline field must read the discriminant, NOT call `OpRefIsNull`.
+
 ## Open questions
 
 - **Discriminant size** — enums use a byte (small) or short at offset 0; confirm via Probe
