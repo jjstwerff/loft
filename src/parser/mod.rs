@@ -7285,4 +7285,26 @@ mod p269_native_backfill_tests {
             );
         }
     }
+
+    /// @PLN26 phase 1 — two native packages exporting the SAME `#native` symbol
+    /// must be detected: the C-ABI flat namespace (and the interpreter's
+    /// symbol-keyed `BRIDGE_REGISTRY`) can't disambiguate them, so native
+    /// codegen rejects the program with a `compile_error!`.  Parse a consumer of
+    /// collide_a + collide_b (both export `collide_shared`) and check the
+    /// detector reports it.
+    #[test]
+    fn native_symbol_collision_across_packages_detected() {
+        let sep = crate::platform::sep_str();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, true).unwrap();
+        p.lib_dirs = vec![format!("tests{sep}lib")];
+        p.parse(&format!("tests{sep}lib{sep}collide_main.loft"), false);
+        let collisions = p.data.native_symbol_collisions();
+        assert!(
+            collisions
+                .iter()
+                .any(|(sym, srcs)| sym == "collide_shared" && srcs.len() >= 2),
+            "expected a `collide_shared` collision across >= 2 sources, got {collisions:?}"
+        );
+    }
 }

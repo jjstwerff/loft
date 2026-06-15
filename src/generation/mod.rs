@@ -1287,6 +1287,17 @@ extern crate loft;"
                     writeln!(w, "    fn __cabi_{}({sig}){ret};", def.native())?;
                 }
                 writeln!(w, "}}")?;
+                // @PLN26 phase 1 — a `#native` symbol exported by 2+ packages
+                // cannot be disambiguated across the flat C-ABI namespace (nor the
+                // interpreter's symbol-keyed BRIDGE_REGISTRY); the link resolves
+                // first-`.so`-wins, silently the wrong fn.  Reject loudly with a
+                // module-level compile_error rather than mis-link.
+                for (sym, srcs) in data.native_symbol_collisions() {
+                    writeln!(
+                        w,
+                        "compile_error!(\"loft --native: native packages (sources {srcs:?}) export the same #native symbol '{sym}'; the C-ABI link cannot disambiguate them — rename one with #native \\\"<unique-symbol>\\\" (@PLN26 phase 1)\");"
+                    )?;
+                }
             } else {
                 // Emit extern crate declarations only for the native packages the
                 // emitted (reachable) code actually calls (#307).  A library cdylib

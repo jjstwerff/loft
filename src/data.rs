@@ -2951,6 +2951,40 @@ impl Data {
         }
     }
 
+    /// @PLN26 phase 1 — body-less `#native` symbols declared by 2+ distinct
+    /// sources (libraries).  Unlike a wrapper *name* (which
+    /// `namespace_colliding_native_fns` renames), a `#native` *symbol* lives in
+    /// the package's cdylib and cannot be renamed by the consumer.  The C-ABI
+    /// native link puts every package's exports in one flat namespace (and the
+    /// interpreter's `BRIDGE_REGISTRY` is keyed by symbol), so two packages
+    /// exporting the same symbol resolve first-`.so`-wins / last-loaded-wins —
+    /// silently the wrong fn.  Native codegen turns each collision into a
+    /// `compile_error!`.  Returns `(symbol, sorted distinct sources)` per
+    /// collision (deterministic order).
+    #[must_use]
+    pub fn native_symbol_collisions(&self) -> Vec<(String, Vec<u16>)> {
+        let mut by_sym: HashMap<String, Vec<u16>> = HashMap::new();
+        for d in 0..self.definitions() {
+            let def = self.def(d);
+            if def.code == Value::Null && !def.native().is_empty() {
+                by_sym
+                    .entry(def.native().to_string())
+                    .or_default()
+                    .push(def.source);
+            }
+        }
+        let mut out: Vec<(String, Vec<u16>)> = by_sym
+            .into_iter()
+            .filter_map(|(sym, mut srcs)| {
+                srcs.sort_unstable();
+                srcs.dedup();
+                (srcs.len() > 1).then_some((sym, srcs))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     #[must_use]
     pub fn use_exists(&self, file: &str) -> bool {
         self.use_names.contains_key(file)
