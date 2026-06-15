@@ -1618,6 +1618,43 @@ impl Parser {
         Type::Null
     }
 
+    /// Resolve one slice bound to a valid `[0, len]` index: a negative bound
+    /// counts from the end (`b + len`), an inclusive end is shifted to its
+    /// exclusive form (`b + 1`) so a single clamp path serves both, and the
+    /// result is clamped into range.  This keeps a vector slice's iteration
+    /// endpoints in bounds so it never runs off either side — see loft#384.
+    /// `len_var` must already hold `OpLengthVector(base)`; `bound` should be a
+    /// `Var` so the duplicated reads below cost nothing and re-run no effects.
+    fn slice_clamp_bound(&mut self, bound: Value, len_var: u16, inclusive_end: bool) -> Value {
+        // from-end: (b < 0) ? b + len : b
+        let is_neg = self.conv_op("<", bound.clone(), Value::Int(0), I32.clone(), I32.clone());
+        let add_len = self.conv_op(
+            "+",
+            bound.clone(),
+            Value::Var(len_var),
+            I32.clone(),
+            I32.clone(),
+        );
+        let resolved = v_if(is_neg, add_len, bound);
+        let resolved = if inclusive_end {
+            self.conv_op("+", resolved, Value::Int(1), I32.clone(), I32.clone())
+        } else {
+            resolved
+        };
+        // clamp high to len: (len < r) ? len : r   (loft has `<`/`<=`, not `>`)
+        let gt_len = self.conv_op(
+            "<",
+            Value::Var(len_var),
+            resolved.clone(),
+            I32.clone(),
+            I32.clone(),
+        );
+        let hi = v_if(gt_len, Value::Var(len_var), resolved);
+        // clamp low: (r < 0) ? 0 : r
+        let lt_zero = self.conv_op("<", hi.clone(), Value::Int(0), I32.clone(), I32.clone());
+        v_if(lt_zero, Value::Int(0), hi)
+    }
+
     // range ::= rev(<expr> '..' ['='] <expr>) | <expr> [ '..' ['='] <expr> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_in_range_body(
@@ -1628,11 +1665,11 @@ impl Parser {
         in_type: Type,
         reverse: bool,
     ) -> Type {
-        let incl = self.lexer.has_token("=");
+        let mut incl = self.lexer.has_token("=");
         // O8.5: capture range bounds for const-unroll detection.
         self.last_range_from = Some(expr.clone());
         let mut till = Value::Null;
-        let till_tp = if self.lexer.peek_token("]") {
+        let mut till_tp = if self.lexer.peek_token("]") {
             till = if *data == Value::Null {
                 Value::Int(i32::MAX)
             } else {
@@ -1654,60 +1691,54 @@ impl Parser {
         } else {
             self.last_range_till = Some(till.clone());
         }
+        // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
+        // resolve negative bounds from the end and clamp into `[0, len]`, else the
+        // iteration endpoints run off an edge: a negative end breaks immediately
+        // (silent empty), a negative start wraps past the end, and an over-range
+        // end reads OOB nulls/garbage in raw iteration.  Both bounds are bound to
+        // temps (evaluated once) and clamped; the slice then runs as a plain
+        // exclusive range, so pure ranges keep their raw bounds untouched.
+        let mut iter_prelude = Vec::new();
+        if *data != Value::Null {
+            let len_var = self.create_unique("slice_len", &I32);
+            let lo_var = self.create_unique("slice_lo", &I32);
+            let hi_var = self.create_unique("slice_hi", &I32);
+            iter_prelude.push(v_set(
+                len_var,
+                self.cl("OpLengthVector", std::slice::from_ref(data)),
+            ));
+            iter_prelude.push(v_set(lo_var, expr.clone()));
+            let lo = self.slice_clamp_bound(Value::Var(lo_var), len_var, false);
+            iter_prelude.push(v_set(lo_var, lo));
+            iter_prelude.push(v_set(hi_var, till.clone()));
+            let hi = self.slice_clamp_bound(Value::Var(hi_var), len_var, incl);
+            iter_prelude.push(v_set(hi_var, hi));
+            *expr = Value::Var(lo_var);
+            till = Value::Var(hi_var);
+            till_tp = I32.clone();
+            incl = false;
+        }
         let ivar = if name == "$" {
             self.create_unique("index", &in_type.clone())
         } else {
             self.create_var(&format!("{name}#index"), &in_type)
         };
         let mut ls = Vec::new();
-        // @P384: for a real-collection slice `col[lo..hi]` a negative bound counts
-        // FROM THE END — mirroring single-index `col[-1]`.  Normalize BOTH bounds to
-        // absolute positions ONCE, before the loop, so the loop walks absolute indices
-        // and the break test compares like with like.  Without this the loop walked the
-        // raw bound and leaned on per-element from-end inside `OpGetVectorNullable`,
-        // which only worked when start and end sat on the same side of zero
-        // (`v[-3..-1]` ok, but `v[2..-1]` broke immediately and `v[-2..]` wrapped past
-        // zero).  Bare ranges (`data == Null`, e.g. `for i in a..b`) keep literal-counter
-        // semantics and are left untouched (pre stays empty → init is the plain reset).
-        let mut pre: Vec<Value> = Vec::new();
-        let (start_bound, end_bound) = if *data == Value::Null {
-            (expr.clone(), till.clone())
-        } else {
-            let len_var = self.create_unique("slice_len", &I32);
-            pre.push(v_set(
-                len_var,
-                self.cl("OpLengthVector", std::slice::from_ref(data)),
-            ));
-            let from_var = self.create_unique("slice_from", &in_type);
-            let till_var = self.create_unique("slice_till", &in_type);
-            for (bound_var, raw) in [(from_var, expr.clone()), (till_var, till.clone())] {
-                // bound_var = raw;  if bound_var < 0 { bound_var = bound_var + len }
-                pre.push(v_set(bound_var, raw));
-                let neg = self.conv_op(
-                    "<",
-                    Value::Var(bound_var),
-                    Value::Int(0),
-                    in_type.clone(),
-                    I32.clone(),
-                );
-                let plus_len = self.conv_op(
-                    "+",
-                    Value::Var(bound_var),
-                    Value::Var(len_var),
-                    in_type.clone(),
-                    I32.clone(),
-                );
-                pre.push(v_set(bound_var, v_if(neg, plus_len, Value::Var(bound_var))));
-            }
-            (Value::Var(from_var), Value::Var(till_var))
-        };
-        let test = if reverse {
+        // A `rev(...)` wrapping a slice subscript (`rev(v[2..5])`) arrives via the
+        // reverse_iterator flag: the inner subscript parse never sees the `rev`
+        // token, so `reverse` (the param) is false here.  Honour the flag for the
+        // loop direction and consume it.  The closing `)` for that form is consumed
+        // by the enclosing `parse_in_range`, so only the `rev(range)` param drives
+        // the `token(")")` below — leave that gated on `reverse`.
+        let want_reverse = reverse || self.reverse_iterator;
+        self.reverse_iterator = false;
+        let test = if want_reverse {
             if incl {
                 ls.push(v_set(
                     ivar,
                     v_if(
                         self.single_op("!", Value::Var(ivar), in_type.clone()),
-                        end_bound.clone(),
+                        till,
                         self.conv_op(
                             "-",
                             Value::Var(ivar),
@@ -1720,7 +1751,7 @@ impl Parser {
             } else {
                 ls.push(v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    v_set(ivar, end_bound.clone()),
+                    v_set(ivar, till),
                     Value::Null,
                 ));
                 ls.push(v_set(
@@ -1737,7 +1768,7 @@ impl Parser {
             self.conv_op(
                 "<",
                 Value::Var(ivar),
-                start_bound.clone(),
+                expr.clone(),
                 in_type.clone(),
                 till_tp,
             )
@@ -1746,7 +1777,7 @@ impl Parser {
                 ivar,
                 v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    start_bound.clone(),
+                    expr.clone(),
                     self.conv_op(
                         "+",
                         Value::Var(ivar),
@@ -1758,7 +1789,7 @@ impl Parser {
             ));
             self.conv_op(
                 if incl { "<" } else { "<=" },
-                end_bound.clone(),
+                till,
                 Value::Var(ivar),
                 till_tp,
                 in_type.clone(),
@@ -1766,22 +1797,23 @@ impl Parser {
         };
         ls.push(v_if(test, Value::Break(0), Value::Null));
         ls.push(Value::Var(ivar));
-        let init = {
-            let null_set = v_set(ivar, self.null(&in_type));
-            if pre.is_empty() {
-                null_set
-            } else {
-                // `Insert` splices its statements at the enclosing scope (no `{}`),
-                // so the loop counter and the slice_len/from/till bounds stay visible
-                // to the sibling loop body — a `Block` would scope the `let`s away
-                // from native codegen.
-                pre.push(null_set);
-                Value::Insert(pre)
-            }
+        // The loop init runs once before iteration.  For a slice it carries the
+        // bound-clamp prelude (len/lo/hi temps) ahead of the iterator-var reset;
+        // `iterator()` keeps this init slot (it drops only `extra_init`), so the
+        // clamp is emitted on both the for-loop and the materialisation paths.
+        let init_ivar = v_set(ivar, self.null(&in_type));
+        let iter_init = if iter_prelude.is_empty() {
+            init_ivar
+        } else {
+            // `Insert` is a flat statement sequence, NOT a scoped block: the clamp
+            // temps must live across the loop body, so they cannot sit in a nested
+            // block scope (its slots are reclaimed on block exit — two-zone design).
+            iter_prelude.push(init_ivar);
+            Value::Insert(iter_prelude)
         };
         *expr = Value::Iter(
             u16::MAX,
-            Box::new(init),
+            Box::new(iter_init),
             Box::new(v_block(ls, in_type.clone(), "Iter range")),
             Box::new(Value::Null),
         );

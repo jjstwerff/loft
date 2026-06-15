@@ -24,4 +24,51 @@ fn test() {
     c = 0;
     for x in n { c += 1; }
     assert(c == 0, "iterating a null vector yields zero elements");
+
+    slice_bounds();
+}
+
+// loft#384 — slice bounds resolve negatives from the end and clamp into [0,len],
+// so a slice never runs off either edge.  v = [10,20,30,40,50].
+fn slice_bounds() {
+    v: vector<integer> = [10, 20, 30, 40, 50];
+
+    // negative end resolves from the end (was: silent empty).
+    a: vector<integer> = v[2..-1];
+    assert(len(a) == 2 && a[0] == 30 && a[1] == 40, "v[2..-1] == [30,40]");
+
+    // negative start resolves from the end (was: wrap past the end).
+    b: vector<integer> = v[-2..];
+    assert(len(b) == 2 && b[0] == 40 && b[1] == 50, "v[-2..] == [40,50]");
+
+    // over-range end clamps; raw iteration must NOT leak trailing nulls.
+    cnt = 0;
+    for x in v[2..100] { cnt += 1; }
+    assert(cnt == 3, "raw iterate v[2..100] yields exactly 3 elements");
+    c: vector<integer> = v[2..100];
+    assert(len(c) == 3 && c[0] == 30 && c[2] == 50, "v[2..100] == [30,40,50]");
+
+    // start under -len clamps to 0.
+    d: vector<integer> = v[-100..2];
+    assert(len(d) == 2 && d[0] == 10 && d[1] == 20, "v[-100..2] == [10,20]");
+
+    // inclusive end (also negative) and reversed-empty cases.
+    e: vector<integer> = v[2..=-1];
+    assert(len(e) == 3 && e[0] == 30 && e[2] == 50, "v[2..=-1] == [30,40,50]");
+    f: vector<integer> = v[3..2];
+    assert(len(f) == 0, "v[3..2] is empty");
+
+    // slicing a null/empty base stays safe (len 0, no OOB).
+    nul = maybe(false);
+    g: vector<integer> = nul[-2..];
+    assert(len(g) == 0, "slice of a null vector is empty");
+
+    // rev() on a slice iterates in reverse (was: forward order).
+    rcnt = 0;
+    first = 0;
+    for x in rev(v[2..5]) {
+        if rcnt == 0 { first = x; }
+        rcnt += 1;
+    }
+    assert(rcnt == 3 && first == 50, "rev(v[2..5]) yields 3 elements, first is 50");
 }
