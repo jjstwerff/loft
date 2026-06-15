@@ -90,6 +90,20 @@ export CARGO_INCREMENTAL := 0
 endif
 endif
 
+# macOS: cc-rs invocations (notably `ring`'s build script) need the SDK path
+# on -isysroot.  When `xcode-select -p` points at the bare Command Line Tools,
+# plain `cc` does not auto-detect it and the build fails with
+# `'TargetConditionals.h' file not found`.  Probe via `xcrun` and export so
+# every recipe shell inherits it.  Honours a user-set SDKROOT; the whole
+# block is skipped on non-Darwin (Linux/Windows), so other platforms build
+# unchanged.
+ifeq ($(shell uname -s),Darwin)
+ifeq ($(origin SDKROOT),undefined)
+SDKROOT := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+endif
+export SDKROOT
+endif
+
 # `make install` writes the binary to /usr/local (needs root) but the compile
 # must NOT run as root: sccache is per-user (see above) and a root build would
 # leave target/ owned by root, breaking the next ordinary `make`.  When invoked
