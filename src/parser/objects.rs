@@ -10,6 +10,28 @@ use super::{
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
+    /// @P387 / @P383 — the user-facing argument types of a fn used as a
+    /// first-class `fn` value.  Excludes the SYNTHETIC return buffer the fn-ref
+    /// dispatch injects: `__work_ret` / `__retbuf` while still `__`-prefixed, AND
+    /// the @PLAN59 signature-time `__retbuf` after it's renamed to the returned
+    /// local's name (the return type's deps still name that attr).  Without this
+    /// a value-returning fn mis-types as `fn(integer, S) -> S` and can't be used
+    /// as a `fn` value.
+    fn fn_ref_arg_types(&self, fn_d_nr: u32) -> Vec<Type> {
+        let n_args = self.data.attributes(fn_d_nr);
+        let buf_deps: Vec<u16> = match self.data.def(fn_d_nr).returned() {
+            Type::Text(d) | Type::Reference(_, d) | Type::Vector(_, d) => d.to_vec(),
+            _ => Vec::new(),
+        };
+        (0..n_args)
+            .filter(|&a| {
+                !buf_deps.contains(&(a as u16))
+                    && !self.data.attr_name(fn_d_nr, a).starts_with("__")
+            })
+            .map(|a| self.data.attr_type(fn_d_nr, a))
+            .collect()
+    }
+
     /// @PLN22 Phase 1 — true if `tp` denotes an enum, either directly
     /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
     /// the expected-enum context for bare value-position variant resolution
@@ -170,14 +192,9 @@ impl Parser {
                     self.var_usages(index_var, true);
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
-                    let n_args = self.data.attributes(fn_d_nr);
-                    // @P387: exclude the synthetic `RefVar(Text)` work-buffer from
-                    // the fn-ref type (same as the bare-name path below) — a
-                    // forward-declared text fn re-resolved on pass 2 reaches here.
-                    let arg_types: Vec<Type> = (0..n_args)
-                        .map(|a| self.data.attr_type(fn_d_nr, a))
-                        .filter(|t| !matches!(t, Type::RefVar(_)))
-                        .collect();
+                    // A forward-declared value-returning fn re-resolved on pass 2
+                    // reaches here; same buffer-exclusion as the bare-name path.
+                    let arg_types = self.fn_ref_arg_types(fn_d_nr);
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     return Type::Function(
                         arg_types,
@@ -397,17 +414,7 @@ impl Parser {
                 } else {
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
-                    let n_args = self.data.attributes(fn_d_nr);
-                    // @P387: a text-returning fn carries a synthetic `RefVar(Text)`
-                    // work-buffer (the return-buffer ABI, added for every text fn).
-                    // It is NOT part of the user-facing signature — the fn-ref
-                    // dispatch injects it — so exclude it from the fn-ref TYPE, or
-                    // `fn(integer) -> text` mis-types as `fn(integer, &text) -> text`
-                    // and every fn-value use of a text fn fails the arity check.
-                    let arg_types: Vec<Type> = (0..n_args)
-                        .map(|a| self.data.attr_type(fn_d_nr, a))
-                        .filter(|t| !matches!(t, Type::RefVar(_)))
-                        .collect();
+                    let arg_types = self.fn_ref_arg_types(fn_d_nr);
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
                 }

@@ -1,19 +1,38 @@
-// @P387 regression: a named text-returning fn used as a first-class `fn` value
-// must work on BOTH backends (was SIGSEGV on --interpret for a no-work-buffer
-// body, arity-error on both for a formatting body — named text fns weren't
-// normalized to the uniform work-buffer ABI).
+// @P387 / @P383 regression: a VALUE-returning fn (text / struct / vector) used
+// as a first-class `fn` value must work on BOTH backends.  Before: a named text
+// fn SIGSEGV'd (interp) or hit an arity error (the synthetic return buffer leaked
+// into the fn-ref type); a struct/vector fn hit the same arity error; a capturing
+// text lambda as a fn-value crashed (out-of-context captured-var marking).
+pub struct S { v: integer }
+
 fn mk_lit(_n: integer) -> text { "z" }
 fn mk_fmt(n: integer) -> text { "v{n}" }
-fn run(f: fn(integer) -> text, x: integer) -> text { f(x) }
+fn mk_struct(n: integer) -> S { s = S { v: n }; s }
+fn mk_vec(n: integer) -> vector<integer> { [n, n + 1] }
+
+fn run_t(f: fn(integer) -> text, x: integer) -> text { f(x) }
+fn run_s(f: fn(integer) -> S, x: integer) -> S { f(x) }
+fn run_v(f: fn(integer) -> vector<integer>, x: integer) -> vector<integer> { f(x) }
 
 fn main() {
-  // literal body (the SIGSEGV case)
-  assert(run(mk_lit, 1) == "z", "lit fn-ref: {run(mk_lit, 1)}");
-  // formatting body (the arity-leak case)
-  assert(run(mk_fmt, 1) == "v1", "fmt fn-ref: {run(mk_fmt, 1)}");
-  // via a local variable holding the fn-ref
+  // #387 — text fns as fn-values (literal body = the SIGSEGV case; formatting
+  // body = the arity-leak case; via a local; direct call alongside the fn-ref).
+  assert(run_t(mk_lit, 1) == "z", "lit: {run_t(mk_lit, 1)}");
+  assert(run_t(mk_fmt, 1) == "v1", "fmt: {run_t(mk_fmt, 1)}");
   g = mk_fmt;
-  assert(run(g, 7) == "v7", "local fn-ref: {run(g, 7)}");
-  // direct call still works alongside the fn-ref use
-  assert(mk_fmt(3) == "v3", "direct call: {mk_fmt(3)}");
+  assert(run_t(g, 7) == "v7", "local: {run_t(g, 7)}");
+  assert(mk_fmt(3) == "v3", "direct: {mk_fmt(3)}");
+
+  // #383 — struct- and vector-returning fns as fn-values (the @PLAN59 __retbuf
+  // is renamed to the returned local, so the buffer is excluded via the return
+  // type's deps, not by name).
+  rs = run_s(mk_struct, 41);
+  assert(rs.v == 41, "struct: {rs.v}");
+  rv = run_v(mk_vec, 5);
+  assert(rv[0] == 5 and rv[1] == 6, "vector: {rv}");
+
+  // @P387 — a CAPTURING text lambda as a fn-value (was a crash).
+  pre = "v";
+  mk = fn(n: integer) -> text { "{pre}{n}" };
+  assert(run_t(mk, 9) == "v9", "capturing lambda: {run_t(mk, 9)}");
 }

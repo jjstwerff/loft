@@ -3304,12 +3304,13 @@ impl Parser {
             // pass; the second-pass `__closure` injection (if any)
             // happens later in parse_lambda so the trailing position is
             // preserved.
-            // @P387 (option A): normalize EVERY text-returning fn — not just
-            // lambdas — to carry one `RefVar(Text)` work-buffer, so the fn-ref
-            // dispatch ABI is uniform (a named text fn used as a fn-value gets a
-            // slot for the injected buffer instead of SIGSEGV / arity-leak).
-            // Previously gated on `is_lambda` to respect @PLAN59's plain-fn
-            // signature finality; correctness-first for now, optimise later.
+            // @P387 — normalize every text-returning fn (not just lambdas) to
+            // carry one `RefVar(Text)` work-buffer so a named text fn used as a
+            // fn-value has a slot for the dispatch-injected buffer.  Text uses
+            // this `__work_ret` mechanism, NOT @PLAN59's `__retbuf` (which covers
+            // only Reference/Vector/Enum returns) — so unlike struct/vector
+            // fn-refs (zero-cost via `__retbuf`), text still needs this.  Making
+            // text zero-cost too would mean extending `__retbuf` to text returns.
             let has_work_buf =
                 self.data.def(self.context).attributes().iter().any(
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
