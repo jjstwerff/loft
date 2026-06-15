@@ -653,6 +653,28 @@ fn p310_graphics_vector_ffi_checks_clean() {
         .output()
         .expect("run --check on the @P310 graphics save_png fixture");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The C-ABI native path links the graphics native package's cdylib, which
+    // must RESOLVE at link time — but graphics needs a system GL library that a
+    // GL-less macOS/Windows CI runner doesn't have ("needs the system library
+    // 'libGL.so.1'" → undefined `loft_save_png`).  That is ENVIRONMENTAL, not
+    // the storage-stride regression this test guards: the stride bug is a rustc
+    // TYPE error (E0308 / `*const i32`) on the GENERATED source that fires at
+    // COMPILE, before the link.  So where graphics native can't link, still
+    // verify the codegen is clean and skip only the link-success assertion;
+    // assert full success everywhere graphics native CAN link (Linux CI).
+    if !out.status.success() && stderr.contains("needs the system library") {
+        assert!(
+            !stderr.contains("E0308") && !stderr.contains("*const i32"),
+            "P310: the vector_elem_rust_type storage-stride fix regressed (E0308 \
+             on the generated source) — vector<integer> must lower to *const i64.  \
+             stderr={stderr:?}"
+        );
+        eprintln!(
+            "p310_graphics_vector_ffi_checks_clean: skipped link-success \
+             (graphics native needs a system GL library absent on this runner)"
+        );
+        return;
+    }
     assert!(
         out.status.success(),
         "P310: graphics save_png fixture failed `--check`.  The \
