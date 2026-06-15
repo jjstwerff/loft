@@ -26,6 +26,41 @@ fn test() {
     assert(c == 0, "iterating a null vector yields zero elements");
 
     slice_bounds();
+    element_null();
+}
+
+// A simple-typed vector element can be the inner typed null (e.g. integer
+// i64::MIN, float NaN).  Two guarantees: iteration yields exactly len(v)
+// elements even when one is null (no early break), and `v[i] == null` detects
+// the typed null (float needs an is-nan test, not equality).
+fn element_null() {
+    // Distinct loop-var names per element type: a single reused `_` would be
+    // type-locked to its first element type, which the native backend rejects.
+    // integer (the loop counts iterations; it must not touch the possibly-null
+    // element value in arithmetic — the null sentinel is i64::MIN).
+    vi: vector<integer> = [10, 20, 30];
+    vi[1] = null;
+    ci = 0; for xi in vi { ci += 1; }
+    assert(ci == 3 && len(vi) == 3, "int: full iteration past a null element");
+    assert(vi[1] == null && vi[0] == 10 && vi[2] == 30, "int: null element, others intact");
+
+    // float — NaN null is detected by ==null, not by equality
+    vf: vector<float> = [1.5, 2.5, 3.5];
+    vf[1] = null;
+    cf = 0; for xf in vf { cf += 1; }
+    assert(cf == 3, "float: full iteration past a null element");
+    assert(vf[1] == null && !(vf[0] == null), "float: NaN null detected");
+
+    // text — iteration must not break at the null element.
+    vt: vector<text> = ["a", "b", "c"];
+    vt[1] = null;
+    ct = 0; for xt in vt { ct += 1; }
+    assert(ct == 3, "text: full iteration past a null element");
+
+    // in-loop #remove still drains fully (length-based termination must not hang)
+    vd: vector<integer> = [for i in 0..20 { i }];
+    for xd in vd { xd#remove; }
+    assert(len(vd) == 0, "remove-during-iteration drains the vector");
 }
 
 // loft#384 — slice bounds resolve negatives from the end and clamp into [0,len],

@@ -16,8 +16,13 @@ now be null (absent), distinct from empty `[]`: the runtime is null-safe (P1), `
 null` / `v != null` / `return null` work (P2), and a slice resolves negative bounds
 from the end and clamps into range so it never runs off an edge (P3, loft#384 — finding
 8). The reverse-slice ordering bug surfaced during that work was fixed in the same
-session (finding 11). What remains: the field-default arm (P3, blast-radius flagged —
-finding 9), then hardening (P4).
+session (finding 11). **Element-level null for simple-typed vectors** (the real core of
+"nullable sequences") is now fixed too: a `vector<integer|boolean|float|text>` element
+can be the inner typed null, iteration no longer breaks at a null element (length-based
+termination), and `float == null` is detected via an is-nan check (finding 12). What
+remains: **reference** vector elements (`vr[i] = null` — interp no-op + native codegen
+crash; not "simple-typed"), the field-default arm (finding 9, declined-pending-decision —
+empty default is correct/ergonomic), then hardening (P4).
 
 Promoted from the design discussion on loft#384 (negative-slice silent-empty / wrap-around
 garbage) and loft#387 (text fn-ref buffer family). The invariant was validated against a
@@ -230,6 +235,32 @@ Probes graduate to `tests/scripts/25-nullable-sequences.loft` as the regression 
     `token(")")` stays gated on the `reverse` param only. Now `rev(v[2..5])` → `50,40,30`,
     `rev(v[2..100])` → `50,40,30` (clamp + reverse compose), and `rev(0..5)`/`rev(v)`
     unchanged. Both backends green; regression cell added.
+12. **[FIXED] Element-level null in simple-typed vectors — the real "nullable
+    sequences" core.** A `vector<integer|boolean|float|text>` element can be the inner
+    typed null (e.g. `i64::MIN`, `NaN`), but two things were broken (matrix over element
+    type × {iterate, ==null} × backend):
+    - **Iteration broke at the first null element (silent data loss).** A vector for-loop
+      terminated on `!element` (convert the element to boolean, then `OpNot`), using the
+      OOB null sentinel as a proxy for "past the end". A *null element* shares that
+      sentinel, so `[10, null, 30]` iterated **once**. The same proxy had already been
+      patched per-type (fn-ref → `d_nr>0`, coroutine/tuple → exhausted). **Fix
+      (`parse_for`, `collections.rs`):** length-based termination — break when the index
+      is outside `[0, len)` (`len <= i` forward end, `i < 0` reverse `i32::MIN` end),
+      independent of the element value. The length is re-read EACH iteration (so in-loop
+      `x#remove`, which shrinks the vector and decrements the index, still drains) and
+      taken from the collection the *fetch* reads (extracted from `iter_next`), so a
+      side-effecting `for x in make()` is not re-evaluated.
+    - **`float == null` was always false.** Float `==` is `!a.is_nan() && !b.is_nan() &&
+      |a-b|<ε`, and `null` converts to `NaN`, so any NaN operand made it false — float
+      null could never be detected, scalars included. **Fix (`operators.rs`):** a
+      `float_null` dispatch (parallel to `vec_null`) lowers `float/single == null` to the
+      validity check `OpNot(convert(f, boolean))` (= `is_nan`), `!= null` to its negation.
+    Verified across int/bool/float/text on BOTH backends; regression cells in
+    `tests/scripts/25-nullable-sequences.loft`. Still open (pre-existing, NOT simple-typed):
+    **reference** vector elements — `vr[i] = null` no-ops on the interpreter and was a
+    native codegen crash (`OpCopyRecord` gets `()`); and a reused `_` loop var across
+    different element types is type-locked to its first type (native E0308) — both are
+    separate from this fix.
 
 ## Cross-arc dependencies
 

@@ -1548,6 +1548,13 @@ impl Parser {
             let vec_null = (operator == "==" || operator == "!=")
                 && ((matches!(*ctp, Type::Vector(_, _)) && second_type == Type::Null)
                     || (*ctp == Type::Null && matches!(second_type, Type::Vector(_, _))));
+            // A float/single null is the NaN sentinel, and NaN compares unequal to
+            // everything (including itself), so `f == null` can't go through OpEq —
+            // it would always be false.  Test validity instead: convert(float, bool)
+            // is `!is_nan` (= non-null), so `== null` is its negation.
+            let float_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Float | Type::Single) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Float | Type::Single)));
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
@@ -1563,6 +1570,23 @@ impl Parser {
                         is_null
                     } else {
                         self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if float_null {
+                if !self.first_pass {
+                    let (f_code, f_tp) = if *ctp == Type::Null {
+                        (second_code, second_type.clone())
+                    } else {
+                        (code.clone(), ctp.clone())
+                    };
+                    // convert(float, boolean) = !is_nan = "is non-null".
+                    let mut valid = f_code;
+                    self.convert(&mut valid, &f_tp, &Type::Boolean);
+                    *code = if operator == "==" {
+                        self.cl("OpNot", &[valid])
+                    } else {
+                        valid
                     };
                 }
                 *ctp = Type::Boolean;

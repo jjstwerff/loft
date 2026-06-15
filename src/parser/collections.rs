@@ -1623,7 +1623,7 @@ use #count instead"
             let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
                 && !self.first_pass
                 && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
-            let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
+            let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);
             // For vector loops: set_loop stores the temp-copy var; override with the
@@ -1634,7 +1634,7 @@ use #count instead"
                 }
                 // Always restore the original collection expression so that
                 // is_iterated_value() can match field-access forms like `db.items`.
-                self.vars.set_coll_value(orig_coll_expr);
+                self.vars.set_coll_value(orig_coll_expr.clone());
             }
             if !self.first_pass && iter_next == Value::Null {
                 diagnostic!(
@@ -1757,27 +1757,42 @@ use #count instead"
             } else {
                 u16::MAX
             };
-            // #403 — a value-element vector for-loop cannot read the OOB null back
-            // from the loop var (a boolean's 1-byte slot truncates the i64::MIN
-            // null, and `false` is itself a valid element), so capture the element
-            // REF the read wraps (`OpGetVectorNullable`) for a ref-null termination.
-            let elem_ref: Option<Value> =
-                if matches!(&var_tp, Type::Boolean) && matches!(in_type, Type::Vector(_, _)) {
-                    // `iter_next` for a vector is a block `[Set(#index, +1), <read>]`;
-                    // the read is `OpGet*(OpGetVectorNullable(vec, size, #index), ..)`
-                    // — pull the wrapped OpGetVectorNullable (the read's first arg).
-                    let read = match iter_next.unspan() {
-                        Value::Block(bl) => bl.operators.last().map(Value::unspan),
-                        other => Some(other),
-                    };
-                    if let Some(Value::Call(_, args)) = read {
-                        args.first().cloned()
-                    } else {
-                        None
+            // For length-based vector termination below: pull the collection the
+            // element fetch actually reads from (the materialised iteration temp),
+            // not the original collection expression.  Re-reading the original each
+            // iteration would re-run a side-effecting source (`for x in make()`); the
+            // fetch temp is already materialised once, so its length is cheap + stable.
+            let vec_fetch_coll = if matches!(in_type, Type::Vector(_, _)) {
+                fn find_vec_coll(v: &Value, gvn: u32, vrn: u32) -> Option<Value> {
+                    match v {
+                        Value::Call(op, args) if *op == gvn || *op == vrn => args.first().cloned(),
+                        Value::Call(_, args)
+                        | Value::Insert(args)
+                        | Value::Tuple(args)
+                        | Value::Parallel(args) => {
+                            args.iter().find_map(|a| find_vec_coll(a, gvn, vrn))
+                        }
+                        Value::Block(bl) | Value::Loop(bl) => {
+                            bl.operators.iter().find_map(|o| find_vec_coll(o, gvn, vrn))
+                        }
+                        Value::If(c, t, e) => find_vec_coll(c, gvn, vrn)
+                            .or_else(|| find_vec_coll(t, gvn, vrn))
+                            .or_else(|| find_vec_coll(e, gvn, vrn)),
+                        Value::Set(_, x)
+                        | Value::Return(x)
+                        | Value::Drop(x)
+                        | Value::Yield(x)
+                        | Value::BreakWith(_, x) => find_vec_coll(x, gvn, vrn),
+                        Value::Span(b) => find_vec_coll(&b.1, gvn, vrn),
+                        _ => None,
                     }
-                } else {
-                    None
-                };
+                }
+                let gvn = self.data.def_nr("OpGetVectorNullable");
+                let vrn = self.data.def_nr("OpVectorRefNullable");
+                find_vec_coll(&iter_next, gvn, vrn)
+            } else {
+                None
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1829,7 +1844,7 @@ use #count instead"
             // OpCoroutineExhausted(gen) reads the coroutine status, which
             // CoroutineNext sets to Exhausted on the post-last-yield call.
             // `gen_var` is captured above from `iter_next`'s first arg
-            // (the coroutine path never assigns a slot to `_iter_var`).
+            // (the coroutine path never assigns a slot to the index var).
             //
             // @PLAN16 phase 05 — closures (`Type::Function`) join tuples on
             // this path: a yielded fn-ref has no null sentinel that
@@ -1883,16 +1898,28 @@ use #count instead"
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));
-            } else if let Some(ref_expr) = elem_ref {
-                // #403 — boolean vector: the value-sentinel termination breaks on a
-                // real `false`.  Terminate on the element REF's null instead — the
-                // `OpGetVectorNullable` the read wraps returns a null DbRef one past
-                // the last item, which `OpConvBoolFromRef` maps to false → break,
-                // while a real `false`/`true` ref is non-null → keep iterating.
-                let test_for = self.cl("OpConvBoolFromRef", &[ref_expr]);
-                let test_for = self.cl("OpNot", &[test_for]);
+            } else if matches!(in_type, Type::Vector(_, _)) {
+                // Length-based termination: yield exactly len(coll) elements,
+                // independent of the element value, so a null ELEMENT (which shares
+                // the OOB null sentinel) no longer ends the loop early.  The length is
+                // re-read EACH iteration (not hoisted) so in-loop `x#remove` — which
+                // shrinks the vector and decrements the index (state/io.rs remove) —
+                // still terminates: when the vector drains, len falls to the index.
+                // Direction-agnostic: forward ends at index == len, reverse ends at
+                // index < 0 (the i32::MIN sentinel the reverse step sets).
+                let coll = vec_fetch_coll
+                    .clone()
+                    .unwrap_or_else(|| orig_coll_expr.clone());
+                let len = self.cl("OpLengthVector", std::slice::from_ref(&coll));
+                let past_end = self.cl("OpLeInt", &[len, Value::Var(iter_var)]);
                 lp.push(v_if(
-                    test_for,
+                    past_end,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+                let before_start = self.cl("OpLtInt", &[Value::Var(iter_var), Value::Int(0)]);
+                lp.push(v_if(
+                    before_start,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));
