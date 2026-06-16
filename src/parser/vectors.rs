@@ -1612,7 +1612,35 @@ impl Parser {
         val: &mut Value,
         parent_tp: &Type,
     ) -> Type {
-        let assign_tp = var_tp.content();
+        let mut assign_tp = var_tp.content();
+        // @PLN25 — INFERRED struct-literal vector default: with no declared element
+        // type (`var_tp` Unknown — an inferred local `v = [Row{…}]`, a fn return
+        // body `{ [Row{…}] }`, …) and a first item that is a struct literal `S{…}`,
+        // default the element to the synthetic `__nullable<S>` enum so the elements
+        // build `Some` — matching the `vector<__nullable<S>>` that every DECLARED
+        // site now resolves to (the construction half of the representation).  A
+        // PEEK only (reverted); fires solely for an inferred struct-literal vector,
+        // so `[1.0]` / `[1,2]`, index expressions, and `not null` / declared vectors
+        // are untouched.  Gated + non-stdlib → inert by default (no gate-off effect).
+        if assign_tp.is_unknown()
+            && self.data.source != crate::data::STD_SOURCE
+            && std::env::var("LOFT_E2_SYNTH").is_ok()
+        {
+            let link = self.lexer.link();
+            if let Some(name) = self.lexer.has_identifier()
+                && self.lexer.peek_token("{")
+            {
+                let d = self.data.def_nr(&name);
+                if d != u32::MAX
+                    && self.data.def_type(d) == DefType::Struct
+                    && self.data.def(d).synthetic.is_none()
+                {
+                    let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                    assign_tp = Type::Enum(syn, true, Deps::none());
+                }
+            }
+            self.lexer.revert(link);
+        }
         // @P315 — `declared` is true when the element type comes from a typed
         // target (typed local / struct field), false when it is inferred from
         // an untyped literal.  A declared element type must NOT be silently
